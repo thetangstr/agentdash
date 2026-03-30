@@ -1,0 +1,42 @@
+{
+  "id": "agentdash.integration-github",
+  "displayName": "GitHub Integration",
+  "version": "0.1.0",
+  "description": "PR sync, CI status tracking, code review automation, bidirectional issue sync",
+  "categories": ["connector"],
+  "capabilities": [
+    "issues.read", "issues.create", "issues.update",
+    "issue.comments.read", "issue.comments.create",
+    "agents.read", "agents.invoke",
+    "events.subscribe", "events.emit",
+    "webhooks.receive", "jobs.schedule",
+    "plugin.state.read", "plugin.state.write",
+    "http.outbound", "secrets.read-ref",
+    "activity.log.write",
+    "sync.register", "sync.read"
+  ],
+  "webhooks": [
+    { "endpointKey": "github-events", "displayName": "GitHub Webhook Events" }
+  ],
+  "jobs": [
+    { "jobKey": "full-sync", "schedule": "0 * * * *", "displayName": "Full GitHub Sync" }
+  ],
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "appId": { "type": "string", "title": "GitHub App ID" },
+      "privateKey": { "type": "string", "title": "GitHub App Private Key (secret ref)" },
+      "webhookSecret": { "type": "string", "title": "Webhook Secret (secret ref)" },
+      "installationId": { "type": "string", "title": "GitHub App Installation ID" },
+      "defaultOrg": { "type": "string", "title": "Default GitHub organization" },
+      "syncRepos": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Repositories to sync (owner/repo)"
+      },
+      "syncIssues": { "type": "boolean", "title": "Enable issue sync", "default": true },
+      "syncPRs": { "type": "boolean", "title": "Enable pull request sync", "default": true }
+    },
+    "required": ["appId", "privateKey", "webhookSecret", "installationId"]
+  }
+}

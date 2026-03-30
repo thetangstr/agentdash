@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "theme_accent_color" text;

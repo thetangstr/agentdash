@@ -700,6 +700,53 @@ export interface WorkerToHostMethods {
     },
     result: Goal,
   ];
+
+  // Sync mapping support for connector plugins
+  "sync.registerMapping": [
+    params: {
+      entityType: string;
+      externalId: string;
+      paperclipEntityType: string;
+      paperclipEntityId: string;
+      syncDirection: "inbound" | "outbound" | "bidirectional";
+      metadata?: Record<string, unknown>;
+    },
+    result: { mappingId: string },
+  ];
+  "sync.getMapping": [
+    params: { externalId: string; entityType: string },
+    result: {
+      mappingId: string;
+      paperclipEntityType: string;
+      paperclipEntityId: string;
+      syncDirection: string;
+      metadata: Record<string, unknown>;
+      lastSyncedAt: string;
+    } | null,
+  ];
+  "sync.getMappingByPaperclipId": [
+    params: { paperclipEntityType: string; paperclipEntityId: string; entityType: string },
+    result: {
+      mappingId: string;
+      externalId: string;
+      syncDirection: string;
+      metadata: Record<string, unknown>;
+      lastSyncedAt: string;
+    } | null,
+  ];
+
+  // Measurement recording for metrics plugins
+  "measurements.record": [
+    params: {
+      companyId: string;
+      metricKey: string;
+      value: number;
+      rawData?: Record<string, unknown>;
+      collectedAt: string;
+      collectionMethod: string;
+    },
+    result: { measurementId: string },
+  ];
 }
 
 /** Union of all worker→host method names. */

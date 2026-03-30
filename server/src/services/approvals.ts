@@ -7,6 +7,7 @@ import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { agentFactoryService } from "./agent-factory.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -162,6 +163,16 @@ export function approvalService(db: Db) {
             sourceId: id,
             approvedAt: now,
           }).catch(() => {});
+        }
+      }
+
+      // AgentDash: handle spawn_agents approval
+      if (applied && updated.type === "spawn_agents") {
+        const payload = updated.payload as Record<string, unknown>;
+        const spawnRequestId = typeof payload.spawnRequestId === "string" ? payload.spawnRequestId : null;
+        if (spawnRequestId) {
+          const factory = agentFactoryService(db);
+          await factory.fulfillSpawnRequest(spawnRequestId, decidedByUserId).catch(() => {});
         }
       }
 

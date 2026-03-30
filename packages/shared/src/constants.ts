@@ -184,7 +184,7 @@ export const PROJECT_COLORS = [
   "#3b82f6", // blue
 ] as const;
 
-export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required"] as const;
+export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required", "spawn_agents"] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
 export const APPROVAL_STATUSES = [
@@ -253,7 +253,7 @@ export const FINANCE_UNITS = [
 ] as const;
 export type FinanceUnit = (typeof FINANCE_UNITS)[number];
 
-export const BUDGET_SCOPE_TYPES = ["company", "agent", "project"] as const;
+export const BUDGET_SCOPE_TYPES = ["company", "agent", "project", "department"] as const;
 export type BudgetScopeType = (typeof BUDGET_SCOPE_TYPES)[number];
 
 export const BUDGET_METRICS = ["billed_cents"] as const;
@@ -687,3 +687,121 @@ export const PLUGIN_BRIDGE_ERROR_CODES = [
   "UNKNOWN",
 ] as const;
 export type PluginBridgeErrorCode = (typeof PLUGIN_BRIDGE_ERROR_CODES)[number];
+
+// ---------------------------------------------------------------------------
+// AgentDash Extensions
+// ---------------------------------------------------------------------------
+
+// Agent Factory — Authority Levels
+export const AGENT_TEMPLATE_AUTHORITY_LEVELS = ["leader", "executor", "specialist"] as const;
+export type AgentTemplateAuthorityLevel = (typeof AGENT_TEMPLATE_AUTHORITY_LEVELS)[number];
+
+// Agent Factory — Task Classifications
+export const TASK_CLASSIFICATIONS = ["deterministic", "stochastic"] as const;
+export type TaskClassification = (typeof TASK_CLASSIFICATIONS)[number];
+
+// Agent Factory — Spawn Request Statuses
+export const SPAWN_REQUEST_STATUSES = [
+  "pending",
+  "approved",
+  "partially_fulfilled",
+  "fulfilled",
+  "rejected",
+  "cancelled",
+] as const;
+export type SpawnRequestStatus = (typeof SPAWN_REQUEST_STATUSES)[number];
+
+// Task Dependencies — Dependency Types
+export const DEPENDENCY_TYPES = ["blocks", "relates_to"] as const;
+export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
+
+// Agent OKRs
+export const OKR_STATUSES = ["active", "achieved", "missed", "cancelled"] as const;
+export type OkrStatus = (typeof OKR_STATUSES)[number];
+
+export const OKR_PERIODS = ["monthly", "quarterly", "annual"] as const;
+export type OkrPeriod = (typeof OKR_PERIODS)[number];
+
+// Security & Policy Engine
+export const SECURITY_POLICY_TYPES = [
+  "resource_access",
+  "action_limit",
+  "data_boundary",
+  "rate_limit",
+  "blast_radius",
+] as const;
+export type SecurityPolicyType = (typeof SECURITY_POLICY_TYPES)[number];
+
+export const SECURITY_TARGET_TYPES = ["agent", "role", "project", "company"] as const;
+export type SecurityTargetType = (typeof SECURITY_TARGET_TYPES)[number];
+
+export const SECURITY_EFFECTS = ["allow", "deny"] as const;
+export type SecurityEffect = (typeof SECURITY_EFFECTS)[number];
+
+export const POLICY_DECISIONS = ["allowed", "denied", "escalated"] as const;
+export type PolicyDecision = (typeof POLICY_DECISIONS)[number];
+
+export const SANDBOX_ISOLATION_LEVELS = ["process", "container", "vm"] as const;
+export type SandboxIsolationLevel = (typeof SANDBOX_ISOLATION_LEVELS)[number];
+
+export const KILL_SWITCH_SCOPES = ["company", "agent"] as const;
+export type KillSwitchScope = (typeof KILL_SWITCH_SCOPES)[number];
+
+export const KILL_SWITCH_ACTIONS = ["halt", "resume"] as const;
+export type KillSwitchAction = (typeof KILL_SWITCH_ACTIONS)[number];
+
+// Budget Extensions
+export const BUDGET_FORECAST_TYPES = ["burn_rate", "deadline_projection", "task_estimate"] as const;
+export type BudgetForecastType = (typeof BUDGET_FORECAST_TYPES)[number];
+
+export const RESOURCE_USAGE_TYPES = ["llm_tokens", "compute_hours", "saas_api_call", "storage_gb", "custom"] as const;
+export type ResourceUsageType = (typeof RESOURCE_USAGE_TYPES)[number];
+
+export const DEPARTMENT_STATUSES = ["active", "paused", "archived"] as const;
+export type DepartmentStatus = (typeof DEPARTMENT_STATUSES)[number];
+
+// Skills Registry
+export const SKILL_VERSION_STATUSES = [
+  "draft",
+  "in_review",
+  "approved",
+  "published",
+  "deprecated",
+  "rejected",
+] as const;
+export type SkillVersionStatus = (typeof SKILL_VERSION_STATUSES)[number];
+
+// AutoResearch
+export const RESEARCH_CYCLE_STATUSES = ["active", "paused", "completed", "cancelled"] as const;
+export type ResearchCycleStatus = (typeof RESEARCH_CYCLE_STATUSES)[number];
+
+export const HYPOTHESIS_STATUSES = ["proposed", "approved", "testing", "validated", "invalidated", "abandoned"] as const;
+export type HypothesisStatus = (typeof HYPOTHESIS_STATUSES)[number];
+
+export const HYPOTHESIS_SOURCES = ["human", "ai", "derived"] as const;
+export type HypothesisSource = (typeof HYPOTHESIS_SOURCES)[number];
+
+export const EXPERIMENT_STATUSES = ["design", "awaiting_approval", "running", "measuring", "evaluating", "completed", "aborted"] as const;
+export type ExperimentStatus = (typeof EXPERIMENT_STATUSES)[number];
+
+export const EVALUATION_VERDICTS = ["validated", "invalidated", "inconclusive"] as const;
+export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+
+export const EVALUATION_NEXT_ACTIONS = ["continue", "pivot", "stop", "new_hypothesis"] as const;
+export type EvaluationNextAction = (typeof EVALUATION_NEXT_ACTIONS)[number];
+
+// Onboarding
+export const ONBOARDING_STEPS = ["discovery", "scope", "goals", "access", "bootstrap"] as const;
+export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+
+export const ONBOARDING_SESSION_STATUSES = ["in_progress", "completed", "abandoned"] as const;
+export type OnboardingSessionStatus = (typeof ONBOARDING_SESSION_STATUSES)[number];
+
+export const ONBOARDING_SOURCE_TYPES = ["url", "file_upload", "github_repo", "notion", "confluence", "text_paste"] as const;
+export type OnboardingSourceType = (typeof ONBOARDING_SOURCE_TYPES)[number];
+
+export const ONBOARDING_SOURCE_STATUSES = ["pending", "processing", "completed", "failed"] as const;
+export type OnboardingSourceStatus = (typeof ONBOARDING_SOURCE_STATUSES)[number];
+
+export const COMPANY_CONTEXT_TYPES = ["domain", "terminology", "process", "tech_stack", "team_structure", "culture"] as const;
+export type CompanyContextType = (typeof COMPANY_CONTEXT_TYPES)[number];

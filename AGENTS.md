@@ -4,8 +4,9 @@ Guidance for human and AI contributors working in this repository.
 
 ## 1. Purpose
 
-Paperclip is a control plane for AI-agent companies.
-The current implementation target is V1 and is defined in `doc/SPEC-implementation.md`.
+AgentDash (AgentDash) is an AI agent orchestration platform for real companies.
+Forked from Paperclip, extended with Agent Factory, AutoResearch, human-agent collaboration, and security-first design.
+See `ARCHITECTURE.md` for the full vision and `doc/SPEC-implementation.md` for the inherited V1 build contract.
 
 ## 2. Read This First
 

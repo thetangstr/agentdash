@@ -32,6 +32,7 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
+import { taskDependencyService } from "./task-dependencies.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -1031,7 +1032,7 @@ export function issueService(db: Db) {
         patch.checkoutRunId = null;
       }
 
-      return db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
           getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
@@ -1063,6 +1064,14 @@ export function issueService(db: Db) {
         const [enriched] = await withIssueLabels(tx, [updated]);
         return enriched;
       });
+
+      // AgentDash: auto-unblock dependents when issue completes
+      if (result && issueData.status && (issueData.status === "done" || issueData.status === "cancelled")) {
+        const deps = taskDependencyService(db);
+        void deps.processCompletionUnblock(existing.companyId, id).catch(() => {});
+      }
+
+      return result;
     },
 
     remove: (id: string) =>

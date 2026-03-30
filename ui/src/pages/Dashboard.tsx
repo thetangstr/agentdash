@@ -6,33 +6,35 @@ import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
-import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
-import { MetricCard } from "../components/MetricCard";
 import { EmptyState } from "../components/EmptyState";
-import { StatusIcon } from "../components/StatusIcon";
-
 import { ActivityRow } from "../components/ActivityRow";
-import { Identity } from "../components/Identity";
-import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
-import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
-import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { Bot, LayoutDashboard, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
 import { PageSkeleton } from "../components/PageSkeleton";
-import type { Agent, Issue } from "@paperclipai/shared";
+import type { Agent } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
-function getRecentIssues(issues: Issue[]): Issue[] {
-  return [...issues]
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function formatBriefingDate(): string {
+  return new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 export function Dashboard() {
-  const { selectedCompanyId, companies } = useCompany();
+  const { selectedCompanyId, selectedCompany, companies } = useCompany();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
   const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
@@ -74,19 +76,11 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
-  const { data: runs } = useQuery({
-    queryKey: queryKeys.heartbeats(selectedCompanyId!),
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
+  const recentActivity = useMemo(() => (activity ?? []).slice(0, 8), [activity]);
 
-  const recentIssues = issues ? getRecentIssues(issues) : [];
-  const recentActivity = useMemo(() => (activity ?? []).slice(0, 10), [activity]);
-
+  // Activity animation logic (preserved from original)
   useEffect(() => {
-    for (const timer of activityAnimationTimersRef.current) {
-      window.clearTimeout(timer);
-    }
+    for (const timer of activityAnimationTimersRef.current) window.clearTimeout(timer);
     activityAnimationTimersRef.current = [];
     seenActivityIdsRef.current = new Set();
     hydratedActivityRef.current = false;
@@ -95,48 +89,25 @@ export function Dashboard() {
 
   useEffect(() => {
     if (recentActivity.length === 0) return;
-
     const seen = seenActivityIdsRef.current;
     const currentIds = recentActivity.map((event) => event.id);
-
     if (!hydratedActivityRef.current) {
       for (const id of currentIds) seen.add(id);
       hydratedActivityRef.current = true;
       return;
     }
-
     const newIds = currentIds.filter((id) => !seen.has(id));
-    if (newIds.length === 0) {
-      for (const id of currentIds) seen.add(id);
-      return;
-    }
-
-    setAnimatedActivityIds((prev) => {
-      const next = new Set(prev);
-      for (const id of newIds) next.add(id);
-      return next;
-    });
-
+    if (newIds.length === 0) { for (const id of currentIds) seen.add(id); return; }
+    setAnimatedActivityIds((prev) => { const next = new Set(prev); for (const id of newIds) next.add(id); return next; });
     for (const id of newIds) seen.add(id);
-
     const timer = window.setTimeout(() => {
-      setAnimatedActivityIds((prev) => {
-        const next = new Set(prev);
-        for (const id of newIds) next.delete(id);
-        return next;
-      });
+      setAnimatedActivityIds((prev) => { const next = new Set(prev); for (const id of newIds) next.delete(id); return next; });
       activityAnimationTimersRef.current = activityAnimationTimersRef.current.filter((t) => t !== timer);
     }, 980);
     activityAnimationTimersRef.current.push(timer);
   }, [recentActivity]);
 
-  useEffect(() => {
-    return () => {
-      for (const timer of activityAnimationTimersRef.current) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, []);
+  useEffect(() => { return () => { for (const timer of activityAnimationTimersRef.current) window.clearTimeout(timer); }; }, []);
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();
@@ -158,228 +129,194 @@ export function Dashboard() {
     return map;
   }, [issues]);
 
-  const agentName = (id: string | null) => {
-    if (!id || !agents) return null;
-    return agents.find((a) => a.id === id)?.name ?? null;
-  };
+  // ── Empty / Loading states ──────────────────────────────────────────
 
   if (!selectedCompanyId) {
     if (companies.length === 0) {
       return (
         <EmptyState
           icon={LayoutDashboard}
-          message="Welcome to Paperclip. Set up your first company and agent to get started."
+          message="Welcome to AgentDash. Set up your first company and agent to get started."
           action="Get Started"
           onAction={openOnboarding}
         />
       );
     }
-    return (
-      <EmptyState icon={LayoutDashboard} message="Create or select a company to view the dashboard." />
-    );
+    return <EmptyState icon={LayoutDashboard} message="Create or select a company to view the dashboard." />;
   }
 
-  if (isLoading) {
-    return <PageSkeleton variant="dashboard" />;
-  }
+  if (isLoading) return <PageSkeleton variant="dashboard" />;
 
   const hasNoAgents = agents !== undefined && agents.length === 0;
+  const totalAgents = data ? data.agents.active + data.agents.running + data.agents.paused + data.agents.error : 0;
+
+  // ── Build attention items ───────────────────────────────────────────
+
+  const attentionItems: Array<{ key: string; tone: "danger" | "warning"; label: string; detail: string; to: string }> = [];
+  if (data) {
+    if (data.agents.error > 0)
+      attentionItems.push({ key: "errors", tone: "danger", label: `${data.agents.error} agent${data.agents.error > 1 ? "s" : ""} in error`, detail: "Needs investigation", to: "/agents/error" });
+    if (data.tasks.blocked > 0)
+      attentionItems.push({ key: "blocked", tone: "danger", label: `${data.tasks.blocked} task${data.tasks.blocked > 1 ? "s" : ""} blocked`, detail: "May be stalling progress", to: "/issues" });
+    if (data.budgets.activeIncidents > 0)
+      attentionItems.push({ key: "budget", tone: "danger", label: `${data.budgets.activeIncidents} budget incident${data.budgets.activeIncidents > 1 ? "s" : ""}`, detail: `${data.budgets.pausedAgents} agents paused`, to: "/costs" });
+    const totalApprovals = data.pendingApprovals + data.budgets.pendingApprovals;
+    if (totalApprovals > 0)
+      attentionItems.push({ key: "approvals", tone: "warning", label: `${totalApprovals} pending approval${totalApprovals > 1 ? "s" : ""}`, detail: "Awaiting your review", to: "/approvals" });
+  }
+
+  // ── Agent status dots ───────────────────────────────────────────────
+
+  const statusDotColor = (status: string) => {
+    if (status === "running") return "bg-cyan-400";
+    if (status === "active" || status === "idle") return "bg-emerald-400";
+    if (status === "paused") return "bg-amber-400";
+    if (status === "error") return "bg-red-400";
+    return "bg-muted-foreground/30";
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-3xl space-y-8 py-2">
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
+      {/* Greeting */}
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">{getGreeting()}</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">{formatBriefingDate()} &middot; {selectedCompany?.name}</p>
+      </div>
+
+      {/* No agents banner */}
       {hasNoAgents && (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-500/25 dark:bg-amber-950/60">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/25 dark:bg-amber-950/60">
           <div className="flex items-center gap-2.5">
             <Bot className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <p className="text-sm text-amber-900 dark:text-amber-100">
-              You have no agents.
-            </p>
+            <p className="text-sm text-amber-900 dark:text-amber-100">No agents yet.</p>
           </div>
           <button
             onClick={() => openOnboarding({ initialStep: 2, companyId: selectedCompanyId! })}
             className="text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100 underline underline-offset-2 shrink-0"
           >
-            Create one here
+            Create one
           </button>
         </div>
       )}
 
-      <ActiveAgentsPanel companyId={selectedCompanyId!} />
-
       {data && (
         <>
-          {data.budgets.activeIncidents > 0 ? (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-500/20 bg-[linear-gradient(180deg,rgba(255,80,80,0.12),rgba(255,255,255,0.02))] px-4 py-3">
-              <div className="flex items-start gap-2.5">
-                <PauseCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
-                <div>
-                  <p className="text-sm font-medium text-red-50">
-                    {data.budgets.activeIncidents} active budget incident{data.budgets.activeIncidents === 1 ? "" : "s"}
-                  </p>
-                  <p className="text-xs text-red-100/70">
-                    {data.budgets.pausedAgents} agents paused · {data.budgets.pausedProjects} projects paused · {data.budgets.pendingApprovals} pending budget approvals
-                  </p>
-                </div>
-              </div>
-              <Link to="/costs" className="text-sm underline underline-offset-2 text-red-100">
-                Open budgets
+          {/* ── Needs Attention ─────────────────────────────────────── */}
+          {attentionItems.length > 0 ? (
+            <div className="space-y-2">
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Needs your attention</h2>
+              {attentionItems.map((item) => (
+                <Link
+                  key={item.key}
+                  to={item.to}
+                  className={cn(
+                    "flex items-center justify-between gap-3 rounded-xl border px-4 py-3 no-underline transition-colors",
+                    item.tone === "danger"
+                      ? "border-red-200 bg-red-50 hover:bg-red-100/70 dark:border-red-500/20 dark:bg-red-950/40 dark:hover:bg-red-950/60"
+                      : "border-amber-200 bg-amber-50 hover:bg-amber-100/70 dark:border-amber-500/20 dark:bg-amber-950/40 dark:hover:bg-amber-950/60",
+                  )}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <AlertTriangle className={cn("h-4 w-4 shrink-0", item.tone === "danger" ? "text-red-500" : "text-amber-500")} />
+                    <div>
+                      <p className={cn("text-sm font-medium", item.tone === "danger" ? "text-red-900 dark:text-red-100" : "text-amber-900 dark:text-amber-100")}>{item.label}</p>
+                      <p className={cn("text-xs", item.tone === "danger" ? "text-red-700/70 dark:text-red-300/70" : "text-amber-700/70 dark:text-amber-300/70")}>{item.detail}</p>
+                    </div>
+                  </div>
+                  <ChevronRight className={cn("h-4 w-4 shrink-0", item.tone === "danger" ? "text-red-400" : "text-amber-400")} />
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-500/20 dark:bg-emerald-950/40">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+              <p className="text-sm text-emerald-800 dark:text-emerald-200">All clear — nothing needs your attention right now.</p>
+            </div>
+          )}
+
+          {/* ── Team Pulse ──────────────────────────────────────────── */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Team</h2>
+              <Link to="/agents" className="text-xs text-primary hover:underline no-underline flex items-center gap-0.5">
+                View all <ChevronRight className="h-3 w-3" />
               </Link>
             </div>
-          ) : null}
+            <div className="rounded-xl border bg-card px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1">
+                  {(agents ?? []).slice(0, 12).map((a) => (
+                    <div key={a.id} className={cn("w-2.5 h-2.5 rounded-full", statusDotColor(a.status))} title={`${a.name}: ${a.status}`} />
+                  ))}
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{totalAgents}</span> agent{totalAgents !== 1 ? "s" : ""}
+                  {data.agents.running > 0 && <> &middot; <span className="text-cyan-600 dark:text-cyan-400">{data.agents.running} running</span></>}
+                  {data.agents.paused > 0 && <> &middot; <span className="text-amber-600 dark:text-amber-400">{data.agents.paused} paused</span></>}
+                  {data.agents.error > 0 && <> &middot; <span className="text-red-500">{data.agents.error} error</span></>}
+                </p>
+              </div>
+            </div>
+          </div>
 
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
-            <MetricCard
-              icon={Bot}
-              value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
-              label="Agents Enabled"
-              to="/agents"
-              description={
-                <span>
-                  {data.agents.running} running{", "}
-                  {data.agents.paused} paused{", "}
-                  {data.agents.error} errors
-                </span>
-              }
-            />
-            <MetricCard
-              icon={CircleDot}
-              value={data.tasks.inProgress}
-              label="Tasks In Progress"
-              to="/issues"
-              description={
-                <span>
-                  {data.tasks.open} open{", "}
-                  {data.tasks.blocked} blocked
-                </span>
-              }
-            />
-            <MetricCard
-              icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
-              to="/costs"
-              description={
-                <span>
+          {/* ── Progress Summary ────────────────────────────────────── */}
+          <div>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">This month</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border bg-card px-4 py-4">
+                <p className="text-3xl font-bold">{data.tasks.done}</p>
+                <p className="text-sm text-muted-foreground mt-0.5">tasks completed</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {data.tasks.inProgress} in progress &middot; {data.tasks.open} open
+                </p>
+              </div>
+              <div className="rounded-xl border bg-card px-4 py-4">
+                <p className="text-3xl font-bold">{formatCents(data.costs.monthSpendCents)}</p>
+                <p className="text-sm text-muted-foreground mt-0.5">spent this month</p>
+                <p className="text-xs text-muted-foreground mt-2">
                   {data.costs.monthBudgetCents > 0
                     ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
-                </span>
-              }
-            />
-            <MetricCard
-              icon={ShieldCheck}
-              value={data.pendingApprovals + data.budgets.pendingApprovals}
-              label="Pending Approvals"
-              to="/approvals"
-              description={
-                <span>
-                  {data.budgets.pendingApprovals > 0
-                    ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
-                    : "Awaiting board review"}
-                </span>
-              }
-            />
+                    : "No budget set"}
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <ChartCard title="Run Activity" subtitle="Last 14 days">
-              <RunActivityChart runs={runs ?? []} />
-            </ChartCard>
-            <ChartCard title="Issues by Priority" subtitle="Last 14 days">
-              <PriorityChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Issues by Status" subtitle="Last 14 days">
-              <IssueStatusChart issues={issues ?? []} />
-            </ChartCard>
-            <ChartCard title="Success Rate" subtitle="Last 14 days">
-              <SuccessRateChart runs={runs ?? []} />
-            </ChartCard>
-          </div>
-
+          {/* ── Plugin widgets ──────────────────────────────────────── */}
           <PluginSlotOutlet
             slotTypes={["dashboardWidget"]}
             context={{ companyId: selectedCompanyId }}
             className="grid gap-4 md:grid-cols-2"
-            itemClassName="rounded-lg border bg-card p-4 shadow-sm"
+            itemClassName="rounded-xl border bg-card p-4"
           />
 
-          <div className="grid md:grid-cols-2 gap-4">
-            {/* Recent Activity */}
-            {recentActivity.length > 0 && (
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                  Recent Activity
-                </h3>
-                <div className="border border-border divide-y divide-border overflow-hidden">
-                  {recentActivity.map((event) => (
-                    <ActivityRow
-                      key={event.id}
-                      event={event}
-                      agentMap={agentMap}
-                      entityNameMap={entityNameMap}
-                      entityTitleMap={entityTitleMap}
-                      className={animatedActivityIds.has(event.id) ? "activity-row-enter" : undefined}
-                    />
-                  ))}
-                </div>
+          {/* ── Recent Activity ─────────────────────────────────────── */}
+          {recentActivity.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent activity</h2>
+                <Link to="/activity" className="text-xs text-primary hover:underline no-underline flex items-center gap-0.5">
+                  View all <ChevronRight className="h-3 w-3" />
+                </Link>
               </div>
-            )}
-
-            {/* Recent Tasks */}
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                Recent Tasks
-              </h3>
-              {recentIssues.length === 0 ? (
-                <div className="border border-border p-4">
-                  <p className="text-sm text-muted-foreground">No tasks yet.</p>
-                </div>
-              ) : (
-                <div className="border border-border divide-y divide-border overflow-hidden">
-                  {recentIssues.slice(0, 10).map((issue) => (
-                    <Link
-                      key={issue.id}
-                      to={`/issues/${issue.identifier ?? issue.id}`}
-                      className="px-4 py-3 text-sm cursor-pointer hover:bg-accent/50 transition-colors no-underline text-inherit block"
-                    >
-                      <div className="flex items-start gap-2 sm:items-center sm:gap-3">
-                        {/* Status icon - left column on mobile */}
-                        <span className="shrink-0 sm:hidden">
-                          <StatusIcon status={issue.status} />
-                        </span>
-
-                        {/* Right column on mobile: title + metadata stacked */}
-                        <span className="flex min-w-0 flex-1 flex-col gap-1 sm:contents">
-                          <span className="line-clamp-2 text-sm sm:order-2 sm:flex-1 sm:min-w-0 sm:line-clamp-none sm:truncate">
-                            {issue.title}
-                          </span>
-                          <span className="flex items-center gap-2 sm:order-1 sm:shrink-0">
-                            <span className="hidden sm:inline-flex"><StatusIcon status={issue.status} /></span>
-                            <span className="text-xs font-mono text-muted-foreground">
-                              {issue.identifier ?? issue.id.slice(0, 8)}
-                            </span>
-                            {issue.assigneeAgentId && (() => {
-                              const name = agentName(issue.assigneeAgentId);
-                              return name
-                                ? <span className="hidden sm:inline-flex"><Identity name={name} size="sm" /></span>
-                                : null;
-                            })()}
-                            <span className="text-xs text-muted-foreground sm:hidden">&middot;</span>
-                            <span className="text-xs text-muted-foreground shrink-0 sm:order-last">
-                              {timeAgo(issue.updatedAt)}
-                            </span>
-                          </span>
-                        </span>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
+              <div className="rounded-xl border divide-y divide-border overflow-hidden">
+                {recentActivity.map((event) => (
+                  <ActivityRow
+                    key={event.id}
+                    event={event}
+                    agentMap={agentMap}
+                    entityNameMap={entityNameMap}
+                    entityTitleMap={entityTitleMap}
+                    className={animatedActivityIds.has(event.id) ? "activity-row-enter" : undefined}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-
+          )}
         </>
       )}
     </div>

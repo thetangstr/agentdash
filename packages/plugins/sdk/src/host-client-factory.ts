@@ -330,6 +330,12 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "goals.get": "goals.read",
   "goals.create": "goals.create",
   "goals.update": "goals.update",
+
+  // iGotit: Sync mapping + measurements
+  "sync.registerMapping": null,
+  "sync.getMapping": null,
+  "sync.getMappingByPaperclipId": null,
+  "measurements.record": "metrics.write",
 };
 
 // ---------------------------------------------------------------------------
@@ -554,6 +560,21 @@ export function createHostClientHandlers(
     }),
     "goals.update": gated("goals.update", async (params) => {
       return services.goals.update(params);
+    }),
+
+    // iGotit: Sync mapping + measurements (placeholder implementations)
+    "sync.registerMapping": async (params) => {
+      // Placeholder — full implementation will use plugin_entities table
+      return { mappingId: `mapping-${Date.now()}` };
+    },
+    "sync.getMapping": async (_params) => {
+      return null;
+    },
+    "sync.getMappingByPaperclipId": async (_params) => {
+      return null;
+    },
+    "measurements.record": gated("measurements.record", async (_params) => {
+      return { measurementId: `measurement-${Date.now()}` };
     }),
   };
 }

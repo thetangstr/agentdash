@@ -1,0 +1,34 @@
+{
+  "id": "agentdash.integration-slack",
+  "displayName": "Slack Integration",
+  "version": "0.1.0",
+  "description": "Agent presence in Slack channels, escalation, approval notifications",
+  "categories": ["connector"],
+  "capabilities": [
+    "issues.read", "issues.create", "issues.update",
+    "issue.comments.read", "issue.comments.create",
+    "agents.read", "agents.invoke",
+    "events.subscribe", "events.emit",
+    "webhooks.receive", "jobs.schedule",
+    "plugin.state.read", "plugin.state.write",
+    "http.outbound", "secrets.read-ref",
+    "activity.log.write"
+  ],
+  "webhooks": [
+    { "endpointKey": "slack-events", "displayName": "Slack Events API" },
+    { "endpointKey": "slack-interactions", "displayName": "Slack Interactive Components" }
+  ],
+  "jobs": [
+    { "jobKey": "presence-sync", "schedule": "*/5 * * * *", "displayName": "Agent Presence Sync" }
+  ],
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "botToken": { "type": "string", "title": "Bot Token (secret ref)" },
+      "signingSecret": { "type": "string", "title": "Signing Secret (secret ref)" },
+      "defaultChannel": { "type": "string", "title": "Default notification channel" },
+      "escalationChannel": { "type": "string", "title": "Human escalation channel" }
+    },
+    "required": ["botToken", "signingSecret"]
+  }
+}

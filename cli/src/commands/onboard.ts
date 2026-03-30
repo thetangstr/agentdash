@@ -32,7 +32,7 @@ import {
   resolvePaperclipInstanceId,
 } from "../config/home.js";
 import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
-import { printPaperclipCliBanner } from "../utils/banner.js";
+import { printAgentDashCliBanner } from "../utils/banner.js";
 
 type SetupMode = "quickstart" | "advanced";
 
@@ -234,7 +234,7 @@ function canCreateBootstrapInviteImmediately(config: Pick<PaperclipConfig, "data
 }
 
 export async function onboard(opts: OnboardOptions): Promise<void> {
-  printPaperclipCliBanner();
+  printAgentDashCliBanner();
   p.intro(pc.bgCyan(pc.black(" paperclipai onboard ")));
   const configPath = resolveConfigPath(opts.config);
   const instance = describeLocalInstancePaths(resolvePaperclipInstanceId());

@@ -11,6 +11,12 @@ import {
   Boxes,
   Repeat,
   Settings,
+  Factory,
+  Shield,
+  BarChart3,
+  FlaskConical,
+  Compass,
+  Briefcase,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -48,15 +54,17 @@ export function Sidebar() {
 
   return (
     <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">
-      {/* Top bar: Company name (bold) + Search — aligned with top sections (no visible border) */}
-      <div className="flex items-center gap-1 px-3 h-12 shrink-0">
+      {/* Brand wordmark + company name */}
+      <div className="flex items-center gap-1.5 px-3 h-12 shrink-0">
+        <span className="text-sm font-bold tracking-tight text-primary">AgentDash</span>
+        <span className="text-border select-none">|</span>
         {selectedCompany?.brandColor && (
           <div
-            className="w-4 h-4 rounded-sm shrink-0 ml-1"
+            className="w-3 h-3 rounded-sm shrink-0"
             style={{ backgroundColor: selectedCompany.brandColor }}
           />
         )}
-        <span className="flex-1 text-sm font-bold text-foreground truncate pl-1">
+        <span className="flex-1 text-xs font-medium text-muted-foreground truncate">
           {selectedCompany?.name ?? "Select company"}
         </span>
         <Button
@@ -71,7 +79,6 @@ export function Sidebar() {
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
         <div className="flex flex-col gap-0.5">
-          {/* New Issue button aligned with nav items */}
           <button
             onClick={() => openNewIssue()}
             className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
@@ -106,6 +113,18 @@ export function Sidebar() {
         <SidebarProjects />
 
         <SidebarAgents />
+
+        <SidebarSection label="CRM">
+          <SidebarNavItem to="/crm" label="Pipeline" icon={Briefcase} />
+        </SidebarSection>
+
+        <SidebarSection label="AgentDash">
+          <SidebarNavItem to="/templates" label="Templates" icon={Factory} />
+          <SidebarNavItem to="/capacity" label="Capacity" icon={BarChart3} />
+          <SidebarNavItem to="/security" label="Security" icon={Shield} />
+          <SidebarNavItem to="/research" label="Research" icon={FlaskConical} />
+          <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
+        </SidebarSection>
 
         <SidebarSection label="Company">
           <SidebarNavItem to="/org" label="Org" icon={Network} />

@@ -57,6 +57,7 @@ import {
   resolveSessionCompactionPolicy,
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
+import { promptBuilderService } from "./prompt-builder.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -2496,6 +2497,24 @@ export function heartbeatService(db: Db) {
           payload: meta as unknown as Record<string, unknown>,
         });
       };
+
+      // AgentDash: inject coordination prompt into context
+      try {
+        const promptBuilder = promptBuilderService(db);
+        const issueIdForPrompt = readNonEmptyString(context.issueId) ?? undefined;
+        const coordinationPrompt = await promptBuilder.buildCoordinationPrompt({
+          agentId: agent.id,
+          companyId: agent.companyId,
+          issueId: issueIdForPrompt,
+          runId: run.id,
+        });
+        context.paperclipCoordinationPrompt = coordinationPrompt.fullText;
+      } catch (err) {
+        await onLog(
+          "stderr",
+          `[agentdash] Failed to build coordination prompt: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
 
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt

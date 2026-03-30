@@ -1,0 +1,45 @@
+{
+  "id": "agentdash.integration-linear",
+  "displayName": "Linear Integration",
+  "version": "0.1.0",
+  "description": "Bidirectional issue sync between iGotit and Linear, status mapping, comment mirroring",
+  "categories": ["connector"],
+  "capabilities": [
+    "issues.read", "issues.create", "issues.update",
+    "issue.comments.read", "issue.comments.create",
+    "agents.read",
+    "events.subscribe", "events.emit",
+    "webhooks.receive", "jobs.schedule",
+    "plugin.state.read", "plugin.state.write",
+    "http.outbound", "secrets.read-ref",
+    "activity.log.write",
+    "sync.register", "sync.read"
+  ],
+  "webhooks": [
+    { "endpointKey": "linear-webhook", "displayName": "Linear Webhook" }
+  ],
+  "jobs": [
+    { "jobKey": "full-sync", "schedule": "0 * * * *", "displayName": "Full Linear Sync" }
+  ],
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string", "title": "Linear API Key (secret ref)" },
+      "teamId": { "type": "string", "title": "Linear Team ID" },
+      "webhookSecret": { "type": "string", "title": "Webhook signing secret (secret ref)" },
+      "statusMapping": {
+        "type": "object",
+        "title": "Status mapping (Linear status -> iGotit status)",
+        "additionalProperties": { "type": "string" }
+      },
+      "syncComments": { "type": "boolean", "title": "Mirror comments bidirectionally", "default": true },
+      "syncDirection": {
+        "type": "string",
+        "title": "Default sync direction",
+        "enum": ["inbound", "outbound", "bidirectional"],
+        "default": "bidirectional"
+      }
+    },
+    "required": ["apiKey", "teamId"]
+  }
+}
