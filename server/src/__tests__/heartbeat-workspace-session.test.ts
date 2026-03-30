@@ -3,11 +3,13 @@ import type { agents } from "@paperclipai/db";
 import { sessionCodec as codexSessionCodec } from "@paperclipai/adapter-codex-local/server";
 import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 import {
+  applyPersistedExecutionWorkspaceConfig,
   buildExplicitResumeSessionOverride,
   formatRuntimeWorkspaceWarningLog,
   prioritizeProjectWorkspaceCandidatesForRun,
   parseSessionCompactionPolicy,
   resolveRuntimeSessionParamsForWorkspace,
+  stripWorkspaceRuntimeFromExecutionRunConfig,
   shouldResetTaskSessionForWake,
   type ResolvedWorkspaceForRun,
 } from "../services/heartbeat.ts";
@@ -117,6 +119,64 @@ describe("resolveRuntimeSessionParamsForWorkspace", () => {
       workspaceId: "workspace-1",
     });
     expect(result.warning).toBeNull();
+  });
+});
+
+describe("applyPersistedExecutionWorkspaceConfig", () => {
+  it("does not add workspace runtime when only the project workspace had manual runtime config", () => {
+    const result = applyPersistedExecutionWorkspaceConfig({
+      config: {},
+      workspaceConfig: null,
+      mode: "isolated_workspace",
+    });
+
+    expect("workspaceRuntime" in result).toBe(false);
+  });
+
+  it("applies explicit persisted execution workspace runtime config when present", () => {
+    const result = applyPersistedExecutionWorkspaceConfig({
+      config: {},
+      workspaceConfig: {
+        provisionCommand: null,
+        teardownCommand: null,
+        cleanupCommand: null,
+        desiredState: null,
+        workspaceRuntime: {
+          services: [{ name: "workspace-web" }],
+        },
+      },
+      mode: "isolated_workspace",
+    });
+
+    expect(result.workspaceRuntime).toEqual({
+      services: [{ name: "workspace-web" }],
+    });
+  });
+});
+
+describe("stripWorkspaceRuntimeFromExecutionRunConfig", () => {
+  it("removes workspace runtime before heartbeat execution", () => {
+    const input = {
+      cwd: "/tmp/project",
+      workspaceStrategy: {
+        type: "git_worktree",
+      },
+      workspaceRuntime: {
+        services: [{ name: "web" }],
+      },
+    };
+
+    const result = stripWorkspaceRuntimeFromExecutionRunConfig(input);
+
+    expect(result).toEqual({
+      cwd: "/tmp/project",
+      workspaceStrategy: {
+        type: "git_worktree",
+      },
+    });
+    expect(input.workspaceRuntime).toEqual({
+      services: [{ name: "web" }],
+    });
   });
 });
 
