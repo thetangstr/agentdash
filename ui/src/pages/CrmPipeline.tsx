@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 
 const STAGE_META: Record<string, { label: string; color: string }> = {
@@ -14,6 +15,12 @@ const STAGE_META: Record<string, { label: string; color: string }> = {
 export function CrmPipeline() {
   const { selectedCompany } = useCompany();
   const cid = selectedCompany?.id;
+
+  const { data: hubspotConfig } = useQuery({
+    queryKey: ["hubspot-config", cid],
+    queryFn: async () => { const r = await fetch(`/api/companies/${cid}/integrations/hubspot/config`); return r.json(); },
+    enabled: !!cid,
+  });
 
   const { data: pipeline } = useQuery({
     queryKey: ["crm-pipeline", cid],
@@ -51,6 +58,16 @@ export function CrmPipeline() {
         <h1 className="text-2xl font-bold">CRM</h1>
         <p className="text-sm text-muted-foreground mt-1">Customer relationships, pipeline, and revenue tracking</p>
       </div>
+
+      {/* AgentDash: HubSpot connection banner */}
+      {hubspotConfig && !hubspotConfig.configured && (
+        <Link to="/crm/hubspot" className="block">
+          <div className="rounded-xl border border-dashed border-primary/40 bg-primary/5 p-5 hover:bg-primary/10 transition-colors">
+            <p className="font-semibold text-primary">Connect HubSpot</p>
+            <p className="text-sm text-muted-foreground mt-1">Sync your contacts, companies, deals, and activities from HubSpot.</p>
+          </div>
+        </Link>
+      )}
 
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">

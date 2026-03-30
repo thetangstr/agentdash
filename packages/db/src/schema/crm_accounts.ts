@@ -113,6 +113,7 @@ export const crmActivities = pgTable(
     index("crm_activities_company_idx").on(table.companyId, table.occurredAt),
     index("crm_activities_account_idx").on(table.accountId, table.occurredAt),
     index("crm_activities_deal_idx").on(table.dealId, table.occurredAt),
+    uniqueIndex("crm_activities_external_unique").on(table.companyId, table.externalSource, table.externalId),
   ],
 );
 

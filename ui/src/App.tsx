@@ -34,6 +34,7 @@ import { CapacityDashboard } from "./pages/CapacityDashboard";
 import { ResearchDashboard } from "./pages/ResearchDashboard";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
 import { CrmPipeline } from "./pages/CrmPipeline";
+import { HubSpotSettings } from "./pages/HubSpotSettings";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -182,6 +183,7 @@ function boardRoutes() {
       <Route path="research" element={<ResearchDashboard />} />
       <Route path="setup" element={<OnboardingWizardPage />} />
       <Route path="crm" element={<CrmPipeline />} />
+      <Route path="crm/hubspot" element={<HubSpotSettings />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="tests/ux/runs" element={<RunTranscriptUxLab />} />
       <Route path=":pluginRoutePath" element={<PluginPage />} />

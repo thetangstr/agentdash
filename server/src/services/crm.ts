@@ -316,6 +316,23 @@ export function crmService(db: Db) {
       .orderBy(desc(crmActivities.createdAt));
   }
 
+  async function upsertActivityByExternalId(
+    companyId: string,
+    externalSource: string,
+    externalId: string,
+    data: Omit<typeof crmActivities.$inferInsert, "id" | "companyId" | "externalId" | "externalSource" | "createdAt">,
+  ) {
+    return db
+      .insert(crmActivities)
+      .values({ ...data, companyId, externalSource, externalId })
+      .onConflictDoUpdate({
+        target: [crmActivities.companyId, crmActivities.externalSource, crmActivities.externalId],
+        set: { ...data },
+      })
+      .returning()
+      .then((rows) => rows[0]);
+  }
+
   async function getActivitiesForAccount(accountId: string) {
     return db
       .select()
@@ -382,6 +399,7 @@ export function crmService(db: Db) {
     // Activities
     listActivities,
     createActivity,
+    upsertActivityByExternalId,
     getActivitiesForDeal,
     getActivitiesForAccount,
 

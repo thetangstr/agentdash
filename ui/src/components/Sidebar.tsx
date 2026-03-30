@@ -17,6 +17,7 @@ import {
   FlaskConical,
   Compass,
   Briefcase,
+  Link2,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -116,6 +117,7 @@ export function Sidebar() {
 
         <SidebarSection label="CRM">
           <SidebarNavItem to="/crm" label="Pipeline" icon={Briefcase} />
+          <SidebarNavItem to="/crm/hubspot" label="HubSpot" icon={Link2} />
         </SidebarSection>
 
         <SidebarSection label="AgentDash">
