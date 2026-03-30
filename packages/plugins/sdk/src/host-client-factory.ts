@@ -331,7 +331,7 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "goals.create": "goals.create",
   "goals.update": "goals.update",
 
-  // iGotit: Sync mapping + measurements
+  // AgentDash: Sync mapping + measurements
   "sync.registerMapping": null,
   "sync.getMapping": null,
   "sync.getMappingByPaperclipId": null,
@@ -562,7 +562,7 @@ export function createHostClientHandlers(
       return services.goals.update(params);
     }),
 
-    // iGotit: Sync mapping + measurements (placeholder implementations)
+    // AgentDash: Sync mapping + measurements (placeholder implementations)
     "sync.registerMapping": async (params) => {
       // Placeholder — full implementation will use plugin_entities table
       return { mappingId: `mapping-${Date.now()}` };

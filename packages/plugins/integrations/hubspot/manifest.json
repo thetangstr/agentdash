@@ -115,7 +115,7 @@
       "dealStageMapping": {
         "type": "object",
         "title": "Deal Stage to Issue Status Mapping",
-        "description": "Map HubSpot deal stages to iGotit issue statuses",
+        "description": "Map HubSpot deal stages to AgentDash issue statuses",
         "properties": {
           "appointmentscheduled": { "type": "string", "default": "backlog" },
           "qualifiedtobuy": { "type": "string", "default": "todo" },

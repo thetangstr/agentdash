@@ -1,8 +1,8 @@
-# iGotit (IGT) Full Architecture Plan
+# AgentDash (IGT) Full Architecture Plan
 
 ## Context
 
-iGotit is a fork of Paperclip (AI agent orchestration control plane) extended with 7 major new systems to make it enterprise-grade: Agent Factory, Task Dependencies, AutoResearch, Integrations, Security/Policy Engine, Budget improvements, Skills Registry, and Onboarding. The goal is a deployable orchestration layer for baremetal/cloud that plugs into existing company infrastructure. We also incorporate design patterns from ClawTeam (auto-injected coordination prompts, task dependency DAG, team templates).
+AgentDash is a fork of Paperclip (AI agent orchestration control plane) extended with 7 major new systems to make it enterprise-grade: Agent Factory, Task Dependencies, AutoResearch, Integrations, Security/Policy Engine, Budget improvements, Skills Registry, and Onboarding. The goal is a deployable orchestration layer for baremetal/cloud that plugs into existing company infrastructure. We also incorporate design patterns from ClawTeam (auto-injected coordination prompts, task dependency DAG, team templates).
 
 **Key architectural principle**: New features are built as additive layers — new tables, new services, new packages — minimizing changes to existing Paperclip code for upstream merge compatibility.
 
@@ -12,12 +12,12 @@ iGotit is a fork of Paperclip (AI agent orchestration control plane) extended wi
 
 ```
                     ┌─────────────────────────────────┐
-                    │         iGotit Dashboard         │
+                    │         AgentDash Dashboard         │
                     │     (React 19 + Vite + TW4)     │
                     └──────────────┬──────────────────┘
                                    │
                     ┌──────────────▼──────────────────┐
-                    │       iGotit Control Plane       │
+                    │       AgentDash Control Plane       │
                     │     (Express 5 + WebSocket)      │
                     │                                  │
                     │  ┌───────────────────────────┐   │
@@ -28,7 +28,7 @@ iGotit is a fork of Paperclip (AI agent orchestration control plane) extended wi
                     │  └───────────────────────────┘   │
                     │                                  │
                     │  ┌───────────────────────────┐   │
-                    │  │ iGotit Extensions          │   │
+                    │  │ AgentDash Extensions          │   │
                     │  │ Agent Factory, Task DAG,   │   │
                     │  │ AutoResearch, Policy Engine│   │
                     │  │ Onboarding, Skills Registry│   │

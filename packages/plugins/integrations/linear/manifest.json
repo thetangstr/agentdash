@@ -2,7 +2,7 @@
   "id": "agentdash.integration-linear",
   "displayName": "Linear Integration",
   "version": "0.1.0",
-  "description": "Bidirectional issue sync between iGotit and Linear, status mapping, comment mirroring",
+  "description": "Bidirectional issue sync between AgentDash and Linear, status mapping, comment mirroring",
   "categories": ["connector"],
   "capabilities": [
     "issues.read", "issues.create", "issues.update",
@@ -29,7 +29,7 @@
       "webhookSecret": { "type": "string", "title": "Webhook signing secret (secret ref)" },
       "statusMapping": {
         "type": "object",
-        "title": "Status mapping (Linear status -> iGotit status)",
+        "title": "Status mapping (Linear status -> AgentDash status)",
         "additionalProperties": { "type": "string" }
       },
       "syncComments": { "type": "boolean", "title": "Mirror comments bidirectionally", "default": true },

@@ -57,7 +57,7 @@ export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 
-// iGotit extensions
+// AgentDash extensions
 export { issueDependencies } from "./issue_dependencies.js";
 export { agentTemplates } from "./agent_templates.js";
 export { spawnRequests } from "./spawn_requests.js";
