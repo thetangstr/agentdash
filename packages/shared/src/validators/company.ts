@@ -8,6 +8,7 @@ export const createCompanySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().nullable(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
+  brandColor: brandColorSchema,
 });
 
 export type CreateCompany = z.infer<typeof createCompanySchema>;

@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
+import { departments } from "./departments.js";
 
 export const agentTemplates = pgTable(
   "agent_templates",
@@ -23,6 +24,7 @@ export const agentTemplates = pgTable(
     estimatedCostPerTaskCents: integer("estimated_cost_per_task_cents"),
     estimatedMinutesPerTask: integer("estimated_minutes_per_task"),
     budgetMonthlyCents: integer("budget_monthly_cents").notNull().default(0),
+    departmentId: uuid("department_id").references(() => departments.id),
     permissions: jsonb("permissions").notNull().$type<Record<string, unknown>>().default({}),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),

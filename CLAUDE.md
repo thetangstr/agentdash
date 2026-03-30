@@ -118,13 +118,28 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 
 ## Upstream Sync
 
-Paperclip tracked as `upstream` remote. To pull updates:
+Paperclip tracked as `upstream` remote. Use the sync script:
+
 ```sh
-git checkout agentdash-upstream-sync
-git fetch upstream && git merge upstream/master
-# test, resolve conflicts
-git checkout agentdash-main && git merge agentdash-upstream-sync
+bash scripts/upstream-sync.sh --dry-run   # Preview: new commits, conflicts, risk areas
+bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 ```
+
+**Manual process** (if script unavailable):
+1. `git fetch upstream`
+2. `git checkout -b agentdash-upstream-sync`
+3. `git merge upstream/master` — resolve conflicts
+4. `pnpm install && pnpm -r typecheck && pnpm test:run && pnpm build`
+5. `bash scripts/dry-run-onboarding.sh` — verify AgentDash flows
+6. `git checkout <working-branch> && git merge agentdash-upstream-sync`
+
+**Conflict-prone files** (AgentDash modifies these Paperclip core files):
+- `ui/src/App.tsx` — AgentDash routes
+- `ui/src/components/Sidebar.tsx` — AgentDash nav items
+- `server/src/index.ts` — AgentDash route wiring
+- `packages/shared/src/constants.ts` — AgentDash status enums
+- `README.md` — AgentDash branding
+- `ui/index.html` — AgentDash title/meta
 
 ## Key Docs
 

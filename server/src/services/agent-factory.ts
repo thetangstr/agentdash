@@ -22,6 +22,7 @@ interface CreateTemplateData {
   adapterConfig?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
   skillKeys?: string[];
+  skills?: string[]; // alias for skillKeys
   instructionsTemplate?: string | null;
   okrs?: Array<{ objective: string; keyResults: Array<{ metric: string; target: number; unit: string }> }>;
   kpis?: Array<{ name: string; metric: string; target: number; unit: string; frequency: string }>;
@@ -30,6 +31,8 @@ interface CreateTemplateData {
   estimatedCostPerTaskCents?: number | null;
   estimatedMinutesPerTask?: number | null;
   budgetMonthlyCents?: number;
+  defaultBudgetCents?: number; // alias for budgetMonthlyCents
+  departmentId?: string | null;
   permissions?: Record<string, unknown>;
   metadata?: Record<string, unknown> | null;
 }
@@ -108,9 +111,13 @@ export function agentFactoryService(db: Db) {
     createTemplate: async (companyId: string, data: CreateTemplateData) => {
       await assertSlugUnique(companyId, data.slug);
 
+      // Resolve aliases
+      const { skills, defaultBudgetCents, ...rest } = data;
       const values: TemplateInsert = {
         companyId,
-        ...data,
+        ...rest,
+        skillKeys: rest.skillKeys ?? skills ?? [],
+        budgetMonthlyCents: rest.budgetMonthlyCents ?? defaultBudgetCents ?? 0,
       };
 
       return db
@@ -294,6 +301,7 @@ export function agentFactoryService(db: Db) {
             adapterType: template.adapterType,
             adapterConfig: { ...template.adapterConfig, ...spawnRequest.agentConfig },
             budgetMonthlyCents: template.budgetMonthlyCents,
+            departmentId: template.departmentId ?? null,
             status: "idle",
           })
           .returning();
