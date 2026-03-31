@@ -32,8 +32,8 @@ source_env_path="$(dirname "$source_config_path")/.env"
 mkdir -p "$paperclip_dir"
 
 run_isolated_worktree_init() {
-  if command -v pnpm >/dev/null 2>&1 && pnpm paperclipai --help >/dev/null 2>&1; then
-    pnpm paperclipai worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
+  if command -v pnpm >/dev/null 2>&1 && pnpm agentdash --help >/dev/null 2>&1; then
+    pnpm agentdash worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
     return 0
   fi
 

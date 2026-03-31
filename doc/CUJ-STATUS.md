@@ -1,7 +1,7 @@
 # AgentDash — CUJ & Feature Status
 
-**Last updated:** 2026-03-30
-**Test results:** 60/60 CUJ tests pass, 721 Vitest unit/integration tests pass
+**Last updated:** 2026-03-31
+**Test results:** 60/60 CUJ tests pass, 775 Vitest unit/integration tests pass (148 test files)
 
 ---
 
@@ -217,7 +217,54 @@
 | CUJ-8: Security Policies | Fully Operational | 5/5 | 7 |
 | CUJ-9: Skill Management | Backend complete | 6/6 | 3 |
 | CUJ-10: Budget & Capacity | Backend complete | 6/6 | 5 |
-| **Total** | | **60/60** | **37 + 684 inherited** |
+| **Total** | | **60/60** | **37 + 738 inherited = 775** |
+
+### New Features (Post-V1)
+
+#### Pipeline Orchestrator
+
+**Status: Operational**
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Create multi-stage pipelines | Done | Linked to agents |
+| Pipeline runs with auto-advance | Done | Stage-by-stage execution |
+| Stage issue creation | Done | Issues created per stage |
+| CRM lifecycle hooks on completion | Done | Fire-and-forget CRM updates |
+| Pipeline UI page | Done | Stage progress visualization |
+
+#### Action Proposals
+
+**Status: Operational**
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Generate action proposals | Done | Agent-originated proposals |
+| Policy engine evaluation | Done | Auto-approve/escalate/deny decisions |
+| Evidence display | Done | Supporting data rendered in UI |
+| CRM link integration | Done | Links to relevant CRM entities |
+
+#### Operator Feed
+
+**Status: Operational**
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Personalized feed aggregation | Done | Issues, approvals, agent activity |
+| Priority ranking | Done | Attention items surfaced first |
+| Feed page UI | Done | Chronological + priority views |
+
+#### Execution Workspaces
+
+**Status: Operational**
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Workspace lifecycle management | Done | Create, provision, close |
+| Runtime service supervision | Done | Heartbeat sessions |
+| Workspace close dialog | Done | Graceful shutdown UI |
+
+---
 
 ### Remaining P1 Work (UI gaps)
 

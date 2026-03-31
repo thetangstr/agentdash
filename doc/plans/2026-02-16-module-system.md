@@ -589,10 +589,10 @@ The Company Store is a registry for discovering and installing modules and templ
 ### CLI Commands
 
 ```bash
-pnpm paperclipai store list                    # browse available modules and templates
-pnpm paperclipai store install <module-id>     # install a module
-pnpm paperclipai store import <template-id>    # import a company template
-pnpm paperclipai store export                  # export current company as template
+pnpm agentdash store list                    # browse available modules and templates
+pnpm agentdash store install <module-id>     # install a module
+pnpm agentdash store import <template-id>    # import a company template
+pnpm agentdash store export                  # export current company as template
 ```
 
 ---
