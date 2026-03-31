@@ -20,6 +20,8 @@ export const goals = pgTable(
     status: text("status").notNull().default("planned"),
     parentId: uuid("parent_id").references((): AnyPgColumn => goals.id),
     ownerAgentId: uuid("owner_agent_id").references(() => agents.id),
+    priority: text("priority").default("medium"),
+    targetDate: timestamp("target_date", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

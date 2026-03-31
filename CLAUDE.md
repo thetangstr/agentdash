@@ -116,15 +116,66 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - Internal package scopes remain `@paperclipai/*` (upstream compatibility)
 - Primary color: Teal — company-customizable via `themeAccentColor`
 
+## Multi-Agent Workflow (MAW)
+
+**MANDATORY:** Feature and bug development should run through MAW unless this is a production hotfix or pure infrastructure work.
+
+### Quick Start
+
+- `/workon AD-123` — full intake -> locally-tested workflow for one Linear issue
+- `/pm <description>` — elaborate requirements and create/update issue scope
+- `/builder AD-123` — implement a specific issue
+- `/tester AD-123` — run the tester workflow for a specific issue
+- `/tpm sync` — ship `Human-Verified` issues
+
+### Agent Roles
+
+| Agent | Role | Invoked By |
+|-------|------|------------|
+| **PM** | Elaborate requirements, size issues, define test plan | `/workon` or `/pm` |
+| **Builder** | Implement feature, add tests, create PR | `/workon` or `/builder` |
+| **Tester** | Run E2E tests, code review, Chrome CUJ verification | `/workon` or `/tester` |
+| **TPM** | Project planning and sole merge authority to `main` | `/tpm sync` |
+| **Admin** | Ops-only health, deploy, and environment checks | `/admin` |
+
+### Deployment Policy
+
+| Size | Path |
+|------|------|
+| XS/S (1-2 pts) | PR -> `main`, auto-ships after local verification |
+| M/L (3-5 pts) | PR -> `main`, human verification required before `/tpm sync` |
+| XL (8+ pts) | PR -> `main` or `staging` if `staging-required`, human verification required |
+
+### References
+
+- `doc/maw/sop.md` — primary MAW operating procedure
+- `doc/maw/protocol.md` — agent handoff and comment protocol
+- `.claude/commands/README.md` — slash-command quick reference
+
 ## Upstream Sync
 
-Paperclip tracked as `upstream` remote. To pull updates:
+Paperclip tracked as `upstream` remote. Use the sync script:
+
 ```sh
-git checkout agentdash-upstream-sync
-git fetch upstream && git merge upstream/master
-# test, resolve conflicts
-git checkout agentdash-main && git merge agentdash-upstream-sync
+bash scripts/upstream-sync.sh --dry-run   # Preview: new commits, conflicts, risk areas
+bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 ```
+
+**Manual process** (if script unavailable):
+1. `git fetch upstream`
+2. `git checkout -b agentdash-upstream-sync`
+3. `git merge upstream/master` — resolve conflicts
+4. `pnpm install && pnpm -r typecheck && pnpm test:run && pnpm build`
+5. `bash scripts/dry-run-onboarding.sh` — verify AgentDash flows
+6. `git checkout <working-branch> && git merge agentdash-upstream-sync`
+
+**Conflict-prone files** (AgentDash modifies these Paperclip core files):
+- `ui/src/App.tsx` — AgentDash routes
+- `ui/src/components/Sidebar.tsx` — AgentDash nav items
+- `server/src/index.ts` — AgentDash route wiring
+- `packages/shared/src/constants.ts` — AgentDash status enums
+- `README.md` — AgentDash branding
+- `ui/index.html` — AgentDash title/meta
 
 ## Key Docs
 

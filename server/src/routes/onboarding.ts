@@ -153,6 +153,50 @@ export function onboardingRoutes(db: Db) {
     }
   });
 
+  // --------------- Plan Generation & Execution ---------------
+
+  router.post("/companies/:companyId/onboarding/sessions/:id/generate-plan", async (req, res) => {
+    try {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const result = await svc.generatePlan(companyId, req.params.id as string);
+      res.status(200).json(result);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(status).json({ error: message });
+    }
+  });
+
+  router.patch("/companies/:companyId/onboarding/sessions/:id/plan", async (req, res) => {
+    try {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const result = await svc.updatePlan(companyId, req.params.id as string, req.body);
+      res.status(200).json(result);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(status).json({ error: message });
+    }
+  });
+
+  router.post("/companies/:companyId/onboarding/sessions/:id/apply-plan", async (req, res) => {
+    try {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const result = await svc.applyPlan(companyId, req.params.id as string);
+      res.status(200).json(result);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(status).json({ error: message });
+    }
+  });
+
   // --------------- Complete ---------------
 
   router.post("/companies/:companyId/onboarding/sessions/:id/complete", async (req, res) => {

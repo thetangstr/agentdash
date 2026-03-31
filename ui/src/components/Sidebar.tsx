@@ -17,6 +17,15 @@ import {
   FlaskConical,
   Compass,
   Briefcase,
+  Building2,
+  Link2,
+  Rss,
+  GitBranch,
+  Scale,
+  Users,
+  UserPlus,
+  Columns3,
+  Wallet,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -87,6 +96,7 @@ export function Sidebar() {
             <span className="truncate">New Issue</span>
           </button>
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
+          <SidebarNavItem to="/feed" label="My Feed" icon={Rss} />
           <SidebarNavItem
             to="/inbox"
             label="Inbox"
@@ -116,10 +126,18 @@ export function Sidebar() {
 
         <SidebarSection label="CRM">
           <SidebarNavItem to="/crm" label="Pipeline" icon={Briefcase} />
+          <SidebarNavItem to="/crm/kanban" label="Kanban" icon={Columns3} />
+          <SidebarNavItem to="/crm/accounts" label="Accounts" icon={Building2} />
+          <SidebarNavItem to="/crm/contacts" label="Contacts" icon={Users} />
+          <SidebarNavItem to="/crm/leads" label="Leads" icon={UserPlus} />
+          <SidebarNavItem to="/crm/hubspot" label="HubSpot" icon={Link2} />
         </SidebarSection>
 
         <SidebarSection label="AgentDash">
           <SidebarNavItem to="/templates" label="Templates" icon={Factory} />
+          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
+          <SidebarNavItem to="/action-proposals" label="Proposals" icon={Scale} />
+          <SidebarNavItem to="/budget" label="Budget" icon={Wallet} />
           <SidebarNavItem to="/capacity" label="Capacity" icon={BarChart3} />
           <SidebarNavItem to="/security" label="Security" icon={Shield} />
           <SidebarNavItem to="/research" label="Research" icon={FlaskConical} />

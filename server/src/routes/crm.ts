@@ -358,5 +358,22 @@ export function crmRoutes(db: Db) {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // AgentDash: CRM Context Snapshot
+  // ---------------------------------------------------------------------------
+
+  router.get("/companies/:companyId/crm/accounts/:accountId/context", async (req, res) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const result = await svc.buildContextForIssue(companyId, req.params.accountId as string);
+      res.status(200).json(result);
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(status).json({ error: message });
+    }
+  });
+
   return router;
 }

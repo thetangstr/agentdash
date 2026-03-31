@@ -1,6 +1,7 @@
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { crmService } from "./crm.js";
 import { logger } from "../middleware/logger.js";
 
@@ -10,6 +11,7 @@ interface HubSpotConfig {
   accessToken: string;
   portalId: string;
   syncEnabled: boolean;
+  clientSecret?: string;
 }
 
 interface SyncResult {
@@ -17,6 +19,18 @@ interface SyncResult {
   created: number;
   updated: number;
   errors: number;
+}
+
+interface HubSpotSyncStatus {
+  lastSyncAt: string | null;
+  lastSyncResult: {
+    contacts: SyncResult;
+    companies: SyncResult;
+    deals: SyncResult;
+    activities: SyncResult;
+  } | null;
+  lastSyncError: string | null;
+  syncInProgress: boolean;
 }
 
 async function hubspotFetch(path: string, accessToken: string): Promise<any> {
@@ -36,47 +50,87 @@ async function hubspotFetch(path: string, accessToken: string): Promise<any> {
 export function hubspotService(db: Db) {
   const crm = crmService(db);
 
-  // ── Config ────────────────────────────────────────────────────────────
+  // ── Metadata helpers ──────────────────────────────────────────────────
 
-  async function getConfig(companyId: string): Promise<HubSpotConfig | null> {
+  async function getMetadata(companyId: string): Promise<Record<string, unknown>> {
     const company = await db
       .select({ metadata: companies.metadata })
       .from(companies)
       .where(eq(companies.id, companyId))
       .then((rows) => rows[0] ?? null);
-    if (!company?.metadata) return null;
-    const meta = company.metadata as Record<string, unknown>;
+    return (company?.metadata as Record<string, unknown>) ?? {};
+  }
+
+  async function updateHubspotMeta(companyId: string, patch: Record<string, unknown>) {
+    const meta = await getMetadata(companyId);
+    const existing = (meta.hubspot as Record<string, unknown>) ?? {};
+    const updatedMeta = { ...meta, hubspot: { ...existing, ...patch } };
+    await db
+      .update(companies)
+      .set({ metadata: updatedMeta } as any)
+      .where(eq(companies.id, companyId));
+  }
+
+  // ── Config ────────────────────────────────────────────────────────────
+
+  async function getConfig(companyId: string): Promise<HubSpotConfig | null> {
+    const meta = await getMetadata(companyId);
     const hs = meta.hubspot as Record<string, unknown> | undefined;
     if (!hs?.accessToken) return null;
     return {
       accessToken: String(hs.accessToken),
       portalId: String(hs.portalId ?? ""),
       syncEnabled: hs.syncEnabled !== false,
+      clientSecret: hs.clientSecret ? String(hs.clientSecret) : undefined,
     };
   }
 
   async function setConfig(
     companyId: string,
-    config: { accessToken: string; portalId?: string; syncEnabled?: boolean },
+    config: { accessToken: string; portalId?: string; syncEnabled?: boolean; clientSecret?: string },
   ): Promise<void> {
-    const company = await db
-      .select({ metadata: companies.metadata })
-      .from(companies)
-      .where(eq(companies.id, companyId))
-      .then((rows) => rows[0] ?? null);
-    const existingMeta = (company?.metadata as Record<string, unknown>) ?? {};
+    const meta = await getMetadata(companyId);
+    const existing = (meta.hubspot as Record<string, unknown>) ?? {};
     const updatedMeta = {
-      ...existingMeta,
+      ...meta,
       hubspot: {
+        ...existing,
         accessToken: config.accessToken,
         portalId: config.portalId ?? "",
         syncEnabled: config.syncEnabled ?? true,
+        ...(config.clientSecret !== undefined ? { clientSecret: config.clientSecret } : {}),
       },
     };
     await db
       .update(companies)
       .set({ metadata: updatedMeta } as any)
       .where(eq(companies.id, companyId));
+  }
+
+  // ── Sync Status ─────────────────────────────────────────────────────
+
+  async function getSyncStatus(companyId: string): Promise<HubSpotSyncStatus> {
+    const meta = await getMetadata(companyId);
+    const hs = (meta.hubspot as Record<string, unknown>) ?? {};
+    return {
+      lastSyncAt: hs.lastSyncAt ? String(hs.lastSyncAt) : null,
+      lastSyncResult: (hs.lastSyncResult as HubSpotSyncStatus["lastSyncResult"]) ?? null,
+      lastSyncError: hs.lastSyncError ? String(hs.lastSyncError) : null,
+      syncInProgress: hs.syncInProgress === true,
+    };
+  }
+
+  // ── Test Connection ─────────────────────────────────────────────────
+
+  async function testConnection(companyId: string): Promise<{ ok: boolean; error?: string }> {
+    const config = await getConfig(companyId);
+    if (!config) return { ok: false, error: "HubSpot not configured" };
+    try {
+      await hubspotFetch("/crm/v3/objects/contacts?limit=1", config.accessToken);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Unknown error" };
+    }
   }
 
   // ── Sync: Contacts ────────────────────────────────────────────────────
@@ -207,25 +261,140 @@ export function hubspotService(db: Db) {
     return result;
   }
 
+  // ── Sync: Activities (notes, calls, emails) ─────────────────────────
+
+  async function syncActivities(companyId: string): Promise<SyncResult> {
+    const config = await getConfig(companyId);
+    if (!config) throw new Error("HubSpot not configured for this company");
+
+    const result: SyncResult = { synced: 0, created: 0, updated: 0, errors: 0 };
+
+    const objectTypes = [
+      { type: "notes", activityType: "note", subjectProp: null, bodyProp: "hs_note_body", timeProp: "hs_timestamp", properties: "hs_note_body,hs_timestamp" },
+      { type: "calls", activityType: "call", subjectProp: "hs_call_title", bodyProp: "hs_call_body", timeProp: "hs_timestamp", properties: "hs_call_title,hs_call_body,hs_timestamp" },
+      { type: "emails", activityType: "email", subjectProp: "hs_email_subject", bodyProp: "hs_email_text", timeProp: "hs_timestamp", properties: "hs_email_subject,hs_email_text,hs_timestamp" },
+    ];
+
+    for (const objType of objectTypes) {
+      let after: string | undefined;
+      let hasMore = true;
+
+      while (hasMore) {
+        const params = new URLSearchParams({
+          limit: "100",
+          properties: objType.properties,
+        });
+        if (after) params.set("after", after);
+
+        try {
+          const data = await hubspotFetch(`/crm/v3/objects/${objType.type}?${params}`, config.accessToken);
+
+          for (const item of data.results ?? []) {
+            try {
+              const props = item.properties ?? {};
+              const subject = objType.subjectProp ? (props[objType.subjectProp] ?? null) : null;
+              const body = objType.bodyProp ? (props[objType.bodyProp] ?? null) : null;
+              const occurredAt = props[objType.timeProp] ? new Date(props[objType.timeProp]) : new Date();
+
+              await crm.upsertActivityByExternalId(companyId, "hubspot", String(item.id), {
+                activityType: objType.activityType,
+                subject,
+                body,
+                occurredAt,
+              });
+              result.synced++;
+            } catch (err) {
+              result.errors++;
+              logger.warn({ err, objectId: item.id, type: objType.type }, "Failed to sync HubSpot activity");
+            }
+          }
+
+          after = data.paging?.next?.after;
+          hasMore = !!after;
+        } catch (err) {
+          // Some HubSpot accounts may not have all object types enabled
+          logger.warn({ err, type: objType.type }, "Failed to fetch HubSpot activities of type");
+          hasMore = false;
+        }
+      }
+    }
+
+    return result;
+  }
+
   // ── Sync All ──────────────────────────────────────────────────────────
 
   async function syncAll(companyId: string) {
-    const [contactsResult, companiesResult, dealsResult] = await Promise.all([
-      syncContacts(companyId),
-      syncCompanies(companyId),
-      syncDeals(companyId),
-    ]);
+    await updateHubspotMeta(companyId, { syncInProgress: true, lastSyncError: null });
 
-    return {
-      contacts: contactsResult,
-      companies: companiesResult,
-      deals: dealsResult,
-      totalSynced: contactsResult.synced + companiesResult.synced + dealsResult.synced,
-      totalErrors: contactsResult.errors + companiesResult.errors + dealsResult.errors,
-    };
+    try {
+      const [contactsResult, companiesResult, dealsResult, activitiesResult] = await Promise.all([
+        syncContacts(companyId),
+        syncCompanies(companyId),
+        syncDeals(companyId),
+        syncActivities(companyId),
+      ]);
+
+      const syncResult = {
+        contacts: contactsResult,
+        companies: companiesResult,
+        deals: dealsResult,
+        activities: activitiesResult,
+        totalSynced:
+          contactsResult.synced + companiesResult.synced + dealsResult.synced + activitiesResult.synced,
+        totalErrors:
+          contactsResult.errors + companiesResult.errors + dealsResult.errors + activitiesResult.errors,
+      };
+
+      await updateHubspotMeta(companyId, {
+        syncInProgress: false,
+        lastSyncAt: new Date().toISOString(),
+        lastSyncResult: {
+          contacts: contactsResult,
+          companies: companiesResult,
+          deals: dealsResult,
+          activities: activitiesResult,
+        },
+        lastSyncError: null,
+      });
+
+      return syncResult;
+    } catch (err) {
+      await updateHubspotMeta(companyId, {
+        syncInProgress: false,
+        lastSyncError: err instanceof Error ? err.message : "Unknown error",
+      });
+      throw err;
+    }
   }
 
   // ── Webhook ───────────────────────────────────────────────────────────
+
+  async function findCompanyByPortalId(portalId: string): Promise<string | null> {
+    const rows = await db
+      .select({ id: companies.id })
+      .from(companies)
+      .where(sql`${companies.metadata}->'hubspot'->>'portalId' = ${portalId}`)
+      .limit(1);
+    return rows[0]?.id ?? null;
+  }
+
+  function verifyWebhookSignature(
+    clientSecret: string,
+    requestBody: string,
+    signatureHeader: string,
+    httpMethod: string,
+    requestUri: string,
+    timestamp: string,
+  ): boolean {
+    // HubSpot v3: HMAC-SHA256(clientSecret, method + URI + body + timestamp)
+    const message = httpMethod + requestUri + requestBody + timestamp;
+    const hash = createHmac("sha256", clientSecret).update(message).digest("hex");
+    const hashBuf = Buffer.from(hash, "utf8");
+    const sigBuf = Buffer.from(signatureHeader, "utf8");
+    if (hashBuf.length !== sigBuf.length) return false;
+    return timingSafeEqual(hashBuf, sigBuf);
+  }
 
   async function handleWebhook(companyId: string, events: Array<Record<string, unknown>>) {
     for (const event of events) {
@@ -233,11 +402,11 @@ export function hubspotService(db: Db) {
       const eventType = String(event.subscriptionType ?? "");
 
       try {
-        if (objectType === "contact" && eventType.includes("creation") || eventType.includes("propertyChange")) {
+        if (objectType === "contact" && (eventType.includes("creation") || eventType.includes("propertyChange"))) {
           await syncContacts(companyId);
-        } else if (objectType === "company") {
+        } else if (objectType === "company" && (eventType.includes("creation") || eventType.includes("propertyChange"))) {
           await syncCompanies(companyId);
-        } else if (objectType === "deal") {
+        } else if (objectType === "deal" && (eventType.includes("creation") || eventType.includes("propertyChange"))) {
           await syncDeals(companyId);
         }
       } catch (err) {
@@ -249,10 +418,15 @@ export function hubspotService(db: Db) {
   return {
     getConfig,
     setConfig,
+    getSyncStatus,
+    testConnection,
     syncContacts,
     syncCompanies,
     syncDeals,
+    syncActivities,
     syncAll,
+    findCompanyByPortalId,
+    verifyWebhookSignature,
     handleWebhook,
   };
 }

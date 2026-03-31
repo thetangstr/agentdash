@@ -18,6 +18,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
+import { crmLifecycleService } from "../services/crm-lifecycle.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -146,6 +147,22 @@ export function approvalRoutes(db: Db) {
         },
       });
 
+      // AgentDash: CRM lifecycle — log action proposal resolution as CRM activity
+      if (approval.type === "action_proposal") {
+        const payload = approval.payload as Record<string, unknown>;
+        void crmLifecycleService(db).onActionProposalResolved(approval.companyId, {
+          approvalId: approval.id,
+          approvalStatus: "approved",
+          actionType: String(payload.actionType ?? "unknown"),
+          summary: String(payload.summary ?? ""),
+          amountCents: typeof payload.amountCents === "number" ? payload.amountCents : undefined,
+          agentId: approval.requestedByAgentId,
+          crmAccountId: payload.crmAccountId as string ?? null,
+          crmContactId: payload.crmContactId as string ?? null,
+          decisionNote: req.body.decisionNote,
+        }).catch(() => {});
+      }
+
       if (approval.requestedByAgentId) {
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
@@ -232,6 +249,22 @@ export function approvalRoutes(db: Db) {
         entityId: approval.id,
         details: { type: approval.type },
       });
+
+      // AgentDash: CRM lifecycle — log action proposal rejection as CRM activity
+      if (approval.type === "action_proposal") {
+        const payload = approval.payload as Record<string, unknown>;
+        void crmLifecycleService(db).onActionProposalResolved(approval.companyId, {
+          approvalId: approval.id,
+          approvalStatus: "rejected",
+          actionType: String(payload.actionType ?? "unknown"),
+          summary: String(payload.summary ?? ""),
+          amountCents: typeof payload.amountCents === "number" ? payload.amountCents : undefined,
+          agentId: approval.requestedByAgentId,
+          crmAccountId: payload.crmAccountId as string ?? null,
+          crmContactId: payload.crmContactId as string ?? null,
+          decisionNote: req.body.decisionNote,
+        }).catch(() => {});
+      }
     }
 
     res.json(redactApprovalPayload(approval));

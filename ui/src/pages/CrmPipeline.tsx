@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
+import { Briefcase } from "lucide-react";
 
 const STAGE_META: Record<string, { label: string; color: string }> = {
   new: { label: "New", color: "bg-blue-100 text-blue-700" },
@@ -14,6 +16,12 @@ const STAGE_META: Record<string, { label: string; color: string }> = {
 export function CrmPipeline() {
   const { selectedCompany } = useCompany();
   const cid = selectedCompany?.id;
+
+  const { data: hubspotConfig } = useQuery({
+    queryKey: ["hubspot-config", cid],
+    queryFn: async () => { const r = await fetch(`/api/companies/${cid}/integrations/hubspot/config`); return r.json(); },
+    enabled: !!cid,
+  });
 
   const { data: pipeline } = useQuery({
     queryKey: ["crm-pipeline", cid],
@@ -51,6 +59,16 @@ export function CrmPipeline() {
         <h1 className="text-2xl font-bold">CRM</h1>
         <p className="text-sm text-muted-foreground mt-1">Customer relationships, pipeline, and revenue tracking</p>
       </div>
+
+      {/* AgentDash: HubSpot connection banner */}
+      {hubspotConfig && !hubspotConfig.configured && (
+        <Link to="/crm/hubspot" className="block">
+          <div className="rounded-xl border border-dashed border-primary/40 bg-primary/5 p-5 hover:bg-primary/10 transition-colors">
+            <p className="font-semibold text-primary">Connect HubSpot</p>
+            <p className="text-sm text-muted-foreground mt-1">Sync your contacts, companies, deals, and activities from HubSpot.</p>
+          </div>
+        </Link>
+      )}
 
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -106,7 +124,13 @@ export function CrmPipeline() {
           <button className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90">New Deal</button>
         </div>
         {deals.length === 0 ? (
-          <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">No deals yet. Create your first deal or sync from HubSpot.</div>
+          <div className="rounded-xl border bg-card p-8 text-center space-y-3">
+            <Briefcase className="h-10 w-10 text-muted-foreground/40 mx-auto" />
+            <div>
+              <p className="font-medium text-muted-foreground">No deals yet</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">Create your first deal or sync from HubSpot.</p>
+            </div>
+          </div>
         ) : (
           <div className="rounded-xl border overflow-hidden">
             <table className="w-full text-sm">
@@ -145,7 +169,10 @@ export function CrmPipeline() {
           <button className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90">New Lead</button>
         </div>
         {leads.length === 0 ? (
-          <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">No leads yet.</div>
+          <div className="rounded-xl border bg-card p-8 text-center space-y-3">
+            <Briefcase className="h-10 w-10 text-muted-foreground/40 mx-auto" />
+            <p className="font-medium text-muted-foreground">No leads yet</p>
+          </div>
         ) : (
           <div className="rounded-xl border overflow-hidden">
             <table className="w-full text-sm">
@@ -181,7 +208,10 @@ export function CrmPipeline() {
           <button className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90">Add Partner</button>
         </div>
         {partners.length === 0 ? (
-          <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">No partners yet.</div>
+          <div className="rounded-xl border bg-card p-8 text-center space-y-3">
+            <Briefcase className="h-10 w-10 text-muted-foreground/40 mx-auto" />
+            <p className="font-medium text-muted-foreground">No partners yet</p>
+          </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {partners.map((p: any) => (
