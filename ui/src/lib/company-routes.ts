@@ -24,6 +24,10 @@ const BOARD_ROUTE_ROOTS = new Set([
   "research",   // AgentDash: AutoResearch
   "setup",      // AgentDash: Onboarding wizard
   "pipelines",  // AgentDash: Pipeline management
+  "action-proposals",  // AgentDash: Action proposals queue
+  "skill-versions",  // AgentDash: Skill version management
+  "task-dependencies",  // AgentDash: Task dependency DAG
+  "budget",  // AgentDash: Budget forecast
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);

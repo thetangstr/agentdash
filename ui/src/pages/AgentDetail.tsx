@@ -13,6 +13,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { AgentOkrs } from "../components/AgentOkrs";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
 import { usePanel } from "../context/PanelContext";
@@ -222,13 +223,14 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget";
+type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget" | "okrs";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return "skills";
   if (value === "budget") return "budget";
+  if (value === "okrs") return "okrs";
   if (value === "runs") return value;
   return "dashboard";
 }
@@ -651,6 +653,8 @@ export function AgentDetail() {
               ? "runs"
               : activeView === "budget"
                 ? "budget"
+                : activeView === "okrs"
+                  ? "okrs"
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
@@ -914,6 +918,7 @@ export function AgentDetail() {
               { value: "configuration", label: "Configuration" },
               { value: "runs", label: "Runs" },
               { value: "budget", label: "Budget" },
+              { value: "okrs", label: "OKRs" },
             ]}
             value={activeView}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1047,6 +1052,10 @@ export function AgentDetail() {
             variant="plain"
           />
         </div>
+      ) : null}
+
+      {activeView === "okrs" && resolvedCompanyId && resolvedAgentId ? (
+        <AgentOkrs companyId={resolvedCompanyId} agentId={resolvedAgentId} />
       ) : null}
     </div>
   );
