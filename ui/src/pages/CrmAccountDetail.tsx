@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   Building2, User, DollarSign, Clock, Bot, ArrowLeft,
   Activity, FileText, Users, Briefcase, ChevronRight,
+  GitBranch, Link2, CheckCircle,
 } from "lucide-react";
 
 const STAGE_COLORS: Record<string, string> = {
@@ -45,21 +46,33 @@ function formatRelative(dateStr: string): string {
 }
 
 function ActivityIcon({ type }: { type: string }) {
+  if (type === "agentdash_auto_approved") return <CheckCircle className="h-4 w-4 text-emerald-500" />;
+  if (type === "agentdash_pipeline") return <GitBranch className="h-4 w-4 text-violet-500" />;
+  if (type === "agentdash_action_proposal" || type === "agentdash_issue_completion") return <Bot className="h-4 w-4 text-teal-600" />;
+  if (type === "hubspot_sync") return <Link2 className="h-4 w-4 text-orange-500" />;
+  if (type === "agentdash_manual") return <User className="h-4 w-4 text-slate-500" />;
+  // Fallback: match by substring for activity types
   if (type.includes("pipeline") || type.includes("agent")) return <Bot className="h-4 w-4 text-teal-600" />;
-  if (type.includes("hubspot") || type.includes("sync")) return <Activity className="h-4 w-4 text-orange-500" />;
+  if (type.includes("hubspot") || type.includes("sync")) return <Link2 className="h-4 w-4 text-orange-500" />;
   if (type.includes("note")) return <FileText className="h-4 w-4 text-blue-500" />;
   return <Clock className="h-4 w-4 text-muted-foreground" />;
 }
 
 function SourceBadge({ source }: { source?: string }) {
   if (!source) return null;
-  if (source.includes("agent") || source.includes("pipeline")) {
+  if (source === "agentdash_auto_approved") {
+    return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-[10px] font-medium"><CheckCircle className="h-3 w-3" />Auto-approved</span>;
+  }
+  if (source === "agentdash_pipeline") {
+    return <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 text-violet-700 px-2 py-0.5 text-[10px] font-medium"><GitBranch className="h-3 w-3" />Pipeline</span>;
+  }
+  if (source === "agentdash_action_proposal" || source === "agentdash_issue_completion" || source.includes("agent")) {
     return <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 text-teal-700 px-2 py-0.5 text-[10px] font-medium"><Bot className="h-3 w-3" />Agent</span>;
   }
-  if (source.includes("hubspot") || source.includes("sync")) {
-    return <span className="rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-[10px] font-medium">HubSpot</span>;
+  if (source === "hubspot_sync" || source.includes("hubspot")) {
+    return <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-[10px] font-medium"><Link2 className="h-3 w-3" />HubSpot</span>;
   }
-  return <span className="rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-[10px] font-medium">Manual</span>;
+  return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[10px] font-medium"><User className="h-3 w-3" />Manual</span>;
 }
 
 export function CrmAccountDetail() {

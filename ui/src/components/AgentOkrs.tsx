@@ -11,9 +11,10 @@ export function AgentOkrs({ companyId, agentId }: AgentOkrsProps) {
     queryKey: ["agent-okrs", companyId, agentId],
     queryFn: async () => {
       const res = await fetch(
-        `/api/companies/${companyId}/okrs?agentId=${agentId}`,
+        `/api/companies/${companyId}/agents/${agentId}/okrs`,
       );
-      return res.json();
+      const json = await res.json();
+      return Array.isArray(json) ? json : [];
     },
     enabled: !!companyId && !!agentId,
   });

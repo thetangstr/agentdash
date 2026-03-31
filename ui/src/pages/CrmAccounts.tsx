@@ -139,8 +139,16 @@ export function CrmAccounts() {
       {isLoading ? (
         <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">Loading accounts...</div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">
-          {search || stageFilter !== "all" ? "No accounts match your filters." : "No accounts yet. Create one or sync from HubSpot."}
+        <div className="rounded-xl border bg-card p-8 text-center space-y-3">
+          <Building2 className="h-10 w-10 text-muted-foreground/40 mx-auto" />
+          <div>
+            <p className="font-medium text-muted-foreground">
+              {search || stageFilter !== "all" ? "No accounts match your filters" : "No accounts yet"}
+            </p>
+            <p className="text-sm text-muted-foreground/70 mt-1">
+              {search || stageFilter !== "all" ? "Try adjusting your search or filters." : "Create your first account or sync from HubSpot."}
+            </p>
+          </div>
         </div>
       ) : (
         <div className="rounded-xl border overflow-hidden">
