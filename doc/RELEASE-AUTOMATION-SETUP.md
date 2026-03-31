@@ -211,7 +211,7 @@ After setup:
 Install-path check:
 
 ```bash
-npx paperclipai@canary onboard
+npx agentdash@canary onboard
 ```
 
 ## 12. Verify the Stable Workflow

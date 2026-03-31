@@ -22,10 +22,14 @@ Forked from [Paperclip](https://github.com/paperclipai/paperclip), AgentDash ext
 │  │ Agent    │ │ Security │ │   CRM    │ │  Budget  │ │  Skills  │ │
 │  │ Factory  │ │ & Policy │ │ Pipeline │ │ & Costs  │ │ Registry │ │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │
-│  │Onboarding│ │  Auto    │ │  Task    │ │ Capacity │              │
-│  │  Engine  │ │ Research │ │   DAG    │ │ Planning │              │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
+│  │ Pipeline │ │  Action  │ │Execution │ │ Operator │ │  Auto    │ │
+│  │Orchestr. │ │Proposals │ │Workspaces│ │   Feed   │ │ Research │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐                           │
+│  │Onboarding│ │  Task    │ │ Capacity │                           │
+│  │  Engine  │ │   DAG    │ │ Planning │                           │
+│  └──────────┘ └──────────┘ └──────────┘                           │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │              Paperclip Core (inherited)                      │   │
@@ -36,10 +40,12 @@ Forked from [Paperclip](https://github.com/paperclipai/paperclip), AgentDash ext
                                  │
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
-              ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │  Claude  │ │ OpenCode │ │  Cursor  │
-              │  Local   │ │  Local   │ │  Local   │
-              └──────────┘ └──────────┘ └──────────┘
+         ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
+         │ Claude │ │OpenCode│ │ Cursor │ │ Codex  │ │Gemini  │
+         └────────┘ └────────┘ └────────┘ └────────┘ └────────┘
+         ┌────────┐ ┌────────┐ ┌────────┐
+         │   Pi   │ │OpenClaw│ │ Hermes │
+         └────────┘ └────────┘ └────────┘
                         Agent Runtimes
 ```
 
@@ -54,9 +60,9 @@ Forked from [Paperclip](https://github.com/paperclipai/paperclip), AgentDash ext
 | CLI | Commander, esbuild | `cli/src/index.ts` |
 | Database | PostgreSQL, Drizzle ORM | `packages/db/src/schema/` |
 | Shared Types | Zod validators, constants | `packages/shared/src/` |
-| Agent Adapters | Claude, Codex, OpenCode, Cursor, Gemini, Pi | `packages/adapters/` |
+| Agent Adapters | Claude, Codex, OpenCode, Cursor, Gemini, Pi, OpenClaw, Hermes | `packages/adapters/` |
 | Plugin System | JSON-RPC workers, event bus | `packages/plugins/` |
-| Testing | Vitest (721 tests), bash CUJ suite (60 tests) | `vitest.config.ts`, `scripts/test-cujs.sh` |
+| Testing | Vitest (775 tests), bash CUJ suite (60 tests) | `vitest.config.ts`, `scripts/test-cujs.sh` |
 | Deployment | Docker Compose, nginx | `docker-compose.yml`, `docker/nginx.conf` |
 
 ---
@@ -67,29 +73,37 @@ Forked from [Paperclip](https://github.com/paperclipai/paperclip), AgentDash ext
 agentdash/
 ├── server/                    # Express API server
 │   └── src/
-│       ├── routes/            # HTTP route handlers (19 route files)
-│       ├── services/          # Business logic (15 AgentDash + 10 core)
+│       ├── routes/            # HTTP route handlers (39 route files)
+│       ├── services/          # Business logic (83 service files)
 │       ├── middleware/        # Auth, logging, error handling
-│       └── __tests__/         # Vitest tests (138 files)
+│       ├── auth/              # BetterAuth integration
+│       ├── realtime/          # WebSocket handling
+│       └── __tests__/         # Vitest tests (148 files)
 ├── ui/                        # React dashboard
 │   └── src/
-│       ├── pages/             # Route-level page components
-│       ├── components/        # Shared UI components
-│       └── context/           # React context providers
+│       ├── pages/             # Route-level page components (62 pages)
+│       ├── components/        # Shared UI components (94 components)
+│       ├── adapters/          # UI adapter implementations (12)
+│       ├── api/               # API client functions
+│       ├── context/           # React context providers
+│       └── hooks/             # Custom React hooks
 ├── cli/                       # CLI tool (`agentdash`)
 ├── packages/
-│   ├── db/                    # Drizzle schema + migrations (57 migrations)
+│   ├── db/                    # Drizzle schema + migrations (60 migrations, 86 schema files)
 │   ├── shared/                # Constants, types, validators
-│   ├── adapters/              # Agent runtime adapters
+│   ├── adapters/              # Agent runtime adapters (7 packages)
 │   │   ├── claude-local/
 │   │   ├── codex-local/
 │   │   ├── opencode-local/
 │   │   ├── cursor-local/
 │   │   ├── gemini-local/
-│   │   └── pi-local/
-│   └── plugins/               # Plugin SDK + runtime
+│   │   ├── pi-local/
+│   │   └── openclaw-gateway/
+│   └── plugins/               # Plugin SDK + runtime + integrations
 ├── doc/                       # Documentation
-├── scripts/                   # Dev scripts, CUJ tests, seeding
+│   └── maw/                   # Multi-Agent Workflow docs
+├── scripts/                   # Dev scripts, CUJ tests, seeding (17 scripts)
+├── .claude/commands/          # MAW slash commands (7 commands)
 ├── docker/                    # Nginx config, smoke tests
 └── website/                   # Marketing site
 ```
@@ -98,7 +112,7 @@ agentdash/
 
 ## Database Schema
 
-**57 migrations, 29 AgentDash-specific tables** across these domains:
+**60 migrations (0000-0059), 86 schema files** across these domains:
 
 ### Core (Paperclip inherited)
 - `companies`, `agents`, `issues`, `projects`, `goals`
@@ -145,10 +159,29 @@ agentdash/
 - `skill_dependencies` — Skill composition graph
 - `skill_usage_events` — Usage analytics
 
+### Pipelines & Execution
+- `agent_pipelines` — Multi-stage agent pipeline definitions
+- `execution_workspaces` — Runtime execution environments
+- `workspace_runtime_services` — Per-workspace runtime services
+- `workspace_operations` — Operation audit log
+- `workspace_operation_log_store` — Structured log storage
+- `heartbeat_runs` — Heartbeat execution records
+- `heartbeat_run_events` — Per-run event timeline
+
 ### Onboarding
 - `onboarding_sessions` — Guided setup sessions
 - `onboarding_sources` — Ingested company documents
 - `company_context` — Extracted structured company knowledge
+
+### Plugins
+- `plugins` — Plugin registry
+- `plugin_config` — Plugin configuration
+- `plugin_company_settings` — Per-company plugin settings
+- `plugin_entities` — Plugin entities
+- `plugin_state` — Plugin state storage
+- `plugin_webhooks` — Webhook subscriptions
+- `plugin_jobs` — Job queue
+- `plugin_logs` — Plugin logging
 
 ---
 
@@ -168,25 +201,38 @@ export function crmService(db: Db) {
 }
 ```
 
-### Services (15 AgentDash + 10 Paperclip core)
+### Services (83 service files)
 
-| Service | Methods | Description |
-|---------|---------|-------------|
-| `agentFactoryService` | 13 | Templates, spawn requests, OKRs |
-| `policyEngineService` | 12 | Policies, kill switch, sandboxes |
-| `crmService` | 25 | Accounts, contacts, deals, leads, partners, activities |
-| `hubspotService` | 8 | Bidirectional sync, webhook, config |
-| `autoresearchService` | 21 | Cycles, hypotheses, experiments, metrics, evaluations |
-| `budgetForecastService` | 11 | Departments, allocations, forecasts, resource usage |
-| `capacityPlanningService` | 5 | Workforce snapshot, pipeline, availability |
-| `skillsRegistryService` | 11 | Versions, dependencies, review workflow |
-| `skillAnalyticsService` | 5 | Usage tracking and aggregation |
-| `onboardingService` | 12 | Sessions, sources, context extraction, team suggestion |
-| `taskDependencyService` | 5 | DAG, cycle detection, auto-unblock |
-| `promptBuilderService` | 3 | Context assembly for agent heartbeats |
-| `dashboardService` | 2 | Morning briefing aggregation |
-| `financeService` | 3 | Financial metrics and summaries |
-| `goalsService` | 5 | Goal hierarchy management |
+**AgentDash Domain Services:**
+
+| Service | Description |
+|---------|-------------|
+| `agent-factory` | Templates, spawn requests, OKRs |
+| `policy-engine` | Security policies, kill switch, sandboxes |
+| `crm` | Accounts, contacts, deals, leads, partners, activities |
+| `crm-lifecycle` | CRM lifecycle stage management, fire-and-forget hooks |
+| `hubspot` | Bidirectional HubSpot sync, webhook, config |
+| `hubspot-sync-scheduler` | Hourly auto-sync scheduler |
+| `autoresearch` | Research cycles, hypotheses, experiments, evaluations |
+| `budgets` / `budget-forecasts` | Departments, allocations, forecasts, resource usage |
+| `capacity-planning` | Workforce snapshot, pipeline, availability |
+| `skills-registry` / `company-skills` | Versions, dependencies, review workflow |
+| `skill-analytics` | Usage tracking and aggregation |
+| `onboarding` | Sessions, sources, context extraction, team suggestion |
+| `task-dependencies` | DAG, cycle detection, auto-unblock |
+| `pipeline-orchestrator` | Multi-stage agent pipelines with auto-advance |
+| `action-proposals` | Action proposal generation with policy evaluation |
+| `feed` | Personalized priority-ranked operator feed |
+| `prompt-builder` | Context assembly for agent heartbeats |
+| `dashboard` | Morning briefing aggregation |
+| `finance` | Financial metrics and summaries |
+| `goals` | Goal hierarchy management |
+| `execution-workspaces` | Workspace lifecycle, runtime config |
+| `workspace-runtime` | Runtime service supervision |
+
+**Paperclip Core Services:** agents, issues, projects, approvals, activity, costs, secrets, assets, documents, routines, heartbeat, cron, access, board-auth, company-portability
+
+**Plugin System Services (15 files):** loader, registry, lifecycle, manifest/capability/config validators, event bus, stream bus, job store/scheduler/coordinator, tool dispatcher/registry, worker manager, host services, state store
 
 ---
 
@@ -210,7 +256,7 @@ export function crmRoutes(db: Db) {
 }
 ```
 
-**120+ API endpoints** across 19 route files.
+**200+ API endpoints** across 39 route files.
 
 ---
 
@@ -242,7 +288,7 @@ Heartbeat Scheduler (30s interval)
   → Process task completion (auto-unblock dependents)
 ```
 
-Supported adapters: `claude_local`, `codex_local`, `opencode_local`, `cursor_local`, `gemini_local`, `pi_local`, `openclaw_gateway`
+Supported adapters: `claude_local`, `codex_local`, `opencode_local`, `cursor_local`, `gemini_local`, `pi_local`, `openclaw_gateway`, `hermes_local`, `http`, `process`
 
 ---
 
@@ -260,10 +306,30 @@ AgentDash ←→ HubSpot API
 ```
 
 ### Plugin System (Inherited from Paperclip)
-- JSON-RPC worker protocol
+- JSON-RPC worker protocol (15 plugin service files)
 - Event bus for lifecycle hooks
 - Plugin UI routes (iframe sandboxed)
 - Scoped secrets management
+- Built-in integrations: GitHub, HubSpot, Linear, Slack
+- 4 example plugins included
+
+---
+
+## Multi-Agent Workflow (MAW)
+
+AgentDash includes a Multi-Agent Workflow system with specialized slash commands for development:
+
+| Agent | Command | Role |
+|-------|---------|------|
+| PM | `/pm` | Elaborate requirements, size issues, define test plans |
+| Builder | `/builder` | Implement features, add tests, create PRs |
+| Tester | `/tester` | E2E tests, code review, Chrome CUJ verification |
+| TPM | `/tpm` | Project planning, sole merge authority to `main` |
+| Admin | `/admin` | Ops-only health, deploy, environment checks |
+
+Full workflow: `/workon AD-123` routes through PM → Builder → Tester pipeline.
+
+See `doc/maw/sop.md` for the standard operating procedure and `doc/maw/protocol.md` for agent handoff protocol.
 
 ---
 

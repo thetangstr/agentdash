@@ -1,12 +1,13 @@
 {
-  "name": "paperclipai",
+  "name": "agentdash",
   "version": "0.3.1",
-  "description": "Paperclip CLI — orchestrate AI agent teams to run a business",
+  "description": "AgentDash CLI — deploy and orchestrate AI agent workforces",
   "type": "module",
   "bin": {
-    "paperclipai": "./dist/index.js"
+    "agentdash": "./dist/index.js"
   },
   "keywords": [
+    "agentdash",
     "paperclip",
     "ai",
     "agents",
@@ -16,12 +17,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/thetangstr/agentdash",
     "directory": "cli"
   },
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/thetangstr/agentdash",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/thetangstr/agentdash/issues"
   },
   "files": [
     "dist"

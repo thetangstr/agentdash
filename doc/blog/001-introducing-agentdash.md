@@ -29,7 +29,7 @@ AgentDash is a full platform for running AI agent workforces:
 - **Skills Registry** — Versioned, reviewed capabilities that agents can learn. Draft, review, publish — like code review, but for agent skills.
 - **Guided Onboarding** — An LLM-powered onboarding flow that ingests your company docs, extracts context, and suggests the right agent team for your business.
 
-29 database tables. 15 services. 120+ API endpoints. 10 UI pages. All company-scoped with proper tenant isolation.
+86 schema tables. 83 services. 200+ API endpoints. 62 UI pages. All company-scoped with proper tenant isolation.
 
 ## Built on Paperclip
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-AgentDash — AI agent orchestration platform. Fork of [Paperclip](https://github.com/paperclipai/paperclip) with 29 new database tables, 15 services, 120+ API endpoints for: Agent Factory, Task Dependencies, Security/Policy Engine, Budget/Capacity, Skills Registry, AutoResearch, CRM, Onboarding, and HubSpot integration.
+AgentDash — AI agent orchestration platform. Fork of [Paperclip](https://github.com/paperclipai/paperclip) with 86 schema tables, 83 services, 39 route modules, 62 UI pages, and 200+ API endpoints spanning: Agent Factory, Pipeline Orchestrator, Action Proposals, Task Dependencies, Security/Policy Engine, Budget/Capacity, Skills Registry, AutoResearch, CRM, Feed, Execution Workspaces, Onboarding, and HubSpot integration.
 
 ## Commands
 
@@ -13,7 +13,7 @@ pnpm install              # Install dependencies (use pnpm, NOT npm/yarn)
 pnpm dev                  # Start server + UI with watch mode (localhost:3100)
 pnpm dev:once             # Start without file watching
 pnpm -r typecheck         # Type-check ALL packages
-pnpm test:run             # Run all tests once (682 tests)
+pnpm test:run             # Run all tests once (775 tests)
 pnpm build                # Build all packages
 pnpm db:generate          # Generate migration after schema changes
 pnpm db:migrate           # Apply pending migrations
@@ -41,7 +41,7 @@ bash scripts/seed-test-scenarios.sh  # Seed 2 demo companies
 | CLI | Commander, esbuild | `cli/src/index.ts` |
 | Database | PostgreSQL, Drizzle ORM | `packages/db/src/schema/` |
 | Shared Types | Zod validators, constants | `packages/shared/src/` |
-| Agent Adapters | Claude, Codex, Cursor, etc. | `packages/adapters/` |
+| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw | `packages/adapters/` |
 | Plugins | JSON-RPC workers, event bus | `packages/plugins/` |
 
 ### Service pattern
@@ -105,7 +105,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - **Dev**: Embedded PG (leave `DATABASE_URL` unset) — auto-managed at `~/.paperclip/instances/default/db/`
 - **Reset**: `rm -rf ~/.paperclip/instances/default/db && pnpm dev`
 - **Schema → Migration**: Edit `packages/db/src/schema/*.ts` → `pnpm db:generate` → `pnpm -r typecheck`
-- **11 migrations** (0046-0056) added by AgentDash
+- **14 migrations** (0046-0059) added by AgentDash; 60 total migrations
 
 ## Branding
 
@@ -183,7 +183,13 @@ bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 |-----|---------|
 | `ARCHITECTURE.md` | Full system design |
 | `doc/PRD.md` | Product requirements, 10 CUJs |
+| `doc/PRD-crm.md` | CRM product requirements |
 | `doc/BUSINESS-PLAN.md` | Pricing, GTM, client guide |
 | `doc/SOP-deployment.md` | 50-person company deployment |
 | `doc/SPEC-implementation.md` | Inherited V1 build contract |
 | `doc/DEVELOPING.md` | Detailed dev guide |
+| `doc/CUJ-STATUS.md` | Feature status and test coverage |
+| `doc/ONBOARDING-FLOW.md` | Client onboarding flow diagram |
+| `doc/agentdash_adapter_strategy.md` | Adapter design strategy |
+| `doc/maw/sop.md` | MAW standard operating procedure |
+| `doc/maw/protocol.md` | Agent handoff and comment protocol |
