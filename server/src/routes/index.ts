@@ -26,3 +26,6 @@ export { autoresearchRoutes } from "./autoresearch.js";
 export { onboardingRoutes } from "./onboarding.js";
 export { crmRoutes } from "./crm.js";
 export { hubspotRoutes } from "./hubspot.js";
+export { actionProposalRoutes } from "./action-proposals.js";
+export { pipelineRoutes } from "./pipelines.js";
+export { feedRoutes } from "./feed.js";

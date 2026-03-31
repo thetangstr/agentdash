@@ -289,3 +289,20 @@ export {
   type SetPluginState,
   type ListPluginState,
 } from "./plugin.js";
+
+// AgentDash: Action Proposals
+export {
+  createActionProposalSchema,
+  type CreateActionProposal,
+} from "./action-proposal.js";
+
+// AgentDash: Pipelines
+export {
+  pipelineStageSchema,
+  createPipelineSchema,
+  updatePipelineSchema,
+  startPipelineRunSchema,
+  type CreatePipeline,
+  type UpdatePipeline,
+  type StartPipelineRun,
+} from "./pipeline.js";

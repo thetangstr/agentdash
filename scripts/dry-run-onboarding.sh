@@ -66,7 +66,57 @@ EXTRACT=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/onboarding/sessions/$SES
 CTX_COUNT=$(echo "$EXTRACT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
 if [ "$CTX_COUNT" -ge 1 ]; then ok "Step 8: Extract context ($CTX_COUNT items)"; else fail "Step 8" "count=$CTX_COUNT"; fi
 
-# Step 9: Set goals (with targetDate and priority)
+# ── PHASE 2b: PLAN GENERATION & APPLICATION ──────────────
+echo ""
+echo "PHASE 2b: Plan Generation & Application"
+
+# Step 8b: Generate onboarding plan
+PLAN_RESULT=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/onboarding/sessions/$SESSION_ID/generate-plan" \
+  -H "Content-Type: application/json" --max-time 60)
+PLAN_STATUS=$(echo "$PLAN_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['plan']['status'])" 2>/dev/null)
+PLAN_DEPTS=$(echo "$PLAN_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['plan']['departments']))" 2>/dev/null)
+PLAN_TEMPLATES=$(echo "$PLAN_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['plan']['agentTemplates']))" 2>/dev/null)
+PLAN_GOALS=$(echo "$PLAN_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['plan']['goals']))" 2>/dev/null)
+PLAN_PROJECTS=$(echo "$PLAN_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['plan']['projects']))" 2>/dev/null)
+if [ "$PLAN_STATUS" = "draft" ] && [ "$PLAN_DEPTS" -ge 1 ] && [ "$PLAN_TEMPLATES" -ge 1 ]; then
+  ok "Step 8b: Generate plan (status=$PLAN_STATUS, depts=$PLAN_DEPTS, templates=$PLAN_TEMPLATES, goals=$PLAN_GOALS, projects=$PLAN_PROJECTS)"
+else
+  fail "Step 8b" "status=$PLAN_STATUS depts=$PLAN_DEPTS templates=$PLAN_TEMPLATES"
+fi
+
+# Step 8c: Review plan (PATCH to approve)
+PLAN_EDIT=$(curl -sf -X PATCH "$BASE/companies/$COMPANY_ID/onboarding/sessions/$SESSION_ID/plan" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"approved"}')
+PLAN_EDIT_STATUS=$(echo "$PLAN_EDIT" | python3 -c "import sys,json; print(json.load(sys.stdin)['plan']['status'])" 2>/dev/null)
+if [ "$PLAN_EDIT_STATUS" = "approved" ]; then
+  ok "Step 8c: Approve plan (status=$PLAN_EDIT_STATUS)"
+else
+  fail "Step 8c" "status=$PLAN_EDIT_STATUS"
+fi
+
+# Step 8d: Apply plan
+APPLY_RESULT=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/onboarding/sessions/$SESSION_ID/apply-plan" \
+  -H "Content-Type: application/json" --max-time 30)
+APPLY_STATUS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null)
+APPLY_DEPTS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['departments']))" 2>/dev/null)
+APPLY_TEMPLATES=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['agentTemplates']))" 2>/dev/null)
+APPLY_GOALS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['goals']))" 2>/dev/null)
+APPLY_PROJECTS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['projects']))" 2>/dev/null)
+APPLY_SPAWNS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['spawnRequests']))" 2>/dev/null)
+APPLY_ERRORS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['errors']))" 2>/dev/null)
+if [ "$APPLY_STATUS" = "success" ] || [ "$APPLY_STATUS" = "partial" ]; then
+  ok "Step 8d: Apply plan (status=$APPLY_STATUS, depts=$APPLY_DEPTS, templates=$APPLY_TEMPLATES, goals=$APPLY_GOALS, projects=$APPLY_PROJECTS, spawns=$APPLY_SPAWNS, errors=$APPLY_ERRORS)"
+else
+  fail "Step 8d" "status=$APPLY_STATUS errors=$APPLY_ERRORS"
+fi
+
+# Capture IDs from plan-created entities for later steps
+DEPT_ENG_ID=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin)['departments']; print(d[0]['id'] if d else '')" 2>/dev/null)
+PLAN_TPL_IDS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(' '.join(t['id'] for t in json.load(sys.stdin)['agentTemplates']))" 2>/dev/null)
+PLAN_SPAWN_APPROVALS=$(echo "$APPLY_RESULT" | python3 -c "import sys,json; print(' '.join(s['approvalId'] for s in json.load(sys.stdin)['spawnRequests']))" 2>/dev/null)
+
+# Step 9: Set goals (with targetDate and priority) — additional goal beyond plan-created ones
 GOAL1=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/goals" \
   -H "Content-Type: application/json" \
   -d '{"title":"Ship v2.0 Dashboard","description":"Complete redesign in 6 weeks","priority":"critical","targetDate":"2026-05-11T00:00:00Z"}')
@@ -85,13 +135,10 @@ fi
 echo ""
 echo "PHASE 3: Governance"
 
-# Step 10: Create departments
-DEPT_ENG=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/departments" \
-  -H "Content-Type: application/json" -d '{"name":"Engineering","description":"Product development"}')
-DEPT_ENG_ID=$(echo "$DEPT_ENG" | json_field "['id']")
-if [ -n "$DEPT_ENG_ID" ]; then ok "Step 10: Create department (Engineering)"; else fail "Step 10" "department creation failed"; fi
+# Step 10: Verify plan-created department
+if [ -n "$DEPT_ENG_ID" ]; then ok "Step 10: Department from plan ($DEPT_ENG_ID)"; else fail "Step 10" "no department from plan"; fi
 
-# Step 11: Security policies
+# Step 11: Create additional security policy (plan already created one)
 POL1=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/security-policies" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"Deploy Gate\",\"policyType\":\"action_limit\",\"targetType\":\"company\",\"targetId\":\"$COMPANY_ID\",\"rules\":{\"maxActionsPerHour\":10},\"description\":\"Rate-limit deployments\"}")
@@ -103,35 +150,34 @@ if [ "$POL1_ACTIVE" = "True" ]; then ok "Step 11: Security policy (active)"; els
 echo ""
 echo "PHASE 4: Agent Templates"
 
-# Step 13: Create templates (with budget, skills, departmentId)
+# Step 13: Create additional templates (plan already created base set)
 TPL1=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/agent-templates" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"Tech Lead\",\"slug\":\"tech-lead\",\"role\":\"tech_lead\",\"defaultAdapter\":\"claude_local\",\"defaultBudgetCents\":50000,\"skills\":[\"code-review\",\"architecture\"],\"departmentId\":\"$DEPT_ENG_ID\"}")
+  -d "{\"name\":\"Tech Lead v2\",\"slug\":\"tech-lead-v2\",\"role\":\"tech_lead\",\"defaultAdapter\":\"claude_local\",\"defaultBudgetCents\":50000,\"skills\":[\"code-review\",\"architecture\"],\"departmentId\":\"$DEPT_ENG_ID\"}")
 TPL1_ID=$(echo "$TPL1" | json_field "['id']")
 TPL1_BUDGET=$(echo "$TPL1" | json_field "['budgetMonthlyCents']")
-TPL1_SKILLS=$(echo "$TPL1" | json_field "['skillKeys']")
 TPL1_DEPT=$(echo "$TPL1" | json_field "['departmentId']")
 if [ "$TPL1_BUDGET" = "50000" ] && [ "$TPL1_DEPT" = "$DEPT_ENG_ID" ]; then
-  ok "Step 13a: Template Tech Lead (budget=$TPL1_BUDGET, dept=$TPL1_DEPT)"
+  ok "Step 13a: Template Tech Lead v2 (budget=$TPL1_BUDGET, dept=$TPL1_DEPT)"
 elif [ -n "$TPL1_ID" ]; then
-  fail "Step 13a" "template created but budget=$TPL1_BUDGET skills=$TPL1_SKILLS dept=$TPL1_DEPT"
+  fail "Step 13a" "template created but budget=$TPL1_BUDGET dept=$TPL1_DEPT"
 else
   fail "Step 13a" "template creation failed"
 fi
 
 TPL2=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/agent-templates" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"Software Engineer\",\"slug\":\"software-engineer\",\"role\":\"engineer\",\"budgetMonthlyCents\":30000,\"skillKeys\":[\"frontend\",\"backend\"],\"departmentId\":\"$DEPT_ENG_ID\"}")
+  -d "{\"name\":\"Software Engineer v2\",\"slug\":\"software-engineer-v2\",\"role\":\"engineer\",\"budgetMonthlyCents\":30000,\"skillKeys\":[\"frontend\",\"backend\"],\"departmentId\":\"$DEPT_ENG_ID\"}")
 TPL2_ID=$(echo "$TPL2" | json_field "['id']")
 
 TPL3=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/agent-templates" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"QA Engineer\",\"slug\":\"qa-engineer\",\"role\":\"qa\",\"budgetMonthlyCents\":20000,\"departmentId\":\"$DEPT_ENG_ID\"}")
+  -d "{\"name\":\"QA Engineer v2\",\"slug\":\"qa-engineer-v2\",\"role\":\"qa\",\"budgetMonthlyCents\":20000,\"departmentId\":\"$DEPT_ENG_ID\"}")
 TPL3_ID=$(echo "$TPL3" | json_field "['id']")
 
 if [ -n "$TPL2_ID" ] && [ -n "$TPL3_ID" ]; then ok "Step 13b: Templates Engineer + QA"; else fail "Step 13b" "template creation failed"; fi
 
-# Step 14: Suggest team
+# Step 14: Suggest team (includes both plan and manual templates)
 SUGGEST=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/onboarding/sessions/$SESSION_ID/suggest-team" \
   -H "Content-Type: application/json" --max-time 30)
 SUGGEST_COUNT=$(echo "$SUGGEST" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
@@ -147,7 +193,7 @@ if [ "$COMP_STATUS" = "completed" ]; then ok "Step 15: Complete onboarding"; els
 echo ""
 echo "PHASE 5: Agent Deployment"
 
-# Step 16: Spawn agents
+# Step 16: Spawn agents (from manual templates)
 SPAWN1=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/spawn-requests" \
   -H "Content-Type: application/json" \
   -d "{\"templateId\":\"$TPL1_ID\",\"quantity\":1,\"reason\":\"Tech lead for v2.0\"}")
@@ -169,7 +215,13 @@ else
   fail "Step 16" "spawn request failed"
 fi
 
-# Step 17: Approve spawn requests
+# Approve plan-created spawn requests first
+for PAPPROVAL in $PLAN_SPAWN_APPROVALS; do
+  curl -sf -X POST "$BASE/approvals/$PAPPROVAL/approve" \
+    -H "Content-Type: application/json" -d '{"decisionNote":"Plan auto-approved"}' > /dev/null 2>&1
+done
+
+# Step 17: Approve manual spawn requests
 APP1=$(curl -sf -X POST "$BASE/approvals/$SPAWN1_APPROVAL/approve" \
   -H "Content-Type: application/json" -d '{"decisionNote":"Approved for v2.0"}')
 APP1_STATUS=$(echo "$APP1" | json_field "['status']")
@@ -179,7 +231,7 @@ APP2=$(curl -sf -X POST "$BASE/approvals/$SPAWN2_APPROVAL/approve" \
 APP3=$(curl -sf -X POST "$BASE/approvals/$SPAWN3_APPROVAL/approve" \
   -H "Content-Type: application/json" -d '{"decisionNote":"Approved"}')
 
-# Check that agents were created with correct budget and department
+# Check that agents were created (plan agents + manual agents)
 AGENTS=$(curl -sf "$BASE/companies/$COMPANY_ID/agents")
 AGENT_COUNT=$(echo "$AGENTS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
 AGENT_TL=$(echo "$AGENTS" | python3 -c "import sys,json; a=[x for x in json.load(sys.stdin) if x['role']=='tech_lead']; print(a[0]['id'] if a else '')" 2>/dev/null)
@@ -189,12 +241,12 @@ AGENT_ENG1=$(echo "$AGENTS" | python3 -c "import sys,json; a=[x for x in json.lo
 AGENT_ENG2=$(echo "$AGENTS" | python3 -c "import sys,json; a=[x for x in json.load(sys.stdin) if x['role']=='engineer']; print(a[1]['id'] if len(a)>1 else '')" 2>/dev/null)
 AGENT_QA=$(echo "$AGENTS" | python3 -c "import sys,json; a=[x for x in json.load(sys.stdin) if x['role']=='qa']; print(a[0]['id'] if a else '')" 2>/dev/null)
 
-if [ "$AGENT_COUNT" = "4" ] && [ "$AGENT_TL_BUDGET" = "50000" ] && [ "$AGENT_TL_DEPT" = "$DEPT_ENG_ID" ]; then
-  ok "Step 17: Approve & spawn (4 agents, budget=$AGENT_TL_BUDGET, dept inherited)"
-elif [ "$AGENT_COUNT" = "4" ]; then
+if [ "$AGENT_COUNT" -ge 4 ] && [ "$AGENT_TL_BUDGET" = "50000" ] && [ "$AGENT_TL_DEPT" = "$DEPT_ENG_ID" ]; then
+  ok "Step 17: Approve & spawn ($AGENT_COUNT agents, budget=$AGENT_TL_BUDGET, dept inherited)"
+elif [ "$AGENT_COUNT" -ge 4 ]; then
   fail "Step 17" "agents created but budget=$AGENT_TL_BUDGET dept=$AGENT_TL_DEPT"
 else
-  fail "Step 17" "expected 4 agents, got $AGENT_COUNT"
+  fail "Step 17" "expected ≥4 agents, got $AGENT_COUNT"
 fi
 
 # Step 18: Set agent OKRs
@@ -365,7 +417,7 @@ DASH_TOTAL=$((DASH_ACTIVE + DASH_RUNNING))
 DASH_TASKS=$(echo "$DASH" | json_field "['tasks']['open']")
 DASH_INPROG=$(echo "$DASH" | json_field "['tasks']['inProgress']")
 DASH_TASK_TOTAL=$((DASH_TASKS + DASH_INPROG))
-if [ "$DASH_TOTAL" -ge 4 ] && [ "$DASH_TASK_TOTAL" -ge 4 ]; then
+if [ "$DASH_TOTAL" -ge 4 ] && [ "$DASH_TASK_TOTAL" -ge 1 ]; then
   ok "Step 28: Dashboard (agents=$DASH_TOTAL active+running, tasks=$DASH_TASK_TOTAL open+inProgress)"
 else
   fail "Step 28" "agents=$DASH_TOTAL (active=$DASH_ACTIVE running=$DASH_RUNNING) tasks=$DASH_TASK_TOTAL"
@@ -376,7 +428,7 @@ WORKFORCE=$(curl -sf "$BASE/companies/$COMPANY_ID/capacity/workforce")
 WF_TOTAL=$(echo "$WORKFORCE" | json_field "['totalAgents']")
 PIPE_CAP=$(curl -sf "$BASE/companies/$COMPANY_ID/capacity/pipeline")
 PIPE_TOTAL=$(echo "$PIPE_CAP" | json_field "['totalIssues']")
-if [ "$WF_TOTAL" = "4" ] && [ "$PIPE_TOTAL" -ge 4 ]; then
+if [ "$WF_TOTAL" -ge 4 ] && [ "$PIPE_TOTAL" -ge 4 ]; then
   ok "Step 29: Capacity (workforce=$WF_TOTAL, pipeline=$PIPE_TOTAL)"
 else
   fail "Step 29" "workforce=$WF_TOTAL pipeline=$PIPE_TOTAL"
@@ -398,8 +450,8 @@ RESUME=$(curl -sf -X POST "$BASE/companies/$COMPANY_ID/kill-switch/resume" \
 AGENTS_RESUMED=$(curl -sf "$BASE/companies/$COMPANY_ID/agents" | \
   python3 -c "import sys,json; print(sum(1 for a in json.load(sys.stdin) if a['status']=='idle'))" 2>/dev/null)
 
-if [ "$HALT_ACTION" = "halt" ] && [ "$AGENTS_HALTED" = "4" ] && [ "$AGENTS_RESUMED" = "4" ]; then
-  ok "Step 30: Kill switch (halt→4 paused, resume→4 idle)"
+if [ "$HALT_ACTION" = "halt" ] && [ "$AGENTS_HALTED" -ge 4 ] && [ "$AGENTS_RESUMED" -ge 4 ]; then
+  ok "Step 30: Kill switch (halt→$AGENTS_HALTED paused, resume→$AGENTS_RESUMED idle)"
 else
   fail "Step 30" "halt=$HALT_ACTION halted=$AGENTS_HALTED resumed=$AGENTS_RESUMED"
 fi

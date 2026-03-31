@@ -6,9 +6,16 @@ import {
   companyContext,
   agentTemplates,
   agents,
+  companies,
 } from "@paperclipai/db";
-import { notFound } from "../errors.js";
+import { notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { budgetForecastService } from "./budget-forecasts.js";
+import { policyEngineService } from "./policy-engine.js";
+import { agentFactoryService } from "./agent-factory.js";
+import { goalService } from "./goals.js";
+import { projectService } from "./projects.js";
+import { issueService } from "./issues.js";
 
 // ---------------------------------------------------------------------------
 // AgentDash: LLM helper — calls Anthropic Messages API via native fetch.
@@ -167,6 +174,226 @@ Include ALL templates sorted most to least relevant. Return ONLY valid JSON.`;
       relevanceScore: Math.max(0, Math.min(1, Number(item.relevanceScore) || 0)),
       reason: String(item.reason ?? ""),
     }));
+}
+
+// ---------------------------------------------------------------------------
+// AgentDash: Plan types
+// ---------------------------------------------------------------------------
+
+interface OnboardingPlan {
+  generatedAt: string;
+  status: "draft" | "approved" | "applied" | "failed";
+  companyProfile: {
+    name: string;
+    industry: string;
+    size: string;
+    summary: string;
+  };
+  departments: Array<{ name: string; description: string }>;
+  securityPolicies: Array<{
+    name: string;
+    description: string;
+    policyType: string;
+    targetType: string;
+    rules: Array<Record<string, unknown>>;
+  }>;
+  agentTemplates: Array<{
+    slug: string;
+    name: string;
+    role: string;
+    description: string;
+    skillKeys: string[];
+    budgetMonthlyCents: number;
+    departmentName: string;
+  }>;
+  goals: Array<{
+    title: string;
+    description: string;
+    level: string;
+    priority: string;
+    targetDate?: string;
+  }>;
+  projects: Array<{
+    name: string;
+    description: string;
+    issues: Array<{ title: string; description: string }>;
+  }>;
+}
+
+interface PlanApplyResult {
+  status: "success" | "partial" | "failed";
+  departments: Array<{ name: string; id: string }>;
+  securityPolicies: Array<{ name: string; id: string }>;
+  goals: Array<{ title: string; id: string }>;
+  agentTemplates: Array<{ name: string; id: string }>;
+  spawnRequests: Array<{ templateName: string; id: string; approvalId: string }>;
+  projects: Array<{ name: string; id: string; issueIds: string[] }>;
+  errors: Array<{ step: string; entity: string; error: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// AgentDash: LLM-powered plan generation
+// ---------------------------------------------------------------------------
+
+async function llmGeneratePlan(
+  contextEntries: Array<{ contextType: string; key: string; value: string }>,
+  companyName: string,
+  rawSources: string[],
+): Promise<OnboardingPlan | null> {
+  const systemPrompt = `You are an expert AI operations architect designing an onboarding plan for an AI agent orchestration platform called AgentDash.
+
+Given company context, generate a complete onboarding plan. Analyze the company's specific pain points, team structure, and operational needs to produce a tailored plan — not generic templates.
+
+Return a JSON object with this EXACT structure:
+{
+  "companyProfile": { "name": string, "industry": string, "size": string, "summary": string },
+  "departments": [{ "name": string, "description": string }],
+  "securityPolicies": [{ "name": string, "description": string, "policyType": string, "targetType": string, "rules": [{ "action": string, ... }] }],
+  "agentTemplates": [{ "slug": string, "name": string, "role": string, "description": string, "skillKeys": string[], "budgetMonthlyCents": number, "departmentName": string }],
+  "goals": [{ "title": string, "description": string, "level": string, "priority": string, "targetDate": string }],
+  "projects": [{ "name": string, "description": string, "issues": [{ "title": string, "description": string }] }]
+}
+
+Rules:
+- policyType: "resource_access" | "action_limit" | "escalation_path" | "data_boundary" | "blast_radius"
+- targetType: "agent" | "role" | "project" | "company"
+- role: "ceo" | "cto" | "cmo" | "cfo" | "engineer" | "designer" | "pm" | "qa" | "devops" | "researcher" | "general"
+- goal level: "company" | "team" | "agent" | "task"
+- goal priority: "critical" | "high" | "medium" | "low"
+- slug: lowercase kebab-case, unique
+- budgetMonthlyCents: reasonable range (10000-200000 = $100-$2000/month)
+- Generate 2-5 departments matching the company's org structure
+- Generate 1-4 security policies reflecting their approval rules and risk boundaries
+- Generate 3-8 agent templates matching their specific use cases and agent descriptions
+- Generate 2-5 goals tied to their measurable business outcomes
+- Generate 1-3 projects with 2-5 issues each aligned to their phased rollout
+- departmentName must exactly match a department name you generate
+- targetDate: ISO 8601 format, 30-90 days from now
+- For security policies with dollar thresholds, encode them in the rules array
+
+Return ONLY valid JSON. No markdown, no commentary.`;
+
+  const contextSummary = contextEntries
+    .map((c) => `[${c.contextType}] ${c.key}: ${c.value}`)
+    .join("\n");
+
+  // Include raw source content for richer plan generation
+  const sourceSummary = rawSources.length > 0
+    ? `\n\nRaw Source Materials:\n${rawSources.join("\n---\n").slice(0, 12000)}`
+    : "";
+
+  const result = await callLlm(
+    systemPrompt,
+    `Company: ${companyName}\n\nExtracted Context:\n${contextSummary || "(no context extracted)"}${sourceSummary}`,
+  );
+
+  const parsed = parseJsonResponse<Omit<OnboardingPlan, "generatedAt" | "status">>(result);
+  if (!parsed || !parsed.departments || !parsed.agentTemplates) return null;
+
+  return {
+    ...parsed,
+    generatedAt: new Date().toISOString(),
+    status: "draft",
+  };
+}
+
+function generateFallbackPlan(
+  companyName: string,
+  contextEntries: Array<{ contextType: string; key: string; value: string }>,
+): OnboardingPlan {
+  const industryEntry = contextEntries.find(
+    (c) => c.contextType === "domain" || c.key.includes("industry"),
+  );
+  const industry = industryEntry?.value?.slice(0, 100) ?? "Technology";
+
+  const sizeEntry = contextEntries.find(
+    (c) => c.key.includes("size") || c.key.includes("employee"),
+  );
+  const size = sizeEntry?.value?.slice(0, 50) ?? "Small-Medium";
+
+  const now = new Date();
+  const d60 = new Date(now.getTime() + 60 * 86400000).toISOString();
+  const d90 = new Date(now.getTime() + 90 * 86400000).toISOString();
+
+  return {
+    generatedAt: now.toISOString(),
+    status: "draft",
+    companyProfile: {
+      name: companyName,
+      industry,
+      size,
+      summary: `${companyName} — onboarding plan generated without LLM.`,
+    },
+    departments: [
+      { name: "Engineering", description: "Product development and infrastructure" },
+      { name: "Operations", description: "Business operations and support" },
+    ],
+    securityPolicies: [
+      {
+        name: "Default Action Limit",
+        description: "Rate-limit all agent actions company-wide",
+        policyType: "action_limit",
+        targetType: "company",
+        rules: [{ action: "deploy", maxPerHour: 10 }],
+      },
+    ],
+    agentTemplates: [
+      {
+        slug: "tech-lead",
+        name: "Tech Lead",
+        role: "cto",
+        description: "Senior technical leadership and architecture decisions",
+        skillKeys: ["code-review", "architecture"],
+        budgetMonthlyCents: 50000,
+        departmentName: "Engineering",
+      },
+      {
+        slug: "software-engineer",
+        name: "Software Engineer",
+        role: "engineer",
+        description: "Core development and feature implementation",
+        skillKeys: ["frontend", "backend"],
+        budgetMonthlyCents: 30000,
+        departmentName: "Engineering",
+      },
+      {
+        slug: "qa-engineer",
+        name: "QA Engineer",
+        role: "qa",
+        description: "Quality assurance and testing",
+        skillKeys: ["testing", "automation"],
+        budgetMonthlyCents: 20000,
+        departmentName: "Engineering",
+      },
+    ],
+    goals: [
+      {
+        title: `${companyName} Launch Goal`,
+        description: "Complete initial platform setup and agent deployment",
+        level: "company",
+        priority: "high",
+        targetDate: d60,
+      },
+      {
+        title: "Establish Agent Workflow",
+        description: "Define and optimize agent task pipelines",
+        level: "team",
+        priority: "medium",
+        targetDate: d90,
+      },
+    ],
+    projects: [
+      {
+        name: "Initial Setup",
+        description: "Bootstrap project for first sprint",
+        issues: [
+          { title: "Define team structure", description: "Map roles and responsibilities" },
+          { title: "Configure CI/CD pipeline", description: "Set up automated build and deploy" },
+          { title: "Write onboarding docs", description: "Document agent usage guidelines" },
+        ],
+      },
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +721,276 @@ export function onboardingService(db: Db) {
   }
 
   // ---------------------------------------------------------------------------
+  // AgentDash: Plan generation — LLM-powered with fallback
+  // ---------------------------------------------------------------------------
+
+  async function generatePlan(companyId: string, sessionId: string) {
+    await getSession(sessionId);
+
+    // Gather company context
+    const context = await db
+      .select()
+      .from(companyContext)
+      .where(eq(companyContext.companyId, companyId));
+
+    // Get company name
+    const company = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .then((rows) => rows[0] ?? null);
+    const companyName = company?.name ?? "Unknown Company";
+
+    const contextEntries = context.map((c) => ({
+      contextType: c.contextType,
+      key: c.key,
+      value: c.value,
+    }));
+
+    // Also gather raw source content for richer plan generation
+    const sources = await db
+      .select()
+      .from(onboardingSources)
+      .where(eq(onboardingSources.companyId, companyId));
+    const rawSources = sources
+      .map((s) => s.rawContent)
+      .filter((c): c is string => !!c);
+
+    // Attempt LLM plan generation
+    let plan = await llmGeneratePlan(contextEntries, companyName, rawSources);
+
+    if (!plan) {
+      if (!process.env.ANTHROPIC_API_KEY) {
+        logger.info("ANTHROPIC_API_KEY not set — generating fallback onboarding plan");
+      }
+      plan = generateFallbackPlan(companyName, contextEntries);
+    }
+
+    // Store plan in session context
+    const session = await getSession(sessionId);
+    const existingContext = (session.context ?? {}) as Record<string, unknown>;
+    const updatedSession = await updateSession(sessionId, {
+      context: { ...existingContext, plan },
+      currentStep: "plan_review",
+    });
+
+    return { plan, session: updatedSession };
+  }
+
+  // ---------------------------------------------------------------------------
+  // AgentDash: Plan update (user edits before applying)
+  // ---------------------------------------------------------------------------
+
+  async function updatePlan(
+    companyId: string,
+    sessionId: string,
+    planEdits: Partial<OnboardingPlan>,
+  ) {
+    const session = await getSession(sessionId);
+    const existingContext = (session.context ?? {}) as Record<string, unknown>;
+    const existingPlan = existingContext.plan as OnboardingPlan | undefined;
+
+    if (!existingPlan) {
+      throw unprocessable("No plan exists for this session. Generate a plan first.");
+    }
+
+    const updatedPlan: OnboardingPlan = {
+      ...existingPlan,
+      ...planEdits,
+      generatedAt: existingPlan.generatedAt,
+    };
+
+    const updatedSession = await updateSession(sessionId, {
+      context: { ...existingContext, plan: updatedPlan },
+    });
+
+    return { plan: updatedPlan, session: updatedSession };
+  }
+
+  // ---------------------------------------------------------------------------
+  // AgentDash: Plan execution — calls existing services in order
+  // ---------------------------------------------------------------------------
+
+  async function applyPlan(companyId: string, sessionId: string) {
+    const session = await getSession(sessionId);
+    const existingContext = (session.context ?? {}) as Record<string, unknown>;
+    const plan = existingContext.plan as OnboardingPlan | undefined;
+
+    if (!plan) {
+      throw unprocessable("No plan exists for this session. Generate a plan first.");
+    }
+
+    if (plan.status === "applied") {
+      throw unprocessable("This plan has already been applied.");
+    }
+
+    const forecast = budgetForecastService(db);
+    const policy = policyEngineService(db);
+    const factory = agentFactoryService(db);
+    const goalSvc = goalService(db);
+    const projectSvc = projectService(db);
+    const issueSvc = issueService(db);
+
+    const result: PlanApplyResult = {
+      status: "success",
+      departments: [],
+      securityPolicies: [],
+      goals: [],
+      agentTemplates: [],
+      spawnRequests: [],
+      projects: [],
+      errors: [],
+    };
+
+    const departmentIdMap = new Map<string, string>();
+
+    // --- Step 1: Create departments ---
+    for (const dept of plan.departments) {
+      try {
+        const created = await forecast.createDepartment(companyId, {
+          name: dept.name,
+          description: dept.description,
+        });
+        departmentIdMap.set(dept.name, created.id);
+        result.departments.push({ name: dept.name, id: created.id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "departments", entity: dept.name, error: msg });
+      }
+    }
+
+    // --- Step 2: Create security policies ---
+    for (const pol of plan.securityPolicies) {
+      try {
+        const created = await policy.createPolicy(companyId, {
+          name: pol.name,
+          description: pol.description,
+          policyType: pol.policyType,
+          targetType: pol.targetType,
+          targetId: pol.targetType === "company" ? companyId : undefined,
+          rules: pol.rules,
+        });
+        result.securityPolicies.push({ name: pol.name, id: created.id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "securityPolicies", entity: pol.name, error: msg });
+      }
+    }
+
+    // --- Step 3: Create goals ---
+    for (const goal of plan.goals) {
+      try {
+        const created = await goalSvc.create(companyId, {
+          title: goal.title,
+          description: goal.description,
+          level: goal.level as any,
+          priority: goal.priority as any,
+          status: "planned",
+          targetDate: goal.targetDate ? new Date(goal.targetDate) : null,
+        });
+        result.goals.push({ title: goal.title, id: created.id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "goals", entity: goal.title, error: msg });
+      }
+    }
+
+    // --- Step 4: Create agent templates (with department ID lookup) ---
+    for (const tmpl of plan.agentTemplates) {
+      try {
+        const departmentId = departmentIdMap.get(tmpl.departmentName) ?? null;
+        const created = await factory.createTemplate(companyId, {
+          slug: tmpl.slug,
+          name: tmpl.name,
+          role: tmpl.role,
+          description: tmpl.description,
+          skillKeys: tmpl.skillKeys,
+          budgetMonthlyCents: tmpl.budgetMonthlyCents,
+          departmentId,
+        });
+        result.agentTemplates.push({ name: tmpl.name, id: created.id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "agentTemplates", entity: tmpl.name, error: msg });
+      }
+    }
+
+    // --- Step 5: Create spawn requests for each template ---
+    for (const createdTemplate of result.agentTemplates) {
+      try {
+        const spawnResult = await factory.requestSpawn(companyId, {
+          templateId: createdTemplate.id,
+          quantity: 1,
+          reason: "Auto-spawned by onboarding plan",
+        });
+        result.spawnRequests.push({
+          templateName: createdTemplate.name,
+          id: spawnResult.spawnRequest.id,
+          approvalId: spawnResult.approval.id,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "spawnRequests", entity: createdTemplate.name, error: msg });
+      }
+    }
+
+    // --- Step 6: Create projects and issues ---
+    for (const proj of plan.projects) {
+      try {
+        const createdProject = await projectSvc.create(companyId, {
+          name: proj.name,
+          description: proj.description,
+        });
+        const issueIds: string[] = [];
+
+        for (const issue of proj.issues) {
+          try {
+            const createdIssue = await issueSvc.create(companyId, {
+              title: issue.title,
+              description: issue.description,
+              projectId: createdProject.id,
+            });
+            issueIds.push(createdIssue.id);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result.errors.push({ step: "issues", entity: `${proj.name}/${issue.title}`, error: msg });
+          }
+        }
+
+        result.projects.push({ name: proj.name, id: createdProject.id, issueIds });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push({ step: "projects", entity: proj.name, error: msg });
+      }
+    }
+
+    // --- Update plan status ---
+    const totalCreated =
+      result.departments.length +
+      result.securityPolicies.length +
+      result.goals.length +
+      result.agentTemplates.length +
+      result.projects.length;
+
+    if (totalCreated === 0 && result.errors.length > 0) {
+      result.status = "failed";
+    } else if (result.errors.length > 0) {
+      result.status = "partial";
+    }
+
+    const planStatus: OnboardingPlan["status"] =
+      totalCreated === 0 ? "failed" : result.errors.length > 0 ? "applied" : "applied";
+
+    const updatedPlan: OnboardingPlan = { ...plan, status: planStatus };
+    await updateSession(sessionId, {
+      context: { ...existingContext, plan: updatedPlan, applyResult: result },
+      currentStep: totalCreated > 0 ? "bootstrap" : session.currentStep,
+    });
+
+    return result;
+  }
+
+  // ---------------------------------------------------------------------------
   // Complete session
   // ---------------------------------------------------------------------------
 
@@ -528,6 +1025,9 @@ export function onboardingService(db: Db) {
     updateContext,
     suggestTeam,
     applyTeam,
+    generatePlan,
+    updatePlan,
+    applyPlan,
     completeSession,
   };
 }

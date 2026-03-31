@@ -35,7 +35,11 @@ import { CapacityDashboard } from "./pages/CapacityDashboard";
 import { ResearchDashboard } from "./pages/ResearchDashboard";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
 import { CrmPipeline } from "./pages/CrmPipeline";
+import { CrmAccounts } from "./pages/CrmAccounts";
+import { CrmAccountDetail } from "./pages/CrmAccountDetail";
 import { HubSpotSettings } from "./pages/HubSpotSettings";
+import { Feed } from "./pages/Feed";
+import { Pipelines } from "./pages/Pipelines";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -185,7 +189,11 @@ function boardRoutes() {
       <Route path="capacity" element={<CapacityDashboard />} />
       <Route path="research" element={<ResearchDashboard />} />
       <Route path="setup" element={<OnboardingWizardPage />} />
+      <Route path="feed" element={<Feed />} />
+      <Route path="pipelines" element={<Pipelines />} />
       <Route path="crm" element={<CrmPipeline />} />
+      <Route path="crm/accounts" element={<CrmAccounts />} />
+      <Route path="crm/accounts/:accountId" element={<CrmAccountDetail />} />
       <Route path="crm/hubspot" element={<HubSpotSettings />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="tests/ux/runs" element={<RunTranscriptUxLab />} />

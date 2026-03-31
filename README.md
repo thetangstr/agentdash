@@ -169,6 +169,16 @@ AgentDash charges for orchestration, not AI usage. You bring your own LLM API ke
 
 ---
 
+## Acknowledgements
+
+AgentDash is built on [Paperclip](https://github.com/paperclipai/paperclip), the open-source AI agent control plane. We actively track upstream releases and contribute back where possible. Thank you to the Paperclip team for building the foundation that makes AgentDash possible.
+
+- **Core engine**: Agent lifecycle, heartbeat, issue tracking, approvals, plugins, and execution workspaces are all Paperclip
+- **What AgentDash adds**: Agent Factory, CRM pipeline, HubSpot sync, security policies, budget/capacity management, skills registry, research cycles, and guided onboarding
+- **Upstream sync**: We maintain a repeatable merge process (`scripts/upstream-sync.sh`) to stay current with Paperclip releases
+
+---
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details. Original copyright Paperclip AI.

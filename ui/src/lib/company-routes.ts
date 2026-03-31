@@ -16,6 +16,14 @@ const BOARD_ROUTE_ROOTS = new Set([
   "activity",
   "inbox",
   "design-guide",
+  "crm",        // AgentDash: CRM pages
+  "feed",       // AgentDash: User feed
+  "templates",  // AgentDash: Agent templates
+  "security",   // AgentDash: Security policies
+  "capacity",   // AgentDash: Capacity dashboard
+  "research",   // AgentDash: AutoResearch
+  "setup",      // AgentDash: Onboarding wizard
+  "pipelines",  // AgentDash: Pipeline management
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);

@@ -414,6 +414,13 @@
       "when": 1774888128484,
       "tag": "0058_clear_rattler",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1774905562286,
+      "tag": "0059_thick_the_professor",
+      "breakpoints": true
     }
   ]
 }

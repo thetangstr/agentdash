@@ -84,3 +84,4 @@ export { onboardingSessions } from "./onboarding_sessions.js";
 export { onboardingSources } from "./onboarding_sources.js";
 export { companyContext } from "./company_context.js";
 export { crmAccounts, crmContacts, crmDeals, crmActivities, crmLeads, crmPartners } from "./crm_accounts.js";
+export { agentPipelines, pipelineRuns } from "./agent_pipelines.js";

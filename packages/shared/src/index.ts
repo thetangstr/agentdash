@@ -553,6 +553,14 @@ export {
   type PluginStateScopeKey,
   type SetPluginState,
   type ListPluginState,
+  createActionProposalSchema,
+  type CreateActionProposal,
+  createPipelineSchema,
+  updatePipelineSchema,
+  startPipelineRunSchema,
+  type CreatePipeline,
+  type UpdatePipeline,
+  type StartPipelineRun,
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";
