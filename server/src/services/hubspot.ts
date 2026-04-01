@@ -1,5 +1,5 @@
-import type { Db } from "@paperclipai/db";
-import { companies } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { companies } from "@agentdash/db";
 import { eq, sql } from "drizzle-orm";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { crmService } from "./crm.js";

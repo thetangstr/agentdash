@@ -1,6 +1,6 @@
 // AgentDash: Scheduled HubSpot sync — keeps CRM data fresh automatically.
-import type { Db } from "@paperclipai/db";
-import { companies } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { companies } from "@agentdash/db";
 import { sql } from "drizzle-orm";
 import { hubspotService } from "./hubspot.js";
 import { logger } from "../middleware/logger.js";

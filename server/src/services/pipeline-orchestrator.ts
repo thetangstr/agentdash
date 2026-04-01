@@ -1,6 +1,6 @@
 import { and, eq, desc } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { agentPipelines, pipelineRuns, agents, agentTemplates, issues } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { agentPipelines, pipelineRuns, agents, agentTemplates, issues } from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { issueService } from "./issues.js";

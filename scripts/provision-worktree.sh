@@ -37,8 +37,8 @@ run_isolated_worktree_init() {
     return 0
   fi
 
-  if command -v paperclipai >/dev/null 2>&1; then
-    paperclipai worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
+  if command -v agentdash >/dev/null 2>&1; then
+    agentdash worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
     return 0
   fi
 
@@ -296,7 +296,7 @@ EOF
 }
 
 if ! run_isolated_worktree_init; then
-  echo "paperclipai CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
+  echo "agentdash CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
   write_fallback_worktree_config
 fi
 

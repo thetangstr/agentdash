@@ -1,4 +1,4 @@
-# Paperclip Memory Service Plan
+# AgentDash Memory Service Plan
 
 ## Goal
 
@@ -48,7 +48,7 @@ Agents and services resolve the active provider by key, not by hard-coded vendor
 
 ### 3. Plugins are the primary provider path
 
-Built-ins are useful for a zero-config local path, but most providers should arrive through the existing Paperclip plugin runtime.
+Built-ins are useful for a zero-config local path, but most providers should arrive through the existing AgentDash plugin runtime.
 
 That keeps the core small and matches the current direction that optional knowledge-like systems live at the edges.
 

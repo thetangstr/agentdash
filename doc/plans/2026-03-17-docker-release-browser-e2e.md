@@ -65,7 +65,7 @@ That is a good base, but it does not validate the public npm package, Docker pat
 `scripts/docker-onboard-smoke.sh` already does useful setup work:
 
 - builds `Dockerfile.onboard-smoke`
-- runs `paperclipai@${PAPERCLIPAI_VERSION}` inside Docker
+- runs `agentdash@${PAPERCLIPAI_VERSION}` inside Docker
 - waits for health
 - signs up or signs in a smoke admin user
 - generates and accepts the bootstrap CEO invite in authenticated mode
@@ -384,8 +384,8 @@ This should stay optional until the token-free lane is trustworthy.
 
 The plan is complete when the implemented system can demonstrate all of the following:
 
-1. A published `paperclipai@canary` Docker install can be smoke-tested by Playwright in CI.
-2. A published `paperclipai@latest` Docker install can be smoke-tested by Playwright in CI.
+1. A published `agentdash@canary` Docker install can be smoke-tested by Playwright in CI.
+2. A published `agentdash@latest` Docker install can be smoke-tested by Playwright in CI.
 3. The test logs into authenticated mode with the smoke credentials.
 4. The test sees onboarding for a fresh instance.
 5. The test completes onboarding in the browser.

@@ -1,4 +1,4 @@
-# @paperclipai/plugin-hello-world-example
+# @agentdash/plugin-hello-world-example
 
 First-party reference plugin showing the smallest possible UI extension.
 
@@ -6,7 +6,7 @@ First-party reference plugin showing the smallest possible UI extension.
 
 - a manifest with a `dashboardWidget` UI slot
 - `entrypoints.ui` wiring for plugin UI bundles
-- a minimal React widget rendered in the Paperclip dashboard
+- a minimal React widget rendered in the AgentDash dashboard
 - reading host context (`companyId`) from `PluginWidgetProps`
 - worker lifecycle hooks (`setup`, `onHealth`) for basic runtime observability
 
@@ -25,7 +25,7 @@ It is a repo-local example plugin for development, not a plugin that should be a
 From the repo root, build the plugin and install it by local path:
 
 ```bash
-pnpm --filter @paperclipai/plugin-hello-world-example build
+pnpm --filter @agentdash/plugin-hello-world-example build
 pnpm agentdash plugin install ./packages/plugins/examples/plugin-hello-world-example
 ```
 

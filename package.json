@@ -1,25 +1,26 @@
 {
   "name": "agentdash",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts watch",
-    "dev:watch": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts watch",
-    "dev:once": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts dev",
-    "dev:list": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-service.ts list",
-    "dev:stop": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-service.ts stop",
-    "dev:server": "pnpm --filter @paperclipai/server dev",
-    "dev:ui": "pnpm --filter @paperclipai/ui dev",
+    "agentdash": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+    "paperclipai": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+    "dev": "node scripts/dev-runner.mjs watch",
+    "dev:watch": "node scripts/dev-runner.mjs watch",
+    "dev:once": "node scripts/dev-runner.mjs dev",
+    "dev:list": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts list",
+    "dev:stop": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts stop",
+    "dev:server": "pnpm --filter @agentdash/server dev",
+    "dev:ui": "pnpm --filter @agentdash/ui dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest",
     "test:run": "vitest run",
-    "db:generate": "pnpm --filter @paperclipai/db generate",
-    "db:migrate": "pnpm --filter @paperclipai/db migrate",
+    "db:generate": "pnpm --filter @agentdash/db generate",
+    "db:migrate": "pnpm --filter @agentdash/db migrate",
     "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
     "db:backup": "./scripts/backup-db.sh",
-    "agentdash": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
-    "paperclipai": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
     "build:npm": "./scripts/build-npm.sh",
     "release": "./scripts/release.sh",
     "release:canary": "./scripts/release.sh canary",
@@ -47,6 +48,14 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thetangstr/agentdash.git"
+  },
+  "homepage": "https://github.com/thetangstr/agentdash",
+  "bugs": {
+    "url": "https://github.com/thetangstr/agentdash/issues"
   },
   "packageManager": "pnpm@9.15.4",
   "pnpm": {

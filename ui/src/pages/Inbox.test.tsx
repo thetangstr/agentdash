@@ -3,7 +3,7 @@
 import { act } from "react";
 import type { ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
-import type { Issue } from "@paperclipai/shared";
+import type { Issue } from "@agentdash/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailedRunInboxRow, InboxIssueMetaLeading } from "./Inbox";
 
@@ -100,6 +100,14 @@ describe("FailedRunInboxRow", () => {
       processPid: null,
       processStartedAt: null,
       retryOfRunId: null,
+      issueId: null,
+      parentRunId: null,
+      delegationKind: null,
+      delegationLabel: null,
+      requestedByAgentId: null,
+      requestedByUserId: null,
+      requestedSkillId: null,
+      requestedSkillVersionId: null,
       processLossRetryCount: 0,
       stdoutExcerpt: null,
       stderrExcerpt: null,

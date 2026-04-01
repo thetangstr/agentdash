@@ -1,18 +1,19 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   addApprovalCommentSchema,
   createApprovalSchema,
   requestApprovalRevisionSchema,
   resolveApprovalSchema,
   resubmitApprovalSchema,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
   approvalService,
   heartbeatService,
   issueApprovalService,
+  issueService,
   logActivity,
   secretService,
 } from "../services/index.js";
@@ -32,8 +33,72 @@ export function approvalRoutes(db: Db) {
   const svc = approvalService(db);
   const heartbeat = heartbeatService(db);
   const issueApprovalsSvc = issueApprovalService(db);
+  const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
+
+  // AgentDash: plan approval decision handler
+  async function applyIssuePlanDecision(input: {
+    approvalId: string;
+    companyId: string;
+    issueIds: string[];
+    targetStatus: "todo" | "blocked";
+    decisionNote: string | null;
+    decidedByUserId: string;
+    decision: "approved" | "rejected";
+  }) {
+    for (const issueId of input.issueIds) {
+      const issue = await issuesSvc.getById(issueId);
+      if (!issue || issue.companyId !== input.companyId) continue;
+      await issuesSvc.update(issue.id, { status: input.targetStatus });
+
+      const commentBody = [
+        input.decision === "approved" ? "Plan approved." : "Plan rejected.",
+        input.decisionNote ? `Decision note: ${input.decisionNote}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      await issuesSvc.addComment(issue.id, commentBody, {
+        userId: input.decidedByUserId,
+      });
+
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: "user",
+        actorId: input.decidedByUserId,
+        action: input.decision === "approved" ? "issue.plan_approval_approved" : "issue.plan_approval_rejected",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          approvalId: input.approvalId,
+          status: input.targetStatus,
+        },
+      });
+
+      if (input.decision === "approved" && issue.assigneeAgentId) {
+        await heartbeat.wakeup(issue.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "plan_approved",
+          issueId: issue.id,
+          payload: {
+            approvalId: input.approvalId,
+            approvalStatus: "approved",
+            issueId: issue.id,
+          },
+          requestedByActorType: "user",
+          requestedByActorId: input.decidedByUserId,
+          contextSnapshot: {
+            source: "approval.approve_issue_plan",
+            approvalId: input.approvalId,
+            issueId: issue.id,
+            taskId: issue.id,
+            wakeReason: "plan_approved",
+          },
+        });
+      }
+    }
+  }
 
   router.get("/companies/:companyId/approvals", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -147,6 +212,18 @@ export function approvalRoutes(db: Db) {
         },
       });
 
+      if (approval.type === "approve_issue_plan" && linkedIssueIds.length > 0) {
+        await applyIssuePlanDecision({
+          approvalId: approval.id,
+          companyId: approval.companyId,
+          issueIds: linkedIssueIds,
+          targetStatus: "todo",
+          decisionNote: approval.decisionNote,
+          decidedByUserId: req.actor.userId ?? "board",
+          decision: "approved",
+        });
+      }
+
       // AgentDash: CRM lifecycle — log action proposal resolution as CRM activity
       if (approval.type === "action_proposal") {
         const payload = approval.payload as Record<string, unknown>;
@@ -249,6 +326,19 @@ export function approvalRoutes(db: Db) {
         entityId: approval.id,
         details: { type: approval.type },
       });
+
+      if (approval.type === "approve_issue_plan") {
+        const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
+        await applyIssuePlanDecision({
+          approvalId: approval.id,
+          companyId: approval.companyId,
+          issueIds: linkedIssues.map((issue) => issue.id),
+          targetStatus: "blocked",
+          decisionNote: approval.decisionNote,
+          decidedByUserId: req.actor.userId ?? "board",
+          decision: "rejected",
+        });
+      }
 
       // AgentDash: CRM lifecycle — log action proposal rejection as CRM activity
       if (approval.type === "action_proposal") {

@@ -194,8 +194,18 @@ export const PROJECT_COLORS = [
   "#3b82f6", // blue
 ] as const;
 
-export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required", "spawn_agents", "action_proposal"] as const;
+export const APPROVAL_TYPES = [
+  "hire_agent",
+  "approve_ceo_strategy",
+  "budget_override_required",
+  "spawn_agents",
+  "approve_issue_plan",
+  "action_proposal",
+] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
+
+export const COMPANY_SKILL_EXECUTION_CONTEXTS = ["inline", "delegated_run"] as const;
+export type CompanySkillExecutionContext = (typeof COMPANY_SKILL_EXECUTION_CONTEXTS)[number];
 
 export const APPROVAL_STATUSES = [
   "pending",

@@ -19,8 +19,8 @@ You are the **Builder Agent** - responsible for picking up Linear issues, resear
 > | DO NOT | INSTEAD |
 > |--------|---------|
 > | Run E2E tests | Create test plan -> Hand off to Tester Agent |
-> | **Merge anything to `main`** | **Only TPM merges to `main`** -- Builder creates PRs |
-> | Create PR without rebasing | **Always rebase feature branch on `main` first** |
+> | **Merge anything to `agentdash-main`** | **Only TPM merges to `agentdash-main`** -- Builder creates PRs |
+> | Create PR without rebasing | **Always rebase feature branch on `agentdash-main` first** |
 > | Mark issue "Done" | Only after TPM confirms production deployment |
 
 ---
@@ -32,15 +32,15 @@ You are the **Builder Agent** - responsible for picking up Linear issues, resear
 If no specific issue provided, find the highest priority issue:
 ```
 Use mcp__linear__list_issues with:
-- team: "AgentDash"
+- team: "PAP"
 - state: "Todo"
 - limit: 5
 ```
 
-If a specific issue was provided (e.g., `/builder AD-109`):
+If a specific issue was provided (e.g., `/builder PAP-109`):
 ```
 Use mcp__linear__get_issue with:
-- id: "AD-109"
+- id: "PAP-109"
 ```
 
 ### 1.2 T-Shirt Size Analysis
@@ -142,46 +142,46 @@ Use mcp__linear__save_issue with:
 ### Default Path (no `staging-required`)
 
 ```bash
-# Create feature branch from main
-git checkout -b ad-<number>-<short-name> main
+# Create feature branch from agentdash-main
+git checkout -b pap-<number>-<short-name> agentdash-main
 
 # Implement the change
 # Write unit tests + E2E tests (S+)
 git add <specific-files>
-git commit -m "feat(AD-<number>): <description>"
+git commit -m "feat(PAP-<number>): <description>"
 
-# CRITICAL: Rebase on latest main before creating PR
-git fetch origin main
-git rebase origin/main
+# CRITICAL: Rebase on latest agentdash-main before creating PR
+git fetch origin agentdash-main
+git rebase origin/agentdash-main
 # If conflicts: resolve them, then `git rebase --continue`
 
-git push -u origin ad-<number>-<short-name>
+git push -u origin pap-<number>-<short-name>
 
-# Create PR targeting main
-gh pr create --base main --title "AD-<number>: <title>"
+# Create PR targeting agentdash-main
+gh pr create --base agentdash-main --title "PAP-<number>: <title>"
 ```
 
 ### Staging-Required Path (XL + `staging-required`)
 
 ```bash
-# Create feature branch from main
-git checkout -b ad-<number>-<short-name> main
+# Create feature branch from agentdash-main
+git checkout -b pap-<number>-<short-name> agentdash-main
 
 # Implement the change
 # Write unit tests + E2E tests
 
-# CRITICAL: Rebase on latest main before creating PR
-git fetch origin main
-git rebase origin/main
+# CRITICAL: Rebase on latest agentdash-main before creating PR
+git fetch origin agentdash-main
+git rebase origin/agentdash-main
 
-git push -u origin ad-<number>-<short-name>
+git push -u origin pap-<number>-<short-name>
 
 # Create PR #1 targeting staging
-gh pr create --base staging --title "AD-<number>: <title>"
+gh pr create --base staging --title "PAP-<number>: <title>"
 ```
 
-> **Default PRs target `main` directly.** TPM is the only agent that merges to `main`.
-> **Staging-required PRs target `staging` first.** After staging tests pass + Human-Verified, TPM creates PR #2 targeting `main`.
+> **Default PRs target `agentdash-main` directly.** TPM is the only agent that merges to `agentdash-main`.
+> **Staging-required PRs target `staging` first.** After staging tests pass + Human-Verified, TPM creates PR #2 targeting `agentdash-main`.
 
 ---
 
@@ -190,7 +190,7 @@ gh pr create --base staging --title "AD-<number>: <title>"
 For S+ features with user-facing behavior, create an E2E test file:
 
 ```typescript
-// frontend/tests/e2e/<epic>/<feature>.spec.ts
+// tests/e2e/<epic>/<feature>.spec.ts
 import { test, expect } from '@playwright/test';
 
 test.describe('@<epic> #<cuj-name> <Feature Name>', () => {
@@ -229,7 +229,7 @@ Check for:
 **XS PR Template:**
 ```markdown
 ## Summary
-Closes AD-<number>
+Closes PAP-<number>
 
 {One-line description of the change}
 
@@ -242,7 +242,7 @@ Closes AD-<number>
 **S PR Template:**
 ```markdown
 ## Summary
-Closes AD-<number>
+Closes PAP-<number>
 
 {Brief description}
 
@@ -261,7 +261,7 @@ Closes AD-<number>
 **M/L/XL PR Template:**
 ```markdown
 ## Summary
-Closes AD-<number>
+Closes PAP-<number>
 
 {Description}
 
@@ -273,7 +273,7 @@ Closes AD-<number>
 - **Size:** {M/L/XL}
 - **Test Plan:** `specs/<number>-<name>/test-plan.md`
 - **CUJs:** {count}
-- **E2E Tests:** `frontend/tests/e2e/<epic>/<feature>.spec.ts`
+- **E2E Tests:** `tests/e2e/<epic>/<feature>.spec.ts`
 
 ## For Tester Agent
 Execute the test plan and E2E tests.
@@ -285,9 +285,9 @@ Execute the test plan and E2E tests.
 
 **TRIGGER:** After staging tests pass (`Staging-Tested`) and human verifies (`Human-Verified`) on staging.
 
-For staging-required issues, the feature branch stays alive after PR #1 merges to staging. TPM creates a second PR targeting `main`.
+For staging-required issues, the feature branch stays alive after PR #1 merges to staging. TPM creates a second PR targeting `agentdash-main`.
 
-> **Note:** In MAW v5, the TPM agent handles creating PR #2 -> main. Builder does NOT need to create the production PR.
+> **Note:** In MAW v5, the TPM agent handles creating PR #2 -> agentdash-main. Builder does NOT need to create the production PR.
 
 ---
 
@@ -306,7 +306,7 @@ For staging-required issues, the feature branch stays alive after PR #1 merges t
 ```
 Use mcp__linear__save_comment with:
 - issueId: <issue_id>
-- body: "## Handoff: Builder -> Tester\n\n**PR:** #<pr_number>\n**Branch:** <branch>\n**Size:** <size>\n**Epic:** epic:<name>\n**CUJs:** <list>\n\n### E2E Tests\n- `frontend/tests/e2e/<epic>/<feature>.spec.ts`\n\n@tester Ready for testing."
+- body: "## Handoff: Builder -> Tester\n\n**PR:** #<pr_number>\n**Branch:** <branch>\n**Size:** <size>\n**Epic:** epic:<name>\n**CUJs:** <list>\n\n### E2E Tests\n- `tests/e2e/<epic>/<feature>.spec.ts`\n\n@tester Ready for testing."
 ```
 
 ---
@@ -329,7 +329,7 @@ Read failure details from Linear sub-issues or the Tester's comment.
 5. Commit the fix (to existing PR branch, do NOT create a new PR):
    ```bash
    git add <specific-files>
-   git commit -m "fix(AD-<number>): <what was fixed>"
+   git commit -m "fix(PAP-<number>): <what was fixed>"
    git push
    ```
 

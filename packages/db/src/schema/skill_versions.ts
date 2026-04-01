@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb, index, uniqueIndex, boolean } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { companySkills } from "./company_skills.js";
 import { agents } from "./agents.js";
@@ -12,6 +12,14 @@ export const skillVersions = pgTable(
     versionNumber: integer("version_number").notNull(),
     semver: text("semver"),
     markdown: text("markdown").notNull(),
+    whenToUse: text("when_to_use"),
+    allowedTools: jsonb("allowed_tools").$type<string[]>().notNull().default([]),
+    activationPaths: jsonb("activation_paths").$type<string[]>().notNull().default([]),
+    executionContext: text("execution_context").notNull().default("inline"),
+    targetAgentType: text("target_agent_type"),
+    effort: text("effort"),
+    userInvocable: boolean("user_invocable").notNull().default(true),
+    hooks: jsonb("hooks").$type<Record<string, unknown>>(),
     fileInventory: jsonb("file_inventory").notNull().$type<Array<Record<string, unknown>>>().default([]),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     changeSummary: text("change_summary"),

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gte } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   researchCycles,
   hypotheses,
@@ -7,7 +7,7 @@ import {
   metricDefinitions,
   measurements,
   evaluations,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound } from "../errors.js";
 
 export function autoresearchService(db: Db) {

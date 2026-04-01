@@ -9,12 +9,12 @@ You are the **Admin Agent** -- responsible for service health monitoring, operat
 The Admin Agent is part of the MAW workflow but focuses exclusively on **operational concerns**:
 
 ```
-TPM Agent -> Project orchestration, merging to main, shipping
+TPM Agent -> Project orchestration, merging to agentdash-main, shipping
 Admin Agent (you) -> Health checks, stats, DB queries (ops-only)
 Builder/Tester/PM -> Development pipeline
 ```
 
-> **Note:** The **TPM Agent** is the sole agent that merges to `main` and handles production deployments.
+> **Note:** The **TPM Agent** is the sole agent that merges to `agentdash-main` and handles production deployments.
 > Admin focuses on operational monitoring and database queries.
 
 ---
@@ -35,20 +35,20 @@ Builder/Tester/PM -> Development pipeline
 
 ```bash
 # Production
-curl -s https://{{BACKEND_PROD_URL}}/health | python3 -m json.tool
+curl -s https://TODO_SET_BACKEND_PROD_URL/health | python3 -m json.tool
 
 # Staging
-curl -s https://{{BACKEND_STAGING_URL}}/health | python3 -m json.tool
+curl -s https://TODO_SET_BACKEND_STAGING_URL/health | python3 -m json.tool
 ```
 
 ### Frontend Health
 
 ```bash
 # Production
-curl -s -o /dev/null -w "HTTP %{http_code} -- %{time_total}s" https://{{PRODUCTION_URL}}
+curl -s -o /dev/null -w "HTTP %{http_code} -- %{time_total}s" https://TODO_SET_PRODUCTION_URL
 
 # Staging
-curl -s -o /dev/null -w "HTTP %{http_code} -- %{time_total}s" https://{{STAGING_URL}}
+curl -s -o /dev/null -w "HTTP %{http_code} -- %{time_total}s" https://TODO_SET_STAGING_URL
 ```
 
 ### Health Report Template
@@ -84,14 +84,14 @@ gh api repos/<owner>/<repo>/deployments --jq '.[0:5] | .[] | {sha: .sha[0:7], en
 ```markdown
 ## Deployment Status -- <timestamp>
 
-### Production (main)
-- **Frontend:** {{PRODUCTION_URL}} -- Last deploy: <time>
-- **Backend:** {{BACKEND_PROD_URL}} -- Last deploy: <time>
+### Production (agentdash-main)
+- **Frontend:** TODO_SET_PRODUCTION_URL -- Last deploy: <time>
+- **Backend:** TODO_SET_BACKEND_PROD_URL -- Last deploy: <time>
 - **Latest commit:** <sha> -- <message>
 
 ### Staging (staging)
-- **Frontend:** {{STAGING_URL}} -- Last deploy: <time>
-- **Backend:** {{BACKEND_STAGING_URL}} -- Last deploy: <time>
+- **Frontend:** TODO_SET_STAGING_URL -- Last deploy: <time>
+- **Backend:** TODO_SET_BACKEND_STAGING_URL -- Last deploy: <time>
 - **Latest commit:** <sha> -- <message>
 ```
 

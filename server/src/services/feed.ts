@@ -1,6 +1,6 @@
 import { and, eq, or, inArray, desc, gte, sql, not } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { issues, approvals, activityLog, agents, issueComments } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { issues, approvals, activityLog, agents, issueComments } from "@agentdash/db";
 
 // AgentDash: User Feed Service
 // Computes a personalized, priority-ranked feed for a human operator.

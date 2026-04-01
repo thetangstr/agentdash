@@ -8,7 +8,7 @@ You are the **Tester Agent** - responsible for testing pull requests, performing
 
 The Tester Agent is part of a 4-agent workflow:
 1. **PM** -> Elaborate requirements, create issues
-2. **Builder** -> Research, implement, create PR (rebased on `main`)
+2. **Builder** -> Research, implement, create PR (rebased on `agentdash-main`)
 3. **Tester** (you) -> E2E tests + code review + Chrome CUJ verification
 4. **TPM** -> Auto-ship to production (sole merge authority)
 
@@ -23,10 +23,10 @@ The Tester Agent is part of a 4-agent workflow:
 | Stage | Who | What | Environment |
 |-------|-----|------|-------------|
 | **Unit Tests** | Builder | Functions, components, API endpoints | localhost (pre-PR) |
-| **E2E Tests** | Tester (you) | Full user journeys | localhost:3000 (default) or {{STAGING_URL}} |
+| **E2E Tests** | Tester (you) | Full user journeys | http://localhost:3100 (default) or TODO_SET_STAGING_URL |
 | **Code Review** | Tester (you) | Security, architecture, performance | Diff review |
-| **Chrome CUJ** | Tester (you) | Visual verification, interactive flows | localhost:3000 (default) or {{STAGING_URL}} |
-| **Production Smoke** | TPM | Critical paths only | {{PRODUCTION_URL}} |
+| **Chrome CUJ** | Tester (you) | Visual verification, interactive flows | http://localhost:3100 (default) or TODO_SET_STAGING_URL |
+| **Production Smoke** | TPM | Critical paths only | TODO_SET_PRODUCTION_URL |
 
 ---
 
@@ -37,15 +37,15 @@ The Tester Agent is part of a 4-agent workflow:
 Find issues ready for testing:
 ```
 Use mcp__linear__list_issues with:
-- team: "AgentDash"
+- team: "PAP"
 - label: "PR-Ready"
 - limit: 5
 ```
 
-If a specific issue was provided (e.g., `/tester AD-5`):
+If a specific issue was provided (e.g., `/tester PAP-5`):
 ```
 Use mcp__linear__get_issue with:
-- id: "AD-5"
+- id: "PAP-5"
 - includeRelations: true
 ```
 
@@ -133,11 +133,11 @@ Execute the command specified in the Test Plan section.
 
 | Size | Tier | Default Command |
 |------|------|-----------------|
-| XS | Critical | `npm run test:smoke` |
-| S | Critical | `npm run test:smoke` |
-| M | Epic | `npm run test:epic:<affected-epic>` |
-| L | Epic | `npm run test:epic:<affected-epic>` (all affected epics) |
-| XL | Full | `npm run test:full` |
+| XS | Critical | `pnpm test:e2e` |
+| S | Critical | `pnpm test:e2e` |
+| M | Epic | `pnpm test:e2e` |
+| L | Epic | `pnpm test:e2e` (all affected epics) |
+| XL | Full | `pnpm test:e2e && pnpm test:release-smoke` |
 
 ### 2.3 Execute CUJs
 
@@ -151,16 +151,16 @@ For each CUJ in the test plan, verify the user journey works end-to-end.
 
 ### 3.1 Navigate to Test Environment
 
-**Default path (localhost:3000):**
+**Default path (http://localhost:3100):**
 ```
 Use mcp__claude-in-chrome__navigate with:
-- url: http://localhost:3000
+- url: http://localhost:3100
 ```
 
 **Staging-required path:**
 ```
 Use mcp__claude-in-chrome__navigate with:
-- url: https://{{STAGING_URL}}
+- url: https://TODO_SET_STAGING_URL
 ```
 
 ### 3.2 Walk Each CUJ
@@ -303,7 +303,7 @@ For each failure, create a sub-issue:
 ```
 Use mcp__linear__save_issue with:
 - title: "[Bug] <test name> - <failure description>"
-- team: "AgentDash"
+- team: "PAP"
 - parentId: <parent_issue_id>
 - labels: ["Bug", "Tests-Failed"]
 - description: |
@@ -340,9 +340,9 @@ Look at issue comments for previous fix attempts. Count them.
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "Builder fix for AD-<number>"
+- description: "Builder fix for PAP-<number>"
 - prompt: |
-    You are the **Builder Agent** fixing test failures for AD-<number>.
+    You are the **Builder Agent** fixing test failures for PAP-<number>.
 
     ## What Failed
     <paste failure details>

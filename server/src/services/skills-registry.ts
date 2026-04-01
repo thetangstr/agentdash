@@ -1,12 +1,13 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   companySkills,
   skillVersions,
   skillDependencies,
   approvals,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
+import { deriveSkillSemanticFields } from "./company-skills.js";
 
 // ── simple line-by-line diff ─────────────────────────────────────────
 function computeLineDiff(
@@ -118,6 +119,10 @@ export function skillsRegistryService(db: Db) {
         createdByUserId?: string;
       },
     ) => {
+      const semantics = deriveSkillSemanticFields({});
+      const parsedSemantics = typeof data.markdown === "string"
+        ? deriveSkillSemanticFields(parseMarkdownFrontmatter(data.markdown))
+        : semantics;
       // Increment latestVersionNumber on parent skill
       const [updatedSkill] = await db
         .update(companySkills)
@@ -162,6 +167,14 @@ export function skillsRegistryService(db: Db) {
           skillId,
           versionNumber: newVersionNumber,
           markdown: data.markdown,
+          whenToUse: parsedSemantics.whenToUse,
+          allowedTools: parsedSemantics.allowedTools,
+          activationPaths: parsedSemantics.activationPaths,
+          executionContext: parsedSemantics.executionContext,
+          targetAgentType: parsedSemantics.targetAgentType,
+          effort: parsedSemantics.effort,
+          userInvocable: parsedSemantics.userInvocable,
+          hooks: parsedSemantics.hooks,
           fileInventory: data.fileInventory ?? [],
           changeSummary: data.changeSummary ?? null,
           semver: data.semver ?? null,
@@ -305,6 +318,14 @@ export function skillsRegistryService(db: Db) {
         .set({
           publishedVersionId: versionId,
           markdown: version.markdown,
+          whenToUse: version.whenToUse,
+          allowedTools: version.allowedTools as string[] | undefined,
+          activationPaths: version.activationPaths as string[] | undefined,
+          executionContext: version.executionContext,
+          targetAgentType: version.targetAgentType,
+          effort: version.effort,
+          userInvocable: version.userInvocable,
+          hooks: (version.hooks as Record<string, unknown> | null | undefined) ?? null,
           updatedAt: now,
         })
         .where(eq(companySkills.id, version.skillId));
@@ -447,4 +468,24 @@ export function skillsRegistryService(db: Db) {
       return Array.from(allSkillIds);
     },
   };
+}
+
+function parseMarkdownFrontmatter(markdown: string): Record<string, unknown> {
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) return {};
+  const closing = normalized.indexOf("\n---\n", 4);
+  if (closing < 0) return {};
+  const block = normalized.slice(4, closing);
+  const out: Record<string, unknown> = {};
+  for (const rawLine of block.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex <= 0) continue;
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (!key) continue;
+    out[key] = value;
+  }
+  return out;
 }

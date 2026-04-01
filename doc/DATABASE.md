@@ -25,7 +25,7 @@ If you need to apply pending migrations manually, run:
 pnpm db:migrate
 ```
 
-When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active Paperclip config/instance.
+When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active AgentDash config/instance.
 
 This mode is ideal for local development and one-command installs.
 

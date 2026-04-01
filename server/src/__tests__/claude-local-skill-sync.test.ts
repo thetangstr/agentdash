@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   listClaudeSkills,
   syncClaudeSkills,
-} from "@paperclipai/adapter-claude-local/server";
+} from "@agentdash/adapter-claude-local/server";
 
 async function makeTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -104,7 +104,7 @@ describe("claude local skill sync", () => {
       originLabel: "User-installed",
       locationLabel: "~/.claude/skills",
       readOnly: true,
-      detail: "Installed outside Paperclip management in the Claude skills home.",
+      detail: "Installed outside AgentDash management in the Claude skills home.",
     }));
   });
 });

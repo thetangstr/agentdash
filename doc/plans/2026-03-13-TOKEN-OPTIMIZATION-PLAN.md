@@ -12,7 +12,7 @@ This plan is based on:
 - the current V1 control-plane design
 - the current adapter and heartbeat implementation
 - the linked user discussion
-- local runtime data from the default Paperclip instance on 2026-03-13
+- local runtime data from the default AgentDash instance on 2026-03-13
 
 ## Executive Summary
 

@@ -39,17 +39,6 @@ This starts:
 
 `pnpm dev` runs the server in watch mode and restarts on changes from workspace packages (including adapter packages). Use `pnpm dev:once` to run without file watching.
 
-`pnpm dev:once` auto-applies pending local migrations by default before starting the dev server.
-
-`pnpm dev` and `pnpm dev:once` are now idempotent for the current repo and instance: if the matching Paperclip dev runner is already alive, Paperclip reports the existing process instead of starting a duplicate.
-
-Inspect or stop the current repo's managed dev runner:
-
-```sh
-pnpm dev:list
-pnpm dev:stop
-```
-
 `pnpm dev:once` now tracks backend-relevant file changes and pending migrations. When the current boot is stale, the board UI shows a `Restart required` banner. You can also enable guarded auto-restart in `Instance Settings > Experimental`, which waits for queued/running local agent runs to finish before restarting the dev server.
 
 Tailscale/private-auth dev mode:
@@ -74,24 +63,24 @@ For a first-time local install, you can bootstrap and run in one command:
 pnpm agentdash run
 ```
 
-`paperclipai run` does:
+`agentdash run` does:
 
 1. auto-onboard if config is missing
-2. `paperclipai doctor` with repair enabled
+2. `agentdash doctor` with repair enabled
 3. starts the server when checks pass
 
 ## Docker Quickstart (No local Node install)
 
-Build and run AgentDash in Docker:
+Build and run Paperclip in Docker:
 
 ```sh
-docker build -t agentdash-local .
-docker run --name agentdash \
+docker build -t paperclip-local .
+docker run --name paperclip \
   -p 3100:3100 \
   -e HOST=0.0.0.0 \
   -e PAPERCLIP_HOME=/paperclip \
-  -v "$(pwd)/data/docker-agentdash:/paperclip" \
-  agentdash-local
+  -v "$(pwd)/data/docker-paperclip:/paperclip" \
+  paperclip-local
 ```
 
 Or use Compose:
@@ -147,12 +136,12 @@ For `codex_local`, Paperclip also manages a per-company Codex home under the ins
 
 ## Worktree-local Instances
 
-When developing from multiple git worktrees, do not point two Paperclip servers at the same embedded PostgreSQL data directory.
+When developing from multiple git worktrees, do not point two AgentDash servers at the same embedded PostgreSQL data directory.
 
-Instead, create a repo-local Paperclip config plus an isolated instance for the worktree:
+Instead, create a repo-local AgentDash config plus an isolated instance for the worktree:
 
 ```sh
-paperclipai worktree init
+agentdash worktree init
 # or create the git worktree and initialize it in one step:
 pnpm agentdash worktree:make paperclip-pr-432
 ```
@@ -163,7 +152,7 @@ This command:
 - creates an isolated instance under `~/.paperclip-worktrees/instances/<worktree-id>/`
 - when run inside a linked git worktree, mirrors the effective git hooks into that worktree's private git dir
 - picks a free app port and embedded PostgreSQL port
-- by default seeds the isolated DB in `minimal` mode from the current effective Paperclip instance/config (repo-local worktree config when present, otherwise the default instance) via a logical SQL snapshot
+- by default seeds the isolated DB in `minimal` mode from the current effective AgentDash instance/config (repo-local worktree config when present, otherwise the default instance) via a logical SQL snapshot
 
 Seed modes:
 
@@ -171,7 +160,7 @@ Seed modes:
 - `full` makes a full logical clone of the source instance
 - `--no-seed` creates an empty isolated instance
 
-After `worktree init`, both the server and the CLI auto-load the repo-local `.paperclip/.env` when run inside that worktree, so normal commands like `pnpm dev`, `paperclipai doctor`, and `paperclipai db:backup` stay scoped to the worktree instance.
+After `worktree init`, both the server and the CLI auto-load the repo-local `.paperclip/.env` when run inside that worktree, so normal commands like `pnpm dev`, `agentdash doctor`, and `agentdash db:backup` stay scoped to the worktree instance.
 
 That repo-local env also sets:
 
@@ -184,9 +173,9 @@ The server/UI use those values for worktree-specific branding such as the top ba
 Print shell exports explicitly when needed:
 
 ```sh
-paperclipai worktree env
+agentdash worktree env
 # or:
-eval "$(paperclipai worktree env)"
+eval "$(agentdash worktree env)"
 ```
 
 ### Worktree CLI Reference
@@ -210,11 +199,11 @@ eval "$(paperclipai worktree env)"
 Examples:
 
 ```sh
-paperclipai worktree init --no-seed
-paperclipai worktree init --seed-mode full
-paperclipai worktree init --from-instance default
-paperclipai worktree init --from-data-dir ~/.paperclip
-paperclipai worktree init --force
+agentdash worktree init --no-seed
+agentdash worktree init --seed-mode full
+agentdash worktree init --from-instance default
+agentdash worktree init --from-data-dir ~/.paperclip
+agentdash worktree init --force
 ```
 
 Repair an already-created repo-managed worktree and reseed its isolated instance from the main default install:
@@ -228,7 +217,7 @@ pnpm agentdash worktree init --force --seed-mode minimal \
 
 That rewrites the worktree-local `.paperclip/config.json` + `.paperclip/.env`, recreates the isolated instance under `~/.paperclip-worktrees/instances/<worktree-id>/`, and preserves the git worktree contents themselves.
 
-**`pnpm agentdash worktree:make <name> [options]`** — Create `~/NAME` as a git worktree, then initialize an isolated Paperclip instance inside it. This combines `git worktree add` with `worktree init` in a single step.
+**`pnpm agentdash worktree:make <name> [options]`** — Create `~/NAME` as a git worktree, then initialize an isolated AgentDash instance inside it. This combines `git worktree add` with `worktree init` in a single step.
 
 | Option | Description |
 |---|---|
@@ -252,7 +241,7 @@ pnpm agentdash worktree:make my-feature --start-point origin/main
 pnpm agentdash worktree:make experiment --no-seed
 ```
 
-**`pnpm agentdash worktree env [options]`** — Print shell exports for the current worktree-local Paperclip instance.
+**`pnpm agentdash worktree env [options]`** — Print shell exports for the current worktree-local AgentDash instance.
 
 | Option | Description |
 |---|---|
@@ -370,7 +359,7 @@ Default behavior:
 
 ## CLI Client Operations
 
-Paperclip CLI now includes client-side control-plane commands in addition to setup commands.
+AgentDash CLI now includes client-side control-plane commands in addition to setup commands.
 
 Quick examples:
 
@@ -456,6 +445,6 @@ State behavior for this smoke script:
 
 Networking behavior for this smoke script:
 
-- auto-detects and prints a Paperclip host URL reachable from inside OpenClaw Docker
+- auto-detects and prints a AgentDash host URL reachable from inside OpenClaw Docker
 - default container-side host alias is `host.docker.internal` (override with `PAPERCLIP_HOST_FROM_CONTAINER` / `PAPERCLIP_HOST_PORT`)
-- if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm agentdash allowed-hostname host.docker.internal` and restart Paperclip
+- if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm agentdash allowed-hostname host.docker.internal` and restart AgentDash

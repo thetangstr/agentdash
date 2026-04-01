@@ -2,7 +2,7 @@
 
 **Download a company.**
 
-ClipHub is the public registry where people share, discover, and download Paperclip company configurations. A company template is a portable artifact containing an entire org — agents, reporting structure, adapter configs, role definitions, seed tasks — ready to spin up with one command.
+ClipHub is the public registry where people share, discover, and download AgentDash company configurations. A company template is a portable artifact containing an entire org — agents, reporting structure, adapter configs, role definitions, seed tasks — ready to spin up with one command.
 
 ---
 
@@ -10,7 +10,7 @@ ClipHub is the public registry where people share, discover, and download Paperc
 
 ClipHub is to Paperclip what a package registry is to a programming language. Paperclip already supports exportable org configs (see [SPEC.md](./SPEC.md) §2). ClipHub is the public directory where those exports live.
 
-A user builds a working company in Paperclip — a dev shop, a marketing agency, a research lab, a content studio — exports the template, and publishes it to ClipHub. Anyone can browse, search, download, and spin up that company on their own Paperclip instance.
+A user builds a working company in Paperclip — a dev shop, a marketing agency, a research lab, a content studio — exports the template, and publishes it to ClipHub. Anyone can browse, search, download, and spin up that company on their own AgentDash instance.
 
 The tagline: **you can literally download a company.**
 
@@ -87,7 +87,7 @@ Two ways to use a template:
 ```
 paperclip install cliphub:<publisher>/<company-slug>
 ```
-Downloads the template and creates a new company in your local Paperclip instance. You add your own API keys, set budgets, customize agents, and hit go.
+Downloads the template and creates a new company in your local AgentDash instance. You add your own API keys, set budgets, customize agents, and hit go.
 
 **Fork:**
 Forking creates a copy of the template under your own ClipHub account. You can modify it, republish it as your own variant, and the fork lineage is tracked. This enables evolutionary improvement — someone publishes a marketing agency, you fork it, add a social media team, republish.
@@ -201,7 +201,7 @@ New accounts have a waiting period before they can publish. This prevents drive-
 
 ## Architecture
 
-ClipHub is a **separate service** from Paperclip itself. Paperclip is self-hosted; ClipHub is a hosted registry that Paperclip instances talk to.
+ClipHub is a **separate service** from AgentDash itself. Paperclip is self-hosted; ClipHub is a hosted registry that AgentDash instances talk to.
 
 ### Integration Points
 
@@ -209,7 +209,7 @@ ClipHub is a **separate service** from Paperclip itself. Paperclip is self-hoste
 |---|---|
 | **ClipHub Web** | Browse, search, discover, comment, star — the website |
 | **ClipHub API** | Registry API for publishing, downloading, searching programmatically |
-| **Paperclip CLI** | `paperclipai install`, `paperclipai publish`, `paperclipai cliphub sync` — built into Paperclip |
+| **AgentDash CLI** | `agentdash install`, `agentdash publish`, `agentdash cliphub sync` — built into Paperclip |
 | **Paperclip UI** | "Browse ClipHub" panel in the Paperclip web UI for discovering templates without leaving the app |
 
 ### Tech Stack
@@ -260,7 +260,7 @@ Report
 1. Open ClipHub, browse by category or search "dev shop for building SaaS"
 2. Find a template that fits — "Lean SaaS Dev Shop (CEO + CTO + 3 Engineers)"
 3. Read the description, inspect the org chart, check the comments
-4. Run `paperclipai install cliphub:acme/lean-saas-shop`
+4. Run `agentdash install cliphub:acme/lean-saas-shop`
 5. Paperclip creates the company locally with all agents pre-configured
 6. Set your API keys, adjust budgets, add your initial tasks
 7. Hit go
@@ -268,8 +268,8 @@ Report
 ### "I built something great and want to share it"
 
 1. Build and iterate on a company in Paperclip until it works well
-2. Export: `paperclipai export --template my-agency`
-3. Publish: `paperclipai publish cliphub my-agency`
+2. Export: `agentdash export --template my-agency`
+3. Publish: `agentdash publish cliphub my-agency`
 4. Fill in description, category, tags on the web UI
 5. Template is live — others can find and install it
 
@@ -285,7 +285,7 @@ Report
 
 1. Search ClipHub for agent templates: "senior python engineer"
 2. Find a well-starred agent config
-3. Install just that agent: `paperclipai install cliphub:acme/senior-python-eng --agent`
+3. Install just that agent: `agentdash install cliphub:acme/senior-python-eng --agent`
 4. Assign it to a manager in your existing company
 5. Done
 
@@ -311,7 +311,7 @@ ClipHub is to Paperclip what a package registry is to a language runtime: option
 - [ ] Template browsing (list, filter by category)
 - [ ] Template detail page (description, org chart, agent list, install command)
 - [ ] Semantic search (vector embeddings)
-- [ ] `paperclipai install cliphub:<publisher>/<slug>` CLI command
+- [ ] `agentdash install cliphub:<publisher>/<slug>` CLI command
 - [ ] GitHub OAuth authentication
 - [ ] Stars
 - [ ] Download counts
@@ -326,7 +326,7 @@ ClipHub is to Paperclip what a package registry is to a language runtime: option
 - [ ] Verified publisher badges
 - [ ] Automated security scanning of adapter configs
 - [ ] "Browse ClipHub" panel in Paperclip web UI
-- [ ] `paperclipai cliphub sync` for bulk publishing
+- [ ] `agentdash cliphub sync` for bulk publishing
 - [ ] Publisher profiles and portfolios
 
 ### Not in Scope

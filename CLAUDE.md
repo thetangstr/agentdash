@@ -30,6 +30,17 @@ bash scripts/test-cujs.sh    # 60 end-to-end tests against live API
 bash scripts/seed-test-scenarios.sh  # Seed 2 demo companies
 ```
 
+## Multi-Agent Workflow
+
+MAW commands are installed under `.claude/commands/` with supporting docs in `doc/multi-agent-workflow/`.
+
+- Base branch for MAW PRs: `agentdash-main`
+- Default issue prefix in examples: `PAP`
+- Primary entry point: `/workon PAP-123`
+- Shipping command: `/tpm sync`
+
+Staging and production steps still contain explicit `TODO_SET_*` placeholders for environment URLs and test credentials. Fill those before using the deploy/admin flows.
+
 ## Architecture
 
 **Monorepo** (pnpm workspaces): `server/`, `ui/`, `cli/`, `packages/*`
@@ -113,7 +124,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - CLI command: `agentdash`
 - localStorage keys: `agentdash.*`
 - Plugin IDs: `agentdash.*`
-- Internal package scopes remain `@paperclipai/*` (upstream compatibility)
+- Internal package scopes remain `@agentdash/*` (upstream compatibility)
 - Primary color: Teal — company-customizable via `themeAccentColor`
 
 ## Multi-Agent Workflow (MAW)

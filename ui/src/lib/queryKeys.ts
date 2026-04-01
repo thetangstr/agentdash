@@ -45,6 +45,7 @@ export const queryKeys = {
     comments: (issueId: string) => ["issues", "comments", issueId] as const,
     attachments: (issueId: string) => ["issues", "attachments", issueId] as const,
     documents: (issueId: string) => ["issues", "documents", issueId] as const,
+    plan: (issueId: string) => ["issues", "plan", issueId] as const,
     documentRevisions: (issueId: string, key: string) => ["issues", "document-revisions", issueId, key] as const,
     activity: (issueId: string) => ["issues", "activity", issueId] as const,
     runs: (issueId: string) => ["issues", "runs", issueId] as const,
@@ -73,6 +74,14 @@ export const queryKeys = {
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
+  },
+  crm: {
+    pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,
+    accounts: (companyId: string) => ["crm", companyId, "accounts"] as const,
+    deals: (companyId: string) => ["crm", companyId, "deals"] as const,
+    leads: (companyId: string) => ["crm", companyId, "leads"] as const,
+    partners: (companyId: string) => ["crm", companyId, "partners"] as const,
+    hubspot: (companyId: string) => ["crm", companyId, "hubspot"] as const,
   },
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,

@@ -1,11 +1,11 @@
 import { and, eq, desc } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   crmAccounts,
   crmActivities,
   crmDeals,
   issues,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
 

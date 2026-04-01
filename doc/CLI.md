@@ -1,6 +1,6 @@
 # CLI Reference
 
-Paperclip CLI now supports both:
+AgentDash CLI now supports both:
 
 - instance setup/diagnostics (`onboard`, `doctor`, `configure`, `env`, `allowed-hostname`)
 - control-plane client operations (issues, approvals, agents, activity, dashboard)
@@ -31,9 +31,9 @@ Mode taxonomy and design intent are documented in `doc/DEPLOYMENT-MODES.md`.
 
 Current CLI behavior:
 
-- `paperclipai onboard` and `paperclipai configure --section server` set deployment mode in config
+- `agentdash onboard` and `agentdash configure --section server` set deployment mode in config
 - runtime can override mode with `PAPERCLIP_DEPLOYMENT_MODE`
-- `paperclipai run` and `paperclipai doctor` do not yet expose a direct `--mode` flag
+- `agentdash run` and `agentdash doctor` do not yet expose a direct `--mode` flag
 
 Target behavior (planned) is documented in `doc/DEPLOYMENT-MODES.md` section 5.
 

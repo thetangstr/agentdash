@@ -1,6 +1,6 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
-import { createActionProposalSchema } from "@paperclipai/shared";
+import type { Db } from "@agentdash/db";
+import { createActionProposalSchema } from "@agentdash/shared";
 import { validate } from "../middleware/validate.js";
 import { actionProposalService } from "../services/action-proposals.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";

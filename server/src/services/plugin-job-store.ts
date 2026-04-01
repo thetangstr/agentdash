@@ -31,14 +31,14 @@
  */
 
 import { and, desc, eq } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { plugins, pluginJobs, pluginJobRuns } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { plugins, pluginJobs, pluginJobRuns } from "@agentdash/db";
 import type {
   PluginJobDeclaration,
   PluginJobRunStatus,
   PluginJobRunTrigger,
   PluginJobRecord,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import { notFound } from "../errors.js";
 
 /**

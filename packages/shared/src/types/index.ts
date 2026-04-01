@@ -5,6 +5,7 @@ export type {
   CompanySkillTrustLevel,
   CompanySkillCompatibility,
   CompanySkillSourceBadge,
+  CompanySkillExecutionContext,
   CompanySkillFileInventoryEntry,
   CompanySkill,
   CompanySkillListItem,

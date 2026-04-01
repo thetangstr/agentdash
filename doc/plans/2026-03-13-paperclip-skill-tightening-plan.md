@@ -1,4 +1,4 @@
-# Paperclip Skill Tightening Plan
+# AgentDash Skill Tightening Plan
 
 ## Status
 
@@ -38,7 +38,7 @@ That structure is safe but expensive.
 
 ## Non-Goals
 
-- changing Paperclip API semantics
+- changing AgentDash API semantics
 - removing required governance rules
 - deleting rare workflows
 - changing agent defaults in the current PR

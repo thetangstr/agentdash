@@ -2,7 +2,7 @@
 
 Status: design report, not a V1 commitment
 
-Paperclip V1 explicitly excludes a plugin framework in [doc/SPEC-implementation.md](../SPEC-implementation.md), but the long-horizon spec says the architecture should leave room for extensions. This report studies the `opencode` plugin system and translates the useful patterns into a Paperclip-shaped design.
+AgentDash V1 explicitly excludes a plugin framework in [doc/SPEC-implementation.md](../SPEC-implementation.md), but the long-horizon spec says the architecture should leave room for extensions. This report studies the `opencode` plugin system and translates the useful patterns into a Paperclip-shaped design.
 
 Assumption for this document: Paperclip is a single-tenant operator-controlled instance. Plugin installation should therefore be global across the instance. "Companies" are still first-class Paperclip objects, but they are organizational records, not tenant-isolation boundaries for plugin trust or installation.
 
@@ -368,7 +368,7 @@ The products are solving different problems.
 | Topic | OpenCode | Paperclip |
 |---|---|---|
 | Primary unit | local project/worktree | single-tenant operator instance with company objects |
-| Trust assumption | local power user on own machine | operator managing one trusted Paperclip instance |
+| Trust assumption | local power user on own machine | operator managing one trusted AgentDash instance |
 | Failure blast radius | local session/runtime | entire company control plane |
 | Extension style | mutate runtime behavior freely | preserve governance and auditability |
 | UI model | local app can load local behavior | board UI must stay coherent and safe |
@@ -376,7 +376,7 @@ The products are solving different problems.
 
 That means Paperclip should borrow the good ideas from `opencode` but use a stricter architecture.
 
-## Paperclip Already Has Useful Pre-Plugin Seams
+## AgentDash Already Has Useful Pre-Plugin Seams
 
 Paperclip has several extension-like seams already:
 
@@ -460,7 +460,7 @@ Plugins ship their own React UI as a bundled module inside `dist/ui/`. The host 
 3. The plugin component fetches data from its own worker via the bridge and renders it however it wants.
 4. The host enforces capability gates through the bridge — if the worker doesn't have a capability, the bridge rejects the call.
 
-**What the host controls:** where plugin components appear, the bridge API, capability enforcement, and shared UI primitives (`@paperclipai/plugin-sdk/ui`) with design tokens and common components.
+**What the host controls:** where plugin components appear, the bridge API, capability enforcement, and shared UI primitives (`@agentdash/plugin-sdk/ui`) with design tokens and common components.
 
 **What the plugin controls:** how to render its data, what data to fetch, what actions to expose, and whether to use the host's shared components or build entirely custom UI.
 
@@ -572,7 +572,7 @@ This is critical for operators. Without observability, debugging plugin issues r
 
 ## 13. Ship a test harness and starter template
 
-A `@paperclipai/plugin-test-harness` package should provide a mock host with in-memory stores, synthetic event emission, and `getData`/`performAction`/`executeTool` simulation. Plugin authors should be able to write unit tests without a running Paperclip instance.
+A `@agentdash/plugin-test-harness` package should provide a mock host with in-memory stores, synthetic event emission, and `getData`/`performAction`/`executeTool` simulation. Plugin authors should be able to write unit tests without a running AgentDash instance.
 
 A `create-paperclip-plugin` CLI should scaffold a working plugin with manifest, worker, UI bundle, test file, and build config.
 
@@ -580,7 +580,7 @@ Low authoring friction was called out as one of `opencode`'s best qualities. The
 
 ## 14. Support hot plugin lifecycle
 
-Plugin install, uninstall, upgrade, and config changes should take effect without restarting the Paperclip server. This is critical for developer workflow and operator experience.
+Plugin install, uninstall, upgrade, and config changes should take effect without restarting the AgentDash server. This is critical for developer workflow and operator experience.
 
 The out-of-process worker architecture makes this natural:
 
@@ -599,8 +599,8 @@ Each worker process is independent — starting, stopping, or replacing one work
 
 Recommended approach:
 
-- **Single SDK package**: `@paperclipai/plugin-sdk` with subpath exports — root for worker code, `/ui` for frontend code. One dependency, one version, one changelog.
-- **SDK major version = API version**: `@paperclipai/plugin-sdk@2.x` targets `apiVersion: 2`. Plugins built with SDK 1.x declare `apiVersion: 1` and continue to work.
+- **Single SDK package**: `@agentdash/plugin-sdk` with subpath exports — root for worker code, `/ui` for frontend code. One dependency, one version, one changelog.
+- **SDK major version = API version**: `@agentdash/plugin-sdk@2.x` targets `apiVersion: 2`. Plugins built with SDK 1.x declare `apiVersion: 1` and continue to work.
 - **Host multi-version support**: The host supports at least the current and one previous `apiVersion` simultaneously with separate IPC protocol handlers per version.
 - **`sdkVersion` in manifest**: Plugins declare a semver range (e.g. `">=1.4.0 <2.0.0"`). The host validates this at install time.
 - **Deprecation timeline**: Previous API versions get at least 6 months of continued support after a new version ships. The host logs deprecation warnings and shows a banner on the plugin settings page.
@@ -613,7 +613,7 @@ Recommended approach:
 An intentionally narrow first pass could look like this:
 
 ```ts
-import { definePlugin, z } from "@paperclipai/plugin-sdk";
+import { definePlugin, z } from "@agentdash/plugin-sdk";
 
 export default definePlugin({
   id: "@paperclip/plugin-linear",
@@ -679,7 +679,7 @@ The plugin's UI bundle (separate from the worker) might look like:
 
 ```tsx
 // dist/ui/index.tsx
-import { usePluginData, usePluginAction, MetricCard, ErrorBoundary } from "@paperclipai/plugin-sdk/ui";
+import { usePluginData, usePluginAction, MetricCard, ErrorBoundary } from "@agentdash/plugin-sdk/ui";
 
 export function DashboardWidget({ context }: PluginWidgetProps) {
   const { data, loading, error } = usePluginData("sync-health", { companyId: context.companyId });
@@ -762,7 +762,7 @@ The host does not wrap or proxy these operations. This keeps the core lean — n
 
 ## Governance And Safety Requirements
 
-Any Paperclip plugin system has to preserve core control-plane invariants from the repo docs.
+Any AgentDash plugin system has to preserve core control-plane invariants from the repo docs.
 
 That means:
 
@@ -842,7 +842,7 @@ That is too much power too early.
 
 The right mental model is:
 
-- reuse core tables when the data is clearly part of Paperclip itself
+- reuse core tables when the data is clearly part of AgentDash itself
 - use generic extension tables for most plugin-owned state
 - only allow plugin-specific tables later, and only for trusted platform modules or a tightly controlled migration workflow
 
@@ -854,7 +854,7 @@ If a concept is becoming part of Paperclip's actual product model, it should get
 
 Examples:
 
-- `project_workspaces` is already a core table because project workspaces are now part of Paperclip itself
+- `project_workspaces` is already a core table because project workspaces are now part of AgentDash itself
 - if a future "project git state" becomes a core feature rather than plugin-owned metadata, that should also be a first-party table
 
 ### 2. Most plugins should start in generic extension tables
@@ -1432,7 +1432,7 @@ Main screens and interactions:
 - Dashboard widgets:
   - one or more metric cards on the main dashboard
   - quick trend view and last refresh time
-  - link out to Grafana and link in to the full Paperclip plugin page
+  - link out to Grafana and link in to the full AgentDash plugin page
 - Full metrics page:
   - selected dashboard panels embedded or proxied
   - metric selector
@@ -1443,7 +1443,7 @@ Main screens and interactions:
 
 Core workflows:
 
-- Board sees service degradation or business KPI movement directly on the Paperclip dashboard.
+- Board sees service degradation or business KPI movement directly on the AgentDash dashboard.
 - Board clicks into the full metrics page to inspect the relevant Grafana panels.
 - Board creates a Paperclip issue from a threshold breach with a metric snapshot attached.
 
@@ -1667,7 +1667,7 @@ Build:
 - scheduled jobs
 - webhook endpoints
 - activity logging helpers
-- plugin UI bundle loading, host bridge, `@paperclipai/plugin-sdk/ui`
+- plugin UI bundle loading, host bridge, `@agentdash/plugin-sdk/ui`
 - extension slot mounting for pages, tabs, widgets, sidebar entries
 - auto-generated settings form from `instanceConfigSchema`
 - bridge error propagation (`PluginBridgeError`)
@@ -1677,7 +1677,7 @@ Build:
 - graceful shutdown with configurable deadlines
 - plugin logging and health dashboard
 - uninstall with data retention grace period
-- `@paperclipai/plugin-test-harness` and `create-paperclip-plugin` starter template
+- `@agentdash/plugin-test-harness` and `create-paperclip-plugin` starter template
 - hot plugin lifecycle (install, uninstall, upgrade, config change without server restart)
 - SDK versioning with multi-version host support and deprecation policy
 
@@ -1732,7 +1732,7 @@ That gets the upside of `opencode`'s extensibility without importing the wrong t
 5. Add agent tool contributions — plugins register namespaced tools that agents can call during runs.
 6. Add plugin observability: structured logging via `ctx.logger`, health dashboard, internal health events.
 7. Add graceful shutdown policy and uninstall data lifecycle with retention grace period.
-8. Ship `@paperclipai/plugin-test-harness` and `create-paperclip-plugin` starter template.
+8. Ship `@agentdash/plugin-test-harness` and `create-paperclip-plugin` starter template.
 9. Implement hot plugin lifecycle — install, uninstall, upgrade, and config changes without server restart.
 10. Define SDK versioning policy — semver, multi-version host support, deprecation timeline, migration guides, published compatibility matrix.
 11. Build workspace plugins (file browser, terminal, git, process tracking) that resolve workspace paths from the host and handle OS-level operations directly.

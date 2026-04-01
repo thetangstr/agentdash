@@ -13,7 +13,7 @@ import {
   type PluginSettingsPageProps,
   type PluginSidebarProps,
   type PluginWidgetProps,
-} from "@paperclipai/plugin-sdk/ui";
+} from "@agentdash/plugin-sdk/ui";
 import {
   DEFAULT_CONFIG,
   JOB_KEYS,
@@ -2088,7 +2088,7 @@ export function KitchenSinkSettingsPage({ context }: PluginSettingsPageProps) {
         <div style={{ display: "grid", gap: "8px" }}>
           <strong>About</strong>
           <div style={{ fontSize: "13px", lineHeight: 1.5 }}>
-            Kitchen Sink demonstrates the current Paperclip plugin API surface in one local, trusted example. It intentionally includes domain mutations, event handling, streams, tools, jobs, webhooks, and local workspace/process demos.
+            Kitchen Sink demonstrates the current AgentDash plugin API surface in one local, trusted example. It intentionally includes domain mutations, event handling, streams, tools, jobs, webhooks, and local workspace/process demos.
           </div>
           <div style={{ fontSize: "12px", opacity: 0.7 }}>
             Current company context: {context.companyId ?? "none"}

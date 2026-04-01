@@ -29,15 +29,26 @@ const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
 }));
 
+const mockIssueService = vi.hoisted(() => ({
+  getById: vi.fn(),
+  update: vi.fn(),
+  addComment: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../services/index.js", () => ({
-  approvalService: () => mockApprovalService,
-  heartbeatService: () => mockHeartbeatService,
-  issueApprovalService: () => mockIssueApprovalService,
-  logActivity: mockLogActivity,
-  secretService: () => mockSecretService,
-}));
+vi.mock("../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/index.js")>();
+  return {
+    ...actual,
+    approvalService: () => mockApprovalService,
+    heartbeatService: () => mockHeartbeatService,
+    issueApprovalService: () => mockIssueApprovalService,
+    issueService: () => mockIssueService,
+    logActivity: mockLogActivity,
+    secretService: () => mockSecretService,
+  };
+});
 
 function createApp() {
   const app = express();
@@ -62,6 +73,7 @@ describe("approval routes idempotent retries", () => {
     vi.clearAllMocks();
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
+    mockIssueService.getById.mockResolvedValue(null);
     mockLogActivity.mockResolvedValue(undefined);
   });
 

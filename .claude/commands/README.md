@@ -6,12 +6,12 @@
 
 | Command | Agent | Description |
 |---------|-------|-------------|
-| `/workon AD-XXX` | Orchestrator | Drive issue from intake -> locally-tested |
+| `/workon PAP-XXX` | Orchestrator | Drive issue from intake -> locally-tested |
 | `/pm` | PM | Interactive requirements elaboration |
 | `/pm <description>` | PM | Elaborate specific feature |
 | `/builder` | Builder | Auto-pickup highest priority issue |
-| `/builder AD-XXX` | Builder | Work on specific issue |
-| `/tester AD-XXX` | Tester | Test specific issue |
+| `/builder PAP-XXX` | Builder | Work on specific issue |
+| `/tester PAP-XXX` | Tester | Test specific issue |
 | `/tpm sync` | TPM | Ship all Human-Verified issues |
 | `/tpm <project>` | TPM | Break project into issues + wave plan |
 | `/tpm status` | TPM | Single-issue status |
@@ -22,7 +22,7 @@
 
 ## Agent Roles
 
-| Agent | Workspace | Merges to main? |
+| Agent | Workspace | Merges to agentdash-main? |
 |-------|-----------|----------------|
 | **TPM** | 1 dedicated | **YES (sole agent)** |
 | **Builder** | 1 per issue | No |
@@ -34,16 +34,16 @@
 
 | Task | Command | Notes |
 |------|---------|-------|
-| **Start any issue** | `/workon AD-XXX` | Per-workspace orchestration |
-| **Check status & ship** | `/tpm sync` | The main command |
+| **Start any issue** | `/workon PAP-XXX` | Per-workspace orchestration |
+| **Check status & ship** | `/tpm sync` | Main shipping command |
 | **Plan a project** | `/tpm <description>` | Creates issues, waves, workspaces |
 | Elaborate requirements | `/pm <description>` | Manual PM control |
-| Start implementation | `/builder AD-XXX` | Skip PM, go direct |
-| Test a PR | `/tester AD-XXX` | Manual test trigger |
+| Start implementation | `/builder PAP-XXX` | Skip PM, go direct |
+| Test a PR | `/tester PAP-XXX` | Manual test trigger |
 | Service health | `/admin health` | Ops monitoring |
 
 ## Documentation
 
-- **MAW SOP:** `doc/maw/sop.md`
-- **Agent Protocol:** `doc/maw/protocol.md`
-- **Epic Registry:** `doc/maw/EPIC_REGISTRY.md`
+- **MAW SOP:** `doc/multi-agent-workflow/sop.md`
+- **Agent Protocol:** `doc/multi-agent-workflow/protocol.md`
+- **Epic Registry:** `doc/multi-agent-workflow/EPIC_REGISTRY.md`

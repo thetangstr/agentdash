@@ -1,6 +1,6 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
-import { createPipelineSchema, updatePipelineSchema, startPipelineRunSchema } from "@paperclipai/shared";
+import type { Db } from "@agentdash/db";
+import { createPipelineSchema, updatePipelineSchema, startPipelineRunSchema } from "@agentdash/shared";
 import { validate } from "../middleware/validate.js";
 import { pipelineOrchestratorService } from "../services/pipeline-orchestrator.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";

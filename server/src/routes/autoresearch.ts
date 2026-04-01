@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import { autoresearchService } from "../services/autoresearch.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 

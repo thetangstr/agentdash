@@ -1,4 +1,4 @@
-# Paperclip Specification
+# AgentDash Specification
 
 Target specification for the Paperclip control plane. Living document — updated incrementally during spec interviews.
 
@@ -6,7 +6,7 @@ Target specification for the Paperclip control plane. Living document — update
 
 ## 1. Company Model [DRAFT]
 
-A Company is a first-order object. One Paperclip instance runs multiple Companies. A Company does not have a standalone "goal" field — its direction is defined by its set of Initiatives (see Task Hierarchy Mapping).
+A Company is a first-order object. One AgentDash instance runs multiple Companies. A Company does not have a standalone "goal" field — its direction is defined by its set of Initiatives (see Task Hierarchy Mapping).
 
 ### Fields (Draft)
 
@@ -75,7 +75,7 @@ Paperclip doesn't prescribe how an agent defines its identity or behavior. It pr
 
 Each agent has an **adapter type** and an **adapter-specific configuration blob**. The adapter defines what config fields exist.
 
-#### Paperclip Protocol (What Paperclip Knows)
+#### AgentDash Protocol (What Paperclip Knows)
 
 At the protocol level, Paperclip tracks:
 
@@ -120,7 +120,7 @@ Beyond the minimum, Paperclip provides progressively richer integration:
 2. **Status reporting** — Agent reports back success/failure/in-progress after execution.
 3. **Fully instrumented** — Agent reports status, cost/token usage, task updates, and logs. Bidirectional integration with the control plane.
 
-Paperclip ships **default agents** that demonstrate full integration: progress tracking, cost instrumentation, and a **Paperclip skill** (a Claude Code skill for interacting with the Paperclip API) for task management. These serve as both useful defaults and reference implementations for adapter authors.
+Paperclip ships **default agents** that demonstrate full integration: progress tracking, cost instrumentation, and a **Paperclip skill** (a Claude Code skill for interacting with the AgentDash API) for task management. These serve as both useful defaults and reference implementations for adapter authors.
 
 #### Export Formats
 
@@ -336,7 +336,7 @@ The default agent's loop is **config-driven**. The adapter config contains the i
 
 This means the default CEO config tells the CEO to review strategy, check on reports, etc. The default engineer config tells the engineer to check assigned tasks, pick the highest priority, and work it. But these are config choices, not protocol requirements.
 
-### Paperclip Skill (SKILL.md)
+### AgentDash Skill (SKILL.md)
 
 A skill definition that teaches agents how to interact with Paperclip. Provides:
 
@@ -362,7 +362,7 @@ This skill is adapter-agnostic — it can be loaded into Claude Code, injected i
 2. **Hosted** — Deploy to Vercel/Supabase/AWS/anywhere. Remote agents connect to your server with a shared database. The UI is accessible via the web.
 3. **Open company** — Optionally make parts public (e.g. a job board visible to the public for open companies).
 
-The key constraint: it must be trivial to go from "I'm trying this on my machine" to "my agents are running on remote servers talking to my Paperclip instance."
+The key constraint: it must be trivial to go from "I'm trying this on my machine" to "my agents are running on remote servers talking to my AgentDash instance."
 
 #### Agent Authentication
 
@@ -436,7 +436,7 @@ The core Paperclip system must be extensible. Features like knowledge bases, ext
 - **Agent Adapter plugins** — new Adapter types can be registered via the plugin system
 - Plugin-registrable UI components (future)
 
-The plugin framework has shipped. Plugins can register new adapter types, hook into lifecycle events, and contribute UI components (e.g. global toolbar buttons). A plugin SDK and CLI commands (`paperclipai plugin`) are available for authoring and installing plugins.
+The plugin framework has shipped. Plugins can register new adapter types, hook into lifecycle events, and contribute UI components (e.g. global toolbar buttons). A plugin SDK and CLI commands (`agentdash plugin`) are available for authoring and installing plugins.
 
 ---
 

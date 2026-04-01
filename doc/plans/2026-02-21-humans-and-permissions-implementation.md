@@ -455,11 +455,11 @@ Files:
 
 Commands:
 
-1. `paperclipai auth bootstrap-ceo`
+1. `agentdash auth bootstrap-ceo`
 - create bootstrap invite
 - print one-time URL
 
-2. `paperclipai onboard`
+2. `agentdash onboard`
 - in cloud mode with `bootstrap_pending`, print bootstrap URL and next steps
 - in local mode, skip bootstrap requirement
 

@@ -323,7 +323,7 @@ This plan introduces instance-level concerns (for example bootstrap state, insta
 V1 approach:
 
 - add a minimal `Instance Settings` page for instance admins
-- expose key instance settings in API + CLI (`paperclipai configure` / `paperclipai onboard`)
+- expose key instance settings in API + CLI (`agentdash configure` / `agentdash onboard`)
 - show read-only instance status indicators in the main UI until full settings UX exists
 
 ## Implementation phases

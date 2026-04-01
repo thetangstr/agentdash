@@ -164,7 +164,7 @@ Use `adapterConfig.env` so secret references are supported by existing secret-re
 
 ---
 
-## Paperclip Callback + Auth Flow (V1)
+## AgentDash Callback + Auth Flow (V1)
 
 Cursor agents run remotely, so we cannot inject local env like `PAPERCLIP_API_KEY`.
 
@@ -195,7 +195,7 @@ Flow:
 3. Cursor agent calls:
    - `POST /api/agent-auth/exchange`
 4. Paperclip validates bootstrap token and returns a run-scoped bearer JWT.
-5. Cursor agent uses returned bearer token for all Paperclip API calls.
+5. Cursor agent uses returned bearer token for all AgentDash API calls.
 
 This keeps long-lived keys out of prompt and supports clean revocation by TTL.
 

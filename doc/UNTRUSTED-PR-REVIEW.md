@@ -87,7 +87,7 @@ Or with Claude:
 claude
 ```
 
-## Preview the Paperclip app from the PR
+## Preview the AgentDash app from the PR
 
 Only do this when you intentionally want to execute the PR's code inside the container.
 

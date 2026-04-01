@@ -48,6 +48,9 @@
 
 ## 3. Critical User Journeys (CUJs)
 
+Canonical source of truth note:
+See `doc/CUSTOMER-CUJS.md` for the normalized customer-user CUJ/task taxonomy used to reconcile product docs, UI IA, and future Linear planning.
+
 ### CUJ-1: First-Time Setup (Onboarding)
 
 **Persona:** P1 (Board Operator)

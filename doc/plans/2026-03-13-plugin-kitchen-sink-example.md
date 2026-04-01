@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add a new first-party example plugin, `Kitchen Sink (Example)`, that demonstrates every currently implemented Paperclip plugin API surface in one place.
+Add a new first-party example plugin, `Kitchen Sink (Example)`, that demonstrates every currently implemented AgentDash plugin API surface in one place.
 
 This plugin is meant to be:
 
@@ -135,7 +135,7 @@ The implementation should keep a small validation checklist for these before we 
 The plugin should be named:
 
 - display name: `Kitchen Sink (Example)`
-- package: `@paperclipai/plugin-kitchen-sink-example`
+- package: `@agentdash/plugin-kitchen-sink-example`
 - plugin id: `paperclip.kitchen-sink-example` or `paperclip-kitchen-sink-example`
 
 Recommendation: use `paperclip-kitchen-sink-example` to match current in-repo example naming style.

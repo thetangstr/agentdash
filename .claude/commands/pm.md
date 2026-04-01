@@ -61,7 +61,7 @@ Use mcp__conductor__AskUserQuestion with:
 
 Determine the correct epic for the issue. If a feature spans multiple epics, the scope is too big -- break it down.
 
-Customize your epic list in `doc/maw/EPIC_REGISTRY.md`.
+Customize your epic list in `doc/multi-agent-workflow/EPIC_REGISTRY.md`.
 
 ### 1.4 Deployment Path Determination
 
@@ -95,7 +95,7 @@ Use this structured framework for requirements elaboration:
 
 ```
 Use mcp__linear__save_issue with:
-- team: "AgentDash"
+- team: "PAP"
 - title: "<action verb> <object> - <brief description>"
 - description: <structured description - see template below>
 - labels: ["epic:<name>", "<size>"]
@@ -189,14 +189,14 @@ Is this an epic with child issues OR major refactor?
 
 When a feature introduces new CUJs:
 
-1. Add CUJ to appropriate epic section in `doc/maw/EPIC_REGISTRY.md`
+1. Add CUJ to appropriate epic section in `doc/multi-agent-workflow/EPIC_REGISTRY.md`
 2. Include: CUJ ID, Name, Description, User Type, Test file mapping
 
 ### 4.2 Update MANUAL_TESTING_GUIDE.md
 
 For features requiring manual verification:
 
-1. Add test scenario to `doc/maw/MANUAL_TESTING_GUIDE.md`
+1. Add test scenario to `doc/multi-agent-workflow/MANUAL_TESTING_GUIDE.md`
 2. Include: Priority, step-by-step instructions, expected results, environment
 
 ---

@@ -1,7 +1,13 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import { crmService } from "../services/crm.js";
 import { assertCompanyAccess } from "./authz.js";
+
+function errorStatus(err: unknown) {
+  return (err as { status?: number; statusCode?: number }).statusCode
+    ?? (err as { status?: number; statusCode?: number }).status
+    ?? 500;
+}
 
 export function crmRoutes(db: Db) {
   const router = Router();
@@ -23,7 +29,7 @@ export function crmRoutes(db: Db) {
       });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -36,7 +42,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createAccount(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -46,10 +52,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.getAccountById(req.params.id as string);
+      const result = await svc.getAccountById(companyId, req.params.id as string);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -59,10 +65,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.updateAccount(req.params.id as string, req.body);
+      const result = await svc.updateAccount(companyId, req.params.id as string, req.body);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -84,7 +90,7 @@ export function crmRoutes(db: Db) {
       });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -97,7 +103,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createContact(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -107,10 +113,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.getContactById(req.params.id as string);
+      const result = await svc.getContactById(companyId, req.params.id as string);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -120,10 +126,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.updateContact(req.params.id as string, req.body);
+      const result = await svc.updateContact(companyId, req.params.id as string, req.body);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -146,7 +152,7 @@ export function crmRoutes(db: Db) {
       });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -159,7 +165,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createDeal(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -169,10 +175,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.getDealById(req.params.id as string);
+      const result = await svc.getDealById(companyId, req.params.id as string);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -182,10 +188,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.updateDeal(req.params.id as string, req.body);
+      const result = await svc.updateDeal(companyId, req.params.id as string, req.body);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -207,7 +213,7 @@ export function crmRoutes(db: Db) {
       });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -220,7 +226,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createActivity(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -237,7 +243,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.getPipelineSummary(companyId);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      const status = errorStatus(err);
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(status).json({ error: message });
     }
@@ -253,7 +259,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.listLeads(companyId, { status, source, limit: limit ? Number(limit) : undefined, offset: offset ? Number(offset) : undefined });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -265,7 +271,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createLead(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -274,10 +280,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.getLeadById(req.params.id as string);
+      const result = await svc.getLeadById(companyId, req.params.id as string);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -286,10 +292,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.updateLead(req.params.id as string, req.body);
+      const result = await svc.updateLead(companyId, req.params.id as string, req.body);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -299,10 +305,10 @@ export function crmRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       const { accountId, contactId } = req.body;
-      const result = await svc.convertLead(req.params.id as string, accountId, contactId);
+      const result = await svc.convertLead(companyId, req.params.id as string, accountId, contactId);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -317,7 +323,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.listPartners(companyId, { type, status, limit: limit ? Number(limit) : undefined, offset: offset ? Number(offset) : undefined });
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -329,7 +335,7 @@ export function crmRoutes(db: Db) {
       const result = await svc.createPartner(companyId, req.body);
       res.status(201).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -338,10 +344,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.getPartnerById(req.params.id as string);
+      const result = await svc.getPartnerById(companyId, req.params.id as string);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });
@@ -350,10 +356,10 @@ export function crmRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.updatePartner(req.params.id as string, req.body);
+      const result = await svc.updatePartner(companyId, req.params.id as string, req.body);
       res.status(200).json(result);
     } catch (err: unknown) {
-      const s = (err as { statusCode?: number }).statusCode ?? 500;
+      const s = errorStatus(err);
       res.status(s).json({ error: err instanceof Error ? err.message : "Internal server error" });
     }
   });

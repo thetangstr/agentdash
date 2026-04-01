@@ -3,19 +3,21 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import type { BillingType, ExecutionWorkspaceConfig } from "@paperclipai/shared";
+import type { Db } from "@agentdash/db";
+import type { BillingType, ExecutionWorkspaceConfig } from "@agentdash/shared";
 import {
   agents,
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  approvals,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueApprovals,
   issues,
   projects,
   projectWorkspaces,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
@@ -27,6 +29,7 @@ import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } fr
 import { costService } from "./costs.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
+import { documentService } from "./documents.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import { summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
@@ -56,8 +59,9 @@ import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
   type SessionCompactionPolicy,
-} from "@paperclipai/adapter-utils";
+} from "@agentdash/adapter-utils";
 import { promptBuilderService } from "./prompt-builder.js";
+import { skillSelectionService } from "./skill-selection.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -207,6 +211,7 @@ const heartbeatRunListColumns = {
   finishedAt: heartbeatRuns.finishedAt,
   error: heartbeatRuns.error,
   wakeupRequestId: heartbeatRuns.wakeupRequestId,
+  issueId: heartbeatRuns.issueId,
   exitCode: heartbeatRuns.exitCode,
   signal: heartbeatRuns.signal,
   usageJson: heartbeatRuns.usageJson,
@@ -225,6 +230,13 @@ const heartbeatRunListColumns = {
   processPid: heartbeatRuns.processPid,
   processStartedAt: heartbeatRuns.processStartedAt,
   retryOfRunId: heartbeatRuns.retryOfRunId,
+  parentRunId: heartbeatRuns.parentRunId,
+  delegationKind: heartbeatRuns.delegationKind,
+  delegationLabel: heartbeatRuns.delegationLabel,
+  requestedByAgentId: heartbeatRuns.requestedByAgentId,
+  requestedByUserId: heartbeatRuns.requestedByUserId,
+  requestedSkillId: heartbeatRuns.requestedSkillId,
+  requestedSkillVersionId: heartbeatRuns.requestedSkillVersionId,
   processLossRetryCount: heartbeatRuns.processLossRetryCount,
   contextSnapshot: heartbeatRuns.contextSnapshot,
   createdAt: heartbeatRuns.createdAt,
@@ -267,6 +279,14 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+  issueId?: string | null;
+  parentRunId?: string | null;
+  delegationKind?: string | null;
+  delegationLabel?: string | null;
+  requestedByAgentId?: string | null;
+  requestedByUserId?: string | null;
+  requestedSkillId?: string | null;
+  requestedSkillVersionId?: string | null;
 }
 
 type UsageTotals = {
@@ -830,9 +850,11 @@ export function heartbeatService(db: Db) {
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
+  const documentsSvc = documentService(db);
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
+  const skillSelector = skillSelectionService(db);
   const activeRunExecutions = new Set<string>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
@@ -853,6 +875,112 @@ export function heartbeatService(db: Db) {
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.id, runId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  // AgentDash: run delegation helpers (child runs, plan approval, execution envelope)
+  async function listChildRuns(runId: string) {
+    return db
+      .select(heartbeatRunListColumns)
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.parentRunId, runId))
+      .orderBy(asc(heartbeatRuns.createdAt), asc(heartbeatRuns.id));
+  }
+
+  async function getPendingIssuePlanApproval(companyId: string, issueId: string) {
+    return db
+      .select({
+        id: approvals.id,
+        status: approvals.status,
+        decisionNote: approvals.decisionNote,
+      })
+      .from(issueApprovals)
+      .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+      .where(
+        and(
+          eq(issueApprovals.companyId, companyId),
+          eq(issueApprovals.issueId, issueId),
+          eq(approvals.companyId, companyId),
+          eq(approvals.type, "approve_issue_plan"),
+          eq(approvals.status, "pending"),
+        ),
+      )
+      .orderBy(desc(approvals.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+  }
+
+  // AgentDash: resolved plan approval status lookup for coordination prompt
+  async function getResolvedIssuePlanApprovalStatus(companyId: string, issueId: string): Promise<string | null> {
+    return db
+      .select({ status: approvals.status })
+      .from(issueApprovals)
+      .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+      .where(
+        and(
+          eq(issueApprovals.companyId, companyId),
+          eq(issueApprovals.issueId, issueId),
+          eq(approvals.companyId, companyId),
+          eq(approvals.type, "approve_issue_plan"),
+          inArray(approvals.status, ["approved", "rejected"]),
+        ),
+      )
+      .orderBy(desc(approvals.createdAt))
+      .limit(1)
+      .then((rows) => rows[0]?.status ?? null);
+  }
+
+  async function writeExecutionEnvelope(
+    runId: string,
+    contextSnapshot: Record<string, unknown>,
+    input: {
+      issue: {
+        id: string;
+        identifier: string | null;
+        title: string;
+      } | null;
+      workspace: {
+        id: string | null;
+        cwd: string | null;
+        mode: string | null;
+      } | null;
+      selectedSkills: Array<{
+        id: string;
+        key: string;
+        name: string;
+        required: boolean;
+        selectionReason: string;
+        executionContext: string;
+      }>;
+      planApprovalStatus: string | null;
+      runtimeServices: Array<{
+        id?: string | null;
+        kind?: string | null;
+        status?: string | null;
+        ownerAgentId?: string | null;
+        url?: string | null;
+      }>;
+    },
+  ) {
+    contextSnapshot.executionEnvelope = {
+      run: {
+        parentRunId: readNonEmptyString(contextSnapshot.parentRunId),
+        delegationKind: readNonEmptyString(contextSnapshot.delegationKind),
+        delegationLabel: readNonEmptyString(contextSnapshot.delegationLabel),
+      },
+      issue: input.issue,
+      workspace: input.workspace,
+      selectedSkills: input.selectedSkills,
+      planApprovalStatus: input.planApprovalStatus,
+      runtimeServices: input.runtimeServices,
+    };
+
+    await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot,
+        updatedAt: new Date(),
+      })
+      .where(eq(heartbeatRuns.id, runId));
   }
 
   async function getRuntimeState(agentId: string) {
@@ -1035,7 +1163,7 @@ export function heartbeatService(db: Db) {
       readNonEmptyString(latestRun.error);
 
     const handoffMarkdown = [
-      "Paperclip session handoff:",
+      "AgentDash session handoff:",
       `- Previous session: ${sessionId}`,
       issueId ? `- Issue: ${issueId}` : "",
       `- Rotation reason: ${reason}`,
@@ -1607,9 +1735,17 @@ export function heartbeatService(db: Db) {
           triggerDetail: "system",
           status: "queued",
           wakeupRequestId: wakeupRequest.id,
+          issueId: issueId ?? run.issueId ?? null,
           contextSnapshot: retryContextSnapshot,
           sessionIdBefore: sessionBefore,
           retryOfRunId: run.id,
+          parentRunId: run.parentRunId ?? null,
+          delegationKind: run.delegationKind ?? null,
+          delegationLabel: run.delegationLabel ?? null,
+          requestedByAgentId: run.requestedByAgentId ?? null,
+          requestedByUserId: run.requestedByUserId ?? null,
+          requestedSkillId: run.requestedSkillId ?? null,
+          requestedSkillVersionId: run.requestedSkillVersionId ?? null,
           processLossRetryCount: (run.processLossRetryCount ?? 0) + 1,
           updatedAt: now,
         })
@@ -2026,6 +2162,27 @@ export function heartbeatService(db: Db) {
     const taskKey = deriveTaskKey(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);
+    // AgentDash: plan approval gate — block run if plan approval is pending
+    const pendingPlanApproval = issueId
+      ? await getPendingIssuePlanApproval(agent.companyId, issueId)
+      : null;
+    if (pendingPlanApproval) {
+      await setRunStatus(runId, "cancelled", {
+        finishedAt: new Date(),
+        error: "plan approval required",
+        errorCode: "plan_approval_required",
+      });
+      await setWakeupStatus(run.wakeupRequestId, "cancelled", {
+        finishedAt: new Date(),
+        error: "plan approval required",
+      });
+      const blockedRun = await getRun(runId);
+      if (blockedRun) await releaseIssueExecutionAndPromote(blockedRun);
+      return;
+    }
+    const planApprovalStatus = issueId
+      ? await getResolvedIssuePlanApprovalStatus(agent.companyId, issueId)
+      : null;
     const issueContext = issueId
       ? await db
           .select({
@@ -2043,6 +2200,9 @@ export function heartbeatService(db: Db) {
           .from(issues)
           .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
           .then((rows) => rows[0] ?? null)
+      : null;
+    const planDocument = issueId
+      ? await documentsSvc.getIssueDocumentByKey(issueId, "plan")
       : null;
     const issueAssigneeOverrides =
       issueContext && issueContext.assigneeAgentId === agent.id
@@ -2097,6 +2257,15 @@ export function heartbeatService(db: Db) {
       previousSessionParams,
       { useProjectWorkspace: executionWorkspaceMode !== "agent_default" },
     );
+    // AgentDash: select relevant skills for this run
+    const selectedSkills = await skillSelector.selectForRun({
+      companyId: agent.companyId,
+      agentId: agent.id,
+      issueId,
+      projectWorkspaceId: issueContext?.projectWorkspaceId ?? resolvedWorkspace.workspaceId,
+      executionWorkspaceId: issueContext?.executionWorkspaceId ?? null,
+      cwd: resolvedWorkspace.cwd,
+    });
     const workspaceManagedConfig = buildExecutionWorkspaceAdapterConfig({
       agentConfig: config,
       projectPolicy: projectExecutionWorkspacePolicy,
@@ -2131,7 +2300,9 @@ export function heartbeatService(db: Db) {
       agent.companyId,
       executionRunConfig,
     );
-    const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
+    const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId, {
+      skillKeys: selectedSkills.map((selected) => selected.skill.key),
+    });
     const runtimeConfig = {
       ...resolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
@@ -2522,14 +2693,46 @@ export function heartbeatService(db: Db) {
         context.paperclipRuntimeServices = runtimeServices;
         context.paperclipRuntimePrimaryUrl =
           runtimeServices.find((service) => readNonEmptyString(service.url))?.url ?? null;
-        await db
-          .update(heartbeatRuns)
-          .set({
-            contextSnapshot: context,
-            updatedAt: new Date(),
-          })
-          .where(eq(heartbeatRuns.id, run.id));
       }
+      context.paperclipSelectedSkills = selectedSkills.map((selected) => ({
+        id: selected.skill.id,
+        key: selected.skill.key,
+        name: selected.skill.name,
+        required: selected.required,
+        selectionReason: selected.selectionReason,
+        executionContext: selected.skill.executionContext,
+      }));
+      context.paperclipPlanApprovalStatus = planApprovalStatus;
+      await writeExecutionEnvelope(run.id, context, {
+        issue: issueRef
+          ? {
+              id: issueRef.id,
+              identifier: issueRef.identifier,
+              title: issueRef.title,
+            }
+          : null,
+        workspace: {
+          id: persistedExecutionWorkspace?.id ?? issueRef?.executionWorkspaceId ?? null,
+          cwd: executionWorkspace.cwd,
+          mode: executionWorkspace.strategy,
+        },
+        selectedSkills: selectedSkills.map((selected) => ({
+          id: selected.skill.id,
+          key: selected.skill.key,
+          name: selected.skill.name,
+          required: selected.required,
+          selectionReason: selected.selectionReason,
+          executionContext: selected.skill.executionContext,
+        })),
+        planApprovalStatus,
+        runtimeServices: runtimeServices.map((service) => ({
+          id: service.id,
+          kind: service.serviceName,
+          status: service.status,
+          ownerAgentId: service.ownerAgentId,
+          url: readNonEmptyString(service.url),
+        })),
+      });
       if (issueId && (executionWorkspace.created || runtimeServices.some((service) => !service.reused))) {
         try {
           await issuesSvc.addComment(
@@ -2571,6 +2774,9 @@ export function heartbeatService(db: Db) {
           companyId: agent.companyId,
           issueId: issueIdForPrompt,
           runId: run.id,
+          selectedSkills,
+          planBody: planDocument?.body ?? null,
+          planApprovalStatus,
         });
         context.paperclipCoordinationPrompt = coordinationPrompt.fullText;
       } catch (err) {
@@ -3003,6 +3209,7 @@ export function heartbeatService(db: Db) {
             triggerDetail: promotedTriggerDetail,
             status: "queued",
             wakeupRequestId: deferred.id,
+            issueId: issue.id,
             contextSnapshot: promotedContextSnapshot,
             sessionIdBefore: sessionBefore,
           })
@@ -3072,6 +3279,23 @@ export function heartbeatService(db: Db) {
       payload,
     });
     let issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueIdFromPayload;
+    if (!issueId && opts.issueId) {
+      issueId = opts.issueId;
+      enrichedContextSnapshot.issueId = opts.issueId;
+      enrichedContextSnapshot.taskId = opts.issueId;
+      if (!readNonEmptyString(enrichedContextSnapshot.taskKey)) {
+        enrichedContextSnapshot.taskKey = opts.issueId;
+      }
+    }
+    if (opts.parentRunId) enrichedContextSnapshot.parentRunId = opts.parentRunId;
+    if (opts.delegationKind) enrichedContextSnapshot.delegationKind = opts.delegationKind;
+    if (opts.delegationLabel) enrichedContextSnapshot.delegationLabel = opts.delegationLabel;
+    if (opts.requestedByAgentId) enrichedContextSnapshot.requestedByAgentId = opts.requestedByAgentId;
+    if (opts.requestedByUserId) enrichedContextSnapshot.requestedByUserId = opts.requestedByUserId;
+    if (opts.requestedSkillId) enrichedContextSnapshot.requestedSkillId = opts.requestedSkillId;
+    if (opts.requestedSkillVersionId) {
+      enrichedContextSnapshot.requestedSkillVersionId = opts.requestedSkillVersionId;
+    }
 
     const agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
@@ -3119,6 +3343,17 @@ export function heartbeatService(db: Db) {
         .from(issues)
         .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
         .then((rows) => rows[0]?.projectId ?? null);
+    }
+
+    if (issueId) {
+      const pendingPlanApproval = await getPendingIssuePlanApproval(agent.companyId, issueId);
+      if (pendingPlanApproval) {
+        await writeSkippedRequest("issue.plan_approval_required");
+        throw conflict("plan approval required", {
+          issueId,
+          approvalId: pendingPlanApproval.id,
+        });
+      }
     }
 
     const budgetBlock = await budgets.getInvocationBlock(agent.companyId, agentId, {
@@ -3224,7 +3459,7 @@ export function heartbeatService(db: Db) {
               and(
                 eq(heartbeatRuns.companyId, issue.companyId),
                 inArray(heartbeatRuns.status, ["queued", "running"]),
-                sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+                sql`coalesce(${heartbeatRuns.issueId}::text, ${heartbeatRuns.contextSnapshot} ->> 'issueId') = ${issue.id}`,
               ),
             )
             .orderBy(
@@ -3392,6 +3627,14 @@ export function heartbeatService(db: Db) {
             triggerDetail,
             status: "queued",
             wakeupRequestId: wakeupRequest.id,
+            issueId,
+            parentRunId: opts.parentRunId ?? null,
+            delegationKind: opts.delegationKind ?? null,
+            delegationLabel: opts.delegationLabel ?? null,
+            requestedByAgentId: opts.requestedByAgentId ?? null,
+            requestedByUserId: opts.requestedByUserId ?? null,
+            requestedSkillId: opts.requestedSkillId ?? null,
+            requestedSkillVersionId: opts.requestedSkillVersionId ?? null,
             contextSnapshot: enrichedContextSnapshot,
             sessionIdBefore: sessionBefore,
           })
@@ -3517,6 +3760,14 @@ export function heartbeatService(db: Db) {
         triggerDetail,
         status: "queued",
         wakeupRequestId: wakeupRequest.id,
+        issueId,
+        parentRunId: opts.parentRunId ?? null,
+        delegationKind: opts.delegationKind ?? null,
+        delegationLabel: opts.delegationLabel ?? null,
+        requestedByAgentId: opts.requestedByAgentId ?? null,
+        requestedByUserId: opts.requestedByUserId ?? null,
+        requestedSkillId: opts.requestedSkillId ?? null,
+        requestedSkillVersionId: opts.requestedSkillVersionId ?? null,
         contextSnapshot: enrichedContextSnapshot,
         sessionIdBefore: sessionBefore,
       })
@@ -3549,7 +3800,7 @@ export function heartbeatService(db: Db) {
   }
 
   async function listProjectScopedRunIds(companyId: string, projectId: string) {
-    const runIssueId = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
+    const runIssueId = sql<string | null>`coalesce(${heartbeatRuns.issueId}::text, ${heartbeatRuns.contextSnapshot} ->> 'issueId')`;
     const effectiveProjectId = sql<string | null>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'projectId', ${issues.projectId}::text)`;
 
     const rows = await db
@@ -3647,7 +3898,14 @@ export function heartbeatService(db: Db) {
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(
+    runId: string,
+    reason = "Cancelled by control plane",
+    _affectedAgentIds?: Set<string>,
+  ) {
+    const isTopLevel = !_affectedAgentIds;
+    const affectedAgentIds = _affectedAgentIds ?? new Set<string>();
+
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (run.status !== "running" && run.status !== "queued") return run;
@@ -3682,11 +3940,36 @@ export function heartbeatService(db: Db) {
         message: "run cancelled",
       });
       await releaseIssueExecutionAndPromote(cancelled);
+
+      // AgentDash: cascade cancellation to child runs
+      const childRuns = await db
+        .select({ id: heartbeatRuns.id, issueId: heartbeatRuns.issueId })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.parentRunId, run.id));
+      for (const childRun of childRuns) {
+        const shouldCascade =
+          !childRun.issueId || childRun.issueId === run.issueId;
+        if (shouldCascade) {
+          await cancelRunInternal(
+            childRun.id,
+            `Cancelled because parent run ${run.id} was cancelled`,
+            affectedAgentIds,
+          );
+        }
+      }
     }
 
     runningProcesses.delete(run.id);
-    await finalizeAgentStatus(run.agentId, "cancelled");
-    await startNextQueuedRunForAgent(run.agentId);
+    affectedAgentIds.add(run.agentId);
+
+    // Only finalize agent statuses at the top-level call to avoid
+    // redundant/conflicting finalizations when parent and child share an agent.
+    if (isTopLevel) {
+      for (const agentId of affectedAgentIds) {
+        await finalizeAgentStatus(agentId, "cancelled");
+        await startNextQueuedRunForAgent(agentId);
+      }
+    }
     return cancelled;
   }
 
@@ -3767,6 +4050,14 @@ export function heartbeatService(db: Db) {
     },
 
     getRun,
+
+    listChildren: async (runId: string) => {
+      const rows = await listChildRuns(runId);
+      return rows.map((row) => ({
+        ...row,
+        resultJson: summarizeHeartbeatRunResultJson(row.resultJson),
+      }));
+    },
 
     getRuntimeState: async (agentId: string) => {
       const state = await getRuntimeState(agentId);
@@ -3879,6 +4170,87 @@ export function heartbeatService(db: Db) {
       }),
 
     wakeup: enqueueWakeup,
+
+    // AgentDash: agent-to-agent run delegation
+    createChildRunFromRun: async (parentRunId: string, input: {
+      agentId: string;
+      issueId?: string | null;
+      reason?: string | null;
+      payload?: Record<string, unknown> | null;
+      contextSnapshot?: Record<string, unknown>;
+      delegationKind?: string | null;
+      delegationLabel?: string | null;
+      requestedSkillId?: string | null;
+      requestedSkillVersionId?: string | null;
+      requestedByUserId?: string | null;
+    }) => {
+      const parentRun = await getRun(parentRunId);
+      if (!parentRun) throw notFound("Parent heartbeat run not found");
+      return enqueueWakeup(input.agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: input.reason ?? "delegated_run",
+        issueId: input.issueId ?? null,
+        payload: input.payload ?? null,
+        contextSnapshot: {
+          ...(input.contextSnapshot ?? {}),
+          parentRunId,
+        },
+        parentRunId,
+        delegationKind: input.delegationKind ?? "delegated_run",
+        delegationLabel: input.delegationLabel ?? null,
+        requestedByAgentId: parentRun.agentId,
+        requestedByUserId: input.requestedByUserId ?? null,
+        requestedSkillId: input.requestedSkillId ?? null,
+        requestedSkillVersionId: input.requestedSkillVersionId ?? null,
+      });
+    },
+
+    // AgentDash: agent-to-agent issue delegation
+    createChildIssueAndRunFromRun: async (parentRunId: string, input: {
+      issue: Omit<typeof issues.$inferInsert, "companyId" | "parentId" | "originRunId"> & { title: string };
+      agentId: string;
+      reason?: string | null;
+      payload?: Record<string, unknown> | null;
+      contextSnapshot?: Record<string, unknown>;
+      delegationKind?: string | null;
+      delegationLabel?: string | null;
+      requestedSkillId?: string | null;
+      requestedSkillVersionId?: string | null;
+      requestedByUserId?: string | null;
+    }) => {
+      const parentRun = await getRun(parentRunId);
+      if (!parentRun) throw notFound("Parent heartbeat run not found");
+      const parentIssue = parentRun.issueId ? await issuesSvc.getById(parentRun.issueId) : null;
+      const childIssue = await issuesSvc.create(parentRun.companyId, {
+        ...input.issue,
+        parentId: parentIssue?.id ?? null,
+        originRunId: parentRun.id,
+      });
+      const childRun = await enqueueWakeup(input.agentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: input.reason ?? "delegated_issue_run",
+        issueId: childIssue.id,
+        payload: {
+          ...(input.payload ?? {}),
+          issueId: childIssue.id,
+        },
+        contextSnapshot: {
+          ...(input.contextSnapshot ?? {}),
+          issueId: childIssue.id,
+          parentRunId,
+        },
+        parentRunId,
+        delegationKind: input.delegationKind ?? "delegated_issue",
+        delegationLabel: input.delegationLabel ?? childIssue.title,
+        requestedByAgentId: parentRun.agentId,
+        requestedByUserId: input.requestedByUserId ?? null,
+        requestedSkillId: input.requestedSkillId ?? null,
+        requestedSkillVersionId: input.requestedSkillVersionId ?? null,
+      });
+      return { issue: childIssue, run: childRun };
+    },
 
     reportRunActivity: clearDetachedRunWarning,
 

@@ -53,7 +53,7 @@ add a `PAPERCLIP_API_KEY` (JWT) to the set of injected env vars.
 **Trust model:** A developer is setting up a remote or semi-remote agent and
 has shell access to it.
 
-**Approach:** Similar to `claude setup-token` -- the developer runs a Paperclip CLI
+**Approach:** Similar to `claude setup-token` -- the developer runs a AgentDash CLI
 command that opens a browser URL for confirmation, then receives a token that
 gets stored in the agent's config automatically.
 
@@ -65,7 +65,7 @@ paperclip auth login
 **Token format:** Long-lived API key (stored hashed on the server side).
 
 **Status:** Future. Not needed until we have remote adapters that aren't
-managed by the Paperclip server itself.
+managed by the AgentDash server itself.
 
 ### Tier 3: Agent Self-Registration (Invite Link)
 
@@ -171,7 +171,7 @@ OpenClaw is the ideal first target for Tier 3 because:
    channel).
 3. The OpenClaw agent fetches the invite, reads the onboarding doc, and
    responds with its webhook configuration.
-4. A Paperclip company member approves the new agent.
+4. A AgentDash company member approves the new agent.
 5. Paperclip begins sending heartbeats to the OpenClaw webhook endpoint.
 
 ---
@@ -203,7 +203,7 @@ On approval, the approver sets:
 | **P1**   | Invite link + onboarding endpoint | `POST /api/companies/:id/invites`, `GET /api/invite/:token`, `POST /api/invite/:token/register`. |
 | **P1**   | Approval flow                     | UI + API for reviewing and approving pending agent registrations.                                |
 | **P2**   | OpenClaw integration              | First real external agent onboarding via invite link.                                            |
-| **P3**   | CLI auth flow                     | `paperclipai auth login` for developer-managed remote agents.                                      |
+| **P3**   | CLI auth flow                     | `agentdash auth login` for developer-managed remote agents.                                      |
 
 ## P0 Implementation Plan
 

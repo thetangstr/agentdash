@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Approval, DashboardSummary, HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
+import type { Approval, DashboardSummary, HeartbeatRun, Issue, JoinRequest } from "@agentdash/shared";
 import {
   computeInboxBadgeData,
   getApprovalsForTab,
@@ -117,6 +117,14 @@ function makeRun(id: string, status: HeartbeatRun["status"], createdAt: string, 
     processPid: null,
     processStartedAt: null,
     retryOfRunId: null,
+    issueId: null,
+    parentRunId: null,
+    delegationKind: null,
+    delegationLabel: null,
+    requestedByAgentId: null,
+    requestedByUserId: null,
+    requestedSkillId: null,
+    requestedSkillVersionId: null,
     processLossRetryCount: 0,
     stdoutExcerpt: null,
     stderrExcerpt: null,
@@ -400,7 +408,7 @@ describe("inbox helpers", () => {
   });
 
   it("maps legacy new-tab storage to mine", () => {
-    localStorage.setItem("paperclip:inbox:last-tab", "new");
+    localStorage.setItem("agentdash:inbox:last-tab", "new");
     expect(loadLastInboxTab()).toBe("mine");
   });
 

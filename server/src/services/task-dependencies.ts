@@ -1,6 +1,6 @@
 import { and, eq, inArray, not } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { issueDependencies, issues } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { issueDependencies, issues } from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
 interface AddDependencyOpts {

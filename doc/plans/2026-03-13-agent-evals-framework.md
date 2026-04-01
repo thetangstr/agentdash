@@ -727,7 +727,7 @@ The suite must keep growing from real runs, otherwise it will become a toy bench
 
 Trajectory matters for agents:
 
-- did they call the right Paperclip APIs?
+- did they call the right AgentDash APIs?
 - did they ask for approval?
 - did they communicate progress?
 - did they choose the right issue?

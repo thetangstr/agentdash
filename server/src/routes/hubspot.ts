@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import { hubspotService } from "../services/hubspot.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 

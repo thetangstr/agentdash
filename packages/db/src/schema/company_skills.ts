@@ -8,6 +8,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
@@ -21,6 +22,14 @@ export const companySkills = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     markdown: text("markdown").notNull(),
+    whenToUse: text("when_to_use"),
+    allowedTools: jsonb("allowed_tools").$type<string[]>().notNull().default([]),
+    activationPaths: jsonb("activation_paths").$type<string[]>().notNull().default([]),
+    executionContext: text("execution_context").notNull().default("inline"),
+    targetAgentType: text("target_agent_type"),
+    effort: text("effort"),
+    userInvocable: boolean("user_invocable").notNull().default(true),
+    hooks: jsonb("hooks").$type<Record<string, unknown>>(),
     sourceType: text("source_type").notNull().default("local_path"),
     sourceLocator: text("source_locator"),
     sourceRef: text("source_ref"),

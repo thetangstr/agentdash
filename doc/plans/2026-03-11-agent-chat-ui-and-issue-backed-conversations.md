@@ -208,7 +208,7 @@ This is another reason ephemeral freeform chat should not be the default.
 
 1. Keep Paperclip as the source of truth for message history and run state.
 2. Add `assistant-ui` as the rendering/composer layer.
-3. Build a Paperclip runtime adapter that maps:
+3. Build a AgentDash runtime adapter that maps:
    - issue comments -> user/assistant messages
    - live run deltas -> streaming assistant messages
    - issue attachments -> chat attachments

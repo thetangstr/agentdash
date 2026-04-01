@@ -1,5 +1,5 @@
 import { and, eq, gte, lte, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   budgetAllocations,
   budgetPolicies,
@@ -7,7 +7,7 @@ import {
   departments,
   resourceUsageEvents,
   issues,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
 export function budgetForecastService(db: Db) {

@@ -1,8 +1,8 @@
 import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
-import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { agents as agentsTable, companies, heartbeatRuns } from "@agentdash/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
@@ -22,11 +22,11 @@ import {
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import {
   readPaperclipSkillSyncPreference,
   writePaperclipSkillSyncPreference,
-} from "@paperclipai/adapter-utils/server-utils";
+} from "@agentdash/adapter-utils/server-utils";
 import { validate } from "../middleware/validate.js";
 import {
   agentService,
@@ -50,14 +50,14 @@ import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
+import { runClaudeLogin } from "@agentdash/adapter-claude-local/server";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
-} from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
-import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
-import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
+} from "@agentdash/adapter-codex-local";
+import { DEFAULT_CURSOR_LOCAL_MODEL } from "@agentdash/adapter-cursor-local";
+import { DEFAULT_GEMINI_LOCAL_MODEL } from "@agentdash/adapter-gemini-local";
+import { ensureOpenCodeModelConfiguredAndAvailable } from "@agentdash/adapter-opencode-local/server";
 import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
@@ -2110,7 +2110,7 @@ export function agentRoutes(db: Db) {
       agentId: heartbeatRuns.agentId,
       agentName: agentsTable.name,
       adapterType: agentsTable.adapterType,
-      issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
+      issueId: sql<string | null>`coalesce(${heartbeatRuns.issueId}::text, ${heartbeatRuns.contextSnapshot} ->> 'issueId')`.as("issueId"),
     };
 
     const liveRuns = await db
@@ -2156,7 +2156,17 @@ export function agentRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, run.companyId);
-    res.json(redactCurrentUserValue(run, await getCurrentUserRedactionOptions()));
+    const childRuns = await heartbeat.listChildren(runId);
+    const childIssueIds = new Set(
+      childRuns
+        .map((child) => child.issueId)
+        .filter((issueId): issueId is string => Boolean(issueId) && issueId !== run.issueId),
+    );
+    res.json(redactCurrentUserValue({
+      ...run,
+      childRunCount: childRuns.length,
+      childIssueCount: childIssueIds.size,
+    }, await getCurrentUserRedactionOptions()));
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
@@ -2199,6 +2209,18 @@ export function agentRoutes(db: Db) {
       }, currentUserRedactionOptions),
     );
     res.json(redactedEvents);
+  });
+
+  router.get("/heartbeat-runs/:runId/children", async (req, res) => {
+    const runId = req.params.runId as string;
+    const run = await heartbeat.getRun(runId);
+    if (!run) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, run.companyId);
+    const children = await heartbeat.listChildren(runId);
+    res.json(redactCurrentUserValue(children, await getCurrentUserRedactionOptions()));
   });
 
   router.get("/heartbeat-runs/:runId/log", async (req, res) => {
@@ -2284,7 +2306,7 @@ export function agentRoutes(db: Db) {
         and(
           eq(heartbeatRuns.companyId, issue.companyId),
           inArray(heartbeatRuns.status, ["queued", "running"]),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+          sql`coalesce(${heartbeatRuns.issueId}::text, ${heartbeatRuns.contextSnapshot} ->> 'issueId') = ${issue.id}`,
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt));

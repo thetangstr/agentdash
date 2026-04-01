@@ -1,5 +1,5 @@
 import { and, eq, isNull } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   onboardingSessions,
   onboardingSources,
@@ -7,7 +7,7 @@ import {
   agentTemplates,
   agents,
   companies,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { budgetForecastService } from "./budget-forecasts.js";

@@ -6,7 +6,7 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 
 ## Overview
 
-`/workon AD-XXX` is the **single entry point** for all feature and bug development. It automatically:
+`/workon PAP-XXX` is the **single entry point** for all feature and bug development. It automatically:
 1. Fetches the issue from Linear
 2. Determines size (uses estimate field or has PM set it)
 3. Determines deployment path (default vs staging-required)
@@ -18,7 +18,7 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 
 ```
 +-------------------------------------------------------------+
-|                     /workon AD-XXX               |
+|                     /workon PAP-XXX               |
 +-------------------------------------------------------------+
 |                                                               |
 |  1. Fetch Issue & Check Size                                  |
@@ -53,14 +53,14 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 ### 1.1 Parse Issue ID
 
 Extract the issue identifier from the command:
-- `/workon AD-123` -> issue ID is `AD-123`
-- `/workon 123` -> assume `AD-123`
+- `/workon PAP-123` -> issue ID is `PAP-123`
+- `/workon 123` -> assume `PAP-123`
 
 ### 1.2 Fetch Issue from Linear
 
 ```
 Use mcp__linear__get_issue with:
-- id: "AD-XXX"
+- id: "PAP-XXX"
 - includeRelations: true
 ```
 
@@ -70,10 +70,10 @@ Look for the `estimate` field in the Linear issue. Linear uses Fibonacci points 
 
 | Points | Size | Deployment Path |
 |--------|------|-----------------|
-| 1 | XS | Direct to production (single PR -> `main`), auto-ship |
-| 2 | S | Direct to production (single PR -> `main`), auto-ship |
-| 3 | M | Direct to production (single PR -> `main`), human gate |
-| 5 | L | Direct to production (single PR -> `main`), human gate |
+| 1 | XS | Direct to production (single PR -> `agentdash-main`), auto-ship |
+| 2 | S | Direct to production (single PR -> `agentdash-main`), auto-ship |
+| 3 | M | Direct to production (single PR -> `agentdash-main`), human gate |
+| 5 | L | Direct to production (single PR -> `agentdash-main`), human gate |
 | 8+ | XL | Direct or staging (check `staging-required` label), human gate |
 
 **Also check for T-shirt size labels:** `XS`, `S`, `M`, `L`, `XL`
@@ -85,9 +85,9 @@ If the issue has no estimate AND no size label:
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "PM sizing for AD-XXX"
+- description: "PM sizing for PAP-XXX"
 - prompt: |
-    You are the PM Agent sizing AD-<number>.
+    You are the PM Agent sizing PAP-<number>.
 
     1. Read the issue description
     2. Analyze complexity using the sizing criteria:
@@ -115,15 +115,15 @@ if "staging-required" in labels:
     pr_target = "staging"
     quality_gate = "Staging-Tested"
 else:
-    pr_target = "main"
+    pr_target = "agentdash-main"
     quality_gate = "Locally-Tested"
 ```
 
 ### 2.2 Default Path (no `staging-required`)
 
 ```
-All sizes go to production via single PR -> main.
-Testing happens on localhost:3000 (frontend) + staging backend.
+All sizes go to production via single PR -> agentdash-main.
+Testing happens on http://localhost:3100 (frontend) + staging backend.
 
 XS/S: auto-ship after Locally-Tested (no human gate)
 M+: human verifies external items after Locally-Tested
@@ -132,10 +132,10 @@ M+: human verifies external items after Locally-Tested
 ### 2.3 Staging-Required Path (XL + `staging-required`)
 
 ```
-PR #1 -> staging. Testing happens on {{STAGING_URL}}.
+PR #1 -> staging. Testing happens on TODO_SET_STAGING_URL.
 After Staging-Tested + Human-Verified:
-  TPM creates PR #2 -> main, merges, prod smoke test.
-  TPM rebases staging on main.
+  TPM creates PR #2 -> agentdash-main, merges, prod smoke test.
+  TPM rebases staging on agentdash-main.
 ```
 
 ---
@@ -185,9 +185,9 @@ def get_current_phase(issue):
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "PM Agent for AD-XXX"
+- description: "PM Agent for PAP-XXX"
 - prompt: |
-    You are the PM Agent. Elaborate requirements for AD-<number>.
+    You are the PM Agent. Elaborate requirements for PAP-<number>.
 
     Follow the full PM workflow from .claude/commands/pm.md:
     1. Parse the raw requirements
@@ -213,18 +213,18 @@ After PM completes, re-check state and continue to Builder.
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "Builder Agent for AD-XXX"
+- description: "Builder Agent for PAP-XXX"
 - prompt: |
-    You are the Builder Agent. Implement AD-<number>.
+    You are the Builder Agent. Implement PAP-<number>.
 
-    **PR target branch:** <main or staging based on deployment path>
+    **PR target branch:** <agentdash-main or staging based on deployment path>
 
     Follow the full Builder workflow from .claude/commands/builder.md:
     1. Read the spec and acceptance criteria
     2. Create feature branch
     3. Implement the feature
     4. Write unit tests + E2E tests (S+)
-    5. **REBASE on `main`**: `git fetch origin main && git rebase origin/main`
+    5. **REBASE on `agentdash-main`**: `git fetch origin agentdash-main && git rebase origin/agentdash-main`
     6. Create PR targeting appropriate branch
     7. Add `PR-Ready` label to Linear
     8. Add comment: "@tester Ready for E2E testing"
@@ -238,14 +238,14 @@ After Builder completes, re-check state and continue to Tester.
 
 **Condition:** PR created, before routing to Tester
 
-For **default path** (PR -> main):
-1. Start local dev server: `cd frontend && npm run dev`
+For **default path** (PR -> agentdash-main):
+1. Start local dev server: `pnpm dev`
 2. Wait for dev server to be ready
-3. Run smoke test against localhost:3000
+3. Run smoke test against http://localhost:3100
 
 For **staging-required path** (PR -> staging):
 1. Wait for Railway staging deployment to finish
-2. Health check: `curl -s https://{{BACKEND_STAGING_URL}}/health`
+2. Health check: `curl -s https://TODO_SET_BACKEND_STAGING_URL/health`
 3. Run smoke test against staging
 
 ### 3.5 Route to Tester
@@ -255,9 +255,9 @@ For **staging-required path** (PR -> staging):
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "Tester Agent for AD-XXX"
+- description: "Tester Agent for PAP-XXX"
 - prompt: |
-    You are the Tester Agent. Test AD-<number>.
+    You are the Tester Agent. Test PAP-<number>.
 
     Follow the full Tester workflow from .claude/commands/tester.md:
     1. Read test plan from Linear issue description
@@ -285,7 +285,7 @@ Check issue size:
 ```
 ## Awaiting Human Validation (M+ only)
 
-AD-<number> has passed all automated and Chrome CUJ tests.
+PAP-<number> has passed all automated and Chrome CUJ tests.
 
 **Current Status:**
 - PM elaboration: Complete
@@ -361,9 +361,9 @@ while true:
 
 | Condition | PR Target | Testing Env | Quality Gate | Human Gate |
 |-----------|-----------|-------------|--------------|------------|
-| XS/S, no `staging-required` | `main` | localhost:3000 | `Locally-Tested` | None (auto-ship) |
-| M/L, no `staging-required` | `main` | localhost:3000 | `Locally-Tested` | Human adds `Human-Verified` |
-| XL + `staging-required` | `staging` | {{STAGING_URL}} | `Staging-Tested` | Human adds `Human-Verified` |
+| XS/S, no `staging-required` | `agentdash-main` | http://localhost:3100 | `Locally-Tested` | None (auto-ship) |
+| M/L, no `staging-required` | `agentdash-main` | http://localhost:3100 | `Locally-Tested` | Human adds `Human-Verified` |
+| XL + `staging-required` | `staging` | TODO_SET_STAGING_URL | `Staging-Tested` | Human adds `Human-Verified` |
 
 ---
 
@@ -372,7 +372,7 @@ while true:
 | State | Label | Next Agent | Notes |
 |-------|-------|------------|-------|
 | No spec | (none) | PM | |
-| Has spec, no PR | (none) | Builder | Rebase on main, create PR |
+| Has spec, no PR | (none) | Builder | Rebase on agentdash-main, create PR |
 | PR created | `PR-Ready` | Tester | E2E + code review + Chrome CUJ |
 | Tests passed (XS/S) | `Locally-Tested` | /workon auto-ships | Auto-adds Human-Verified |
 | Tests passed (M+) | `Locally-Tested` | Human | Human adds Human-Verified |
@@ -384,7 +384,7 @@ while true:
 
 ## Related Documentation
 
-- [MAW SOP](../../doc/maw/sop.md) - Full workflow documentation
+- [MAW SOP](../doc/multi-agent-workflow/sop.md) - Full workflow documentation
 - [PM Agent](./pm.md) - Requirements elaboration
 - [Builder Agent](./builder.md) - Implementation
 - [Tester Agent](./tester.md) - E2E testing + Chrome CUJ

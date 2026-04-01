@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@paperclipai/shared";
+import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@agentdash/shared";
 import { agentRoutes } from "../routes/agents.js";
 import { errorHandler } from "../middleware/index.js";
 
@@ -110,7 +110,7 @@ function createDbStub() {
         where: vi.fn().mockReturnValue({
           then: vi.fn().mockResolvedValue([{
             id: companyId,
-            name: "Paperclip",
+            name: "AgentDash",
             requireBoardApprovalForNewAgents: false,
           }]),
         }),
