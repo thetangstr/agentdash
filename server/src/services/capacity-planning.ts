@@ -1,5 +1,5 @@
 import { and, eq, gte, isNull, isNotNull, ne, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   agents,
   agentTemplates,
@@ -7,7 +7,7 @@ import {
   heartbeatRuns,
   issues,
   projects,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
 export function capacityPlanningService(db: Db) {

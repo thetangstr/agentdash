@@ -1,4 +1,4 @@
-# Paperclip UI Spec
+# AgentDash UI Spec
 
 Status: Draft
 Date: 2026-02-17

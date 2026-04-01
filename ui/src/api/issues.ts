@@ -5,11 +5,20 @@ import type {
   IssueAttachment,
   IssueComment,
   IssueDocument,
+  LegacyPlanDocument,
   IssueLabel,
   IssueWorkProduct,
   UpsertIssueDocument,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import { api } from "./client";
+
+export interface IssuePlanState {
+  issueId: string;
+  document: IssueDocument | null;
+  legacyDocument: LegacyPlanDocument | null;
+  approval: Approval | null;
+  approvalHistory: Approval[];
+}
 
 export const issuesApi = {
   list: (
@@ -81,6 +90,11 @@ export const issuesApi = {
   getDocument: (id: string, key: string) => api.get<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}`),
   upsertDocument: (id: string, key: string, data: UpsertIssueDocument) =>
     api.put<IssueDocument>(`/issues/${id}/documents/${encodeURIComponent(key)}`, data),
+  getPlan: (id: string) => api.get<IssuePlanState>(`/issues/${id}/plan`),
+  upsertPlan: (id: string, data: UpsertIssueDocument) =>
+    api.put<IssueDocument>(`/issues/${id}/plan`, data),
+  requestPlanApproval: (id: string, decisionNote?: string | null) =>
+    api.post<Approval>(`/issues/${id}/plan/request-approval`, { decisionNote }),
   listDocumentRevisions: (id: string, key: string) =>
     api.get<DocumentRevision[]>(`/issues/${id}/documents/${encodeURIComponent(key)}/revisions`),
   deleteDocument: (id: string, key: string) =>

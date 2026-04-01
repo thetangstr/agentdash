@@ -8,7 +8,7 @@ import {
   issueComments,
   issueInboxArchives,
   issues,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -55,7 +55,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
     await db.insert(companies).values({
       id: companyId,
-      name: "Paperclip",
+      name: "AgentDash",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       requireBoardApprovalForNewAgents: false,
     });
@@ -172,7 +172,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
     await db.insert(companies).values({
       id: companyId,
-      name: "Paperclip",
+      name: "AgentDash",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       requireBoardApprovalForNewAgents: false,
     });
@@ -226,7 +226,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
 
     await db.insert(companies).values({
       id: companyId,
-      name: "Paperclip",
+      name: "AgentDash",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       requireBoardApprovalForNewAgents: false,
     });

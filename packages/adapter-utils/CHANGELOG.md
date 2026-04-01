@@ -1,4 +1,4 @@
-# @paperclipai/adapter-utils
+# @agentdash/adapter-utils
 
 ## 0.3.1
 

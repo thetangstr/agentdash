@@ -28,7 +28,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { Company } from "@paperclipai/shared";
+import type { Company } from "@agentdash/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 
 const ORDER_STORAGE_KEY = "agentdash.companyOrder";

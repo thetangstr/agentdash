@@ -108,9 +108,9 @@ Paperclip should make plain search the minimum contract and richer outputs optio
 
 Paperclip needs both direct request/response operations and background maintenance hooks.
 
-## Paperclip-Specific Takeaways
+## AgentDash-Specific Takeaways
 
-### Paperclip should own these concerns
+### AgentDash should own these concerns
 
 - binding a provider to a company and optionally overriding it per agent
 - mapping Paperclip entities into provider scopes
@@ -169,4 +169,4 @@ That is enough to support:
 - hosted services similar to `mem0`, `supermemory`, or `Memori`
 - richer agent-memory systems like `MemOS` or `OpenViking`
 
-without forcing Paperclip itself to become a monolithic memory engine.
+without forcing AgentDash itself to become a monolithic memory engine.

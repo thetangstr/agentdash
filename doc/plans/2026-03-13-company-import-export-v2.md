@@ -9,7 +9,7 @@ Supersedes for package-format direction:
 
 ## 1. Purpose
 
-This document defines the next-stage plan for Paperclip company import/export.
+This document defines the next-stage plan for AgentDash company import/export.
 
 The core shift is:
 
@@ -483,9 +483,9 @@ The CLI should continue to support direct import/export without a registry.
 
 Target commands:
 
-- `paperclipai company export <company-id> --out <path>`
-- `paperclipai company import <path-or-url> --dry-run`
-- `paperclipai company import <path-or-url> --target existing -C <company-id>`
+- `agentdash company export <company-id> --out <path>`
+- `agentdash company import <path-or-url> --dry-run`
+- `agentdash company import <path-or-url> --target existing -C <company-id>`
 
 Planned additions:
 

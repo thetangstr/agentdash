@@ -1,12 +1,12 @@
 import { and, asc, desc, eq, or } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   securityPolicies,
   policyEvaluations,
   agentSandboxes,
   killSwitchEvents,
   agents,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
 export function policyEngineService(db: Db) {

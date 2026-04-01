@@ -1,4 +1,4 @@
-# @paperclipai/shared
+# @agentdash/shared
 
 ## 0.3.1
 

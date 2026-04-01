@@ -138,7 +138,7 @@ TARGET_PUBLISH_VERSION="$TARGET_STABLE_VERSION"
 DIST_TAG="latest"
 
 if [ "$channel" = "canary" ]; then
-  require_on_master_branch
+  require_on_release_branch
   TARGET_PUBLISH_VERSION="$(next_canary_version "$TARGET_STABLE_VERSION" "${PUBLIC_PACKAGE_NAMES[@]}")"
   DIST_TAG="canary"
   tag_name="$(canary_tag_name "$TARGET_PUBLISH_VERSION")"
@@ -301,7 +301,7 @@ if [ "$dry_run" = true ]; then
 else
   if [ "$channel" = "canary" ]; then
     release_info "Published canary ${TARGET_PUBLISH_VERSION}."
-    release_info "Install with: npx paperclipai@canary onboard"
+    release_info "Install with: npx agentdash@canary onboard"
     release_info "Next step: git push ${PUBLISH_REMOTE} refs/tags/${tag_name}"
   else
     release_info "Published stable ${TARGET_PUBLISH_VERSION}."

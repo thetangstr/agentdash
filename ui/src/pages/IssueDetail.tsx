@@ -54,8 +54,8 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import type { ActivityEvent } from "@paperclipai/shared";
-import type { Agent, IssueAttachment } from "@paperclipai/shared";
+import type { ActivityEvent } from "@agentdash/shared";
+import type { Agent, IssueAttachment } from "@agentdash/shared";
 
 type CommentReassignment = {
   assigneeAgentId: string | null;
@@ -73,6 +73,11 @@ const ACTION_LABELS: Record<string, string> = {
   "issue.document_created": "created a document",
   "issue.document_updated": "updated a document",
   "issue.document_deleted": "deleted a document",
+  "issue.plan_created": "created the plan",
+  "issue.plan_updated": "updated the plan",
+  "issue.plan_approval_requested": "requested plan approval",
+  "issue.plan_approval_approved": "approved the plan",
+  "issue.plan_approval_rejected": "rejected the plan",
   "issue.deleted": "deleted the issue",
   "agent.created": "created an agent",
   "agent.updated": "updated the agent",
@@ -248,6 +253,12 @@ export function IssueDetail() {
     enabled: !!issueId,
   });
 
+  const { data: planState } = useQuery({
+    queryKey: queryKeys.issues.plan(issueId!),
+    queryFn: () => issuesApi.getPlan(issueId!),
+    enabled: !!issueId,
+  });
+
   const { data: attachments } = useQuery({
     queryKey: queryKeys.issues.attachments(issueId!),
     queryFn: () => issuesApi.listAttachments(issueId!),
@@ -365,6 +376,13 @@ export function IssueDetail() {
       .filter((i) => i.parentId === issue.id)
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [allIssues, issue]);
+
+  const planApprovalHistory = useMemo(
+    () => planState?.approvalHistory ?? (linkedApprovals ?? []).filter((approval) => approval.type === "approve_issue_plan"),
+    [linkedApprovals, planState],
+  );
+  const latestPlanApproval = planState?.approval ?? planApprovalHistory[0] ?? null;
+  const hasPlanDocument = Boolean(issue?.planDocument || issue?.legacyPlanDocument);
 
   const commentReassignOptions = useMemo(() => {
     const options: Array<{ id: string; label: string; searchText?: string }> = [];
@@ -567,6 +585,32 @@ export function IssueDetail() {
     },
     onError: (err) => {
       setAttachmentError(err instanceof Error ? err.message : "Delete failed");
+    },
+  });
+
+  const requestPlanApproval = useMutation({
+    mutationFn: async () => {
+      if (!issueId) throw new Error("Issue not found");
+      return issuesApi.requestPlanApproval(issueId);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.approvals(issueId!) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.plan(issueId!) }),
+      ]);
+      pushToast({
+        title: "Plan approval requested",
+        body: "The issue was moved to review and a plan approval was created.",
+        tone: "success",
+      });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to request plan approval",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
     },
   });
 
@@ -912,6 +956,68 @@ export function IssueDetail() {
         itemClassName="rounded-lg border border-border p-3"
         missingBehavior="placeholder"
       />
+
+      <div className="rounded-lg border border-border p-3 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h3 className="text-sm font-medium text-muted-foreground">Plan Approval</h3>
+            <p className="text-xs text-muted-foreground">
+              Plans live in the `plan` issue document and can be explicitly gated before execution resumes.
+            </p>
+          </div>
+          {latestPlanApproval ? (
+            <StatusBadge status={latestPlanApproval.status} />
+          ) : (
+            <span className="text-xs text-muted-foreground">Not requested</span>
+          )}
+        </div>
+
+        {!hasPlanDocument ? (
+          <p className="text-xs text-muted-foreground">
+            Add a `plan` document first, then request approval here.
+          </p>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-xs text-foreground">
+                {issue?.planDocument
+                  ? `Current plan revision ${issue.planDocument.latestRevisionNumber}`
+                  : "Using legacy plan content from the issue description"}
+              </p>
+              {latestPlanApproval?.decisionNote ? (
+                <p className="text-xs text-muted-foreground">
+                  Decision note: {latestPlanApproval.decisionNote}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={requestPlanApproval.isPending || latestPlanApproval?.status === "pending"}
+              onClick={() => requestPlanApproval.mutate()}
+            >
+              {latestPlanApproval?.status === "pending" ? "Approval Pending" : "Request Approval"}
+            </Button>
+          </div>
+        )}
+
+        {planApprovalHistory.length > 0 ? (
+          <div className="space-y-2 border-t border-border pt-3">
+            {planApprovalHistory.slice(0, 3).map((approval) => (
+              <div key={approval.id} className="flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <StatusBadge status={approval.status} />
+                  <span className="font-mono text-muted-foreground">{approval.id.slice(0, 8)}</span>
+                  {approval.decisionNote ? (
+                    <span className="truncate text-muted-foreground">{truncate(approval.decisionNote, 96)}</span>
+                  ) : null}
+                </div>
+                <span className="shrink-0 text-muted-foreground">{relativeTime(approval.updatedAt)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       <IssueDocumentsSection
         issue={issue}

@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   crmAccounts,
   crmContacts,
@@ -7,7 +7,7 @@ import {
   crmActivities,
   crmLeads,
   crmPartners,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound } from "../errors.js";
 
 export function crmService(db: Db) {
@@ -39,11 +39,11 @@ export function crmService(db: Db) {
       .offset(opts?.offset ?? 0);
   }
 
-  async function getAccountById(id: string) {
+  async function getAccountById(companyId: string, id: string) {
     const row = await db
       .select()
       .from(crmAccounts)
-      .where(eq(crmAccounts.id, id))
+      .where(and(eq(crmAccounts.companyId, companyId), eq(crmAccounts.id, id)))
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM account not found");
     return row;
@@ -61,6 +61,7 @@ export function crmService(db: Db) {
   }
 
   async function updateAccount(
+    companyId: string,
     id: string,
     data: Partial<
       Omit<typeof crmAccounts.$inferInsert, "id" | "companyId" | "createdAt">
@@ -69,7 +70,7 @@ export function crmService(db: Db) {
     const row = await db
       .update(crmAccounts)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(crmAccounts.id, id))
+      .where(and(eq(crmAccounts.companyId, companyId), eq(crmAccounts.id, id)))
       .returning()
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM account not found");
@@ -122,11 +123,11 @@ export function crmService(db: Db) {
       .offset(opts?.offset ?? 0);
   }
 
-  async function getContactById(id: string) {
+  async function getContactById(companyId: string, id: string) {
     const row = await db
       .select()
       .from(crmContacts)
-      .where(eq(crmContacts.id, id))
+      .where(and(eq(crmContacts.companyId, companyId), eq(crmContacts.id, id)))
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM contact not found");
     return row;
@@ -144,6 +145,7 @@ export function crmService(db: Db) {
   }
 
   async function updateContact(
+    companyId: string,
     id: string,
     data: Partial<
       Omit<typeof crmContacts.$inferInsert, "id" | "companyId" | "createdAt">
@@ -152,7 +154,7 @@ export function crmService(db: Db) {
     const row = await db
       .update(crmContacts)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(crmContacts.id, id))
+      .where(and(eq(crmContacts.companyId, companyId), eq(crmContacts.id, id)))
       .returning()
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM contact not found");
@@ -206,11 +208,11 @@ export function crmService(db: Db) {
       .offset(opts?.offset ?? 0);
   }
 
-  async function getDealById(id: string) {
+  async function getDealById(companyId: string, id: string) {
     const row = await db
       .select()
       .from(crmDeals)
-      .where(eq(crmDeals.id, id))
+      .where(and(eq(crmDeals.companyId, companyId), eq(crmDeals.id, id)))
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM deal not found");
     return row;
@@ -228,6 +230,7 @@ export function crmService(db: Db) {
   }
 
   async function updateDeal(
+    companyId: string,
     id: string,
     data: Partial<
       Omit<typeof crmDeals.$inferInsert, "id" | "companyId" | "createdAt">
@@ -236,7 +239,7 @@ export function crmService(db: Db) {
     const row = await db
       .update(crmDeals)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(crmDeals.id, id))
+      .where(and(eq(crmDeals.companyId, companyId), eq(crmDeals.id, id)))
       .returning()
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("CRM deal not found");
@@ -396,27 +399,28 @@ export function crmService(db: Db) {
       return db.select().from(crmLeads).where(and(...conditions))
         .orderBy(desc(crmLeads.createdAt)).limit(opts?.limit ?? 50).offset(opts?.offset ?? 0);
     },
-    getLeadById: async (id: string) => {
-      const lead = await db.select().from(crmLeads).where(eq(crmLeads.id, id)).then((r) => r[0] ?? null);
+    getLeadById: async (companyId: string, id: string) => {
+      const lead = await db.select().from(crmLeads).where(and(eq(crmLeads.companyId, companyId), eq(crmLeads.id, id))).then((r) => r[0] ?? null);
       if (!lead) throw notFound("Lead not found");
       return lead;
     },
     createLead: async (companyId: string, data: Omit<typeof crmLeads.$inferInsert, "id" | "companyId" | "createdAt" | "updatedAt">) =>
       db.insert(crmLeads).values({ ...data, companyId }).returning().then((r) => r[0]),
-    updateLead: async (id: string, data: Partial<typeof crmLeads.$inferInsert>) => {
-      const updated = await db.update(crmLeads).set({ ...data, updatedAt: new Date() })
-        .where(eq(crmLeads.id, id)).returning().then((r) => r[0] ?? null);
+    updateLead: async (companyId: string, id: string, data: Partial<Omit<typeof crmLeads.$inferInsert, "id" | "companyId" | "createdAt">>) => {
+      const { id: _id, companyId: _cid, createdAt: _ca, ...safeData } = data as Record<string, unknown>;
+      const updated = await db.update(crmLeads).set({ ...safeData, updatedAt: new Date() })
+        .where(and(eq(crmLeads.companyId, companyId), eq(crmLeads.id, id))).returning().then((r) => r[0] ?? null);
       if (!updated) throw notFound("Lead not found");
       return updated;
     },
-    convertLead: async (id: string, accountId: string, contactId: string) => {
+    convertLead: async (companyId: string, id: string, accountId: string, contactId: string) => {
       const updated = await db.update(crmLeads).set({
         status: "converted",
         convertedAccountId: accountId,
         convertedContactId: contactId,
         convertedAt: new Date(),
         updatedAt: new Date(),
-      }).where(eq(crmLeads.id, id)).returning().then((r) => r[0] ?? null);
+      }).where(and(eq(crmLeads.companyId, companyId), eq(crmLeads.id, id))).returning().then((r) => r[0] ?? null);
       if (!updated) throw notFound("Lead not found");
       return updated;
     },
@@ -429,16 +433,17 @@ export function crmService(db: Db) {
       return db.select().from(crmPartners).where(and(...conditions))
         .orderBy(desc(crmPartners.createdAt)).limit(opts?.limit ?? 50).offset(opts?.offset ?? 0);
     },
-    getPartnerById: async (id: string) => {
-      const partner = await db.select().from(crmPartners).where(eq(crmPartners.id, id)).then((r) => r[0] ?? null);
+    getPartnerById: async (companyId: string, id: string) => {
+      const partner = await db.select().from(crmPartners).where(and(eq(crmPartners.companyId, companyId), eq(crmPartners.id, id))).then((r) => r[0] ?? null);
       if (!partner) throw notFound("Partner not found");
       return partner;
     },
     createPartner: async (companyId: string, data: Omit<typeof crmPartners.$inferInsert, "id" | "companyId" | "createdAt" | "updatedAt">) =>
       db.insert(crmPartners).values({ ...data, companyId }).returning().then((r) => r[0]),
-    updatePartner: async (id: string, data: Partial<typeof crmPartners.$inferInsert>) => {
-      const updated = await db.update(crmPartners).set({ ...data, updatedAt: new Date() })
-        .where(eq(crmPartners.id, id)).returning().then((r) => r[0] ?? null);
+    updatePartner: async (companyId: string, id: string, data: Partial<Omit<typeof crmPartners.$inferInsert, "id" | "companyId" | "createdAt">>) => {
+      const { id: _id, companyId: _cid, createdAt: _ca, ...safeData } = data as Record<string, unknown>;
+      const updated = await db.update(crmPartners).set({ ...safeData, updatedAt: new Date() })
+        .where(and(eq(crmPartners.companyId, companyId), eq(crmPartners.id, id))).returning().then((r) => r[0] ?? null);
       if (!updated) throw notFound("Partner not found");
       return updated;
     },

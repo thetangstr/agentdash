@@ -10,7 +10,7 @@
 
 import Ajv, { type ErrorObject } from "ajv";
 import addFormats from "ajv-formats";
-import type { JsonSchema } from "@paperclipai/shared";
+import type { JsonSchema } from "@agentdash/shared";
 
 export interface ConfigValidationResult {
   valid: boolean;

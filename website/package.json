@@ -2,6 +2,7 @@
   "name": "agentdash-website",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -17,5 +18,9 @@
     "react-dom": "^18.3.1",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2"
+  },
+  "homepage": "https://github.com/thetangstr/agentdash",
+  "bugs": {
+    "url": "https://github.com/thetangstr/agentdash/issues"
   }
 }

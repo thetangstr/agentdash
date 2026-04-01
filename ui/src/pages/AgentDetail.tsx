@@ -88,8 +88,8 @@ import {
   type AgentRuntimeState,
   type LiveEvent,
   type WorkspaceOperation,
-} from "@paperclipai/shared";
-import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
+} from "@agentdash/shared";
+import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@agentdash/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
 import {
   applyAgentSkillSnapshot,
@@ -2671,7 +2671,7 @@ function AgentSkillsTab({
                   <section className="border-y border-border">
                     <div className="border-b border-border bg-muted/40 px-3 py-2">
                       <span className="text-xs font-medium text-muted-foreground">
-                        Required by Paperclip
+                        Required by AgentDash
                       </span>
                     </div>
                     {requiredSkillRows.map(renderSkillRow)}
@@ -2682,7 +2682,7 @@ function AgentSkillsTab({
                   <section className="border-y border-border">
                     <div className="border-b border-border bg-muted/40 px-3 py-2">
                       <span className="text-xs font-medium text-muted-foreground">
-                        User-installed skills, not managed by Paperclip
+                        User-installed skills, not managed by AgentDash
                       </span>
                     </div>
                     {unmanagedSkillRows.map(renderSkillRow)}

@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
-import type { Db } from "@paperclipai/db";
+import { z } from "zod";
+import type { Db } from "@agentdash/db";
 import {
   addIssueCommentSchema,
   createIssueAttachmentMetadataSchema,
@@ -13,12 +14,13 @@ import {
   updateIssueWorkProductSchema,
   upsertIssueDocumentSchema,
   updateIssueSchema,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
   agentService,
+  approvalService,
   executionWorkspaceService,
   goalService,
   heartbeatService,
@@ -38,6 +40,10 @@ import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
+// AgentDash: plan approval schema and routes
+const requestIssuePlanApprovalSchema = z.object({
+  decisionNote: z.string().nullable().optional(),
+});
 
 export function issueRoutes(db: Db, storage: StorageService) {
   const router = Router();
@@ -45,6 +51,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
   const access = accessService(db);
   const heartbeat = heartbeatService(db);
   const agentsSvc = agentService(db);
+  const approvalsSvc = approvalService(db);
   const projectsSvc = projectService(db);
   const goalsSvc = goalService(db);
   const issueApprovalsSvc = issueApprovalService(db);
@@ -88,6 +95,22 @@ export function issueRoutes(db: Db, storage: StorageService) {
     if (actorAgent.role === "ceo" || Boolean(actorAgent.permissions?.canCreateAgents)) return true;
     res.status(403).json({ error: "Missing permission to link approvals" });
     return false;
+  }
+
+  // AgentDash: plan approval authorization
+  async function assertCanRequestPlanApproval(
+    req: Request,
+    res: Response,
+    issue: { companyId: string; assigneeAgentId: string | null },
+  ) {
+    assertCompanyAccess(req, issue.companyId);
+    if (req.actor.type === "board") return true;
+    if (!req.actor.agentId) {
+      res.status(403).json({ error: "Agent authentication required" });
+      return false;
+    }
+    if (req.actor.agentId === issue.assigneeAgentId) return true;
+    return assertCanManageIssueApprovalLinks(req, res, issue.companyId);
   }
 
   function canCreateAgentsLegacy(agent: { permissions: Record<string, unknown> | null | undefined; role: string }) {
@@ -373,6 +396,147 @@ export function issueRoutes(db: Db, storage: StorageService) {
       workProducts,
     });
   });
+
+  // AgentDash: plan document and approval routes
+  router.get("/issues/:id/plan", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const [documentPayload, linkedApprovals] = await Promise.all([
+      documentsSvc.getIssueDocumentPayload(issue),
+      issueApprovalsSvc.listApprovalsForIssue(issue.id),
+    ]);
+    const latestPlanApproval = linkedApprovals.find((approval) => approval.type === "approve_issue_plan") ?? null;
+    res.json({
+      issueId: issue.id,
+      document: documentPayload.planDocument,
+      legacyDocument: documentPayload.legacyPlanDocument,
+      approval: latestPlanApproval,
+      approvalHistory: linkedApprovals.filter((approval) => approval.type === "approve_issue_plan"),
+    });
+  });
+
+  router.put("/issues/:id/plan", validate(upsertIssueDocumentSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+
+    const actor = getActorInfo(req);
+    const result = await documentsSvc.upsertIssueDocument({
+      issueId: issue.id,
+      key: "plan",
+      title: null,
+      format: req.body.format,
+      body: req.body.body,
+      changeSummary: req.body.changeSummary,
+      baseRevisionId: req.body.baseRevisionId,
+      createdByAgentId: actor.agentId,
+      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+    });
+
+    await logActivity(db, {
+      companyId: issue.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: result.created ? "issue.plan_created" : "issue.plan_updated",
+      entityType: "issue",
+      entityId: issue.id,
+      details: {
+        revisionId: result.document.latestRevisionId,
+        revisionNumber: result.document.latestRevisionNumber,
+      },
+    });
+
+    res.json(result.document);
+  });
+
+  router.post(
+    "/issues/:id/plan/request-approval",
+    validate(requestIssuePlanApprovalSchema),
+    async (req, res) => {
+      const id = req.params.id as string;
+      const issue = await svc.getById(id);
+      if (!issue) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      if (!(await assertCanRequestPlanApproval(req, res, issue))) {
+        return;
+      }
+
+      const [planDocument, documentPayload, linkedApprovals] = await Promise.all([
+        documentsSvc.getIssueDocumentByKey(issue.id, "plan"),
+        documentsSvc.getIssueDocumentPayload(issue),
+        issueApprovalsSvc.listApprovalsForIssue(issue.id),
+      ]);
+      if (!planDocument && !documentPayload.legacyPlanDocument) {
+        res.status(409).json({ error: "Plan document required before requesting approval" });
+        return;
+      }
+      const existingPending = linkedApprovals.find(
+        (approval) => approval.type === "approve_issue_plan" && approval.status === "pending",
+      );
+      if (existingPending) {
+        res.status(409).json({ error: "Plan approval already pending", approvalId: existingPending.id });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      const approval = await approvalsSvc.create(issue.companyId, {
+        type: "approve_issue_plan",
+        requestedByAgentId: actor.actorType === "agent" ? actor.actorId : null,
+        requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
+        status: "pending",
+        payload: {
+          issueId: issue.id,
+          issueIdentifier: issue.identifier,
+          planDocumentId: planDocument?.id ?? null,
+          latestRevisionId: planDocument?.latestRevisionId ?? null,
+          latestRevisionNumber: planDocument?.latestRevisionNumber ?? null,
+        },
+        decisionNote: null,
+        decidedByUserId: null,
+        decidedAt: null,
+        updatedAt: new Date(),
+      });
+      await issueApprovalsSvc.link(issue.id, approval.id, {
+        agentId: actor.agentId,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+      });
+      if (issue.status !== "in_review") {
+        await svc.update(issue.id, { status: "in_review" });
+      }
+
+      await logActivity(db, {
+        companyId: issue.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.plan_approval_requested",
+        entityType: "issue",
+        entityId: issue.id,
+        details: {
+          approvalId: approval.id,
+          latestRevisionId: planDocument?.latestRevisionId ?? null,
+          latestRevisionNumber: planDocument?.latestRevisionNumber ?? null,
+          decisionNote: req.body.decisionNote ?? null,
+        },
+      });
+
+      res.status(201).json(approval);
+    },
+  );
 
   router.get("/issues/:id/heartbeat-context", async (req, res) => {
     const id = req.params.id as string;

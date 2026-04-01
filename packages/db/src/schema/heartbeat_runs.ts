@@ -2,6 +2,9 @@ import { type AnyPgColumn, pgTable, uuid, text, timestamp, jsonb, index, integer
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { agentWakeupRequests } from "./agent_wakeup_requests.js";
+import { issues } from "./issues.js";
+import { companySkills } from "./company_skills.js";
+import { skillVersions } from "./skill_versions.js";
 
 export const heartbeatRuns = pgTable(
   "heartbeat_runs",
@@ -16,6 +19,7 @@ export const heartbeatRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     error: text("error"),
     wakeupRequestId: uuid("wakeup_request_id").references(() => agentWakeupRequests.id),
+    issueId: uuid("issue_id").references((): AnyPgColumn => issues.id, { onDelete: "set null" }),
     exitCode: integer("exit_code"),
     signal: text("signal"),
     usageJson: jsonb("usage_json").$type<Record<string, unknown>>(),
@@ -34,6 +38,21 @@ export const heartbeatRuns = pgTable(
     processPid: integer("process_pid"),
     processStartedAt: timestamp("process_started_at", { withTimezone: true }),
     retryOfRunId: uuid("retry_of_run_id").references((): AnyPgColumn => heartbeatRuns.id, {
+      onDelete: "set null",
+    }),
+    parentRunId: uuid("parent_run_id").references((): AnyPgColumn => heartbeatRuns.id, {
+      onDelete: "set null",
+    }),
+    delegationKind: text("delegation_kind"),
+    delegationLabel: text("delegation_label"),
+    requestedByAgentId: uuid("requested_by_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+    requestedByUserId: text("requested_by_user_id"),
+    requestedSkillId: uuid("requested_skill_id").references((): AnyPgColumn => companySkills.id, {
+      onDelete: "set null",
+    }),
+    requestedSkillVersionId: uuid("requested_skill_version_id").references((): AnyPgColumn => skillVersions.id, {
       onDelete: "set null",
     }),
     processLossRetryCount: integer("process_loss_retry_count").notNull().default(0),

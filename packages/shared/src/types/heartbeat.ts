@@ -18,6 +18,7 @@ export interface HeartbeatRun {
   finishedAt: Date | null;
   error: string | null;
   wakeupRequestId: string | null;
+  issueId: string | null;
   exitCode: number | null;
   signal: string | null;
   usageJson: Record<string, unknown> | null;
@@ -36,6 +37,13 @@ export interface HeartbeatRun {
   processPid: number | null;
   processStartedAt: Date | null;
   retryOfRunId: string | null;
+  parentRunId: string | null;
+  delegationKind: string | null;
+  delegationLabel: string | null;
+  requestedByAgentId: string | null;
+  requestedByUserId: string | null;
+  requestedSkillId: string | null;
+  requestedSkillVersionId: string | null;
   processLossRetryCount: number;
   contextSnapshot: Record<string, unknown> | null;
   createdAt: Date;

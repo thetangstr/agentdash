@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, sql } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { skillUsageEvents, companySkills, issues, agents } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
+import { skillUsageEvents, companySkills, issues, agents } from "@agentdash/db";
 
 export function skillAnalyticsService(db: Db) {
   return {

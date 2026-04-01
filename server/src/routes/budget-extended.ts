@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import { budgetForecastService } from "../services/budget-forecasts.js";
 import { capacityPlanningService } from "../services/capacity-planning.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";

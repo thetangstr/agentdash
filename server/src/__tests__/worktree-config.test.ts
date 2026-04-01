@@ -96,7 +96,7 @@ describe("worktree config repair", () => {
     await fs.writeFile(
       envPath,
       [
-        "# Paperclip environment variables",
+        "# AgentDash environment variables",
         "PAPERCLIP_IN_WORKTREE=true",
         "PAPERCLIP_WORKTREE_NAME=PAP-884-ai-commits-component",
         "PAPERCLIP_AGENT_JWT_SECRET=shared-secret",
@@ -155,7 +155,7 @@ describe("worktree config repair", () => {
     await fs.writeFile(
       envPath,
       [
-        "# Paperclip environment variables",
+        "# AgentDash environment variables",
         "PAPERCLIP_IN_WORKTREE=true",
         "PAPERCLIP_WORKTREE_NAME=PAP-880-thumbs-capture-for-evals-feature",
         "",
@@ -277,7 +277,7 @@ describe("worktree config repair", () => {
     await fs.writeFile(
       envPath,
       [
-        "# Paperclip environment variables",
+        "# AgentDash environment variables",
         "PAPERCLIP_IN_WORKTREE=true",
         "PAPERCLIP_WORKTREE_NAME=PAP-884-ai-commits-component",
         "",

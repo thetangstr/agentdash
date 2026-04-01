@@ -22,7 +22,7 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
@@ -757,7 +757,7 @@ function isMainModule(metaUrl: string): boolean {
 
 if (isMainModule(import.meta.url)) {
   void startServer().catch((err) => {
-    logger.error({ err }, "Paperclip server failed to start");
+    logger.error({ err }, "AgentDash server failed to start");
     process.exit(1);
   });
 }

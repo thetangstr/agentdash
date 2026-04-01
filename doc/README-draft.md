@@ -24,7 +24,7 @@ It looks like a task manager but has specialized skills and agent coordination
 
 **It's high taste, and feels good to use**
 
-# Paperclip is right for you if:
+# AgentDash is right for you if:
 
 - You want to build autonomous companies
 - You want to coordinate many different types agents (OpenClaw, Codex, Claude, Cursor, etc.) to collaborate towards a common goal

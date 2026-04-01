@@ -6,7 +6,7 @@ import type {
   CompanyPortabilityPreviewResult,
   CompanyPortabilitySource,
   CompanyPortabilityAdapterOverride,
-} from "@paperclipai/shared";
+} from "@agentdash/shared";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
@@ -33,7 +33,7 @@ import {
 import { Field, adapterLabels } from "../components/agent-config-primitives";
 import { defaultCreateValues } from "../components/agent-config-defaults";
 import { getUIAdapter, listUIAdapters } from "../adapters";
-import type { CreateConfigValues } from "@paperclipai/adapter-utils";
+import type { CreateConfigValues } from "@agentdash/adapter-utils";
 import {
   type FileTreeNode,
   type FrontmatterData,

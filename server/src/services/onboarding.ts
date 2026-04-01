@@ -1,12 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   onboardingSessions,
   onboardingSources,
   companyContext,
   agentTemplates,
   agents,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound } from "../errors.js";
 
 export function onboardingService(db: Db) {

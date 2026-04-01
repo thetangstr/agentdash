@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import { taskDependencyService } from "../services/task-dependencies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 

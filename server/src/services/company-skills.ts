@@ -3,15 +3,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, asc, eq } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { companySkills } from "@paperclipai/db";
-import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
-import type { PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
+import type { Db } from "@agentdash/db";
+import { companySkills } from "@agentdash/db";
+import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference } from "@agentdash/adapter-utils/server-utils";
+import type { PaperclipSkillEntry } from "@agentdash/adapter-utils/server-utils";
 import type {
   CompanySkill,
   CompanySkillCreateRequest,
   CompanySkillCompatibility,
   CompanySkillDetail,
+  CompanySkillExecutionContext,
   CompanySkillFileDetail,
   CompanySkillFileInventoryEntry,
   CompanySkillImportResult,
@@ -25,8 +26,8 @@ import type {
   CompanySkillTrustLevel,
   CompanySkillUpdateStatus,
   CompanySkillUsageAgent,
-} from "@paperclipai/shared";
-import { normalizeAgentUrlKey } from "@paperclipai/shared";
+} from "@agentdash/shared";
+import { normalizeAgentUrlKey } from "@agentdash/shared";
 import { findServerAdapter } from "../adapters/index.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { notFound, unprocessable } from "../errors.js";
@@ -42,6 +43,14 @@ type ImportedSkill = {
   name: string;
   description: string | null;
   markdown: string;
+  whenToUse: string | null;
+  allowedTools: string[];
+  activationPaths: string[];
+  executionContext: CompanySkillExecutionContext;
+  targetAgentType: string | null;
+  effort: string | null;
+  userInvocable: boolean;
+  hooks: Record<string, unknown> | null;
   packageDir?: string | null;
   sourceType: CompanySkillSourceType;
   sourceLocator: string | null;
@@ -97,6 +106,7 @@ export type ProjectSkillScanTarget = {
 
 type RuntimeSkillEntryOptions = {
   materializeMissing?: boolean;
+  skillKeys?: string[] | null;
 };
 
 const skillInventoryRefreshPromises = new Map<string, Promise<void>>();
@@ -152,6 +162,57 @@ function asString(value: unknown): string | null {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// AgentDash: skill semantic field derivation helpers
+function normalizeStringArray(value: unknown): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]/g)
+      : [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawEntry of rawValues) {
+    if (typeof rawEntry !== "string") continue;
+    const normalized = rawEntry.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function normalizeSkillExecutionContext(value: unknown): CompanySkillExecutionContext {
+  return value === "delegated_run" ? "delegated_run" : "inline";
+}
+
+function normalizeOptionalBoolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return fallback;
+}
+
+export function deriveSkillSemanticFields(frontmatter: Record<string, unknown>) {
+  return {
+    whenToUse: asString(frontmatter.whenToUse ?? frontmatter.when_to_use),
+    allowedTools: normalizeStringArray(frontmatter.allowedTools ?? frontmatter.allowed_tools),
+    activationPaths: normalizeStringArray(frontmatter.activationPaths ?? frontmatter.activation_paths),
+    executionContext: normalizeSkillExecutionContext(
+      frontmatter.executionContext ?? frontmatter.execution_context,
+    ),
+    targetAgentType: asString(frontmatter.targetAgentType ?? frontmatter.target_agent_type),
+    effort: asString(frontmatter.effort),
+    userInvocable: normalizeOptionalBoolean(
+      frontmatter.userInvocable ?? frontmatter.user_invocable,
+      true,
+    ),
+    hooks: isPlainRecord(frontmatter.hooks) ? frontmatter.hooks : null,
+  };
 }
 
 function normalizePortablePath(input: string) {
@@ -738,6 +799,7 @@ function readInlineSkillImports(companyId: string, files: Record<string, string>
     const markdown = normalizedFiles[skillPath]!;
     const parsed = parseFrontmatterMarkdown(markdown);
     const slug = deriveImportedSkillSlug(parsed.frontmatter, slugFallback);
+    const semantics = deriveSkillSemanticFields(parsed.frontmatter);
     const source = deriveImportedSkillSource(parsed.frontmatter, slug);
     const inventory = Object.keys(normalizedFiles)
       .filter((entry) => entry === skillPath || (skillDir ? entry.startsWith(`${skillDir}/`) : false))
@@ -756,6 +818,7 @@ function readInlineSkillImports(companyId: string, files: Record<string, string>
       name: asString(parsed.frontmatter.name) ?? slug,
       description: asString(parsed.frontmatter.description),
       markdown,
+      ...semantics,
       packageDir: skillDir,
       sourceType: source.sourceType,
       sourceLocator: source.sourceLocator,
@@ -842,6 +905,7 @@ export async function readLocalSkillImportFromDirectory(
   const slug = deriveImportedSkillSlug(parsed.frontmatter, path.basename(resolvedSkillDir));
   const parsedMetadata = isPlainRecord(parsed.frontmatter.metadata) ? parsed.frontmatter.metadata : null;
   const skillKey = readCanonicalSkillKey(parsed.frontmatter, parsedMetadata);
+  const semantics = deriveSkillSemanticFields(parsed.frontmatter);
   const metadata = {
     ...(skillKey ? { skillKey } : {}),
     ...(parsedMetadata ?? {}),
@@ -861,6 +925,7 @@ export async function readLocalSkillImportFromDirectory(
     name: asString(parsed.frontmatter.name) ?? slug,
     description: asString(parsed.frontmatter.description),
     markdown,
+    ...semantics,
     packageDir: resolvedSkillDir,
     sourceType: "local_path",
     sourceLocator: resolvedSkillDir,
@@ -914,6 +979,7 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
     const slug = deriveImportedSkillSlug(parsed.frontmatter, path.basename(path.dirname(resolvedPath)));
     const parsedMetadata = isPlainRecord(parsed.frontmatter.metadata) ? parsed.frontmatter.metadata : null;
     const skillKey = readCanonicalSkillKey(parsed.frontmatter, parsedMetadata);
+    const semantics = deriveSkillSemanticFields(parsed.frontmatter);
     const metadata = {
       ...(skillKey ? { skillKey } : {}),
       ...(parsedMetadata ?? {}),
@@ -933,6 +999,7 @@ async function readLocalSkillImports(companyId: string, sourcePath: string): Pro
       name: asString(parsed.frontmatter.name) ?? slug,
       description: asString(parsed.frontmatter.description),
       markdown,
+      ...semantics,
       packageDir: path.dirname(resolvedPath),
       sourceType: "local_path",
       sourceLocator: path.dirname(resolvedPath),
@@ -1017,6 +1084,7 @@ async function readUrlSkillImports(
       const parsedMarkdown = parseFrontmatterMarkdown(markdown);
       const skillDir = path.posix.dirname(relativeSkillPath);
       const slug = deriveImportedSkillSlug(parsedMarkdown.frontmatter, path.posix.basename(skillDir));
+      const semantics = deriveSkillSemanticFields(parsedMarkdown.frontmatter);
       const skillKey = readCanonicalSkillKey(
         parsedMarkdown.frontmatter,
         isPlainRecord(parsedMarkdown.frontmatter.metadata) ? parsedMarkdown.frontmatter.metadata : null,
@@ -1054,6 +1122,7 @@ async function readUrlSkillImports(
         name: asString(parsedMarkdown.frontmatter.name) ?? slug,
         description: asString(parsedMarkdown.frontmatter.description),
         markdown,
+        ...semantics,
         sourceType: "github",
         sourceLocator: sourceUrl,
         sourceRef: ref,
@@ -1079,6 +1148,7 @@ async function readUrlSkillImports(
     const urlObj = new URL(url);
     const fileName = path.posix.basename(urlObj.pathname);
     const slug = deriveImportedSkillSlug(parsedMarkdown.frontmatter, fileName.replace(/\.md$/i, ""));
+    const semantics = deriveSkillSemanticFields(parsedMarkdown.frontmatter);
     const skillKey = readCanonicalSkillKey(
       parsedMarkdown.frontmatter,
       isPlainRecord(parsedMarkdown.frontmatter.metadata) ? parsedMarkdown.frontmatter.metadata : null,
@@ -1100,6 +1170,7 @@ async function readUrlSkillImports(
         name: asString(parsedMarkdown.frontmatter.name) ?? slug,
         description: asString(parsedMarkdown.frontmatter.description),
         markdown,
+        ...semantics,
         sourceType: "url",
         sourceLocator: url,
         sourceRef: null,
@@ -1119,6 +1190,18 @@ function toCompanySkill(row: CompanySkillRow): CompanySkill {
   return {
     ...row,
     description: row.description ?? null,
+    whenToUse: row.whenToUse ?? null,
+    allowedTools: Array.isArray(row.allowedTools)
+      ? row.allowedTools.flatMap((entry) => typeof entry === "string" ? [entry] : [])
+      : [],
+    activationPaths: Array.isArray(row.activationPaths)
+      ? row.activationPaths.flatMap((entry) => typeof entry === "string" ? [entry] : [])
+      : [],
+    executionContext: (row.executionContext === "delegated_run" ? row.executionContext : "inline") as CompanySkillExecutionContext,
+    targetAgentType: row.targetAgentType ?? null,
+    effort: row.effort ?? null,
+    userInvocable: row.userInvocable ?? true,
+    hooks: isPlainRecord(row.hooks) ? row.hooks : null,
     sourceType: row.sourceType as CompanySkillSourceType,
     sourceLocator: row.sourceLocator ?? null,
     sourceRef: row.sourceRef ?? null,
@@ -1329,7 +1412,7 @@ function deriveSkillSourceInfo(skill: CompanySkill): {
     return {
       editable: false,
       editableReason: "Bundled Paperclip skills are read-only.",
-      sourceLabel: "Paperclip bundled",
+      sourceLabel: "AgentDash bundled",
       sourceBadge: "paperclip",
       sourcePath: null,
     };
@@ -1378,7 +1461,7 @@ function deriveSkillSourceInfo(skill: CompanySkill): {
       return {
         editable: true,
         editableReason: null,
-        sourceLabel: "Paperclip workspace",
+        sourceLabel: "AgentDash workspace",
         sourceBadge: "paperclip",
         sourcePath: managedRoot,
       };
@@ -1731,12 +1814,21 @@ export function companySkillService(db: Db) {
     await fs.writeFile(skillFilePath, markdown, "utf8");
 
     const parsed = parseFrontmatterMarkdown(markdown);
+    const semantics = deriveSkillSemanticFields(parsed.frontmatter);
     const imported = await upsertImportedSkills(companyId, [{
       key: `company/${companyId}/${slug}`,
       slug,
       name: asString(parsed.frontmatter.name) ?? input.name,
       description: asString(parsed.frontmatter.description) ?? input.description?.trim() ?? null,
       markdown,
+      whenToUse: input.whenToUse ?? semantics.whenToUse,
+      allowedTools: input.allowedTools ?? semantics.allowedTools,
+      activationPaths: input.activationPaths ?? semantics.activationPaths,
+      executionContext: input.executionContext ?? semantics.executionContext,
+      targetAgentType: input.targetAgentType ?? semantics.targetAgentType,
+      effort: input.effort ?? semantics.effort,
+      userInvocable: input.userInvocable ?? semantics.userInvocable,
+      hooks: input.hooks ?? semantics.hooks,
       sourceType: "local_path",
       sourceLocator: skillDir,
       sourceRef: null,
@@ -1768,12 +1860,21 @@ export function companySkillService(db: Db) {
 
     if (normalizedPath === "SKILL.md") {
       const parsed = parseFrontmatterMarkdown(content);
+      const semantics = deriveSkillSemanticFields(parsed.frontmatter);
       await db
         .update(companySkills)
         .set({
           name: asString(parsed.frontmatter.name) ?? skill.name,
           description: asString(parsed.frontmatter.description) ?? skill.description,
           markdown: content,
+          whenToUse: semantics.whenToUse,
+          allowedTools: semantics.allowedTools,
+          activationPaths: semantics.activationPaths,
+          executionContext: semantics.executionContext,
+          targetAgentType: semantics.targetAgentType,
+          effort: semantics.effort,
+          userInvocable: semantics.userInvocable,
+          hooks: semantics.hooks,
           updatedAt: new Date(),
         })
         .where(eq(companySkills.id, skill.id));
@@ -2042,9 +2143,11 @@ export function companySkillService(db: Db) {
     options: RuntimeSkillEntryOptions = {},
   ): Promise<PaperclipSkillEntry[]> {
     const skills = await listFull(companyId);
+    const selectedSkillKeys = options.skillKeys?.length ? new Set(options.skillKeys) : null;
 
     const out: PaperclipSkillEntry[] = [];
     for (const skill of skills) {
+      if (selectedSkillKeys && !selectedSkillKeys.has(skill.key)) continue;
       const sourceKind = asString(getSkillMeta(skill).sourceKind);
       let source = normalizeSkillDirectory(skill);
       if (!source) {
@@ -2222,6 +2325,14 @@ export function companySkillService(db: Db) {
         name: skill.name,
         description: skill.description,
         markdown: skill.markdown,
+        whenToUse: skill.whenToUse,
+        allowedTools: skill.allowedTools,
+        activationPaths: skill.activationPaths,
+        executionContext: skill.executionContext,
+        targetAgentType: skill.targetAgentType,
+        effort: skill.effort,
+        userInvocable: skill.userInvocable,
+        hooks: skill.hooks,
         sourceType: skill.sourceType,
         sourceLocator: skill.sourceLocator,
         sourceRef: skill.sourceRef,

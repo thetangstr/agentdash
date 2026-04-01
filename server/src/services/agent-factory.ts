@@ -1,5 +1,5 @@
 import { and, eq, isNull } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   agentTemplates,
   spawnRequests,
@@ -7,7 +7,7 @@ import {
   agentKeyResults,
   approvals,
   agents,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
 type TemplateInsert = typeof agentTemplates.$inferInsert;

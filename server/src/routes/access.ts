@@ -10,13 +10,13 @@ import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import type { Request } from "express";
 import { and, eq, isNull, desc } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   agentApiKeys,
   authUsers,
   invites,
   joinRequests
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import {
   acceptInviteSchema,
   createCliAuthChallengeSchema,
@@ -28,8 +28,8 @@ import {
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS
-} from "@paperclipai/shared";
-import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+} from "@agentdash/shared";
+import type { DeploymentExposure, DeploymentMode } from "@agentdash/shared";
 import {
   forbidden,
   conflict,
@@ -911,7 +911,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_api_loopback",
       level: "warn",
       message:
-        "Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your Paperclip host.",
+        "Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your AgentDash host.",
       hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain)."
     });
   }
@@ -924,7 +924,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
     diagnostics.push({
       code: "openclaw_onboarding_private_loopback_bind",
       level: "warn",
-      message: "Paperclip is bound to loopback in authenticated/private mode.",
+      message: "AgentDash is bound to loopback in authenticated/private mode.",
       hint: "Run with a reachable bind host or use pnpm dev --tailscale-auth for private-network onboarding."
     });
   }
@@ -941,7 +941,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_host_not_allowed",
       level: "warn",
       message: `Onboarding host "${apiHost}" is not in allowed hostnames for authenticated/private mode.`,
-      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`
+      hint: `Run pnpm agentdash allowed-hostname ${apiHost}`
     });
   }
 
@@ -1061,8 +1061,8 @@ function buildInviteOnboardingManifest(
         guidance:
           opts.deploymentMode === "authenticated" &&
           opts.deploymentExposure === "private"
-            ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm paperclipai allowed-hostname <host>`."
-            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls."
+            ? "If OpenClaw runs on another machine, ensure the AgentDash hostname is reachable and allowed via `pnpm agentdash allowed-hostname <host>`."
+            : "Ensure OpenClaw can reach this AgentDash API base URL for invite, claim, and skill bootstrap calls."
       },
       textInstructions: {
         path: onboardingTextPath,
@@ -1123,7 +1123,7 @@ export function buildInviteOnboardingTextDocument(
   };
 
   appendBlock(`
-    # Paperclip OpenClaw Gateway Onboarding
+    # AgentDash OpenClaw Gateway Onboarding
 
     This document is meant to be readable by both humans and agents.
 
@@ -1277,7 +1277,7 @@ export function buildInviteOnboardingTextDocument(
     : [];
 
   if (connectionCandidates.length > 0) {
-    lines.push("## Suggested Paperclip base URLs to try");
+    lines.push("## Suggested AgentDash base URLs to try");
     for (const candidate of connectionCandidates) {
       lines.push(`- ${candidate}`);
     }
@@ -1289,8 +1289,8 @@ export function buildInviteOnboardingTextDocument(
 
       If none are reachable: ask your human operator for a reachable hostname/address and help them update network configuration.
       For authenticated/private mode, they may need:
-      - pnpm paperclipai allowed-hostname <host>
-      - then restart Paperclip and retry onboarding.
+      - pnpm agentdash allowed-hostname <host>
+      - then restart AgentDash and retry onboarding.
     `);
   }
 

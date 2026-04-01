@@ -14,7 +14,7 @@ import {
   routineRuns,
   routines,
   routineTriggers,
-} from "@paperclipai/db";
+} from "@agentdash/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -91,7 +91,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
 
     await db.insert(companies).values({
       id: companyId,
-      name: "Paperclip",
+      name: "AgentDash",
       issuePrefix,
       requireBoardApprovalForNewAgents: false,
     });

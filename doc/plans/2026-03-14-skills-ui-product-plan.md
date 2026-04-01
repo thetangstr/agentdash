@@ -19,7 +19,7 @@ This plan assumes:
 
 - `SKILL.md` remains Agent Skills compatible
 - `skills.sh` compatibility is a V1 requirement
-- Paperclip company import/export can include skills as package content
+- AgentDash company import/export can include skills as package content
 - adapters may support persistent skill sync, ephemeral skill mounting, read-only skill discovery, or no skill integration at all
 
 ## 2. Current State

@@ -6,6 +6,8 @@ export type CompanySkillCompatibility = "compatible" | "unknown" | "invalid";
 
 export type CompanySkillSourceBadge = "paperclip" | "github" | "local" | "url" | "catalog" | "skills_sh";
 
+export type CompanySkillExecutionContext = "inline" | "delegated_run";
+
 export interface CompanySkillFileInventoryEntry {
   path: string;
   kind: "skill" | "markdown" | "reference" | "script" | "asset" | "other";
@@ -19,6 +21,14 @@ export interface CompanySkill {
   name: string;
   description: string | null;
   markdown: string;
+  whenToUse: string | null;
+  allowedTools: string[];
+  activationPaths: string[];
+  executionContext: CompanySkillExecutionContext;
+  targetAgentType: string | null;
+  effort: string | null;
+  userInvocable: boolean;
+  hooks: Record<string, unknown> | null;
   sourceType: CompanySkillSourceType;
   sourceLocator: string | null;
   sourceRef: string | null;
@@ -134,6 +144,14 @@ export interface CompanySkillCreateRequest {
   slug?: string | null;
   description?: string | null;
   markdown?: string | null;
+  whenToUse?: string | null;
+  allowedTools?: string[];
+  activationPaths?: string[];
+  executionContext?: CompanySkillExecutionContext;
+  targetAgentType?: string | null;
+  effort?: string | null;
+  userInvocable?: boolean;
+  hooks?: Record<string, unknown> | null;
 }
 
 export interface CompanySkillFileDetail {

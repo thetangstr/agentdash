@@ -9,7 +9,7 @@ The motivating use case is strong:
 - when an issue starts, a local coding agent may want its own isolated checkout
 - the agent may need a dedicated branch and a predictable path to push later
 - the agent may need to start one or more long-lived workspace runtime services, discover reachable ports or URLs, and report them back into the issue
-- the workflow should reuse the same Paperclip instance and embedded database instead of creating a blank environment
+- the workflow should reuse the same AgentDash instance and embedded database instead of creating a blank environment
 - local agent auth should remain low-friction
 
 At the same time, we do not want to hard-code "every agent uses git worktrees" into Paperclip:
@@ -974,7 +974,7 @@ Keep issue-level overrides possible through the existing `assigneeAdapterOverrid
 
 ## Responsibilities by Layer
 
-### Paperclip Core
+### AgentDash Core
 
 Paperclip core should:
 
@@ -1177,7 +1177,7 @@ Acceptance:
 
 - runtime service startup remains opt-in
 - failures produce actionable run logs and issue comments
-- same embedded DB / Paperclip instance can be reused through env/config injection when appropriate
+- same embedded DB / AgentDash instance can be reused through env/config injection when appropriate
 - remote service realizations are represented without pretending to be local processes
 
 ## Phase 5: Runtime Service Reuse, Tracking, and Shutdown

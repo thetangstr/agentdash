@@ -4,6 +4,7 @@ export const companySkillSourceTypeSchema = z.enum(["local_path", "github", "url
 export const companySkillTrustLevelSchema = z.enum(["markdown_only", "assets", "scripts_executables"]);
 export const companySkillCompatibilitySchema = z.enum(["compatible", "unknown", "invalid"]);
 export const companySkillSourceBadgeSchema = z.enum(["paperclip", "github", "local", "url", "catalog", "skills_sh"]);
+export const companySkillExecutionContextSchema = z.enum(["inline", "delegated_run"]);
 
 export const companySkillFileInventoryEntrySchema = z.object({
   path: z.string().min(1),
@@ -18,6 +19,14 @@ export const companySkillSchema = z.object({
   name: z.string().min(1),
   description: z.string().nullable(),
   markdown: z.string(),
+  whenToUse: z.string().nullable(),
+  allowedTools: z.array(z.string().min(1)).default([]),
+  activationPaths: z.array(z.string().min(1)).default([]),
+  executionContext: companySkillExecutionContextSchema.default("inline"),
+  targetAgentType: z.string().nullable(),
+  effort: z.string().nullable(),
+  userInvocable: z.boolean().default(true),
+  hooks: z.record(z.unknown()).nullable(),
   sourceType: companySkillSourceTypeSchema,
   sourceLocator: z.string().nullable(),
   sourceRef: z.string().nullable(),
@@ -112,6 +121,14 @@ export const companySkillCreateSchema = z.object({
   slug: z.string().min(1).nullable().optional(),
   description: z.string().nullable().optional(),
   markdown: z.string().nullable().optional(),
+  whenToUse: z.string().nullable().optional(),
+  allowedTools: z.array(z.string().min(1)).optional(),
+  activationPaths: z.array(z.string().min(1)).optional(),
+  executionContext: companySkillExecutionContextSchema.optional(),
+  targetAgentType: z.string().nullable().optional(),
+  effort: z.string().nullable().optional(),
+  userInvocable: z.boolean().optional(),
+  hooks: z.record(z.unknown()).nullable().optional(),
 });
 
 export const companySkillFileDetailSchema = z.object({

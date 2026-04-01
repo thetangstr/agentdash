@@ -15,7 +15,7 @@ import { ActivityRow } from "../components/ActivityRow";
 import { cn, formatCents } from "../lib/utils";
 import { Bot, LayoutDashboard, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
 import { PageSkeleton } from "../components/PageSkeleton";
-import type { Agent } from "@paperclipai/shared";
+import type { Agent } from "@agentdash/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
 
 function getGreeting(): string {

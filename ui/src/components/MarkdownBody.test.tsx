@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildAgentMentionHref, buildProjectMentionHref } from "@paperclipai/shared";
+import { buildAgentMentionHref, buildProjectMentionHref } from "@agentdash/shared";
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
 
@@ -34,7 +34,7 @@ describe("MarkdownBody", () => {
     const html = renderToStaticMarkup(
       <ThemeProvider>
         <MarkdownBody>
-          {`[@CodexCoder](${buildAgentMentionHref("agent-123", "code")}) [@Paperclip App](${buildProjectMentionHref("project-456", "#336699")})`}
+          {`[@CodexCoder](${buildAgentMentionHref("agent-123", "code")}) [@AgentDash App](${buildProjectMentionHref("project-456", "#336699")})`}
         </MarkdownBody>
       </ThemeProvider>,
     );

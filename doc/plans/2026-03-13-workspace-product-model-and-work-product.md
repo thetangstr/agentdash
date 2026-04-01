@@ -216,7 +216,7 @@ from:
 - "what temporary execution environment did this issue run in?"
 
 That keeps the model simple for solo users while still supporting advanced automation.
-It also lets cloud-hosted Paperclip deployments point at codebases and remotes without pretending the Paperclip host has direct filesystem access.
+It also lets cloud-hosted Paperclip deployments point at codebases and remotes without pretending the AgentDash host has direct filesystem access.
 
 ### Proposed fields
 
@@ -965,7 +965,7 @@ Avoid migration copy that implies users were previously using the product "wrong
 
 ## Cloud Deployment Requirements
 
-## 1. Paperclip host and execution host must be decoupled
+## 1. AgentDash host and execution host must be decoupled
 
 Paperclip may run:
 
@@ -986,7 +986,7 @@ A cloud agent should be able to:
 - emit preview URLs
 - register artifacts
 
-without the Paperclip host itself running local git or local preview processes.
+without the AgentDash host itself running local git or local preview processes.
 
 ## 3. Local-only assumptions must be optional
 

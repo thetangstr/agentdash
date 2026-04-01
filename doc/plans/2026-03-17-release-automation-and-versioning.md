@@ -85,7 +85,7 @@ That tradeoff is probably acceptable for Paperclip, but it should be explicit:
 - release notes become the compatibility signal
 - downstream users should prefer exact pins or deliberate upgrades
 
-This is especially relevant for public library packages like `@paperclipai/shared`, `@paperclipai/db`, and the adapter packages.
+This is especially relevant for public library packages like `@agentdash/shared`, `@agentdash/db`, and the adapter packages.
 
 ### 3. Drop release branches for normal publishing
 
@@ -109,8 +109,8 @@ This is the most important mechanical constraint.
 
 npm can move dist-tags, but it does not let you rename an already-published version. That means:
 
-- you can move `latest` to `paperclipai@1.2.3`
-- you cannot turn `paperclipai@2026.317.0-canary.8` into `paperclipai@2026.317.0`
+- you can move `latest` to `agentdash@1.2.3`
+- you cannot turn `agentdash@2026.317.0-canary.8` into `agentdash@2026.317.0`
 
 So "promote canary to stable" really means:
 

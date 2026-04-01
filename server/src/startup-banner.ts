@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolvePaperclipConfigPath, resolvePaperclipEnvPath } from "./paths.js";
-import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
+import type { DeploymentExposure, DeploymentMode } from "@agentdash/shared";
 
 import { parse as parseEnvFileContents } from "dotenv";
 
@@ -92,7 +92,7 @@ function resolveAgentJwtSecretStatus(
 
   return {
     status: "warn",
-    message: "missing (run `pnpm paperclipai onboard`)",
+    message: "missing (run `pnpm agentdash onboard`)",
   };
 }
 

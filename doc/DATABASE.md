@@ -25,7 +25,7 @@ If you need to apply pending migrations manually, run:
 pnpm db:migrate
 ```
 
-When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active Paperclip config/instance.
+When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active AgentDash config/instance.
 
 This mode is ideal for local development and one-command installs.
 
@@ -158,7 +158,7 @@ PAPERCLIP_SECRETS_STRICT_MODE=true
 You can set strict mode and provider defaults via:
 
 ```sh
-pnpm paperclipai configure --section secrets
+pnpm agentdash configure --section secrets
 ```
 
 Inline secret migration command:

@@ -1,5 +1,5 @@
 import { eq, and, inArray } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@agentdash/db";
 import {
   agents,
   companies,
@@ -8,14 +8,17 @@ import {
   agentOkrs,
   agentKeyResults,
   issueDependencies,
-  companySkills,
-} from "@paperclipai/db";
+} from "@agentdash/db";
+import type { SelectedSkillForRun } from "./skill-selection.js";
 
 interface BuildCoordinationPromptInput {
   agentId: string;
   companyId: string;
   issueId?: string;
   runId: string;
+  selectedSkills?: SelectedSkillForRun[]; // AgentDash: skill selection
+  planBody?: string | null; // AgentDash: plan document
+  planApprovalStatus?: string | null; // AgentDash: plan approval
 }
 
 interface CoordinationPromptResult {
@@ -268,6 +271,41 @@ export function promptBuilderService(db: Db) {
     return lines.join("\n");
   }
 
+  // AgentDash: plan and skills prompt sections
+  function buildPlanSection(planBody: string | null | undefined, planApprovalStatus: string | null | undefined) {
+    if (!planBody && !planApprovalStatus) return "";
+    const lines: string[] = ["## Issue Plan"];
+    if (planApprovalStatus) {
+      lines.push(`Plan approval status: ${planApprovalStatus}`);
+    }
+    if (planBody) {
+      const truncated = planBody.length > 800 ? `${planBody.slice(0, 800)}...` : planBody;
+      lines.push("");
+      lines.push(truncated);
+    }
+    return lines.join("\n");
+  }
+
+  function buildRelevantSkillsSection(selectedSkills: SelectedSkillForRun[]) {
+    if (selectedSkills.length === 0) return "";
+    const lines: string[] = ["## Relevant Skills"];
+    for (const selected of selectedSkills) {
+      const label = selected.required ? "required" : "optional";
+      lines.push(`- ${selected.skill.name} (${label})`);
+      if (selected.skill.description) {
+        lines.push(`  Description: ${selected.skill.description}`);
+      }
+      if (selected.skill.whenToUse) {
+        lines.push(`  When to use: ${selected.skill.whenToUse}`);
+      }
+      lines.push(`  Why included: ${selected.selectionReason}`);
+      if (selected.skill.allowedTools.length > 0) {
+        lines.push(`  Allowed tools: ${selected.skill.allowedTools.join(", ")}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
   function buildProtocolSection(): string {
     return [
       "## Coordination Protocol",
@@ -327,6 +365,16 @@ export function promptBuilderService(db: Db) {
         ]);
         sections.push(buildTaskSection(issue, subtasks, blockers, dependents));
       }
+    }
+
+    const planSection = buildPlanSection(input.planBody, input.planApprovalStatus);
+    if (planSection) {
+      sections.push(planSection);
+    }
+
+    const skillsSection = buildRelevantSkillsSection(input.selectedSkills ?? []);
+    if (skillsSection) {
+      sections.push(skillsSection);
     }
 
     // Always include the protocol section

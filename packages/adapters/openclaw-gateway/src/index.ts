@@ -13,7 +13,7 @@ Use when:
 
 Don't use when:
 - You only expose OpenClaw HTTP endpoints.
-- Your deployment does not permit outbound WebSocket access from the Paperclip server.
+- Your deployment does not permit outbound WebSocket access from the AgentDash server.
 
 Core fields:
 - url (string, required): OpenClaw gateway WebSocket URL (ws:// or wss://)

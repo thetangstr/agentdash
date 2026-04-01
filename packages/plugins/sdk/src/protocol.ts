@@ -2,7 +2,7 @@
  * JSON-RPC 2.0 message types and protocol helpers for the host ↔ worker IPC
  * channel.
  *
- * The Paperclip plugin runtime uses JSON-RPC 2.0 over stdio to communicate
+ * The AgentDash plugin runtime uses JSON-RPC 2.0 over stdio to communicate
  * between the host process and each plugin worker process. This module defines:
  *
  * - Core JSON-RPC 2.0 envelope types (request, response, notification, error)
@@ -29,8 +29,8 @@ import type {
   IssueDocumentSummary,
   Agent,
   Goal,
-} from "@paperclipai/shared";
-export type { PluginLauncherRenderContextSnapshot } from "@paperclipai/shared";
+} from "@agentdash/shared";
+export type { PluginLauncherRenderContextSnapshot } from "@agentdash/shared";
 
 import type {
   PluginEvent,
@@ -171,7 +171,7 @@ export type JsonRpcErrorCode =
   (typeof JSONRPC_ERROR_CODES)[keyof typeof JSONRPC_ERROR_CODES];
 
 /**
- * Paperclip plugin-specific error codes.
+ * AgentDash plugin-specific error codes.
  *
  * These live in the JSON-RPC "server error" reserved range (-32000 to -32099)
  * as specified by JSON-RPC 2.0 for implementation-defined server errors.
@@ -212,9 +212,9 @@ export interface InitializeParams {
   config: Record<string, unknown>;
   /** Instance-level metadata. */
   instanceInfo: {
-    /** UUID of this Paperclip instance. */
+    /** UUID of this AgentDash instance. */
     instanceId: string;
-    /** Semver version of the running Paperclip host. */
+    /** Semver version of the running AgentDash host. */
     hostVersion: string;
   };
   /** Host API version. */

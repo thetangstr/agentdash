@@ -1,4 +1,4 @@
-import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+import type { PaperclipPluginManifestV1 } from "@agentdash/plugin-sdk";
 import {
   DEFAULT_CONFIG,
   EXPORT_NAMES,
@@ -16,7 +16,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: PLUGIN_VERSION,
   displayName: "Kitchen Sink (Example)",
-  description: "Reference plugin that demonstrates the current Paperclip plugin API surface, UI surfaces, bridge actions, events, jobs, webhooks, tools, local workspace access, and runtime diagnostics in one place.",
+  description: "Reference plugin that demonstrates the current AgentDash plugin API surface, UI surfaces, bridge actions, events, jobs, webhooks, tools, local workspace access, and runtime diagnostics in one place.",
   author: "Paperclip",
   categories: ["ui", "automation", "workspace", "connector"],
   capabilities: [

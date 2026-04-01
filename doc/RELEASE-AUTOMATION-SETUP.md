@@ -1,8 +1,8 @@
 # Release Automation Setup
 
-This document covers the GitHub and npm setup required for the current Paperclip release model:
+This document covers the GitHub and npm setup required for the current AgentDash release model:
 
-- automatic canaries from `master`
+- automatic canaries from `agentdash-main`
 - manual stable promotion from a chosen source ref
 - npm trusted publishing via GitHub OIDC
 - protected release infrastructure in a public repository
@@ -15,7 +15,7 @@ Repo-side files that depend on this setup:
 Note:
 
 - the release workflows intentionally use `pnpm install --no-frozen-lockfile`
-- this matches the repo's current policy where `pnpm-lock.yaml` is refreshed by GitHub automation after manifest changes land on `master`
+- this matches the repo's current policy where `pnpm-lock.yaml` is refreshed by GitHub automation after manifest changes land on `agentdash-main`
 - the publish jobs then restore `pnpm-lock.yaml` before running `scripts/release.sh`, so the release script still sees a clean worktree
 
 ## 1. Merge the Repo Changes First
@@ -29,13 +29,13 @@ Required files:
 
 ## 2. Configure npm Trusted Publishing
 
-Do this for every public package that Paperclip publishes.
+Do this for every public package that AgentDash publishes.
 
 At minimum that includes:
 
-- `paperclipai`
-- `@paperclipai/server`
-- `@paperclipai/ui`
+- `agentdash`
+- `@agentdash/server`
+- `@agentdash/ui`
 - public packages under `packages/`
 
 ### 2.1. In npm, open each package settings page
@@ -44,7 +44,7 @@ For each package:
 
 1. open npm as an owner of the package
 2. go to the package settings / publishing access area
-3. add a trusted publisher for the GitHub repository `paperclipai/paperclip`
+3. add a trusted publisher for the GitHub repository `thetangstr/agentdash`
 
 ### 2.2. Add one trusted publisher entry per package
 
@@ -56,7 +56,7 @@ Configure:
 
 Repository:
 
-- `paperclipai/paperclip`
+- `thetangstr/agentdash`
 
 Environment name:
 
@@ -83,7 +83,7 @@ Only after that should you remove old token-based access.
 After trusted publishing works:
 
 1. revoke any repository or organization `NPM_TOKEN` secrets used for publish
-2. revoke any personal automation token that used to publish Paperclip
+2. revoke any personal automation token that used to publish AgentDash
 3. if npm offers a package-level setting to restrict publishing to trusted publishers, enable it
 
 Goal:
@@ -113,11 +113,11 @@ Recommended settings for `npm-canary`:
 - wait timer: none
 - deployment branches and tags:
   - selected branches only
-  - allow `master`
+  - allow `agentdash-main`
 
 Reasoning:
 
-- every push to `master` should be able to publish a canary automatically
+- every push to `agentdash-main` should be able to publish a canary automatically
 - no human approval should be required for canaries
 
 ## 6. Configure `npm-stable`
@@ -131,16 +131,16 @@ Recommended settings for `npm-stable`:
 - wait timer: optional
 - deployment branches and tags:
   - selected branches only
-  - allow `master`
+  - allow `agentdash-main`
 
 Reasoning:
 
 - stable publishes should require an explicit human approval gate
 - the workflow is manual, but the environment should still be the real control point
 
-## 7. Protect `master`
+## 7. Protect `agentdash-main`
 
-Open the branch protection settings for `master`.
+Open the branch protection settings for `agentdash-main`.
 
 Recommended rules:
 
@@ -148,7 +148,7 @@ Recommended rules:
 2. require status checks to pass before merging
 3. require review from code owners
 4. dismiss stale approvals when new commits are pushed
-5. restrict who can push directly to `master`
+5. restrict who can push directly to `agentdash-main`
 
 At minimum, make sure workflow and release script changes cannot land without review.
 
@@ -156,7 +156,7 @@ At minimum, make sure workflow and release script changes cannot land without re
 
 This repo now includes `.github/CODEOWNERS`, but GitHub only enforces it if branch protection requires code owner reviews.
 
-In branch protection for `master`, enable:
+In branch protection for `agentdash-main`, enable:
 
 - `Require review from Code Owners`
 
@@ -201,7 +201,7 @@ This keeps LLM spending intentional and avoids a high-value token sitting in Act
 
 After setup:
 
-1. merge a harmless commit to `master`
+1. merge a harmless commit to `agentdash-main`
 2. open the `Release` workflow run triggered by that push
 3. confirm it passes verification
 4. confirm publish succeeds under the `npm-canary` environment
@@ -211,7 +211,7 @@ After setup:
 Install-path check:
 
 ```bash
-npx paperclipai@canary onboard
+npx agentdash@canary onboard
 ```
 
 ## 12. Verify the Stable Workflow
@@ -272,7 +272,21 @@ Check:
 Check:
 
 1. `.github/CODEOWNERS` is on the default branch
-2. branch protection on `master` requires code owner review
+2. branch protection on `agentdash-main` requires code owner review
+
+## 15. GitHub Release Formalization
+
+The GitHub Release surface should be treated as part of the release contract, not an optional polish step.
+
+Required conventions:
+
+1. title format: `AgentDash vYYYY.MDD.P`
+2. tag format: `vYYYY.MDD.P`
+3. notes source: `releases/vYYYY.MDD.P.md`
+4. notes structure: follow [`releases/TEMPLATE.md`](../releases/TEMPLATE.md)
+5. release creation path: `scripts/create-github-release.sh`
+
+This gives the repo one canonical path for stable GitHub Releases locally and in Actions.
 3. the owner identities in the file are valid reviewers with repository access
 
 ## Related Docs

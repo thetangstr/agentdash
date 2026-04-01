@@ -17,6 +17,10 @@ release_fail() {
   exit 1
 }
 
+default_release_branch() {
+  printf '%s\n' "${RELEASE_BRANCH:-agentdash-main}"
+}
+
 git_remote_exists() {
   git -C "$REPO_ROOT" remote get-url "$1" >/dev/null 2>&1
 }
@@ -269,11 +273,13 @@ require_clean_worktree() {
   fi
 }
 
-require_on_master_branch() {
+require_on_release_branch() {
   local current_branch
+  local release_branch
   current_branch="$(git_current_branch)"
-  if [ "$current_branch" != "master" ]; then
-    release_fail "this release step must run from branch master, but current branch is ${current_branch:-<detached>}."
+  release_branch="$(default_release_branch)"
+  if [ "$current_branch" != "$release_branch" ]; then
+    release_fail "this release step must run from branch $release_branch, but current branch is ${current_branch:-<detached>}."
   fi
 }
 

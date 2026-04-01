@@ -54,6 +54,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 tag="v$version"
+title="AgentDash $tag"
 notes_file="$REPO_ROOT/releases/${tag}.md"
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -z "${PUBLISH_REMOTE:-}" ] && git_remote_exists origin; then
   PUBLISH_REMOTE=origin
@@ -81,7 +82,7 @@ if ! git -C "$REPO_ROOT" rev-parse "$tag" >/dev/null 2>&1; then
 fi
 
 if [ "$dry_run" = true ]; then
-  echo "[dry-run] gh release create $tag -R $GITHUB_REPO --title $tag --notes-file $notes_file"
+  echo "[dry-run] gh release create $tag -R $GITHUB_REPO --title $title --notes-file $notes_file"
   exit 0
 fi
 
@@ -91,9 +92,9 @@ if ! git -C "$REPO_ROOT" ls-remote --exit-code --tags "$PUBLISH_REMOTE" "refs/ta
 fi
 
 if gh release view "$tag" -R "$GITHUB_REPO" >/dev/null 2>&1; then
-  gh release edit "$tag" -R "$GITHUB_REPO" --title "$tag" --notes-file "$notes_file"
+  gh release edit "$tag" -R "$GITHUB_REPO" --title "$title" --notes-file "$notes_file"
   echo "Updated GitHub Release $tag"
 else
-  gh release create "$tag" -R "$GITHUB_REPO" --title "$tag" --notes-file "$notes_file"
+  gh release create "$tag" -R "$GITHUB_REPO" --title "$title" --notes-file "$notes_file"
   echo "Created GitHub Release $tag"
 fi
