@@ -296,8 +296,17 @@ require_npm_publish_auth() {
   fi
 
   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-    release_info "  ✓ npm publish auth will be provided by GitHub Actions trusted publishing"
-    return
+    if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+      release_info "  ✓ npm publish auth will be provided by GitHub Actions trusted publishing"
+      return
+    fi
+
+    if [ -n "${NODE_AUTH_TOKEN:-}" ] || [ -n "${NPM_TOKEN:-}" ]; then
+      release_info "  ✓ npm publish auth will be provided by GitHub Actions token-based npm auth"
+      return
+    fi
+
+    release_fail "GitHub Actions release job is missing npm publish auth. Configure OIDC trusted publishing or provide NODE_AUTH_TOKEN/NPM_TOKEN."
   fi
 
   release_fail "npm publish auth is not available. Use 'npm login' locally or run from GitHub Actions with trusted publishing."

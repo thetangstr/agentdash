@@ -76,6 +76,12 @@ After the workflows are live:
 3. run a stable dry-run
 4. run one real stable publish
 
+Implementation detail:
+
+- the release workflow uses `actions/setup-node` with `registry-url: https://registry.npmjs.org`
+- package publish runs through `npm publish --provenance`
+- `pnpm` is still used for install/build/test, but not for the final registry publish step
+
 Only after that should you remove old token-based access.
 
 ## 3. Remove Legacy npm Tokens
@@ -96,6 +102,8 @@ Create two environments in the GitHub repository:
 
 - `npm-canary`
 - `npm-stable`
+
+Both environments must exist before the full release pipeline is considered ready. A missing `npm-stable` environment will not break canaries, but it will block or weaken the stable approval path.
 
 Path:
 
@@ -257,7 +265,8 @@ Check:
 1. the workflow filename on GitHub exactly matches the filename configured in npm
 2. the package has the trusted publisher entry for the correct repository
 3. the job has `id-token: write`
-4. the job is running from the expected repository, not a fork
+4. `actions/setup-node` sets `registry-url: https://registry.npmjs.org`
+5. the job is running from the expected repository, not a fork
 
 ### Stable workflow runs but never asks for approval
 
