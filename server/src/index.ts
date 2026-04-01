@@ -33,6 +33,7 @@ import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
+import { createHubSpotSyncScheduler } from "./services/hubspot-sync-scheduler.js";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -656,6 +657,9 @@ export async function startServer(): Promise<StartedServer> {
     }, backupIntervalMs);
   }
   
+  // AgentDash: Start HubSpot sync scheduler (hourly, no-op if no companies configured)
+  createHubSpotSyncScheduler(db).start();
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);

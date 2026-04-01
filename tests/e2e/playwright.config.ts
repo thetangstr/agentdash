@@ -21,9 +21,9 @@ export default defineConfig({
     },
   ],
   // The webServer directive starts `paperclipai run` before tests.
-  // Expects `pnpm paperclipai` to be runnable from repo root.
+  // Expects `pnpm agentdash` to be runnable from repo root.
   webServer: {
-    command: `pnpm paperclipai run`,
+    command: `pnpm agentdash run`,
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

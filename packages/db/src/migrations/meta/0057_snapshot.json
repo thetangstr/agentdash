@@ -1,5 +1,5 @@
 {
-  "id": "9bfff6f4-2ef8-467c-ad51-958cbf039c03",
+  "id": "8b741c8f-a2ab-4fce-a607-85763dfc6beb",
   "prevId": "31bbce84-62e3-4791-a37e-f588666553da",
   "version": "7",
   "dialect": "postgresql",
@@ -4760,58 +4760,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "when_to_use": {
-          "name": "when_to_use",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "allowed_tools": {
-          "name": "allowed_tools",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "activation_paths": {
-          "name": "activation_paths",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "execution_context": {
-          "name": "execution_context",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'inline'"
-        },
-        "target_agent_type": {
-          "name": "target_agent_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "effort": {
-          "name": "effort",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "user_invocable": {
-          "name": "user_invocable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "hooks": {
-          "name": "hooks",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "source_type": {
           "name": "source_type",
           "type": "text",
@@ -5602,6 +5550,33 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "crm_activities_external_unique": {
+          "name": "crm_activities_external_unique",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -8832,12 +8807,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "issue_id": {
-          "name": "issue_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "exit_code": {
           "name": "exit_code",
           "type": "integer",
@@ -8947,48 +8916,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "parent_run_id": {
-          "name": "parent_run_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "delegation_kind": {
-          "name": "delegation_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "delegation_label": {
-          "name": "delegation_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_by_agent_id": {
-          "name": "requested_by_agent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_by_user_id": {
-          "name": "requested_by_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_skill_id": {
-          "name": "requested_skill_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_skill_version_id": {
-          "name": "requested_skill_version_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "process_loss_retry_count": {
           "name": "process_loss_retry_count",
           "type": "integer",
@@ -9086,77 +9013,12 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "heartbeat_runs_issue_id_issues_id_fk": {
-          "name": "heartbeat_runs_issue_id_issues_id_fk",
-          "tableFrom": "heartbeat_runs",
-          "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
         "heartbeat_runs_retry_of_run_id_heartbeat_runs_id_fk": {
           "name": "heartbeat_runs_retry_of_run_id_heartbeat_runs_id_fk",
           "tableFrom": "heartbeat_runs",
           "tableTo": "heartbeat_runs",
           "columnsFrom": [
             "retry_of_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "heartbeat_runs_parent_run_id_heartbeat_runs_id_fk": {
-          "name": "heartbeat_runs_parent_run_id_heartbeat_runs_id_fk",
-          "tableFrom": "heartbeat_runs",
-          "tableTo": "heartbeat_runs",
-          "columnsFrom": [
-            "parent_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "heartbeat_runs_requested_by_agent_id_agents_id_fk": {
-          "name": "heartbeat_runs_requested_by_agent_id_agents_id_fk",
-          "tableFrom": "heartbeat_runs",
-          "tableTo": "agents",
-          "columnsFrom": [
-            "requested_by_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "heartbeat_runs_requested_skill_id_company_skills_id_fk": {
-          "name": "heartbeat_runs_requested_skill_id_company_skills_id_fk",
-          "tableFrom": "heartbeat_runs",
-          "tableTo": "company_skills",
-          "columnsFrom": [
-            "requested_skill_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "heartbeat_runs_requested_skill_version_id_skill_versions_id_fk": {
-          "name": "heartbeat_runs_requested_skill_version_id_skill_versions_id_fk",
-          "tableFrom": "heartbeat_runs",
-          "tableTo": "skill_versions",
-          "columnsFrom": [
-            "requested_skill_version_id"
           ],
           "columnsTo": [
             "id"
@@ -16925,58 +16787,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "when_to_use": {
-          "name": "when_to_use",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "allowed_tools": {
-          "name": "allowed_tools",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "activation_paths": {
-          "name": "activation_paths",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "execution_context": {
-          "name": "execution_context",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'inline'"
-        },
-        "target_agent_type": {
-          "name": "target_agent_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "effort": {
-          "name": "effort",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "user_invocable": {
-          "name": "user_invocable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "hooks": {
-          "name": "hooks",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         },
         "file_inventory": {
           "name": "file_inventory",

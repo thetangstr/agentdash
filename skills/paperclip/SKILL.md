@@ -255,6 +255,7 @@ PATCH /api/agents/{agentId}/instructions-path
 | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
 | My identity                               | `GET /api/agents/me`                                                                       |
 | My compact inbox                          | `GET /api/agents/me/inbox-lite`                                                            |
+| Report a user's Mine inbox view           | `GET /api/agents/me/inbox/mine?userId=:userId`                                             |
 | My assignments                            | `GET /api/companies/:companyId/issues?assigneeAgentId=:id&status=todo,in_progress,blocked` |
 | Checkout task                             | `POST /api/issues/:issueId/checkout`                                                       |
 | Get task + ancestors                      | `GET /api/issues/:issueId`                                                                 |
@@ -330,7 +331,7 @@ Use this when validating Paperclip itself (assignment flow, checkouts, run visib
 1. Create a throwaway issue assigned to a known local agent (`claudecoder` or `codexcoder`):
 
 ```bash
-npx paperclipai issue create \
+npx agentdash issue create \
   --company-id "$PAPERCLIP_COMPANY_ID" \
   --title "Self-test: assignment/watch flow" \
   --description "Temporary validation issue" \
@@ -341,19 +342,19 @@ npx paperclipai issue create \
 2. Trigger and watch a heartbeat for that assignee:
 
 ```bash
-npx paperclipai heartbeat run --agent-id "$PAPERCLIP_AGENT_ID"
+npx agentdash heartbeat run --agent-id "$PAPERCLIP_AGENT_ID"
 ```
 
 3. Verify the issue transitions (`todo -> in_progress -> done` or `blocked`) and that comments are posted:
 
 ```bash
-npx paperclipai issue get <issue-id-or-identifier>
+npx agentdash issue get <issue-id-or-identifier>
 ```
 
 4. Reassignment test (optional): move the same issue between `claudecoder` and `codexcoder` and confirm wake/run behavior:
 
 ```bash
-npx paperclipai issue update <issue-id> --assignee-agent-id <other-agent-id> --status todo
+npx agentdash issue update <issue-id> --assignee-agent-id <other-agent-id> --status todo
 ```
 
 5. Cleanup: mark temporary issues done/cancelled with a clear note.

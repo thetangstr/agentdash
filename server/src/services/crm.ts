@@ -319,6 +319,23 @@ export function crmService(db: Db) {
       .orderBy(desc(crmActivities.createdAt));
   }
 
+  async function upsertActivityByExternalId(
+    companyId: string,
+    externalSource: string,
+    externalId: string,
+    data: Omit<typeof crmActivities.$inferInsert, "id" | "companyId" | "externalId" | "externalSource" | "createdAt">,
+  ) {
+    return db
+      .insert(crmActivities)
+      .values({ ...data, companyId, externalSource, externalId })
+      .onConflictDoUpdate({
+        target: [crmActivities.companyId, crmActivities.externalSource, crmActivities.externalId],
+        set: { ...data },
+      })
+      .returning()
+      .then((rows) => rows[0]);
+  }
+
   async function getActivitiesForAccount(accountId: string) {
     return db
       .select()
@@ -356,6 +373,64 @@ export function crmService(db: Db) {
   }
 
   // ---------------------------------------------------------------------------
+  // AgentDash: CRM Context for Agent Workflows
+  // ---------------------------------------------------------------------------
+
+  async function buildContextForIssue(companyId: string, crmAccountId: string) {
+    const account = await db.select().from(crmAccounts)
+      .where(and(eq(crmAccounts.id, crmAccountId), eq(crmAccounts.companyId, companyId)))
+      .then((r) => r[0] ?? null);
+    if (!account) throw notFound("CRM account not found");
+
+    const contacts = await db.select().from(crmContacts)
+      .where(and(eq(crmContacts.accountId, crmAccountId), eq(crmContacts.companyId, companyId)))
+      .orderBy(desc(crmContacts.createdAt))
+      .limit(5);
+
+    const deals = await db.select().from(crmDeals)
+      .where(and(eq(crmDeals.accountId, crmAccountId), eq(crmDeals.companyId, companyId)))
+      .orderBy(desc(crmDeals.createdAt))
+      .limit(10);
+
+    const activities = await db.select().from(crmActivities)
+      .where(and(eq(crmActivities.accountId, crmAccountId), eq(crmActivities.companyId, companyId)))
+      .orderBy(desc(crmActivities.createdAt))
+      .limit(20);
+
+    const totalValueCents = deals.reduce((sum, d) => sum + (Number(d.amountCents) || 0), 0);
+
+    return {
+      account: {
+        id: account.id,
+        name: account.name,
+        stage: account.stage,
+        industry: account.industry,
+        metadata: account.metadata,
+      },
+      contacts: contacts.map((c) => ({
+        id: c.id, email: c.email, firstName: c.firstName, lastName: c.lastName, phone: c.phone,
+      })),
+      deals: {
+        items: deals.map((d) => ({
+          id: d.id, name: d.name, stage: d.stage, amountCents: d.amountCents,
+        })),
+        totalValueCents,
+        count: deals.length,
+      },
+      recentActivities: activities.map((a) => ({
+        id: a.id, activityType: a.activityType, subject: a.subject, createdAt: a.createdAt,
+      })),
+      customerMetrics: {
+        lifetimeValueCents: totalValueCents,
+        dealCount: deals.length,
+        avgDealSizeCents: deals.length > 0 ? Math.round(totalValueCents / deals.length) : 0,
+        contactCount: contacts.length,
+        lastActivityAt: activities[0]?.createdAt ?? null,
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
@@ -385,11 +460,15 @@ export function crmService(db: Db) {
     // Activities
     listActivities,
     createActivity,
+    upsertActivityByExternalId,
     getActivitiesForDeal,
     getActivitiesForAccount,
 
     // Dashboard
     getPipelineSummary,
+
+    // AgentDash: CRM Context
+    buildContextForIssue,
 
     // Leads
     listLeads: async (companyId: string, opts?: { status?: string; source?: string; limit?: number; offset?: number }) => {

@@ -420,6 +420,133 @@ export function policyEngineService(db: Db) {
   }
 
   // ---------------------------------------------------------------------------
+  // AgentDash: Threshold-Aware Proposal Evaluation
+  // ---------------------------------------------------------------------------
+
+  async function evaluateProposal(
+    companyId: string,
+    agentId: string,
+    proposal: {
+      actionType: string;
+      amountCents?: number;
+      resource?: string | null;
+      context?: Record<string, unknown>;
+    },
+  ) {
+    // Load the agent to determine its role
+    const agent = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .then((rows) => rows[0] ?? null);
+
+    if (!agent) throw unprocessable("Agent not found");
+
+    // Build target-matching conditions
+    const targetConditions = [
+      eq(securityPolicies.targetType, "company"),
+      and(
+        eq(securityPolicies.targetType, "agent"),
+        eq(securityPolicies.targetId, agentId),
+      ),
+    ];
+    if (agent.role) {
+      targetConditions.push(
+        and(
+          eq(securityPolicies.targetType, "role"),
+          eq(securityPolicies.targetId, agent.role),
+        ),
+      );
+    }
+
+    // Load all active policies
+    const policies = await db
+      .select()
+      .from(securityPolicies)
+      .where(
+        and(
+          eq(securityPolicies.companyId, companyId),
+          eq(securityPolicies.isActive, true),
+          or(...targetConditions),
+        ),
+      )
+      .orderBy(asc(securityPolicies.priority));
+
+    let decision: "allowed" | "denied" | "escalated" = "allowed";
+    let denialReason: string | undefined;
+    let escalationThreshold: number | undefined;
+    const matchedPolicyIds: string[] = [];
+
+    for (const policy of policies) {
+      const rawRules = policy.rules;
+      const rules: Array<Record<string, unknown>> = Array.isArray(rawRules) ? rawRules : [];
+
+      for (const rule of rules) {
+        // Check action_limit: amount exceeds threshold → escalate
+        if (
+          policy.policyType === "action_limit" &&
+          (rule.action === proposal.actionType || rule.action === "*")
+        ) {
+          matchedPolicyIds.push(policy.id);
+          const maxAmount = typeof rule.maxAmountCents === "number" ? rule.maxAmountCents : undefined;
+          if (maxAmount != null && proposal.amountCents != null && proposal.amountCents > maxAmount) {
+            decision = "escalated";
+            escalationThreshold = maxAmount;
+            denialReason = `Amount ${proposal.amountCents} exceeds threshold ${maxAmount} (policy: ${policy.name})`;
+          }
+          // Under threshold → stays "allowed"
+          break;
+        }
+
+        // Check blast_radius policies
+        if (policy.policyType === "blast_radius" && rule.action === proposal.actionType) {
+          matchedPolicyIds.push(policy.id);
+          if (policy.effect === "deny") {
+            decision = "escalated";
+            denialReason = `Blast radius limit (policy: ${policy.name})`;
+          }
+          break;
+        }
+
+        // Check resource_access (escalation paths)
+        if (policy.policyType === "resource_access") {
+          const escalateOn = Array.isArray(rule.escalateOn) ? rule.escalateOn : [];
+          if (escalateOn.includes(proposal.actionType)) {
+            matchedPolicyIds.push(policy.id);
+            decision = "escalated";
+            denialReason = `Escalation required (policy: ${policy.name})`;
+            break;
+          }
+        }
+      }
+
+      if (decision !== "allowed") break;
+    }
+
+    // Record the evaluation
+    const [evaluation] = await db.insert(policyEvaluations).values({
+      companyId,
+      agentId,
+      runId: null,
+      action: proposal.actionType,
+      resource: proposal.resource ?? null,
+      matchedPolicyIds,
+      decision,
+      denialReason: denialReason ?? null,
+      context: { ...proposal.context, amountCents: proposal.amountCents },
+      evaluatedAt: new Date(),
+    }).returning();
+
+    return {
+      decision,
+      matchedPolicyIds,
+      denialReason,
+      escalationThreshold,
+      evaluationId: evaluation?.id,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Policy Evaluation Listing
   // ---------------------------------------------------------------------------
 
@@ -454,6 +581,7 @@ export function policyEngineService(db: Db) {
     listPolicies,
     getPolicyById,
     evaluateAction,
+    evaluateProposal,
     configureSandbox,
     getSandbox,
     activateKillSwitch,

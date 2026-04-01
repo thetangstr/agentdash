@@ -71,6 +71,7 @@ export interface IssueFilters {
   inboxArchivedByUserId?: string;
   unreadForUserId?: string;
   projectId?: string;
+  executionWorkspaceId?: string;
   parentId?: string;
   labelId?: string;
   originKind?: string;
@@ -648,6 +649,9 @@ export function issueService(db: Db) {
         conditions.push(unreadForUserCondition(companyId, unreadForUserId));
       }
       if (filters?.projectId) conditions.push(eq(issues.projectId, filters.projectId));
+      if (filters?.executionWorkspaceId) {
+        conditions.push(eq(issues.executionWorkspaceId, filters.executionWorkspaceId));
+      }
       if (filters?.parentId) conditions.push(eq(issues.parentId, filters.parentId));
       if (filters?.originKind) conditions.push(eq(issues.originKind, filters.originKind));
       if (filters?.originId) conditions.push(eq(issues.originId, filters.originId));
@@ -790,6 +794,20 @@ export function issueService(db: Db) {
         })
         .returning();
       return row;
+    },
+
+    markUnread: async (companyId: string, issueId: string, userId: string) => {
+      const deleted = await db
+        .delete(issueReadStates)
+        .where(
+          and(
+            eq(issueReadStates.companyId, companyId),
+            eq(issueReadStates.issueId, issueId),
+            eq(issueReadStates.userId, userId),
+          ),
+        )
+        .returning();
+      return deleted.length > 0;
     },
 
     archiveInbox: async (companyId: string, issueId: string, userId: string, archivedAt: Date = new Date()) => {
@@ -1069,6 +1087,29 @@ export function issueService(db: Db) {
       if (result && issueData.status && (issueData.status === "done" || issueData.status === "cancelled")) {
         const deps = taskDependencyService(db);
         void deps.processCompletionUnblock(existing.companyId, id).catch(() => {});
+      }
+
+      // AgentDash: advance pipeline when pipeline-stage issue completes
+      if (result && issueData.status === "done" && existing.originKind === "pipeline_stage" && existing.originId) {
+        const { pipelineOrchestratorService } = await import("./pipeline-orchestrator.js");
+        void pipelineOrchestratorService(db).onStageCompleted(existing.companyId, id).catch(() => {});
+      }
+
+      // AgentDash: CRM lifecycle — update deals and accounts when issue completes
+      if (result && issueData.status === "done") {
+        const { crmLifecycleService } = await import("./crm-lifecycle.js");
+        const crmSvc = crmLifecycleService(db);
+        // Advance linked deal stages
+        void crmSvc.onIssueCompleted(existing.companyId, id, {
+          agentId: existing.assigneeAgentId,
+        }).catch(() => {});
+        // Update CRM account lifecycle stage
+        if (existing.crmAccountId) {
+          void crmSvc.onIssueCompletedForAccount(
+            existing.companyId, id, existing.crmAccountId,
+            { agentId: existing.assigneeAgentId },
+          ).catch(() => {});
+        }
       }
 
       return result;

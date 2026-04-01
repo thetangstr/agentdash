@@ -11,6 +11,7 @@ import { Agents } from "./pages/Agents";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Projects } from "./pages/Projects";
 import { ProjectDetail } from "./pages/ProjectDetail";
+import { ProjectWorkspaceDetail } from "./pages/ProjectWorkspaceDetail";
 import { Issues } from "./pages/Issues";
 import { IssueDetail } from "./pages/IssueDetail";
 import { Routines } from "./pages/Routines";
@@ -34,6 +35,21 @@ import { CapacityDashboard } from "./pages/CapacityDashboard";
 import { ResearchDashboard } from "./pages/ResearchDashboard";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
 import { CrmPipeline } from "./pages/CrmPipeline";
+import { CrmAccounts } from "./pages/CrmAccounts";
+import { CrmAccountDetail } from "./pages/CrmAccountDetail";
+import { HubSpotSettings } from "./pages/HubSpotSettings";
+import { Feed } from "./pages/Feed";
+import { ActionProposals } from "./pages/ActionProposals";
+import { Pipelines } from "./pages/Pipelines";
+import { CrmContacts } from "./pages/CrmContacts";
+import { CrmLeads } from "./pages/CrmLeads";
+import { CrmKanban } from "./pages/CrmKanban";
+import { CrmDealDetail } from "./pages/CrmDealDetail";
+import { SkillVersions } from "./pages/SkillVersions";
+import { ResearchCycleDetail } from "./pages/ResearchCycleDetail";
+import { TaskDependencyDag } from "./pages/TaskDependencyDag";
+import { BudgetForecast } from "./pages/BudgetForecast";
+import { UserProfile } from "./pages/UserProfile";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
@@ -150,6 +166,8 @@ function boardRoutes() {
       <Route path="projects/:projectId/overview" element={<ProjectDetail />} />
       <Route path="projects/:projectId/issues" element={<ProjectDetail />} />
       <Route path="projects/:projectId/issues/:filter" element={<ProjectDetail />} />
+      <Route path="projects/:projectId/workspaces/:workspaceId" element={<ProjectWorkspaceDetail />} />
+      <Route path="projects/:projectId/workspaces" element={<ProjectDetail />} />
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route path="issues" element={<Issues />} />
@@ -168,6 +186,7 @@ function boardRoutes() {
       <Route path="approvals/pending" element={<Approvals />} />
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
+      <Route path="action-proposals" element={<ActionProposals />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
@@ -180,8 +199,22 @@ function boardRoutes() {
       <Route path="security" element={<SecurityPolicies />} />
       <Route path="capacity" element={<CapacityDashboard />} />
       <Route path="research" element={<ResearchDashboard />} />
+      <Route path="research/:cycleId" element={<ResearchCycleDetail />} />
       <Route path="setup" element={<OnboardingWizardPage />} />
+      <Route path="feed" element={<Feed />} />
+      <Route path="pipelines" element={<Pipelines />} />
+      <Route path="profile" element={<UserProfile />} />
       <Route path="crm" element={<CrmPipeline />} />
+      <Route path="crm/kanban" element={<CrmKanban />} />
+      <Route path="crm/contacts" element={<CrmContacts />} />
+      <Route path="crm/leads" element={<CrmLeads />} />
+      <Route path="crm/deals/:dealId" element={<CrmDealDetail />} />
+      <Route path="crm/accounts" element={<CrmAccounts />} />
+      <Route path="crm/accounts/:accountId" element={<CrmAccountDetail />} />
+      <Route path="crm/hubspot" element={<HubSpotSettings />} />
+      <Route path="skill-versions" element={<SkillVersions />} />
+      <Route path="task-dependencies" element={<TaskDependencyDag />} />
+      <Route path="budget" element={<BudgetForecast />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="tests/ux/runs" element={<RunTranscriptUxLab />} />
       <Route path=":pluginRoutePath" element={<PluginPage />} />
@@ -349,7 +382,10 @@ export function App() {
           <Route path="projects/:projectId/overview" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/issues" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/issues/:filter" element={<UnprefixedBoardRedirect />} />
+          <Route path="projects/:projectId/workspaces" element={<UnprefixedBoardRedirect />} />
+          <Route path="projects/:projectId/workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
+          <Route path="execution-workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="tests/ux/runs" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}

@@ -55,20 +55,31 @@ export function goalService(db: Db) {
 
     getDefaultCompanyGoal: (companyId: string) => getDefaultCompanyGoal(db, companyId),
 
-    create: (companyId: string, data: Omit<typeof goals.$inferInsert, "companyId">) =>
-      db
+    create: (companyId: string, data: Omit<typeof goals.$inferInsert, "companyId"> & { targetDate?: string | Date | null }) => {
+      const values = {
+        ...data,
+        companyId,
+        targetDate: data.targetDate ? new Date(data.targetDate) : null,
+      };
+      return db
         .insert(goals)
-        .values({ ...data, companyId })
+        .values(values)
         .returning()
-        .then((rows) => rows[0]),
+        .then((rows) => rows[0]);
+    },
 
-    update: (id: string, data: Partial<typeof goals.$inferInsert>) =>
-      db
+    update: (id: string, data: Partial<typeof goals.$inferInsert> & { targetDate?: string | Date | null }) => {
+      const values: Record<string, unknown> = { ...data, updatedAt: new Date() };
+      if (typeof data.targetDate === "string") {
+        values.targetDate = new Date(data.targetDate);
+      }
+      return db
         .update(goals)
-        .set({ ...data, updatedAt: new Date() })
+        .set(values)
         .where(eq(goals.id, id))
         .returning()
-        .then((rows) => rows[0] ?? null),
+        .then((rows) => rows[0] ?? null);
+    },
 
     remove: (id: string) =>
       db

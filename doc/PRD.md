@@ -366,10 +366,10 @@ See `doc/CUSTOMER-CUJS.md` for the normalized customer-user CUJ/task taxonomy us
 
 ## 5. Technical Summary
 
-- **29 new database tables** across 9 migrations
-- **15 services** with 150+ methods
-- **120+ API endpoints**
-- **10 new UI pages** (Templates, Security, Capacity, Research, Onboarding, CRM Pipeline + 5 inherited AgentDash pages)
+- **86 schema tables** across 60 migrations (14 AgentDash-specific: 0046-0059)
+- **83 services** across all domains
+- **200+ API endpoints** across 39 route modules
+- **62 UI pages** (Pipelines, Action Proposals, Feed, CRM suite, Budget Forecast, Research, Onboarding, Security, Capacity, Agent Templates, Skill Versions, User Profile, and more)
 - **4 integration plugin manifests** (HubSpot, Slack, GitHub, Linear)
 - **Design system**: Teal primary, Inter font, customizable accent colors, light/dark mode
 

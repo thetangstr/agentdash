@@ -404,8 +404,29 @@
     {
       "idx": 57,
       "version": "7",
-      "when": 1775013079794,
-      "tag": "0057_lovely_naoko",
+      "when": 1774851149341,
+      "tag": "0057_powerful_ricochet",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1774888128484,
+      "tag": "0058_clear_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1774905562286,
+      "tag": "0059_thick_the_professor",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1775023653072,
+      "tag": "0060_ambitious_charles_xavier",
       "breakpoints": true
     }
   ]

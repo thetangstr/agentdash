@@ -119,10 +119,20 @@ export const ISSUE_STATUSES = [
 ] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
+export const INBOX_MINE_ISSUE_STATUSES = [
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "blocked",
+  "done",
+] as const;
+export const INBOX_MINE_ISSUE_STATUS_FILTER = INBOX_MINE_ISSUE_STATUSES.join(",");
+
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 
-export const ISSUE_ORIGIN_KINDS = ["manual", "routine_execution"] as const;
+export const ISSUE_ORIGIN_KINDS = ["manual", "routine_execution", "pipeline_stage"] as const;
 export type IssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 
 export const GOAL_LEVELS = ["company", "team", "agent", "task"] as const;
@@ -190,6 +200,7 @@ export const APPROVAL_TYPES = [
   "budget_override_required",
   "spawn_agents",
   "approve_issue_plan",
+  "action_proposal",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
@@ -814,3 +825,17 @@ export type OnboardingSourceStatus = (typeof ONBOARDING_SOURCE_STATUSES)[number]
 
 export const COMPANY_CONTEXT_TYPES = ["domain", "terminology", "process", "tech_stack", "team_structure", "culture"] as const;
 export type CompanyContextType = (typeof COMPANY_CONTEXT_TYPES)[number];
+
+// Action Proposals
+export const ACTION_PROPOSAL_TYPES = [
+  "refund", "replacement", "credit", "escalation",
+  "discount", "account_action", "communication", "custom",
+] as const;
+export type ActionProposalType = (typeof ACTION_PROPOSAL_TYPES)[number];
+
+// Agent Pipelines
+export const PIPELINE_STATUSES = ["draft", "active", "paused", "archived"] as const;
+export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
+
+export const PIPELINE_RUN_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
+export type PipelineRunStatus = (typeof PIPELINE_RUN_STATUSES)[number];

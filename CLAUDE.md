@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-AgentDash — AI agent orchestration platform. Fork of [Paperclip](https://github.com/paperclipai/paperclip) with 29 new database tables, 15 services, 120+ API endpoints for: Agent Factory, Task Dependencies, Security/Policy Engine, Budget/Capacity, Skills Registry, AutoResearch, CRM, Onboarding, and HubSpot integration.
+AgentDash — AI agent orchestration platform. Fork of [Paperclip](https://github.com/paperclipai/paperclip) with 86 schema tables, 83 services, 39 route modules, 62 UI pages, and 200+ API endpoints spanning: Agent Factory, Pipeline Orchestrator, Action Proposals, Task Dependencies, Security/Policy Engine, Budget/Capacity, Skills Registry, AutoResearch, CRM, Feed, Execution Workspaces, Onboarding, and HubSpot integration.
 
 ## Commands
 
@@ -13,7 +13,7 @@ pnpm install              # Install dependencies (use pnpm, NOT npm/yarn)
 pnpm dev                  # Start server + UI with watch mode (localhost:3100)
 pnpm dev:once             # Start without file watching
 pnpm -r typecheck         # Type-check ALL packages
-pnpm test:run             # Run all tests once (682 tests)
+pnpm test:run             # Run all tests once (775 tests)
 pnpm build                # Build all packages
 pnpm db:generate          # Generate migration after schema changes
 pnpm db:migrate           # Apply pending migrations
@@ -52,7 +52,7 @@ Staging and production steps still contain explicit `TODO_SET_*` placeholders fo
 | CLI | Commander, esbuild | `cli/src/index.ts` |
 | Database | PostgreSQL, Drizzle ORM | `packages/db/src/schema/` |
 | Shared Types | Zod validators, constants | `packages/shared/src/` |
-| Agent Adapters | Claude, Codex, Cursor, etc. | `packages/adapters/` |
+| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw | `packages/adapters/` |
 | Plugins | JSON-RPC workers, event bus | `packages/plugins/` |
 
 ### Service pattern
@@ -116,7 +116,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - **Dev**: Embedded PG (leave `DATABASE_URL` unset) — auto-managed at `~/.paperclip/instances/default/db/`
 - **Reset**: `rm -rf ~/.paperclip/instances/default/db && pnpm dev`
 - **Schema → Migration**: Edit `packages/db/src/schema/*.ts` → `pnpm db:generate` → `pnpm -r typecheck`
-- **11 migrations** (0046-0056) added by AgentDash
+- **14 migrations** (0046-0059) added by AgentDash; 60 total migrations
 
 ## Branding
 
@@ -127,15 +127,66 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - Internal package scopes remain `@agentdash/*` (upstream compatibility)
 - Primary color: Teal — company-customizable via `themeAccentColor`
 
+## Multi-Agent Workflow (MAW)
+
+**MANDATORY:** Feature and bug development should run through MAW unless this is a production hotfix or pure infrastructure work.
+
+### Quick Start
+
+- `/workon AD-123` — full intake -> locally-tested workflow for one Linear issue
+- `/pm <description>` — elaborate requirements and create/update issue scope
+- `/builder AD-123` — implement a specific issue
+- `/tester AD-123` — run the tester workflow for a specific issue
+- `/tpm sync` — ship `Human-Verified` issues
+
+### Agent Roles
+
+| Agent | Role | Invoked By |
+|-------|------|------------|
+| **PM** | Elaborate requirements, size issues, define test plan | `/workon` or `/pm` |
+| **Builder** | Implement feature, add tests, create PR | `/workon` or `/builder` |
+| **Tester** | Run E2E tests, code review, Chrome CUJ verification | `/workon` or `/tester` |
+| **TPM** | Project planning and sole merge authority to `main` | `/tpm sync` |
+| **Admin** | Ops-only health, deploy, and environment checks | `/admin` |
+
+### Deployment Policy
+
+| Size | Path |
+|------|------|
+| XS/S (1-2 pts) | PR -> `main`, auto-ships after local verification |
+| M/L (3-5 pts) | PR -> `main`, human verification required before `/tpm sync` |
+| XL (8+ pts) | PR -> `main` or `staging` if `staging-required`, human verification required |
+
+### References
+
+- `doc/maw/sop.md` — primary MAW operating procedure
+- `doc/maw/protocol.md` — agent handoff and comment protocol
+- `.claude/commands/README.md` — slash-command quick reference
+
 ## Upstream Sync
 
-Paperclip tracked as `upstream` remote. To pull updates:
+Paperclip tracked as `upstream` remote. Use the sync script:
+
 ```sh
-git checkout agentdash-upstream-sync
-git fetch upstream && git merge upstream/master
-# test, resolve conflicts
-git checkout agentdash-main && git merge agentdash-upstream-sync
+bash scripts/upstream-sync.sh --dry-run   # Preview: new commits, conflicts, risk areas
+bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 ```
+
+**Manual process** (if script unavailable):
+1. `git fetch upstream`
+2. `git checkout -b agentdash-upstream-sync`
+3. `git merge upstream/master` — resolve conflicts
+4. `pnpm install && pnpm -r typecheck && pnpm test:run && pnpm build`
+5. `bash scripts/dry-run-onboarding.sh` — verify AgentDash flows
+6. `git checkout <working-branch> && git merge agentdash-upstream-sync`
+
+**Conflict-prone files** (AgentDash modifies these Paperclip core files):
+- `ui/src/App.tsx` — AgentDash routes
+- `ui/src/components/Sidebar.tsx` — AgentDash nav items
+- `server/src/index.ts` — AgentDash route wiring
+- `packages/shared/src/constants.ts` — AgentDash status enums
+- `README.md` — AgentDash branding
+- `ui/index.html` — AgentDash title/meta
 
 ## Key Docs
 
@@ -143,7 +194,13 @@ git checkout agentdash-main && git merge agentdash-upstream-sync
 |-----|---------|
 | `ARCHITECTURE.md` | Full system design |
 | `doc/PRD.md` | Product requirements, 10 CUJs |
+| `doc/PRD-crm.md` | CRM product requirements |
 | `doc/BUSINESS-PLAN.md` | Pricing, GTM, client guide |
 | `doc/SOP-deployment.md` | 50-person company deployment |
 | `doc/SPEC-implementation.md` | Inherited V1 build contract |
 | `doc/DEVELOPING.md` | Detailed dev guide |
+| `doc/CUJ-STATUS.md` | Feature status and test coverage |
+| `doc/ONBOARDING-FLOW.md` | Client onboarding flow diagram |
+| `doc/agentdash_adapter_strategy.md` | Adapter design strategy |
+| `doc/maw/sop.md` | MAW standard operating procedure |
+| `doc/maw/protocol.md` | Agent handoff and comment protocol |
