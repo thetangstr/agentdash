@@ -67,7 +67,7 @@ It:
 
 - verifies the pushed commit
 - computes the canary version for the current UTC date
-- publishes under npm dist-tag `canary`
+- publishes under npm dist-tag `canary` with `npm publish --provenance`
 - creates a git tag `canary/vYYYY.MDD.P-canary.N`
 
 Users install canaries with:
@@ -111,7 +111,7 @@ The workflow:
 
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
-- publishes `YYYY.MDD.P` under npm dist-tag `latest`
+- publishes `YYYY.MDD.P` under npm dist-tag `latest` with `npm publish --provenance`
 - creates git tag `vYYYY.MDD.P`
 - creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
 
@@ -165,6 +165,12 @@ Stable GitHub Releases are now formalized with these rules:
 5. the release notes should follow [`releases/TEMPLATE.md`](../releases/TEMPLATE.md)
 
 This keeps the GitHub release surface deterministic and machine-repeatable.
+
+The publish jobs rely on npm trusted publishing from GitHub Actions. In practice that means:
+
+- `actions/setup-node` must set `registry-url: https://registry.npmjs.org`
+- the publish job must keep `id-token: write`
+- the release script must publish through the npm CLI, not `pnpm publish`
 
 The repo intentionally does not run this through GitHub Actions because:
 
