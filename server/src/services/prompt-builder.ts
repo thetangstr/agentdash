@@ -10,6 +10,7 @@ import {
   issueDependencies,
 } from "@agentdash/db";
 import type { SelectedSkillForRun } from "./skill-selection.js";
+import type { PromptSection } from "./context-manager.js";
 
 interface BuildCoordinationPromptInput {
   agentId: string;
@@ -19,10 +20,14 @@ interface BuildCoordinationPromptInput {
   selectedSkills?: SelectedSkillForRun[]; // AgentDash: skill selection
   planBody?: string | null; // AgentDash: plan document
   planApprovalStatus?: string | null; // AgentDash: plan approval
+  /** AgentDash: optional token budget for the prompt (0 = unlimited) */
+  tokenBudget?: number;
 }
 
 interface CoordinationPromptResult {
   fullText: string;
+  /** AgentDash: named sections for context-manager token allocation */
+  sections: PromptSection[];
   metadata: {
     agentId: string;
     issueId: string | null;
@@ -348,10 +353,13 @@ export function promptBuilderService(db: Db) {
       loadPeers(companyId, agent.reportsTo),
     ]);
 
-    // Build core sections
-    const sections: string[] = [
-      buildIdentitySection(agent, manager, okrs),
-      buildOrganizationSection(company, chain, agent, peers),
+    const builtAt = new Date().toISOString();
+    const builtAtMs = Date.now();
+
+    // AgentDash: Build named sections for context-manager integration
+    const namedSections: PromptSection[] = [
+      { name: "identity", content: buildIdentitySection(agent, manager, okrs), dataFreshnessMs: builtAtMs },
+      { name: "organization", content: buildOrganizationSection(company, chain, agent, peers), dataFreshnessMs: builtAtMs },
     ];
 
     // Load issue data if issueId is provided
@@ -363,31 +371,36 @@ export function promptBuilderService(db: Db) {
           loadBlockers(issueId),
           loadDependents(issueId),
         ]);
-        sections.push(buildTaskSection(issue, subtasks, blockers, dependents));
+        namedSections.push({
+          name: "task",
+          content: buildTaskSection(issue, subtasks, blockers, dependents),
+          dataFreshnessMs: builtAtMs,
+        });
       }
     }
 
-    const planSection = buildPlanSection(input.planBody, input.planApprovalStatus);
-    if (planSection) {
-      sections.push(planSection);
+    const planSectionContent = buildPlanSection(input.planBody, input.planApprovalStatus);
+    if (planSectionContent) {
+      namedSections.push({ name: "plan", content: planSectionContent, dataFreshnessMs: builtAtMs });
     }
 
-    const skillsSection = buildRelevantSkillsSection(input.selectedSkills ?? []);
-    if (skillsSection) {
-      sections.push(skillsSection);
+    const skillsSectionContent = buildRelevantSkillsSection(input.selectedSkills ?? []);
+    if (skillsSectionContent) {
+      namedSections.push({ name: "skills", content: skillsSectionContent, dataFreshnessMs: builtAtMs });
     }
 
     // Always include the protocol section
-    sections.push(buildProtocolSection());
+    namedSections.push({ name: "protocol", content: buildProtocolSection(), dataFreshnessMs: builtAtMs });
 
-    const fullText = sections.join("\n\n");
+    const fullText = namedSections.map((s) => s.content).join("\n\n");
 
     return {
       fullText,
+      sections: namedSections,
       metadata: {
         agentId,
         issueId: issueId ?? null,
-        builtAt: new Date().toISOString(),
+        builtAt,
       },
     };
   }
