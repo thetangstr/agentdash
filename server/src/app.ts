@@ -42,6 +42,7 @@ import { hubspotRoutes } from "./routes/hubspot.js";
 import { actionProposalRoutes } from "./routes/action-proposals.js";
 import { pipelineRoutes } from "./routes/pipelines.js";
 import { feedRoutes } from "./routes/feed.js";
+import { agentResearchRoutes } from "./routes/agent-research.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -177,6 +178,7 @@ export async function createApp(
   api.use(budgetExtendedRoutes(db));
   api.use(skillsRegistryRoutes(db));
   api.use(autoresearchRoutes(db));
+  api.use(agentResearchRoutes(db));
   api.use(onboardingRoutes(db));
   api.use(crmRoutes(db));
   api.use(hubspotRoutes(db));
