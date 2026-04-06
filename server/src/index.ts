@@ -28,11 +28,18 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
-import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineService } from "./services/index.js";
+import {
+  feedbackService,
+  heartbeatService,
+  reconcilePersistedRuntimeServicesOnStartup,
+  routineService,
+} from "./services/index.js";
+import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
+import { initTelemetry, getTelemetryClient } from "./telemetry.js";
 import { createHubSpotSyncScheduler } from "./services/hubspot-sync-scheduler.js";
 
 type BetterAuthSessionUser = {
@@ -74,6 +81,7 @@ export interface StartedServer {
 
 export async function startServer(): Promise<StartedServer> {
   let config = loadConfig();
+  initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
     process.env.PAPERCLIP_SECRETS_PROVIDER = config.secretsProvider;
   }
@@ -517,10 +525,14 @@ export async function startServer(): Promise<StartedServer> {
   });
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
+  const feedback = feedbackService(db as any, {
+    shareClient: createFeedbackTraceShareClientFromConfig(config),
+  });
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
     storageService,
+    feedbackExportService: feedback,
     deploymentMode: config.deploymentMode,
     deploymentExposure: config.deploymentExposure,
     allowedHostnames: config.allowedHostnames,
@@ -657,6 +669,12 @@ export async function startServer(): Promise<StartedServer> {
     }, backupIntervalMs);
   }
   
+  // Wait for external adapters to finish loading before accepting requests.
+  // Without this, adapter type validation (assertKnownAdapterType) would
+  // reject valid external adapter types during the startup loading window.
+  const { waitForExternalAdapters } = await import("./adapters/registry.js");
+  await waitForExternalAdapters();
+
   // AgentDash: Start HubSpot sync scheduler (hourly, no-op if no companies configured)
   createHubSpotSyncScheduler(db).start();
 
@@ -720,18 +738,26 @@ export async function startServer(): Promise<StartedServer> {
     });
   });
   
-  if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+  {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
-      logger.info({ signal }, "Stopping embedded PostgreSQL");
-      try {
-        await embeddedPostgres?.stop();
-      } catch (err) {
-        logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
-      } finally {
-        process.exit(0);
+      const telemetryClient = getTelemetryClient();
+      if (telemetryClient) {
+        telemetryClient.stop();
+        await telemetryClient.flush();
       }
+
+      if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
+        logger.info({ signal }, "Stopping embedded PostgreSQL");
+        try {
+          await embeddedPostgres?.stop();
+        } catch (err) {
+          logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
+        }
+      }
+
+      process.exit(0);
     };
-  
+
     process.once("SIGINT", () => {
       void shutdown("SIGINT");
     });

@@ -1,0 +1,363 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775512108658,
+  "projectRoot": "/Users/Kailor/conductor/workspaces/townhall/san-francisco-v1",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=20",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "@playwright/test",
+        "version": "1.58.2",
+        "category": "testing"
+      },
+      {
+        "name": "esbuild",
+        "version": "0.27.3",
+        "category": "build"
+      },
+      {
+        "name": "vitest",
+        "version": "3.0.5",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": "Node.js 20"
+  },
+  "build": {
+    "buildCommand": "pnpm build",
+    "testCommand": "pnpm test",
+    "lintCommand": null,
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "agentdash": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+      "paperclipai": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+      "dev": "node scripts/dev-runner.mjs watch",
+      "dev:watch": "node scripts/dev-runner.mjs watch",
+      "dev:once": "node scripts/dev-runner.mjs dev",
+      "dev:list": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts list",
+      "dev:stop": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts stop",
+      "dev:server": "pnpm --filter @agentdash/server dev",
+      "dev:ui": "pnpm --filter @agentdash/ui dev",
+      "build": "pnpm -r build",
+      "typecheck": "pnpm -r typecheck",
+      "test": "vitest",
+      "test:run": "vitest run",
+      "db:generate": "pnpm --filter @agentdash/db generate",
+      "db:migrate": "pnpm --filter @agentdash/db migrate",
+      "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
+      "db:backup": "./scripts/backup-db.sh",
+      "build:npm": "./scripts/build-npm.sh",
+      "release": "./scripts/release.sh",
+      "release:canary": "./scripts/release.sh canary",
+      "release:stable": "./scripts/release.sh stable",
+      "release:github": "./scripts/create-github-release.sh",
+      "release:rollback": "./scripts/rollback-latest.sh",
+      "check:tokens": "node scripts/check-forbidden-tokens.mjs",
+      "docs:dev": "cd docs && npx mintlify dev",
+      "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
+      "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",
+      "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh",
+      "test:e2e": "npx playwright test --config tests/e2e/playwright.config.ts",
+      "test:e2e:headed": "npx playwright test --config tests/e2e/playwright.config.ts --headed",
+      "evals:smoke": "cd evals/promptfoo && npx promptfoo@0.103.3 eval",
+      "test:release-smoke": "npx playwright test --config tests/release-smoke/playwright.config.ts",
+      "test:release-smoke:headed": "npx playwright test --config tests/release-smoke/playwright.config.ts --headed",
+      "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "agentdash-main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "cli": {
+      "path": "cli",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1775512108636,
+      "keyFiles": [
+        "CHANGELOG.md",
+        "README.md",
+        "esbuild.config.mjs",
+        "package.json",
+        "tsconfig.json"
+      ]
+    },
+    "deploy": {
+      "path": "deploy",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1775512108639,
+      "keyFiles": [
+        "docker-compose.remote.yml",
+        "remote.env.example"
+      ]
+    },
+    "doc": {
+      "path": "doc",
+      "purpose": null,
+      "fileCount": 30,
+      "lastAccessed": 1775512108639,
+      "keyFiles": [
+        "AGENTCOMPANIES_SPEC_INVENTORY.md",
+        "BRAND-REFERENCE-MAP.md",
+        "BUSINESS-PLAN.md",
+        "CLI.md",
+        "CLIPHUB.md"
+      ]
+    },
+    "docker": {
+      "path": "docker",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1775512108639,
+      "keyFiles": [
+        "Dockerfile.onboard-smoke",
+        "docker-compose.quickstart.yml",
+        "docker-compose.untrusted-review.yml",
+        "docker-compose.yml",
+        "nginx.conf"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 4,
+      "lastAccessed": 1775512108640,
+      "keyFiles": [
+        "agents-runtime.md",
+        "docs.json",
+        "favicon.svg",
+        "feedback-voting.md"
+      ]
+    },
+    "evals": {
+      "path": "evals",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775512108640,
+      "keyFiles": [
+        "README.md"
+      ]
+    },
+    "packages": {
+      "path": "packages",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775512108640,
+      "keyFiles": []
+    },
+    "patches": {
+      "path": "patches",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775512108640,
+      "keyFiles": [
+        "embedded-postgres@18.1.0-beta.16.patch"
+      ]
+    },
+    "releases": {
+      "path": "releases",
+      "purpose": null,
+      "fileCount": 9,
+      "lastAccessed": 1775512108641,
+      "keyFiles": [
+        "TEMPLATE.md",
+        "v0.2.7.md",
+        "v0.3.0.md",
+        "v0.3.1.md",
+        "v2026.318.0.md"
+      ]
+    },
+    "report": {
+      "path": "report",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775512108641,
+      "keyFiles": [
+        "2026-03-13-08-46-token-optimization-implementation.md"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 38,
+      "lastAccessed": 1775512108641,
+      "keyFiles": [
+        "backup-db.sh",
+        "build-npm.sh",
+        "check-forbidden-tokens.mjs",
+        "clean-onboard-git.sh",
+        "clean-onboard-npm.sh"
+      ]
+    },
+    "server": {
+      "path": "server",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1775512108641,
+      "keyFiles": [
+        "CHANGELOG.md",
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts"
+      ]
+    },
+    "skills": {
+      "path": "skills",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775512108641,
+      "keyFiles": []
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 0,
+      "lastAccessed": 1775512108641,
+      "keyFiles": []
+    },
+    "ui": {
+      "path": "ui",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1775512108642,
+      "keyFiles": [
+        "README.md",
+        "components.json",
+        "index.html",
+        "package.json",
+        "tsconfig.json"
+      ]
+    },
+    "website": {
+      "path": "website",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1775512108642,
+      "keyFiles": [
+        "next-env.d.ts",
+        "next.config.js",
+        "package-lock.json",
+        "package.json",
+        "postcss.config.mjs"
+      ]
+    },
+    "cli/src": {
+      "path": "cli/src",
+      "purpose": "Source code",
+      "fileCount": 3,
+      "lastAccessed": 1775512108642,
+      "keyFiles": [
+        "index.ts",
+        "telemetry.ts",
+        "version.ts"
+      ]
+    },
+    "docs/api": {
+      "path": "docs/api",
+      "purpose": "API routes",
+      "fileCount": 12,
+      "lastAccessed": 1775512108642,
+      "keyFiles": [
+        "activity.md",
+        "agents.md",
+        "approvals.md"
+      ]
+    },
+    "server/scripts": {
+      "path": "server/scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1775512108644,
+      "keyFiles": [
+        "dev-watch.ts"
+      ]
+    },
+    "server/src": {
+      "path": "server/src",
+      "purpose": "Source code",
+      "fileCount": 19,
+      "lastAccessed": 1775512108644,
+      "keyFiles": [
+        "agent-auth-jwt.ts",
+        "app.ts",
+        "attachment-types.ts"
+      ]
+    },
+    "ui/public": {
+      "path": "ui/public",
+      "purpose": "Public files",
+      "fileCount": 13,
+      "lastAccessed": 1775512108644,
+      "keyFiles": [
+        "android-chrome-192x192.png",
+        "android-chrome-512x512.png",
+        "apple-touch-icon.png"
+      ]
+    },
+    "ui/src": {
+      "path": "ui/src",
+      "purpose": "Source code",
+      "fileCount": 4,
+      "lastAccessed": 1775512108644,
+      "keyFiles": [
+        "App.tsx",
+        "index.css",
+        "main.tsx"
+      ]
+    },
+    "website/src": {
+      "path": "website/src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1775512108644,
+      "keyFiles": [
+        "global.d.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "packages/db/src/migrations/meta/_journal.json",
+      "accessCount": 3,
+      "lastAccessed": 1775515748851,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

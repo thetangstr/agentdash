@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"git diff --name-status HEAD agentdash-main | grep \\\"^D\\\" | awk '{print $2}' | xargs git checkout agentdash-main -- 2>&1 && echo \\\"Restored all deleted AgentDash files\\\"\",\"description\":\"Res...",
+  "error": "Exit code 1\nerror: pathspec '.claude/commands/README.md' did not match any file(s) known to git\nerror: pathspec '.claude/commands/admin.md' did not match any file(s) known to git\nerror: pathspec '.claude/commands/builder.md' did not match any file(s) known to git\nerror: pathspec '.claude/commands/pm.md' did not match any file(s) known to git\nerror: pathspec '.claude/commands/tester.md' did not match any file(s) known to git\nerror: pathspec '.claude/commands/tpm.md' did not match any file(s) know...",
+  "timestamp": "2026-04-06T22:49:56.259Z",
+  "retry_count": 1
+}

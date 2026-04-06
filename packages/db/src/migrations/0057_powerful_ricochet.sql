@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "crm_activities_external_unique" ON "crm_activities" USING btree ("company_id","external_source","external_id");
