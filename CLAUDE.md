@@ -141,27 +141,15 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 
 ### Agent Roles
 
-| Agent | Role | Invoked By |
-|-------|------|------------|
-| **PM** | Elaborate requirements, size issues, define test plan | `/workon` or `/pm` |
-| **Builder** | Implement feature, add tests, create PR | `/workon` or `/builder` |
-| **Tester** | Run E2E tests, code review, Chrome CUJ verification | `/workon` or `/tester` |
-| **TPM** | Project planning and sole merge authority to `main` | `/tpm sync` |
-| **Admin** | Ops-only health, deploy, and environment checks | `/admin` |
+| Agent | Invoked By | Role |
+|-------|------------|------|
+| **PM** | `/workon`, `/pm` | Elaborate requirements, size issues |
+| **Builder** | `/workon`, `/builder` | Implement feature, add tests, create PR |
+| **Tester** | `/workon`, `/tester` | E2E tests, code review, Chrome CUJ |
+| **TPM** | `/tpm sync` | Sole merge authority to `main` |
+| **Admin** | `/admin` | Ops health, deploy, environment checks |
 
-### Deployment Policy
-
-| Size | Path |
-|------|------|
-| XS/S (1-2 pts) | PR -> `main`, auto-ships after local verification |
-| M/L (3-5 pts) | PR -> `main`, human verification required before `/tpm sync` |
-| XL (8+ pts) | PR -> `main` or `staging` if `staging-required`, human verification required |
-
-### References
-
-- `doc/maw/sop.md` — primary MAW operating procedure
-- `doc/maw/protocol.md` — agent handoff and comment protocol
-- `.claude/commands/README.md` — slash-command quick reference
+Deployment: XS/S auto-ship after local test. M+ requires human verification. XL may use `staging` branch. See `doc/multi-agent-workflow/sop.md` for full details.
 
 ## Upstream Sync
 
@@ -171,14 +159,6 @@ Paperclip tracked as `upstream` remote. Use the sync script:
 bash scripts/upstream-sync.sh --dry-run   # Preview: new commits, conflicts, risk areas
 bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 ```
-
-**Manual process** (if script unavailable):
-1. `git fetch upstream`
-2. `git checkout -b agentdash-upstream-sync`
-3. `git merge upstream/master` — resolve conflicts
-4. `pnpm install && pnpm -r typecheck && pnpm test:run && pnpm build`
-5. `bash scripts/dry-run-onboarding.sh` — verify AgentDash flows
-6. `git checkout <working-branch> && git merge agentdash-upstream-sync`
 
 **Conflict-prone files** (AgentDash modifies these Paperclip core files):
 - `ui/src/App.tsx` — AgentDash routes
@@ -202,5 +182,16 @@ bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 | `doc/CUJ-STATUS.md` | Feature status and test coverage |
 | `doc/ONBOARDING-FLOW.md` | Client onboarding flow diagram |
 | `doc/agentdash_adapter_strategy.md` | Adapter design strategy |
-| `doc/maw/sop.md` | MAW standard operating procedure |
-| `doc/maw/protocol.md` | Agent handoff and comment protocol |
+| `doc/multi-agent-workflow/sop.md` | MAW standard operating procedure |
+| `doc/multi-agent-workflow/protocol.md` | Agent handoff and comment protocol |
+
+## Document Lifecycle
+
+Agents generate docs, plans, and specs that accumulate over time. Run `bash scripts/doc-hygiene.sh` periodically to detect staleness and bloat.
+
+Rules: docs under 40KB (split if larger), date-prefix plans (`YYYY-MM-DD-name.md`), archive superseded plans to `doc/plans/archive/`, one canonical location per topic, CLAUDE.md under 200 lines.
+
+```sh
+bash scripts/doc-hygiene.sh              # Scan for staleness, bloat, duplicates
+bash scripts/doc-hygiene.sh --archive    # Auto-archive superseded plans
+```

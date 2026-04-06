@@ -35,11 +35,17 @@ export type {
   NativeContextManagement,
   AdapterSessionManagement,
   ResolvedSessionCompactionPolicy,
+  AdapterContextBudget,
+  PromptSectionBudget,
 } from "./session-compaction.js";
 export {
   ADAPTER_SESSION_MANAGEMENT,
+  ADAPTER_CONTEXT_BUDGETS,
+  DEFAULT_PROMPT_SECTION_BUDGETS,
   LEGACY_SESSIONED_ADAPTER_TYPES,
   getAdapterSessionManagement,
+  getAdapterContextBudget,
+  getPromptTokenBudget,
   readSessionCompactionOverride,
   resolveSessionCompactionPolicy,
   hasSessionCompactionThresholds,

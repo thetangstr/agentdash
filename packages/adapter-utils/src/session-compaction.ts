@@ -13,6 +13,109 @@ export interface AdapterSessionManagement {
   defaultSessionCompaction: SessionCompactionPolicy;
 }
 
+// AgentDash: Per-adapter context window budgets
+// These define how much context each adapter can handle and how to allocate it.
+export interface AdapterContextBudget {
+  /** Maximum input tokens the adapter's model can accept */
+  maxContextTokens: number;
+  /** Tokens reserved for model output (not available for prompt) */
+  reservedOutputTokens: number;
+  /** Trigger platform-level compaction when this % of context is used */
+  compactionThresholdPct: number;
+  /** Whether the platform should manage prompt truncation (false = adapter handles it) */
+  platformManagedTruncation: boolean;
+}
+
+export const ADAPTER_CONTEXT_BUDGETS: Record<string, AdapterContextBudget> = {
+  claude_local: {
+    maxContextTokens: 200_000,
+    reservedOutputTokens: 16_000,
+    compactionThresholdPct: 0, // Claude CLI manages its own context
+    platformManagedTruncation: false,
+  },
+  codex_local: {
+    maxContextTokens: 200_000,
+    reservedOutputTokens: 16_000,
+    compactionThresholdPct: 0, // Codex CLI manages its own context
+    platformManagedTruncation: false,
+  },
+  cursor: {
+    maxContextTokens: 128_000,
+    reservedOutputTokens: 8_000,
+    compactionThresholdPct: 80,
+    platformManagedTruncation: true,
+  },
+  gemini_local: {
+    maxContextTokens: 1_000_000,
+    reservedOutputTokens: 32_000,
+    compactionThresholdPct: 85,
+    platformManagedTruncation: true,
+  },
+  opencode_local: {
+    maxContextTokens: 128_000,
+    reservedOutputTokens: 8_000,
+    compactionThresholdPct: 80,
+    platformManagedTruncation: true,
+  },
+  pi_local: {
+    maxContextTokens: 128_000,
+    reservedOutputTokens: 8_000,
+    compactionThresholdPct: 80,
+    platformManagedTruncation: true,
+  },
+  openclaw_gateway: {
+    maxContextTokens: 128_000,
+    reservedOutputTokens: 8_000,
+    compactionThresholdPct: 80,
+    platformManagedTruncation: true,
+  },
+  hermes_local: {
+    maxContextTokens: 128_000,
+    reservedOutputTokens: 8_000,
+    compactionThresholdPct: 80,
+    platformManagedTruncation: true,
+  },
+};
+
+// AgentDash: Token budget allocation for prompt sections.
+// Priority order determines what gets truncated first when over budget.
+// Lower priority = truncated first.
+export interface PromptSectionBudget {
+  /** Section name matching buildCoordinationPrompt sections */
+  section: string;
+  /** Priority (1 = highest, truncated last). Identity/Protocol are highest. */
+  priority: number;
+  /** Maximum % of available prompt budget this section can consume */
+  maxBudgetPct: number;
+  /** Hard floor: minimum tokens to always include (0 = can be fully dropped) */
+  minTokens: number;
+}
+
+export const DEFAULT_PROMPT_SECTION_BUDGETS: PromptSectionBudget[] = [
+  { section: "identity",     priority: 1, maxBudgetPct: 15, minTokens: 200 },
+  { section: "protocol",     priority: 2, maxBudgetPct: 10, minTokens: 150 },
+  { section: "task",         priority: 3, maxBudgetPct: 25, minTokens: 100 },
+  { section: "organization", priority: 4, maxBudgetPct: 10, minTokens: 50 },
+  { section: "skills",       priority: 5, maxBudgetPct: 20, minTokens: 0 },
+  { section: "plan",         priority: 6, maxBudgetPct: 15, minTokens: 0 },
+  { section: "handoff",      priority: 7, maxBudgetPct: 5,  minTokens: 0 },
+];
+
+export function getAdapterContextBudget(adapterType: string | null | undefined): AdapterContextBudget | null {
+  if (!adapterType) return null;
+  return ADAPTER_CONTEXT_BUDGETS[adapterType] ?? null;
+}
+
+/**
+ * Calculate the available prompt token budget for an adapter.
+ * Returns 0 if the adapter manages its own context.
+ */
+export function getPromptTokenBudget(adapterType: string | null | undefined): number {
+  const budget = getAdapterContextBudget(adapterType);
+  if (!budget || !budget.platformManagedTruncation) return 0;
+  return budget.maxContextTokens - budget.reservedOutputTokens;
+}
+
 export interface ResolvedSessionCompactionPolicy {
   policy: SessionCompactionPolicy;
   adapterSessionManagement: AdapterSessionManagement | null;
