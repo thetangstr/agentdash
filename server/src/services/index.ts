@@ -32,3 +32,7 @@ export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js
 export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
+// AgentDash: Cockpit services
+export { connectorService } from "./connectors.js";
+export { inboxService } from "./inbox.js";
+export { wizardService } from "./wizard.js";
