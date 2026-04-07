@@ -3,6 +3,7 @@ import type { Db } from "@agentdash/db";
 import { agents, approvals } from "@agentdash/db";
 import type { InboxListQuery } from "@agentdash/shared";
 import { approvalService } from "./approvals.js";
+import { notFound } from "../errors.js";
 
 export interface InboxItem {
   id: string;
@@ -92,17 +93,21 @@ export function inboxService(db: Db) {
       return result?.count ?? 0;
     },
 
-    async approve(approvalId: string, decidedByUserId: string, decisionNote?: string | null) {
+    async approve(companyId: string, approvalId: string, decidedByUserId: string, decisionNote?: string | null) {
+      const row = await approveSvc.getById(approvalId);
+      if (!row || row.companyId !== companyId) throw notFound("Approval not found");
       return approveSvc.approve(approvalId, decidedByUserId, decisionNote);
     },
 
-    async reject(approvalId: string, decidedByUserId: string, reason?: string | null) {
+    async reject(companyId: string, approvalId: string, decidedByUserId: string, reason?: string | null) {
+      const row = await approveSvc.getById(approvalId);
+      if (!row || row.companyId !== companyId) throw notFound("Approval not found");
       return approveSvc.reject(approvalId, decidedByUserId, reason);
     },
 
-    async getDetail(approvalId: string) {
+    async getDetail(companyId: string, approvalId: string) {
       const row = await approveSvc.getById(approvalId);
-      if (!row) return null;
+      if (!row || row.companyId !== companyId) return null;
 
       let agentName: string | null = null;
       if (row.requestedByAgentId) {

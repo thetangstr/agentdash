@@ -42,7 +42,7 @@ export function inboxRoutes(db: Db) {
   router.get("/companies/:companyId/inbox/:actionId", async (req, res) => {
     const companyId = req.params.companyId;
     assertCompanyAccess(req, companyId);
-    const item = await svc.getDetail(req.params.actionId);
+    const item = await svc.getDetail(companyId, req.params.actionId);
     if (!item) {
       res.status(404).json({ error: "Action not found" });
       return;
@@ -56,6 +56,7 @@ export function inboxRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
     const result = await svc.approve(
+      companyId,
       req.params.actionId,
       actor.actorId,
       req.body.decisionNote,
@@ -69,6 +70,7 @@ export function inboxRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
     const result = await svc.reject(
+      companyId,
       req.params.actionId,
       actor.actorId,
       req.body.reason,

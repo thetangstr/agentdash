@@ -36,6 +36,9 @@ export function connectorRoutes(db: Db) {
   // AgentDash: OAuth callback
   router.get("/companies/:companyId/connectors/:provider/callback", async (req, res) => {
     const { companyId, provider } = req.params;
+    // TODO: SECURITY — when implementing real OAuth, validate the `state` parameter
+    // against a server-side session to prevent CSRF attacks on the callback.
+    assertCompanyAccess(req, companyId);
     const { code } = req.query;
 
     if (!code || typeof code !== "string") {

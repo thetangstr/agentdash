@@ -183,7 +183,7 @@ export function wizardService(db: Db) {
         name: input.name,
         role: roleForAgent,
         title: input.role === "custom" && input.customRole ? input.customRole : null,
-        adapterType: "claude",
+        adapterType: "claude_local",
         adapterConfig: {},
       });
 
@@ -204,13 +204,14 @@ export function wizardService(db: Db) {
       const updatedAgent = await agentSvc.update(agent.id, { adapterConfig });
 
       // Step 5: optionally create a routine if a schedule was provided
+      let routineId: string | null = null;
       if (input.schedule) {
         const cronExpression =
           input.schedule.cronExpression ?? FREQUENCY_TO_CRON[input.schedule.frequency];
         if (!cronExpression) {
           logger.warn({ frequency: input.schedule.frequency }, "wizard: unknown frequency, skipping routine creation");
         } else {
-          await routineSvc.create(
+          const routine = await routineSvc.create(
             companyId,
             {
               projectId,
@@ -224,10 +225,11 @@ export function wizardService(db: Db) {
             },
             { userId: actorUserId },
           );
+          routineId = routine?.id ?? null;
         }
       }
 
-      return updatedAgent ?? agent;
+      return { agent: updatedAgent ?? agent, routineId };
     },
   };
 }
