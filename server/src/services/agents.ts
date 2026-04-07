@@ -6,6 +6,7 @@ import {
   agentConfigRevisions,
   agentApiKeys,
   agentRuntimeState,
+  agentServiceAccounts,
   agentTaskSessions,
   agentWakeupRequests,
   costEvents,
@@ -688,6 +689,60 @@ export function agentService(db: Db) {
         return { agent: null, ambiguous: true } as const;
       }
       return { agent: null, ambiguous: false } as const;
+    },
+
+    async setServiceAccount(
+      agentId: string,
+      provider: string,
+      data: {
+        email?: string;
+        displayName?: string;
+        encryptedTokens?: Record<string, unknown>;
+        scopes?: string[];
+      },
+    ) {
+      const [agent] = await db
+        .select({ companyId: agents.companyId })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) throw notFound("Agent not found");
+
+      const [row] = await db
+        .insert(agentServiceAccounts)
+        .values({
+          agentId,
+          companyId: agent.companyId,
+          provider,
+          ...data,
+        })
+        .onConflictDoUpdate({
+          target: [agentServiceAccounts.agentId, agentServiceAccounts.provider],
+          set: { ...data, updatedAt: new Date() },
+        })
+        .returning();
+      return row;
+    },
+
+    async getServiceAccount(agentId: string, provider: string) {
+      const [row] = await db
+        .select()
+        .from(agentServiceAccounts)
+        .where(
+          and(
+            eq(agentServiceAccounts.agentId, agentId),
+            eq(agentServiceAccounts.provider, provider),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    },
+
+    async listServiceAccounts(agentId: string) {
+      return db
+        .select()
+        .from(agentServiceAccounts)
+        .where(eq(agentServiceAccounts.agentId, agentId));
     },
   };
 }
