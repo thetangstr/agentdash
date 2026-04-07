@@ -1641,6 +1641,45 @@ function ConfigurationTab({
           </div>
         </div>
       </div>
+
+      {/* AgentDash: Claw/Assistant Mode */}
+      <div>
+        <h3 className="text-sm font-medium mb-3">Identity Mode</h3>
+        <div className="border border-border rounded-lg p-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => updateAgent.mutate({ credentialMode: "claw" })}
+              disabled={updateAgent.isPending}
+              className={cn(
+                "flex-1 p-3 rounded-md border text-left transition-colors",
+                (agent.credentialMode === "claw" || !agent.credentialMode)
+                  ? "border-primary bg-primary/5"
+                  : "hover:bg-accent/50",
+              )}
+            >
+              <div className="text-sm font-medium">Claw</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                Agent has its own fixed identity and service account credentials
+              </div>
+            </button>
+            <button
+              onClick={() => updateAgent.mutate({ credentialMode: "assistant" })}
+              disabled={updateAgent.isPending}
+              className={cn(
+                "flex-1 p-3 rounded-md border text-left transition-colors",
+                agent.credentialMode === "assistant"
+                  ? "border-primary bg-primary/5"
+                  : "hover:bg-accent/50",
+              )}
+            >
+              <div className="text-sm font-medium">Assistant</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                Agent inherits the triggering user's identity and OAuth tokens
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
