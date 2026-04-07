@@ -846,3 +846,35 @@ export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 
 export const PIPELINE_RUN_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
 export type PipelineRunStatus = (typeof PIPELINE_RUN_STATUSES)[number];
+
+// AgentDash: Cockpit constants
+export const CONNECTOR_PROVIDERS = [
+  "microsoft365",
+  "hubspot",
+  "google",
+  "slack",
+] as const;
+export type ConnectorProvider = (typeof CONNECTOR_PROVIDERS)[number];
+
+export const CONNECTOR_STATUSES = [
+  "connected",
+  "disconnected",
+  "error",
+] as const;
+export type ConnectorStatus = (typeof CONNECTOR_STATUSES)[number];
+
+export const CREDENTIAL_MODES = ["claw", "assistant"] as const;
+export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
+
+export const AGENT_TONES = ["professional", "friendly", "direct"] as const;
+export type AgentTone = (typeof AGENT_TONES)[number];
+
+export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProvider, string> = {
+  microsoft365: "Microsoft 365",
+  hubspot: "HubSpot",
+  google: "Google Workspace",
+  slack: "Slack",
+};
+
+export const INBOX_STATUSES = ["pending", "approved", "rejected", "all"] as const;
+export type InboxStatus = (typeof INBOX_STATUSES)[number];

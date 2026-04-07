@@ -317,3 +317,23 @@ export {
   type UpdatePipeline,
   type StartPipelineRun,
 } from "./pipeline.js";
+
+// AgentDash: Cockpit validators
+export {
+  connectConnectorSchema,
+  connectorCallbackSchema,
+  type ConnectConnector,
+  type ConnectorCallback,
+} from "./connector.js";
+
+export {
+  createAgentWizardSchema,
+  type CreateAgentWizard,
+} from "./wizard.js";
+
+export {
+  inboxListQuerySchema,
+  inboxRejectSchema,
+  type InboxListQuery,
+  type InboxReject,
+} from "./inbox.js";

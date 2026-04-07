@@ -140,6 +140,17 @@ export {
   type PluginWebhookDeliveryStatus,
   type PluginEventType,
   type PluginBridgeErrorCode,
+  CONNECTOR_PROVIDERS,
+  CONNECTOR_STATUSES,
+  CREDENTIAL_MODES,
+  AGENT_TONES,
+  CONNECTOR_PROVIDER_LABELS,
+  INBOX_STATUSES,
+  type ConnectorProvider,
+  type ConnectorStatus,
+  type CredentialMode,
+  type AgentTone,
+  type InboxStatus,
 } from "./constants.js";
 
 export type {
@@ -606,6 +617,16 @@ export {
   type CreatePipeline,
   type UpdatePipeline,
   type StartPipelineRun,
+  connectConnectorSchema,
+  connectorCallbackSchema,
+  type ConnectConnector,
+  type ConnectorCallback,
+  createAgentWizardSchema,
+  type CreateAgentWizard,
+  inboxListQuerySchema,
+  inboxRejectSchema,
+  type InboxListQuery,
+  type InboxReject,
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";
