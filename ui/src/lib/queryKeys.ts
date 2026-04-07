@@ -156,4 +156,18 @@ export const queryKeys = {
   adapters: {
     all: ["adapters"] as const,
   },
+  connectors: {
+    list: (companyId: string) => ["connectors", companyId] as const,
+  },
+  inbox: {
+    list: (companyId: string, status?: string) =>
+      ["inbox", companyId, status] as const,
+    count: (companyId: string) => ["inbox", "count", companyId] as const,
+    detail: (companyId: string, actionId: string) =>
+      ["inbox", "detail", companyId, actionId] as const,
+  },
+  agentResearch: {
+    assessment: (companyId: string) =>
+      ["agent-research", companyId] as const,
+  },
 };
