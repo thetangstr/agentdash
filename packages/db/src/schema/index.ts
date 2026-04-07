@@ -61,6 +61,8 @@ export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 
 // AgentDash extensions
+export { agentServiceAccounts } from "./agent_service_accounts.js";
+export { companyConnectors } from "./company_connectors.js";
 export { issueDependencies } from "./issue_dependencies.js";
 export { agentTemplates } from "./agent_templates.js";
 export { spawnRequests } from "./spawn_requests.js";
