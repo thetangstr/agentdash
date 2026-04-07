@@ -40,6 +40,9 @@ import { CrmAccountDetail } from "./pages/CrmAccountDetail";
 import { HubSpotSettings } from "./pages/HubSpotSettings";
 import { Feed } from "./pages/Feed";
 import { ActionProposals } from "./pages/ActionProposals";
+import { ActionInbox } from "./pages/ActionInbox";
+import { Connectors } from "./pages/Connectors";
+import { AgentWizard } from "./pages/AgentWizard";
 import { Pipelines } from "./pages/Pipelines";
 import { CrmContacts } from "./pages/CrmContacts";
 import { CrmLeads } from "./pages/CrmLeads";
@@ -188,6 +191,9 @@ function boardRoutes() {
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="action-proposals" element={<ActionProposals />} />
+      <Route path="action-inbox" element={<ActionInbox />} />
+      <Route path="connectors" element={<Connectors />} />
+      <Route path="agents/wizard" element={<AgentWizard />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="inbox" element={<InboxRootRedirect />} />

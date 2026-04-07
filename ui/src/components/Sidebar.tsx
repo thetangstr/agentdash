@@ -26,6 +26,7 @@ import {
   UserPlus,
   Columns3,
   Wallet,
+  Plug,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -134,6 +135,8 @@ export function Sidebar() {
         </SidebarSection>
 
         <SidebarSection label="AgentDash">
+          <SidebarNavItem to="/action-inbox" label="Inbox" icon={Inbox} />
+          <SidebarNavItem to="/connectors" label="Connectors" icon={Plug} />
           <SidebarNavItem to="/templates" label="Templates" icon={Factory} />
           <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
           <SidebarNavItem to="/action-proposals" label="Proposals" icon={Scale} />
