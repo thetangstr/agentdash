@@ -28,7 +28,7 @@ import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
-import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
+import { trackAgentFirstHeartbeat } from "@agentdash/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
@@ -2519,13 +2519,6 @@ export function heartbeatService(db: Db) {
       projectWorkspaceId: issueContext?.projectWorkspaceId ?? resolvedWorkspace.workspaceId,
       executionWorkspaceId: issueContext?.executionWorkspaceId ?? null,
       cwd: resolvedWorkspace.cwd,
-    });
-    const workspaceManagedConfig = buildExecutionWorkspaceAdapterConfig({
-      agentConfig: config,
-      projectPolicy: projectExecutionWorkspacePolicy,
-      issueSettings: issueExecutionWorkspaceSettings,
-      mode: executionWorkspaceMode,
-      legacyUseProjectWorkspace: issueAssigneeOverrides?.useProjectWorkspace ?? null,
     });
     const issueRef = issueContext
       ? {

@@ -18,7 +18,7 @@ const mockAgentService = vi.hoisted(() => ({
 const mockTrackAgentTaskCompleted = vi.hoisted(() => vi.fn());
 const mockGetTelemetryClient = vi.hoisted(() => vi.fn());
 
-vi.mock("@paperclipai/shared/telemetry", () => ({
+vi.mock("@agentdash/shared/telemetry", () => ({
   trackAgentTaskCompleted: mockTrackAgentTaskCompleted,
 }));
 
@@ -41,6 +41,7 @@ vi.mock("../services/index.js", () => ({
     reportRunActivity: vi.fn(async () => undefined),
   }),
   instanceSettingsService: () => ({}),
+  approvalService: () => ({}),
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
   logActivity: vi.fn(async () => undefined),

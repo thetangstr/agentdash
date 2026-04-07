@@ -171,7 +171,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
   );
 
   it(
-    "replays migration 0046 safely when document revision columns already exist",
+    "replays migration 0061 safely when document revision columns already exist",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -179,7 +179,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
 
       const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
       try {
-        const smoothSentinelsHash = await migrationHash("0046_smooth_sentinels.sql");
+        const smoothSentinelsHash = await migrationHash("0061_smooth_sentinels.sql");
 
         await sql.unsafe(
           `DELETE FROM "drizzle"."__drizzle_migrations" WHERE hash = '${smoothSentinelsHash}'`,
@@ -203,7 +203,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
       const pendingState = await inspectMigrations(connectionString);
       expect(pendingState).toMatchObject({
         status: "needsMigrations",
-        pendingMigrations: ["0046_smooth_sentinels.sql"],
+        pendingMigrations: ["0061_smooth_sentinels.sql"],
         reason: "pending-migrations",
       });
 
@@ -243,7 +243,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
   );
 
   it(
-    "replays migration 0047 safely when feedback tables and run columns already exist",
+    "replays migration 0062 safely when feedback tables and run columns already exist",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -251,7 +251,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
 
       const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
       try {
-        const overjoyedGrootHash = await migrationHash("0047_overjoyed_groot.sql");
+        const overjoyedGrootHash = await migrationHash("0062_overjoyed_groot.sql");
 
         await sql.unsafe(
           `DELETE FROM "drizzle"."__drizzle_migrations" WHERE hash = '${overjoyedGrootHash}'`,
@@ -297,7 +297,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
       const pendingState = await inspectMigrations(connectionString);
       expect(pendingState).toMatchObject({
         status: "needsMigrations",
-        pendingMigrations: ["0047_overjoyed_groot.sql"],
+        pendingMigrations: ["0062_overjoyed_groot.sql"],
         reason: "pending-migrations",
       });
 
@@ -337,7 +337,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
   );
 
   it(
-    "replays migration 0048 safely when routines.variables already exists",
+    "replays migration 0063 safely when routines.variables already exists",
     async () => {
       const connectionString = await createTempDatabase();
 
@@ -345,7 +345,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
 
       const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
       try {
-        const flashyMarrowHash = await migrationHash("0048_flashy_marrow.sql");
+        const flashyMarrowHash = await migrationHash("0063_flashy_marrow.sql");
 
         await sql.unsafe(
           `DELETE FROM "drizzle"."__drizzle_migrations" WHERE hash = '${flashyMarrowHash}'`,
@@ -368,7 +368,7 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
       const pendingState = await inspectMigrations(connectionString);
       expect(pendingState).toMatchObject({
         status: "needsMigrations",
-        pendingMigrations: ["0048_flashy_marrow.sql"],
+        pendingMigrations: ["0063_flashy_marrow.sql"],
         reason: "pending-migrations",
       });
 

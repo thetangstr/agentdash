@@ -353,10 +353,304 @@
   },
   "hotPaths": [
     {
+      "path": "ui/src",
+      "accessCount": 8,
+      "lastAccessed": 1775516436116,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/services/skill-selection.ts",
+      "accessCount": 8,
+      "lastAccessed": 1775517160471,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/heartbeat.ts",
+      "accessCount": 6,
+      "lastAccessed": 1775517016572,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/crm-lifecycle.ts",
+      "accessCount": 6,
+      "lastAccessed": 1775517084519,
+      "type": "file"
+    },
+    {
+      "path": "server/src",
+      "accessCount": 6,
+      "lastAccessed": 1775517102627,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/services/context-manager.ts",
+      "accessCount": 5,
+      "lastAccessed": 1775516823853,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/pipeline-orchestrator.ts",
+      "accessCount": 4,
+      "lastAccessed": 1775516774821,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/index.ts",
+      "accessCount": 4,
+      "lastAccessed": 1775517678630,
+      "type": "directory"
+    },
+    {
       "path": "packages/db/src/migrations/meta/_journal.json",
       "accessCount": 3,
       "lastAccessed": 1775515748851,
       "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/routines.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775515997928,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/app.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775516139455,
+      "type": "file"
+    },
+    {
+      "path": "server/src/index.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775516183555,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/pages/ProjectWorkspaceDetail.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1775516266463,
+      "type": "file"
+    },
+    {
+      "path": "ui/package.json",
+      "accessCount": 3,
+      "lastAccessed": 1775516484126,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/pages/CrmPipeline.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1775516600995,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/telemetry.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775516659075,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/services/feedback.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775517030930,
+      "type": "file"
+    },
+    {
+      "path": "server/src/middleware/error-handler.ts",
+      "accessCount": 3,
+      "lastAccessed": 1775517095707,
+      "type": "directory"
+    },
+    {
+      "path": "packages/shared/src/types",
+      "accessCount": 2,
+      "lastAccessed": 1775515949272,
+      "type": "directory"
+    },
+    {
+      "path": "packages/shared/src/validators/action-proposal.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775515960720,
+      "type": "file"
+    },
+    {
+      "path": "packages/shared/src/validators/pipeline.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775515963795,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/index.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775515992061,
+      "type": "directory"
+    },
+    {
+      "path": "packages/db/src/schema/agent_pipelines.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516011501,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/action-proposals.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516157418,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/pipelines.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516158300,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/feed.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516159645,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/hubspot-sync-scheduler.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516200068,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/local-service-supervisor.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516202638,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/project-workspace-runtime-config.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516203452,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/action-proposals.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516204724,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/feed.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516205110,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/claude-local-execute.test.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516209116,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/agentdash-cuj-routes.test.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516210024,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/execution-workspaces-service.test.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516210894,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/crm-routes.test.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516211993,
+      "type": "file"
+    },
+    {
+      "path": "scripts/dev-service-profile.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516320161,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/api/crm.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516452735,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/issues.ts",
+      "accessCount": 2,
+      "lastAccessed": 1775516991780,
+      "type": "directory"
+    },
+    {
+      "path": "packages/shared/src/validators",
+      "accessCount": 1,
+      "lastAccessed": 1775515931285,
+      "type": "directory"
+    },
+    {
+      "path": "packages/shared/src/validators/index.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775515943436,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema",
+      "accessCount": 1,
+      "lastAccessed": 1775515949990,
+      "type": "directory"
+    },
+    {
+      "path": "packages/db/src/schema/agent_templates.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516002452,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes",
+      "accessCount": 1,
+      "lastAccessed": 1775516029028,
+      "type": "directory"
+    },
+    {
+      "path": "server/src/routes/goals.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516062313,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/projects.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516062809,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/workspace-runtime.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516105085,
+      "type": "file"
+    },
+    {
+      "path": "packages/shared/src/types/workspace-runtime.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516110045,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/App.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775516235973,
+      "type": "directory"
+    },
+    {
+      "path": "scripts/ensure-workspace-package-links.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775516309082,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 1,
+      "lastAccessed": 1775516330059,
+      "type": "directory"
     }
   ],
   "userDirectives": []
