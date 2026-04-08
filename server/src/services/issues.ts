@@ -1678,8 +1678,17 @@ export function issueService(db: Db) {
 
       // AgentDash: advance pipeline when pipeline-stage issue completes
       if (result && issueData.status === "done" && existing.originKind === "pipeline_stage" && existing.originId) {
-        const { pipelineOrchestratorService } = await import("./pipeline-orchestrator.js");
-        void pipelineOrchestratorService(db).onStageCompleted(existing.companyId, id).catch(() => {});
+        const { pipelineRunnerService } = await import("./pipeline-runner.js");
+        const { pipelineStageExecutions } = await import("@agentdash/db");
+        const [stageExec] = await db
+          .select()
+          .from(pipelineStageExecutions)
+          .where(eq(pipelineStageExecutions.id, existing.originId));
+        if (stageExec) {
+          void pipelineRunnerService(db)
+            .onStageCompleted(stageExec.pipelineRunId, stageExec.stageId, {}, 0)
+            .catch(() => {});
+        }
       }
 
       // AgentDash: CRM lifecycle — update deals and accounts when issue completes

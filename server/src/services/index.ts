@@ -37,3 +37,4 @@ export { connectorService } from "./connectors.js";
 export { inboxService } from "./inbox.js";
 export { wizardService } from "./wizard.js";
 export { pipelineOrchestratorService, validatePipelineDag } from "./pipeline-orchestrator.js";
+export { pipelineRunnerService } from "./pipeline-runner.js";
