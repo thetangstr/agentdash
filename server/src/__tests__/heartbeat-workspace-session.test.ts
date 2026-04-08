@@ -4,8 +4,12 @@ import { sessionCodec as codexSessionCodec } from "@agentdash/adapter-codex-loca
 import { resolveDefaultAgentWorkspaceDir } from "../home-paths.js";
 import {
   applyPersistedExecutionWorkspaceConfig,
+  buildRealizedExecutionWorkspaceFromPersisted,
   buildExplicitResumeSessionOverride,
+  deriveTaskKeyWithHeartbeatFallback,
+  extractWakeCommentIds,
   formatRuntimeWorkspaceWarningLog,
+  mergeCoalescedContextSnapshot,
   prioritizeProjectWorkspaceCandidatesForRun,
   parseSessionCompactionPolicy,
   resolveRuntimeSessionParamsForWorkspace,
@@ -154,6 +158,89 @@ describe("applyPersistedExecutionWorkspaceConfig", () => {
   });
 });
 
+describe("buildRealizedExecutionWorkspaceFromPersisted", () => {
+  it("reuses the persisted execution workspace path instead of deriving a new worktree", () => {
+    const result = buildRealizedExecutionWorkspaceFromPersisted({
+      base: buildResolvedWorkspace({
+        cwd: "/tmp/project-primary",
+        repoRef: "main",
+      }),
+      workspace: {
+        id: "execution-workspace-1",
+        companyId: "company-1",
+        projectId: "project-1",
+        projectWorkspaceId: "workspace-1",
+        sourceIssueId: "issue-1",
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "PAP-880-thumbs-capture-for-evals-feature",
+        status: "active",
+        cwd: "/tmp/reused-worktree",
+        repoUrl: "https://example.com/paperclip.git",
+        baseRef: "main",
+        branchName: "PAP-880-thumbs-capture-for-evals-feature",
+        providerType: "git_worktree",
+        providerRef: "/tmp/reused-worktree",
+        derivedFromExecutionWorkspaceId: null,
+        lastUsedAt: new Date(),
+        openedAt: new Date(),
+        closedAt: null,
+        cleanupEligibleAt: null,
+        cleanupReason: null,
+        config: null,
+        metadata: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.strategy).toBe("git_worktree");
+    expect(result.cwd).toBe("/tmp/reused-worktree");
+    expect(result.worktreePath).toBe("/tmp/reused-worktree");
+    expect(result.branchName).toBe("PAP-880-thumbs-capture-for-evals-feature");
+    expect(result.source).toBe("task_session");
+  });
+
+  it("falls back to realization when the persisted workspace has no local path yet", () => {
+    const result = buildRealizedExecutionWorkspaceFromPersisted({
+      base: buildResolvedWorkspace({
+        cwd: "/tmp/project-primary",
+        repoRef: "main",
+      }),
+      workspace: {
+        id: "execution-workspace-2",
+        companyId: "company-1",
+        projectId: "project-1",
+        projectWorkspaceId: "workspace-1",
+        sourceIssueId: "issue-2",
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "PAP-999-missing-provider-ref",
+        status: "active",
+        cwd: null,
+        repoUrl: "https://example.com/paperclip.git",
+        baseRef: "main",
+        branchName: "feature/PAP-999-missing-provider-ref",
+        providerType: "git_worktree",
+        providerRef: null,
+        derivedFromExecutionWorkspaceId: null,
+        lastUsedAt: new Date(),
+        openedAt: new Date(),
+        closedAt: null,
+        cleanupEligibleAt: null,
+        cleanupReason: null,
+        config: null,
+        metadata: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
 describe("stripWorkspaceRuntimeFromExecutionRunConfig", () => {
   it("removes workspace runtime before heartbeat execution", () => {
     const input = {
@@ -241,6 +328,60 @@ describe("shouldResetTaskSessionForWake", () => {
         wakeTriggerDetail: "callback",
       }),
     ).toBe(false);
+  });
+});
+
+describe("deriveTaskKeyWithHeartbeatFallback", () => {
+  it("returns explicit taskKey when present", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({ taskKey: "issue-123" }, null)).toBe("issue-123");
+  });
+
+  it("returns explicit issueId when no taskKey", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({ issueId: "issue-456" }, null)).toBe("issue-456");
+  });
+
+  it("returns __heartbeat__ for timer wakes with no explicit key", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "timer" }, null)).toBe("__heartbeat__");
+  });
+
+  it("prefers explicit key over heartbeat fallback even on timer wakes", () => {
+    expect(
+      deriveTaskKeyWithHeartbeatFallback({ wakeSource: "timer", taskKey: "issue-789" }, null),
+    ).toBe("issue-789");
+  });
+
+  it("returns null for non-timer wakes with no explicit key", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({ wakeSource: "on_demand" }, null)).toBeNull();
+  });
+
+  it("returns null for empty context", () => {
+    expect(deriveTaskKeyWithHeartbeatFallback({}, null)).toBeNull();
+  });
+});
+
+describe("comment wake batching", () => {
+  it("preserves ordered wake comment ids when coalescing queued follow-up wakes", () => {
+    const merged = mergeCoalescedContextSnapshot(
+      {
+        issueId: "issue-1",
+        wakeReason: "issue_commented",
+        wakeCommentId: "comment-1",
+        wakeCommentIds: ["comment-1"],
+        paperclipWake: {
+          latestCommentId: "comment-1",
+        },
+      },
+      {
+        issueId: "issue-1",
+        wakeReason: "issue_commented",
+        wakeCommentId: "comment-2",
+      },
+    );
+
+    expect(extractWakeCommentIds(merged)).toEqual(["comment-1", "comment-2"]);
+    expect(merged.commentId).toBe("comment-2");
+    expect(merged.wakeCommentId).toBe("comment-2");
+    expect(merged.paperclipWake).toBeUndefined();
   });
 });
 

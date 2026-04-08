@@ -26,13 +26,13 @@ export const AGENT_ADAPTER_TYPES = [
   "http",
   "claude_local",
   "codex_local",
+  "gemini_local",
   "opencode_local",
   "pi_local",
   "cursor",
   "openclaw_gateway",
-  "hermes_local",
 ] as const;
-export type AgentAdapterType = (typeof AGENT_ADAPTER_TYPES)[number];
+export type AgentAdapterType = (typeof AGENT_ADAPTER_TYPES)[number] | (string & {});
 
 export const AGENT_ROLES = [
   "ceo",
@@ -135,6 +135,9 @@ export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 export const ISSUE_ORIGIN_KINDS = ["manual", "routine_execution", "pipeline_stage"] as const;
 export type IssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 
+export const ISSUE_RELATION_TYPES = ["blocks"] as const;
+export type IssueRelationType = (typeof ISSUE_RELATION_TYPES)[number];
+
 export const GOAL_LEVELS = ["company", "team", "agent", "task"] as const;
 export type GoalLevel = (typeof GOAL_LEVELS)[number];
 
@@ -164,6 +167,9 @@ export type RoutineTriggerKind = (typeof ROUTINE_TRIGGER_KINDS)[number];
 
 export const ROUTINE_TRIGGER_SIGNING_MODES = ["bearer", "hmac_sha256"] as const;
 export type RoutineTriggerSigningMode = (typeof ROUTINE_TRIGGER_SIGNING_MODES)[number];
+
+export const ROUTINE_VARIABLE_TYPES = ["text", "textarea", "number", "boolean", "select"] as const;
+export type RoutineVariableType = (typeof ROUTINE_VARIABLE_TYPES)[number];
 
 export const ROUTINE_RUN_STATUSES = [
   "received",
@@ -457,6 +463,7 @@ export const PLUGIN_CAPABILITIES = [
   "agent.sessions.close",
   "activity.log.write",
   "metrics.write",
+  "telemetry.track",
   // Plugin State
   "plugin.state.read",
   "plugin.state.write",
@@ -837,5 +844,51 @@ export type ActionProposalType = (typeof ACTION_PROPOSAL_TYPES)[number];
 export const PIPELINE_STATUSES = ["draft", "active", "paused", "archived"] as const;
 export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 
-export const PIPELINE_RUN_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
+export const PIPELINE_RUN_STATUSES = [
+  "pending", "running", "paused", "completed", "failed", "cancelled",
+] as const;
 export type PipelineRunStatus = (typeof PIPELINE_RUN_STATUSES)[number];
+
+// AgentDash: Pipeline orchestrator constants
+export const PIPELINE_EXECUTION_MODES = ["sync", "async"] as const;
+export type PipelineExecutionMode = (typeof PIPELINE_EXECUTION_MODES)[number];
+
+export const PIPELINE_STAGE_TYPES = ["agent", "hitl_gate", "merge"] as const;
+export type PipelineStageType = (typeof PIPELINE_STAGE_TYPES)[number];
+
+export const STAGE_EXECUTION_STATUSES = [
+  "pending", "running", "completed", "failed", "skipped", "waiting_hitl",
+] as const;
+export type StageExecutionStatus = (typeof STAGE_EXECUTION_STATUSES)[number];
+
+// AgentDash: Cockpit constants
+export const CONNECTOR_PROVIDERS = [
+  "microsoft365",
+  "hubspot",
+  "google",
+  "slack",
+] as const;
+export type ConnectorProvider = (typeof CONNECTOR_PROVIDERS)[number];
+
+export const CONNECTOR_STATUSES = [
+  "connected",
+  "disconnected",
+  "error",
+] as const;
+export type ConnectorStatus = (typeof CONNECTOR_STATUSES)[number];
+
+export const CREDENTIAL_MODES = ["claw", "assistant"] as const;
+export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
+
+export const AGENT_TONES = ["professional", "friendly", "direct"] as const;
+export type AgentTone = (typeof AGENT_TONES)[number];
+
+export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProvider, string> = {
+  microsoft365: "Microsoft 365",
+  hubspot: "HubSpot",
+  google: "Google Workspace",
+  slack: "Slack",
+};
+
+export const INBOX_STATUSES = ["pending", "approved", "rejected", "all"] as const;
+export type InboxStatus = (typeof INBOX_STATUSES)[number];

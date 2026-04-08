@@ -43,6 +43,7 @@ export const queryKeys = {
       ["issues", companyId, "execution-workspace", executionWorkspaceId] as const,
     detail: (id: string) => ["issues", "detail", id] as const,
     comments: (issueId: string) => ["issues", "comments", issueId] as const,
+    feedbackVotes: (issueId: string) => ["issues", "feedback-votes", issueId] as const,
     attachments: (issueId: string) => ["issues", "attachments", issueId] as const,
     documents: (issueId: string) => ["issues", "documents", issueId] as const,
     plan: (issueId: string) => ["issues", "plan", issueId] as const,
@@ -151,5 +152,31 @@ export const queryKeys = {
     config: (pluginId: string) => ["plugins", pluginId, "config"] as const,
     dashboard: (pluginId: string) => ["plugins", pluginId, "dashboard"] as const,
     logs: (pluginId: string) => ["plugins", pluginId, "logs"] as const,
+  },
+  adapters: {
+    all: ["adapters"] as const,
+  },
+  connectors: {
+    list: (companyId: string) => ["connectors", companyId] as const,
+  },
+  inbox: {
+    list: (companyId: string, status?: string) =>
+      ["inbox", companyId, status] as const,
+    count: (companyId: string) => ["inbox", "count", companyId] as const,
+    detail: (companyId: string, actionId: string) =>
+      ["inbox", "detail", companyId, actionId] as const,
+  },
+  agentResearch: {
+    assessment: (companyId: string) =>
+      ["agent-research", companyId] as const,
+  },
+  pipelines: {
+    list: (companyId: string) => ["pipelines", companyId] as const,
+    detail: (companyId: string, pipelineId: string) =>
+      ["pipelines", companyId, pipelineId] as const,
+    runs: (companyId: string, pipelineId: string) =>
+      ["pipelines", companyId, pipelineId, "runs"] as const,
+    runDetail: (companyId: string, runId: string) =>
+      ["pipelines", "run", companyId, runId] as const,
   },
 };

@@ -63,6 +63,9 @@ function createExistingConfigFixture() {
         keyFilePath: path.join(runtimeRoot, "secrets", "master.key"),
       },
     },
+    telemetry: {
+      enabled: true,
+    },
   };
 
   fs.mkdirSync(path.dirname(configPath), { recursive: true });

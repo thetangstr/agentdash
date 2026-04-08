@@ -1,6 +1,7 @@
 // Re-export everything from the shared adapter-utils/server-utils package.
 // This file is kept as a convenience shim so existing in-tree
 // imports (process/, http/, heartbeat.ts) don't need rewriting.
+import type { ChildProcess } from "node:child_process";
 import { logger } from "../middleware/logger.js";
 export {
   type RunProcessResult,

@@ -40,7 +40,13 @@ import { CrmAccountDetail } from "./pages/CrmAccountDetail";
 import { HubSpotSettings } from "./pages/HubSpotSettings";
 import { Feed } from "./pages/Feed";
 import { ActionProposals } from "./pages/ActionProposals";
+import { ActionInbox } from "./pages/ActionInbox";
+import { Connectors } from "./pages/Connectors";
+import { AgentWizard } from "./pages/AgentWizard";
 import { Pipelines } from "./pages/Pipelines";
+import PipelineDetail from "./pages/PipelineDetail";
+import PipelineWizard from "./pages/PipelineWizard";
+import PipelineRunDetail from "./pages/PipelineRunDetail";
 import { CrmContacts } from "./pages/CrmContacts";
 import { CrmLeads } from "./pages/CrmLeads";
 import { CrmKanban } from "./pages/CrmKanban";
@@ -55,6 +61,7 @@ import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
 import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
+import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
 import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
@@ -187,6 +194,9 @@ function boardRoutes() {
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="action-proposals" element={<ActionProposals />} />
+      <Route path="action-inbox" element={<ActionInbox />} />
+      <Route path="connectors" element={<Connectors />} />
+      <Route path="agents/wizard" element={<AgentWizard />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
@@ -203,6 +213,9 @@ function boardRoutes() {
       <Route path="setup" element={<OnboardingWizardPage />} />
       <Route path="feed" element={<Feed />} />
       <Route path="pipelines" element={<Pipelines />} />
+      <Route path="pipelines/new" element={<PipelineWizard />} />
+      <Route path="pipelines/:pipelineId" element={<PipelineDetail />} />
+      <Route path="pipeline-runs/:runId" element={<PipelineRunDetail />} />
       <Route path="profile" element={<UserProfile />} />
       <Route path="crm" element={<CrmPipeline />} />
       <Route path="crm/kanban" element={<CrmKanban />} />
@@ -217,6 +230,7 @@ function boardRoutes() {
       <Route path="budget" element={<BudgetForecast />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="tests/ux/runs" element={<RunTranscriptUxLab />} />
+      <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />
     </>
@@ -363,6 +377,7 @@ export function App() {
             <Route path="experimental" element={<InstanceExperimentalSettings />} />
             <Route path="plugins" element={<PluginManager />} />
             <Route path="plugins/:pluginId" element={<PluginSettings />} />
+            <Route path="adapters" element={<AdapterManager />} />
           </Route>
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />

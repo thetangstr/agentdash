@@ -25,7 +25,7 @@ describe("issueDetailBreadcrumb", () => {
   it("adds the source query param when building an issue detail path", () => {
     const state = createIssueDetailLocationState("Inbox", "/inbox/mine", "inbox");
 
-    expect(createIssueDetailPath("PAP-465", state)).toBe("/issues/PAP-465?from=inbox");
+    expect(createIssueDetailPath("PAP-465", state)).toBe("/issues/PAP-465?from=inbox&fromHref=%2Finbox%2Fmine");
   });
 
   it("reuses the current source query param when state has been dropped", () => {

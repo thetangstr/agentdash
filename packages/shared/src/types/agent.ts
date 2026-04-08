@@ -80,6 +80,8 @@ export interface Agent {
   permissions: AgentPermissions;
   lastHeartbeatAt: Date | null;
   metadata: Record<string, unknown> | null;
+  // AgentDash: credential mode for Claw vs Assistant identity
+  credentialMode: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
