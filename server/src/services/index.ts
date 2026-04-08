@@ -38,3 +38,4 @@ export { inboxService } from "./inbox.js";
 export { wizardService } from "./wizard.js";
 export { pipelineOrchestratorService, validatePipelineDag } from "./pipeline-orchestrator.js";
 export { pipelineRunnerService } from "./pipeline-runner.js";
+export { pipelineSelfHealService } from "./pipeline-self-heal.js";
