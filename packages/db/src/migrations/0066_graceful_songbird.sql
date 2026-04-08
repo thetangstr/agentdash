@@ -19,8 +19,8 @@ CREATE TABLE "pipeline_stage_executions" (
 ALTER TABLE "agent_pipelines" ADD COLUMN "edges" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_pipelines" ADD COLUMN "execution_mode" text DEFAULT 'sync' NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_pipelines" ADD COLUMN "defaults" jsonb;--> statement-breakpoint
-ALTER TABLE "agent_pipelines" ADD COLUMN "status" text DEFAULT 'draft' NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_pipelines" ADD COLUMN "created_by" uuid;--> statement-breakpoint
+ALTER TABLE "agent_pipelines" ADD COLUMN "archived_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "pipeline_runs" ADD COLUMN "execution_mode" text DEFAULT 'sync' NOT NULL;--> statement-breakpoint
 ALTER TABLE "pipeline_runs" ADD COLUMN "active_stage_ids" jsonb DEFAULT '[]'::jsonb;--> statement-breakpoint
 ALTER TABLE "pipeline_runs" ADD COLUMN "total_cost_usd" numeric DEFAULT '0';--> statement-breakpoint
