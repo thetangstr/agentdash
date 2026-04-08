@@ -844,8 +844,22 @@ export type ActionProposalType = (typeof ACTION_PROPOSAL_TYPES)[number];
 export const PIPELINE_STATUSES = ["draft", "active", "paused", "archived"] as const;
 export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 
-export const PIPELINE_RUN_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
+export const PIPELINE_RUN_STATUSES = [
+  "pending", "running", "paused", "completed", "failed", "cancelled",
+] as const;
 export type PipelineRunStatus = (typeof PIPELINE_RUN_STATUSES)[number];
+
+// AgentDash: Pipeline orchestrator constants
+export const PIPELINE_EXECUTION_MODES = ["sync", "async"] as const;
+export type PipelineExecutionMode = (typeof PIPELINE_EXECUTION_MODES)[number];
+
+export const PIPELINE_STAGE_TYPES = ["agent", "hitl_gate", "merge"] as const;
+export type PipelineStageType = (typeof PIPELINE_STAGE_TYPES)[number];
+
+export const STAGE_EXECUTION_STATUSES = [
+  "pending", "running", "completed", "failed", "skipped", "waiting_hitl",
+] as const;
+export type StageExecutionStatus = (typeof STAGE_EXECUTION_STATUSES)[number];
 
 // AgentDash: Cockpit constants
 export const CONNECTOR_PROVIDERS = [

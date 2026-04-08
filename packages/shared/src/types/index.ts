@@ -198,6 +198,15 @@ export type {
   CompanyPortabilityImportResult,
   CompanyPortabilityExportRequest,
 } from "./company-portability.js";
+// AgentDash: Pipeline orchestrator types
+export type {
+  PipelineStageDefinition,
+  PipelineEdgeDefinition,
+  PipelineDefaults,
+  StateEnvelope,
+  SelfHealEntry,
+  PipelineWithCounts,
+} from "./pipeline.js";
 export type {
   JsonSchema,
   PluginJobDeclaration,

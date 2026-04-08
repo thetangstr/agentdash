@@ -310,6 +310,8 @@ export {
 // AgentDash: Pipelines
 export {
   pipelineStageSchema,
+  pipelineEdgeSchema,
+  pipelineDefaultsSchema,
   createPipelineSchema,
   updatePipelineSchema,
   startPipelineRunSchema,

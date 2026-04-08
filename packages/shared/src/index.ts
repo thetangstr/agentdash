@@ -151,7 +151,22 @@ export {
   type CredentialMode,
   type AgentTone,
   type InboxStatus,
+  PIPELINE_EXECUTION_MODES,
+  PIPELINE_STAGE_TYPES,
+  STAGE_EXECUTION_STATUSES,
+  type PipelineExecutionMode,
+  type PipelineStageType,
+  type StageExecutionStatus,
 } from "./constants.js";
+
+export type {
+  PipelineStageDefinition,
+  PipelineEdgeDefinition,
+  PipelineDefaults,
+  StateEnvelope,
+  SelfHealEntry,
+  PipelineWithCounts,
+} from "./types/pipeline.js";
 
 export type {
   Company,
@@ -611,6 +626,9 @@ export {
   type ListPluginState,
   createActionProposalSchema,
   type CreateActionProposal,
+  pipelineStageSchema,
+  pipelineEdgeSchema,
+  pipelineDefaultsSchema,
   createPipelineSchema,
   updatePipelineSchema,
   startPipelineRunSchema,
