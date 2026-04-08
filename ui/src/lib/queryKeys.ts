@@ -170,4 +170,13 @@ export const queryKeys = {
     assessment: (companyId: string) =>
       ["agent-research", companyId] as const,
   },
+  pipelines: {
+    list: (companyId: string) => ["pipelines", companyId] as const,
+    detail: (companyId: string, pipelineId: string) =>
+      ["pipelines", companyId, pipelineId] as const,
+    runs: (companyId: string, pipelineId: string) =>
+      ["pipelines", companyId, pipelineId, "runs"] as const,
+    runDetail: (companyId: string, runId: string) =>
+      ["pipelines", "run", companyId, runId] as const,
+  },
 };
