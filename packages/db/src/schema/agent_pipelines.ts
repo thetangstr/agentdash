@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb, index, numeric } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
@@ -10,8 +10,16 @@ export const agentPipelines = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     name: text("name").notNull(),
     description: text("description"),
-    stages: jsonb("stages").notNull().$type<Array<{ name: string; order: number; agentId?: string }>>().default([]),
+    stages: jsonb("stages").notNull().$type<any[]>().default([]),
+    // AgentDash: DAG edges connecting stages
+    edges: jsonb("edges").notNull().$type<any[]>().default([]),
+    // AgentDash: sync (direct execute) or async (heartbeat-driven)
+    executionMode: text("execution_mode").notNull().default("sync"),
+    // AgentDash: pipeline-level timeout/budget/retry defaults
+    defaults: jsonb("defaults").$type<Record<string, unknown>>(),
+    status: text("status").notNull().default("draft"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdBy: uuid("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
@@ -28,11 +36,20 @@ export const pipelineRuns = pgTable(
     pipelineId: uuid("pipeline_id").notNull().references(() => agentPipelines.id),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     status: text("status").notNull().default("pending"),
+    // AgentDash: sync or async execution mode for this run
+    executionMode: text("execution_mode").notNull().default("sync"),
+    // AgentDash: tracks multiple active stages for parallel fan-out
+    activeStageIds: jsonb("active_stage_ids").$type<string[]>().default([]),
     currentStage: integer("current_stage").notNull().default(0),
     inputData: jsonb("input_data").$type<Record<string, unknown>>(),
     outputData: jsonb("output_data").$type<Record<string, unknown>>(),
+    // AgentDash: cost tracking
+    totalCostUsd: numeric("total_cost_usd").default("0"),
+    triggeredBy: uuid("triggered_by"),
+    errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
