@@ -44,6 +44,9 @@ import { ActionInbox } from "./pages/ActionInbox";
 import { Connectors } from "./pages/Connectors";
 import { AgentWizard } from "./pages/AgentWizard";
 import { Pipelines } from "./pages/Pipelines";
+import PipelineDetail from "./pages/PipelineDetail";
+import PipelineWizard from "./pages/PipelineWizard";
+import PipelineRunDetail from "./pages/PipelineRunDetail";
 import { CrmContacts } from "./pages/CrmContacts";
 import { CrmLeads } from "./pages/CrmLeads";
 import { CrmKanban } from "./pages/CrmKanban";
@@ -210,6 +213,9 @@ function boardRoutes() {
       <Route path="setup" element={<OnboardingWizardPage />} />
       <Route path="feed" element={<Feed />} />
       <Route path="pipelines" element={<Pipelines />} />
+      <Route path="pipelines/new" element={<PipelineWizard />} />
+      <Route path="pipelines/:pipelineId" element={<PipelineDetail />} />
+      <Route path="pipeline-runs/:runId" element={<PipelineRunDetail />} />
       <Route path="profile" element={<UserProfile />} />
       <Route path="crm" element={<CrmPipeline />} />
       <Route path="crm/kanban" element={<CrmKanban />} />
