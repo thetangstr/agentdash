@@ -1,0 +1,33 @@
+services:
+  agentdash:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      NODE_ENV: production
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_HOME: "/paperclip"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Optional API keys for agent adapters
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    volumes:
+      # Persists embedded-postgres data, config, and agent workspaces
+      - agentdash-data:/paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/api/companies || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  agentdash-data:

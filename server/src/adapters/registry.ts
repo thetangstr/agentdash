@@ -84,6 +84,8 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+// AgentDash: direct Anthropic API adapter (no local CLI required)
+import { claudeApiAdapter } from "./claude-api/index.js";
 
 const claudeLocalAdapter: ServerAdapterModule = {
   type: "claude_local",
@@ -214,6 +216,7 @@ function registerBuiltInAdapters() {
     hermesLocalAdapter,
     processAdapter,
     httpAdapter,
+    claudeApiAdapter, // AgentDash: direct API adapter
   ]) {
     adaptersByType.set(adapter.type, adapter);
   }

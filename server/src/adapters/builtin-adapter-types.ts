@@ -3,6 +3,7 @@
  */
 export const BUILTIN_ADAPTER_TYPES = new Set([
   "claude_local",
+  "claude_api", // AgentDash: direct Anthropic API adapter
   "codex_local",
   "cursor",
   "gemini_local",

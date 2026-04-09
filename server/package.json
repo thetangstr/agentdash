@@ -44,7 +44,6 @@
     "typecheck": "pnpm run preflight:workspace-links && pnpm --filter @agentdash/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.888.0",
     "@agentdash/adapter-claude-local": "workspace:*",
     "@agentdash/adapter-codex-local": "workspace:*",
     "@agentdash/adapter-cursor-local": "workspace:*",
@@ -56,6 +55,8 @@
     "@agentdash/db": "workspace:*",
     "@agentdash/plugin-sdk": "workspace:*",
     "@agentdash/shared": "workspace:*",
+    "@anthropic-ai/sdk": "^0.86.1",
+    "@aws-sdk/client-s3": "^3.888.0",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
     "better-auth": "1.4.18",

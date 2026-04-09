@@ -1,10 +1,50 @@
+# Version control
 .git
 .github
-.paperclip
-.pnpm-store
+.gitignore
+
+# Dependencies (reinstalled during build)
 node_modules
 **/node_modules
-coverage
+.pnpm-store
+
+# Build outputs (rebuilt during image build)
+dist
+**/dist
+ui/dist
+
+# Local dev state
+.paperclip
 data
 tmp
+
+# Environment files
+.env
+.env.*
+*.env
+
+# AgentDash orchestrator state
+.omc
+
+# Logs and coverage
 *.log
+coverage
+**/coverage
+
+# Editor / OS artifacts
+.DS_Store
+*.swp
+*.swo
+.vscode
+.idea
+
+# Docs (not needed in the image)
+*.md
+!packages/*/README.md
+!README.md
+
+# Test / eval artifacts
+tests/e2e/test-results
+evals
+releases
+report
