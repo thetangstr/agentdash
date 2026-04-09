@@ -470,6 +470,13 @@
       "when": 1775628539806,
       "tag": "0066_graceful_songbird",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1775747890473,
+      "tag": "0067_missing_connectors_credential_mode",
+      "breakpoints": true
     }
   ]
 }

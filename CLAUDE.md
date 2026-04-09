@@ -173,8 +173,7 @@ bash scripts/upstream-sync.sh             # Interactive merge on sync branch
 | Doc | Purpose |
 |-----|---------|
 | `ARCHITECTURE.md` | Full system design |
-| `doc/PRD.md` | Product requirements, 10 CUJs |
-| `doc/PRD-crm.md` | CRM product requirements |
+| `doc/PRD.md` | Product requirements, 13 CUJs, deployment modes |
 | `doc/BUSINESS-PLAN.md` | Pricing, GTM, client guide |
 | `doc/SOP-deployment.md` | 50-person company deployment |
 | `doc/SPEC-implementation.md` | Inherited V1 build contract |

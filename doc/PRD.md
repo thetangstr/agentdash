@@ -1,8 +1,8 @@
 # AgentDash — Product Requirements Document
 
-**Version:** 1.0
-**Date:** 2026-03-28
-**Status:** Draft — Needs Review
+**Version:** 2.0
+**Date:** 2026-04-08
+**Status:** Active
 
 ---
 
@@ -12,30 +12,36 @@
 
 **Tagline:** Your AI workforce, at a glance.
 
-**Target customers:**
-- SMBs deploying 5-20 AI agents to augment existing teams
-- Enterprises deploying 20-200+ agents across departments
-- First client: SMB using HubSpot CRM
+### Target Customers
 
-**Core value proposition:**
-- Deploy agents on your own infrastructure (BYOT — bring your own tokens)
+| Segment | Company Size | AgentDash Angle |
+|---------|-------------|-----------------|
+| **SMB** | 10-50 people | Agents handle follow-ups, lead qualification, support tickets. BYOT (bring your own tokens). |
+| **Mid-market** | 50-500 people | Agents run operational workflows, humans review escalations. HubSpot/Slack integration. |
+| **Enterprise** | 500+ people | Agents as workforce layer, full governance, multi-pipeline, Salesforce sync. |
+
+**First client:** SMB construction services company (MKthink) using HubSpot CRM.
+
+### Core Value Proposition
+
+- Deploy agents on your own infrastructure (BYOT) or use cloud runtime
+- DAG-based pipeline orchestration with human-in-the-loop gates
 - Plug into existing CRM and workflow tools (HubSpot, Slack, GitHub)
 - Scale agent teams up/down dynamically based on workload
 - Human oversight at decision points, autonomous execution elsewhere
+- CRM as System of Action — agents read from and write to customer data
 
 ---
 
 ## 2. User Personas
 
 ### P1: Board Operator (CEO / Founder / Ops Lead)
-- The human who oversees the AI workforce
-- Checks the dashboard daily (60-second morning scan)
+- Oversees the AI workforce via daily dashboard (60-second morning scan)
 - Approves spawn requests, reviews escalations, monitors spend
 - Cares about: outcomes, cost, velocity, what needs attention
 
 ### P2: Department Lead (VP Eng / Growth Lead)
-- Manages agents within a function
-- Creates projects, sets goals, assigns work
+- Manages agents within a function, creates projects, sets goals
 - Spawns additional agents when deadlines are tight
 - Cares about: delivery timelines, task dependencies, team capacity
 
@@ -46,357 +52,214 @@
 
 ---
 
-## 3. Critical User Journeys (CUJs)
-
-Canonical source of truth note:
-See `doc/CUSTOMER-CUJS.md` for the normalized customer-user CUJ/task taxonomy used to reconcile product docs, UI IA, and future Linear planning.
+## 3. Critical User Journeys
 
 ### CUJ-1: First-Time Setup (Onboarding)
+**Persona:** P1 | **Goal:** Zero to working agent team in under 30 minutes
 
-**Persona:** P1 (Board Operator)
-**Trigger:** New customer deploys AgentDash
-**Goal:** Go from zero to a working agent team in under 30 minutes
+1. Deploy AgentDash (Docker, bare metal, or Railway)
+2. Open dashboard → onboarding wizard (discovery, scope, goals, access, bootstrap)
+3. System suggests initial agent team from templates (LLM-ranked) → approve
+4. First agent heartbeat fires → agent picks up a task → work begins
 
-**Flow:**
-1. Deploy AgentDash (Docker or bare metal)
-2. Open dashboard at localhost:3100 — see onboarding wizard
-3. **Discovery step:** Enter company info (paste description, upload docs, or connect to wiki)
-4. **Scope step:** Choose operating mode (whole company / department / team / project)
-5. **Goals step:** Define 1 company goal + 2-3 team goals with measurable KPIs
-6. **Access step:** Set up primary overseer (name, email), configure approval requirements
-7. **Bootstrap step:** System suggests initial agent team from templates → approve → agents created
-8. First agent heartbeat fires → agent picks up an assigned task → work begins
-
-**Success criteria:**
-- [ ] User has a working agent team within 30 minutes
-- [ ] At least 1 agent has completed a task within 2 hours of setup
-- [ ] User understands how to check status via the dashboard
-
-**Current state:** Onboarding wizard UI exists (/setup route). Backend services exist (onboarding.ts with 12 methods). Context extraction is placeholder (needs LLM integration). Team suggestion returns all templates (needs LLM ranking).
-
----
+**Status:** Fully Operational (11 API endpoints, 7 CUJ tests)
 
 ### CUJ-2: Morning Check-In (Daily Dashboard)
+**Persona:** P1 | **Goal:** Understand company health in 60 seconds
 
-**Persona:** P1 (Board Operator)
-**Trigger:** Start of workday
-**Goal:** Understand company health in 60 seconds
+1. Open dashboard → greeting + date + company name
+2. Scan "Needs Attention" (errors, blocked tasks, pending approvals, budget alerts)
+3. Glance at Team Pulse (agent status dots), check progress, skim activity feed
 
-**Flow:**
-1. Open AgentDash dashboard
-2. See greeting + date + company name
-3. **Scan "Needs Attention"** section:
-   - Any agent errors? → click to investigate
-   - Any blocked tasks? → click to unblock or reassign
-   - Any pending approvals? → click to approve/reject
-   - Budget incidents? → click to review
-   - If all clear: green "All clear" banner → done
-4. **Glance at Team Pulse:** See agent count and status dots (green/amber/red)
-5. **Check Progress:** Tasks completed this month, spend vs budget
-6. **Skim Recent Activity:** What happened since yesterday
-7. Close dashboard, go about their day
-
-**Success criteria:**
-- [ ] User can assess company health in under 60 seconds
-- [ ] Attention items are prominently displayed with clear actions
-- [ ] No information overload — show exceptions, not norms
-- [ ] Works on mobile (responsive)
-
-**Current state:** Dashboard redesigned to morning briefing layout. Attention items, team pulse, progress summary, activity feed all implemented. Fetches from existing dashboard API.
-
----
+**Status:** Fully Operational (2 CUJ tests)
 
 ### CUJ-3: Scale the Team (Agent Factory)
+**Persona:** P1/P2 | **Goal:** Spawn agents quickly from templates
 
-**Persona:** P2 (Department Lead) or P1 (Board Operator)
-**Trigger:** Aggressive deadline, increased workload, or new project
-**Goal:** Spawn additional agents quickly from templates
+1. Browse templates → select → spawn with quantity, reason, project
+2. If approval required: request created → P1 reviews → agents created
+3. New agents appear idle → assign tasks → agents begin work
 
-**Flow:**
-1. Go to Templates page → browse available agent templates
-2. Select a template (e.g., "Frontend Engineer")
-3. Click "Spawn" → enter quantity (e.g., 3), reason, target project
-4. If approval required: spawn request created → P1 reviews in Approvals
-5. If no approval required (P1 acting): agents created immediately
-6. New agents appear in Agents list with status "idle"
-7. Assign tasks to new agents → agents begin work via heartbeat
-8. Monitor progress via Capacity dashboard
-
-**Success criteria:**
-- [ ] Spawn 3 agents from a template in under 2 minutes
-- [ ] Approval flow works end-to-end (request → approve → agents created)
-- [ ] New agents have correct role, skills, OKRs from template
-- [ ] Capacity dashboard shows updated workforce snapshot
-
-**Current state:** Agent templates CRUD, spawn requests with approval integration, OKR assignment all implemented. 93+ API endpoints. Template page exists in UI. Spawn UI needs a "Spawn from template" dialog (currently button placeholder).
-
----
+**Status:** Fully Operational (11 endpoints, 9 CUJ tests)
 
 ### CUJ-4: Manage Task Dependencies (DAG)
+**Persona:** P2 | **Goal:** Define task execution order
 
-**Persona:** P2 (Department Lead)
-**Trigger:** Creating a project plan with dependent tasks
-**Goal:** Define task execution order so agents work on the right things in the right sequence
+1. Create issues with dependencies → system validates no cycles (BFS)
+2. Agent completes task → auto-unblock downstream → agents wake via heartbeat
 
-**Flow:**
-1. Create issues for a project (e.g., "Design API" → "Build endpoints" → "Write tests")
-2. Add dependencies: "Build endpoints" blocked by "Design API", "Write tests" blocked by "Build endpoints"
-3. System validates no circular dependencies
-4. Assign "Design API" to an agent → agent works on it
-5. Agent completes "Design API" → status changes to "done"
-6. **Auto-unblock:** "Build endpoints" transitions from "blocked" to "todo"
-7. Assigned agent gets woken up via heartbeat → starts "Build endpoints"
-8. Chain continues automatically until all tasks complete
-
-**Success criteria:**
-- [ ] Dependencies can be added/removed via API
-- [ ] Circular dependency detection prevents invalid DAGs
-- [ ] Auto-unblocking works end-to-end (tested and verified)
-- [ ] Agent wakeup fires when dependencies resolve
-- [ ] Dependency graph viewable for a project
-
-**Current state:** Fully implemented and tested. addDependency, detectCycle (BFS), processCompletionUnblock with auto-wakeup all working. API endpoints exist. Dependency graph endpoint exists. No UI for visualizing the graph yet.
-
----
+**Status:** Backend Complete (5 endpoints, 6 CUJ tests). UI DAG visualization is P1.
 
 ### CUJ-5: Emergency Stop (Kill Switch)
+**Persona:** P1 | **Goal:** Instantly halt all agent activity
 
-**Persona:** P1 (Board Operator)
-**Trigger:** Agent misbehavior, security concern, or budget emergency
-**Goal:** Instantly halt all agent activity
+1. Security page → "HALT ALL AGENTS" → confirm
+2. All agents paused, heartbeats cancelled, audit trail logged
+3. Investigate → "Resume All Agents" when resolved
 
-**Flow:**
-1. Go to Security page
-2. See kill switch panel at top
-3. Click "HALT ALL AGENTS" → confirm
-4. All agents immediately paused (status = paused, reason = kill_switch)
-5. All active heartbeat runs cancelled
-6. Dashboard shows halted state
-7. Investigate the issue
-8. When resolved: click "Resume All Agents" → agents return to idle
+**Status:** Fully Operational (3 endpoints, 4 CUJ tests)
 
-**Success criteria:**
-- [ ] All agents halt within 5 seconds of clicking
-- [ ] Halt is logged in audit trail
-- [ ] Resume restores agents to previous state
-- [ ] Kill switch status visible on dashboard
-- [ ] Works for company-wide and per-agent scope
+### CUJ-6: Pipeline Orchestration (DAG Workflows)
+**Persona:** P1/P2 | **Goal:** Run multi-stage agent workflows with automated routing
 
-**Current state:** Kill switch fully implemented — activate, resume, status. Tested end-to-end. Security page UI has the kill switch panel with halt/resume buttons.
+1. Create pipeline with stages (agent tasks, HITL gates, conditions) and edges (DAG)
+2. Trigger run → entry stages launch → agents execute → stages auto-advance
+3. Fan-out (parallel branches), fan-in (merge with wait-all/first-wins), conditional routing
+4. HITL gates pause for human approval → approve/reject → pipeline continues/stops
+5. Self-healing: failed stages get diagnosed and retried with adjusted instructions
+6. Budget tracking per stage, CRM lifecycle hooks on completion
 
----
+**Status:** Fully Operational (10 endpoints). Pipeline wizard and run detail UI complete.
 
-### CUJ-6: CRM Pipeline Review
+### CUJ-7: CRM Pipeline Review
+**Persona:** P1 | **Goal:** See customer pipeline, deals, leads, partner status
 
-**Persona:** P1 (Board Operator)
-**Trigger:** Revenue review, pipeline check
-**Goal:** See customer pipeline, deals, leads, and partner status
+1. Pipeline page → summary cards (value, accounts, leads, deals, partners)
+2. Pipeline by stage (deal count + value per stage)
+3. Review deals, check leads, review partners
+4. HubSpot bidirectional sync (contacts, companies, deals, activities)
 
-**Flow:**
-1. Click "Pipeline" in CRM sidebar section
-2. See summary cards: pipeline value, accounts, leads, deals, partners
-3. See pipeline by stage (deal count + value per stage)
-4. Review recent deals table
-5. Check new leads
-6. Review partner relationships
-7. (Future) Deals sync bidirectionally with HubSpot
+**Status:** Fully Operational (31 endpoints, 8 CUJ tests)
 
-**Success criteria:**
-- [ ] Pipeline page loads with summary data
-- [ ] All CRM entities visible (accounts, contacts, deals, leads, partners)
-- [ ] Data syncs with HubSpot (when connector is active)
-- [ ] Agents can read customer context for informed decision-making
+### CUJ-8: Research Cycle (AutoResearch)
+**Persona:** P1/P2 | **Goal:** Run hypothesis-driven experiment loops
 
-**Current state:** CRM schema complete (6 tables: accounts, contacts, deals, activities, leads, partners). CRM service with 30+ methods. 25 API endpoints. CrmPipeline UI page created and wired into router + sidebar. HubSpot plugin manifest created (implementation pending).
+1. Create research cycle linked to a goal → agent generates hypotheses
+2. Human approves hypothesis → experiment designed with budget/time limits
+3. Agent executes → measurements collected → evaluation produces verdict
+4. Loop continues until goal met or budget exhausted
 
----
+**Status:** Backend Complete (21 endpoints, 7 CUJ tests). Detail pages P1.
 
-### CUJ-7: Research Cycle (AutoResearch)
+### CUJ-9: Security Policy Configuration
+**Persona:** P1 | **Goal:** Define what agents can and cannot do
 
-**Persona:** P1 or P2
-**Trigger:** Company has a measurable goal and wants to experiment to achieve it
-**Goal:** Run hypothesis-driven experiment loops automatically
+1. Security page → add policy (5 types: resource_access, action_limit, data_boundary, rate_limit, blast_radius)
+2. Target: all agents, specific role, or specific agent
+3. Policy evaluates on hot path → action denied/escalated → audit trail
 
-**Flow:**
-1. Go to Research page → click "New Research Cycle"
-2. Link to a company goal (e.g., "Reach 50K monthly visitors")
-3. Research agent generates hypotheses (e.g., "Social sharing will increase organic acquisition by 20%")
-4. Human approves a hypothesis for testing
-5. Experiment is designed: success criteria, budget cap, time limit
-6. Human approves experiment → agent team executes
-7. Measurement window: metrics collected automatically
-8. Evaluation: system analyzes results, produces verdict
-9. Next hypothesis generated or cycle completes
+**Status:** Fully Operational (14 endpoints, 5 CUJ tests)
 
-**Success criteria:**
-- [ ] Research cycle tied to a goal with measurable success criteria
-- [ ] Human approval gates at hypothesis and experiment stages
-- [ ] Budget caps and time limits enforced per experiment
-- [ ] Evaluation produces clear verdict (validated/invalidated/inconclusive)
-- [ ] Loop continues automatically until goal met or budget exhausted
+### CUJ-10: Skill Management
+**Persona:** P2 | **Goal:** Author, review, and deploy agent skills
 
-**Current state:** Full schema (6 tables), service (22 methods), API (21 endpoints), constants. Research dashboard page in UI. Metrics integration layer defined (plugin-based). No LLM integration yet for hypothesis generation.
+1. Create skill → new version (draft → in_review → approved → published → deprecated)
+2. Review workflow ties into approval system
+3. Usage analytics by skill and agent
 
----
+**Status:** Backend Complete (17 endpoints, 6 CUJ tests). Version UI P1.
 
-### CUJ-8: Security Policy Configuration
+### CUJ-11: Budget Monitoring & Forecasting
+**Persona:** P1 | **Goal:** Understand spend, forecast costs, track ROI
 
-**Persona:** P1 (Board Operator)
-**Trigger:** Setting up governance rules for agents
-**Goal:** Define what agents can and cannot do
+1. Costs page → spend by agent/project
+2. Capacity dashboard → burn rate, trend, days-until-exhaustion
+3. Multi-resource tracking (LLM tokens, compute, SaaS APIs)
 
-**Flow:**
-1. Go to Security page
-2. See existing policies in table
-3. Click "Add Policy" → configure:
-   - Name (e.g., "No production deploys")
-   - Type (action_limit, resource_access, rate_limit, etc.)
-   - Target (all agents, specific role, specific agent)
-   - Rules (e.g., deploy_prod requires approval)
-   - Effect (deny/allow)
-   - Priority
-4. Policy takes effect immediately
-5. When an agent triggers the policy → action denied/escalated → logged in audit trail
-6. Review policy evaluations in audit log
+**Status:** Backend Complete (16 endpoints, 6 CUJ tests). Forecast UI P1.
 
-**Success criteria:**
-- [ ] Policies enforceable before agent actions
-- [ ] 5 policy types: resource_access, action_limit, data_boundary, rate_limit, blast_radius
-- [ ] Audit trail of all policy evaluations
-- [ ] Agent sandboxes configurable (isolation level, network/filesystem policies)
+### CUJ-12: CRM Customer 360
+**Persona:** P1 | **Goal:** See everything about a customer in one place
 
-**Current state:** Full schema (4 tables), service (12 methods), API (12 endpoints), UI page. Policy evaluation runs on hot path. Audit log is append-only.
+1. Accounts list → search/filter by stage → click account
+2. Account detail: header, metrics strip, contacts tab, deals tab, activity timeline, agent history
+3. Activity timeline intermixes HubSpot-synced data with agent-generated actions
+4. Each entry shows: timestamp, actor (agent/Board/HubSpot), description, metadata
+
+**Status:** Backend Complete (APIs exist). UI pages P0.
+
+### CUJ-13: Agent Impact on Customer
+**Persona:** P1 | **Goal:** Trust the system by seeing what agents did for a customer
+
+1. Open account detail → activity timeline shows pipeline stages, action proposals, CRM updates
+2. See totals: tickets resolved autonomously, escalated to human, cost saved
+3. Deal stages auto-advance when agents complete linked work (lifecycle hooks)
+
+**Status:** Backend Complete (lifecycle hooks implemented). UI P1.
 
 ---
 
-### CUJ-9: Skill Management
+## 4. CRM Architecture
 
-**Persona:** P2 (Department Lead) or P1
-**Trigger:** Creating or updating agent skills
-**Goal:** Author, review, and deploy skills with version control
+AgentDash CRM is **not** a System of Record (that's HubSpot/Salesforce). It's a **System of Action** — the layer where AI agent decisions execute against customer data.
 
-**Flow:**
-1. Go to Skills page → see existing skills
-2. Create or edit a skill → new version created as "draft"
-3. Submit for review → creates an approval
-4. Reviewer approves → version status = "approved"
-5. Publish → skill becomes active, injected into agents at runtime
-6. View analytics: which skills are used, by which agents, with what outcomes
-7. Deprecate old versions when no longer needed
+| Layer | Purpose | Who Owns It |
+|-------|---------|-------------|
+| System of Record | Master customer data | HubSpot, Salesforce |
+| System of Engagement | Where interactions happen | Zendesk, Intercom, email |
+| **System of Action** | Where AI decisions execute | **AgentDash** |
 
-**Success criteria:**
-- [ ] Skills are versioned (sequential version numbers)
-- [ ] Review workflow: draft → in_review → approved → published → deprecated
-- [ ] Skill dependencies tracked with circular dependency prevention
-- [ ] Usage analytics available (by skill, by agent, outcome correlation)
-- [ ] Publishing copies skill content to active agent runtime
+### Lifecycle Stages
 
-**Current state:** Full schema (3 tables), services (skills-registry 11 methods + skill-analytics 5 methods), API (17 endpoints). UI page exists for skills. Version review workflow ties into existing approval system.
+**Accounts:** prospect → active → customer → champion → churned (auto-advances via lifecycle hooks)
 
----
+**Deals:** lead → qualification → proposal → negotiation → closed_won / closed_lost (auto-advances when linked issues complete)
 
-### CUJ-10: Budget Monitoring & Forecasting
+**Leads:** new → contacted → qualified → converted / lost (conversion creates account + contact)
 
-**Persona:** P1 (Board Operator)
-**Trigger:** Monthly budget review or cost concern
-**Goal:** Understand spend, forecast future costs, track ROI
-
-**Flow:**
-1. Go to Costs page → see current spend by agent/project
-2. Go to Capacity dashboard → see budget forecasts
-3. Check burn rate: daily average, trend (up/down), days until exhaustion
-4. Check project ROI: cost per completed task
-5. Review resource usage beyond LLM tokens (compute, SaaS APIs)
-6. Adjust budget allocations between departments/projects
-7. Set alert thresholds for early warning
-
-**Success criteria:**
-- [ ] Hierarchical budgets: company → department → project → agent
-- [ ] Burn rate calculation with trend
-- [ ] Days-until-exhaustion projection
-- [ ] ROI per project (cost vs. outcomes)
-- [ ] Multi-resource tracking (not just LLM tokens)
-
-**Current state:** Full schema (4 tables), services (budget-forecasts 9 methods + capacity-planning 5 methods), API (16 endpoints). Capacity dashboard page in UI. Departments table supports hierarchy. Budget allocations support flexible parent-child relationships.
+### What We Do NOT Build
+- Email/communication integration (HubSpot owns channels)
+- Marketing automation, drip campaigns
+- Revenue forecasting engine
+- Custom object builder
 
 ---
 
-## 4. Feature Inventory
+## 5. Deployment Modes
 
-| Feature | Schema | Service | API | UI | Status |
-|---------|--------|---------|-----|-----|--------|
-| Agent Templates | agent_templates | agentFactoryService | 5 endpoints | Templates page | Complete |
-| Spawn Requests | spawn_requests | agentFactoryService | 3 endpoints | Needs spawn dialog | Backend complete, UI partial |
-| Agent OKRs | agent_okrs, agent_key_results | agentFactoryService | 3 endpoints | Needs OKR display | Backend complete, UI missing |
-| Task Dependencies | issue_dependencies | taskDependencyService | 5 endpoints | Needs DAG viz | Backend complete, tested |
-| Prompt Builder | — | promptBuilderService | — (heartbeat hook) | — | Complete |
-| Security Policies | security_policies, policy_evaluations | policyEngineService | 12 endpoints | Security page | Complete |
-| Agent Sandboxes | agent_sandboxes | policyEngineService | 2 endpoints | Needs sandbox config UI | Backend complete |
-| Kill Switch | kill_switch_events | policyEngineService | 3 endpoints | Security page | Complete, tested |
-| Departments | departments | budgetForecastService | 3 endpoints | Capacity page | Complete |
-| Budget Allocations | budget_allocations | budgetForecastService | 2 endpoints | Needs allocation UI | Backend complete |
-| Budget Forecasts | budget_forecasts | budgetForecastService | 2 endpoints | Needs forecast UI | Backend complete |
-| Resource Usage | resource_usage_events | budgetForecastService | 2 endpoints | Needs usage UI | Backend complete |
-| Capacity Planning | — | capacityPlanningService | 5 endpoints | Capacity page | Complete |
-| Skill Versions | skill_versions | skillsRegistryService | 8 endpoints | Needs version UI | Backend complete |
-| Skill Dependencies | skill_dependencies | skillsRegistryService | 3 endpoints | Needs dep UI | Backend complete |
-| Skill Analytics | skill_usage_events | skillAnalyticsService | 4 endpoints | Needs analytics UI | Backend complete |
-| Research Cycles | research_cycles | autoresearchService | 4 endpoints | Research page | Complete |
-| Hypotheses | hypotheses | autoresearchService | 3 endpoints | Needs hypothesis UI | Backend complete |
-| Experiments | experiments | autoresearchService | 5 endpoints | Needs experiment UI | Backend complete |
-| Metrics | metric_definitions, measurements | autoresearchService | 6 endpoints | Needs metrics UI | Backend complete |
-| Evaluations | evaluations | autoresearchService | 3 endpoints | Needs eval UI | Backend complete |
-| Onboarding | onboarding_sessions, sources, context | onboardingService | 11 endpoints | Onboarding wizard | UI exists, LLM integration pending |
-| CRM Accounts | crm_accounts | crmService | 4 endpoints | Pipeline page | Complete |
-| CRM Contacts | crm_contacts | crmService | 4 endpoints | Pipeline page | Complete |
-| CRM Deals | crm_deals | crmService | 5 endpoints | Pipeline page | Complete |
-| CRM Leads | crm_leads | crmService | 5 endpoints | Pipeline page | Complete |
-| CRM Partners | crm_partners | crmService | 4 endpoints | Pipeline page | Complete |
-| CRM Activities | crm_activities | crmService | 4 endpoints | — | Backend complete |
-| CRM Pipeline Summary | — | crmService | 1 endpoint | Pipeline page | Complete |
-| HubSpot Integration | — | plugin manifest | 6 agent tools | — | Manifest only |
-| Slack Integration | — | plugin manifest | — | — | Manifest only |
-| GitHub Integration | — | plugin manifest | — | — | Manifest only |
-| Linear Integration | — | plugin manifest | — | — | Manifest only |
-| Plugin SDK Extensions | protocol.ts | placeholder handlers | 4 RPCs | — | Placeholder |
-| Company Theme Colors | companies.themeAccentColor | CompanyTheme.tsx | — | Settings | Complete |
-| Dashboard | — | — | — | Morning briefing | Redesigned |
+### Local (Mac Mini / Bare Metal)
+- `pnpm dev` or `./scripts/demo.sh` for one-command demo
+- Embedded PostgreSQL, all adapters available (CLI-based)
+- Best for: development, demos, single-company deployments
+
+### Docker (Self-Hosted)
+- `docker compose up` with `BETTER_AUTH_SECRET` and optional API keys
+- Single container with embedded PG, volume-persisted data
+- Best for: small teams, on-premise deployments
+
+### Cloud (Railway / Hosted)
+- Railway one-click deploy with external PostgreSQL
+- `claude_api` adapter for cloud-native agent execution (no CLI dependency)
+- Best for: SaaS, multi-tenant, scalable deployments
+
+### Hybrid
+- Hosted UI + API server in cloud, local agent runtime on customer hardware
+- Agents connect back to cloud API via webhook/polling
+- Best for: customers with strict data residency or air-gapped networks
 
 ---
 
-## 5. Technical Summary
+## 6. Technical Summary
 
-- **86 schema tables** across 60 migrations (14 AgentDash-specific: 0046-0059)
+- **86 schema tables** across 60 migrations
 - **83 services** across all domains
 - **200+ API endpoints** across 39 route modules
-- **62 UI pages** (Pipelines, Action Proposals, Feed, CRM suite, Budget Forecast, Research, Onboarding, Security, Capacity, Agent Templates, Skill Versions, User Profile, and more)
-- **4 integration plugin manifests** (HubSpot, Slack, GitHub, Linear)
-- **Design system**: Teal primary, Inter font, customizable accent colors, light/dark mode
+- **62 UI pages** (Pipelines, Action Proposals, Feed, CRM, Budget, Research, Onboarding, Security, Capacity, Templates, Skills, and more)
+- **11 agent adapters**: Claude (local + API), Codex, Cursor, Gemini, OpenCode, Pi, OpenClaw, Hermes, Process, HTTP
+- **4 integration manifests**: HubSpot (operational), Slack, GitHub, Linear
 
 ---
 
-## 6. Open Items / Next Steps
+## 7. Open Items
 
-### P0 (Must-have for first client)
-- [ ] HubSpot connector implementation (beyond manifest — actual bidirectional sync)
-- [ ] Spawn dialog in Templates UI (button exists, dialog missing)
-- [ ] Task dependency visualization in Issue Detail page
-- [ ] OKR display on Agent Detail page
-- [ ] LLM integration in onboarding (context extraction, team suggestion)
-- [ ] End-to-end agent execution test with OpenCode + MiniMax
+### P0 (First Client)
+- [ ] HubSpot connector implementation (beyond manifest — bidirectional sync is done, need deeper automation triggers)
+- [ ] CRM UI pages: account list, account detail with activity timeline, contacts list
+- [ ] LLM integration in onboarding (context extraction works, team suggestion works — needs polish)
+- [ ] Cloud deployment hardening (external PG, health monitoring)
 
 ### P1 (Important)
+- [ ] Task dependency DAG visualization UI
+- [ ] AutoResearch cycle detail pages
 - [ ] Skill version management UI
 - [ ] Budget forecast display in Capacity page
-- [ ] Research cycle detail pages (hypothesis list, experiment timeline)
-- [ ] CRM deal → issue linking UI
-- [ ] Mobile responsive polish on new pages
+- [ ] Agent OKR display on Agent Detail page
+- [ ] Deal detail page, leads list with convert action
 - [ ] License key system for tier gating
 
-### P2 (Nice to have)
+### P2 (Nice to Have)
 - [ ] Slack/GitHub/Linear plugin implementations
-- [ ] Metrics plugin implementations (PostHog, custom API)
-- [ ] Analytics/charts page (for those who want the deep dive)
-- [ ] Multi-tenant SaaS mode
-- [ ] White-labeling support
+- [ ] Multi-tenant SaaS mode with tenant isolation
 - [ ] Helm chart for Kubernetes deployment
+- [ ] White-labeling support
+- [ ] Distributed execution (web + worker split, Redis pub/sub, job queue)

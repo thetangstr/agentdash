@@ -119,6 +119,9 @@ export function Sidebar() {
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} textBadge="Beta" textBadgeTone="amber" />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+          {/* AgentDash: pipeline orchestrator and proposal nav items */}
+          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
+          <SidebarNavItem to="/action-proposals" label="Proposals" icon={Scale} />
         </SidebarSection>
 
         <SidebarProjects />
@@ -126,7 +129,7 @@ export function Sidebar() {
         <SidebarAgents />
 
         <SidebarSection label="CRM">
-          <SidebarNavItem to="/crm" label="Pipeline" icon={Briefcase} />
+          <SidebarNavItem to="/crm" label="Deals" icon={Briefcase} />
           <SidebarNavItem to="/crm/kanban" label="Kanban" icon={Columns3} />
           <SidebarNavItem to="/crm/accounts" label="Accounts" icon={Building2} />
           <SidebarNavItem to="/crm/contacts" label="Contacts" icon={Users} />
@@ -134,24 +137,22 @@ export function Sidebar() {
           <SidebarNavItem to="/crm/hubspot" label="HubSpot" icon={Link2} />
         </SidebarSection>
 
-        <SidebarSection label="AgentDash">
-          <SidebarNavItem to="/action-inbox" label="Inbox" icon={Inbox} />
-          <SidebarNavItem to="/connectors" label="Connectors" icon={Plug} />
-          <SidebarNavItem to="/templates" label="Templates" icon={Factory} />
-          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
-          <SidebarNavItem to="/action-proposals" label="Proposals" icon={Scale} />
+        {/* AgentDash: governance controls (budget, capacity, security, research) */}
+        <SidebarSection label="Governance">
           <SidebarNavItem to="/budget" label="Budget" icon={Wallet} />
           <SidebarNavItem to="/capacity" label="Capacity" icon={BarChart3} />
           <SidebarNavItem to="/security" label="Security" icon={Shield} />
           <SidebarNavItem to="/research" label="Research" icon={FlaskConical} />
-          <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
         </SidebarSection>
 
         <SidebarSection label="Company">
           <SidebarNavItem to="/org" label="Org" icon={Network} />
+          <SidebarNavItem to="/templates" label="Templates" icon={Factory} />
+          <SidebarNavItem to="/connectors" label="Connectors" icon={Plug} />
           <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
+          <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
           <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         </SidebarSection>
 

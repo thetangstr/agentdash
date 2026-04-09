@@ -128,7 +128,7 @@ export function skillAnalyticsService(db: Db) {
         .where(eq(companySkills.companyId, companyId))
         .groupBy(companySkills.id, companySkills.name)
         .having(
-          sql`max(${skillUsageEvents.usedAt}) is null or max(${skillUsageEvents.usedAt}) < ${since}`,
+          sql`max(${skillUsageEvents.usedAt}) is null or max(${skillUsageEvents.usedAt}) < ${since.toISOString()}`,
         );
 
       return rows;
