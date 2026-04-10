@@ -477,6 +477,13 @@
       "when": 1775747890473,
       "tag": "0067_missing_connectors_credential_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1775778681016,
+      "tag": "0068_slippery_agent_zero",
+      "breakpoints": true
     }
   ]
 }
