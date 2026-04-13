@@ -157,6 +157,10 @@ export {
   type PipelineExecutionMode,
   type PipelineStageType,
   type StageExecutionStatus,
+  // AgentDash: Smart model routing
+  SMALL_MODELS,
+  MODEL_TIERS,
+  type ModelTier,
 } from "./constants.js";
 
 export type {
@@ -167,6 +171,15 @@ export type {
   SelfHealEntry,
   PipelineWithCounts,
 } from "./types/pipeline.js";
+
+// AgentDash: Smart model routing types
+export type {
+  SkillVerification,
+  SkillVerificationType,
+  SkillVerificationSchema,
+  SkillVerificationEffect,
+  SkillVerificationNone,
+} from "./types/model-routing.js";
 
 export type {
   Company,
