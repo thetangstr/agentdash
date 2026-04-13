@@ -13,6 +13,7 @@ export interface PipelineStageDefinition {
   mergeTimeout?: number;
   hitlInstructions?: string;
   hitlTimeoutHours?: number;
+  modelTier?: "small" | null;
 }
 
 export interface PipelineEdgeDefinition {
