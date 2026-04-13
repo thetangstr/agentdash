@@ -728,6 +728,20 @@ export type AgentTemplateAuthorityLevel = (typeof AGENT_TEMPLATE_AUTHORITY_LEVEL
 export const TASK_CLASSIFICATIONS = ["deterministic", "stochastic"] as const;
 export type TaskClassification = (typeof TASK_CLASSIFICATIONS)[number];
 
+// Smart Model Routing — Model Tiers
+export const MODEL_TIERS = ["small", "default"] as const;
+export type ModelTier = (typeof MODEL_TIERS)[number];
+
+// Smart Model Routing — Small model per adapter type
+export const SMALL_MODELS: Record<string, string> = {
+  claude_local: "haiku",
+  claude_api: "haiku",
+  codex_local: "codex-mini",
+  gemini_local: "gemini-flash",
+  opencode_local: "haiku",
+  pi_local: "haiku",
+};
+
 // Agent Factory — Spawn Request Statuses
 export const SPAWN_REQUEST_STATUSES = [
   "pending",

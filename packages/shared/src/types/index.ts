@@ -207,6 +207,8 @@ export type {
   SelfHealEntry,
   PipelineWithCounts,
 } from "./pipeline.js";
+// AgentDash: Smart model routing types
+export type { SkillVerification, SkillVerificationType, SkillVerificationSchema, SkillVerificationEffect, SkillVerificationNone } from "./model-routing.js";
 export type {
   JsonSchema,
   PluginJobDeclaration,
