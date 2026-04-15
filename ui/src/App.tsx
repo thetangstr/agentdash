@@ -34,12 +34,16 @@ import { SecurityPolicies } from "./pages/SecurityPolicies";
 import { CapacityDashboard } from "./pages/CapacityDashboard";
 import { ResearchDashboard } from "./pages/ResearchDashboard";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
+import { WelcomePage } from "./pages/WelcomePage";
+import { SetupWizard } from "./pages/SetupWizard";
 import { CrmPipeline } from "./pages/CrmPipeline";
 import { CrmAccounts } from "./pages/CrmAccounts";
 import { CrmAccountDetail } from "./pages/CrmAccountDetail";
 import { HubSpotSettings } from "./pages/HubSpotSettings";
 import { Feed } from "./pages/Feed";
 import { ActionProposals } from "./pages/ActionProposals";
+import { AssessPage } from "./pages/AssessPage";
+import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { ActionInbox } from "./pages/ActionInbox";
 import { Connectors } from "./pages/Connectors";
 import { AgentWizard } from "./pages/AgentWizard";
@@ -211,6 +215,9 @@ function boardRoutes() {
       <Route path="research" element={<ResearchDashboard />} />
       <Route path="research/:cycleId" element={<ResearchCycleDetail />} />
       <Route path="setup" element={<OnboardingWizardPage />} />
+      <Route path="setup-wizard" element={<SetupWizard />} />
+      <Route path="assess" element={<AssessPage />} />
+      <Route path="assess/history" element={<AssessHistoryPage />} />
       <Route path="feed" element={<Feed />} />
       <Route path="pipelines" element={<Pipelines />} />
       <Route path="pipelines/new" element={<PipelineWizard />} />
@@ -340,21 +347,7 @@ function UnprefixedBoardRedirect() {
 }
 
 function NoCompaniesStartPage() {
-  const { openOnboarding } = useDialog();
-
-  return (
-    <div className="mx-auto max-w-xl py-10">
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h1 className="text-xl font-semibold">Create your first company</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Get started by creating a company.
-        </p>
-        <div className="mt-4">
-          <Button onClick={() => openOnboarding()}>New Company</Button>
-        </div>
-      </div>
-    </div>
-  );
+  return <WelcomePage />;
 }
 
 export function App() {

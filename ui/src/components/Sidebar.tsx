@@ -143,6 +143,7 @@ export function Sidebar() {
           <SidebarNavItem to="/capacity" label="Capacity" icon={BarChart3} />
           <SidebarNavItem to="/security" label="Security" icon={Shield} />
           <SidebarNavItem to="/research" label="Research" icon={FlaskConical} />
+          <SidebarNavItem to="/assess" label="Assess" icon={Search} />
         </SidebarSection>
 
         <SidebarSection label="Company">
