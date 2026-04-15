@@ -13,10 +13,76 @@ import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
 import { cn, formatCents } from "../lib/utils";
-import { Bot, LayoutDashboard, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
+import { Bot, LayoutDashboard, AlertTriangle, CheckCircle2, ChevronRight, X } from "lucide-react";
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent } from "@agentdash/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
+
+// AgentDash: Getting Started onboarding checklist
+interface GettingStartedChecklistProps {
+  companyId: string;
+  hasAgents: boolean;
+  hasIssues: boolean;
+}
+
+function GettingStartedChecklist({ companyId, hasAgents, hasIssues }: GettingStartedChecklistProps) {
+  const storageKey = `agentdash.onboarding.dismissed.${companyId}`;
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(storageKey) === "true");
+
+  if (dismissed) return null;
+
+  const items: Array<{ label: string; done: boolean; linkLabel?: string; linkTo?: string }> = [
+    { label: "Company created", done: true },
+    { label: "Agent team deployed", done: hasAgents, linkLabel: "Add agents", linkTo: "/agents" },
+    { label: "Add AI API key", done: false, linkLabel: "Settings", linkTo: "/instance/settings/adapters" },
+    { label: "Connect HubSpot", done: false, linkLabel: "HubSpot Settings", linkTo: "/crm/hubspot" },
+    { label: "Create first issue", done: hasIssues, linkLabel: "New Issue", linkTo: "/issues" },
+  ];
+
+  const completedCount = items.filter((i) => i.done).length;
+
+  return (
+    <div className="rounded-xl border bg-card p-5 relative">
+      <button
+        onClick={() => {
+          localStorage.setItem(storageKey, "true");
+          setDismissed(true);
+        }}
+        className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
+        aria-label="Dismiss"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold">Getting Started</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">{completedCount} of {items.length} complete</p>
+      </div>
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <li key={item.label} className="flex items-center gap-3">
+            {item.done ? (
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500">
+                <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
+                </svg>
+              </span>
+            ) : (
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/30" />
+            )}
+            <span className={cn("text-sm", item.done ? "text-muted-foreground line-through" : "text-foreground")}>
+              {item.label}
+            </span>
+            {!item.done && item.linkLabel && item.linkTo && (
+              <Link to={item.linkTo} className="ml-auto text-xs text-primary hover:underline no-underline shrink-0">
+                {item.linkLabel} &rarr;
+              </Link>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -180,6 +246,13 @@ export function Dashboard() {
   return (
     <div className="max-w-3xl space-y-8 py-2">
       {error && <p className="text-sm text-destructive">{error.message}</p>}
+
+      {/* AgentDash: Getting Started checklist */}
+      <GettingStartedChecklist
+        companyId={selectedCompanyId!}
+        hasAgents={(agents ?? []).length > 0}
+        hasIssues={(issues ?? []).length > 0}
+      />
 
       {/* Greeting */}
       <div>
