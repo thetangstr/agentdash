@@ -20,7 +20,8 @@ import {
   executeTool,
   type ToolContext,
 } from "./assistant-tools.js";
-import { buildInterviewSystemPrompt } from "./assistant-interview.js";
+import { buildInterviewSystemPrompt, buildStandardSystemPrompt } from "./assistant-interview.js";
+import { logActivity } from "./activity-log.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -187,6 +188,20 @@ export async function* chat(
   // 3. Save user message
   await saveMessage(db, conversationId, "user", message);
 
+  // Telemetry: log user message
+  try {
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: userId,
+      action: "assistant.message",
+      entityType: "conversation",
+      entityId: conversationId,
+    });
+  } catch (err) {
+    logger.warn({ err }, "assistant.message telemetry failed");
+  }
+
   // 4. Load last 20 messages and convert to AssistantMessage[]
   const storedMessages = await getMessages(db, conversationId, 20);
   const history: AssistantMessage[] = storedMessages.map((m) => ({
@@ -205,18 +220,7 @@ export async function* chat(
   if (!interviewComplete) {
     systemPrompt = buildInterviewSystemPrompt(companyProfile, userName, companyName);
   } else {
-    systemPrompt = `You are an AI assistant for ${companyName} on AgentDash, helping ${userName} manage their agent team and accomplish their goals.
-
-Company context:
-${companyProfile}
-
-You can use tools to:
-- Create and manage AI agents
-- Create and manage issues/tasks
-- Set and track business goals
-- Get dashboard summaries
-
-Be helpful, concise, and action-oriented. When the user asks you to do something, use the appropriate tool. When they ask a question, answer it using available data.`;
+    systemPrompt = buildStandardSystemPrompt(companyProfile, userName, companyName);
   }
 
   // 7. Get tool definitions
@@ -334,6 +338,37 @@ Be helpful, concise, and action-oriented. When the user asks you to do something
         tu.name,
         tu.input,
       );
+
+      // Telemetry: log tool call
+      try {
+        await logActivity(db, {
+          companyId,
+          actorType: "user",
+          actorId: userId,
+          action: "assistant.tool_call",
+          entityType: "conversation",
+          entityId: conversationId,
+          details: { toolName: tu.name },
+        });
+      } catch (err) {
+        logger.warn({ err }, "assistant.tool_call telemetry failed");
+      }
+
+      // Telemetry: log interview completion when create_agent is called
+      if (tu.name === "create_agent" && !interviewComplete) {
+        try {
+          await logActivity(db, {
+            companyId,
+            actorType: "user",
+            actorId: userId,
+            action: "assistant.interview_complete",
+            entityType: "conversation",
+            entityId: conversationId,
+          });
+        } catch (err) {
+          logger.warn({ err }, "assistant.interview_complete telemetry failed");
+        }
+      }
     }
 
     // Append user turn with all tool results
