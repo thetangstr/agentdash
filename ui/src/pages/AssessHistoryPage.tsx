@@ -9,7 +9,7 @@ export function AssessHistoryPage() {
   const navigate = useNavigate();
 
   const { data, isLoading } = useQuery({
-    queryKey: [...queryKeys.agentResearch.all(selectedCompanyId!), "assessment"],
+    queryKey: queryKeys.agentResearch.assessment(selectedCompanyId!),
     queryFn: () => assessApi.getAssessment(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
