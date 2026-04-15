@@ -1,0 +1,56 @@
+{
+  "sector": "Public Sector Intake & Case-Processing",
+  "slug": "public-sector",
+  "narrative": "Local governments do not fail because they lack forms. They fail because every intake-heavy department is buried under incomplete submissions, manual routing, policy lookups, applicant back-and-forth, and backlog cleanup. The Agent Factory story is not 'replace civil servants with AI.' It is: create a governed intake-and-triage layer that reads every submission, checks it against policy and checklist logic, requests missing information automatically, routes standard cases correctly, and escalates the ambiguous ones with a clean evidence packet.",
+  "buyerPromise": "We reduce incomplete submissions, speed first response, and cut backlog without asking you to replace your system of record or automate final adjudication.",
+  "pactScore": {
+    "total": 89,
+    "dimensions": [
+      {"key": "P", "name": "Performance", "score": 22, "subCriteria": [{"name": "Checklist-driven reasoning", "score": 5, "rationale": "Workflow boundaries are unusually clear"}, {"name": "Document processing", "score": 4, "rationale": "Evidence-heavy tasks with clear structure"}, {"name": "Multi-hop reasoning", "score": 4, "rationale": "Policy lookup chains are bounded and traceable"}]},
+      {"key": "A", "name": "Access", "score": 20, "subCriteria": [{"name": "System integration", "score": 4, "rationale": "Legacy systems and weak APIs present challenges"}, {"name": "Portal navigation", "score": 4, "rationale": "Fragmented local systems but established patterns"}, {"name": "Data retrieval", "score": 4, "rationale": "GIS, parcel data, payment systems accessible"}]},
+      {"key": "C", "name": "Context", "score": 23, "subCriteria": [{"name": "Policy grounding", "score": 5, "rationale": "Local policy manuals and checklists are highly structured"}, {"name": "Document diversity", "score": 5, "rationale": "Scanned attachments, emails, call notes all processable"}, {"name": "Historical precedent", "score": 4, "rationale": "Routing and SLA data provides clear patterns"}]},
+      {"key": "T", "name": "Trust", "score": 24, "subCriteria": [{"name": "Auditability", "score": 5, "rationale": "Low tolerance for black-box reasoning drives high audit standards"}, {"name": "Exception routing", "score": 5, "rationale": "Clear escalation with evidence packet design"}, {"name": "Compliance alignment", "score": 5, "rationale": "Public accountability demands transparent operations"}]}
+    ]
+  },
+  "examples": [
+    {
+      "name": "City of Seattle Utility Assistance Intake",
+      "source": "Automation Anywhere case study on Seattle",
+      "challenge": "COVID-era demand created a backlog in public utility assistance applications. Shift from call-center to online forms created disconnected Excel-based workflows.",
+      "scale": "6,200-application backlog",
+      "humanHoursAndDollarImpact": "600 hours of manual data entry reduced. 1,500+ FTE hours saved. Direct dollar savings not publicly disclosed.",
+      "whyItMatters": "This is the exact pattern: intake, triage, validation, routing, and case progression. Shows public-sector backlog work is workflow repair work."
+    },
+    {
+      "name": "City of Albuquerque Public Records Intake",
+      "source": "City of Albuquerque FY 2025 IPRA annual backlog report",
+      "challenge": "Public-records request volume grew much faster than manual handling capacity. City restructured intake around a dedicated triage team.",
+      "scale": "Requests grew from ~4,500 in FY 2017 to 15,900 in FY 2025. Dedicated staff: 28. Remaining backlog: 993.",
+      "humanHoursAndDollarImpact": "~568 requests per staff member per year. Litigation risk explicitly cited as a consequence of slow closures.",
+      "whyItMatters": "The city only improved once it changed the front-end operating model. That is exactly the value proposition for an intake-and-triage agent layer."
+    },
+    {
+      "name": "Honolulu Building Permits",
+      "source": "AP / Honolulu Civil Beat reporting on Honolulu permit backlog",
+      "challenge": "Permitting delays driven by staffing turnover, legacy systems, poor SOPs, and low-quality submissions.",
+      "scale": "FY 2023: ~20,000 permit applications received, fewer than 15,000 issued. One permit took 1 year and 7 months.",
+      "humanHoursAndDollarImpact": "Gap represented more than $1 billion in taxable construction work and ~$7 million in building permit fees carried forward. One property-tax example: ~$40,000 in delayed city revenue.",
+      "whyItMatters": "Permitting is one of the clearest evidence-heavy, rules-heavy, routing-heavy workflows. The city needs a governed intake and review layer, not just a portal."
+    }
+  ],
+  "quickStart": ["Permit completeness review", "Applicant remediation notices", "Routing by case type and complexity", "Backlog and SLA monitoring"],
+  "avoid": ["Final adjudication", "Broad case-management replacement", "Politically sensitive exceptions"],
+  "consultantSignals": [
+    "Deloitte: Only 1% of government leaders said more than 60% of workers had access to gen AI. Australia trial: 7,600 employees saved ~1 hour/day on admin tasks.",
+    "McKinsey: 650+ infrastructure projects on the federal Permitting Dashboard awaiting approval — bottlenecks are structural, not anecdotal."
+  ],
+  "obstacles": ["Long procurement cycles", "Security and privacy review", "Fragmented local policy interpretation", "Legacy systems and weak APIs", "Union, legal, and public-accountability concerns", "Low tolerance for black-box reasoning"],
+  "whereDataLives": ["Permitting or case-management systems", "Document repositories and scanned attachments", "Applicant emails and call-center notes", "GIS and parcel data", "Payment systems", "Public records request logs", "Routing and SLA data", "Local policy manuals and checklists"],
+  "openQuestions": ["Which single intake workflow is painful enough to fund now?", "Which system of record is already installed and how open is it?", "What notices can be sent autonomously without legal review?", "Which departments own the backlog pain and the budget?", "What evidence must be shown to staff so they trust the routing?", "What audit log format will satisfy legal, records, and IT stakeholders?"],
+  "collaborationJourney": {
+    "stage": "Conflict Detection",
+    "humanRole": "Tech reviews flags",
+    "agentRole": "Detect metadata mismatch/zoning gaps",
+    "handoffOutput": "Escalation with evidence links"
+  }
+}

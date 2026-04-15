@@ -1,0 +1,328 @@
+{
+  "name": "Devra",
+  "slug": "devra",
+  "category": "use-case",
+  "subcategory": "dev-tools",
+  "description": "Devra is an AI-powered autonomous code maintenance agent that monitors repos for dependency updates, security vulnerabilities, and documentation drift. Automatically generates PRs with code changes, upgrades, and doc updates. Differentiates from Dependabot/Renovate with LLM-powered code understanding.",
+  "oneLiner": "Autonomous AI agent that keeps codebases healthy by generating PRs for dependency updates, security patches, and doc maintenance.",
+  "founded": "2023",
+  "funding": "Seed stage; exact amount undisclosed",
+  "pricing": "Freemium — free for public repos; paid plans for private repos/teams; Enterprise custom pricing",
+  "website": "https://devra.ai",
+  "screenshots": [],
+  "capabilities": [
+    "Autonomous dependency update PR generation",
+    "Security vulnerability scanning and patching",
+    "Documentation drift detection and auto-sync",
+    "Multi-language support (npm, PyPI, Maven, Go, Cargo, NuGet)",
+    "GitHub, GitLab, Bitbucket integration",
+    "Configurable scan schedules",
+    "Breaking change detection for major upgrades",
+    "Changelog and migration guide summarization in PRs",
+    "CI/CD pipeline integration",
+    "Configurable ignore lists and update policies"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Lightweight GitHub/GitLab app install: authorize, select repos, optionally configure YAML for custom policies. No visual builder — purpose-built for code maintenance. Agent runs autonomously, surfacing work through PRs in existing developer workflow.",
+    "strengths": [
+      "Extremely low friction onboarding — install app and agent starts working",
+      "Fits seamlessly into existing PR-based developer workflows",
+      "AI-powered doc updates go beyond traditional dependency bots",
+      "Natural HITL via standard code review",
+      "No context switching for developers"
+    ],
+    "weaknesses": [
+      "Narrow scope — only dependency/doc maintenance, not general-purpose",
+      "No visual builder or drag-and-drop",
+      "Competes against free tools (Dependabot, Renovate)",
+      "Early-stage with unclear long-term viability",
+      "No self-hosted deployment",
+      "Minimal observability and debugging"
+    ],
+    "notableFeatures": [
+      "AI-powered documentation drift detection and auto-sync",
+      "LLM-based breaking change impact analysis",
+      "Intelligent PR descriptions with changelog summaries",
+      "Concurrent multi-repo scanning with dependency graph awareness"
+    ]
+  },
+  "recentDevelopments": [
+    "2026: Positioned among AI coding agents in a market where multi-agent shipping became standard (Feb 2026)",
+    "2026: 5/5 rating from 719 reviews on AI agent directories",
+    "2026-02: Industry-wide multi-agent wave — Grok Build (8 agents), Windsurf (5 parallel), Claude Code Teams, Codex CLI all ship",
+    "Positions as AI-native alternative to Dependabot/Renovate",
+    "Documentation auto-sync differentiates from traditional dependency bots",
+    "Competes in growing AI-for-developer-tools space alongside Copilot, Cursor"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://devra.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "low",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-hosted SaaS. No self-hosted option."
+  },
+  "scores": {
+    "total": 39,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "GitHub app install + YAML config. No visual builder. Under 30 min to first agent."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "See PR outputs and CI results. No interactive trace or evaluation harness."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 2,
+            "rationale": "Setup docs exist but thin on advanced topics. Early-stage product."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Config changes take effect on next scan cycle. Reasonable turnaround."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 5.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "Single agent per repo. Fixed task set. No multi-agent."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Unidirectional: agent creates PR, human reviews. No shared workspace."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No team features. Config per-repo via Git."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "Single fixed workflow. No customizable patterns."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "GitHub, GitLab, Bitbucket + npm, PyPI, Maven, Go, Cargo, NuGet. Code domain only."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 2,
+            "rationale": "Git platform APIs and webhooks. No MCP or external tool protocols."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "OAuth app installation. Basic SSO. No SAML or credential rotation."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 2,
+            "rationale": "Reads dep manifests and code directly. No configurable RAG or doc loaders."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 7.6,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "Disable per-repo. Configurable ignore lists. No behavioral monitoring."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "PR review as inherent HITL. Not a platform feature but Git workflow property."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 1,
+            "rationale": "No dedicated audit trail. No SOC2. Early-stage startup."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 1,
+            "rationale": "Relies on Git platform permissions. No custom roles."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 6.8,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "SaaS-only as GitHub/GitLab app. No self-hosted option."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 2,
+            "rationale": "Scales across repos in SaaS. Large monorepo performance unclear."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Basic dashboard: PR status, scan history. No deep observability."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 1,
+            "rationale": "Early-stage. Minimal public community. Competes with Dependabot (free) and Renovate (OSS)."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "39/100 overall. Strongest: Creation (10/20). Weakest: Orchestration (5/20). Breakdown: Creation (10/20), Orchestration (5/20), Integration (9/20), Governance (8/20), Operations (7/20).",
+  "competence": "Autonomous Coding Agent",
+  "targetUser": "Engineering teams automating dependency updates and doc maintenance",
+  "supportedCUJs": [
+    "code-development",
+    "security-monitoring"
+  ],
+  "walkthrough": {
+    "title": "Automated Code Fix: Issue to Pull Request",
+    "steps": [
+      {
+        "title": "Install the GitHub/GitLab App",
+        "description": "Connect Devra to your repository with a one-click app install. Devra gets read access to your codebase and issues, and write access to create branches and pull requests. No code changes to your repo required.",
+        "image": "/screenshots/devra/step-1.png",
+        "pmCritique": {
+          "works": [
+            "PR-integrated review workflow fits naturally into existing development process",
+            "Contextual code analysis understands the broader codebase, not just the diff",
+            "Actionable suggestions with code snippets, not just descriptions"
+          ],
+          "doesntWork": [
+            "Review suggestions can be noisy — too many minor style comments",
+            "No way to configure review focus (security vs performance vs style)",
+            "Limited language support — strongest in Python and JavaScript"
+          ],
+          "userPsychology": "Code review is a pain point every developer recognizes — automating it creates immediate time savings. But noisy reviews train developers to ignore suggestions, defeating the purpose."
+        }
+      },
+      {
+        "title": "Agent Scans for Security Vulnerabilities",
+        "description": "Devra continuously monitors your codebase for security issues, deprecated dependencies, and code quality problems. It understands your codebase context — not just syntax patterns, but architectural intent and data flow.",
+        "image": "/screenshots/devra/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Bug detection catches issues human reviewers commonly miss",
+            "Security vulnerability scanning integrated with code review",
+            "Learning from codebase patterns to reduce false positives over time"
+          ],
+          "doesntWork": [
+            "Learning period is long — first few weeks produce many irrelevant findings",
+            "Cannot explain WHY a pattern is buggy — just flags it",
+            "No integration with issue trackers for tracking found issues"
+          ],
+          "userPsychology": "Finding a real bug that humans missed is the conversion moment — one critical catch justifies the tool forever. But the noisy learning period risks developers dismissing the tool before it reaches that moment."
+        }
+      },
+      {
+        "title": "AI Generates Fix Pull Requests",
+        "description": "When Devra identifies an issue, it generates a targeted fix — a new branch with minimal, focused changes. The PR includes a clear description of the problem, the fix rationale, and any test updates needed.",
+        "image": "/screenshots/devra/step-3.png"
+      },
+      {
+        "title": "Review in Your Existing Workflow",
+        "description": "The PR appears in your normal GitHub/GitLab review flow. Your team reviews the diff, runs CI, and merges just like any human-authored PR. Devra responds to review comments and iterates on the fix.",
+        "image": "/screenshots/devra/step-4.png"
+      },
+      {
+        "title": "Configure Policies and Schedules",
+        "description": "Set rules for what Devra should fix autonomously vs. flag for review. Schedule scans for off-hours, define severity thresholds for auto-PR creation, and exclude files or directories from scanning.",
+        "image": "/screenshots/devra/step-5.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Devra — limited public demo content available. Verdict based on documentation and existing research data only. Score reflects capability claims that could not be verified through video walkthrough.",
+      "score": "Unverified",
+      "strengths": [
+        "See existing capability analysis in the product profile"
+      ],
+      "risks": [
+        "No video demo available for verification",
+        "Product capabilities based on documentation only",
+        "UX quality unverifiable without live demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Insufficient public demo material to evaluate Devra for enterprise adoption. Recommend requesting a live demo from the vendor before making any commitment.",
+      "decision": "INSUFFICIENT DATA",
+      "strengths": [
+        "See existing scoring for capability assessment"
+      ],
+      "dealBreakers": [
+        "No public product demo available",
+        "Cannot verify UX claims without walkthrough",
+        "Enterprise readiness unassessable"
+      ]
+    },
+    "coverageGaps": [
+      "Complete product walkthrough needed",
+      "All capabilities unverified via video"
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "VE8Zpx2QoGM",
+      "title": "most depressing ai demo on record",
+      "channel": "Devra AI"
+    },
+    {
+      "videoId": "pYgThez0a_U",
+      "title": "AI makes JS Breakout",
+      "channel": "Devra AI"
+    }
+  ],
+  "marketIntelligence": {
+    "funding": {
+      "total": "Undisclosed",
+      "lastRound": "Seed (undisclosed amount)"
+    }
+  },
+  "coreCompetence": {
+    "bestAt": "AI developer assistant focused on code review and bug detection — understands codebases contextually to find issues human reviewers miss.",
+    "targetUser": "Development teams who want AI-powered code review integrated into their existing PR workflow. Teams struggling with code quality at scale.",
+    "vsAlternatives": "Wins on code review depth vs generic AI assistants. Focused UX for the review use case. Loses on breadth — single use case. Loses to GitHub Copilot and Cursor on IDE integration and coding assistance."
+  }
+}

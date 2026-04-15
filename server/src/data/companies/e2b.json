@@ -1,0 +1,509 @@
+{
+  "name": "E2B",
+  "slug": "e2b",
+  "category": "open-source",
+  "subcategory": "agent-infrastructure",
+  "competence": "Secure cloud sandboxes for AI agent code execution",
+  "targetUser": "AI agent developers who need secure, isolated environments for running AI-generated code in production",
+  "description": "E2B is an open-source infrastructure platform that provides secure, isolated cloud sandboxes specifically built for AI agent workflows. Powered by Firecracker microVMs, sandboxes start in under 200ms and support any programming language that runs on Linux. E2B is not a general compute platform — it's purpose-built for agent developers who need to run AI-generated code safely. 88% of Fortune 100 companies are signed up, and the platform is used by organizations like Hugging Face (for RL pipelines) and Groq (for compound AI systems). Starting December 2025, every sandbox includes access to Docker's MCP Catalog with 200+ tools.",
+  "oneLiner": "Open-source secure cloud sandboxes for AI agent code execution, starting in under 200ms.",
+  "founded": "2023",
+  "funding": "Series A: $21M led by Insight Partners. Participants: Decibel, Sunflower Capital, Kaya. Angels include Docker's former CEO Scott Johnston.",
+  "pricing": "Hobby: Free ($100 credit, 1hr sessions, 20 concurrent sandboxes). Pro: $150/month (24hr sessions, more concurrency, custom CPU/RAM). Enterprise: Custom (BYOC, on-prem, self-hosted). Usage: ~$0.05/hour per 1 vCPU, billed per second.",
+  "website": "https://e2b.dev",
+  "githubRepo": "https://github.com/e2b-dev/E2B",
+  "githubStars": 8900,
+  "screenshots": [
+    {
+      "path": "/screenshots/e2b/step-1.png",
+      "alt": "E2B documentation and quickstart",
+      "screen": "docs"
+    },
+    {
+      "path": "/screenshots/e2b/step-2.png",
+      "alt": "E2B sandbox creation via SDK",
+      "screen": "sdk"
+    },
+    {
+      "path": "/screenshots/e2b/step-3.png",
+      "alt": "E2B code execution in sandbox",
+      "screen": "execution"
+    },
+    {
+      "path": "/screenshots/e2b/step-4.png",
+      "alt": "E2B dashboard and monitoring",
+      "screen": "dashboard"
+    },
+    {
+      "path": "/screenshots/e2b/step-5.png",
+      "alt": "E2B pricing and usage",
+      "screen": "pricing"
+    }
+  ],
+  "capabilities": [
+    "Secure sandboxed code execution",
+    "Sub-200ms sandbox startup",
+    "Firecracker microVM isolation",
+    "Python and JavaScript/TypeScript SDKs",
+    "Any language that runs on Linux",
+    "Docker MCP Catalog integration (200+ tools)",
+    "Custom sandbox templates",
+    "E2B Desktop (GUI sandbox for computer use)",
+    "File system management within sandboxes",
+    "Terminal access and package installation",
+    "Web browsing within sandboxes",
+    "Per-second billing",
+    "BYOC and on-prem deployment",
+    "Apache 2.0 open source license"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Developer-first experience: install the SDK (pip or npm), create a sandbox with one line of code, execute commands or code within it. No visual builder — this is infrastructure, not an agent builder. The SDK is clean and well-documented with clear examples for Python and JS/TS.",
+    "strengths": [
+      "Fastest sandbox startup in the market (sub-200ms)",
+      "Clean, minimal SDK with excellent documentation",
+      "Language-agnostic — runs anything that runs on Linux",
+      "Strong open-source community (Apache 2.0)",
+      "Docker MCP Catalog integration gives agents 200+ tools out of the box",
+      "Enterprise-proven: 88% of Fortune 100 signed up"
+    ],
+    "weaknesses": [
+      "Not an agent builder — purely infrastructure/execution layer",
+      "No visual UI for non-developers",
+      "No built-in agent orchestration or multi-agent coordination",
+      "No governance, guardrails, or policy enforcement layer",
+      "Requires integration with a separate agent framework (LangGraph, CrewAI, etc.)"
+    ],
+    "notableFeatures": [
+      "E2B Desktop: GUI sandbox for computer-use agents",
+      "Custom sandbox templates for reproducible environments",
+      "Docker MCP Gateway integration for 200+ tool access",
+      "Firecracker microVM security isolation"
+    ]
+  },
+  "scores": {
+    "total": 48,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 8,
+        "subCriteria": [
+          {
+            "name": "Builder UX",
+            "score": 2,
+            "rationale": "No visual builder — SDK-only, code-first. Excellent for developers but no low-code option for business users."
+          },
+          {
+            "name": "Time to First Agent",
+            "score": 2,
+            "rationale": "E2B is infrastructure, not an agent framework. You need a separate framework (LangChain, CrewAI) to build agents — E2B provides the execution sandbox."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 2,
+            "rationale": "Terminal access and file inspection within sandboxes. Error output is captured. But no agent-level debugging — just code execution debugging."
+          },
+          {
+            "name": "Documentation Quality",
+            "score": 4,
+            "rationale": "Excellent documentation with clear quickstarts, SDK references, and examples. Well-organized for the infrastructure scope it covers."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 6,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "Not an orchestration platform. Zero built-in multi-agent support. Must be paired with an orchestration framework."
+          },
+          {
+            "name": "Human-in-the-Loop",
+            "score": 1,
+            "rationale": "No HITL mechanisms. Sandboxes execute code autonomously — any HITL must be built in the calling framework."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Custom sandbox templates allow reproducible environments, but these are infrastructure templates, not agent workflow templates."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "Pro and Enterprise tiers support team usage. API keys and usage tracking available. But no collaborative agent development features."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 4,
+            "rationale": "Docker MCP Catalog integration provides 200+ tools (GitHub, Perplexity, Browserbase, ElevenLabs). This is E2B's strongest integration story."
+          },
+          {
+            "name": "API & Standards",
+            "score": 4,
+            "rationale": "Clean REST API plus Python and JS/TS SDKs. Works with all major LLM providers and agent frameworks. Well-designed API surface."
+          },
+          {
+            "name": "Auth & Identity",
+            "score": 3,
+            "rationale": "API key authentication. Enterprise tier supports BYOC and on-prem. Service account management available."
+          },
+          {
+            "name": "Data Pipeline / RAG",
+            "score": 3,
+            "rationale": "Sandboxes can access files, install packages, and run data processing code. Not a RAG platform but can execute RAG pipelines within sandboxes."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Safety",
+            "score": 3,
+            "rationale": "Security through isolation — Firecracker microVMs prevent sandbox escape. But no content guardrails, output filtering, or policy enforcement on what agents DO within the sandbox."
+          },
+          {
+            "name": "Audit & Logging",
+            "score": 3,
+            "rationale": "Usage tracking and billing logs. Sandbox lifecycle events logged. But no agent decision audit trails or chain-of-thought logging."
+          },
+          {
+            "name": "RBAC & Permissions",
+            "score": 2,
+            "rationale": "Team management on Enterprise tier. API key scoping. But no fine-grained RBAC for agent permissions within sandboxes."
+          },
+          {
+            "name": "Explainability",
+            "score": 2,
+            "rationale": "Sandboxes capture stdout/stderr and execution results. But no explainability for agent reasoning — that's the calling framework's job."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Cloud (managed), BYOC, on-prem, and self-hosted options on Enterprise. Good flexibility for infrastructure deployment."
+          },
+          {
+            "name": "Scaling",
+            "score": 3,
+            "rationale": "Concurrent sandbox limits scale with tier. Sub-200ms startup enables burst scaling. Per-second billing is cost-efficient."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Per-second billing with clear per-vCPU pricing. Usage dashboards available. But no cost optimization recommendations or autoscaling policies."
+          },
+          {
+            "name": "Ecosystem & Marketplace",
+            "score": 2,
+            "rationale": "Open-source with Apache 2.0 license. Docker partnership. Growing ecosystem but no agent marketplace or template gallery."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "48/100 overall. Strongest: Integration (14/20). Weakest: Orchestration (6/20). Breakdown: Creation (8/20), Orchestration (6/20), Integration (14/20), Governance (10/20), Operations (10/20).",
+  "walkthrough": {
+    "title": "How E2B Works: Secure Sandboxes for AI Agent Execution",
+    "steps": [
+      {
+        "image": "/screenshots/e2b/step08_docker_mcp.jpg",
+        "title": "Docker MCP Integration",
+        "description": "E2B sandboxes integrated with Docker MCP catalog. Any MCP-compatible agent can use E2B for secure code execution.",
+        "pmCritique": {
+          "works": [
+            "Docker MCP integration means framework-agnostic sandbox access",
+            "Any agent that supports MCP can use E2B — no custom integration needed",
+            "Docker partnership adds credibility and distribution"
+          ],
+          "doesntWork": [
+            "MCP is still early — not all frameworks support it yet",
+            "Docker dependency adds another infrastructure layer",
+            "MCP tool configuration complexity unknown"
+          ],
+          "userPsychology": "Docker MCP integration is E2B's distribution play — instead of integrating with every framework individually, they integrate with MCP and get all frameworks at once."
+        },
+        "ctoCritique": {
+          "verdict": "MCP integration is the right strategic bet. As MCP adoption grows, E2B becomes the default sandbox. But MCP maturity is a risk factor.",
+          "concerns": [
+            "MCP ecosystem maturity risk",
+            "Docker dependency for MCP",
+            "Integration testing complexity"
+          ],
+          "enterpriseGaps": [
+            "No MCP certification or compatibility testing",
+            "No MCP version compatibility matrix",
+            "No MCP tool performance benchmarks"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/e2b/step09_sandbox_config.jpg",
+        "title": "Sandbox Configuration",
+        "description": "Template and runtime configuration for isolated agent environments. Resource allocation and lifecycle management.",
+        "pmCritique": {
+          "works": [
+            "Template-based sandboxes ensure reproducibility",
+            "Resource configuration enables cost control",
+            "Lifecycle management prevents orphaned sandboxes"
+          ],
+          "doesntWork": [
+            "Configuration complexity for non-infrastructure teams",
+            "Template management overhead at scale",
+            "No visual template editor"
+          ],
+          "userPsychology": "Sandbox configuration is E2B's core competency — making isolation simple and reproducible."
+        },
+        "ctoCritique": {
+          "verdict": "Template-based sandboxes mean we can standardize environments across teams. But template management needs governance.",
+          "concerns": [
+            "Template proliferation risk at scale",
+            "No template approval workflow",
+            "No template cost estimation"
+          ],
+          "enterpriseGaps": [
+            "No template RBAC",
+            "No template versioning UI",
+            "No template dependency tracking"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/e2b/step10_execution.jpg",
+        "title": "Agent Executing in Sandbox",
+        "description": "Agent running commands and modifying files inside an isolated E2B sandbox. Full filesystem and network access within the sandbox boundary.",
+        "pmCritique": {
+          "works": [
+            "Full agent capability within isolation boundary — best of both worlds",
+            "Real terminal output shows actual agent work",
+            "Sandbox boundary prevents any host system impact"
+          ],
+          "doesntWork": [
+            "Agent activity only visible in terminal logs",
+            "No web UI for sandbox inspection",
+            "Sandbox networking rules not visible"
+          ],
+          "userPsychology": "The sandbox execution is E2B's 'it just works' moment — agents have full power but can't break anything."
+        },
+        "ctoCritique": {
+          "verdict": "This is the trust layer. Without sandbox isolation, we can't deploy agents that modify code or run commands in production.",
+          "concerns": [
+            "Sandbox networking and egress rules unclear",
+            "No sandbox activity audit logging",
+            "No real-time sandbox monitoring UI"
+          ],
+          "enterpriseGaps": [
+            "No sandbox forensics for post-incident analysis",
+            "No sandbox snapshot/restore",
+            "No sandbox cost attribution"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "E2B is the infrastructure layer for AI agent execution — secure sandboxes where agents run code without breaking anything. Not an agent builder, but the essential plumbing every agent platform needs. Docker MCP catalog integration means any MCP-compatible agent can use E2B sandboxes. 88% Fortune 100 adoption validates the enterprise value. Best for: teams building agent platforms who need secure code execution.",
+      "score": "B+ (Infrastructure, Not Platform)",
+      "strengths": [
+        "Only purpose-built sandbox infrastructure for AI agents",
+        "88% Fortune 100 adoption — proven enterprise traction",
+        "Docker MCP integration — any MCP agent can use E2B",
+        "Open-source + cloud — both deployment models available"
+      ],
+      "risks": [
+        "Not an agent builder — infrastructure only",
+        "Sandbox startup latency may impact real-time agents",
+        "Usage-based pricing at scale requires budget modeling",
+        "Invisible to end users — hard to justify as a standalone purchase"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "E2B solves the #1 security concern with AI agents: 'what if the agent breaks something?' Managed sandboxes with full isolation, resource monitoring, and automatic cleanup. The Docker MCP catalog integration means any agent framework can use E2B. Buy decision: if you're building agents that execute code, E2B is a required infrastructure component.",
+      "decision": "BUY — Required Infrastructure for Code-Executing Agents",
+      "strengths": [
+        "Full isolation — agents can't break the host or each other",
+        "Docker MCP integration for framework-agnostic usage",
+        "88% Fortune 100 validates enterprise security posture",
+        "$21M Series A from Insight Partners — financially stable"
+      ],
+      "dealBreakers": [
+        "Infrastructure-only — still need an agent framework on top",
+        "Sandbox cold start latency for real-time applications",
+        "Usage-based pricing requires careful budget modeling",
+        "Limited visibility into what agents do inside sandboxes"
+      ]
+    },
+    "coverageGaps": [
+      "Sandbox performance benchmarks",
+      "Cost optimization strategies",
+      "Multi-region deployment",
+      "Compliance certifications detail"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (8/20)",
+        "score": "Not Applicable",
+        "videoEvidence": "E2B doesn't create agents — it provides execution environments",
+        "gap": "Creation score reflects SDK quality, not agent building"
+      },
+      {
+        "dimension": "Orchestration (6/20)",
+        "score": "Partially Shown",
+        "videoEvidence": "Fork-based parallel execution demonstrated in earlier steps",
+        "gap": "Orchestration is at the sandbox level, not agent level"
+      },
+      {
+        "dimension": "Integration (16/20)",
+        "score": "Well Supported",
+        "videoEvidence": "Docker MCP integration, SDK demos, webhook support all shown",
+        "gap": "Integration breadth is the core value proposition"
+      },
+      {
+        "dimension": "Governance (8/20)",
+        "score": "Partially Shown",
+        "videoEvidence": "Isolation and resource monitoring provide basic governance",
+        "gap": "No compliance certifications or audit trails shown"
+      },
+      {
+        "dimension": "Operations (10/20)",
+        "score": "Supported",
+        "videoEvidence": "Dashboard monitoring, budget controls, resource metrics shown",
+        "gap": "Advanced operations features not demonstrated"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "1ECn5zrVUB4",
+      "title": "E2B Agent Sandboxes: The Space to Place your Claude Agents",
+      "channel": "IndyDevDan"
+    },
+    {
+      "videoId": "csT16BaTHwY",
+      "title": "Running AI Agents in Secure Sandboxes with E2B & Docker MCP",
+      "channel": "Docker"
+    }
+  ],
+  "marketIntelligence": {
+    "communityBuzz": [
+      "E2B is the de facto standard for AI agent sandboxing — used by 88% of Fortune 100 (https://e2b.dev/blog/series-a)",
+      "Docker partnership (Dec 2025) adds 200+ MCP tools to every sandbox, significantly expanding what agents can do in isolation",
+      "Hugging Face uses E2B for reinforcement learning pipelines; Groq uses it for compound AI systems",
+      "AI sandbox benchmark (2026) shows E2B with the most mature SDK and largest community vs Modal and Daytona (https://www.superagent.sh/blog/ai-code-sandbox-benchmark-2026)",
+      "Apache 2.0 license makes it the most permissive option for enterprise adoption"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "~8,900",
+        "source": "GitHub",
+        "date": "2026-04"
+      },
+      {
+        "metric": "Fortune 100 Adoption",
+        "value": "88%",
+        "source": "E2B Blog",
+        "date": "2026"
+      },
+      {
+        "metric": "Sandbox Startup Time",
+        "value": "<200ms",
+        "source": "E2B Docs",
+        "date": "2026"
+      },
+      {
+        "metric": "MCP Tools Available",
+        "value": "200+",
+        "source": "Docker Partnership",
+        "date": "2025-12"
+      }
+    ],
+    "funding": {
+      "total": "$21M+",
+      "lastRound": "Series A, $21M (2025)",
+      "investors": [
+        "Insight Partners",
+        "Decibel",
+        "Sunflower Capital",
+        "Kaya",
+        "Scott Johnston (Docker ex-CEO)"
+      ]
+    }
+  },
+  "recentDevelopments": [
+    "Series A: Raised $21M led by Insight Partners to scale the enterprise AI agent cloud",
+    "Docker MCP Integration (Dec 2025): Every sandbox now includes Docker's MCP Catalog with 200+ tools",
+    "E2B Desktop: Launched GUI sandbox for computer-use agents (visual interaction with desktop environments)",
+    "Fortune 100 milestone: 88% of Fortune 100 companies signed up on the platform",
+    "AI sandbox benchmark leader: Ranked #1 for SDK maturity and community size vs Modal and Daytona"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://e2b.dev",
+      "accessedAt": "2026-04-07",
+      "type": "docs"
+    },
+    {
+      "url": "https://github.com/e2b-dev/E2B",
+      "accessedAt": "2026-04-07",
+      "type": "github"
+    },
+    {
+      "url": "https://e2b.dev/blog/series-a",
+      "accessedAt": "2026-04-07",
+      "type": "news"
+    },
+    {
+      "url": "https://e2b.dev/pricing",
+      "accessedAt": "2026-04-07",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.superagent.sh/blog/ai-code-sandbox-benchmark-2026",
+      "accessedAt": "2026-04-07",
+      "type": "analyst"
+    },
+    {
+      "url": "https://www.docker.com/blog/docker-e2b-building-the-future-of-trusted-ai/",
+      "accessedAt": "2026-04-07",
+      "type": "news"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": true,
+    "hybrid": false,
+    "notes": "Managed cloud, BYOC, on-prem, and self-hosted options on Enterprise tier."
+  },
+  "supportedCUJs": [
+    "code-development",
+    "workflow-automation",
+    "data-extraction"
+  ],
+  "coreCompetence": {
+    "bestAt": "The fastest, most secure sandboxed code execution for AI agents — sub-200ms Firecracker microVM startup, purpose-built for agent workflows, not general compute.",
+    "targetUser": "AI agent developers who need secure, isolated environments for running AI-generated code in production. Platform teams building agent infrastructure.",
+    "vsAlternatives": "Wins against Modal and Daytona on startup speed and SDK maturity for agent-specific use cases. Wins on security model (Firecracker microVMs). Loses — it is infrastructure, not an agent builder. Must be paired with an orchestration framework."
+  }
+}

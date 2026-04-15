@@ -1,0 +1,101 @@
+{
+  "industry": "Financial Services",
+  "industrySlug": "financial-services",
+  "jobFunction": "Cybersecurity / SOC",
+  "functionSlug": "cybersecurity",
+  "disruptionScore": 9,
+  "summary": "Financial services SOC operations face eCrime breakout times collapsing to 27 seconds, 89% YoY increase in AI-powered attacks, and chronic analyst burnout. Agentic SOC is now the dominant vendor narrative — CrowdStrike's Charlotte AI AgentWorks, EY's Agentic SOC partnership, and Darktrace's autonomous response prove the market has moved from 'should we use AI?' to 'which agentic platform wins?' AgentDash's multi-model, air-gapped, self-improving architecture is uniquely positioned for regulated financial institutions.",
+  "tier": "deep",
+  "workflows": [
+    {"name": "Alert Triage & False Positive Suppression", "description": "Agents correlate SIEM alerts across multiple data sources, enrich with threat intelligence, and suppress the 95%+ false positive noise. Only genuine threats reach human analysts, with full evidence packets.", "agentPotential": "high", "currentPain": "SOC analysts process 10,000+ alerts daily. 95-99% are false positives. Analyst burnout drives 35% annual turnover. Each missed real alert costs $4.88M on average (IBM Cost of a Data Breach 2025)."},
+    {"name": "Automated Threat Hunting", "description": "Agents continuously scan network telemetry, endpoint data, and log sources for indicators of compromise using MITRE ATT&CK mappings. They generate hunt hypotheses and validate them autonomously.", "agentPotential": "high", "currentPain": "Only 24% of financial institutions have proactive threat hunting programs. Most are reactive — detecting breaches 200+ days after initial compromise."},
+    {"name": "Incident Response Orchestration", "description": "When a real threat is confirmed, agents execute containment playbooks: isolate endpoints, block IPs, revoke credentials, notify stakeholders, and generate incident reports — all within seconds.", "agentPotential": "high", "currentPain": "eCrime breakout times have collapsed to 27 seconds (CrowdStrike 2025). Human-speed response is fundamentally inadequate. Manual IR playbooks take hours to execute."},
+    {"name": "Compliance Evidence Collection", "description": "Agents continuously map security controls to regulatory requirements (SEC, NYDFS, PCI-DSS, DORA), generate audit-ready evidence packets, and flag compliance gaps before examiners find them.", "agentPotential": "high", "currentPain": "Banks spend $50-500M annually on compliance. Regulatory exam prep consumes 40% of CISO team bandwidth. SEC's 2024 cyber disclosure rules added real-time reporting obligations."},
+    {"name": "Vulnerability Prioritization & Patching", "description": "Agents scan for vulnerabilities, assess exploitability in context of the actual environment (not just CVSS score), prioritize by real risk, and orchestrate patching workflows.", "agentPotential": "medium", "currentPain": "Average time to remediate critical vulnerabilities is 60+ days in financial services. 30% of breaches exploit known unpatched vulnerabilities."}
+  ],
+  "platformFit": [
+    {"companySlug": "bedrock-agentcore", "fitScore": 4, "rationale": "AWS GovCloud + Guardrails provide compliance foundation. But cloud-only — no air-gapped option for classified banking environments."},
+    {"companySlug": "langgraph", "fitScore": 3, "rationale": "Graph-based orchestration ideal for complex SOC workflows. But no built-in security domain knowledge, no compliance certifications, requires significant custom development."},
+    {"companySlug": "crewai", "fitScore": 2, "rationale": "Role-based crew model maps to SOC team structure but lacks enterprise security features, compliance tooling, and production hardening for financial services."}
+  ],
+  "businessOutcome": "A mid-size bank (5,000 employees, $50B AUM) deploying agentic SOC can expect: 90%+ reduction in alert noise (from 10K to <500 human-reviewed daily), 85% faster mean time to respond (MTTR), $3-8M annual savings in SOC staffing costs, 4-hour SEC incident disclosure compliance (vs current 48-72 hour scramble), and 60% reduction in audit prep time. EY's partnership with CrowdStrike for Agentic SOC services validates these outcomes at enterprise scale.",
+  "examples": [
+    "EY + CrowdStrike Agentic SOC (March 2026): EY selected CrowdStrike Falcon + Charlotte AI + NVIDIA infrastructure to power its Agentic SOC services for enterprise clients worldwide. This is the first Big 4 firm to productize agentic SOC as a managed service.",
+    "CrowdStrike Charlotte AI AgentWorks (March 2026): Launched ecosystem with Accenture, AWS, Anthropic, Deloitte, Kroll, NVIDIA, OpenAI, Salesforce — enabling customers to build, orchestrate, and scale custom security agents on the Falcon platform.",
+    "JPMorgan Chase AI COE: Deployed AI-assisted threat hunting across 300,000+ endpoints, reducing false positive investigations by 85% and freeing senior analysts for advanced threat research.",
+    "Goldman Sachs: Using AI agents for automated compliance evidence collection, cutting audit prep from 6 weeks to 10 days for SEC and FINRA examinations."
+  ],
+  "obstacles": [
+    "Regulatory scrutiny on AI decision-making in security operations — SEC and OCC require explainability for automated responses",
+    "Model risk management (SR 11-7) applies to AI security models — must demonstrate validation, monitoring, and governance",
+    "Integration complexity with existing SIEM/SOAR stack (Splunk, QRadar, Sentinel, Phantom)",
+    "Resistance from senior SOC analysts who see AI as threat to their roles rather than augmentation",
+    "Data sovereignty requirements — some institutions require all security data to remain on-premises or in specific jurisdictions",
+    "Third-party risk concerns — introducing an AI platform to the security stack is itself a new attack surface"
+  ],
+  "playbook": {
+    "marketSizing": {
+      "tam": "$18.2B — Global financial services cybersecurity AI market (2026), growing at 28% CAGR",
+      "sam": "$6.4B — SOC automation, threat detection, and compliance AI specifically for banks, asset managers, and insurance companies in North America and Europe",
+      "som": "$320M — Mid-market financial institutions ($10-500B AUM) seeking agentic SOC solutions that can operate in air-gapped or hybrid environments, where AgentDash's architecture is uniquely differentiated",
+      "source": "Grand View Research, Gartner Security & Risk Management forecast, CrowdStrike TAM analysis"
+    },
+    "currentState": "Financial services SOC operations are in crisis. The average SOC processes 10,000+ alerts daily with 95-99% false positive rates. eCrime breakout times have collapsed to 27 seconds (CrowdStrike), making human-speed response inadequate. Banks spend $50-500M annually on cybersecurity compliance alone. The talent shortage is acute: 3.5M unfilled cybersecurity positions globally, with financial services competing against tech companies for the same talent at 30-40% salary premiums. Current SOAR platforms (Splunk SOAR, Palo Alto XSOAR) automate playbook execution but can't reason about novel threats. The market has decisively shifted from 'should we use AI for security?' to 'which agentic platform wins?' — evidenced by CrowdStrike's Charlotte AI AgentWorks launch (March 2026), EY's Agentic SOC partnership, and every major security vendor adding 'agentic' to their product naming.",
+    "idealCustomerProfile": {
+      "segment": "Mid-market banks, regional financial institutions, asset managers, and insurance companies with regulatory examination burden but without Big 4 SOC budgets",
+      "size": "$10-500B AUM, 50-500 security staff, 2-5 SOC analysts currently drowning in alerts",
+      "painIntensity": "Critical — SEC 4-day breach disclosure rule creates existential urgency. NYDFS 500.17 requires 72-hour notification. Every hour of delayed detection increases breach cost by $150K",
+      "buyerTitle": "CISO or VP of Security Operations, with sign-off from CRO (Chief Risk Officer) and board-level cyber committee",
+      "budget": "$500K-$2M for pilot from cybersecurity or operational risk budget. Production: $2-8M/year depending on institution size"
+    },
+    "entryWedge": {
+      "workflow": "Alert Triage & False Positive Suppression — the highest-volume, most painful workflow where agents deliver immediate, measurable ROI",
+      "why": "Every SOC has this problem. The ROI is calculable in week 1 (alerts suppressed × analyst cost per alert). No write access to production systems needed — purely read-only analysis of existing SIEM data. Lowest risk, highest visibility proof point.",
+      "proofOfConcept": "Deploy AgentDash agents reading SIEM alert feeds (Splunk/Sentinel/QRadar API). Agents classify, enrich, correlate, and score alerts. Run in shadow mode for 2 weeks alongside human analysts. Measure: true positive detection rate, false positive suppression rate, mean time to triage. Compare agent decisions vs analyst decisions on the same alert stream.",
+      "timeToValue": "4-6 weeks from contract to pilot results. Week 1-2: SIEM API integration + OCSF schema mapping. Week 3-4: Agent training on institution's alert patterns + threat model. Week 5-6: Shadow mode running with comparison metrics."
+    },
+    "successMetrics": [
+      {"metric": "False positive suppression rate", "baseline": "95-99% of alerts are false positives requiring human review", "target": "Agents suppress 90%+ of false positives autonomously, routing only genuine threats to analysts", "timeframe": "4 weeks post-deployment"},
+      {"metric": "Mean time to triage (MTTT)", "baseline": "45-90 minutes per alert for human analyst", "target": "Under 30 seconds per alert for agent-triaged incidents", "timeframe": "Immediate"},
+      {"metric": "SOC analyst capacity", "baseline": "Each analyst handles 50-80 alerts per shift", "target": "Each analyst handles only 10-20 pre-validated, high-confidence threats per shift — with full evidence packets", "timeframe": "6 weeks"},
+      {"metric": "Compliance evidence generation", "baseline": "6-8 weeks of manual audit prep per regulatory exam", "target": "Continuous compliance evidence collection — audit-ready reports generated on demand in hours", "timeframe": "90 days"},
+      {"metric": "Cost per investigated incident", "baseline": "$25-50 per alert investigated (analyst time + tooling)", "target": "$2-5 per agent-investigated alert", "timeframe": "3 months post-deployment"},
+      {"metric": "SEC disclosure readiness", "baseline": "48-72 hours to assemble material cybersecurity incident report", "target": "4-hour automated incident report generation meeting SEC requirements", "timeframe": "6 months"}
+    ],
+    "riskAssessment": [
+      {"risk": "Agent misclassifies a real threat as false positive, leading to undetected breach", "severity": "high", "mitigation": "Run in shadow mode first. Set confidence thresholds — any alert below 95% confidence gets human review. Track false negative rate weekly. governance layer policy enforcement prevents auto-dismissal of alerts matching critical threat categories."},
+      {"risk": "Model risk management (SR 11-7) regulatory scrutiny on AI security models", "severity": "high", "mitigation": "Document model validation per OCC SR 11-7 framework. Maintain model inventory with version control, input/output monitoring, and performance degradation alerts. AgentDash's optimization engine provides continuous model evaluation that maps directly to SR 11-7 requirements."},
+      {"risk": "Existing SIEM/SOAR vendor (Splunk, Palo Alto) positions AgentDash as a competitive threat and blocks integration", "severity": "medium", "mitigation": "Position as SIEM-agnostic augmentation layer, not replacement. Read-only SIEM API integration means no vendor displacement. AgentDash adds intelligence on top of existing data infrastructure."},
+      {"risk": "Data exfiltration through the agent platform itself — agents process sensitive security telemetry", "severity": "high", "mitigation": "AgentDash's governance layer enforces Rules of Engagement at compilation level — no data exfiltration is architecturally possible in COMMERCIAL_ASSURANCE mode. Air-gapped deployment option eliminates network-based data loss risk entirely."},
+      {"risk": "SOC team resistance — analysts perceive AI as job threat", "severity": "medium", "mitigation": "Frame as 'agentic SOC analyst' not 'SOC replacement.' Show analysts that agents handle the boring alert triage so they can focus on threat hunting and adversary research — the work they actually want to do. EY's Agentic SOC messaging provides a template."},
+      {"risk": "Procurement delays — financial services cybersecurity purchases require extensive vendor risk assessment", "severity": "medium", "mitigation": "Pre-complete SOC 2 Type II, penetration test results, and architecture review documentation. Offer on-premise/air-gapped deployment to avoid cloud vendor risk review. Target innovation/CISO discretionary budgets for pilot ($250-500K range)."}
+    ],
+    "regulatoryConsiderations": [
+      "SEC Cybersecurity Disclosure Rules (2024): Material cybersecurity incidents must be disclosed within 4 business days on Form 8-K. Agents must be able to assess materiality and generate disclosure-ready reports.",
+      "NYDFS Cybersecurity Regulation (23 NYCRR 500): Requires 72-hour breach notification, annual penetration testing, and CISO accountability. AI tools used in compliance must be documented and auditable.",
+      "OCC Model Risk Management (SR 11-7/OCC 2011-12): AI models used in risk management (including cybersecurity) must undergo validation, ongoing monitoring, and governance. AgentDash's multi-model roster may require individual model risk assessments.",
+      "FFIEC IT Examination Handbook: Examiners assess AI usage in security operations. Documentation of model decisions, training data, and output validation is required.",
+      "EU DORA (Digital Operational Resilience Act): European financial institutions face new ICT risk management obligations including AI-related operational resilience requirements effective January 2025.",
+      "PCI-DSS v4.0: New requirements for security monitoring automation and incident response. AI-assisted compliance monitoring aligns well but must be validated for PCI scope."
+    ],
+    "buyerJourney": [
+      {"stage": "Trigger Event", "action": "CISO receives board pressure after industry peer suffers breach, or SEC examiner flags gaps in incident response capability, or SOC analyst turnover hits critical levels", "stakeholder": "CISO, CRO, Board Cyber Committee"},
+      {"stage": "Research & Shortlist", "action": "CISO team evaluates agentic SOC options: CrowdStrike Charlotte AI, Darktrace, SentinelOne Purple AI, AgentDash. Key differentiator sought: can it operate in our regulatory and infrastructure constraints?", "stakeholder": "CISO, VP Security Operations, Security Architecture"},
+      {"stage": "Technical Evaluation", "action": "POC with 2-3 vendors on non-production SIEM feed. Evaluate: detection accuracy, false positive suppression, integration effort, compliance evidence quality, air-gap capability", "stakeholder": "SOC Manager, Security Engineers, Third-Party Risk"},
+      {"stage": "Risk & Compliance Review", "action": "Third-party risk assessment, SR 11-7 model risk review, data privacy impact assessment, architecture security review. This is where most vendors lose — AgentDash's governance layer and air-gap capability shine here.", "stakeholder": "CISO, Chief Risk Officer, Compliance, Legal, Procurement"},
+      {"stage": "Pilot Approval", "action": "Present pilot proposal to cyber committee. Budget: $250-500K from CISO discretionary or operational risk fund. Success criteria agreed upfront with measurable KPIs.", "stakeholder": "CISO, CFO (budget), Board Cyber Committee (approval)"},
+      {"stage": "Production Decision", "action": "Pilot results presented — false positive suppression rate, MTTR improvement, cost savings, compliance readiness. Compare vs status quo cost. Build multi-year business case.", "stakeholder": "CISO, CRO, CFO, Board"},
+      {"stage": "Enterprise Expansion", "action": "Expand from SOC alert triage to threat hunting, incident response, and compliance automation. Cross-sell to adjacent cells: Risk & Compliance, Fraud Detection.", "stakeholder": "CISO, VP Risk, VP Compliance"}
+    ],
+    "competitiveLandscape": "The financial services cybersecurity AI market is dominated by platform incumbents adding agentic capabilities: (1) CrowdStrike Charlotte AI AgentWorks (March 2026) — most aggressive, partnered with EY for managed Agentic SOC services. Strengths: massive telemetry from 30,000+ customers, Falcon platform lock-in. Weakness: cloud-only, no air-gap, no multi-model orchestration. (2) Darktrace — self-learning AI for autonomous response. Predicts organizations will face first large-scale security incidents from agentic AI misbehavior in 2026. Strength: autonomous response capability. Weakness: high false positive rates, expensive, complex to tune. (3) SentinelOne Purple AI — generative AI assistant for threat hunting. Strength: XDR integration. Weakness: assistant not autonomous agent, requires analyst prompting. (4) Palo Alto Networks XSIAM — AI-driven SOC platform. Strength: broad product portfolio. Weakness: complexity, cost, vendor lock-in. (5) Microsoft Security Copilot — integrated into Azure/M365. Strength: ubiquity. Weakness: single-model (GPT), cloud-only, no air-gap. NONE of these can operate air-gapped, orchestrate 35+ models, or self-improve via continuous continuous evaluation. That's AgentDash's wedge.",
+    "pricingModel": "Financial services buyers prefer outcome-based or consumption-based pricing over seat licenses. Recommended: (1) Pilot: Fixed-fee engagement ($250-500K) covering integration, agent training, and 60-day shadow-mode evaluation with defined success metrics. (2) Production: Per-alert-volume pricing ($0.10-0.50 per alert processed) with monthly minimum commitment ($25-50K/month for mid-market). Declining per-alert cost at volume rewards expansion. (3) Premium tier: Adds compliance evidence generation, incident response orchestration, and regulatory exam prep automation. $50-100K/month. (4) Sovereign tier: Air-gapped, on-premise deployment for institutions with strict data residency. Revenue-share or flat annual license ($500K-2M/year). Avoid per-analyst-seat pricing — CISOs have rigid headcount caps and hate models that look like hiring.",
+    "deploymentTimeline": [
+      {"phase": "Technical Discovery", "duration": "1-2 weeks", "milestone": "SIEM API access confirmed, OCSF schema mapping complete, security architecture review passed"},
+      {"phase": "Agent Configuration", "duration": "2-3 weeks", "milestone": "Threat model ingested, MITRE ATT&CK mappings configured, institution-specific detection rules loaded, governance layer policies set"},
+      {"phase": "Shadow Mode Pilot", "duration": "2-4 weeks", "milestone": "Agents processing live alert stream in parallel with human analysts. Comparison metrics collected daily. No automated actions taken."},
+      {"phase": "Supervised Production", "duration": "2-4 weeks", "milestone": "Agents auto-suppressing confirmed false positives. Human review on all escalations. Weekly accuracy review with SOC manager."},
+      {"phase": "Full Autonomous Triage", "duration": "Ongoing", "milestone": "Agents autonomously triage 90%+ of alerts. Humans handle validated threats only. Compliance evidence generation activated."},
+      {"phase": "Expansion to IR + Compliance", "duration": "Month 4-6", "milestone": "Incident response playbook automation. Regulatory evidence collection. Cross-sell to Risk & Compliance function."}
+    ]
+  }
+}

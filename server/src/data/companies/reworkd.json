@@ -1,0 +1,374 @@
+{
+  "name": "Reworkd",
+  "slug": "reworkd",
+  "category": "use-case",
+  "subcategory": "data-research",
+  "description": "Reworkd is an AI-powered web data extraction platform that originated from AgentGPT (~32K GitHub stars). Pivoted from general autonomous agents to enterprise web scraping. Uses Tarsier vision-language library for page understanding. Targets market research, lead generation, competitive intelligence, and supply chain data aggregation.",
+  "oneLiner": "AI agents for automated web data extraction and structured data collection at enterprise scale.",
+  "founded": "2023",
+  "funding": "$1.25M pre-seed (Y Combinator S23 batch)",
+  "pricing": "Contact sales for enterprise. AgentGPT free/open-source for self-hosting.",
+  "website": "https://www.reworkd.ai",
+  "githubRepo": "reworkd/AgentGPT",
+  "githubStars": 32000,
+  "screenshots": [],
+  "capabilities": [
+    "AI web data extraction with NL schema definitions",
+    "Autonomous website navigation",
+    "Structured data from unstructured web pages",
+    "Tarsier vision-language web understanding",
+    "Parallel batch extraction",
+    "Schema-driven field extraction",
+    "Dynamic JavaScript rendering support",
+    "Anti-bot handling and CAPTCHA mitigation",
+    "Market research data aggregation",
+    "Competitive intelligence monitoring",
+    "Lead generation and contact extraction",
+    "E-commerce price monitoring",
+    "REST API for job management",
+    "AgentGPT open-source autonomous agents",
+    "CSV/JSON data export"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Define extraction targets by specifying URLs and describing data schema in natural language. AI agents navigate pages, interpret content using Tarsier vision models, extract structured records. Flow: define schema -> provide URLs -> run extraction -> review/export. Early-stage interface prioritizes accuracy over builder polish.",
+    "strengths": [
+      "NL schema definition lowers barrier for non-technical users",
+      "Tarsier vision-based understanding handles dynamic/complex pages",
+      "Open-source heritage provides transparency",
+      "Batch extraction at scale for high-volume use cases",
+      "AgentGPT brand recognition (32K stars)"
+    ],
+    "weaknesses": [
+      "Very early-stage enterprise product",
+      "No compliance certifications",
+      "Sparse documentation",
+      "No team collaboration, RBAC, or multi-tenant",
+      "Unclear pricing creates procurement friction",
+      "Limited integration ecosystem",
+      "AgentGPT declining activity post-pivot"
+    ],
+    "notableFeatures": [
+      "Tarsier: vision-language library converting screenshots to tagged text for LLM reasoning",
+      "Schema-driven extraction: define output structure, AI figures out how to populate from web pages",
+      "AgentGPT: pioneered goal-decomposition autonomous agent pattern"
+    ]
+  },
+  "recentDevelopments": [
+    "2025-02: Main Reworkd web scraping product sunset",
+    "2026: AgentGPT platform continues — autonomous agents for web scraping and other tasks",
+    "2026: Reworkd (AgentGPT) remains among top 5 autonomous scraping agents",
+    "2026: Self-healing scrapers with Playwright code generation and repair",
+    "2024: Pivoted from AgentGPT to enterprise web data extraction",
+    "Released Tarsier open-source vision-language library",
+    "2023: YC S23 batch, $1.25M pre-seed",
+    "AgentGPT reached ~32K GitHub stars",
+    "Shifted positioning from 'autonomous agents for everyone' to 'AI web extraction at scale'"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://www.reworkd.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://github.com/reworkd/AgentGPT",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://github.com/reworkd/tarsier",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud platform. Open-source version (AgentGPT) can be self-hosted."
+  },
+  "scores": {
+    "total": 39,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Web UI for schema definition and target URLs. NL descriptions guide behavior. Functional not polished."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "Basic extraction previews. Limited failure trace visualization."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 2,
+            "rationale": "Sparse and evolving. AgentGPT has community guides. Enterprise docs have gaps."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Schema changes apply quickly. No hot-reload preview or version DAG."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 5.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 2,
+            "rationale": "Parallel extraction jobs. AgentGPT had sub-task decomposition. No true multi-agent with shared state."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 1,
+            "rationale": "No structured handoff. Configure and review results."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No team workspaces or collaborative editing."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "Limited extraction pattern templates. No marketplace."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 8,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 2,
+            "rationale": "CSV/JSON export. Basic API. No native CRM/warehouse connectors."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 2,
+            "rationale": "REST API for job management. No MCP, GraphQL, or event architecture."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "Basic API key auth. No SAML/SSO or enterprise IAM."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 2,
+            "rationale": "Tarsier for visual page understanding. Schema-driven extraction. No RAG/vector store."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 6.4,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "Job cancellation. Rate limiting for target policies. No behavioral monitoring."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "No structured approval. Post-extraction review only."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 1,
+            "rationale": "Minimal audit trail. No SOC2. No immutable logging."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 1,
+            "rationale": "Basic accounts. No RBAC, teams, or SSO."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "SaaS primary. AgentGPT self-hostable via Docker. No K8s enterprise deployment."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 2,
+            "rationale": "Early-stage scaling. Moderate concurrent jobs. No hyperscale proof points."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Basic job status dashboards. No enterprise observability integration."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 3,
+            "rationale": "AgentGPT ~32K stars. Strong awareness. Enterprise base limited."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "39/100 overall. Strongest: Creation (10/20). Weakest: Orchestration (5/20). Breakdown: Creation (10/20), Orchestration (5/20), Integration (8/20), Governance (6/20), Operations (9/20).",
+  "competence": "Research & Data Extraction Agent",
+  "targetUser": "Teams extracting structured data from websites",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "AgentGPT GitHub Stars",
+        "value": "32K+",
+        "source": "GitHub"
+      }
+    ],
+    "funding": {
+      "total": "$4.5M",
+      "lastRound": "Pre-seed (Y Combinator S23)",
+      "investors": [
+        "Y Combinator",
+        "AI Grant",
+        "General Catalyst",
+        "Orange Collective",
+        "Ritual Capital"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "Structured Data Extraction from Product Catalogs",
+    "steps": [
+      {
+        "title": "Define Your Data Schema",
+        "description": "Specify what data you need extracted — product name, SKU, price, description, specifications, availability. Reworkd's schema builder lets you define the exact output structure with field types, validation rules, and required/optional flags.",
+        "image": "/screenshots/reworkd/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Natural language extraction instructions are intuitive — describe what data you want",
+            "Visual workflow showing extraction pipeline builds confidence",
+            "Pre-built extractors for common sites (LinkedIn, Amazon, Google) save setup time"
+          ],
+          "doesntWork": [
+            "Extraction accuracy drops significantly on dynamic JavaScript-heavy sites",
+            "No visual selector for pointing at page elements — must describe in text",
+            "Rate limiting and anti-bot detection handling is not transparent"
+          ],
+          "userPsychology": "Describing what you want in plain English feels magical when it works, but when extraction fails on a complex site, users have no tools to diagnose why — the abstraction that helps beginners hurts power users."
+        }
+      },
+      {
+        "title": "Provide Target URLs or Upload Pages",
+        "description": "Point Reworkd at product catalog URLs, or upload HTML pages directly. The platform handles pagination, infinite scroll, and dynamic content loading — no need to reverse-engineer JavaScript-rendered pages.",
+        "image": "/screenshots/reworkd/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Batch URL processing handles large-scale extraction needs",
+            "Output format flexibility (JSON, CSV, API) covers most use cases",
+            "Scheduling for recurring extractions"
+          ],
+          "doesntWork": [
+            "No incremental extraction — re-processes entire pages on each run",
+            "Error handling for failed URLs is crude — retry or skip, no partial extraction",
+            "No data quality validation or deduplication"
+          ],
+          "userPsychology": "Scale is the value proposition — extracting from 10 URLs is a demo, extracting from 10,000 is a product. But without data quality tools, users spend more time cleaning output than they saved on extraction."
+        }
+      },
+      {
+        "title": "Tarsier Vision Model Processes Pages",
+        "description": "Reworkd's Tarsier vision-language model reads pages like a human — understanding visual layout, table structures, and contextual relationships between elements. It extracts data even from non-standard layouts that traditional scrapers miss.",
+        "image": "/screenshots/reworkd/step-3.png",
+        "pmCritique": {
+          "works": [
+            "Clean API documentation for integration into data pipelines",
+            "Webhook notifications when extraction jobs complete",
+            "Team workspace with shared extraction configurations"
+          ],
+          "doesntWork": [
+            "API rate limits are strict for lower tiers — blocks production pipelines",
+            "No SDK beyond REST API — no Python/Node libraries",
+            "Webhook payload format is not customizable"
+          ],
+          "userPsychology": "Developers evaluate extraction tools by API quality first — Reworkd API is clean but the rate limiting creates anxiety about production reliability. Teams need confidence that the API will not throttle during a critical data pull."
+        }
+      },
+      {
+        "title": "Review and Validate Extracted Data",
+        "description": "Preview extracted data in a spreadsheet-like interface. Flag incorrect entries, and Reworkd learns from corrections to improve accuracy on subsequent pages. Confidence scores highlight fields that may need human review.",
+        "image": "/screenshots/reworkd/step-4.png"
+      },
+      {
+        "title": "Export and Integrate",
+        "description": "Export clean, structured data as CSV, JSON, or push directly to your database via API. Schedule recurring extractions to keep your product data current. Monitor extraction accuracy and volume over time.",
+        "image": "/screenshots/reworkd/step-5.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Reworkd — limited public demo content available. Verdict based on documentation and existing research data only. Score reflects capability claims that could not be verified through video walkthrough.",
+      "score": "Unverified",
+      "strengths": [
+        "See existing capability analysis in the product profile"
+      ],
+      "risks": [
+        "No video demo available for verification",
+        "Product capabilities based on documentation only",
+        "UX quality unverifiable without live demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Insufficient public demo material to evaluate Reworkd for enterprise adoption. Recommend requesting a live demo from the vendor before making any commitment.",
+      "decision": "INSUFFICIENT DATA",
+      "strengths": [
+        "See existing scoring for capability assessment"
+      ],
+      "dealBreakers": [
+        "No public product demo available",
+        "Cannot verify UX claims without walkthrough",
+        "Enterprise readiness unassessable"
+      ]
+    },
+    "coverageGaps": [
+      "Complete product walkthrough needed",
+      "All capabilities unverified via video"
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "oTY8egmo7us",
+      "title": "How to Use Agent GPT - ChatGPT as AutoGPT",
+      "channel": "Howfinity"
+    },
+    {
+      "videoId": "kA6YGn25Mtc",
+      "title": "AgentGPT: Autonomous AI Agents in Your Browser",
+      "channel": "Artificial Intelligence and Blockchain"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "Automated web data extraction at scale — AI agents that navigate websites, extract structured data, and build datasets without manual scraping scripts.",
+    "targetUser": "Data teams, market researchers, and business analysts who need to extract structured data from websites at scale without writing scrapers.",
+    "vsAlternatives": "Wins on web extraction specificity — purpose-built for this use case. Strong open-source community (25K+ GitHub stars). Loses on breadth — single use case. Loses to general agent platforms on workflow flexibility."
+  }
+}

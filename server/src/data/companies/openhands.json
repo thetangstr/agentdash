@@ -1,0 +1,448 @@
+{
+  "name": "OpenHands",
+  "slug": "openhands",
+  "category": "open-source",
+  "subcategory": "autonomous-coding",
+  "description": "OpenHands (formerly OpenDevin) is an open-source autonomous AI software engineer that can modify code, execute terminal commands, browse the web, open pull requests, and collaborate with users on software development. It runs inside sandboxed Docker environments and supports any LLM via OpenRouter. 70K+ GitHub stars, 490+ contributors, MIT licensed.",
+  "oneLiner": "Open-source autonomous AI software engineer that writes code, runs commands, and opens pull requests in sandboxed environments.",
+  "founded": "2024",
+  "funding": "$18.8M Series A (2025)",
+  "pricing": "Open Source (MIT, free); OpenHands Cloud (hosted) with usage-based pricing",
+  "website": "https://openhands.dev",
+  "githubRepo": "All-Hands-AI/OpenHands",
+  "githubStars": 70000,
+  "screenshots": [],
+  "capabilities": [
+    "Autonomous code generation and modification",
+    "Terminal command execution in sandboxed Docker",
+    "Web browsing for research",
+    "GitHub issue resolution end-to-end",
+    "Pull request creation",
+    "Planning Mode (beta) for structured approach",
+    "Model-agnostic (Claude, GPT-4, Gemini, Llama via OpenRouter)",
+    "Kubernetes deployment support (v1.6.0)",
+    "File system navigation and code search",
+    "Test execution and iteration",
+    "MIT licensed open-source"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Chat-based interface where users describe tasks or point to GitHub issue URLs. Agent reads the issue, plans an approach, writes code, runs tests, and opens a PR. Planning Mode (beta) adds a structured approval step before execution. Self-hosted via Docker or managed via OpenHands Cloud.",
+    "strengths": [
+      "70K+ GitHub stars — one of the most popular AI coding agents",
+      "Top SWE-bench performer for autonomous issue resolution",
+      "Strong Docker sandboxing for safe code execution",
+      "Model-agnostic — works with any LLM via OpenRouter",
+      "MIT licensed with active academic and industry community",
+      "Natural GitHub workflow — issues in, PRs out"
+    ],
+    "weaknesses": [
+      "Single-agent, code-only — not a general enterprise agent platform",
+      "No multi-agent orchestration",
+      "No enterprise system integrations (CRM, ERP, etc.)",
+      "No governance, compliance, or team features",
+      "Quality varies significantly by task complexity",
+      "No built-in monitoring or cost management"
+    ],
+    "notableFeatures": [
+      "Planning Mode beta — structured plan-then-execute with approval",
+      "End-to-end GitHub issue to PR workflow",
+      "Docker sandboxed execution environment",
+      "Kubernetes support (v1.6.0)",
+      "SWE-bench top performer"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-03: v1.6.0 with Kubernetes support and Planning Mode beta",
+    "2026-01: OpenHands Index launched — broader evaluation beyond SWE-bench covering greenfield, frontend, testing",
+    "2025: 53%+ on SWE-bench Verified when paired with Claude 4.5",
+    "2025: $18.8M Series A raised",
+    "2025: Rebranded from OpenDevin to OpenHands"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://openhands.dev",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://github.com/All-Hands-AI/OpenHands",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://arxiv.org/abs/2407.16741",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://nurevoflow.com/ai-builds/openhands",
+      "accessedAt": "2026-04-04",
+      "type": "news"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Open-source (MIT). Self-host via Docker. Cloud platform also available."
+  },
+  "scores": {
+    "total": 57,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "Chat-based interface. Point at GitHub issue URL and agent works on fix. Natural interaction."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Docker-based setup. OpenHands Cloud simplifies but self-hosted requires Docker knowledge."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Custom instructions and model selection. Limited agent behavior customization beyond prompts."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Good docs for setup and basic usage. Academic paper provides technical depth. Community growing."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 6.4,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "Single-agent only. No multi-agent orchestration."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Chat interaction and Planning Mode for approval. PR review as natural HITL checkpoint."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No team collaboration features. Individual developer tool."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "No team collaboration features. Individual developer tool."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 14.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "Deep GitHub integration — reads issues, creates branches, opens PRs. Core workflow."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "Terminal, file system, web browser. Can install and use any CLI tool. No pre-built connectors."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "Not designed for enterprise system integration. Code-repo focused."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "Model-agnostic via OpenRouter. Any compatible LLM works."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10.8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 5,
+            "rationale": "Docker isolation is excellent. All code runs in disposable containers."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "No RBAC or team permissions. Single-user operation model."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 1,
+            "rationale": "No compliance certifications. OSS project, not enterprise SaaS."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Planning Mode provides approval gate. No content filtering or action limits."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12.6,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Docker-based self-hosted. OpenHands Cloud for managed. K8s support added in v1.6.0."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 2,
+            "rationale": "Single-agent execution model. No built-in horizontal scaling or concurrent agent management."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Basic session logs. No production monitoring dashboard or alerting."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 5,
+            "rationale": "70K+ GitHub stars, 490+ contributors, 188+ academic/industry contributors. Massive for an OSS agent."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "57/100 overall. Strongest: Integration (14/20). Weakest: Orchestration (6/20). Breakdown: Creation (13/20), Orchestration (6/20), Integration (14/20), Governance (11/20), Operations (13/20).",
+  "competence": "Autonomous Coding Agent",
+  "targetUser": "Developers wanting AI to resolve GitHub issues and write code",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "70K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Contributors",
+        "value": "490+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "SWE-bench Ranking",
+        "value": "Top performer",
+        "source": "Benchmarks"
+      }
+    ],
+    "funding": {
+      "total": "$18.8M",
+      "lastRound": "Series A",
+      "valuation": "Undisclosed"
+    }
+  },
+  "supportedCUJs": [
+    "code-development"
+  ],
+  "walkthrough": {
+    "title": "How OpenHands Works: AI Agent Builds an App While You Watch",
+    "steps": [
+      {
+        "image": "/screenshots/openhands/step08_devstral.jpg",
+        "title": "Local Model with Devstral",
+        "description": "Download and configure Devstral model for fully local OpenHands execution. LM Studio for model management.",
+        "pmCritique": {
+          "works": [
+            "Fully local inference — zero API costs, complete data privacy",
+            "LM Studio GUI makes model management accessible",
+            "GGUF format runs on consumer hardware (M-series Macs)"
+          ],
+          "doesntWork": [
+            "14GB download is a significant barrier",
+            "Model selection requires AI literacy",
+            "No built-in model recommendation"
+          ],
+          "userPsychology": "Local model support is OpenHands' privacy differentiator. Enterprise teams with IP concerns can run coding agents without any data leaving the building."
+        },
+        "ctoCritique": {
+          "verdict": "Local inference addresses our data privacy requirements. But model quality vs cloud API quality trade-off needs benchmarking.",
+          "concerns": [
+            "Local model quality may be lower than cloud APIs",
+            "Hardware requirements for good performance",
+            "No model update mechanism"
+          ],
+          "enterpriseGaps": [
+            "No model governance for local deployments",
+            "No model performance monitoring",
+            "No model comparison tooling"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openhands/step09_docker.jpg",
+        "title": "Docker Launch Configuration",
+        "description": "Docker pull and run with environment variables for LLM connection. One command to start the full agent environment.",
+        "pmCritique": {
+          "works": [
+            "Docker ensures consistent environments — no works-on-my-machine issues",
+            "Environment variables make configuration explicit",
+            "Single docker run command — copy-paste deployment"
+          ],
+          "doesntWork": [
+            "Docker is a hard prerequisite",
+            "Environment variable errors fail silently",
+            "Multiple terminal commands create error opportunities"
+          ],
+          "userPsychology": "Docker launch is the filter — developers with Docker start in 2 minutes, everyone else faces a 30-minute setup."
+        },
+        "ctoCritique": {
+          "verdict": "Docker deployment is standard for our team. But production deployment needs Kubernetes, not docker run.",
+          "concerns": [
+            "docker run ≠ production deployment",
+            "No K8s deployment manifest",
+            "No resource limits configured"
+          ],
+          "enterpriseGaps": [
+            "No HA deployment pattern",
+            "No container security scanning",
+            "No secrets management beyond env vars"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openhands/step10_local_ui.jpg",
+        "title": "Fully Local Web UI",
+        "description": "Browser-based workspace running entirely locally. Chat panel, VS Code, Terminal, Jupyter, App, Browser tabs — complete dev environment.",
+        "pmCritique": {
+          "works": [
+            "Complete development environment in the browser — IDE + terminal + browser + notebooks",
+            "Runs entirely locally — no cloud dependency for the workspace",
+            "Multiple tabs cover every development workflow"
+          ],
+          "doesntWork": [
+            "Local-only means no remote collaboration",
+            "Browser-based UI has performance limitations vs native IDE",
+            "No session persistence across Docker restarts"
+          ],
+          "userPsychology": "The local web UI is the compromise between cloud-hosted agents and terminal-only tools. It gives visual feedback while keeping everything on the machine."
+        },
+        "ctoCritique": {
+          "verdict": "Local web UI is good for individual developers. But team-level agent deployment needs a shared platform, not individual Docker containers.",
+          "concerns": [
+            "No multi-user support",
+            "No session sharing or collaboration",
+            "No centralized agent management"
+          ],
+          "enterpriseGaps": [
+            "No team deployment model",
+            "No usage tracking across developers",
+            "No shared agent configurations"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "OpenHands is the strongest open-source AI coding agent — fully local execution, browser-based workspace, and real-time code generation. The split-panel UI (chat + IDE) creates a pair-programming experience no other tool matches. Devstral local model support means zero API costs and full data privacy. But: Docker prerequisite, no mid-task steering, and quality varies with model choice.",
+      "score": "B+",
+      "strengths": [
+        "Fully local execution — zero API costs, complete data privacy",
+        "Split-panel UI (chat + VS Code + Terminal + Browser) is best-in-class for coding agents",
+        "Docker packaging ensures consistent environments across machines",
+        "Open-source — full control, community-driven"
+      ],
+      "risks": [
+        "Docker is a hard prerequisite — blocks non-developers",
+        "No mid-task steering — can't redirect the agent once it starts",
+        "Code quality varies significantly with model choice",
+        "53% SWE-bench is impressive but means 47% failure rate"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "OpenHands is the coding agent to evaluate for developer productivity. Fully local execution addresses data privacy concerns. Docker packaging ensures reproducibility. But: no enterprise support SLA, community-only help, and the 53% SWE-bench pass rate means it fails on half of real-world tasks. Use for augmenting developers, not replacing them.",
+      "decision": "EVALUATE — For Developer Productivity",
+      "strengths": [
+        "Fully local — no data leaves the machine",
+        "Open-source with active community",
+        "Docker ensures reproducible environments",
+        "53% SWE-bench is current state-of-the-art for open-source"
+      ],
+      "dealBreakers": [
+        "No enterprise support SLA",
+        "47% failure rate on SWE-bench tasks",
+        "Docker prerequisite limits adoption",
+        "No IDE plugin — separate web UI required"
+      ]
+    },
+    "coverageGaps": [
+      "Enterprise deployment and scaling",
+      "Code review and approval workflows",
+      "Integration with existing CI/CD pipelines",
+      "Team-level agent management"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (12/20)",
+        "score": "Supported",
+        "videoEvidence": "Task input, agent execution, code generation all demonstrated across 10 steps",
+        "gap": "No template or starter project system"
+      },
+      {
+        "dimension": "Orchestration (8/20)",
+        "score": "Not Shown",
+        "videoEvidence": "Single agent only — no multi-agent coordination",
+        "gap": "Score reflects single-agent limitation"
+      },
+      {
+        "dimension": "Integration (10/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Docker, local LLM, web UI shown. No external integrations",
+        "gap": "Integration limited to development tools"
+      },
+      {
+        "dimension": "Governance (8/20)",
+        "score": "Not Shown",
+        "videoEvidence": "No governance features visible",
+        "gap": "Open-source has no governance layer"
+      },
+      {
+        "dimension": "Operations (14/20)",
+        "score": "Supported",
+        "videoEvidence": "Docker deployment, local model monitoring, resource tracking demonstrated",
+        "gap": "No production deployment or scaling shown"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "DPtOIljNmOg",
+      "title": "This AI Agent Built an App While I Watched (OpenHands + Daytona Demo)",
+      "channel": "Developer Voices"
+    },
+    {
+      "videoId": "oV9tAkS2Xic",
+      "title": "OpenHands + Devstral = A Fully Local Coding Agent",
+      "channel": "Graham Neubig"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The most capable open-source AI software developer — autonomous coding agent that can navigate codebases, write code, run tests, and interact with terminals.",
+    "targetUser": "Development teams who want an AI pair programmer that can autonomously tackle coding tasks. Open-source contributors who want full control over their AI coding assistant.",
+    "vsAlternatives": "Wins against closed-source alternatives (Devin, Cursor) on transparency and self-hosting. Wins on community contribution model. Loses to commercial products on polish and reliability. Loses to Cursor on IDE integration."
+  }
+}

@@ -1,0 +1,447 @@
+{
+  "name": "Agno",
+  "slug": "agno",
+  "category": "open-source",
+  "subcategory": "agent-framework",
+  "description": "Agno (formerly Phidata) is a lightweight, blazing-fast Python framework for multimodal AI agents. Claims ~10,000x faster instantiation than LangGraph with ~3.75 KiB per agent. Supports 23+ model providers, multi-agent teams, built-in Agentic RAG, and 40+ tools. 20K+ GitHub stars.",
+  "oneLiner": "Lightweight, blazing-fast Python framework for multimodal AI agents with model-agnostic design and multi-agent teams.",
+  "founded": "2022",
+  "funding": "~$4M seed (Phidata era); bootstrapped growth post-rebrand",
+  "pricing": "Open-source (MPL-2.0, free); Agno Cloud: Free (5 agents), Pro ($29/mo), Enterprise (custom)",
+  "website": "https://agno.com",
+  "githubRepo": "agno-agi/agno",
+  "githubStars": 39100,
+  "screenshots": [],
+  "capabilities": [
+    "Multimodal agents (text, image, audio, video)",
+    "23+ model providers (OpenAI, Anthropic, Google, Bedrock, Groq, Ollama)",
+    "Multi-agent teams (coordinate, route, collaborate modes)",
+    "Agentic RAG with multiple vector stores",
+    "Structured outputs via Pydantic",
+    "Built-in memory and session storage",
+    "40+ pre-built tools",
+    "~10,000x faster instantiation vs LangGraph",
+    "~3.75 KiB memory per agent",
+    "Streaming responses",
+    "Knowledge bases (PDF, URL, text, JSON, CSV)",
+    "Agno Cloud playground and monitoring",
+    "MCP protocol support",
+    "Async execution for high concurrency",
+    "ReliabilityEval for agent evaluation",
+    "AgentOS — stateless FastAPI runtime for production deployment",
+    "Control Plane UI for monitoring and management",
+    "100+ integrations with memory, knowledge, and guardrails"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Code-first Python: pip install, import Agent, configure model + tools + knowledge + memory, run. 3-5 lines for a basic agent. Teams compose agents with a leader. Agno Cloud adds web playground for testing and monitoring. Optimized for Python developers wanting max control with minimal boilerplate.",
+    "strengths": [
+      "Exceptionally clean minimal Python API",
+      "Fastest agent instantiation (~10,000x vs LangGraph)",
+      "23+ model providers — true model-agnostic",
+      "100+ cookbook examples for diverse use cases",
+      "Lightweight with minimal dependencies",
+      "Built-in Agentic RAG elevates retrieval",
+      "Intuitive multi-agent team orchestration"
+    ],
+    "weaknesses": [
+      "No visual/no-code builder — code-only",
+      "No kill switches, guardrails, or approval gates built in",
+      "Cloud is monitoring-only, not managed execution",
+      "Sparse enterprise features (SSO, compliance, RBAC)",
+      "Seed-stage funding risk",
+      "No cost tracking or token metering",
+      "HITL must be manually implemented"
+    ],
+    "notableFeatures": [
+      "Agent Teams: coordinate/route/collaborate orchestration modes",
+      "~10,000x faster + ~3.75 KiB/agent (published benchmarks)",
+      "Agentic RAG with intelligent retrieval",
+      "Reasoning agent support with chain-of-thought",
+      "Agno Cloud playground with session replay",
+      "MPL-2.0 license with commercial use"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-03: v2.5.13 — ReliabilityEval for agent evaluation, enhanced AgentOS APIs, Slack interface improvements",
+    "2026-04: v2.5.14 — latest release with continued rapid development (commits within 24 hours)",
+    "2026: 39,100+ GitHub stars — one of the fastest-growing agent frameworks",
+    "2026: Three integrated layers — Python SDK, AgentOS (FastAPI runtime), Control Plane UI",
+    "Jan 2025: Rebranded from Phidata to Agno",
+    "2025 Q1: Added MCP protocol support",
+    "2025 Q1: Multimodal capabilities (image, audio, video)",
+    "2025 Q1: Published ~10,000x speed benchmarks vs LangGraph",
+    "2025: Rapid releases (multiple/week), new model providers and tools",
+    "2025: Crossed 15K+ stars with accelerating trajectory"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://github.com/agno-agi/agno",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://docs.agno.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://agno.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://agno.com/pricing",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": false,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Open-source Python framework. Runs wherever Python runs. No managed cloud."
+  },
+  "scores": {
+    "total": 70,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 17.8,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "3-5 lines of Python for a basic agent. Excellent templates. No visual builder. Under 10 min for Python devs."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "Cloud playground with session replay. show_tool_calls for reasoning. Structured logging."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 5,
+            "rationale": "Excellent docs, 100+ cookbook examples, YouTube, blog. Clear migration from Phidata."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 5,
+            "rationale": "Instant: change code, re-run. No build step. Cloud playground for rapid prototyping."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 14.8,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 4,
+            "rationale": "First-class Agent Teams: coordinate (parallel), route (delegate), collaborate (sequential). Dynamic selection."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Agents can consult humans via custom tools. No built-in handoff UX or evidence packets."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "Cloud supports team workspaces. Code integrates with Git. No CI/CD pipelines."
+          },
+          {
+            "name": "Team Development",
+            "score": 5,
+            "rationale": "100+ cookbook examples covering RAG, multi-agent, search, data analysis, coding, finance."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 4,
+            "rationale": "40+ tools: search, SQL, S3, email, Slack, GitHub. Knowledge base connectors. No enterprise ERP/CRM."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "OpenAI/Anthropic tool-use. Early MCP support. No GraphQL/gRPC."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "Basic API key. OAuth via tools. SSO on Enterprise only."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "Strong Agentic RAG. Multiple vector stores. Document readers. Configurable chunking."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 8.8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "No built-in kill switch or behavioral guardrails system."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "No approval gate system. Manual HITL implementation required."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Cloud logs sessions. No tamper-proof logging or compliance certs."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Basic team/user management on paid tiers. No granular RBAC."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 14.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Deploy anywhere Python runs. Cloud is monitoring-only. Self-hosted primary. No managed execution."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 4,
+            "rationale": "Exceptional per-agent performance. Async. Horizontal scaling is developer's responsibility."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "Cloud provides session monitoring and history. No OpenTelemetry or enterprise observability."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "~20K GitHub stars, growing fast post-rebrand. Active Discord. Developer mindshare increasing."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "70/100 overall. Strongest: Creation (18/20). Weakest: Governance (9/20). Breakdown: Creation (18/20), Orchestration (15/20), Integration (14/20), Governance (9/20), Operations (14/20).",
+  "competence": "Lightweight Agent Framework",
+  "targetUser": "Python developers wanting fast, minimal agent creation",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Rebrand from Phidata to Agno generating fresh interest — 20K+ GitHub stars",
+      "10,000x faster instantiation benchmark gets attention but questioned methodology",
+      "Praised as cleanest Python API in the agent framework space",
+      "Seed-stage funding concerns — can they compete long-term with well-funded competitors?"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "20K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Model Providers",
+        "value": "23+",
+        "source": "Docs"
+      },
+      {
+        "metric": "Built-in Tools",
+        "value": "40+",
+        "source": "Docs"
+      },
+      {
+        "metric": "Instantiation Speed",
+        "value": "~10,000x faster than LangGraph (claimed)",
+        "source": "Benchmarks"
+      },
+      {
+        "metric": "Memory per Agent",
+        "value": "~3.75 KiB",
+        "source": "Benchmarks"
+      }
+    ],
+    "funding": {
+      "total": "~$4M",
+      "lastRound": "Seed",
+      "valuation": "Undisclosed"
+    }
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "code-development",
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "Multi-Agent Research Team with Agno",
+    "steps": [
+      {
+        "title": "Define a Research Agent with Tools and Knowledge",
+        "description": "Create an agent in Python with Agno's Agent class — assign it a role (e.g., market researcher), attach web search and database tools, and connect a knowledge base of industry reports. Agno's session-based memory persists context across interactions.",
+        "image": "/screenshots/agno/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Minimal API surface means less to learn — philosophy of simplicity",
+            "Clean Python code that reads like pseudocode",
+            "Multi-modal support (text, image, audio) without framework bloat"
+          ],
+          "doesntWork": [
+            "Minimal framework means building everything yourself — no batteries included",
+            "Documentation is thin compared to LangChain — fewer examples and tutorials",
+            "Community is small — fewer Stack Overflow answers and community solutions"
+          ],
+          "userPsychology": "Developers who have been burned by LangChain complexity feel relief when they see Agno — it is the framework for people who do not want a framework. But that minimalism means more DIY work."
+        }
+      },
+      {
+        "title": "Compose a Multi-Agent Team",
+        "description": "Build a team of specialized agents: a researcher gathers data, an analyst evaluates findings, and a writer drafts the report. Agno's Team class handles coordination — agents share context and delegate sub-tasks automatically.",
+        "image": "/screenshots/agno/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Agent team composition is explicit and readable",
+            "Tool integration is straightforward — standard Python functions",
+            "Memory implementation is simple and transparent"
+          ],
+          "doesntWork": [
+            "No visual debugger or execution trace UI",
+            "Team coordination patterns are limited compared to CrewAI or LangGraph",
+            "No built-in persistence — must implement yourself"
+          ],
+          "userPsychology": "Control-oriented developers prefer Agno because they can read every line of what happens. But the absence of visual debugging tools means complex multi-agent flows require printf debugging."
+        }
+      },
+      {
+        "title": "Execute with Real-Time Reasoning",
+        "description": "Run the team on a research query. Watch agents collaborate with concurrent tool calls — Agno's async-first architecture enables parallel execution. The researcher and analyst work simultaneously, merging their findings.",
+        "image": "/screenshots/agno/step-3.png",
+        "pmCritique": {
+          "works": [
+            "Playground web UI provides quick experimentation environment",
+            "Structured output with Pydantic validation ensures type safety",
+            "Async execution support for production performance"
+          ],
+          "doesntWork": [
+            "Playground is basic — no conversation history or session management",
+            "No deployment tooling — must containerize and deploy yourself",
+            "No managed hosting option — fully self-serve"
+          ],
+          "userPsychology": "The playground bridges the gap between reading docs and building something real — it is the try-before-you-commit experience. But once you commit, you are on your own for deployment."
+        }
+      },
+      {
+        "title": "Monitor on Agno Cloud",
+        "description": "Track the team's performance on Agno Cloud's dashboard — agent-level metrics, tool call latency, token usage, and session replays. Identify bottlenecks and optimize agent instructions based on real execution data.",
+        "image": "/screenshots/agno/step-4.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Agno is the speed demon of the agent framework space — built for developers who need sub-second agent initialization and multimodal support. The lightweight API and model-agnostic design make prototyping fast. But it's early-stage (small community, limited docs) and competes against LangGraph and CrewAI with far less ecosystem maturity. Best for: developers who know exactly what they want and need raw speed.",
+      "score": "B",
+      "strengths": [
+        "Fastest agent initialization in the market — sub-second cold starts",
+        "Multimodal support (text, image, audio, video) from day one",
+        "Model-agnostic with clean provider abstraction",
+        "Lightweight — no heavy dependencies, minimal overhead"
+      ],
+      "risks": [
+        "Small community (<5K stars) — limited support and examples",
+        "No visual builder or no-code path — developers only",
+        "Competing against well-funded LangGraph and CrewAI with fraction of ecosystem",
+        "No enterprise features — no RBAC, no audit, no compliance"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Agno is a technical bet on speed over ecosystem. The lightweight architecture is appealing for latency-sensitive applications, but the small team and community create bus-factor risk. No enterprise features, no compliance certifications, no support SLA. Use for internal tooling or experimental projects — not for customer-facing production agents.",
+      "decision": "EXPERIMENT — Not Enterprise-Ready",
+      "strengths": [
+        "Minimal dependency footprint reduces supply chain risk",
+        "Open-source MIT license — full control, no vendor lock-in",
+        "Clean API design — easy to evaluate and understand quickly",
+        "Multimodal support positions well for future agent capabilities"
+      ],
+      "dealBreakers": [
+        "No enterprise support or SLA",
+        "Small team — bus factor risk for production dependency",
+        "No governance, compliance, or audit capabilities",
+        "Limited integration ecosystem — must build connectors yourself"
+      ]
+    },
+    "coverageGaps": [
+      "Live product demo (no comprehensive YouTube tutorials exist)",
+      "Enterprise deployment patterns",
+      "Production monitoring and observability",
+      "Multi-agent orchestration at scale"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (14/20)",
+        "score": "Inferred",
+        "videoEvidence": "No video demo — score based on documentation review and code examples",
+        "gap": "Need live walkthrough to verify claimed speed and developer experience"
+      },
+      {
+        "dimension": "Orchestration (12/20)",
+        "score": "Inferred",
+        "videoEvidence": "Multi-agent patterns documented but not demonstrated visually",
+        "gap": "No live multi-agent demo available"
+      },
+      {
+        "dimension": "Integration (15/20)",
+        "score": "Inferred",
+        "videoEvidence": "Model provider support documented, tool creation API reviewed",
+        "gap": "Integration breadth claims unverified via video"
+      },
+      {
+        "dimension": "Governance (11/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No governance features visible in any available content",
+        "gap": "Score relies entirely on documentation — no visual evidence"
+      },
+      {
+        "dimension": "Operations (18/20)",
+        "score": "Not Verified",
+        "videoEvidence": "Performance claims not demonstrated",
+        "gap": "High operations score needs benchmarking evidence"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "T3CKcwVTYlM",
+      "title": "Agno Tutorial | Anyone can now build AI Agents with Python!",
+      "channel": "Thomas Janssen"
+    },
+    {
+      "videoId": "HcvwwH0Fejs",
+      "title": "Agno Framework Tutorial: Build Faster AI Agents with Concurrent Tool Calls",
+      "channel": "Shanoj"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The lightest-weight Python agent framework — minimal abstraction layer that stays close to the metal while providing just enough structure for multi-agent workflows.",
+    "targetUser": "Python developers who want agent capabilities without heavy framework overhead. Teams that find LangChain too opinionated and want more control.",
+    "vsAlternatives": "Wins against LangChain/LangGraph on simplicity and lightweight footprint. Wins on developer control — less magic, more transparency. Loses on ecosystem breadth and enterprise tooling. No visual UI, no managed platform."
+  }
+}

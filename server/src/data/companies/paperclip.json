@@ -1,0 +1,438 @@
+{
+  "name": "Paperclip",
+  "slug": "paperclip",
+  "category": "open-source",
+  "subcategory": "zero-human-company",
+  "description": "Paperclip is an open-source Node.js + React platform for orchestrating AI agent teams to run businesses autonomously. Launched March 2026, it crossed 43K GitHub stars in weeks. Solves the 'runaway spend' problem with atomic task execution and budget enforcement. Supports multiple businesses in one install with complete data isolation.",
+  "oneLiner": "Open-source orchestration platform for zero-human companies — org charts, budgets, governance, and AI agent coordination.",
+  "founded": "2026",
+  "funding": "Open-source project. No disclosed venture funding.",
+  "pricing": "Open Source (free, self-hosted). No Paperclip account required.",
+  "website": "https://paperclip.ing",
+  "githubRepo": "paperclipai/paperclip",
+  "githubStars": 43000,
+  "screenshots": [],
+  "capabilities": [
+    "Bring Your Own Agent (BYOA) — works with Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, Pi, OpenCode, Hermes",
+    "Org chart with role-based agent hierarchy and reporting lines",
+    "Atomic task checkout and budget enforcement — no double-work, no runaway spend",
+    "Goal alignment — every task traces back to company mission",
+    "Heartbeat scheduling with delegation flows up and down org chart",
+    "Multi-company support with complete data isolation",
+    "Ticket system with threaded conversations and tool-call tracing",
+    "Board-level governance — approve hires, override strategy, pause/terminate agents",
+    "Plugin framework and SDK for extensibility",
+    "Company import/export with secret scrubbing (companies.sh)",
+    "Routines engine for recurring tasks with triggers",
+    "Execution workspaces with lifecycle management",
+    "Skills manager — company-scoped skills with agent sync",
+    "Embedded PostgreSQL with single npx command onboarding",
+    "Mobile-ready PWA interface",
+    "Immutable audit log for every conversation and decision",
+    "AI employee orchestration — hire agents, set goals, automate business",
+    "Multi-business support with data isolation",
+    "Atomic task execution with budget enforcement",
+    "Full tracing and audit trail for all agent actions",
+    "Ticket-based agent communication system"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Web-based React UI that looks like a project management tool. Define company structure (org chart, departments, roles), set budgets and goals, then assign AI agents to roles. Agents pick up tasks, execute within budget constraints, and report back. The interface surfaces agent activity, spend, and goal progress in real-time dashboards.",
+    "strengths": [
+      "Novel 'company operating system' paradigm resonates with the zero-human company vision",
+      "Atomic budget enforcement prevents runaway agent spend",
+      "Context resumption across heartbeats — agents don't restart from scratch",
+      "Fully self-hosted with no vendor lock-in or account requirement",
+      "Explosive community growth (42K+ stars in weeks) validates demand",
+      "Open-source transparency enables audit and customization",
+      "Task checkout prevents duplicate work across agents"
+    ],
+    "weaknesses": [
+      "Very early stage (released March 2026) — expect rapid breaking changes",
+      "No enterprise features (SSO, RBAC, compliance, SOC2)",
+      "Limited documentation for production deployment",
+      "No managed cloud offering — self-hosted only",
+      "No visual agent builder — configuration-driven",
+      "No native integrations with enterprise systems (CRM, ERP)",
+      "Governance model untested at enterprise scale"
+    ],
+    "notableFeatures": [
+      "Org chart-based agent hierarchy — agents have roles, managers, and reporting lines",
+      "Atomic task checkout and budget enforcement — no double-work, no runaway spend",
+      "Agent heartbeat with context resumption — stateful across interruptions",
+      "Goal alignment framework with OKR-style tracking",
+      "Zero vendor dependency — fully self-hosted, no account needed"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-03-04: Paperclip launched by @dotta — crossed 30K GitHub stars in 3 weeks",
+    "2026-04: 43K+ GitHub stars — fastest-rising open-source AI repo of Q1 2026",
+    "2026: Multi-business support with complete data isolation",
+    "2026: Atomic task execution with budget enforcement — no double-work, no runaway spend",
+    "2026: Full tracing — every instruction, response, tool call, and decision recorded",
+    "2026-04-03: v2026.403.0 — Inbox overhaul, feedback/evals, document revisions, execution workspaces, GPT-5.4 support",
+    "2026-03-25: v2026.325.0 — Company import/export, skills library, routines engine, Docker CI",
+    "2026-03-18: v2026.318.0 — Plugin framework & SDK, upgraded budgeting, Hermes agent adapter",
+    "2026-03-12: v0.3.1 — Gemini CLI adapter, inbox refinements, worktree workflow",
+    "2026-03-09: v0.3.0 — Initial major release with Cursor/OpenCode/Pi adapters, PWA support",
+    "2026-03-04: Initial open-source release by @cryppadotta",
+    "2026-04: Surpassed 48,000 GitHub stars and 7,700+ forks with 59 contributors"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://github.com/paperclipai/paperclip",
+      "accessedAt": "2026-04-05",
+      "type": "github"
+    },
+    {
+      "url": "https://paperclip.ing",
+      "accessedAt": "2026-04-05",
+      "type": "docs"
+    },
+    {
+      "url": "https://medium.com/@creativeaininja/paperclip-the-open-source-platform-turning-ai-agents-into-an-actual-company-7348015c5bf7",
+      "accessedAt": "2026-04-05",
+      "type": "news"
+    },
+    {
+      "url": "https://dev.to/jangwook_kim_e31e7291ad98/how-we-built-a-company-powered-by-14-ai-agents-using-paperclip-4bg6",
+      "accessedAt": "2026-04-05",
+      "type": "social"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": false,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Self-hosted only. Node.js + React stack. No managed cloud offering."
+  },
+  "scores": {
+    "total": 52,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 11.6,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Web UI for org/role definition. Configuration-driven, not visual builder. Functional but early-stage polish."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Self-hosted setup requires Node.js knowledge. Templates and examples available but limited."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Dashboard shows agent activity and task status. No dedicated debugging or trace tooling yet."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "README and community guides. Rapidly evolving docs. Medium/DEV Community tutorials supplement official docs."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 15.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 5,
+            "rationale": "Core differentiator — org chart hierarchy, role-based coordination, task delegation, and inter-agent protocols."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Dashboard for monitoring and intervention. Budget gates serve as implicit approval mechanism. No structured escalation."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "Task management with assignment. No pre-built workflow library. Community examples filling the gap."
+          },
+          {
+            "name": "Team Development",
+            "score": 4,
+            "rationale": "Org chart, department structure, and role definitions provide strong team scaffolding. Goal alignment with OKRs."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 7.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 2,
+            "rationale": "No pre-built enterprise connectors. Agents use their own tools. Integration is agent-level, not platform-level."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 2,
+            "rationale": "Node.js API for agent management. No MCP, GraphQL, or standardized protocols."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "Basic self-hosted auth. No SSO, SAML, or enterprise IAM."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 1,
+            "rationale": "No built-in RAG, vector store, or data pipeline. Agents manage their own data access."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 11.6,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Budget enforcement acts as financial guardrail. Task checkout prevents double-work. No behavioral guardrails."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Agent activity logging. Budget tracking. No compliance certifications."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Org chart hierarchy provides implicit access control. No granular RBAC system."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 3,
+            "rationale": "Open-source code provides full transparency. Dashboard shows agent reasoning and decisions."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 6.4,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "Self-hosted only. Node.js + React stack. No managed cloud offering."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 2,
+            "rationale": "Single-server deployment. No horizontal scaling or enterprise monitoring."
+          },
+          {
+            "name": "Cost Management",
+            "score": 1,
+            "rationale": "Budget tracking for agents. No LLM cost management or optimization."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 3,
+            "rationale": "42K+ GitHub stars in weeks. Massive community interest. Very early-stage ecosystem."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "52/100 overall. Strongest: Orchestration (15/20). Weakest: Operations (6/20). Breakdown: Creation (12/20), Orchestration (15/20), Integration (7/20), Governance (12/20), Operations (6/20).",
+  "competence": "Zero-Human Company Orchestration",
+  "targetUser": "Developers and entrepreneurs building fully autonomous AI-run businesses",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "42K+ GitHub stars in under a month — fastest-growing agent project of 2026",
+      "'2025 was the year of the AI employee. 2026 is the year of the AI company' — common framing in coverage",
+      "DEV Community post 'How We Built a Company Powered by 14 AI Agents' went viral",
+      "Praised for atomic budget enforcement — 'no runaway spend' resonates with enterprise concerns",
+      "Skepticism about 'zero-human company' viability in regulated industries"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "48K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "GitHub Forks",
+        "value": "7,700+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Contributors",
+        "value": "59",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Agent Adapters",
+        "value": "8+ (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, Pi, OpenCode, Hermes)",
+        "source": "Docs"
+      },
+      {
+        "metric": "Releases in First Month",
+        "value": "5",
+        "source": "GitHub"
+      }
+    ]
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "code-development",
+    "content-generation",
+    "sales-outreach",
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "Running an AI-Powered Research Company",
+    "steps": [
+      {
+        "title": "Define Your Company Structure",
+        "description": "Set up a virtual company in Paperclip with departments and roles — a Research division, a Content team, and a QA department. Define each role's responsibilities, tools, and decision authority. The org chart becomes your agent topology.",
+        "image": "/screenshots/paperclip/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Org-chart-based agent hierarchy is a genuinely novel paradigm — instantly understandable",
+            "CEO/department/worker agent topology mirrors real organizational thinking",
+            "Budget enforcement per department prevents runaway costs"
+          ],
+          "doesntWork": [
+            "Documentation is sparse — early-stage project with gaps",
+            "Org chart becomes unwieldy for complex organizations — no grouping or nesting",
+            "No visual org chart editor — must configure via code"
+          ],
+          "userPsychology": "The org chart metaphor is a brilliant hook — users immediately understand the vision. But the gap between the concept and current implementation maturity creates disappointment when you try to build something real."
+        }
+      },
+      {
+        "title": "Set Goals and Resource Budgets",
+        "description": "Define company-level objectives: 'Produce 20 industry analysis reports per week.' Set token budgets per department, cost limits per task, and quality thresholds. Paperclip's governance engine enforces these constraints across all agent activity.",
+        "image": "/screenshots/paperclip/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Inter-agent communication protocol is well-designed — clear message passing",
+            "Task delegation from CEO agent to department agents is intuitive",
+            "Budget tracking dashboard shows spend per agent role"
+          ],
+          "doesntWork": [
+            "Message passing has no priority system — urgent tasks wait in queue",
+            "No retry or escalation policy for failed agent communications",
+            "Dashboard updates are not real-time — manual refresh required"
+          ],
+          "userPsychology": "The delegation model satisfies the desire for control — you are the CEO of an AI company. But the lack of priority and escalation means the system feels more like email than a responsive organization."
+        }
+      },
+      {
+        "title": "Agents Self-Organize and Execute",
+        "description": "Agents autonomously pick up tasks from the goal queue, coordinate with teammates, and execute — researchers gather data, writers draft reports, QA agents review for accuracy. Inter-agent communication follows your org hierarchy.",
+        "image": "/screenshots/paperclip/step-3.png",
+        "pmCritique": {
+          "works": [
+            "Worker agents execute tasks with clear input/output contracts",
+            "Parallel execution across departments when tasks are independent",
+            "Execution logs per agent role aid debugging"
+          ],
+          "doesntWork": [
+            "Worker agents have no learning — same mistakes repeat across runs",
+            "No shared knowledge base between departments",
+            "Error recovery requires restarting the entire org, not just the failed agent"
+          ],
+          "userPsychology": "Seeing multiple agents work simultaneously is exciting and validates the multi-agent vision, but the lack of cross-department learning makes the organization feel like independent contractors rather than a team."
+        }
+      },
+      {
+        "title": "Monitor Company Operations",
+        "description": "Track real-time company performance on the dashboard — tasks completed, quality scores, cost per deliverable, and department utilization. Identify bottlenecks, underperforming agents, and budget overruns before they compound.",
+        "image": "/screenshots/paperclip/step-4.png",
+        "pmCritique": {
+          "works": [
+            "Budget alerts prevent unexpected costs before they happen",
+            "Per-department cost attribution is clear and actionable",
+            "Export functionality for financial reporting"
+          ],
+          "doesntWork": [
+            "Budget optimization suggestions are absent — just tracking, not advising",
+            "Cannot set budget policies (e.g., auto-pause at threshold)",
+            "No forecasting based on historical usage patterns"
+          ],
+          "userPsychology": "Cost visibility is the grown-up feature that separates serious tools from demos. Users who see exactly what each agent costs trust the system more — even when costs are high, transparency builds confidence."
+        }
+      },
+      {
+        "title": "Govern and Scale",
+        "description": "Add new roles, adjust budgets, and refine agent instructions as the company evolves. Paperclip's governance model ensures agents operate within defined boundaries — no rogue spending, no unauthorized actions, full audit trail.",
+        "image": "/screenshots/paperclip/step-5.png",
+        "pmCritique": {
+          "works": [
+            "Full self-hosted deployment means no data leaves your infrastructure",
+            "Docker Compose setup gets you running quickly",
+            "No vendor lock-in — Apache 2.0 license"
+          ],
+          "doesntWork": [
+            "Self-hosted only means you are responsible for scaling and reliability",
+            "No monitoring or alerting out of the box — must bring your own",
+            "Community support only — no enterprise support tier available"
+          ],
+          "userPsychology": "Open-source true believers love the self-hosted model, but it creates a divide: hobbyists are excited, enterprise teams are skeptical because there is no one to call when production breaks at 3am."
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Paperclip — limited public demo content available. Verdict based on documentation and existing research data only. Score reflects capability claims that could not be verified through video walkthrough.",
+      "score": "Unverified",
+      "strengths": [
+        "See existing capability analysis in the product profile"
+      ],
+      "risks": [
+        "No video demo available for verification",
+        "Product capabilities based on documentation only",
+        "UX quality unverifiable without live demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Insufficient public demo material to evaluate Paperclip for enterprise adoption. Recommend requesting a live demo from the vendor before making any commitment.",
+      "decision": "INSUFFICIENT DATA",
+      "strengths": [
+        "See existing scoring for capability assessment"
+      ],
+      "dealBreakers": [
+        "No public product demo available",
+        "Cannot verify UX claims without walkthrough",
+        "Enterprise readiness unassessable"
+      ]
+    },
+    "coverageGaps": [
+      "Complete product walkthrough needed",
+      "All capabilities unverified via video"
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "-wRYkR110rg",
+      "title": "Paperclip AI Just Changed Agent Orchestration: Overview for Beginners",
+      "channel": "Fru Dev"
+    },
+    {
+      "videoId": "DIFbusAz4lo",
+      "title": "Paperclip AI Just Changed Everything — Zero-Human Companies",
+      "channel": "Fru Dev"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The boldest vision in the space — org-chart-based multi-agent orchestration designed to run entire companies with zero human employees.",
+    "targetUser": "Visionary founders and experimenters exploring fully autonomous AI organizations. Builders who want to architect agent teams that mirror human organizational structures.",
+    "vsAlternatives": "Wins on conceptual ambition — no other platform explicitly targets zero-human companies. Unique org-chart agent topology. Loses on production maturity — early stage, limited documentation. Loses to established platforms on enterprise readiness."
+  }
+}

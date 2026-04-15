@@ -1,0 +1,404 @@
+{
+  "name": "Netcracker",
+  "slug": "netcracker",
+  "category": "use-case",
+  "subcategory": "enterprise-telecom",
+  "description": "Netcracker (NEC subsidiary) provides BSS/OSS and digital transformation for telecoms with integrated GenAI agent capabilities. 250+ operator customers, built-in audit trails, regulatory guardrails, and HITL approval gates for the heavily regulated telecom sector. 30+ years of domain expertise.",
+  "oneLiner": "Telecom-focused BSS/OSS platform with AI agents, built-in audit trails, regulatory guardrails, and governed automation.",
+  "founded": "1993",
+  "funding": "Wholly owned by NEC Corporation (~$25B+ market cap)",
+  "pricing": "Enterprise contracts per subscriber count and module. Multi-year. No published pricing.",
+  "website": "https://www.netcracker.com",
+  "screenshots": [],
+  "capabilities": [
+    "AI network fault diagnosis",
+    "Automated customer complaint resolution",
+    "Billing dispute processing",
+    "Service provisioning orchestration",
+    "Regulatory compliance reporting",
+    "Revenue assurance and fraud detection",
+    "Predictive network maintenance",
+    "Churn prediction and retention",
+    "TMF Open API integration",
+    "HITL approval gates for high-value operations"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "AI agents configured within BSS/OSS using telecom workflow designers. Pre-built TMF/eTOM templates. Enterprise-telecom UX, not general-purpose agent builder.",
+    "strengths": [
+      "30+ years telecom domain expertise",
+      "Built-in audit trails and regulatory guardrails",
+      "Proven carrier-grade scale (100M+ subscribers)",
+      "Full deployment flexibility including air-gapped",
+      "Deep legacy telecom integration"
+    ],
+    "weaknesses": [
+      "Telecom-only vertical",
+      "Enterprise sales cycle, no self-service",
+      "AI agents embedded in BSS/OSS, not standalone",
+      "Traditional enterprise UX",
+      "Slow iteration typical of carrier-grade software"
+    ],
+    "notableFeatures": [
+      "Telecom-specific guardrails enforcing business rules",
+      "Tamper-proof audit trails for multi-jurisdiction compliance",
+      "TMF Open API conformance"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-01: Glotel Awards — Best Application of Agentic AI in Telecom + MVNO Solution of the Year",
+    "2026-02: Juniper Research Platinum Award for AI Innovation in Telco",
+    "2026-03: MWC 2026 demos — Agentic AI Solution with 60+ pre-built agents for service providers",
+    "2026: Rakuten Mobile extends partnership for AI-enabled Digital BSS in Japan",
+    "2026: Measurable results — 7x faster service design, 70% less billing resolution time, 2.5x faster time-to-market",
+    "2025: GenAI agent capabilities for network ops and customer service",
+    "AI revenue assurance and fraud detection",
+    "TMF Open API conformance deepened",
+    "AI churn prediction and proactive retention",
+    "Cloud provider partnerships for hybrid telecom"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://www.netcracker.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": true,
+    "notes": "Enterprise telecom platform. On-prem and hybrid cloud deployment for carrier-grade requirements."
+  },
+  "scores": {
+    "total": 76,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Telecom-specific workflow designers. Not general agent builder."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Mature telecom service testing. AI-specific debugging newer."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 4,
+            "rationale": "Extensive BSS/OSS docs. Training/cert programs."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Enterprise telecom = slow change cycles."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 10.4,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "BSS/OSS workflow orchestration. Not framed as multi-agent but functions similarly."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Structured handoff between automated and human steps."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Enterprise config management. Traditional change control."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "TMF/eTOM process templates. Telecom-specific."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 16.4,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "Hundreds of telecom integrations. Network elements, mediation, payment. TMF Open APIs."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "TMF Open APIs, REST, SOAP, SNMP, Kafka."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 4,
+            "rationale": "Enterprise IAM, LDAP, SAML, OAuth. Subscriber data controls."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Unified BSS/OSS data model. No general-purpose RAG."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 17.2,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 5,
+            "rationale": "Built-in telecom business rules. Operations outside policy blocked. Kill switches."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 4,
+            "rationale": "Configurable by operation type, value, segment."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 5,
+            "rationale": "Tamper-proof. FCC, Ofcom, GDPR, PCI. SOC2. Legal hold."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 3,
+            "rationale": "Role-based. Multi-tenant for MVNOs. Custom roles for telecom functions."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 19.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 5,
+            "rationale": "Full spectrum: SaaS, private cloud, on-prem, hybrid, air-gapped. K8s-native."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 5,
+            "rationale": "Hundreds of millions of subscribers. Carrier-class reliability."
+          },
+          {
+            "name": "Cost Management",
+            "score": 4,
+            "rationale": "Telecom KPI dashboards. Network monitoring. SNMP/Prometheus."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 5,
+            "rationale": "250+ operators. Gartner MQ leader. TMF standards contributor."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "76/100 overall. Strongest: Operations (19/20). Weakest: Orchestration (10/20). Breakdown: Creation (13/20), Orchestration (10/20), Integration (16/20), Governance (17/20), Operations (19/20).",
+  "competence": "Industry-Specific Agent Platform (Telecom)",
+  "targetUser": "Telecom operators automating BSS/OSS with governed AI agents",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "Telecom Operator Customers",
+        "value": "250+",
+        "source": "Netcracker"
+      },
+      {
+        "metric": "Years in Business",
+        "value": "30+",
+        "source": "Founded 1993"
+      },
+      {
+        "metric": "Gartner Position",
+        "value": "Magic Quadrant Leader (BSS)",
+        "source": "Gartner"
+      }
+    ],
+    "funding": {
+      "total": "NEC subsidiary",
+      "lastRound": "N/A",
+      "valuation": "Part of NEC (~$25B+ market cap)"
+    }
+  },
+  "supportedCUJs": [
+    "customer-support",
+    "workflow-automation"
+  ],
+  "walkthrough": {
+    "title": "Telecom Customer Complaint Resolution with AI Agents",
+    "steps": [
+      {
+        "title": "Configure AI Agents Within BSS/OSS",
+        "description": "Deploy Netcracker's AI agents within your existing telecom stack — CRM, billing, network management, and order systems. Agents are pre-trained on telecom-specific ontologies and workflows, with deep integration into Netcracker's Digital BSS/OSS suite.",
+        "image": "/screenshots/netcracker/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Deepest telecom domain knowledge of any AI platform — decades of BSS/OSS expertise",
+            "TMF API compliance means integration with carrier billing and provisioning",
+            "Multi-tenant architecture handles carrier-grade scale and isolation"
+          ],
+          "doesntWork": [
+            "UI is enterprise-traditional — functional but not modern or intuitive",
+            "Configuration requires deep telecom domain expertise",
+            "Implementation timelines are measured in months, not days"
+          ],
+          "userPsychology": "Telecom operators trust Netcracker because it speaks their language — eTOM, SID, TAM are not acronyms they need to explain. But the enterprise sales cycle and implementation timeline means value realization is slow."
+        }
+      },
+      {
+        "title": "Agent Handles Incoming Customer Complaint",
+        "description": "A customer reports billing discrepancies and network drops. The AI agent analyzes the complaint, cross-references billing records in the CRM, checks network fault logs in the OSS, and identifies a provisioning error as the root cause.",
+        "image": "/screenshots/netcracker/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Network analytics dashboard provides real-time operational visibility",
+            "Automated service assurance reduces mean time to repair",
+            "Revenue assurance AI detects billing anomalies and revenue leakage"
+          ],
+          "doesntWork": [
+            "Dashboard customization requires professional services engagement",
+            "Alert correlation across network domains is still partially manual",
+            "AI model training requires carrier-specific data that takes months to collect"
+          ],
+          "userPsychology": "Revenue leakage detection sells itself — showing a CFO that AI found $2M in billing errors creates an immediate champion. But the months of data collection before the AI works dampens the initial excitement."
+        }
+      },
+      {
+        "title": "Network Fault Diagnosis and Resolution",
+        "description": "For network-related issues, the agent queries network monitoring systems, runs diagnostic checks, and correlates symptoms with known fault patterns. It identifies affected infrastructure and initiates remediation — adjusting configurations or dispatching a fix.",
+        "image": "/screenshots/netcracker/step-3.png",
+        "pmCritique": {
+          "works": [
+            "Customer experience management with AI-driven churn prediction",
+            "Omnichannel support integration (voice, chat, social, in-store)",
+            "Proactive network issue resolution before customers notice"
+          ],
+          "doesntWork": [
+            "Churn prediction accuracy depends heavily on data quality — garbage in, garbage out",
+            "Omnichannel integration requires significant middleware configuration",
+            "Proactive resolution is limited to known issue patterns — no zero-day detection"
+          ],
+          "userPsychology": "Predicting and preventing churn is the holy grail for telecom operators — every saved customer is worth thousands in lifetime value. But the dependency on data quality means the AI is only as good as the worst data source."
+        }
+      },
+      {
+        "title": "Governed Automation with Audit Trails",
+        "description": "Every agent action is logged with full audit trails for regulatory compliance. Configurable governance rules control what agents can do autonomously vs. what requires human approval. SOX and telecom regulatory requirements are built in.",
+        "image": "/screenshots/netcracker/step-4.png"
+      },
+      {
+        "title": "Revenue Assurance and Fraud Detection",
+        "description": "AI agents continuously monitor billing streams for revenue leakage, usage anomalies, and fraud patterns. When discrepancies are found, agents auto-correct billing errors and flag suspicious activity for investigation.",
+        "image": "/screenshots/netcracker/step-5.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Netcracker is the telecom-specific agent platform — BSS/OSS workflow automation for carriers. The AI capabilities are deeply integrated into telecom operations (network provisioning, customer lifecycle, revenue assurance). For telecom CIOs, this is the only agent platform that speaks eTOM/SID/TAM natively. For everyone else, it's irrelevant. The PM verdict: unmatched in telecom, invisible outside it.",
+      "score": "A- (Telecom Only)",
+      "strengths": [
+        "Only agent platform native to telecom BSS/OSS workflows",
+        "eTOM/SID/TAM standards built in — speaks the carrier's language",
+        "NEC Corporation backing — financial stability and telecom credibility",
+        "Proven at Tier 1 carriers — not a startup pitch"
+      ],
+      "risks": [
+        "Zero relevance outside telecom industry",
+        "No public demos or self-serve evaluation",
+        "Telecom sales cycles are 12-24 months minimum",
+        "Community and ecosystem are carrier-only — no developer ecosystem"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "If you're a telecom carrier, Netcracker is the agent platform. Period. Native BSS/OSS integration, eTOM compliance, and NEC backing make it the safe enterprise choice. If you're not a carrier, this product doesn't exist for you. The scoring reflects telecom-specific excellence, not general-purpose capability.",
+      "decision": "BUY — If Telecom Carrier",
+      "strengths": [
+        "Native BSS/OSS integration — no middleware needed",
+        "eTOM/SID/TAM compliance out of the box",
+        "NEC Corporation financial backing and telecom heritage",
+        "Proven at scale with Tier 1 global carriers"
+      ],
+      "dealBreakers": [
+        "Telecom-only — zero applicability outside the industry",
+        "No public pricing, demos, or evaluation path",
+        "12-24 month sales and implementation cycles",
+        "Proprietary — complete vendor lock-in"
+      ]
+    },
+    "coverageGaps": [
+      "Product UI and agent builder walkthrough",
+      "BSS/OSS integration demonstration",
+      "Agent monitoring and operations dashboard",
+      "Multi-agent orchestration in telecom workflows",
+      "Compliance and audit trail features"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (14/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No public demos available — score based on analyst reports",
+        "gap": "Creation experience entirely undocumented publicly"
+      },
+      {
+        "dimension": "Orchestration (16/20)",
+        "score": "Not Verified",
+        "videoEvidence": "BSS/OSS workflow orchestration described in marketing",
+        "gap": "High orchestration score relies on vendor claims only"
+      },
+      {
+        "dimension": "Integration (16/20)",
+        "score": "Inferred",
+        "videoEvidence": "eTOM/SID/TAM compliance documented",
+        "gap": "Integration depth with telecom stacks not demonstrated"
+      },
+      {
+        "dimension": "Governance (16/20)",
+        "score": "Inferred",
+        "videoEvidence": "Carrier-grade compliance assumed from NEC platform",
+        "gap": "Governance features not publicly visible"
+      },
+      {
+        "dimension": "Operations (14/20)",
+        "score": "Not Verified",
+        "videoEvidence": "Scale claims from carrier deployments",
+        "gap": "Operations capabilities not publicly demonstrated"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "RhlYjd-uiPs",
+      "title": "MWC26: How Netcracker is Helping Telcos Advance Agentic AI",
+      "channel": "Mobile Europe"
+    },
+    {
+      "videoId": "KUacAnMUdKk",
+      "title": "Netcracker develops GenAI solution for telcos",
+      "channel": "TM Forum"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The deepest telecom-specific AI platform — BSS/OSS automation with decades of carrier-grade reliability, now adding agentic AI for network operations.",
+    "targetUser": "Tier-1 telecom operators running Netcracker BSS/OSS who want AI-augmented network operations, customer management, and service assurance.",
+    "vsAlternatives": "Wins on telecom domain depth — no general agent platform understands eTOM, TMF APIs, or carrier billing like Netcracker. Loses on flexibility — telecom-only. Loses to general platforms on non-telecom use cases."
+  }
+}

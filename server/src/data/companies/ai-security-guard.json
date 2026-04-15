@@ -1,0 +1,329 @@
+{
+  "name": "AI Security Guard",
+  "slug": "ai-security-guard",
+  "category": "use-case",
+  "subcategory": "security",
+  "description": "Real-time AI agent input/output security scanning platform. Detects and blocks prompt injection, data exfiltration, jailbreaking, and adversarial inputs before they reach LLMs. Sits as middleware between users/agents and the AI model, acting as a firewall for agentic systems.",
+  "oneLiner": "Real-time AI agent security scanning with prompt injection detection, data leak prevention, and policy enforcement.",
+  "founded": "2024",
+  "funding": "Seed-stage (~$5-15M estimated)",
+  "pricing": "Usage-based per scan. Free tier for evaluation. Enterprise custom pricing.",
+  "website": "https://www.aisecurityguard.com",
+  "screenshots": [],
+  "capabilities": [
+    "Real-time prompt injection detection",
+    "PII/sensitive data scanning",
+    "Content policy enforcement",
+    "Toxicity filtering",
+    "Multi-turn jailbreak detection",
+    "Custom threat patterns",
+    "Inline middleware (sub-100ms)",
+    "Scan audit logging",
+    "SDK for LLM providers and agent frameworks",
+    "Batch historical analysis"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Not agent builder. Integrate SDK, configure policies via web console: select threat categories, set thresholds, define custom patterns.",
+    "strengths": [
+      "Addresses critical gap in enterprise agent security",
+      "Middleware fits any agent framework",
+      "Low-latency inline scanning",
+      "Comprehensive scan audit logging",
+      "Growing market demand"
+    ],
+    "weaknesses": [
+      "Early-stage with limited track record",
+      "Narrow scope: security only",
+      "Compliance certs in progress",
+      "Limited integration beyond LLM interception",
+      "False positive/negative rates are industry challenge"
+    ],
+    "notableFeatures": [
+      "Prompt injection detection via specialized ML",
+      "Multi-turn jailbreak detection across conversation context",
+      "Customizable PII scanning per jurisdiction"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-04: Microsoft Agent Governance Toolkit — open-source, addresses all 10 OWASP agentic AI risks with sub-ms policy enforcement",
+    "2026-03: Cisco Reimagines Security for Agentic Workforce — Detection Studio and Malware Threat Reversing Agent GA",
+    "2026-03: Tencent AI-Infra-Guard expands to 55 AI components, launches EdgeOne ClawScan + Agent-Scan",
+    "2026: Salt Agentic Security Platform — first dedicated solution for AI agent-to-enterprise data security",
+    "2026: 78.6% of security leaders report increased executive scrutiny of AI risks, only 23.5% find legacy tools effective",
+    "2025: Real-time prompt injection detection launched",
+    "SDK integrations for LangChain, CrewAI, OpenAI/Anthropic",
+    "Multi-turn conversation analysis",
+    "Custom policy builder for enterprises",
+    "Growing partnerships with agent platform vendors"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://www.aisecurityguard.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "low",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": true,
+    "notes": "Enterprise security product with on-prem option for sensitive environments."
+  },
+  "scores": {
+    "total": 55,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 12,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Policy config via web console. Not agent builder."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Policy testing with samples. Scan result inspector."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "API docs and integration guides. Early-stage depth."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Policy changes immediate. No staged rollout."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 5.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "Not orchestration. Security scanning service."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Flagged threat review as basic human interaction."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "Single-team policy management."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "Some pre-built policy templates."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 11.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "SDKs for OpenAI, Anthropic, LangChain, CrewAI. Webhooks."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "REST API. Python/JS SDKs. Early MCP. No gRPC."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "API keys. SSO on enterprise. Basic."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 2,
+            "rationale": "No data pipeline. Operates on individual inputs."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 14.4,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 5,
+            "rationale": "THIS IS the guardrails product. Real-time blocking. Policy enforcement."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Flagged inputs routed for review. Basic quarantine."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Scan logs comprehensive. Compliance certs in progress."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 3,
+            "rationale": "Basic admin/viewer roles. Team management in enterprise."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 11.8,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Cloud scanning service. SDK for inline. On-prem may be available."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 4,
+            "rationale": "High-throughput, low-latency by design. Auto-scaling."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "Threat dashboards, scan metrics, policy match rates."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "Early-stage. Small customer base. Growing AI security visibility."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "55/100 overall. Strongest: Governance (14/20). Weakest: Orchestration (5/20). Breakdown: Creation (12/20), Orchestration (5/20), Integration (11/20), Governance (14/20), Operations (12/20).",
+  "competence": "Agent Security & Guardrails",
+  "targetUser": "Security teams protecting AI agent deployments from attacks",
+  "supportedCUJs": [
+    "security-monitoring"
+  ],
+  "walkthrough": {
+    "title": "Detecting and Blocking Prompt Injection Attacks",
+    "steps": [
+      {
+        "title": "Integrate the Security SDK",
+        "description": "Add AI Security Guard's lightweight SDK to your agent pipeline — it wraps your LLM calls with input/output scanning. One-line integration for LangChain, CrewAI, or custom agent frameworks. Under 5ms latency overhead.",
+        "image": "/screenshots/ai-security-guard/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Purpose-built for AI security — deeper than bolt-on guardrails in general platforms",
+            "Prompt injection detection is among the most comprehensive available",
+            "API-first design integrates into any agent pipeline"
+          ],
+          "doesntWork": [
+            "Security-only tool requires integration with a separate agent platform",
+            "Configuration requires security expertise — not accessible to general developers",
+            "Evaluation metrics for detection quality are not self-serve"
+          ],
+          "userPsychology": "Security teams trust specialized tools over general-platform guardrails — the depth of prompt injection detection signals serious engineering. But integration overhead means it only gets adopted when there is a dedicated security team championing it."
+        }
+      },
+      {
+        "title": "Configure Threat Detection Policies",
+        "description": "Define what threats to monitor: prompt injection attempts, jailbreak patterns, PII leakage, toxic content, and off-topic manipulation. Set sensitivity thresholds and choose block vs. alert mode for each threat category.",
+        "image": "/screenshots/ai-security-guard/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Real-time threat detection with sub-100ms latency",
+            "Configurable sensitivity levels balance security vs usability",
+            "Detailed threat reports with classification and confidence scores"
+          ],
+          "doesntWork": [
+            "False positive tuning requires production traffic — cannot calibrate pre-deployment",
+            "No visual dashboard for security posture overview",
+            "Integration documentation assumes advanced security knowledge"
+          ],
+          "userPsychology": "Low latency is critical — security that slows down the user experience gets disabled. The sub-100ms performance means developers cannot use latency as an excuse to skip security."
+        }
+      },
+      {
+        "title": "Real-Time Input Scanning",
+        "description": "Every user message is scanned before reaching your LLM. The detector identifies injection patterns — hidden instructions, role hijacking, delimiter attacks, and encoded payloads. Malicious inputs are blocked with an explanation.",
+        "image": "/screenshots/ai-security-guard/step-3.png"
+      },
+      {
+        "title": "Output Monitoring and Data Loss Prevention",
+        "description": "Agent responses are scanned for accidental PII exposure, credential leaks, and unauthorized data disclosure. DLP rules prevent your agent from revealing internal system prompts, API keys, or customer data.",
+        "image": "/screenshots/ai-security-guard/step-4.png"
+      },
+      {
+        "title": "Audit Trail and Incident Response",
+        "description": "Every blocked threat is logged with full context — the original input, detection confidence, and policy matched. Security teams get real-time alerts and can review incident timelines to tune detection rules.",
+        "image": "/screenshots/ai-security-guard/step-5.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "AI Security Guard — limited public demo content available. Verdict based on documentation and existing research data only. Score reflects capability claims that could not be verified through video walkthrough.",
+      "score": "Unverified",
+      "strengths": [
+        "See existing capability analysis in the product profile"
+      ],
+      "risks": [
+        "No video demo available for verification",
+        "Product capabilities based on documentation only",
+        "UX quality unverifiable without live demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Insufficient public demo material to evaluate AI Security Guard for enterprise adoption. Recommend requesting a live demo from the vendor before making any commitment.",
+      "decision": "INSUFFICIENT DATA",
+      "strengths": [
+        "See existing scoring for capability assessment"
+      ],
+      "dealBreakers": [
+        "No public product demo available",
+        "Cannot verify UX claims without walkthrough",
+        "Enterprise readiness unassessable"
+      ]
+    },
+    "coverageGaps": [
+      "Complete product walkthrough needed",
+      "All capabilities unverified via video"
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "5ZA1lTxTH3c",
+      "title": "Securing AI Agents: How to Prevent Hidden Prompt Injection Attacks",
+      "channel": "IBM Technology"
+    },
+    {
+      "videoId": "fhbf-vRQoyo",
+      "title": "Why Prompt Injection Guardrails Fail in Browser Agents",
+      "channel": "Lasso Security"
+    }
+  ],
+  "marketIntelligence": {
+    "funding": {
+      "total": "$5-15M estimated",
+      "lastRound": "Seed stage"
+    }
+  },
+  "coreCompetence": {
+    "bestAt": "AI-native security guardrails — purpose-built to detect and prevent prompt injection, data leakage, and adversarial attacks on AI agent systems.",
+    "targetUser": "Security teams responsible for protecting AI deployments. Enterprises deploying agents in regulated environments who need compliance-grade protection.",
+    "vsAlternatives": "Wins on security specialization — deeper than bolt-on guardrails in general platforms. Wins on threat detection depth. Loses on breadth — security-only, not an agent builder. Must be integrated with a separate agent platform."
+  }
+}

@@ -1,0 +1,620 @@
+{
+  "name": "Lindy.ai",
+  "slug": "lindy-ai",
+  "category": "enterprise",
+  "subcategory": "no-code-agent-factory",
+  "description": "Lindy.ai is a no-code AI agent platform that lets users create autonomous 'AI employees' for customer support, recruiting, sales, scheduling, and back-office workflows. It features a visual workflow builder, template marketplace, trigger-based automation, and 3,000+ integrations.",
+  "oneLiner": "No-code platform for creating AI employees that automate support, recruiting, sales, and operations.",
+  "founded": "2023",
+  "funding": "~$33M total raised (Series A led by NEA, Airtree Ventures, Abstract Ventures)",
+  "pricing": "Free (400 credits/mo), Pro ($49.99/mo, 5K credits), Business ($299/mo, 30K credits), Enterprise (custom)",
+  "website": "https://www.lindy.ai",
+  "screenshots": [],
+  "capabilities": [
+    "No-code visual workflow builder",
+    "50+ pre-built agent templates",
+    "Natural language agent configuration",
+    "Trigger system (email, schedule, webhook, form, Slack, calendar)",
+    "3,000+ integrations (Salesforce, HubSpot, Gmail, Slack, Zoom, Notion)",
+    "Knowledge base with RAG retrieval",
+    "Multi-agent orchestration (Societies of Lindies)",
+    "HITL approval gates (Slack/email)",
+    "AI phone/voice agent for calls",
+    "Meeting intelligence (notes, summaries, action items)",
+    "Custom API calls and webhooks",
+    "Credit-based usage metering",
+    "SOC 2 Type II compliance",
+    "Enterprise SSO"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Select a template or start from scratch. Visual builder presents a flowchart canvas with trigger, AI, and action nodes. Configure each node via side panel with natural language instructions, variable mappings, and credentials. Test in real-time with sample inputs. Toggle on to deploy instantly. Template to live agent in under 5 minutes.",
+    "strengths": [
+      "Fastest time-to-deploy — functional agents in under 2 minutes from templates",
+      "Visual builder intuitive for non-technical business users",
+      "Natural language configuration removes prompt engineering expertise",
+      "3,000+ integrations cover most enterprise stacks",
+      "Societies of Lindies multi-agent orchestration without code",
+      "First-class HITL approval gates",
+      "Live testing creates tight feedback loop"
+    ],
+    "weaknesses": [
+      "Cloud-only — no self-hosted option",
+      "Credit-based pricing unpredictable at high volume",
+      "No MCP or open tool-use protocol",
+      "Limited observability and monitoring",
+      "Opaque LLM reasoning — no chain-of-thought visibility",
+      "Limited cross-session memory",
+      "Basic RBAC compared to enterprise platforms",
+      "No open-source components"
+    ],
+    "notableFeatures": [
+      "Societies of Lindies — multi-agent collaboration and delegation",
+      "AI phone agent for inbound/outbound calls",
+      "One-click template deployment",
+      "Knowledge base with RAG grounding",
+      "Meeting intelligence (auto notes, summaries, action items)",
+      "Email autopilot with human review"
+    ]
+  },
+  "recentDevelopments": [
+    "2025 Q1: Launched Societies of Lindies multi-agent orchestration",
+    "2025 Q1: Expanded to 3,000+ integrations",
+    "2025 Q2: AI voice/phone agent for customer support",
+    "2025 Q3: Enterprise tier with SSO, SOC 2 Type II, SLAs",
+    "2025 Q3: ~$33M total funding, Series A led by NEA",
+    "2026 Q1: 50+ templates across new verticals including legal and finance"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://www.lindy.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.lindy.ai/pricing",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://docs.lindy.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-only SaaS. No self-hosted or on-prem option."
+  },
+  "scores": {
+    "total": 73,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 17.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 5,
+            "rationale": "Best-in-class no-code builder. Drag-and-drop flowchart. Intuitive for non-technical users."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "50+ pre-built templates for support, recruiting, sales, scheduling. Deploy in under 2 min."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 4,
+            "rationale": "Describe agent behavior in plain English. Lowers barrier significantly."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 4,
+            "rationale": "Live testing in builder. Instant deploy. Version history with rollback. Very fast feedback loop."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 14.4,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 4,
+            "rationale": "Societies of Lindies — agents collaborate, delegate, share context. Strong differentiator."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 4,
+            "rationale": "First-class approval gates, escalation paths, human review steps."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "Shared workspaces. No simultaneous editing or review workflows for agent configs."
+          },
+          {
+            "name": "Team Development",
+            "score": 3,
+            "rationale": "Shared workspaces. No simultaneous editing or review workflows for agent configs."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 15.4,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "3,000+ integrations. Major CRM, comms, productivity, dev tools with read/write."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "Custom API calls, webhook triggers. Headers, auth, payload config supported."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "Tool calling within workflow nodes. No MCP or standardized protocol. Proprietary framework."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Tool calling within workflow nodes. No MCP or standardized protocol. Proprietary framework."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 13.2,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Team-level access on Business/Enterprise. Limited per-agent RBAC granularity."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 4,
+            "rationale": "Workflow approval nodes with Slack/email notification. Agents disable instantly."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "SOC 2 Type II. Execution logs. Enterprise compliance features. Lags dedicated platforms."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 3,
+            "rationale": "SOC 2 Type II. Execution logs. Enterprise compliance features. Lags dedicated platforms."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12.8,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Cloud-only SaaS. No self-hosted option. Limitation for data-residency-sensitive enterprises."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Basic execution logs and task history. No performance dashboards or custom alerting."
+          },
+          {
+            "name": "Cost Management",
+            "score": 4,
+            "rationale": "Auto-scaling cloud infra. Concurrent agents. Credit-gated but technically capable."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 3,
+            "rationale": "Growing user base. Product Hunt attention. Nascent vs established platforms."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "73/100 overall. Strongest: Creation (17/20). Weakest: Operations (13/20). Breakdown: Creation (17/20), Orchestration (14/20), Integration (15/20), Governance (13/20), Operations (13/20).",
+  "competence": "No-Code Agent Builder",
+  "targetUser": "Business operators automating support, sales, HR workflows without code",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Getting TikTok coverage — @onetechnations showing Lindy Agent automation (675 views)",
+      "Lindy 3.0 Agent Builder praised for vibe-coding approach — describe what you want in English",
+      "Societies of Lindies multi-agent feature generating positive buzz",
+      "Credit-based pricing criticized as unpredictable at scale",
+      "7,000+ integrations via Pipedream partnership expanding connector breadth"
+    ],
+    "metrics": [
+      {
+        "metric": "Integrations",
+        "value": "7,000+ (via Pipedream)",
+        "source": "Lindy.ai"
+      },
+      {
+        "metric": "Agent Templates",
+        "value": "50+",
+        "source": "Marketplace"
+      },
+      {
+        "metric": "Compliance",
+        "value": "SOC 2 Type II",
+        "source": "Enterprise tier"
+      }
+    ],
+    "funding": {
+      "total": "$33M",
+      "lastRound": "Series A",
+      "valuation": "Undisclosed",
+      "investors": [
+        "NEA",
+        "Airtree Ventures",
+        "Abstract Ventures"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "customer-support",
+    "sales-outreach",
+    "it-helpdesk"
+  ],
+  "walkthrough": {
+    "title": "Lindy.ai: PM & CTO Walkthrough — No-Code Agent Builder",
+    "pmVerdict": {
+      "summary": "Lindy is the best no-code agent builder for business users. The chat-based creation, visual flow editor, and 30+ action integrations (Google Sheets, Slack, Gmail, LinkedIn, HubSpot) make it genuinely accessible. The pricing (Free/400 credits, Pro/$49, Business/$299) is transparent but credit consumption is opaque. Best for: business teams automating email, CRM, and social media workflows without developer involvement.",
+      "score": "A-",
+      "strengths": [
+        "Only platform where non-technical users build agents in under 5 minutes",
+        "30+ integrations including scrapers (LinkedIn, YouTube, TikTok, Instagram)",
+        "Visual flow editor makes agent logic shareable with stakeholders",
+        "Chat-based builder generates complete workflows from descriptions"
+      ],
+      "risks": [
+        "Credit-based pricing creates unpredictable costs — 400 free credits run out fast",
+        "AI builder sometimes can't configure steps it proposes",
+        "No developer API for custom integrations beyond the built-in library",
+        "Limited testing — no regression testing or A/B for agent behavior"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Lindy is a department-level tool, not an enterprise platform. Great for marketing/sales teams automating email and social workflows. But: no SSO, no RBAC, no audit trails, no self-hosted option, credit-based pricing that's hard to budget, and the builder's AI sometimes fails to configure its own proposals. For enterprise, it's a shadow IT risk — teams will adopt it without IT approval.",
+      "decision": "ALLOW — Department Tool, Not Enterprise Platform",
+      "strengths": [
+        "Fastest time-to-value for non-technical users",
+        "Integration breadth covers common business tools",
+        "Visual flows are auditable by non-technical reviewers",
+        "Pricing starts free — low barrier to evaluation"
+      ],
+      "dealBreakers": [
+        "No SSO or enterprise identity integration",
+        "No RBAC — every user sees everything",
+        "Credit-based pricing is hard to budget at scale",
+        "No self-hosted option — data flows through Lindy's cloud"
+      ]
+    },
+    "coverageGaps": [
+      "Enterprise security and compliance features",
+      "API/developer extensibility",
+      "Multi-agent coordination",
+      "Analytics and performance monitoring",
+      "Team management and permissions"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (16/20)",
+        "score": "Fully Supported",
+        "videoEvidence": "Chat builder (step 7), visual flow editor (step 3), action library (step 2), agent config (step 5)",
+        "gap": "Score justified — best no-code creation experience demonstrated"
+      },
+      {
+        "dimension": "Orchestration (10/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Sequential flows with conditions shown, Agent Step for multi-step processing",
+        "gap": "No multi-agent orchestration or parallel execution demonstrated"
+      },
+      {
+        "dimension": "Integration (16/20)",
+        "score": "Well Supported",
+        "videoEvidence": "30+ integrations visible: Google, Slack, Gmail, LinkedIn, YouTube, HubSpot, scrapers",
+        "gap": "Integration depth per connector not demonstrated"
+      },
+      {
+        "dimension": "Governance (12/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No governance features shown in any frame",
+        "gap": "Score may be generous — no RBAC, audit, or compliance visible"
+      },
+      {
+        "dimension": "Operations (13/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Deploy toggle shown, testing button visible",
+        "gap": "No monitoring, analytics, or cost management demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/lindy-ai/step01_homepage.jpg",
+        "title": "Lindy Homepage",
+        "description": "AI agent platform homepage — create automations with natural language, templates for common use cases.",
+        "pmCritique": {
+          "works": [
+            "Clean homepage with clear value proposition",
+            "Template categories signal breadth of use cases",
+            "Try for free CTA — no credit card required"
+          ],
+          "doesntWork": [
+            "Generic AI platform messaging — doesn't differentiate from competitors",
+            "No live demo or interactive preview",
+            "Template previews not visible from homepage"
+          ],
+          "userPsychology": "First impressions matter. Lindy's homepage says 'easy AI automation' but doesn't show it. A 30-second demo video would convert more visitors."
+        },
+        "ctoCritique": {
+          "verdict": "The homepage gives me no technical information. What models does it use? Where is data stored? What's the architecture? Enterprise buyers need this before signing up.",
+          "concerns": [
+            "No technical architecture information",
+            "No security/compliance badges visible",
+            "No enterprise case studies on homepage"
+          ],
+          "enterpriseGaps": [
+            "No SOC2/HIPAA badges",
+            "No data residency information",
+            "No enterprise tier features visible"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step02_add_action.jpg",
+        "title": "Add Action Library",
+        "description": "30+ actions: Google Sheets, Drive, Calendar, HubSpot, Slack, Gmail, Outlook, Telegram + Scrapers (LinkedIn, YouTube, TikTok, Instagram) + AI/Logic/KB steps.",
+        "pmCritique": {
+          "works": [
+            "Categorized action library — Apps, Chat, AI, Logic, Scrapers, By Lindy",
+            "Scraper category (LinkedIn, YouTube, TikTok, Instagram) is unique differentiator",
+            "Search bar enables quick action discovery"
+          ],
+          "doesntWork": [
+            "No action count shown — unclear how many total integrations exist",
+            "No action quality indicators (verified, beta, community)",
+            "Custom/webhook action not visible — limited to built-in library"
+          ],
+          "userPsychology": "The scraper category is Lindy's hidden gem. No other no-code agent platform offers LinkedIn + YouTube + TikTok scrapers built in. Marketing teams discover this and never leave."
+        },
+        "ctoCritique": {
+          "verdict": "The action library breadth is good for common business tools. But I need: custom webhook actions, API authentication management, and data transformation steps. The built-in library is a ceiling, not a floor.",
+          "concerns": [
+            "No custom action creation visible",
+            "No API authentication management",
+            "Scraper legality/compliance not addressed"
+          ],
+          "enterpriseGaps": [
+            "No webhook/custom HTTP action visible",
+            "No OAuth management for connected accounts",
+            "No action versioning or changelog"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step03_flow_builder.jpg",
+        "title": "Visual Flow Builder",
+        "description": "Email Received → Start Computer → Agent Step → Search tone guidelines → Draft reply email. Visual flow with chat builder on left.",
+        "pmCritique": {
+          "works": [
+            "Split view: chat builder (left) + visual flow (right) — build and see simultaneously",
+            "Agent Step node shows AI reasoning is a first-class flow element",
+            "Flow reads top-to-bottom — intuitive for non-technical users"
+          ],
+          "doesntWork": [
+            "Chat builder takes up 50% of screen — flow editor is cramped",
+            "Agent Step is a black box — what model, what prompt?",
+            "No zoom or pan controls visible for large flows"
+          ],
+          "userPsychology": "The split chat+flow view is Lindy's UX innovation. You describe in chat, the flow appears visually. It's the closest thing to 'thinking out loud and seeing it built.'"
+        },
+        "ctoCritique": {
+          "verdict": "Visual flows are auditable — I can review what an agent does without reading code. But the Agent Step is opaque. What model is it using? What prompt? What guardrails?",
+          "concerns": [
+            "Agent Step internals not visible in flow view",
+            "No flow versioning or diff",
+            "No flow testing beyond manual runs"
+          ],
+          "enterpriseGaps": [
+            "No approval workflow before deploying flow changes",
+            "No flow-level monitoring or alerting",
+            "No flow export for backup or migration"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step04_pricing.jpg",
+        "title": "Pricing Tiers",
+        "description": "Free ($0, 400 credits), Pro ($49.99, 5K credits), Business ($299.99, 30K credits), Custom (talk to sales). Credit-based with sliding scale.",
+        "pmCritique": {
+          "works": [
+            "Transparent pricing with 4 clear tiers — free to enterprise",
+            "Credit slider on paid tiers enables cost scaling",
+            "Free tier exists — low barrier to start evaluating"
+          ],
+          "doesntWork": [
+            "400 free credits disappear fast — maybe 20-40 agent runs",
+            "Credit consumption per action is opaque — hard to predict costs",
+            "'Premium actions' on paid tiers only — free tier is severely limited"
+          ],
+          "userPsychology": "The pricing page is where Lindy converts or loses. 400 free credits sounds generous until you realize a single email automation consumes 10-20 credits per run."
+        },
+        "ctoCritique": {
+          "verdict": "Credit-based pricing is the worst model for enterprise budgeting. I can't predict monthly costs without understanding credit consumption per action. Need a calculator.",
+          "concerns": [
+            "Credit consumption per action not documented",
+            "No annual pricing or volume discounts visible",
+            "Custom tier has no starting price indicator"
+          ],
+          "enterpriseGaps": [
+            "No cost predictability for budgeting",
+            "No spending alerts or caps",
+            "No enterprise contract terms visible"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step05_agent_config.jpg",
+        "title": "Agent Configuration",
+        "description": "Knowledge base upload, tone guidelines, draft vs send mode, trigger configuration. Per-agent settings for behavior control.",
+        "pmCritique": {
+          "works": [
+            "Knowledge base upload makes RAG accessible — drag files, agent learns",
+            "Tone guidelines enable brand-consistent responses",
+            "Draft vs send toggle — safety net for cautious teams"
+          ],
+          "doesntWork": [
+            "Configuration options scattered across multiple panels",
+            "No prompt preview — unclear what the agent will actually say",
+            "Knowledge base quality/coverage not measurable"
+          ],
+          "userPsychology": "The draft-vs-send toggle is Lindy's most important trust-building feature. It transforms 'do I trust AI?' into 'do I trust AI to draft for my review?'"
+        },
+        "ctoCritique": {
+          "verdict": "Draft mode is the right enterprise default. But I need: approval workflows, audit trails, and quality scoring on drafts before they're sent. Manual review doesn't scale.",
+          "concerns": [
+            "No automated quality scoring on drafts",
+            "No approval workflow beyond manual review",
+            "Knowledge base has no freshness management"
+          ],
+          "enterpriseGaps": [
+            "No knowledge base access control",
+            "No draft quality metrics",
+            "No automated compliance checking on outputs"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step06_integrations.jpg",
+        "title": "Integration Ecosystem",
+        "description": "Full action library with categories: Top, Apps, Chat, AI, Logic, Scrapers, By Lindy. Linked Actions, search, and filtering.",
+        "pmCritique": {
+          "works": [
+            "Categorized browsing — Apps for business tools, Scrapers for data, AI for reasoning",
+            "Linked Actions shortcut — frequently used actions surfaced first",
+            "By Lindy category shows proprietary capabilities (Computer, Utilities, Run Code, HTTP)"
+          ],
+          "doesntWork": [
+            "No integration depth information — how robust is each connector?",
+            "No user ratings or reliability indicators",
+            "HTTP action exists but buried under 'By Lindy' category"
+          ],
+          "userPsychology": "The integration library is Lindy's competitive position — broader than most no-code tools for AI automation. The scraper category alone justifies evaluation for marketing teams."
+        },
+        "ctoCritique": {
+          "verdict": "HTTP action under 'By Lindy' means custom integrations are possible. But it's hidden, not promoted. The platform wants you to use built-in connectors, which limits flexibility.",
+          "concerns": [
+            "Integration reliability metrics absent",
+            "No webhook incoming action visible",
+            "Custom integration path (HTTP) is hidden"
+          ],
+          "enterpriseGaps": [
+            "No integration monitoring or error alerting",
+            "No integration testing framework",
+            "No bulk integration management"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step07_chat_builder.jpg",
+        "title": "Chat-Based Agent Builder",
+        "description": "AI builds Email Reply Assistant: monitors Gmail, searches KB, drafts personalized replies, saves as draft. Complete 5-step flow from one description.",
+        "pmCritique": {
+          "works": [
+            "Complete flow generated from natural language — genuinely impressive",
+            "5-step flow with KB search, tone matching, draft saving — real business logic",
+            "Builder explains what it created and how to use it"
+          ],
+          "doesntWork": [
+            "Builder admits 'I cannot configure the Knowledge Base step at this time' — breaks the magic",
+            "No undo if the generated flow is wrong — start over",
+            "Credits consumed during builder chat are invisible"
+          ],
+          "userPsychology": "This is Lindy's 'wow' moment — describe what you want, get a working agent. The drop-off happens when the builder can't finish what it started."
+        },
+        "ctoCritique": {
+          "verdict": "Chat-based flow generation is impressive for demos but unreliable for production. The builder's admission that it 'cannot configure' a step it proposed is a trust-breaking moment.",
+          "concerns": [
+            "Builder reliability is inconsistent — sometimes can't configure its own proposals",
+            "No builder version or improvement tracking",
+            "Generated flows may not follow best practices"
+          ],
+          "enterpriseGaps": [
+            "No builder quality metrics or success rate",
+            "No builder customization for enterprise templates",
+            "No builder audit trail"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/lindy-ai/step08_testing.jpg",
+        "title": "Test and Deploy",
+        "description": "Run Test validates the workflow, Deploy toggle activates the agent. Agent starts monitoring and responding automatically.",
+        "pmCritique": {
+          "works": [
+            "Test before deploy gives confidence",
+            "One-click deploy makes activation frictionless",
+            "Agent goes live immediately — no staging needed for simple flows"
+          ],
+          "doesntWork": [
+            "Test validates connectivity, not output quality",
+            "No staging/production separation",
+            "No gradual rollout option"
+          ],
+          "userPsychology": "Test-then-deploy is simple enough for non-technical users. But the gap between 'it runs' and 'it runs well' is where most Lindy agents need iteration."
+        },
+        "ctoCritique": {
+          "verdict": "No staging environment means every deploy is to production. For department-level use this is acceptable. For enterprise-wide deployment, it's a risk.",
+          "concerns": [
+            "No staging environment",
+            "No rollback capability visible",
+            "No deployment approval workflow"
+          ],
+          "enterpriseGaps": [
+            "No blue/green deployment",
+            "No canary deployment",
+            "No deployment notifications"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "D-m-eJp8DhE",
+      "title": "How to Use Lindy AI (Beginner Tutorial)",
+      "channel": "Kevin Stratvert"
+    },
+    {
+      "videoId": "oiAm4P2OAq8",
+      "title": "Lindy AI Review: I Tested it With 12 Automations",
+      "channel": "Liam Ottley"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The most accessible no-code agent builder — business users create multi-step agents from natural language descriptions with 3000+ integrations, no technical skills required.",
+    "targetUser": "Business operations managers, sales leaders, and non-technical teams who want AI automation without involving engineering. SMBs without dedicated AI teams.",
+    "vsAlternatives": "Wins against all developer frameworks (LangGraph, CrewAI, AutoGen) on accessibility — zero code required. Wins on integration breadth (3000+). Loses on customization depth for complex workflows. Loses to Moveworks on enterprise IT specificity."
+  }
+}

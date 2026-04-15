@@ -1,0 +1,592 @@
+{
+  "name": "Synthflow AI",
+  "slug": "synthflow-ai",
+  "category": "use-case",
+  "subcategory": "voice-cs",
+  "description": "Synthflow AI is a no-code platform for building AI voice agents that handle phone calls for lead qualification, appointment scheduling, customer support, and sales outreach. Features a drag-and-drop builder, pre-built templates, sub-second voice latency, 20+ languages, and a white-label agency program.",
+  "oneLiner": "No-code platform for building AI voice agents that handle phone calls for lead qualification, appointments, and support.",
+  "founded": "2023",
+  "funding": "$30M total (Series A $20M in 2025)",
+  "pricing": "Starter $29/month (50 min, 5 concurrent). Pro $450/month (2,000 min, 25 concurrent). Growth $900/month (4,000 min, 50 concurrent). Enterprise custom. Note: BYOK required — actual costs higher due to provider fees.",
+  "website": "https://synthflow.ai",
+  "screenshots": [],
+  "capabilities": [
+    "No-code visual voice agent builder",
+    "Inbound/outbound AI phone calls",
+    "Sub-second voice latency",
+    "Lead qualification via phone",
+    "Automated appointment scheduling",
+    "Live call transfer with context",
+    "20+ language support",
+    "CRM integration (HubSpot, Salesforce, GoHighLevel)",
+    "Telephony (Twilio, Vonage, SIP)",
+    "Zapier/Make automation",
+    "White-label agency program",
+    "Pre-built templates (receptionist, qualifier, support)",
+    "Call recording and transcription",
+    "Sentiment analysis",
+    "Custom voice selection and cloning",
+    "Post-call summaries",
+    "Knowledge base upload"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "No-code visual interface. Select template or start from scratch. Configure persona (voice, language, personality), define conversation workflow via node editor, connect integrations, upload knowledge base, test via built-in call simulator. Prioritizes speed-to-first-agent over customization depth.",
+    "strengths": [
+      "First voice agent in under 15 min with no technical background",
+      "Strong template library for common use cases",
+      "White-label agency program enables reseller ecosystem",
+      "Native GoHighLevel integration captures marketing agency market",
+      "20+ language multilingual support",
+      "Competitive per-minute pricing for SMBs"
+    ],
+    "weaknesses": [
+      "No pro-code SDK — advanced users hit customization ceilings",
+      "Cloud-only, no self-hosted option",
+      "No SOC2 or HIPAA compliance",
+      "Single-agent-per-call, no multi-agent orchestration",
+      "Limited debugging and observability",
+      "No MCP or emerging protocol support",
+      "Immature enterprise governance"
+    ],
+    "notableFeatures": [
+      "Agency white-label with branded subdomains and client management",
+      "Built-in call simulator for testing",
+      "Real-time sentiment detection triggering auto-transfers",
+      "Voice cloning for brand-consistent personas",
+      "GoHighLevel native integration for marketing agencies"
+    ]
+  },
+  "recentDevelopments": [
+    "2026: Trusted by 1,500+ companies with enterprise-grade telephony (sub-100ms latency, 99.99% uptime)",
+    "2025: $20M Series A raised, total funding $30M",
+    "2025: 200+ integrations with no-code builder",
+    "2025: Enterprise deployment in under 3 weeks"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://synthflow.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://synthflow.ai/pricing",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-only SaaS. No self-hosted or on-prem option."
+  },
+  "scores": {
+    "total": 51,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "No-code visual builder with templates. First agent in under 15 min. No pro-code SDK."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Call transcript review, conversation testing, recordings for QA. No advanced debugging."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Covers setup, integrations, basic workflows. Video tutorials. Gaps in advanced topics."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Visual builder changes take effect quickly. Basic version history. Minutes not seconds."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 8.8,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 2,
+            "rationale": "Single agent per call. No multi-agent orchestration or inter-agent communication."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Call transfer with basic context. No structured evidence packets or shared workspace."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Agency model with client workspaces. No version control or CI/CD."
+          },
+          {
+            "name": "Team Development",
+            "score": 3,
+            "rationale": "Pre-built templates: receptionist, lead qualifier, scheduler. Template customization."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 11,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "HubSpot, Salesforce, GoHighLevel, Twilio, Vonage, Google Calendar, Zapier, Make. 30-50 connectors."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "REST API available. Webhooks. No MCP, GraphQL, or gRPC. SIP for telephony."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "OAuth for major integrations. No SAML SSO or secret rotation."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Knowledge base upload. Basic CRM context loading. No advanced RAG pipeline."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "Agent pause/deactivate. Prompt-based guardrails. No ML-powered monitoring."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Call transfer as HITL. Configurable triggers (sentiment, keywords). No multi-tier approval."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "Call recordings stored. No SOC2. No tamper-proof logging."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Basic admin/member roles. Agency white-label provides client isolation. No SSO."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 9,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "Cloud-only SaaS. No self-hosted or on-prem option."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Auto-scaling telephony. Adequate for SMB volumes. Sub-second voice latency."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Basic call analytics dashboard. No enterprise observability integration."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "Growing SMB/agency user base. YouTube/social presence. No open-source community."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "51/100 overall. Strongest: Creation (13/20). Weakest: Orchestration (9/20). Breakdown: Creation (13/20), Orchestration (9/20), Integration (11/20), Governance (9/20), Operations (9/20).",
+  "competence": "Voice Agent Platform",
+  "targetUser": "SMBs and agencies deploying AI phone agents without code",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "Languages Supported",
+        "value": "20+",
+        "source": "Docs"
+      },
+      {
+        "metric": "Telephony Providers",
+        "value": "Twilio, Vonage, SIP",
+        "source": "Docs"
+      }
+    ],
+    "funding": {
+      "total": "~$7.4M",
+      "lastRound": "Seed",
+      "valuation": "Undisclosed"
+    }
+  },
+  "supportedCUJs": [
+    "voice-telephony",
+    "customer-support",
+    "sales-outreach"
+  ],
+  "walkthrough": {
+    "title": "Synthflow AI: PM & CTO Walkthrough — Voice Agent Platform",
+    "steps": [
+      {
+        "image": "/screenshots/synthflow-ai/step01_configure.jpg",
+        "title": "Configure Assistant",
+        "description": "General tab: Timezone, Knowledge Base upload, Custom Vocabulary, Filter Words. Left nav: Dashboard, Configure, Prompt, Actions, Deployment, Calls, Template.",
+        "pmCritique": {
+          "works": [
+            "Left nav covers full lifecycle — configure, prompt, deploy, monitor calls",
+            "Custom Vocabulary adds business-specific terms for better recognition",
+            "Filter Words prevents the agent from saying forbidden content"
+          ],
+          "doesntWork": [
+            "'Your assistant doesn't have a phone number and can't make calls' warning is jarring",
+            "Knowledge Base is a button, not inline — extra click to add grounding",
+            "'Hire an Expert' sidebar suggests the product is hard to use alone"
+          ],
+          "userPsychology": "The Configure page reveals Synthflow's complexity. Clean layout but many sections to fill before the agent works."
+        },
+        "ctoCritique": {
+          "verdict": "Configuration is straightforward but missing enterprise controls. No RBAC on who can modify, no change history, no approval workflow.",
+          "concerns": [
+            "No configuration versioning or change history",
+            "No RBAC on assistant modifications",
+            "Filter Words is basic — no regex or pattern matching"
+          ],
+          "enterpriseGaps": [
+            "No configuration approval workflow",
+            "No environment separation (staging/prod)",
+            "No configuration export/import"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step02_prompt_copilot.jpg",
+        "title": "Prompt Copilot — AI Script Builder",
+        "description": "Copilot dialog: collects Company Information, Target Audience, Value Proposition, Agent Information. Generates optimized prompts from business context.",
+        "pmCritique": {
+          "works": [
+            "Copilot structures prompt creation — 4 clear inputs instead of blank textarea",
+            "Business-focused inputs (Company, Audience, Value Prop) map to how agencies think",
+            "Chat-based interaction makes prompt creation conversational"
+          ],
+          "doesntWork": [
+            "Copilot output quality unknown — no before/after comparison shown",
+            "Fills the textarea but user must still manually verify and edit",
+            "No prompt testing after generation — must deploy to hear it"
+          ],
+          "userPsychology": "Prompt Copilot is Synthflow's best UX innovation. It transforms prompt engineering from 'write a system message' to 'describe your business.'"
+        },
+        "ctoCritique": {
+          "verdict": "Copilot reduces prompt engineering effort but adds a dependency on AI-generated prompts. No way to audit or version the prompts Copilot generates.",
+          "concerns": [
+            "AI-generated prompts may not follow best practices",
+            "No prompt versioning or A/B testing",
+            "Copilot quality not measurable"
+          ],
+          "enterpriseGaps": [
+            "No prompt governance or compliance checking",
+            "No prompt library for reuse across assistants",
+            "No prompt performance metrics"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step03_deployment.jpg",
+        "title": "Deployment Options",
+        "description": "Phone number assignment, Caller ID, Webhook URL, GoHighLevel, Zapier, REST API tabs. Multiple deployment channels from one assistant.",
+        "pmCritique": {
+          "works": [
+            "Multi-channel deployment — GoHighLevel, Zapier, REST API covers agency needs",
+            "Phone number assignment is inline — no separate provisioning step",
+            "Webhook URL enables custom backend integration"
+          ],
+          "doesntWork": [
+            "GoHighLevel is niche — most enterprises don't use it",
+            "API documentation via REST API tab but no interactive explorer",
+            "Caller ID configuration is a regulatory requirement, not a feature"
+          ],
+          "userPsychology": "Deployment tabs show Synthflow's market: agencies using GoHighLevel. Enterprise buyers see GoHighLevel and think 'this isn't for us.'"
+        },
+        "ctoCritique": {
+          "verdict": "GoHighLevel-first deployment reveals the target market. Enterprise needs: SIP trunk, PBX integration, CRM screen pop. None of these are available.",
+          "concerns": [
+            "No SIP trunk integration",
+            "No PBX/contact center integration",
+            "GoHighLevel dependency limits enterprise market"
+          ],
+          "enterpriseGaps": [
+            "No enterprise telephony integration",
+            "No call routing or queue management",
+            "No deployment staging environment"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step04_full_config.jpg",
+        "title": "Full Configuration View",
+        "description": "Voice Engine v1.0/v2.0 BETA toggle, AI Model GPT-4o, Knowledge Base 'Carson Knowledge Base 2', Custom Vocabulary field.",
+        "pmCritique": {
+          "works": [
+            "Voice Engine version toggle — v2.0 BETA shows active development",
+            "GPT-4o as default model — using frontier models",
+            "Knowledge Base integration by name — simple attachment"
+          ],
+          "doesntWork": [
+            "v2.0 BETA label signals instability for production use",
+            "No model selection beyond GPT-4o — limited provider choice",
+            "Knowledge Base is a black box — no visibility into what it contains"
+          ],
+          "userPsychology": "The v2.0 BETA toggle is honest but risky. Users on v1.0 wonder what they're missing; users on v2.0 worry about bugs."
+        },
+        "ctoCritique": {
+          "verdict": "GPT-4o only means OpenAI dependency. No model fallback, no cost optimization with cheaper models for simple intents.",
+          "concerns": [
+            "Single model provider dependency (OpenAI)",
+            "BETA features in production configuration",
+            "No model cost comparison or optimization"
+          ],
+          "enterpriseGaps": [
+            "No model failover chain",
+            "No cost alerting per model usage",
+            "No model performance benchmarking"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step05_deployment_detail.jpg",
+        "title": "GoHighLevel + Zapier Integration",
+        "description": "Deployment detail: GoHighLevel installation guide, Zapier connector, REST API with assistant ID and API key. Step-by-step deployment.",
+        "pmCritique": {
+          "works": [
+            "Step-by-step deployment guide for GoHighLevel — reduces integration friction",
+            "API key and Assistant ID visible — developers can integrate programmatically",
+            "Multiple integration paths serve different technical skill levels"
+          ],
+          "doesntWork": [
+            "GoHighLevel requires separate app installation and subaccount setup",
+            "API key visible on screen — security concern in video",
+            "REST API documentation is minimal — link to external docs"
+          ],
+          "userPsychology": "The deployment page serves two audiences: agency owners (GoHighLevel) and developers (REST API). The split works but neither path is deep."
+        },
+        "ctoCritique": {
+          "verdict": "REST API access means we can integrate programmatically. But the API surface is likely limited — voice-specific, not a general agent platform.",
+          "concerns": [
+            "API surface area unknown — may be limited to basic call operations",
+            "No SDK or client library visible",
+            "No webhook signing for security"
+          ],
+          "enterpriseGaps": [
+            "No API rate limiting documentation",
+            "No API versioning visible",
+            "No sandbox API environment"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step06_actions.jpg",
+        "title": "Actions Configuration",
+        "description": "Custom actions and integrations for the voice assistant — extend agent capabilities beyond conversation.",
+        "pmCritique": {
+          "works": [
+            "Actions extend the agent beyond talk — trigger workflows, update CRMs",
+            "Dedicated nav section signals actions are a first-class capability"
+          ],
+          "doesntWork": [
+            "Actions page content not fully visible in this frame",
+            "No action library or marketplace shown",
+            "Custom action creation complexity unknown"
+          ],
+          "userPsychology": "Actions are the bridge between voice agent and business workflow. Without them, Synthflow is just a talking bot."
+        },
+        "ctoCritique": {
+          "verdict": "Action extensibility determines enterprise value. Need to evaluate: what actions are available, how custom actions are built, and what data flows through them.",
+          "concerns": [
+            "Action catalog breadth unknown",
+            "Custom action development complexity unclear",
+            "No action monitoring or error handling visible"
+          ],
+          "enterpriseGaps": [
+            "No action audit trail",
+            "No action-level permissions",
+            "No action testing framework"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step07_calls.jpg",
+        "title": "Call Management",
+        "description": "Call logs, recordings, transcripts, and analytics. Monitor all agent conversations from one dashboard.",
+        "pmCritique": {
+          "works": [
+            "Call history provides accountability — review what agents said",
+            "Recordings enable quality assurance and training",
+            "Dashboard view aggregates call metrics"
+          ],
+          "doesntWork": [
+            "Call detail depth not shown — just the navigation to this page",
+            "No real-time monitoring visible",
+            "No call quality scoring or sentiment analysis"
+          ],
+          "userPsychology": "Call management is where voice AI becomes manageable at scale. Without call logs and transcripts, you're flying blind."
+        },
+        "ctoCritique": {
+          "verdict": "Call recordings and transcripts are table stakes. I need: automated QA scoring, sentiment trends, escalation rate tracking, and cost per call.",
+          "concerns": [
+            "No automated QA scoring",
+            "No sentiment analysis on calls",
+            "No cost-per-call attribution"
+          ],
+          "enterpriseGaps": [
+            "14-day retention on free tier is too short for enterprise audit",
+            "No call recording compliance (PCI pause/resume)",
+            "No call data export for external analysis"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/synthflow-ai/step08_template.jpg",
+        "title": "Template Library",
+        "description": "Pre-built assistant templates for common use cases — skip configuration and start with a working agent.",
+        "pmCritique": {
+          "works": [
+            "Templates reduce time-to-first-agent dramatically",
+            "Common use cases pre-built — booking, support, sales qualification",
+            "NEW badge on templates signals active development"
+          ],
+          "doesntWork": [
+            "Template count and categories not visible",
+            "No template preview before applying",
+            "No community or marketplace templates"
+          ],
+          "userPsychology": "Templates are the right onboarding pattern for SMBs. Start from something working, customize to your business."
+        },
+        "ctoCritique": {
+          "verdict": "Templates are good for evaluation. But enterprise needs custom templates that enforce organizational standards — not generic ones.",
+          "concerns": [
+            "No custom template creation for enterprises",
+            "No template versioning",
+            "No template quality metrics"
+          ],
+          "enterpriseGaps": [
+            "No organizational template management",
+            "No template compliance checking",
+            "No template sharing across teams"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Synthflow targets SMB/agency voice AI with a simpler UX than Vapi but less technical depth. Prompt Copilot for AI-assisted script creation is clever. GoHighLevel + Zapier integrations serve the agency market well. But: BYOK required (no built-in models), no SOC2/HIPAA, and the 'Hire an Expert' sidebar suggests the product needs professional services to work.",
+      "score": "C+",
+      "strengths": [
+        "Prompt Copilot generates scripts from business context — reduces prompt engineering",
+        "GoHighLevel integration targets the agency/SMB market specifically",
+        "Voice Engine v1/v2 gives users voice quality options",
+        "Template library for common use cases"
+      ],
+      "risks": [
+        "No SOC2/HIPAA — can't serve healthcare or finance",
+        "BYOK model means hidden costs on top of platform fee",
+        "'Hire an Expert' sidebar suggests the product needs help to work",
+        "Sub-100ms latency claims unverified in demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Synthflow is an SMB tool, not an enterprise platform. No compliance certifications, BYOK pricing model obscures true costs, and the 'Hire an Expert' feature signals product complexity. Use for internal demos or agency clients — not for regulated enterprise voice AI.",
+      "decision": "AVOID — For Enterprise Use",
+      "strengths": [
+        "Simple enough for non-technical agency owners",
+        "GoHighLevel ecosystem integration for marketing agencies",
+        "Template library reduces time-to-first-call"
+      ],
+      "dealBreakers": [
+        "No SOC2/HIPAA/PCI compliance",
+        "BYOK model — actual costs $590-770/mo not the marketed price",
+        "No API-first architecture for developers",
+        "Human handoff is the #1 cancel reason per user reviews"
+      ]
+    },
+    "coverageGaps": [
+      "Call analytics and reporting",
+      "Human handoff configuration",
+      "Multi-agent/squad support",
+      "Enterprise compliance features"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (12/20)",
+        "score": "Supported",
+        "videoEvidence": "Configure page, Prompt Copilot, Voice Engine selection demonstrated",
+        "gap": "Template depth not explored"
+      },
+      {
+        "dimension": "Orchestration (8/20)",
+        "score": "Not Shown",
+        "videoEvidence": "Single agent only — no multi-agent coordination visible",
+        "gap": "Low score justified — no orchestration features demonstrated"
+      },
+      {
+        "dimension": "Integration (12/20)",
+        "score": "Supported",
+        "videoEvidence": "GoHighLevel, Zapier, REST API, phone number config shown",
+        "gap": "Integration depth per connector not demonstrated"
+      },
+      {
+        "dimension": "Governance (8/20)",
+        "score": "Not Shown",
+        "videoEvidence": "No compliance or governance features visible",
+        "gap": "No SOC2/HIPAA — governance score should be lower"
+      },
+      {
+        "dimension": "Operations (11/20)",
+        "score": "Partially Shown",
+        "videoEvidence": "Deployment page with phone number and webhook shown",
+        "gap": "Call analytics and monitoring not demonstrated"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "2OWu45eb0s8",
+      "title": "Full Guide On Using Synthflow AI in 2026",
+      "channel": "Carson Testing"
+    },
+    {
+      "videoId": "lvS-im-KgRU",
+      "title": "I Tested Every AI Phone Caller Platform (2026)",
+      "channel": "Charlie Chang"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The easiest no-code voice AI agent builder — drag-and-drop phone agent creation with pre-built templates for common telephony use cases.",
+    "targetUser": "SMBs and agencies who want to deploy AI phone agents without writing code. Dental offices, real estate agencies, service businesses automating phone intake.",
+    "vsAlternatives": "Wins against Vapi on no-code accessibility — non-developers can build agents in minutes. Wins on template library. Loses to Vapi on developer customization and API flexibility. Loses on enterprise features and scale."
+  }
+}
