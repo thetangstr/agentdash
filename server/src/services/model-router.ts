@@ -50,3 +50,49 @@ export function resolveModelTier(params: {
 
   return { model: agentModel, tier: "default" };
 }
+
+/**
+ * Check whether a run exceeded the skill's maxToolCalls limit.
+ */
+export function checkMaxToolCalls(
+  toolCallCount: number,
+  maxToolCalls: number | null,
+): { passed: boolean; reason?: string } {
+  if (maxToolCalls === null) return { passed: true };
+  if (toolCallCount > maxToolCalls) {
+    return { passed: false, reason: `exceeded_max_tool_calls: ${toolCallCount} > ${maxToolCalls}` };
+  }
+  return { passed: true };
+}
+
+/**
+ * Check whether a small-model run's output passes the skill's verification rule.
+ * Schema verification does a key-presence check. Effect verification is a no-op
+ * here (exit-code checks happen at the adapter level).
+ */
+export function checkVerification(
+  result: Record<string, unknown>,
+  verification: { type: string; zodSchema?: string; command?: string } | null,
+): { passed: boolean; reason?: string } {
+  if (!verification || verification.type === "none") return { passed: true };
+
+  if (verification.type === "schema" && verification.zodSchema) {
+    try {
+      const expected = JSON.parse(verification.zodSchema) as Record<string, unknown>;
+      const missingKeys = Object.keys(expected).filter((k) => !(k in result));
+      if (missingKeys.length > 0) {
+        return { passed: false, reason: `schema_mismatch: missing keys: ${missingKeys.join(", ")}` };
+      }
+      return { passed: true };
+    } catch {
+      return { passed: false, reason: "schema_parse_error" };
+    }
+  }
+
+  if (verification.type === "effect") {
+    // Effect verification (exit-code check) happens externally
+    return { passed: true };
+  }
+
+  return { passed: true };
+}

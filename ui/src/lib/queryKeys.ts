@@ -79,6 +79,9 @@ export const queryKeys = {
   crm: {
     pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,
     accounts: (companyId: string) => ["crm", companyId, "accounts"] as const,
+    accountDetail: (companyId: string, id: string) => ["crm", companyId, "accounts", id] as const,
+    contacts: (companyId: string) => ["crm", companyId, "contacts"] as const,
+    contactDetail: (companyId: string, id: string) => ["crm", companyId, "contacts", id] as const,
     deals: (companyId: string) => ["crm", companyId, "deals"] as const,
     leads: (companyId: string) => ["crm", companyId, "leads"] as const,
     partners: (companyId: string) => ["crm", companyId, "partners"] as const,

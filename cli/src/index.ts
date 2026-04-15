@@ -32,7 +32,11 @@ const DATA_DIR_OPTION_HELP =
 program
   .name("agentdash")
   .description("AgentDash CLI — setup, diagnose, and configure your instance")
-  .version(cliVersion);
+  .version(cliVersion)
+  .action(async () => {
+    // No subcommand = zero-config start (equivalent to `agentdash run --yes`)
+    await runCommand({ yes: true, repair: true });
+  });
 
 program.hook("preAction", (_thisCommand, actionCommand) => {
   const options = actionCommand.optsWithGlobals() as DataDirOptionLike;

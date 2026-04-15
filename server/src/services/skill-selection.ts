@@ -1,4 +1,5 @@
 import type { Db } from "@agentdash/db";
+import type { SkillVerification } from "@agentdash/shared";
 
 // AgentDash: Skill selection types and service
 export interface SkillDescriptor {
@@ -10,6 +11,10 @@ export interface SkillDescriptor {
   instructions?: string;
   allowedTools: string[];
   executionContext: string;
+  // AgentDash: smart model routing fields from skill_versions
+  modelTier: string | null;
+  maxToolCalls: number | null;
+  verification: SkillVerification | null;
 }
 
 export interface SelectedSkillForRun {

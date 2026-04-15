@@ -1,7 +1,7 @@
 # AgentDash — Product Requirements Document
 
-**Version:** 2.0
-**Date:** 2026-04-08
+**Version:** 2.1
+**Date:** 2026-04-12
 **Status:** Active
 
 ---
@@ -29,6 +29,7 @@
 - Plug into existing CRM and workflow tools (HubSpot, Slack, GitHub)
 - Scale agent teams up/down dynamically based on workload
 - Human oversight at decision points, autonomous execution elsewhere
+- Smart model routing — small models for mechanical tasks, large models for thinking
 - CRM as System of Action — agents read from and write to customer data
 
 ---
@@ -88,7 +89,7 @@
 1. Create issues with dependencies → system validates no cycles (BFS)
 2. Agent completes task → auto-unblock downstream → agents wake via heartbeat
 
-**Status:** Backend Complete (5 endpoints, 6 CUJ tests). UI DAG visualization is P1.
+**Status:** Fully Operational (5 endpoints, 6 CUJ tests). UI DAG visualization complete.
 
 ### CUJ-5: Emergency Stop (Kill Switch)
 **Persona:** P1 | **Goal:** Instantly halt all agent activity
@@ -129,7 +130,7 @@
 3. Agent executes → measurements collected → evaluation produces verdict
 4. Loop continues until goal met or budget exhausted
 
-**Status:** Backend Complete (21 endpoints, 7 CUJ tests). Detail pages P1.
+**Status:** Fully Operational (21 endpoints, 7 CUJ tests). Detail pages complete.
 
 ### CUJ-9: Security Policy Configuration
 **Persona:** P1 | **Goal:** Define what agents can and cannot do
@@ -147,7 +148,7 @@
 2. Review workflow ties into approval system
 3. Usage analytics by skill and agent
 
-**Status:** Backend Complete (17 endpoints, 6 CUJ tests). Version UI P1.
+**Status:** Fully Operational (17 endpoints, 6 CUJ tests). Version UI complete.
 
 ### CUJ-11: Budget Monitoring & Forecasting
 **Persona:** P1 | **Goal:** Understand spend, forecast costs, track ROI
@@ -156,7 +157,7 @@
 2. Capacity dashboard → burn rate, trend, days-until-exhaustion
 3. Multi-resource tracking (LLM tokens, compute, SaaS APIs)
 
-**Status:** Backend Complete (16 endpoints, 6 CUJ tests). Forecast UI P1.
+**Status:** Fully Operational (16 endpoints, 6 CUJ tests). Forecast UI complete.
 
 ### CUJ-12: CRM Customer 360
 **Persona:** P1 | **Goal:** See everything about a customer in one place
@@ -166,7 +167,7 @@
 3. Activity timeline intermixes HubSpot-synced data with agent-generated actions
 4. Each entry shows: timestamp, actor (agent/Board/HubSpot), description, metadata
 
-**Status:** Backend Complete (APIs exist). UI pages P0.
+**Status:** Fully Operational (APIs exist). UI pages complete (accounts, account detail, contacts).
 
 ### CUJ-13: Agent Impact on Customer
 **Persona:** P1 | **Goal:** Trust the system by seeing what agents did for a customer
@@ -175,7 +176,63 @@
 2. See totals: tickets resolved autonomously, escalated to human, cost saved
 3. Deal stages auto-advance when agents complete linked work (lifecycle hooks)
 
-**Status:** Backend Complete (lifecycle hooks implemented). UI P1.
+**Status:** Fully Operational (lifecycle hooks implemented). OKR tab added to agent detail.
+
+### CUJ-14: Smart Model Routing
+**Persona:** P1/P2 | **Goal:** Cut LLM costs by routing mechanical tasks to small models
+
+The routing rule: **does this task require thinking, or just executing?** Tasks that require reasoning, judgment, or interpretation always use the agent's default (large) model. Tasks that are purely mechanical — completable in 2-3 tool calls with deterministic, verifiable output — route to a small model (Haiku, GPT-4o-mini, Gemini Flash).
+
+1. Skill author publishes a skill with `modelTier: "small"` and `maxToolCalls: 3` via the existing Skills Registry review pipeline
+2. Heartbeat matches task to skill → model router checks skill's `modelTier`
+3. If `modelTier: "small"`, override agent's model for this dispatch only → execute on small model
+4. If no skill match or skill has no `modelTier`, use agent's default model (no change)
+5. After execution, run skill's `verification` (schema validation or exit-code check) → pass/fail
+6. If run exceeds `maxToolCalls`, mark as failed (`exceeded_max_tool_calls`)
+7. Pipeline stages can also declare `modelTier: "small"` for pure-execution stages
+
+**Priority order:** Pipeline stage `modelTier` > Skill `modelTier` > Agent default model
+
+**What qualifies for small model:**
+- Generate commit message from diff (1 tool call)
+- Classify webhook/event payload into known category (1 tool call)
+- Fill notification/email template from structured data (1 tool call)
+- Convert between structured formats (1-2 tool calls)
+
+**What does NOT qualify:** Anything requiring interpretation, multi-step reasoning, validation+fixing, ambiguous input, or judgment calls. If the task would benefit from extended thinking, it stays on the large model.
+
+**Built-in small-model skills:** `commit-message`, `event-classifier`, `template-render`, `format-transform`. Companies can author and publish additional small-model skills through the existing review pipeline.
+
+**No auto-escalation:** If a small-model task fails verification, it fails. These tasks are deterministic — failure means the input or skill is wrong, not the model size.
+
+**Status:** Fully Operational. Schema, routing function, and heartbeat integration complete. 17 tests passing.
+
+### CUJ-15: Agent-Human Conversation (Comment-Driven Interaction)
+**Persona:** P2 | **Goal:** Answer agent questions and provide guidance via issue comments
+
+Agents are always autonomous. When an agent needs human input, it posts a question as an issue comment and pauses. The human replies in the comment thread, which wakes the agent with the reply in context. No separate "conversational mode" — the behavior is emergent.
+
+1. Agent runs heartbeat → posts summary/question as issue comment → run completes
+2. If agent needs input, its comment contains a question — no further heartbeat auto-queued
+3. Human replies in the comment thread (no @-mention required for assigned agent)
+4. Reply triggers wakeup → agent resumes with comment body in prompt context
+5. Repeat naturally until issue resolved
+
+**Already implemented (Paperclip core):**
+- Agent posts comments after heartbeat runs (`buildHeartbeatRunIssueComment`)
+- User comments wake assigned agent with `issue_commented` reason and comment body in context (`buildPaperclipWakePayload`)
+- @-mentions wake non-assigned agents (`issue_comment_mentioned`, bypasses execution lock)
+- Multiple rapid comments coalesced into single wakeup (`mergeWakeCommentIds`)
+- WebSocket live events for real-time comment updates
+
+**UI polish (AgentDash additions):**
+- Chat-style rendering: agent comments left-aligned (teal), human comments right-aligned (gray)
+- "Waiting for your reply..." indicator when agent's comment is the latest
+- PATCH route alignment: wake assigned agent on inline comments (matching POST route behavior)
+
+**Governance:** Kill switch, budget enforcement, and security policies apply. All exchanges are issue comments — full audit trail by default.
+
+**Status:** Fully Operational. Backend (Paperclip core) + UI chat styling + waiting indicator complete.
 
 ---
 
@@ -236,6 +293,7 @@ AgentDash CRM is **not** a System of Record (that's HubSpot/Salesforce). It's a 
 - **200+ API endpoints** across 39 route modules
 - **62 UI pages** (Pipelines, Action Proposals, Feed, CRM, Budget, Research, Onboarding, Security, Capacity, Templates, Skills, and more)
 - **11 agent adapters**: Claude (local + API), Codex, Cursor, Gemini, OpenCode, Pi, OpenClaw, Hermes, Process, HTTP
+- **Smart model routing**: Skill-driven two-tier system (small/default) with per-adapter model mapping and pipeline stage overrides
 - **4 integration manifests**: HubSpot (operational), Slack, GitHub, Linear
 
 ---
@@ -249,6 +307,8 @@ AgentDash CRM is **not** a System of Record (that's HubSpot/Salesforce). It's a 
 - [ ] Cloud deployment hardening (external PG, health monitoring)
 
 ### P1 (Important)
+- [ ] Smart model routing: `model_tier`, `max_tool_calls`, `verification` columns on `skill_versions`; `modelTier` on pipeline stage definitions; routing function in heartbeat
+- [ ] Built-in small-model skills: `commit-message`, `event-classifier`, `template-render`, `format-transform`
 - [ ] Task dependency DAG visualization UI
 - [ ] AutoResearch cycle detail pages
 - [ ] Skill version management UI
@@ -256,6 +316,7 @@ AgentDash CRM is **not** a System of Record (that's HubSpot/Salesforce). It's a 
 - [ ] Agent OKR display on Agent Detail page
 - [ ] Deal detail page, leads list with convert action
 - [ ] License key system for tier gating
+- [ ] Agent-human conversation: chat-style comment rendering, "waiting for reply" indicator, PATCH route wakeup alignment
 
 ### P2 (Nice to Have)
 - [ ] Slack/GitHub/Linear plugin implementations

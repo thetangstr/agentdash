@@ -11,19 +11,31 @@ Built on [Paperclip](https://github.com/paperclipai/paperclip). Extended with Ag
 ## Quickstart
 
 ```bash
-# Option 1: npx (recommended for new installs)
-npx agentdash onboard
-
-# Option 2: From source
-git clone https://github.com/thetangstr/agentdash.git
-cd agentdash
-pnpm install
-pnpm dev
+npx agentdash
 ```
 
-Open `http://localhost:3100`. Embedded PostgreSQL starts automatically — no external setup needed.
+That's it. Your browser opens at `localhost:3100` with a guided setup wizard. Embedded PostgreSQL starts automatically — no external database needed.
 
-> **Requirements:** Node.js 20+, pnpm 9.15+
+> **Requirements:** Node.js 20+
+
+<details>
+<summary>Other install methods</summary>
+
+```bash
+# From source
+git clone https://github.com/thetangstr/agentdash.git
+cd agentdash && pnpm install && pnpm dev
+
+# Docker Compose
+export BETTER_AUTH_SECRET=$(openssl rand -hex 32)
+docker compose up -d
+docker compose exec server pnpm agentdash auth bootstrap-ceo
+
+# Advanced setup (custom database, auth, storage)
+npx agentdash onboard
+```
+
+</details>
 
 ---
 

@@ -1,3 +1,4 @@
+import { exec } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -88,6 +89,13 @@ export async function runCommand(opts: RunOptions): Promise<void> {
       dbUrl: startedServer.databaseUrl,
       baseUrl: resolveBootstrapInviteBaseUrl(config, startedServer),
     });
+  }
+
+  // Auto-open browser (skip in CI or when explicitly disabled)
+  if (!process.env.CI && process.env.AGENTDASH_NO_OPEN !== "1") {
+    const url = `http://${startedServer.host === "0.0.0.0" ? "localhost" : startedServer.host}:${startedServer.listenPort}`;
+    const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    exec(`${openCmd} ${url}`, () => {/* ignore errors — browser open is best-effort */});
   }
 }
 

@@ -1573,6 +1573,30 @@ export function issueRoutes(
             },
           });
         }
+
+        // AgentDash: wake assigned agent on inline comment (match POST comment route behavior)
+        if (
+          issue.assigneeAgentId &&
+          !(actor.actorType === "agent" && actor.actorId === issue.assigneeAgentId) &&
+          !mentionedIds.includes(issue.assigneeAgentId)
+        ) {
+          addWakeup(issue.assigneeAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "issue_commented",
+            payload: { issueId: id, commentId: comment.id },
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
+            contextSnapshot: {
+              issueId: id,
+              taskId: id,
+              commentId: comment.id,
+              wakeCommentId: comment.id,
+              wakeReason: "issue_commented",
+              source: "issue.comment",
+            },
+          });
+        }
       }
 
       const becameDone = existing.status !== "done" && issue.status === "done";
