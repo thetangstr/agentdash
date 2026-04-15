@@ -59,23 +59,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
                 ),
               ),
           ]);
-          // AgentDash: auto-promote first user to instance admin if none exist
+          // AgentDash: auto-promote any session user to instance admin
           let isAdmin = Boolean(roleRow);
           if (!isAdmin) {
-            const anyAdmin = await db
-              .select({ id: instanceUserRoles.id })
-              .from(instanceUserRoles)
-              .where(eq(instanceUserRoles.role, "instance_admin"))
-              .limit(1)
-              .then((rows) => rows[0] ?? null);
-            if (!anyAdmin) {
-              await db.insert(instanceUserRoles).values({
-                userId,
-                role: "instance_admin",
-              });
-              logger.info({ userId }, "Auto-promoted first user to instance admin");
-              isAdmin = true;
-            }
+            await db.insert(instanceUserRoles).values({
+              userId,
+              role: "instance_admin",
+            }).onConflictDoNothing();
+            logger.info({ userId }, "Auto-promoted user to instance admin");
+            isAdmin = true;
           }
           req.actor = {
             type: "board",
