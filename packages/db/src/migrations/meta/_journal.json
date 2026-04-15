@@ -491,6 +491,13 @@
       "when": 1776045085673,
       "tag": "0069_sparkling_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1776294117116,
+      "tag": "0070_absurd_steve_rogers",
+      "breakpoints": true
     }
   ]
 }
