@@ -38,6 +38,7 @@ import { skillsRegistryRoutes } from "./routes/skills-registry.js";
 import { autoresearchRoutes } from "./routes/autoresearch.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { assessRoutes } from "./routes/assess.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { crmRoutes } from "./routes/crm.js";
 import { hubspotRoutes } from "./routes/hubspot.js";
 import { actionProposalRoutes } from "./routes/action-proposals.js";
@@ -197,6 +198,8 @@ export async function createApp(
   api.use(onboardingRoutes(db));
   // AgentDash: Agent Readiness Assessment
   api.use(assessRoutes(db));
+  // AgentDash: Assistant Chatbot
+  api.use(assistantRoutes(db));
   api.use(crmRoutes(db));
   api.use(hubspotRoutes(db));
   api.use(actionProposalRoutes(db));
