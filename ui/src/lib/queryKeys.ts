@@ -182,4 +182,7 @@ export const queryKeys = {
     runDetail: (companyId: string, runId: string) =>
       ["pipelines", "run", companyId, runId] as const,
   },
+  entitlements: {
+    detail: (companyId: string) => ["entitlements", companyId] as const,
+  },
 };
