@@ -44,6 +44,7 @@ import { hubspotRoutes } from "./routes/hubspot.js";
 import { actionProposalRoutes } from "./routes/action-proposals.js";
 import { pipelineRoutes } from "./routes/pipelines.js";
 import { feedRoutes } from "./routes/feed.js";
+import { entitlementsRoutes } from "./routes/entitlements.js";
 // AgentDash: Cockpit routes
 import { connectorRoutes } from "./routes/connectors.js";
 import { inboxRoutes } from "./routes/inbox.js";
@@ -205,6 +206,8 @@ export async function createApp(
   api.use(actionProposalRoutes(db));
   api.use(pipelineRoutes(db));
   api.use(feedRoutes(db));
+  // AgentDash: Entitlements (tier gating + billing readback)
+  api.use(entitlementsRoutes(db));
   // AgentDash: Cockpit routes
   api.use(connectorRoutes(db));
   api.use(inboxRoutes(db));

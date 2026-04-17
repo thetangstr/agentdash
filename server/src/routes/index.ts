@@ -29,6 +29,7 @@ export { hubspotRoutes } from "./hubspot.js";
 export { actionProposalRoutes } from "./action-proposals.js";
 export { pipelineRoutes } from "./pipelines.js";
 export { feedRoutes } from "./feed.js";
+export { entitlementsRoutes } from "./entitlements.js";
 // AgentDash: Cockpit routes
 export { connectorRoutes } from "./connectors.js";
 export { inboxRoutes } from "./inbox.js";
