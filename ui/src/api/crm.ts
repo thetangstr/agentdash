@@ -79,6 +79,24 @@ export interface NewDeal {
   ownerUserId?: string | null;
 }
 
+export interface CrmActivity {
+  id: string;
+  companyId: string;
+  accountId: string | null;
+  contactId: string | null;
+  dealId: string | null;
+  activityType: string;
+  subject: string | null;
+  body: string | null;
+  performedByAgentId: string | null;
+  performedByUserId: string | null;
+  externalId: string | null;
+  externalSource: string | null;
+  occurredAt: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
 export interface CrmLead {
   id: string;
   companyId: string;
@@ -225,6 +243,14 @@ export const crmApi = {
     api.post<CrmDeal>(`/companies/${companyId}/crm/deals`, body),
   updateDeal: (companyId: string, id: string, patch: Partial<CrmDeal>) =>
     api.patch<CrmDeal>(`/companies/${companyId}/crm/deals/${id}`, patch),
+
+  // Activities
+  listActivities: (
+    companyId: string,
+    opts?: { limit?: number; offset?: number; accountId?: string; dealId?: string },
+  ) => api.get<CrmActivity[]>(`/companies/${companyId}/crm/activities${qs({ ...opts })}`),
+  createActivity: (companyId: string, body: Partial<CrmActivity>) =>
+    api.post<CrmActivity>(`/companies/${companyId}/crm/activities`, body),
 
   // Leads
   listLeads: (companyId: string, opts?: { limit?: number; offset?: number; status?: string; source?: string }) =>
