@@ -53,6 +53,45 @@ export interface CrmDeal {
   updatedAt: string;
 }
 
+export interface CrmLead {
+  id: string;
+  companyId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+  title: string | null;
+  source: string | null;
+  status: string;
+  score: string | null;
+  ownerAgentId: string | null;
+  ownerUserId: string | null;
+  convertedAccountId: string | null;
+  convertedContactId: string | null;
+  convertedAt: string | null;
+  externalId: string | null;
+  externalSource: string | null;
+  metadata: Record<string, unknown> | null;
+  lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewLead {
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  title?: string | null;
+  source?: string | null;
+  status?: string;
+  score?: string | null;
+  ownerAgentId?: string | null;
+  ownerUserId?: string | null;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -86,6 +125,18 @@ export const crmApi = {
   // Deals
   listDeals: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; stage?: string }) =>
     api.get<CrmDeal[]>(`/companies/${companyId}/crm/deals${qs({ ...opts })}`),
+
+  // Leads
+  listLeads: (companyId: string, opts?: { limit?: number; offset?: number; status?: string; source?: string }) =>
+    api.get<CrmLead[]>(`/companies/${companyId}/crm/leads${qs({ ...opts })}`),
+  getLead: (companyId: string, id: string) =>
+    api.get<CrmLead>(`/companies/${companyId}/crm/leads/${id}`),
+  createLead: (companyId: string, body: NewLead) =>
+    api.post<CrmLead>(`/companies/${companyId}/crm/leads`, body),
+  updateLead: (companyId: string, id: string, patch: Partial<CrmLead>) =>
+    api.patch<CrmLead>(`/companies/${companyId}/crm/leads/${id}`, patch),
+  convertLead: (companyId: string, id: string, body?: { accountId?: string; contactId?: string }) =>
+    api.post<CrmLead>(`/companies/${companyId}/crm/leads/${id}/convert`, body ?? {}),
 
   // Pipeline
   pipeline: (companyId: string) =>
