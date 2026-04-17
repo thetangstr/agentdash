@@ -2,13 +2,15 @@ import { Router } from "express";
 import type { Db } from "@agentdash/db";
 import { hubspotService } from "../services/hubspot.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { requireTier } from "../middleware/require-tier.js";
 
 export function hubspotRoutes(db: Db) {
   const router = Router();
   const svc = hubspotService(db);
+  const requirePro = requireTier(db, "pro");
 
-  // Save HubSpot configuration
-  router.post("/companies/:companyId/integrations/hubspot/config", async (req, res) => {
+  // Save HubSpot configuration (Pro+)
+  router.post("/companies/:companyId/integrations/hubspot/config", requirePro, async (req, res) => {
     try {
       assertBoard(req);
       const companyId = req.params.companyId as string;
@@ -87,8 +89,8 @@ export function hubspotRoutes(db: Db) {
     }
   });
 
-  // Trigger full HubSpot sync
-  router.post("/companies/:companyId/integrations/hubspot/sync", async (req, res) => {
+  // Trigger full HubSpot sync (Pro+)
+  router.post("/companies/:companyId/integrations/hubspot/sync", requirePro, async (req, res) => {
     try {
       assertBoard(req);
       const companyId = req.params.companyId as string;
