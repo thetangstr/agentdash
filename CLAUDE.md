@@ -30,6 +30,17 @@ bash scripts/test-cujs.sh    # 60 end-to-end tests against live API
 bash scripts/seed-test-scenarios.sh  # Seed 2 demo companies
 ```
 
+### Mandatory regression testing before handing off
+
+**NEVER ask the user to test something until you have already run the regression suite yourself.** Before any "please try this", "can you verify", or "ready for your review" handoff, you MUST have run and reported results for:
+
+1. `pnpm -r typecheck` — all packages pass
+2. `pnpm test:run` — report pass count and explicitly flag any failures (even pre-existing flakes must be named)
+3. `pnpm build` — all packages build
+4. For any UI-touching change: relevant `tests/e2e/*.spec.ts` Playwright specs (or `bash scripts/test-cujs.sh` for API CUJs)
+
+If a step fails, fix it (or explicitly document it as a pre-existing failure unrelated to your change) before the handoff. "Works for me" or "should work" is not acceptable. Ship the test evidence with the request.
+
 ## Multi-Agent Workflow
 
 MAW commands are installed under `.claude/commands/` with supporting docs in `doc/multi-agent-workflow/`.
@@ -151,22 +162,13 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 
 Deployment: XS/S auto-ship after local test. M+ requires human verification. XL may use `staging` branch. See `doc/multi-agent-workflow/sop.md` for full details.
 
-## Upstream Sync
+## Upstream Policy
 
-Paperclip tracked as `upstream` remote. Use the sync script:
+**Reference, don't merge.** Paperclip tracked as `upstream` remote for read-only reference only. We do NOT run continuous or scheduled upstream syncs — as of 2026-04-17 we were 339 commits behind with 37% of migrations AgentDash-owned, and every conflict-prone core file has AgentDash modifications. Continuous merging is not worth the cost.
 
-```sh
-bash scripts/upstream-sync.sh --dry-run   # Preview: new commits, conflicts, risk areas
-bash scripts/upstream-sync.sh             # Interactive merge on sync branch
-```
+Cherry-pick an upstream commit only when all four apply: target is in the "still inherited" list (heartbeat, adapters, auth, plugin SDK, etc.), fix is specific and bounded, we have a concrete reason to care, and the commit doesn't touch AgentDash-modified files in a way that requires redesign.
 
-**Conflict-prone files** (AgentDash modifies these Paperclip core files):
-- `ui/src/App.tsx` — AgentDash routes
-- `ui/src/components/Sidebar.tsx` — AgentDash nav items
-- `server/src/index.ts` — AgentDash route wiring
-- `packages/shared/src/constants.ts` — AgentDash status enums
-- `README.md` — AgentDash branding
-- `ui/index.html` — AgentDash title/meta
+See `doc/UPSTREAM-POLICY.md` for the full rubric, what we still inherit vs what is 100% AgentDash, and the cherry-pick log. Archived sync script at `scripts/archive/upstream-sync.sh`.
 
 ## Key Docs
 
