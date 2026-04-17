@@ -27,6 +27,7 @@ import {
   Columns3,
   Wallet,
   Plug,
+  CreditCard,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -154,6 +155,7 @@ export function Sidebar() {
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
           <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
+          <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
           <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         </SidebarSection>
 

@@ -1,6 +1,9 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION } from "@agentdash/shared";
+import { Link } from "@/lib/router";
+import { useEntitlements } from "../hooks/useEntitlements";
+import { TierBadge } from "../components/TierBadge";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
@@ -32,6 +35,7 @@ export function CompanySettings() {
     selectedCompanyId,
     setSelectedCompanyId
   } = useCompany();
+  const { tier } = useEntitlements();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
@@ -249,6 +253,23 @@ export function CompanySettings() {
       <div className="flex items-center gap-2">
         <Settings className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-lg font-semibold">Company Settings</h1>
+      </div>
+
+      {/* AgentDash: plan summary — full details live on /billing */}
+      <div
+        className="flex items-center justify-between rounded-md border border-border px-4 py-3"
+        data-testid="settings-plan-row"
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Plan</span>
+          <TierBadge tier={tier} />
+        </div>
+        <Link
+          to="/billing"
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          Manage billing
+        </Link>
       </div>
 
       {/* General */}
