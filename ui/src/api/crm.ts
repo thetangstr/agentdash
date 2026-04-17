@@ -118,6 +118,68 @@ export interface NewLead {
   ownerUserId?: string | null;
 }
 
+export interface CrmPartner {
+  id: string;
+  companyId: string;
+  name: string;
+  type: string;
+  contactName: string | null;
+  contactEmail: string | null;
+  website: string | null;
+  status: string;
+  tier: string | null;
+  referralCount: string | null;
+  revenueAttributedCents: string | null;
+  ownerAgentId: string | null;
+  ownerUserId: string | null;
+  linkedAccountId: string | null;
+  externalId: string | null;
+  externalSource: string | null;
+  metadata: Record<string, unknown> | null;
+  lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewPartner {
+  name: string;
+  type?: string;
+  contactName?: string | null;
+  contactEmail?: string | null;
+  website?: string | null;
+  status?: string;
+  tier?: string | null;
+}
+
+export interface CrmPipelineStage {
+  stage: string | null;
+  count: number;
+  totalAmountCents: number;
+}
+
+export interface CrmPipelineSummary {
+  stages: CrmPipelineStage[];
+  totalDeals: number;
+  totalPipelineValueCents: number;
+}
+
+export interface HubspotConfig {
+  configured: boolean;
+  portalId?: string;
+  syncEnabled?: boolean;
+  accessToken?: string | null;
+  hasClientSecret?: boolean;
+}
+
+export interface HubspotSyncSummary {
+  contacts: number;
+  companies: number;
+  deals: number;
+  activities: number;
+  totalSynced: number;
+  totalErrors: number;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -131,6 +193,8 @@ export const crmApi = {
   // Accounts
   listAccounts: (companyId: string, opts?: { limit?: number; offset?: number; stage?: string; ownerAgentId?: string }) =>
     api.get<CrmAccount[]>(`/companies/${companyId}/crm/accounts${qs({ ...opts })}`),
+  accounts: (companyId: string, opts?: { limit?: number; offset?: number; stage?: string; ownerAgentId?: string }) =>
+    api.get<CrmAccount[]>(`/companies/${companyId}/crm/accounts${qs({ ...opts })}`),
   getAccount: (companyId: string, id: string) =>
     api.get<CrmAccount>(`/companies/${companyId}/crm/accounts/${id}`),
   createAccount: (companyId: string, data: Partial<CrmAccount>) =>
@@ -140,6 +204,8 @@ export const crmApi = {
 
   // Contacts
   listContacts: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; ownerAgentId?: string }) =>
+    api.get<CrmContact[]>(`/companies/${companyId}/crm/contacts${qs({ ...opts })}`),
+  contacts: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; ownerAgentId?: string }) =>
     api.get<CrmContact[]>(`/companies/${companyId}/crm/contacts${qs({ ...opts })}`),
   getContact: (companyId: string, id: string) =>
     api.get<CrmContact>(`/companies/${companyId}/crm/contacts/${id}`),
@@ -151,6 +217,8 @@ export const crmApi = {
   // Deals
   listDeals: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; stage?: string }) =>
     api.get<CrmDeal[]>(`/companies/${companyId}/crm/deals${qs({ ...opts })}`),
+  deals: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; stage?: string }) =>
+    api.get<CrmDeal[]>(`/companies/${companyId}/crm/deals${qs({ ...opts })}`),
   getDeal: (companyId: string, id: string) =>
     api.get<CrmDeal>(`/companies/${companyId}/crm/deals/${id}`),
   createDeal: (companyId: string, body: NewDeal) =>
@@ -161,6 +229,8 @@ export const crmApi = {
   // Leads
   listLeads: (companyId: string, opts?: { limit?: number; offset?: number; status?: string; source?: string }) =>
     api.get<CrmLead[]>(`/companies/${companyId}/crm/leads${qs({ ...opts })}`),
+  leads: (companyId: string, opts?: { limit?: number; offset?: number; status?: string; source?: string }) =>
+    api.get<CrmLead[]>(`/companies/${companyId}/crm/leads${qs({ ...opts })}`),
   getLead: (companyId: string, id: string) =>
     api.get<CrmLead>(`/companies/${companyId}/crm/leads/${id}`),
   createLead: (companyId: string, body: NewLead) =>
@@ -170,10 +240,49 @@ export const crmApi = {
   convertLead: (companyId: string, id: string, body?: { accountId?: string; contactId?: string }) =>
     api.post<CrmLead>(`/companies/${companyId}/crm/leads/${id}/convert`, body ?? {}),
 
+  // Partners
+  listPartners: (companyId: string, opts?: { limit?: number; offset?: number; type?: string; status?: string }) =>
+    api.get<CrmPartner[]>(`/companies/${companyId}/crm/partners${qs({ ...opts })}`),
+  partners: (companyId: string, opts?: { limit?: number; offset?: number; type?: string; status?: string }) =>
+    api.get<CrmPartner[]>(`/companies/${companyId}/crm/partners${qs({ ...opts })}`),
+  getPartner: (companyId: string, id: string) =>
+    api.get<CrmPartner>(`/companies/${companyId}/crm/partners/${id}`),
+  createPartner: (companyId: string, body: NewPartner) =>
+    api.post<CrmPartner>(`/companies/${companyId}/crm/partners`, body),
+  updatePartner: (companyId: string, id: string, patch: Partial<CrmPartner>) =>
+    api.patch<CrmPartner>(`/companies/${companyId}/crm/partners/${id}`, patch),
+
   // Pipeline
   pipeline: (companyId: string) =>
-    api.get<unknown>(`/companies/${companyId}/crm/pipeline`),
+    api.get<CrmPipelineSummary>(`/companies/${companyId}/crm/pipeline`),
 
-  // HubSpot config
-  hubspotConfig: async (_companyId: string) => ({ configured: false }),
+  // HubSpot config + sync
+  hubspotConfig: (companyId: string) =>
+    api.get<HubspotConfig>(`/companies/${companyId}/integrations/hubspot/config`),
+  saveHubspotConfig: (
+    companyId: string,
+    body: { portalId: string | null; accessToken: string | null; syncEnabled: boolean },
+  ) =>
+    api.post<{ success: boolean }>(
+      `/companies/${companyId}/integrations/hubspot/config`,
+      body,
+    ),
+  syncHubspot: async (companyId: string): Promise<HubspotSyncSummary> => {
+    const raw = await api.post<{
+      contacts: { synced: number };
+      companies: { synced: number };
+      deals: { synced: number };
+      activities: { synced: number };
+      totalSynced: number;
+      totalErrors: number;
+    }>(`/companies/${companyId}/integrations/hubspot/sync`, {});
+    return {
+      contacts: raw.contacts?.synced ?? 0,
+      companies: raw.companies?.synced ?? 0,
+      deals: raw.deals?.synced ?? 0,
+      activities: raw.activities?.synced ?? 0,
+      totalSynced: raw.totalSynced ?? 0,
+      totalErrors: raw.totalErrors ?? 0,
+    };
+  },
 };
