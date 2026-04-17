@@ -93,20 +93,16 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     label: "OpenClaw Gateway",
     description: "Invoke OpenClaw via gateway protocol",
     icon: Bot,
-    comingSoon: true,
-    disabledLabel: "Configure OpenClaw within the App",
   },
   process: {
     label: "Process",
     description: "Internal process adapter",
     icon: Cpu,
-    comingSoon: true,
   },
   http: {
     label: "HTTP",
     description: "Internal HTTP adapter",
     icon: Cpu,
-    comingSoon: true,
   },
 };
 
