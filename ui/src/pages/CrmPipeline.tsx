@@ -496,8 +496,8 @@ export function CrmPipeline() {
   const saveHubspotConfig = useMutation({
     mutationFn: () =>
       crmApi.saveHubspotConfig(cid!, {
-        portalId: trimToNull(hubspotDraft.portalId),
-        accessToken: trimToNull(hubspotDraft.accessToken),
+        portalId: trimToNull(hubspotDraft.portalId) ?? undefined,
+        accessToken: hubspotDraft.accessToken.trim(),
         syncEnabled: hubspotDraft.syncEnabled,
       }),
     onSuccess: async () => {

@@ -37,7 +37,23 @@ export function hubspotRoutes(db: Db) {
         syncEnabled: config.syncEnabled,
         accessToken: config.accessToken ? `****${config.accessToken.slice(-4)}` : null,
         hasClientSecret: !!config.clientSecret,
+        syncDirection: config.syncDirection ?? "bidirectional",
+        fieldMapping: config.fieldMapping ?? {},
       });
+    } catch (err: unknown) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500;
+      res.status(status).json({ error: err instanceof Error ? err.message : "Internal server error" });
+    }
+  });
+
+  // Disconnect HubSpot (clears stored config)
+  router.delete("/companies/:companyId/integrations/hubspot/config", async (req, res) => {
+    try {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      await svc.clearConfig(companyId);
+      res.status(200).json({ success: true });
     } catch (err: unknown) {
       const status = (err as { statusCode?: number }).statusCode ?? 500;
       res.status(status).json({ error: err instanceof Error ? err.message : "Internal server error" });

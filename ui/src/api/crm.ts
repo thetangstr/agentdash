@@ -181,12 +181,44 @@ export interface CrmPipelineSummary {
   totalPipelineValueCents: number;
 }
 
+export type HubspotSyncDirection = "read" | "write" | "bidirectional";
+
+export type HubspotFieldMapping = Record<string, Record<string, string>>;
+
 export interface HubspotConfig {
   configured: boolean;
   portalId?: string;
   syncEnabled?: boolean;
   accessToken?: string | null;
   hasClientSecret?: boolean;
+  syncDirection?: HubspotSyncDirection;
+  fieldMapping?: HubspotFieldMapping;
+}
+
+export interface HubspotSaveConfig {
+  accessToken: string;
+  portalId?: string | null;
+  syncEnabled?: boolean;
+  clientSecret?: string;
+  syncDirection?: HubspotSyncDirection;
+  fieldMapping?: HubspotFieldMapping;
+}
+
+export interface HubspotSyncStatus {
+  lastSyncAt: string | null;
+  lastSyncResult: {
+    contacts: { synced: number; created: number; updated: number; errors: number };
+    companies: { synced: number; created: number; updated: number; errors: number };
+    deals: { synced: number; created: number; updated: number; errors: number };
+    activities: { synced: number; created: number; updated: number; errors: number };
+  } | null;
+  lastSyncError: string | null;
+  syncInProgress: boolean;
+}
+
+export interface HubspotTestResult {
+  ok: boolean;
+  error?: string;
 }
 
 export interface HubspotSyncSummary {
@@ -285,14 +317,17 @@ export const crmApi = {
   // HubSpot config + sync
   hubspotConfig: (companyId: string) =>
     api.get<HubspotConfig>(`/companies/${companyId}/integrations/hubspot/config`),
-  saveHubspotConfig: (
-    companyId: string,
-    body: { portalId: string | null; accessToken: string | null; syncEnabled: boolean },
-  ) =>
+  saveHubspotConfig: (companyId: string, body: HubspotSaveConfig) =>
     api.post<{ success: boolean }>(
       `/companies/${companyId}/integrations/hubspot/config`,
       body,
     ),
+  disconnectHubspot: (companyId: string) =>
+    api.delete<{ success: boolean }>(`/companies/${companyId}/integrations/hubspot/config`),
+  testHubspotConnection: (companyId: string) =>
+    api.post<HubspotTestResult>(`/companies/${companyId}/integrations/hubspot/test`, {}),
+  hubspotSyncStatus: (companyId: string) =>
+    api.get<HubspotSyncStatus>(`/companies/${companyId}/integrations/hubspot/sync/status`),
   syncHubspot: async (companyId: string): Promise<HubspotSyncSummary> => {
     const raw = await api.post<{
       contacts: { synced: number };

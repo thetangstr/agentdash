@@ -12,6 +12,8 @@ interface HubSpotConfig {
   portalId: string;
   syncEnabled: boolean;
   clientSecret?: string;
+  syncDirection?: "read" | "write" | "bidirectional";
+  fieldMapping?: Record<string, Record<string, string>>;
 }
 
 interface SyncResult {
@@ -77,17 +79,31 @@ export function hubspotService(db: Db) {
     const meta = await getMetadata(companyId);
     const hs = meta.hubspot as Record<string, unknown> | undefined;
     if (!hs?.accessToken) return null;
+    const direction = hs.syncDirection;
+    const syncDirection =
+      direction === "read" || direction === "write" || direction === "bidirectional"
+        ? direction
+        : undefined;
     return {
       accessToken: String(hs.accessToken),
       portalId: String(hs.portalId ?? ""),
       syncEnabled: hs.syncEnabled !== false,
       clientSecret: hs.clientSecret ? String(hs.clientSecret) : undefined,
+      syncDirection,
+      fieldMapping: (hs.fieldMapping as Record<string, Record<string, string>>) ?? undefined,
     };
   }
 
   async function setConfig(
     companyId: string,
-    config: { accessToken: string; portalId?: string; syncEnabled?: boolean; clientSecret?: string },
+    config: {
+      accessToken: string;
+      portalId?: string;
+      syncEnabled?: boolean;
+      clientSecret?: string;
+      syncDirection?: "read" | "write" | "bidirectional";
+      fieldMapping?: Record<string, Record<string, string>>;
+    },
   ): Promise<void> {
     const meta = await getMetadata(companyId);
     const existing = (meta.hubspot as Record<string, unknown>) ?? {};
@@ -99,11 +115,24 @@ export function hubspotService(db: Db) {
         portalId: config.portalId ?? "",
         syncEnabled: config.syncEnabled ?? true,
         ...(config.clientSecret !== undefined ? { clientSecret: config.clientSecret } : {}),
+        ...(config.syncDirection !== undefined ? { syncDirection: config.syncDirection } : {}),
+        ...(config.fieldMapping !== undefined ? { fieldMapping: config.fieldMapping } : {}),
       },
     };
     await db
       .update(companies)
       .set({ metadata: updatedMeta } as any)
+      .where(eq(companies.id, companyId));
+  }
+
+  async function clearConfig(companyId: string): Promise<void> {
+    const meta = await getMetadata(companyId);
+    if (!meta.hubspot) return;
+    const { hubspot: _dropped, ...rest } = meta;
+    void _dropped;
+    await db
+      .update(companies)
+      .set({ metadata: rest } as any)
       .where(eq(companies.id, companyId));
   }
 
@@ -418,6 +447,7 @@ export function hubspotService(db: Db) {
   return {
     getConfig,
     setConfig,
+    clearConfig,
     getSyncStatus,
     testConnection,
     syncContacts,
