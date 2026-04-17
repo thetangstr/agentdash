@@ -10,6 +10,40 @@ import { test, expect, getAgents, navigateAndWait } from "./fixtures/test-helper
  */
 
 test.describe("CUJ-D: adapter onboarding", () => {
+  test("invite landing page shows no 'coming soon' copy for any adapter", async ({ page }) => {
+    // Mock the invite API so the InviteLanding renders its full form regardless
+    // of whether the backend has a seeded token.
+    await page.route("**/api/access/invites/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          token: "e2e-test",
+          companyName: "CUJ-D E2E",
+          companyId: "00000000-0000-0000-0000-000000000001",
+          inviteType: "standard",
+          allowedJoinTypes: "both",
+          expiresAt: null,
+        }),
+      });
+    });
+
+    await page.goto("/invite/e2e-test");
+    await page.waitForLoadState("networkidle");
+
+    // Render must not contain any "coming soon" copy anywhere on the page.
+    await expect(page.getByText(/coming soon/i)).toHaveCount(0);
+
+    // Switch to "agent" join type so the adapter selector renders, if the UI
+    // defaults to human. Look for an adapter-type selector and confirm no
+    // gated copy appears in its options.
+    const agentRadio = page.getByRole("radio", { name: /agent/i }).or(page.getByLabel(/agent/i));
+    if (await agentRadio.first().isVisible().catch(() => false)) {
+      await agentRadio.first().click().catch(() => {});
+      await expect(page.getByText(/coming soon/i)).toHaveCount(0);
+    }
+  });
+
   test("adapter config dropdown has no 'coming soon' options", async ({ page, company, prefix }) => {
     // Get an agent to navigate to its config tab
     const agents = await getAgents(page, company.id);
