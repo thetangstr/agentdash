@@ -5,9 +5,10 @@
 // apply cursor pagination. Each source query is bounded by `(limit + 1) * N`
 // at worst; we then trim to `limit` after merging.
 
-import { and, desc, eq, lt, or } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, type SQL } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
 import {
+  agents,
   approvals,
   costEvents,
   financeEvents,
@@ -65,118 +66,167 @@ export function feedService(db: Db) {
       companyId: string,
       opts: { userId?: string; cursor?: string | null; limit?: number } = {},
     ): Promise<FeedListResult> {
-      void opts.userId; // accepted for API parity; no per-user filter yet
+      const userId = opts.userId ?? null;
       const requestedLimit = opts.limit ?? DEFAULT_LIMIT;
       const limit = Math.max(1, Math.min(requestedLimit, MAX_LIMIT));
       const fetchPerSource = limit + 1; // small buffer so we can compute nextCursor
 
       const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
 
+      // Resolve agent IDs owned by the user when filtering by userId.
+      // Used for skill/heartbeat filters which reference agentId (no user column).
+      let ownedAgentIds: string[] | null = null;
+      if (userId) {
+        const ownedRows = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.companyId, companyId), eq(agents.ownerUserId, userId)));
+        ownedAgentIds = ownedRows.map((r) => r.id as string);
+      }
+
       // --- approvals ------------------------------------------------------
-      const approvalWhere = cursor
-        ? and(
-            eq(approvals.companyId, companyId),
-            or(
-              lt(approvals.createdAt, cursor.at),
-              and(eq(approvals.createdAt, cursor.at), lt(approvals.id, cursor.id)),
-            ),
-          )
-        : eq(approvals.companyId, companyId);
+      const approvalConditions: SQL[] = [eq(approvals.companyId, companyId)];
+      if (cursor) {
+        approvalConditions.push(
+          or(
+            lt(approvals.createdAt, cursor.at),
+            and(eq(approvals.createdAt, cursor.at), lt(approvals.id, cursor.id)) as SQL,
+          ) as SQL,
+        );
+      }
+      if (userId) {
+        approvalConditions.push(
+          or(
+            eq(approvals.requestedByUserId, userId),
+            eq(approvals.decidedByUserId, userId),
+          ) as SQL,
+        );
+      }
       const approvalRows = await db
         .select()
         .from(approvals)
-        .where(approvalWhere)
+        .where(and(...approvalConditions))
         .orderBy(desc(approvals.createdAt))
         .limit(fetchPerSource);
 
-      // --- cost_events ----------------------------------------------------
-      const costWhere = cursor
-        ? and(
-            eq(costEvents.companyId, companyId),
+      // --- cost_events ---------------------------------------------------
+      // Skip entirely when filtering by user — no user dimension on cost rows.
+      let costRows: (typeof costEvents.$inferSelect)[] = [];
+      if (!userId) {
+        const costConditions: SQL[] = [eq(costEvents.companyId, companyId)];
+        if (cursor) {
+          costConditions.push(
             or(
               lt(costEvents.occurredAt, cursor.at),
-              and(eq(costEvents.occurredAt, cursor.at), lt(costEvents.id, cursor.id)),
-            ),
-          )
-        : eq(costEvents.companyId, companyId);
-      const costRows = await db
-        .select()
-        .from(costEvents)
-        .where(costWhere)
-        .orderBy(desc(costEvents.occurredAt))
-        .limit(fetchPerSource);
+              and(
+                eq(costEvents.occurredAt, cursor.at),
+                lt(costEvents.id, cursor.id),
+              ) as SQL,
+            ) as SQL,
+          );
+        }
+        costRows = await db
+          .select()
+          .from(costEvents)
+          .where(and(...costConditions))
+          .orderBy(desc(costEvents.occurredAt))
+          .limit(fetchPerSource);
+      }
 
       // --- finance_events -------------------------------------------------
-      const financeWhere = cursor
-        ? and(
-            eq(financeEvents.companyId, companyId),
+      // Skip entirely when filtering by user — no user dimension on finance rows.
+      let financeRows: (typeof financeEvents.$inferSelect)[] = [];
+      if (!userId) {
+        const financeConditions: SQL[] = [eq(financeEvents.companyId, companyId)];
+        if (cursor) {
+          financeConditions.push(
             or(
               lt(financeEvents.occurredAt, cursor.at),
-              and(eq(financeEvents.occurredAt, cursor.at), lt(financeEvents.id, cursor.id)),
-            ),
-          )
-        : eq(financeEvents.companyId, companyId);
-      const financeRows = await db
-        .select()
-        .from(financeEvents)
-        .where(financeWhere)
-        .orderBy(desc(financeEvents.occurredAt))
-        .limit(fetchPerSource);
+              and(
+                eq(financeEvents.occurredAt, cursor.at),
+                lt(financeEvents.id, cursor.id),
+              ) as SQL,
+            ) as SQL,
+          );
+        }
+        financeRows = await db
+          .select()
+          .from(financeEvents)
+          .where(and(...financeConditions))
+          .orderBy(desc(financeEvents.occurredAt))
+          .limit(fetchPerSource);
+      }
 
       // --- kill_switch_events --------------------------------------------
-      const killWhere = cursor
-        ? and(
-            eq(killSwitchEvents.companyId, companyId),
-            or(
-              lt(killSwitchEvents.triggeredAt, cursor.at),
-              and(
-                eq(killSwitchEvents.triggeredAt, cursor.at),
-                lt(killSwitchEvents.id, cursor.id),
-              ),
-            ),
-          )
-        : eq(killSwitchEvents.companyId, companyId);
+      const killConditions: SQL[] = [eq(killSwitchEvents.companyId, companyId)];
+      if (cursor) {
+        killConditions.push(
+          or(
+            lt(killSwitchEvents.triggeredAt, cursor.at),
+            and(
+              eq(killSwitchEvents.triggeredAt, cursor.at),
+              lt(killSwitchEvents.id, cursor.id),
+            ) as SQL,
+          ) as SQL,
+        );
+      }
+      if (userId) {
+        killConditions.push(eq(killSwitchEvents.triggeredByUserId, userId));
+      }
       const killRows = await db
         .select()
         .from(killSwitchEvents)
-        .where(killWhere)
+        .where(and(...killConditions))
         .orderBy(desc(killSwitchEvents.triggeredAt))
         .limit(fetchPerSource);
 
       // --- skill_usage_events --------------------------------------------
-      const skillWhere = cursor
-        ? and(
-            eq(skillUsageEvents.companyId, companyId),
+      // When filtering by user, scope to events from agents the user owns.
+      // If the user owns no agents, skip the query entirely.
+      let skillRows: (typeof skillUsageEvents.$inferSelect)[] = [];
+      if (!userId || (ownedAgentIds && ownedAgentIds.length > 0)) {
+        const skillConditions: SQL[] = [eq(skillUsageEvents.companyId, companyId)];
+        if (cursor) {
+          skillConditions.push(
             or(
               lt(skillUsageEvents.usedAt, cursor.at),
-              and(eq(skillUsageEvents.usedAt, cursor.at), lt(skillUsageEvents.id, cursor.id)),
-            ),
-          )
-        : eq(skillUsageEvents.companyId, companyId);
-      const skillRows = await db
-        .select()
-        .from(skillUsageEvents)
-        .where(skillWhere)
-        .orderBy(desc(skillUsageEvents.usedAt))
-        .limit(fetchPerSource);
+              and(
+                eq(skillUsageEvents.usedAt, cursor.at),
+                lt(skillUsageEvents.id, cursor.id),
+              ) as SQL,
+            ) as SQL,
+          );
+        }
+        if (userId && ownedAgentIds && ownedAgentIds.length > 0) {
+          skillConditions.push(inArray(skillUsageEvents.agentId, ownedAgentIds));
+        }
+        skillRows = await db
+          .select()
+          .from(skillUsageEvents)
+          .where(and(...skillConditions))
+          .orderBy(desc(skillUsageEvents.usedAt))
+          .limit(fetchPerSource);
+      }
 
       // --- heartbeat_run_events ------------------------------------------
-      // Note: heartbeat_run_events.id is bigserial (number), so compare as
-      // string via casting is awkward. We only apply the secondary tiebreak
-      // when ids are of compatible type; for simplicity we use createdAt only
-      // for the cursor comparison here.
-      const heartbeatWhere = cursor
-        ? and(
-            eq(heartbeatRunEvents.companyId, companyId),
-            lt(heartbeatRunEvents.createdAt, cursor.at),
-          )
-        : eq(heartbeatRunEvents.companyId, companyId);
-      const heartbeatRows = await db
-        .select()
-        .from(heartbeatRunEvents)
-        .where(heartbeatWhere)
-        .orderBy(desc(heartbeatRunEvents.createdAt))
-        .limit(fetchPerSource);
+      // Note: heartbeat_run_events.id is bigserial (number), so we use
+      // createdAt only for the cursor comparison here.
+      let heartbeatRows: (typeof heartbeatRunEvents.$inferSelect)[] = [];
+      if (!userId || (ownedAgentIds && ownedAgentIds.length > 0)) {
+        const heartbeatConditions: SQL[] = [eq(heartbeatRunEvents.companyId, companyId)];
+        if (cursor) {
+          heartbeatConditions.push(lt(heartbeatRunEvents.createdAt, cursor.at));
+        }
+        if (userId && ownedAgentIds && ownedAgentIds.length > 0) {
+          heartbeatConditions.push(inArray(heartbeatRunEvents.agentId, ownedAgentIds));
+        }
+        heartbeatRows = await db
+          .select()
+          .from(heartbeatRunEvents)
+          .where(and(...heartbeatConditions))
+          .orderBy(desc(heartbeatRunEvents.createdAt))
+          .limit(fetchPerSource);
+      }
 
       // --- normalize into FeedEvent shape --------------------------------
       const merged: FeedEvent[] = [];

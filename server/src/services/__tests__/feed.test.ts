@@ -85,6 +85,22 @@ describe("feedService source structure", () => {
   it("enforces a max limit of 200", () => {
     expect(src).toContain("200");
   });
+
+  // ---- userId filter source structure ----
+  it("imports agents table for owned-agent resolution", () => {
+    expect(src).toMatch(/agents,/);
+  });
+  it("imports inArray for agent list filtering", () => {
+    expect(src).toMatch(/inArray/);
+  });
+  it("resolves ownedAgentIds when userId provided", () => {
+    expect(src).toContain("ownedAgentIds");
+    expect(src).toContain("agents.ownerUserId");
+  });
+  it("filters approvals by requested or decided user", () => {
+    expect(src).toContain("requestedByUserId");
+    expect(src).toContain("decidedByUserId");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -291,5 +307,175 @@ describe("feedService.list", () => {
     const res = await svc.list("co-1", { limit: 9999 });
     expect(res.events).toEqual([]);
     expect(res.nextCursor).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // userId filtering behavior
+  // ---------------------------------------------------------------------------
+
+  it("skips cost and finance events when userId is set", async () => {
+    const { feedService } = await import("../feed.js");
+    const { agents, approvals, costEvents, financeEvents } = await import(
+      "@agentdash/db"
+    );
+
+    const now = new Date("2026-04-15T00:00:00Z");
+    const mockDb = makeMockDb(
+      new Map<unknown, Row[]>([
+        [agents, []],
+        [approvals, []],
+        [
+          costEvents,
+          [
+            {
+              id: "cost-1",
+              companyId: "co-1",
+              agentId: "agent-1",
+              provider: "anthropic",
+              model: "opus",
+              costCents: 42,
+              inputTokens: 100,
+              outputTokens: 200,
+              heartbeatRunId: null,
+              occurredAt: now,
+              createdAt: now,
+            },
+          ],
+        ],
+        [
+          financeEvents,
+          [
+            {
+              id: "fin-1",
+              companyId: "co-1",
+              agentId: "agent-1",
+              eventKind: "invoice_paid",
+              direction: "in",
+              amountCents: 1000,
+              currency: "usd",
+              biller: null,
+              heartbeatRunId: null,
+              occurredAt: now,
+              createdAt: now,
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const svc = feedService(mockDb);
+    const res = await svc.list("co-1", { userId: "u-1" });
+    const types = new Set(res.events.map((e) => e.type));
+    expect(types.has("cost_event")).toBe(false);
+    expect(types.has("finance")).toBe(false);
+  });
+
+  it("resolves owned agents from the agents table when userId is set", async () => {
+    const { feedService } = await import("../feed.js");
+    const { agents, approvals } = await import("@agentdash/db");
+
+    const selectSpy = vi.fn();
+    const mockDb = makeMockDb(
+      new Map<unknown, Row[]>([
+        [agents, [{ id: "agent-u1-a", companyId: "co-1", ownerUserId: "u-1" }]],
+        [approvals, []],
+      ]),
+    );
+    // Wrap select() so we can see which tables were queried.
+    const originalSelect = mockDb.select;
+    (mockDb as unknown as { select: unknown }).select = (projection?: unknown) => {
+      selectSpy(projection);
+      return (originalSelect as (p?: unknown) => unknown)(projection);
+    };
+
+    const svc = feedService(mockDb);
+    await svc.list("co-1", { userId: "u-1" });
+
+    // At least one select call must project { id: agents.id } — the
+    // owned-agents resolver.
+    const idProjectionCalls = selectSpy.mock.calls.filter((call) => {
+      const projection = call[0];
+      return (
+        projection &&
+        typeof projection === "object" &&
+        Object.prototype.hasOwnProperty.call(projection, "id")
+      );
+    });
+    expect(idProjectionCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("skips skill + heartbeat queries when user owns no agents", async () => {
+    const { feedService } = await import("../feed.js");
+    const { agents, approvals, heartbeatRunEvents, skillUsageEvents } = await import(
+      "@agentdash/db"
+    );
+
+    const now = new Date("2026-04-15T00:00:00Z");
+    const skillFromSpy = vi.fn();
+    const heartbeatFromSpy = vi.fn();
+
+    const mockDb = makeMockDb(
+      new Map<unknown, Row[]>([
+        [agents, []], // user owns nothing
+        [approvals, []],
+        // If the service did query these despite empty ownedAgentIds, mock
+        // would return these rows and they'd appear in the output.
+        [
+          skillUsageEvents,
+          [
+            {
+              id: "skill-leak",
+              companyId: "co-1",
+              agentId: "agent-other",
+              skillId: "skill-a",
+              versionId: null,
+              issueId: null,
+              usedAt: now,
+              createdAt: now,
+            },
+          ],
+        ],
+        [
+          heartbeatRunEvents,
+          [
+            {
+              id: 1,
+              companyId: "co-1",
+              agentId: "agent-other",
+              runId: "run-1",
+              eventType: "status",
+              stream: null,
+              level: null,
+              message: null,
+              createdAt: now,
+            },
+          ],
+        ],
+      ]),
+    );
+
+    // Wrap .from() to detect if skill/heartbeat tables were queried.
+    const originalSelect = mockDb.select;
+    (mockDb as unknown as { select: unknown }).select = (projection?: unknown) => {
+      const chain = (originalSelect as (p?: unknown) => {
+        from: (t: unknown) => unknown;
+      })(projection);
+      const originalFrom = chain.from;
+      chain.from = (t: unknown) => {
+        if (t === skillUsageEvents) skillFromSpy();
+        if (t === heartbeatRunEvents) heartbeatFromSpy();
+        return originalFrom.call(chain, t);
+      };
+      return chain;
+    };
+
+    const svc = feedService(mockDb);
+    const res = await svc.list("co-1", { userId: "u-1" });
+
+    expect(skillFromSpy).not.toHaveBeenCalled();
+    expect(heartbeatFromSpy).not.toHaveBeenCalled();
+    const types = new Set(res.events.map((e) => e.type));
+    expect(types.has("skill_use")).toBe(false);
+    expect(types.has("heartbeat")).toBe(false);
   });
 });
