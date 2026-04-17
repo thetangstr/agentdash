@@ -92,3 +92,4 @@ export { crmAccounts, crmContacts, crmDeals, crmActivities, crmLeads, crmPartner
 export { agentPipelines, pipelineRuns } from "./agent_pipelines.js";
 export { pipelineStageExecutions } from "./pipeline_stage_executions.js";
 export { assistantConversations, assistantMessages } from "./assistant_conversations.js";
+export { plans, companyPlan } from "./plans.js";
