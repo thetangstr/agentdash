@@ -14,8 +14,6 @@ const joinAdapterOptions: AgentAdapterType[] = [...AGENT_ADAPTER_TYPES];
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 
-const ENABLED_INVITE_ADAPTERS = new Set(["claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local", "cursor"]);
-
 function dateTime(value: string) {
   return new Date(value).toLocaleString();
 }
@@ -267,8 +265,8 @@ export function InviteLandingPage() {
                 onChange={(event) => setAdapterType(event.target.value as AgentAdapterType)}
               >
                 {joinAdapterOptions.map((type) => (
-                  <option key={type} value={type} disabled={!ENABLED_INVITE_ADAPTERS.has(type)}>
-                    {getAdapterLabel(type)}{!ENABLED_INVITE_ADAPTERS.has(type) ? " (Coming soon)" : ""}
+                  <option key={type} value={type}>
+                    {getAdapterLabel(type)}
                   </option>
                 ))}
               </select>
