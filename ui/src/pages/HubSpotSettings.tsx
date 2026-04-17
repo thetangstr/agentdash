@@ -19,6 +19,9 @@ import {
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
+import { useEntitlements } from "../hooks/useEntitlements";
+import { UpgradeDialog } from "../components/UpgradeDialog";
+import { TierBadge } from "../components/TierBadge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -129,6 +132,9 @@ export function HubSpotSettings() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
+  const { tier, hasFeature } = useEntitlements();
+  const hubspotEnabled = hasFeature("hubspotSync");
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([
@@ -314,6 +320,44 @@ export function HubSpotSettings() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────
+  if (!hubspotEnabled) {
+    return (
+      <div className="space-y-6 p-6" data-testid="hubspot-gate">
+        <div className="flex items-start gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded bg-muted text-muted-foreground shrink-0">
+            <Plug className="h-6 w-6" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-semibold">HubSpot Integration</h1>
+              <TierBadge tier={tier} />
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              HubSpot bi-directional sync is a Pro feature. Upgrade to
+              connect AgentDash to HubSpot and keep accounts, contacts,
+              and deals in sync.
+            </p>
+          </div>
+        </div>
+        <div className="rounded-md border border-border bg-muted/20 p-6">
+          <Button
+            onClick={() => setUpgradeOpen(true)}
+            data-testid="hubspot-upgrade"
+          >
+            Upgrade to Pro
+          </Button>
+        </div>
+        <UpgradeDialog
+          open={upgradeOpen}
+          onOpenChange={setUpgradeOpen}
+          currentTier={tier}
+          requiredTier="pro"
+          featureName="HubSpot sync"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}

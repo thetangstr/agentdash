@@ -50,6 +50,25 @@ vi.mock("../../context/ToastContext", () => ({
   useToast: () => ({ pushToast: pushToastMock }),
 }));
 
+vi.mock("../../hooks/useEntitlements", () => ({
+  useEntitlements: () => ({
+    entitlements: {
+      tier: "pro",
+      limits: { agents: 25, monthlyActions: 50_000, pipelines: 10 },
+      features: {
+        hubspotSync: true,
+        autoResearch: true,
+        assessMode: true,
+        prioritySupport: false,
+      },
+    },
+    tier: "pro",
+    isLoading: false,
+    hasFeature: (feature: string) => feature !== "prioritySupport",
+    isAtLeast: () => true,
+  }),
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 

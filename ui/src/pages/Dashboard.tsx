@@ -7,6 +7,7 @@ import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
+import { useEntitlements } from "../hooks/useEntitlements";
 import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -23,9 +24,10 @@ interface GettingStartedChecklistProps {
   companyId: string;
   hasAgents: boolean;
   hasIssues: boolean;
+  showHubspot: boolean;
 }
 
-function GettingStartedChecklist({ companyId, hasAgents, hasIssues }: GettingStartedChecklistProps) {
+function GettingStartedChecklist({ companyId, hasAgents, hasIssues, showHubspot }: GettingStartedChecklistProps) {
   const storageKey = `agentdash.onboarding.dismissed.${companyId}`;
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(storageKey) === "true");
 
@@ -35,7 +37,9 @@ function GettingStartedChecklist({ companyId, hasAgents, hasIssues }: GettingSta
     { label: "Company created", done: true },
     { label: "Agent team deployed", done: hasAgents, linkLabel: "Add agents", linkTo: "/agents" },
     { label: "Add AI API key", done: false, linkLabel: "Settings", linkTo: "/instance/settings/adapters" },
-    { label: "Connect HubSpot", done: false, linkLabel: "HubSpot Settings", linkTo: "/crm/hubspot" },
+    ...(showHubspot
+      ? [{ label: "Connect HubSpot", done: false, linkLabel: "HubSpot Settings", linkTo: "/crm/hubspot" }]
+      : []),
     { label: "Create first issue", done: hasIssues, linkLabel: "New Issue", linkTo: "/issues" },
   ];
 
@@ -103,6 +107,7 @@ export function Dashboard() {
   const { selectedCompanyId, selectedCompany, companies } = useCompany();
   const { openOnboarding } = useDialog();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { hasFeature } = useEntitlements();
   const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
   const seenActivityIdsRef = useRef<Set<string>>(new Set());
   const hydratedActivityRef = useRef(false);
@@ -252,6 +257,7 @@ export function Dashboard() {
         companyId={selectedCompanyId!}
         hasAgents={(agents ?? []).length > 0}
         hasIssues={(issues ?? []).length > 0}
+        showHubspot={hasFeature("hubspotSync")}
       />
 
       {/* Greeting */}
