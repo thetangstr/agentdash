@@ -909,3 +909,6 @@ export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProvider, string> = {
 
 export const INBOX_STATUSES = ["pending", "approved", "rejected", "all"] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
+
+export const TIERS = ["free", "pro", "enterprise"] as const;
+export type Tier = (typeof TIERS)[number];

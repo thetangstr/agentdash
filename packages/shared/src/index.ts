@@ -146,11 +146,13 @@ export {
   AGENT_TONES,
   CONNECTOR_PROVIDER_LABELS,
   INBOX_STATUSES,
+  TIERS,
   type ConnectorProvider,
   type ConnectorStatus,
   type CredentialMode,
   type AgentTone,
   type InboxStatus,
+  type Tier,
   PIPELINE_EXECUTION_MODES,
   PIPELINE_STAGE_TYPES,
   STAGE_EXECUTION_STATUSES,
@@ -719,3 +721,9 @@ export {
   type SecretsLocalEncryptedConfig,
   type ConfigMeta,
 } from "./config-schema.js";
+
+export {
+  entitlementsForTier,
+  tierAtLeast,
+  type Entitlements,
+} from "./entitlements.js";
