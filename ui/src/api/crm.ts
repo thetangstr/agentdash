@@ -42,15 +42,41 @@ export interface CrmDeal {
   id: string;
   companyId: string;
   accountId: string | null;
+  contactId?: string | null;
   name: string;
   stage: string | null;
-  amount: number | null;
+  /**
+   * Legacy float-style amount (used by some pages). The backend stores
+   * the canonical value in `amountCents` (string of integer cents).
+   */
+  amount?: number | null;
+  amountCents?: string | null;
   currency: string | null;
   closeDate: string | null;
+  probability?: string | null;
   ownerAgentId: string | null;
   ownerUserId: string | null;
+  linkedProjectId?: string | null;
+  linkedIssueId?: string | null;
+  externalId?: string | null;
+  externalSource?: string | null;
+  metadata?: Record<string, unknown> | null;
+  lastSyncedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface NewDeal {
+  name: string;
+  accountId?: string | null;
+  contactId?: string | null;
+  stage?: string | null;
+  amountCents?: string | null;
+  currency?: string | null;
+  closeDate?: string | null;
+  probability?: string | null;
+  ownerAgentId?: string | null;
+  ownerUserId?: string | null;
 }
 
 export interface CrmLead {
@@ -125,6 +151,12 @@ export const crmApi = {
   // Deals
   listDeals: (companyId: string, opts?: { limit?: number; offset?: number; accountId?: string; stage?: string }) =>
     api.get<CrmDeal[]>(`/companies/${companyId}/crm/deals${qs({ ...opts })}`),
+  getDeal: (companyId: string, id: string) =>
+    api.get<CrmDeal>(`/companies/${companyId}/crm/deals/${id}`),
+  createDeal: (companyId: string, body: NewDeal) =>
+    api.post<CrmDeal>(`/companies/${companyId}/crm/deals`, body),
+  updateDeal: (companyId: string, id: string, patch: Partial<CrmDeal>) =>
+    api.patch<CrmDeal>(`/companies/${companyId}/crm/deals/${id}`, patch),
 
   // Leads
   listLeads: (companyId: string, opts?: { limit?: number; offset?: number; status?: string; source?: string }) =>
