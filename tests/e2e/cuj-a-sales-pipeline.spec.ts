@@ -25,8 +25,9 @@ test.describe("CUJ-A: sales pipeline", () => {
     // No stub copy.
     await expect(page.getByText(/coming soon/i)).toHaveCount(0);
 
-    // Page header should be visible.
-    await expect(page.getByRole("heading", { name: /leads/i })).toBeVisible();
+    // Page header should be visible (Layout renders a breadcrumb heading + page title,
+    // so we match the first match).
+    await expect(page.getByRole("heading", { name: /leads/i }).first()).toBeVisible();
   });
 
   test("crm kanban page renders columns", async ({ page, prefix }) => {
@@ -41,7 +42,8 @@ test.describe("CUJ-A: sales pipeline", () => {
   });
 
   test("crm pipeline page renders without @ts-nocheck stub copy", async ({ page, prefix }) => {
-    await navigateAndWait(page, "/crm/pipeline", prefix);
+    // Route is `/crm` (renders CrmPipeline); `/crm/pipeline` is not a registered path.
+    await navigateAndWait(page, "/crm", prefix);
     await page.waitForLoadState("networkidle");
 
     // No stub copy.

@@ -22,11 +22,14 @@ test.describe("CUJ-B: agent governance", () => {
     // No "coming soon" copy anywhere on the page.
     await expect(page.getByText(/coming soon/i)).toHaveCount(0);
 
-    // The page header should be visible.
-    await expect(page.getByRole("heading", { name: /action proposals/i })).toBeVisible();
+    // The page header should be visible (Layout renders a breadcrumb heading + page title,
+    // so we match the first).
+    await expect(page.getByRole("heading", { name: /action proposals/i }).first()).toBeVisible();
 
-    // Status filter controls should be present (pending / approved / rejected).
-    await expect(page.getByRole("button", { name: /pending/i }).first()).toBeVisible();
+    // Approval queue UI renders either a proposal row or the empty state.
+    const emptyState = page.getByText(/no proposals awaiting/i);
+    const actionButton = page.getByRole("button", { name: /approve|reject|pending/i }).first();
+    await expect(emptyState.or(actionButton)).toBeVisible();
   });
 
   test("feed page renders activity feed UI", async ({ page, prefix }) => {
