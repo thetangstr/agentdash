@@ -505,6 +505,13 @@
       "when": 1776400856635,
       "tag": "0071_public_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1776487000000,
+      "tag": "0072_seed_plans",
+      "breakpoints": true
     }
   ]
 }
