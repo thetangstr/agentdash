@@ -50,5 +50,8 @@ tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
+# Phase-1 CUJ orchestrator runtime output
+test-results/
+scripts/qa/test-results/
 .superset/
 .claude/worktrees/
