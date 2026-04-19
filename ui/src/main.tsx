@@ -18,6 +18,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { initPluginBridge } from "./plugins/bridge-init";
 import { PluginLauncherProvider } from "./plugins/launchers";
 import "./index.css";
+import "./styles/luxe.css";
 
 initPluginBridge(React, ReactDOM);
 

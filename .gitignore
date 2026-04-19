@@ -53,5 +53,7 @@ tests/release-smoke/playwright-report/
 # Phase-1 CUJ orchestrator runtime output
 test-results/
 scripts/qa/test-results/
+# Superpowers brainstorming companion
+.superpowers/
 .superset/
 .claude/worktrees/
