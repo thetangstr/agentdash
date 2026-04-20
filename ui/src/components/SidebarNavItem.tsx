@@ -3,6 +3,10 @@ import { cn } from "../lib/utils";
 import { useSidebar } from "../context/SidebarContext";
 import type { LucideIcon } from "lucide-react";
 
+// AgentDash: luxe sidebar nav item.
+// Active state uses accent-tinted surface + left-edge 2px rule (.lux-nav-item).
+// Badges use mono pill tags for the editorial feel.
+
 interface SidebarNavItemProps {
   to: string;
   label: string;
@@ -39,27 +43,27 @@ export function SidebarNavItem({
       onClick={() => { if (isMobile) setSidebarOpen(false); }}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors",
+          "lux-nav-item flex items-center gap-2.5 px-3 py-1.5 text-[13px] font-medium rounded-sm transition-colors",
           isActive
-            ? "bg-accent text-foreground"
-            : "text-foreground/80 hover:bg-accent/50 hover:text-foreground",
+            ? "is-active bg-accent text-accent-foreground"
+            : "text-foreground/80 hover:bg-accent/40 hover:text-foreground",
           className,
         )
       }
     >
       <span className="relative shrink-0">
-        <Icon className="h-4 w-4" />
+        <Icon className="h-3.5 w-3.5" />
         {alert && (
-          <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500 shadow-[0_0_0_2px_hsl(var(--background))]" />
+          <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive shadow-[0_0_0_2px_var(--background)]" />
         )}
       </span>
       <span className="flex-1 truncate">{label}</span>
       {textBadge && (
         <span
           className={cn(
-            "ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+            "ml-auto rounded-sm px-1.5 py-0.5 text-[9.5px] font-medium leading-none lux-mono tracking-[0.1em] uppercase",
             textBadgeTone === "amber"
-              ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+              ? "bg-[color-mix(in_oklab,var(--chart-3)_25%,transparent)] text-[color-mix(in_oklab,var(--chart-3)_85%,var(--foreground))]"
               : "bg-muted text-muted-foreground",
           )}
         >
@@ -69,19 +73,19 @@ export function SidebarNavItem({
       {liveCount != null && liveCount > 0 && (
         <span className="ml-auto flex items-center gap-1.5">
           <span className="relative flex h-2 w-2">
-            <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+            <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-primary opacity-60" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
           </span>
-          <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">{liveCount} live</span>
+          <span className="text-[10px] font-medium text-primary lux-mono tracking-[0.04em]">{liveCount} live</span>
         </span>
       )}
       {badge != null && badge > 0 && (
         <span
           className={cn(
-            "ml-auto rounded-full px-1.5 py-0.5 text-xs leading-none",
+            "ml-auto rounded-full px-1.5 py-0.5 text-[10px] leading-none lux-mono lux-tnum",
             badgeTone === "danger"
-              ? "bg-red-600/90 text-red-50"
-              : "bg-primary text-primary-foreground",
+              ? "bg-destructive text-destructive-foreground"
+              : "bg-muted text-muted-foreground",
           )}
         >
           {badge}

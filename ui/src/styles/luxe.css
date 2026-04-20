@@ -942,3 +942,125 @@
 .luxe-root .luxe-mono { font-family: var(--luxe-f-mono); }
 .luxe-root .luxe-tnum { font-variant-numeric: tabular-nums; }
 .luxe-root .luxe-dim  { color: var(--luxe-ink-4); }
+
+/* ============================================================
+   Page-level utilities (do NOT require .luxe-root ancestor)
+   These let individual pages adopt the luxury typography
+   without being full luxe-root containers. Fonts fall back to
+   the values set in the luxe-root config but live here as
+   standalone defaults so they work app-wide.
+   ============================================================ */
+
+.lux-page {
+  /* Editorial section wrapper: adds spacing + font stack. */
+  font-family: -apple-system, BlinkMacSystemFont, "Mona Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+.lux-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+.lux-eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin-bottom: 8px;
+}
+.lux-h1 {
+  font-family: "Instrument Serif", "Cochin", "Garamond", "Times New Roman", serif;
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: -0.018em;
+  margin: 0;
+  font-weight: 400;
+  color: var(--foreground);
+}
+.lux-h1 .soft {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.lux-h2 {
+  font-family: "Instrument Serif", "Cochin", "Garamond", "Times New Roman", serif;
+  font-size: 26px;
+  line-height: 1.05;
+  letter-spacing: -0.012em;
+  margin: 0;
+  font-weight: 400;
+  color: var(--foreground);
+}
+.lux-subtitle {
+  margin-top: 10px;
+  color: var(--muted-foreground);
+  max-width: 640px;
+  font-size: 14px;
+}
+.lux-meta {
+  display: flex;
+  gap: 16px;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  letter-spacing: 0.04em;
+  padding-bottom: 4px;
+  align-items: center;
+}
+.lux-mono {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.lux-tnum { font-variant-numeric: tabular-nums; }
+
+/* Sidebar brand wordmark uses the serif display face. */
+.lux-brand {
+  font-family: "Instrument Serif", "Cochin", "Garamond", "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+/* Crumb trail: mono typography, / separator. */
+.lux-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.lux-crumbs .sep { color: color-mix(in oklab, var(--muted-foreground) 55%, transparent); }
+.lux-crumbs .here { color: var(--foreground); }
+
+/* Hairline separator. */
+.lux-rule { border-top: 1px solid var(--border); }
+
+/* Sidebar section label = mono-uppercase eyebrow. */
+.lux-section-label {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  padding: 14px 12px 6px;
+}
+
+/* Sidebar nav-item accent bar when active. */
+.lux-nav-item {
+  position: relative;
+}
+.lux-nav-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--primary);
+  border-radius: 1px;
+}
