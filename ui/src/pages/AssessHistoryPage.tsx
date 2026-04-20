@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { assessApi } from "../api/assess";
 import { queryKeys } from "../lib/queryKeys";
 import { useNavigate } from "../lib/router";
+import { MarkdownBody } from "../components/MarkdownBody";
 
 export function AssessHistoryPage() {
   const { selectedCompanyId } = useCompany();
@@ -44,8 +45,8 @@ export function AssessHistoryPage() {
           New Assessment
         </button>
       </div>
-      <div className="prose prose-sm max-w-none rounded-lg border border-border bg-card p-6">
-        <div dangerouslySetInnerHTML={{ __html: simpleMarkdownToHtml(data.markdown) }} />
+      <div className="rounded-lg border border-border bg-card p-6">
+        <MarkdownBody>{data.markdown}</MarkdownBody>
       </div>
       {data.jumpstart && (
         <details className="mt-4 rounded-lg border border-border bg-card p-4">
@@ -57,15 +58,4 @@ export function AssessHistoryPage() {
       )}
     </div>
   );
-}
-
-function simpleMarkdownToHtml(md: string): string {
-  return md
-    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/\n/g, "<br/>");
 }

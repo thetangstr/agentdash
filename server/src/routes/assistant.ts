@@ -116,7 +116,9 @@ export function assistantRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
 
       const conversationId = req.params.id as string;
-      const messages = await getConversationMessages(db, conversationId);
+      const actor = req.actor;
+      const userId = actor.type === "board" ? (actor.userId ?? "unknown") : "unknown";
+      const messages = await getConversationMessages(db, conversationId, companyId, userId);
       res.json(messages);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Internal server error";

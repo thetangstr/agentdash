@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useCompany } from "../context/CompanyContext";
 import { assessApi, type ResearchResult, type InterviewResponse } from "../api/assess";
+import { MarkdownBody } from "../components/MarkdownBody";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -113,17 +114,6 @@ const SCOPE_OPTIONS = [
 
 function toSlug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function simpleMarkdownToHtml(md: string): string {
-  return md
-    .replace(/^### (.+)$/gm, "<h3 class=\"text-base font-semibold mt-4 mb-1\">$1</h3>")
-    .replace(/^## (.+)$/gm, "<h2 class=\"text-lg font-bold mt-6 mb-2\">$1</h2>")
-    .replace(/^# (.+)$/gm, "<h1 class=\"text-2xl font-bold mt-4 mb-3\">$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/^- (.+)$/gm, "<li class=\"ml-4 list-disc\">$1</li>")
-    .replace(/\n\n/g, "</p><p class=\"mb-3\">")
-    .replace(/\n/g, "<br/>");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1222,10 +1212,7 @@ export function AssessPage() {
 
             {/* Report body */}
             <div className="px-8 py-6">
-              <div
-                className="prose prose-sm max-w-none text-foreground"
-                dangerouslySetInnerHTML={{ __html: `<p class="mb-3">${simpleMarkdownToHtml(reportMarkdown)}</p>` }}
-              />
+              <MarkdownBody className="text-foreground">{reportMarkdown}</MarkdownBody>
             </div>
           </div>
         </div>

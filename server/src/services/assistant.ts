@@ -420,7 +420,24 @@ export async function listConversations(db: Db, userId: string, companyId: strin
     .orderBy(desc(assistantConversations.createdAt));
 }
 
-export async function getConversationMessages(db: Db, conversationId: string) {
+export async function getConversationMessages(
+  db: Db,
+  conversationId: string,
+  companyId: string,
+  userId: string,
+) {
+  const conversation = await db
+    .select({ id: assistantConversations.id })
+    .from(assistantConversations)
+    .where(
+      and(
+        eq(assistantConversations.id, conversationId),
+        eq(assistantConversations.companyId, companyId),
+        eq(assistantConversations.userId, userId),
+      ),
+    )
+    .then((rows) => rows[0] ?? null);
+  if (!conversation) return [];
   return db
     .select()
     .from(assistantMessages)

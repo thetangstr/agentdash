@@ -30,11 +30,11 @@ export interface ActionProposal {
 }
 
 export function actionProposalService(db: Db) {
-  async function getApprovalOrThrow(approvalId: string) {
+  async function getApprovalOrThrow(approvalId: string, companyId: string) {
     const row = await db
       .select()
       .from(approvals)
-      .where(eq(approvals.id, approvalId))
+      .where(and(eq(approvals.id, approvalId), eq(approvals.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
     if (!row) throw notFound("Approval not found");
     return row;
@@ -133,10 +133,11 @@ export function actionProposalService(db: Db) {
     },
 
     async approve(
+      companyId: string,
       approvalId: string,
       opts: { decidedByUserId: string; decisionNote?: string | null },
     ): Promise<ActionProposal> {
-      const existing = await getApprovalOrThrow(approvalId);
+      const existing = await getApprovalOrThrow(approvalId, companyId);
 
       if (existing.status !== "pending" && existing.status !== "revision_requested") {
         if (existing.status === "approved") {
@@ -157,7 +158,7 @@ export function actionProposalService(db: Db) {
             decidedAt: now,
             updatedAt: now,
           })
-          .where(eq(approvals.id, approvalId))
+          .where(and(eq(approvals.id, approvalId), eq(approvals.companyId, companyId)))
           .returning();
 
         if (!updatedApproval) throw unprocessable("Failed to approve approval");
@@ -182,10 +183,11 @@ export function actionProposalService(db: Db) {
     },
 
     async reject(
+      companyId: string,
       approvalId: string,
       opts: { decidedByUserId: string; decisionNote?: string | null },
     ): Promise<ActionProposal> {
-      const existing = await getApprovalOrThrow(approvalId);
+      const existing = await getApprovalOrThrow(approvalId, companyId);
 
       if (existing.status !== "pending" && existing.status !== "revision_requested") {
         if (existing.status === "rejected") {
@@ -204,7 +206,7 @@ export function actionProposalService(db: Db) {
           decidedAt: now,
           updatedAt: now,
         })
-        .where(eq(approvals.id, approvalId))
+        .where(and(eq(approvals.id, approvalId), eq(approvals.companyId, companyId)))
         .returning()
         .then((rows) => rows[0]);
 

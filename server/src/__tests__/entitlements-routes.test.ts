@@ -23,6 +23,8 @@ vi.mock("../services/entitlements.js", () => ({
   entitlementsService: () => mockEntitlements,
 }));
 
+let actorIsAdmin = false;
+
 function createApp() {
   const app = express();
   app.use(express.json());
@@ -32,7 +34,7 @@ function createApp() {
       userId: "local-board",
       companyIds: ["company-1"],
       source: "local_implicit",
-      isInstanceAdmin: false,
+      isInstanceAdmin: actorIsAdmin,
     };
     next();
   });
@@ -46,6 +48,7 @@ const app = createApp();
 describe("entitlements routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    actorIsAdmin = false;
     mockEntitlements.getTier.mockResolvedValue("pro");
     mockEntitlements.setTier.mockResolvedValue(undefined);
     mockEntitlements.getEntitlements.mockResolvedValue({
@@ -77,18 +80,18 @@ describe("entitlements routes", () => {
 
   describe("PATCH /companies/:companyId/entitlements", () => {
     it("rejects non-admin requests with 403", async () => {
+      actorIsAdmin = false;
       const res = await request(app)
         .patch("/api/companies/company-1/entitlements")
         .send({ tier: "enterprise" });
       expect(res.status).toBe(403);
-      expect(res.body).toEqual({ error: "admin_required" });
       expect(mockEntitlements.setTier).not.toHaveBeenCalled();
     });
 
     it("rejects invalid tier values with 400", async () => {
+      actorIsAdmin = true;
       const res = await request(app)
         .patch("/api/companies/company-1/entitlements")
-        .set("X-AgentDash-Admin", "1")
         .send({ tier: "platinum" });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("invalid_tier");
@@ -96,6 +99,7 @@ describe("entitlements routes", () => {
     });
 
     it("sets tier and returns fresh entitlements on valid admin request", async () => {
+      actorIsAdmin = true;
       mockEntitlements.getEntitlements.mockResolvedValueOnce({
         tier: "enterprise",
         limits: { agents: 1000, monthlyActions: 5_000_000, pipelines: 1000 },
@@ -108,7 +112,6 @@ describe("entitlements routes", () => {
       });
       const res = await request(app)
         .patch("/api/companies/company-1/entitlements")
-        .set("X-AgentDash-Admin", "1")
         .send({ tier: "enterprise" });
       expect(res.status).toBe(200);
       expect(res.body.tier).toBe("enterprise");

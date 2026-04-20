@@ -30,7 +30,7 @@ export function actionProposalRoutes(db: Db) {
       req.actor.type === "board" ? (req.actor.userId ?? "board") : "board";
     const { decisionNote } = req.body as { decisionNote?: string };
 
-    const proposal = await svc.approve(id, { decidedByUserId, decisionNote });
+    const proposal = await svc.approve(companyId, id, { decidedByUserId, decisionNote });
     if (!proposal) throw notFound("Approval not found");
     res.json(proposal);
   });
@@ -45,7 +45,7 @@ export function actionProposalRoutes(db: Db) {
       req.actor.type === "board" ? (req.actor.userId ?? "board") : "board";
     const { decisionNote } = req.body as { decisionNote?: string };
 
-    const proposal = await svc.reject(id, { decidedByUserId, decisionNote });
+    const proposal = await svc.reject(companyId, id, { decidedByUserId, decisionNote });
     if (!proposal) throw notFound("Approval not found");
     res.json(proposal);
   });

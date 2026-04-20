@@ -59,21 +59,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
                 ),
               ),
           ]);
-          // AgentDash: auto-promote any session user to instance admin
-          let isAdmin = Boolean(roleRow);
-          if (!isAdmin) {
-            await db.insert(instanceUserRoles).values({
-              userId,
-              role: "instance_admin",
-            }).onConflictDoNothing();
-            logger.info({ userId }, "Auto-promoted user to instance admin");
-            isAdmin = true;
-          }
           req.actor = {
             type: "board",
             userId,
             companyIds: memberships.map((row) => row.companyId),
-            isInstanceAdmin: isAdmin,
+            isInstanceAdmin: Boolean(roleRow),
             runId: runIdHeader ?? undefined,
             source: "session",
           };
