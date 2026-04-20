@@ -16,6 +16,7 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LuxePageHeader } from "../components/LuxePageHeader";
 import { timeAgo } from "../lib/timeAgo";
 
 function feedQueryKey(companyId: string) {
@@ -75,12 +76,12 @@ export function Feed() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Feed</h1>
-        <p className="text-sm text-muted-foreground">
-          Unified activity across approvals, costs, skills, and runs.
-        </p>
-      </div>
+      <LuxePageHeader
+        eyebrow="My feed"
+        title={<>Activity, <span className="soft">end to end</span></>}
+        subtitle="Unified activity across approvals, costs, skills, and runs."
+      />
+
 
       {error && (
         <p className="text-sm text-destructive">

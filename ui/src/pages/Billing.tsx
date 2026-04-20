@@ -12,6 +12,7 @@ import {
 import { useEntitlements } from "../hooks/useEntitlements";
 import { TierBadge } from "../components/TierBadge";
 import { UpgradeDialog } from "../components/UpgradeDialog";
+import { LuxePageHeader } from "../components/LuxePageHeader";
 import { Button } from "@/components/ui/button";
 import { Check, X } from "lucide-react";
 
@@ -48,16 +49,12 @@ export function Billing() {
       data-testid="billing-page"
     >
       <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold">Plan & billing</h1>
-          <p className="text-sm text-muted-foreground">
-            Your workspace is on the{" "}
-            <span className="font-medium text-foreground">
-              {TIER_LABEL[tier]}
-            </span>{" "}
-            plan.
-          </p>
-        </div>
+        <LuxePageHeader
+          eyebrow="Billing"
+          title={<>Plan &amp; <span className="soft">billing</span></>}
+          subtitle={<>Your workspace is on the <span className="font-medium text-foreground">{TIER_LABEL[tier]}</span> plan.</>}
+          slim
+        />
         <div className="flex items-center gap-2">
           <TierBadge tier={tier} />
           {upgradeTarget && (
