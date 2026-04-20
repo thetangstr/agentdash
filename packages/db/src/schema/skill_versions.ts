@@ -25,6 +25,10 @@ export const skillVersions = pgTable(
     changeSummary: text("change_summary"),
     diffFromPrevious: text("diff_from_previous"),
     status: text("status").notNull().default("draft"),
+    // AgentDash: Smart model routing
+    modelTier: text("model_tier"),
+    maxToolCalls: integer("max_tool_calls"),
+    verification: jsonb("verification").$type<{ type: string; zodSchema?: string; command?: string }>(),
     createdByAgentId: uuid("created_by_agent_id").references(() => agents.id),
     createdByUserId: text("created_by_user_id"),
     reviewedByUserId: text("reviewed_by_user_id"),

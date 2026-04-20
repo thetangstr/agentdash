@@ -43,91 +43,91 @@
 }
 
 /* ==========================================================================
-   AgentDash Design System
-   Primary: Teal (#0d9488) — trust, clarity, professionalism
-   Accent comes from company's themeAccentColor (customizable per-company)
+   AgentDash Design System — Luxury Control-Plane (v2, 2026-04-18)
+   Palette: warm paper + deep ink + muted jade accent (archival tone).
+   Mapped from the Claude Design handoff (mifal-agent-factory). The same
+   scalars power every shadcn component via the semantic --color-* vars.
+   Accent stays overridable per-company via --primary-accent / --ring-accent.
    ========================================================================== */
 
 :root {
   color-scheme: light;
-  --radius: 0.5rem;
-  /* Warm white background with subtle warmth */
-  --background: oklch(0.995 0.002 90);
-  --foreground: oklch(0.18 0.02 260);
-  /* Cards slightly lifted from background */
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.02 260);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.02 260);
-  /* Primary: Teal — the AgentDash brand color (overridable via company theme) */
-  --primary: var(--primary-accent, oklch(0.55 0.14 175));
-  --primary-foreground: oklch(0.99 0 0);
-  /* Secondary: Warm light gray with a hint of blue */
-  --secondary: oklch(0.965 0.005 260);
-  --secondary-foreground: oklch(0.25 0.02 260);
-  /* Muted: Soft warm gray */
-  --muted: oklch(0.96 0.004 260);
-  --muted-foreground: oklch(0.50 0.015 260);
-  /* Accent: Light teal tint */
-  --accent: oklch(0.96 0.02 175);
-  --accent-foreground: oklch(0.25 0.06 175);
-  /* Destructive: Warm red */
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
-  /* Borders: Subtle warm gray */
-  --border: oklch(0.91 0.004 260);
-  --input: oklch(0.91 0.004 260);
-  --ring: var(--ring-accent, oklch(0.55 0.14 175));
-  /* Charts: Vibrant, distinguishable palette */
-  --chart-1: oklch(0.55 0.14 175);
-  --chart-2: oklch(0.55 0.20 265);
-  --chart-3: oklch(0.65 0.18 45);
-  --chart-4: oklch(0.60 0.22 310);
-  --chart-5: oklch(0.70 0.15 140);
-  /* Sidebar: Distinct panel feel */
-  --sidebar: oklch(0.98 0.003 260);
-  --sidebar-foreground: oklch(0.18 0.02 260);
-  --sidebar-primary: var(--sidebar-primary-accent, oklch(0.55 0.14 175));
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.95 0.02 175);
-  --sidebar-accent-foreground: oklch(0.25 0.06 175);
-  --sidebar-border: oklch(0.91 0.004 260);
-  --sidebar-ring: var(--ring-accent, oklch(0.55 0.14 175));
+  --radius: 0.375rem;
+  /* Paper + ink — warm archival light mode. */
+  --background: #F6F3EC;
+  --foreground: #1A1915;
+  --card: #FDFBF5;
+  --card-foreground: #1A1915;
+  --popover: #FDFBF5;
+  --popover-foreground: #1A1915;
+  /* Primary: muted jade (overridable via company theme). */
+  --primary: var(--primary-accent, #4A6B5C);
+  --primary-foreground: #FFFFFF;
+  /* Secondary/muted: recessed paper. */
+  --secondary: #EFEBE0;
+  --secondary-foreground: #3A3830;
+  --muted: #EFEBE0;
+  --muted-foreground: #6B6658;
+  /* Accent: soft jade tint for hovered/active states. */
+  --accent: #EAEFE9;
+  --accent-foreground: #2B4438;
+  /* Destructive: oxblood-tone warm red. */
+  --destructive: #9E4B3A;
+  --destructive-foreground: #FDFBF5;
+  /* Borders: warm hairline. */
+  --border: #D9D3C3;
+  --input: #D9D3C3;
+  --ring: var(--ring-accent, #4A6B5C);
+  /* Charts: jade / cobalt / amber / oxblood / ink — picked from the palette. */
+  --chart-1: #4A6B5C;
+  --chart-2: #3E5C7E;
+  --chart-3: #B78B3B;
+  --chart-4: #9E4B3A;
+  --chart-5: #2B2A26;
+  /* Sidebar: slightly recessed from paper for legible separation. */
+  --sidebar: #F1EDE0;
+  --sidebar-foreground: #1A1915;
+  --sidebar-primary: var(--sidebar-primary-accent, #4A6B5C);
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EAEFE9;
+  --sidebar-accent-foreground: #2B4438;
+  --sidebar-border: #D9D3C3;
+  --sidebar-ring: var(--ring-accent, #4A6B5C);
 }
 
 .dark {
-  --background: oklch(0.16 0.015 260);
-  --foreground: oklch(0.96 0.005 260);
-  --card: oklch(0.20 0.015 260);
-  --card-foreground: oklch(0.96 0.005 260);
-  --popover: oklch(0.20 0.015 260);
-  --popover-foreground: oklch(0.96 0.005 260);
-  --primary: var(--primary-accent, oklch(0.65 0.14 175));
-  --primary-foreground: oklch(0.12 0.02 260);
-  --secondary: oklch(0.25 0.015 260);
-  --secondary-foreground: oklch(0.96 0.005 260);
-  --muted: oklch(0.25 0.015 260);
-  --muted-foreground: oklch(0.65 0.01 260);
-  --accent: oklch(0.25 0.03 175);
-  --accent-foreground: oklch(0.80 0.10 175);
-  --destructive: oklch(0.637 0.237 25.331);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.28 0.015 260);
-  --input: oklch(0.28 0.015 260);
-  --ring: var(--ring-accent, oklch(0.65 0.14 175));
-  --chart-1: oklch(0.65 0.14 175);
-  --chart-2: oklch(0.60 0.20 265);
-  --chart-3: oklch(0.70 0.18 45);
-  --chart-4: oklch(0.65 0.22 310);
-  --chart-5: oklch(0.75 0.15 140);
-  --sidebar: oklch(0.14 0.015 260);
-  --sidebar-foreground: oklch(0.96 0.005 260);
-  --sidebar-primary: var(--sidebar-primary-accent, oklch(0.65 0.14 175));
-  --sidebar-primary-foreground: oklch(0.96 0.005 260);
-  --sidebar-accent: oklch(0.25 0.03 175);
-  --sidebar-accent-foreground: oklch(0.80 0.10 175);
-  --sidebar-border: oklch(0.28 0.015 260);
-  --sidebar-ring: var(--ring-accent, oklch(0.65 0.14 175));
+  --background: #141310;
+  --foreground: #E9E3D2;
+  --card: #1A1914;
+  --card-foreground: #E9E3D2;
+  --popover: #1A1914;
+  --popover-foreground: #E9E3D2;
+  --primary: var(--primary-accent, #8CB39E);
+  --primary-foreground: #141310;
+  --secondary: #1C1B17;
+  --secondary-foreground: #E9E3D2;
+  --muted: #1C1B17;
+  --muted-foreground: #8A8472;
+  --accent: #22291F;
+  --accent-foreground: #B9D2C3;
+  --destructive: #D17A68;
+  --destructive-foreground: #141310;
+  --border: #2C2A22;
+  --input: #2C2A22;
+  --ring: var(--ring-accent, #8CB39E);
+  --chart-1: #8CB39E;
+  --chart-2: #7FA2C9;
+  --chart-3: #D8A851;
+  --chart-4: #D17A68;
+  --chart-5: #CFC9B7;
+  --sidebar: #111010;
+  --sidebar-foreground: #E9E3D2;
+  --sidebar-primary: var(--sidebar-primary-accent, #8CB39E);
+  --sidebar-primary-foreground: #141310;
+  --sidebar-accent: #22291F;
+  --sidebar-accent-foreground: #B9D2C3;
+  --sidebar-border: #2C2A22;
+  --sidebar-ring: var(--ring-accent, #8CB39E);
 }
 
 @layer base {
@@ -140,7 +140,8 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Mona Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-feature-settings: "ss01", "cv11";
     height: 100%;
     overflow: hidden;
   }

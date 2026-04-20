@@ -1,4 +1,4 @@
-// @ts-nocheck — AgentDash CRM WIP, stub API
+// AgentDash: CRM Pipeline operator workspace
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -496,8 +496,8 @@ export function CrmPipeline() {
   const saveHubspotConfig = useMutation({
     mutationFn: () =>
       crmApi.saveHubspotConfig(cid!, {
-        portalId: trimToNull(hubspotDraft.portalId),
-        accessToken: trimToNull(hubspotDraft.accessToken),
+        portalId: trimToNull(hubspotDraft.portalId) ?? undefined,
+        accessToken: hubspotDraft.accessToken.trim(),
         syncEnabled: hubspotDraft.syncEnabled,
       }),
     onSuccess: async () => {

@@ -37,11 +37,14 @@ import { budgetExtendedRoutes } from "./routes/budget-extended.js";
 import { skillsRegistryRoutes } from "./routes/skills-registry.js";
 import { autoresearchRoutes } from "./routes/autoresearch.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
+import { assessRoutes } from "./routes/assess.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { crmRoutes } from "./routes/crm.js";
 import { hubspotRoutes } from "./routes/hubspot.js";
 import { actionProposalRoutes } from "./routes/action-proposals.js";
 import { pipelineRoutes } from "./routes/pipelines.js";
 import { feedRoutes } from "./routes/feed.js";
+import { entitlementsRoutes } from "./routes/entitlements.js";
 // AgentDash: Cockpit routes
 import { connectorRoutes } from "./routes/connectors.js";
 import { inboxRoutes } from "./routes/inbox.js";
@@ -194,11 +197,17 @@ export async function createApp(
   api.use(skillsRegistryRoutes(db));
   api.use(autoresearchRoutes(db));
   api.use(onboardingRoutes(db));
+  // AgentDash: Agent Readiness Assessment
+  api.use(assessRoutes(db));
+  // AgentDash: Assistant Chatbot
+  api.use(assistantRoutes(db));
   api.use(crmRoutes(db));
   api.use(hubspotRoutes(db));
   api.use(actionProposalRoutes(db));
   api.use(pipelineRoutes(db));
   api.use(feedRoutes(db));
+  // AgentDash: Entitlements (tier gating + billing readback)
+  api.use(entitlementsRoutes(db));
   // AgentDash: Cockpit routes
   api.use(connectorRoutes(db));
   api.use(inboxRoutes(db));
@@ -311,11 +320,11 @@ export async function createApp(
       appType: "custom",
       server: {
         middlewareMode: true,
-        hmr: {
-          host: opts.bindHost,
-          port: hmrPort,
-          clientPort: hmrPort,
-        },
+        // When binding to 0.0.0.0, omit `host` so the HMR client connects via
+        // the browser's page hostname instead of the literal 0.0.0.0 address.
+        hmr: opts.bindHost === "0.0.0.0"
+          ? { port: hmrPort, clientPort: hmrPort }
+          : { host: opts.bindHost, port: hmrPort, clientPort: hmrPort },
         allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
       },
     });

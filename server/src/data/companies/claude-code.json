@@ -1,0 +1,545 @@
+{
+  "name": "Claude Code (Anthropic)",
+  "slug": "claude-code",
+  "category": "enterprise",
+  "subcategory": "agent-harness",
+  "description": "Claude Code is Anthropic's agent harness — a CLI, desktop app, web app, and IDE extension that turns Claude into an autonomous coding and task execution agent. The architecture is an agent operating system: sessions, tools, permissions, memory, scheduling, background execution, plugin ecosystems, human approvals, prompt context assembly, telemetry, and cost accounting. The Agent SDK makes everything available programmatically. Claude Managed Agents (public beta) provides fully managed sandboxed execution. 80.8% SWE-bench, 72.5% OSWorld. The reference implementation for enterprise agent factory architecture.",
+  "oneLiner": "Anthropic's agent operating system — the reference architecture for enterprise agent factories, with 80.8% SWE-bench.",
+  "founded": "2021",
+  "funding": "Anthropic: $15B+ total funding. Google, Salesforce, Amazon, Spark Capital.",
+  "pricing": "Free tier; Pro $20/mo; Max $100/mo; Team $25-150/user/mo; Enterprise custom (SSO, audit, HIPAA, 500K context).",
+  "website": "https://claude.com/claude-code",
+  "githubRepo": "anthropics/claude-agent-sdk-python",
+  "githubStars": 0,
+  "screenshots": [],
+  "capabilities": [
+    "Agent operating system: sessions, tools, permissions, memory, scheduling, telemetry, cost accounting",
+    "80.8% SWE-bench Verified — state-of-the-art agentic coding",
+    "72.5% OSWorld — computer use benchmark",
+    "Agent SDK: programmatic access to the full harness (Python, TypeScript)",
+    "Claude Managed Agents: fully managed sandboxed agent execution (public beta)",
+    "MCP (Model Context Protocol): universal tool integration standard",
+    "Dynamic tool registry with schemas, permissions, concurrency hints, and policy hooks",
+    "Permission decision engine: allow, deny, ask modes with classifier-assisted approvals",
+    "Context infrastructure: cacheable/dynamic prompt separation, auto-compaction, selective memory retrieval",
+    "Durable scheduling: cron, one-shot, event-driven jobs with missed-run recovery",
+    "Typed human collaboration: plan mode, task management, structured approval inbox",
+    "CLAUDE.md persistent project memory across sessions",
+    "Hooks system: pre/post tool-use governance at harness level",
+    "Sub-agent spawning for parallel specialized work",
+    "Background execution with session resume",
+    "Headless mode for CI/CD integration",
+    "Custom skills and plugin ecosystem (oh-my-claudecode, etc.)",
+    "Multi-model: Opus 4.6, Sonnet 4.6, Haiku 4.5",
+    "CLI, Desktop (Mac/Windows), Web (claude.ai/code), IDE extensions (VS Code, JetBrains)",
+    "Enterprise: SSO, audit logging, HIPAA readiness, 500K context window, compliance APIs"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "CLI-first terminal experience. Install via npm/brew, authenticate, run 'claude' in any project directory. CLAUDE.md provides persistent project instructions. Hooks system for governance. Sub-agents for parallelism. MCP for tool integration. Agent SDK for programmatic use.",
+    "strengths": [
+      "The reference implementation — every pattern in the Claude Code harness whitepaper ships as product",
+      "Permission engine is the most sophisticated in any agent tool (allow/deny/ask with classifiers)",
+      "Context infrastructure (compaction, selective memory, cache boundaries) is production-hardened",
+      "MCP as universal tool protocol is becoming the industry standard",
+      "CLAUDE.md persistent memory is the simplest and most effective project memory system",
+      "80.8% SWE-bench — demonstrably the best coding agent available",
+      "Enterprise tier with SSO, audit, HIPAA, 500K context covers regulated industries"
+    ],
+    "weaknesses": [
+      "No visual workflow builder — terminal/CLI only for agent creation",
+      "Anthropic model lock-in — Claude models only, no multi-provider routing",
+      "Pricing at scale is expensive — Opus 4.6 at $15/M output tokens adds up fast",
+      "No visual agent marketplace or template gallery",
+      "Background execution and scheduling still maturing",
+      "No built-in multi-agent orchestration UI — sub-agents are code-level"
+    ],
+    "notableFeatures": [
+      "Permission decision engine with reason codes and source attribution",
+      "Auto-compaction with semantic boundaries and circuit breakers",
+      "CLAUDE.md + memory system for persistent cross-session knowledge",
+      "Hooks for pre/post tool-use governance",
+      "Agent SDK for building custom agent applications",
+      "Managed Agents for sandboxed cloud execution"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-04: Claude Managed Agents public beta — fully managed sandboxed agent execution",
+    "2026-04: Agent SDK Python and TypeScript — programmatic access to the full harness",
+    "2026-04: Focus view, stronger permissions, sandbox handling, richer status line",
+    "2026-03: Sonnet 4.6 — 79.6% SWE-bench, 72.7% OSWorld at $3/$15 per M tokens",
+    "2026-02: Sonnet 5 — 82.1% SWE-bench Verified, surpassing Opus 4.6 on coding",
+    "2026: MCP adoption accelerating — hundreds of MCP servers available",
+    "2026: 641K views on beginner tutorial — massive developer adoption",
+    "2026: Enterprise tier with SSO, audit, HIPAA, 500K context, compliance APIs"
+  ],
+  "lastResearched": "2026-04-13",
+  "dataSources": [
+    {
+      "url": "https://code.claude.com/docs",
+      "accessedAt": "2026-04-13",
+      "type": "docs"
+    },
+    {
+      "url": "https://platform.claude.com/docs/en/agent-sdk/overview",
+      "accessedAt": "2026-04-13",
+      "type": "docs"
+    },
+    {
+      "url": "https://platform.claude.com/docs/en/managed-agents/overview",
+      "accessedAt": "2026-04-13",
+      "type": "docs"
+    },
+    {
+      "url": "/Volumes/home/Projects_Hosted/cc/AGENT_FACTORY_WHITEPAPER.md",
+      "accessedAt": "2026-04-13",
+      "type": "analyst"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Claude Code runs locally but uses Anthropic API. Managed Agents runs in Anthropic's cloud. No self-hosted option for the model."
+  },
+  "scores": {
+    "total": 82,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "CLI/SDK only — no visual builder. Terminal UX is excellent for developers but excludes business users."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 5,
+            "rationale": "npm install + claude command in any directory. CLAUDE.md for instant project context. Fastest time-to-working-agent."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 4,
+            "rationale": "Permission traces, cost tracking, session replay, OTEL tracing. Best debugging in any agent harness."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Growing docs, 641K tutorial views, active community. Agent SDK docs still maturing."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 16,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 4,
+            "rationale": "Sub-agent spawning, background execution, Agent SDK for custom orchestration. Not visual but architecturally sound."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 5,
+            "rationale": "Permission engine (allow/deny/ask), plan mode, task management, structured approval — the reference implementation for HITL."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "CLAUDE.md as project template, custom skills, hooks. No visual template gallery."
+          },
+          {
+            "name": "Team Development",
+            "score": 4,
+            "rationale": "Enterprise tier with team management, shared projects, audit logging. Claude Code Teams."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 18,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "MCP is the universal tool protocol — hundreds of servers. File, terminal, browser, database, API tools built in."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 5,
+            "rationale": "MCP, Agent SDK, REST API, CLI, headless mode. The most complete API surface in any agent tool."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 4,
+            "rationale": "Enterprise SSO, API keys, team management. MCP server auth delegation."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "CLAUDE.md memory, auto-compaction, selective retrieval, vector search via MCP. Context is infrastructure."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 18,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 5,
+            "rationale": "Permission engine with classifiers, hooks system, sandbox mode. Most sophisticated guardrails in any agent tool."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 5,
+            "rationale": "Enterprise audit logging, HIPAA readiness, compliance APIs, cost tracking per session. Immutable event trail."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 4,
+            "rationale": "Enterprise SSO, team roles, permission policies. Tool-level access control via permission engine."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 4,
+            "rationale": "Permission reason codes, cost attribution, OTEL tracing, session transcripts. Every decision is traceable."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "CLI + API + Managed Agents. But Anthropic API dependency — no self-hosted model option."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 4,
+            "rationale": "Managed Agents for cloud scaling. OTEL tracing, cost tracking. Enterprise monitoring integration."
+          },
+          {
+            "name": "Cost Management",
+            "score": 4,
+            "rationale": "Per-session cost tracking, budget controls, model mix visibility. But Opus is expensive at scale."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "MCP ecosystem, 641K tutorial views, oh-my-claudecode plugins, massive developer adoption. Growing fast."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "82/100 overall. Strongest: Governance (18/20). Weakest: Operations (15/20). Breakdown: Creation (15/20), Orchestration (16/20), Integration (18/20), Governance (18/20), Operations (15/20).",
+  "competence": "agent-harness",
+  "targetUser": "Developers and engineering teams building AI-powered applications, and enterprises deploying governed autonomous agents",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "641K views on beginner tutorial — most-watched agent tool tutorial of 2026",
+      "Claude Code harness architecture studied as reference for enterprise agent factories",
+      "MCP becoming the industry standard for tool integration — Claude Code pioneered it",
+      "oh-my-claudecode plugin ecosystem growing rapidly",
+      "Enterprise tier adoption accelerating with SSO, HIPAA, audit features"
+    ],
+    "metrics": [
+      {
+        "metric": "SWE-bench Verified",
+        "value": "80.8%",
+        "source": "Anthropic"
+      },
+      {
+        "metric": "OSWorld",
+        "value": "72.5%",
+        "source": "Anthropic"
+      },
+      {
+        "metric": "Tutorial Views",
+        "value": "641K",
+        "source": "YouTube"
+      },
+      {
+        "metric": "Anthropic Funding",
+        "value": "$15B+",
+        "source": "Various"
+      }
+    ],
+    "funding": "Anthropic: $15B+ total. Claude Code is a core product, not a startup."
+  },
+  "supportedCUJs": [
+    "code-development",
+    "code-review",
+    "workflow-automation",
+    "data-extraction"
+  ],
+  "coreCompetence": {
+    "bestAt": "The reference architecture for enterprise agent factories. Permission decision engine, context infrastructure, typed HITL, durable scheduling, and MCP tool protocol — all production-hardened. 80.8% SWE-bench proves the execution quality.",
+    "targetUser": "Engineering teams who need governed autonomous agents, and platform builders studying the control plane architecture.",
+    "vsAlternatives": "Wins on governance (permission engine, audit, HIPAA), integration (MCP standard), and benchmark performance (80.8% SWE-bench). Loses on visual UX (CLI only), model diversity (Anthropic models only), and cost (Opus is expensive). Different category than OpenAI Agent Builder (visual) or CrewAI (multi-agent framework). Claude Code is the agent OS that other platforms should study."
+  },
+  "walkthrough": {
+    "title": "Claude Code: PM & CTO Walkthrough — The Agent Operating System",
+    "pmVerdict": {
+      "summary": "Claude Code is not a competitor to AgentDash — it's the reference architecture AgentDash should study. The permission engine, context infrastructure, HITL model, scheduling, and MCP protocol are the patterns every enterprise agent factory needs. The 80.8% SWE-bench proves the execution layer works. But it's CLI-only, Anthropic-model-locked, and expensive at scale. The lesson: build a governed execution platform that happens to use language models, not a chatbot with tools.",
+      "score": "A (Reference Architecture)",
+      "strengths": [
+        "Permission engine is the gold standard — allow/deny/ask with classifiers and reason codes",
+        "MCP is becoming THE tool integration standard — Claude Code pioneered it",
+        "Context infrastructure (compaction, selective memory, cache boundaries) is production-proven",
+        "80.8% SWE-bench — best coding agent benchmark, proves execution quality",
+        "Enterprise tier actually ships (SSO, audit, HIPAA) — not just claimed"
+      ],
+      "risks": [
+        "Anthropic model lock-in — cannot use GPT, Gemini, or open models",
+        "CLI-only creation — no visual builder for business users",
+        "Opus 4.6 at $15/M output tokens makes scale expensive",
+        "Not a platform for building agents — it IS the agent",
+        "Managed Agents still in beta — production reliability unproven"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Claude Code is the most architecturally complete agent harness available. The whitepaper analysis reveals 6 principles every agent factory should implement: runtime as product, tool registry, permission engine, context infrastructure, scheduling, and typed HITL. AgentDash's 5-pillar architecture (Chat/Zeus/Forge/Darwin/Guardian) maps well to this model. The gap: AgentDash needs to match Claude Code's permission engine sophistication and context infrastructure maturity.",
+      "decision": "STUDY — The Reference Architecture to Build Against",
+      "strengths": [
+        "Most complete control plane in any agent product",
+        "Permission engine with classifiers, reason codes, source attribution",
+        "Enterprise-grade: SSO, HIPAA, audit logging, compliance APIs",
+        "$15B+ backing — Anthropic is not going anywhere",
+        "MCP standard gives ecosystem leverage no other tool has"
+      ],
+      "dealBreakers": [
+        "Not a platform — you can't build custom agents on Claude Code for your customers",
+        "Single-vendor model dependency (Anthropic)",
+        "No visual builder, no agent marketplace, no template gallery",
+        "Expensive at scale — enterprise pricing is opaque",
+        "Managed Agents beta means production sandboxing is still maturing"
+      ]
+    },
+    "coverageGaps": [
+      "Agent SDK detailed walkthrough",
+      "Managed Agents sandbox configuration",
+      "Enterprise SSO and audit setup",
+      "MCP server development workflow",
+      "Background execution and scheduling demo"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (15/20)",
+        "score": "Supported",
+        "videoEvidence": "CLI installation, CLAUDE.md, hooks, skills all demonstrated in tutorials",
+        "gap": "No visual builder — creation is terminal-only"
+      },
+      {
+        "dimension": "Orchestration (16/20)",
+        "score": "Well Supported",
+        "videoEvidence": "Plan mode, task management, sub-agents, background execution shown",
+        "gap": "Multi-agent visual orchestration not available"
+      },
+      {
+        "dimension": "Integration (18/20)",
+        "score": "Fully Supported",
+        "videoEvidence": "MCP tools, file ops, terminal, browser all demonstrated extensively",
+        "gap": "MCP is the standard — fully verified"
+      },
+      {
+        "dimension": "Governance (18/20)",
+        "score": "Fully Supported",
+        "videoEvidence": "Permission engine, hooks, audit, cost tracking all demonstrated",
+        "gap": "Enterprise SSO/HIPAA not shown in public videos"
+      },
+      {
+        "dimension": "Operations (15/20)",
+        "score": "Supported",
+        "videoEvidence": "CLI deployment, cost tracking, session management shown",
+        "gap": "Managed Agents cloud scaling not publicly demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/claude-code/step01_setup.jpg",
+        "title": "Autonomous Environment Setup",
+        "description": "Agent installs GitHub CLI, authenticates via OAuth device flow, clones repository — sets up the entire dev environment with zero manual configuration.",
+        "pmCritique": {
+          "works": [
+            "Agent handles multi-step setup autonomously — install, auth, clone in sequence",
+            "OAuth device flow shown inline — no context switching to browser needed",
+            "Terminal output is clean and status-rich — every step shows result"
+          ],
+          "doesntWork": [
+            "Setup is powerful but intimidating for non-developers",
+            "No visual progress indicator — just scrolling terminal text",
+            "Error recovery during setup not shown — what if auth fails?"
+          ],
+          "userPsychology": "Watching the agent set up its own development environment is the first trust-building moment. It proves this is not just a chatbot — it operates the computer."
+        },
+        "ctoCritique": {
+          "verdict": "Autonomous setup demonstrates the agent OS thesis — the runtime manages its own dependencies. This is the pattern enterprise onboarding should follow.",
+          "concerns": [
+            "Agent installs software without explicit approval — permission model needed",
+            "OAuth tokens created during setup need lifecycle management",
+            "No sandbox boundary shown — agent has full terminal access"
+          ],
+          "enterpriseGaps": [
+            "No approval gate before installing software",
+            "No credential lifecycle management visible",
+            "No sandbox or least-privilege boundary for setup actions"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/claude-code/step02_first_task.jpg",
+        "title": "Natural Language to Working Code",
+        "description": "User types \"make tic tac toe that I can play on the web\" — agent responds with plan and starts building. Welcome screen shows model, org, and project context.",
+        "pmCritique": {
+          "works": [
+            "Welcome screen immediately shows model (Opus 4.5), account, and project directory — full context",
+            "Natural language task input — no configuration needed, just describe what you want",
+            "Effecting status with think time (2s) shows the agent is reasoning, not stalling"
+          ],
+          "doesntWork": [
+            "No template or suggestion chips — blank prompt requires user to know what to ask",
+            "Recent activity shows \"No recent activity\" — cold start with no guidance",
+            "Ctrl+K for shortcuts is developer-native but invisible to casual users"
+          ],
+          "userPsychology": "The welcome screen with the mascot creates warmth in a terminal environment. The immediate \"I will create\" response builds confidence that the agent understood."
+        },
+        "ctoCritique": {
+          "verdict": "The welcome UX shows model, org, and directory context upfront — transparent about what the agent knows. The execution model (think → plan → build) is architecturally sound.",
+          "concerns": [
+            "Model selection is implicit (Opus 4.5) — no cost/quality trade-off visible",
+            "No budget or token limit shown before execution starts",
+            "Single model lock-in — cannot route to GPT or Gemini for specific subtasks"
+          ],
+          "enterpriseGaps": [
+            "No cost estimation before task execution",
+            "No model selection or routing control",
+            "No task approval gate for new projects"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/claude-code/step03_plan_mode.jpg",
+        "title": "Plan Mode — Typed Human-in-the-Loop",
+        "description": "Plan mode on (shift+tab to cycle) — agent plans before acting, user reviews and approves. /help shows available commands. This is typed HITL, not just a chat.",
+        "pmCritique": {
+          "works": [
+            "Plan mode is a first-class runtime mode, not a flag — shift+tab cycles between modes",
+            "/help command shows the agent is a structured tool, not just a conversation",
+            "Plan mode prevents the agent from executing until the user approves — safety by default"
+          ],
+          "doesntWork": [
+            "Mode switching via shift+tab is not discoverable — hidden keyboard shortcut",
+            "Plan mode UI is minimal — just a green text label, easy to miss",
+            "No visual plan editor — plan is text in terminal, not an interactive diagram"
+          ],
+          "userPsychology": "Plan mode is where Claude Code becomes an enterprise tool. The ability to say \"think but don't act\" is the trust primitive every agent factory needs."
+        },
+        "ctoCritique": {
+          "verdict": "Plan mode is the reference implementation for typed HITL. The run state machine (plan → approve → execute) is exactly what the whitepaper prescribes.",
+          "concerns": [
+            "Plan approval is binary (approve/reject) — no partial approval or modification",
+            "No plan versioning — approved plan is not persisted for audit",
+            "Plan mode is per-session, not per-organization policy"
+          ],
+          "enterpriseGaps": [
+            "No org-level policy to enforce plan mode for certain task types",
+            "No plan persistence or versioning for audit trail",
+            "No multi-approver workflow for high-risk plans"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/claude-code/step04_structured_plan.jpg",
+        "title": "Structured Implementation Plan",
+        "description": "Agent outputs a phased plan: Phase 1 Foundation (canvas, game loop, input), Phase 2 Core Gameplay (player, aiming, bullets), Phase 3 Enemies. Numbered implementation order.",
+        "pmCritique": {
+          "works": [
+            "Phased plan with numbered steps shows structured thinking — not just code dumping",
+            "Phases map to logical milestones — Foundation before Gameplay before Enemies",
+            "Polish phase explicitly listed — agent thinks about UX, not just functionality"
+          ],
+          "doesntWork": [
+            "Plan is text-only — no visual timeline, Gantt chart, or dependency graph",
+            "No time or cost estimates per phase",
+            "No way to selectively approve phases — all or nothing"
+          ],
+          "userPsychology": "The structured plan is what converts managers from skeptics to supporters. Seeing an agent think in phases and milestones mirrors how senior engineers plan."
+        },
+        "ctoCritique": {
+          "verdict": "Structured plans with phases and implementation order is the right abstraction. This is the task graph the whitepaper describes.",
+          "concerns": [
+            "Plans are ephemeral — not stored as durable objects in a task system",
+            "No dependency tracking between phases — Phase 3 implicitly depends on Phase 2",
+            "No checkpoint or rollback points between phases"
+          ],
+          "enterpriseGaps": [
+            "No task graph persistence",
+            "No phase-level approval gates",
+            "No cost attribution per phase"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/claude-code/step05_init_memory.jpg",
+        "title": "/init — Persistent Project Memory",
+        "description": "Agent runs /init to explore the codebase and create CLAUDE.md — persistent instructions that survive across sessions. Explore tool call visible with file tree analysis.",
+        "pmCritique": {
+          "works": [
+            "/init as a single command for project onboarding — agent learns the codebase autonomously",
+            "CLAUDE.md as persistent memory is the simplest and most effective memory system in any agent",
+            "Explore tool shows the agent actually reading the codebase, not guessing"
+          ],
+          "doesntWork": [
+            "CLAUDE.md is a single file — no structured memory types (user, feedback, project, reference)",
+            "/init overwrites existing CLAUDE.md without confirmation",
+            "Memory is text-only — no vector embeddings, no semantic search"
+          ],
+          "userPsychology": "/init is the moment the agent becomes \"yours.\" It learns your project and remembers it forever. This creates a relationship that generic chatbots cannot."
+        },
+        "ctoCritique": {
+          "verdict": "CLAUDE.md as persistent project memory is the reference pattern for stateful onboarding. The whitepaper principle: onboarding is stateful, not a docs page.",
+          "concerns": [
+            "Memory in a flat file has no access control — anyone with repo access can modify agent behavior",
+            "No memory versioning or rollback",
+            "Memory is project-scoped — no org-level or user-level memory layers"
+          ],
+          "enterpriseGaps": [
+            "No memory access control or RBAC",
+            "No memory audit trail",
+            "No multi-layer memory (org → workspace → project → session)"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "ntDIxaeo3Wg",
+      "title": "Claude Code - Full Tutorial for Beginners (36min)",
+      "channel": "freeCodeCamp"
+    },
+    {
+      "videoId": "qYqIhX9hTQk",
+      "title": "FULL Claude Code Tutorial for Beginners 2026",
+      "channel": "Income Stream Surfers"
+    },
+    {
+      "videoId": "LlFgLsffbBs",
+      "title": "The ONLY Claude Code Tutorial You'll Ever Need",
+      "channel": "Cole Medin"
+    }
+  ]
+}

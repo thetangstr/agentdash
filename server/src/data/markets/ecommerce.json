@@ -1,0 +1,56 @@
+{
+  "sector": "E-Commerce Post-Purchase Support",
+  "slug": "ecommerce",
+  "narrative": "E-commerce brands lose money because post-purchase operations are fragmented across helpdesk tools, Shopify, payment systems, subscription platforms, WMS tools, and fraud/dispute systems. The winning system is not a chatbot that sounds smart. It is an agent layer that can look at order state, shipping state, prior customer behavior, policy thresholds, and risk signals, then decide whether to refund, replace, edit, reship, or escalate.",
+  "buyerPromise": "We turn post-purchase support from a labor queue into an autonomous resolution engine that closes low-risk cases instantly and routes the rest with context.",
+  "pactScore": {
+    "total": 87,
+    "dimensions": [
+      {"key": "P", "name": "Performance", "score": 23, "subCriteria": [{"name": "Decision automation", "score": 5, "rationale": "Bounded money and inventory writes with clear thresholds"}, {"name": "Multi-system reconciliation", "score": 5, "rationale": "Cross-system state resolution is core competency"}, {"name": "Policy execution", "score": 4, "rationale": "Rapid iteration on thresholds enables fast improvement"}]},
+      {"key": "A", "name": "Access", "score": 22, "subCriteria": [{"name": "E-commerce platforms", "score": 5, "rationale": "Shopify, OMS, WMS all have modern APIs"}, {"name": "Payment systems", "score": 4, "rationale": "Chargeback tools and payment processing accessible"}, {"name": "Carrier feeds", "score": 4, "rationale": "Tracking and shipping data well-structured"}]},
+      {"key": "C", "name": "Context", "score": 20, "subCriteria": [{"name": "Order state", "score": 5, "rationale": "Transaction data is highly structured"}, {"name": "Customer history", "score": 4, "rationale": "Prior behavior and policy flags available"}, {"name": "Fraud signals", "score": 3, "rationale": "Abuse detection requires cross-referencing multiple signals"}]},
+      {"key": "T", "name": "Trust", "score": 22, "subCriteria": [{"name": "Reversible actions", "score": 5, "rationale": "Most post-purchase actions are reversible or bounded"}, {"name": "Exception routing", "score": 5, "rationale": "Human escalation on fraud, abuse, or ambiguity is well-defined"}, {"name": "Outcome measurement", "score": 4, "rationale": "Direct ROI visibility through cost and CX metrics"}]}
+    ]
+  },
+  "examples": [
+    {
+      "name": "Ring Returns Abuse",
+      "source": "Riskified case study on Ring",
+      "challenge": "Generous return policies exploited by organized refund abuse. Fraudsters bought goods, filed returns, sent back empty boxes or junk.",
+      "scale": "Riskified identified 600 bad actors behind the abuse. Some responsible for up to $150,000 annually.",
+      "humanHoursAndDollarImpact": "Ring blocked more than $4 million in abusive returns in 7 months. Company also absorbed two-way shipping costs and operational review burden.",
+      "whyItMatters": "Post-purchase support is not just handling tickets. It is resolving stateful, risk-sensitive operational decisions."
+    },
+    {
+      "name": "LSKD Returns Automation",
+      "source": "Loop case study on LSKD",
+      "challenge": "Every return required direct customer-support involvement. Manual process could take six weeks or longer.",
+      "scale": "53% of return revenue retained after moving to exchange-first automated workflow.",
+      "humanHoursAndDollarImpact": "Hundreds of thousands of dollars in retained revenue. Average upsell value per return: $3.03. Automation saved valuable customer-support time.",
+      "whyItMatters": "A system that turns a refund queue into a revenue-retention engine through bounded, reversible actions."
+    },
+    {
+      "name": "Casely Order-Tracking and Support Load",
+      "source": "Loop blog example citing Casely",
+      "challenge": "'Where is my order?' support tickets consuming support capacity.",
+      "scale": "WISMO tickets reduced by 76% after adding branded order tracking and self-service elements.",
+      "humanHoursAndDollarImpact": "Saved more than $1,880 per month in support costs. More than 10 hours per week freed for the support team.",
+      "whyItMatters": "A meaningful share of post-purchase support is repetitive cross-system status resolution, not emotionally complex service work."
+    }
+  ],
+  "quickStart": ["Low-risk refunds", "Replacements and reships", "Order-edit exceptions", "WISMO and return-status deflection", "Dispute-prevention workflows"],
+  "avoid": ["Unconstrained goodwill credits", "High-value abuse-prone refunds", "Deep product-diagnosis flows requiring physical inspection"],
+  "consultantSignals": [
+    "McKinsey: Reverse-logistics services market estimated at up to $14 billion. Value sits in return-policy design and disposition decisions.",
+    "Narvar 2025: Anxiety after checkout is now an operational problem, not a marketing problem — delivery issues and return friction directly affect repeat purchase behavior."
+  ],
+  "obstacles": ["Fraud and first-party abuse", "Inconsistent order state across Shopify, OMS, WMS, and payment systems", "Policy sprawl by region, channel, and SKU type", "Merchant fear of automated refunds going wrong", "Support-team distrust if the AI escalates poorly"],
+  "whereDataLives": ["Shopify or ecommerce platform", "OMS and WMS", "Carrier and tracking feeds", "Payment systems and chargeback tools", "Subscription and billing tools", "Helpdesk and chat systems", "Returns platforms and warehouse inspection outcomes", "Customer history, policy flags, and fraud signals"],
+  "openQuestions": ["What refund or replacement thresholds can be fully autonomous?", "Where is policy abuse most concentrated by SKU, channel, or cohort?", "Which systems actually own order truth when data conflicts?", "What is the acceptable rollback rate for autonomous actions?", "How should the agent hand off abuse cases without causing customer rage?", "Who owns the budget: CX, ecommerce ops, or fraud/risk?"],
+  "collaborationJourney": {
+    "stage": "Abuse Review",
+    "humanRole": "Risk analyst review",
+    "agentRole": "Score prior behavior & signals",
+    "handoffOutput": "Risk packet + Recommended action"
+  }
+}

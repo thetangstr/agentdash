@@ -2,10 +2,12 @@ import { Router } from "express";
 import type { Db } from "@agentdash/db";
 import { autoresearchService } from "../services/autoresearch.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { requireTier } from "../middleware/require-tier.js";
 
 export function autoresearchRoutes(db: Db) {
   const router = Router();
   const svc = autoresearchService(db);
+  const requirePro = requireTier(db, "pro");
 
   // --------------- Research Cycles ---------------
 
@@ -23,7 +25,7 @@ export function autoresearchRoutes(db: Db) {
     }
   });
 
-  router.post("/companies/:companyId/research-cycles", async (req, res) => {
+  router.post("/companies/:companyId/research-cycles", requirePro, async (req, res) => {
     try {
       assertBoard(req);
       const companyId = req.params.companyId as string;

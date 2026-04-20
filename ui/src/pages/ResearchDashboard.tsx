@@ -1,8 +1,17 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
+import { useEntitlements } from "../hooks/useEntitlements";
+import { UpgradeDialog } from "../components/UpgradeDialog";
+import { TierBadge } from "../components/TierBadge";
+import { Button } from "@/components/ui/button";
+
 export function ResearchDashboard() {
   const { selectedCompany } = useCompany();
   const companyId = selectedCompany?.id;
+  const { tier, hasFeature } = useEntitlements();
+  const autoResearchEnabled = hasFeature("autoResearch");
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   const { data: cycles = [], isLoading } = useQuery({
     queryKey: ["research-cycles", companyId],
@@ -10,10 +19,41 @@ export function ResearchDashboard() {
       const res = await fetch(`/api/companies/${companyId}/research-cycles`);
       return res.json();
     },
-    enabled: !!companyId,
+    enabled: !!companyId && autoResearchEnabled,
   });
 
   if (!companyId) return <div className="p-6 text-muted-foreground">Select a company</div>;
+
+  if (!autoResearchEnabled) {
+    return (
+      <div className="p-6 space-y-6" data-testid="research-gate">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold">AutoResearch</h1>
+          <TierBadge tier={tier} />
+        </div>
+        <p className="text-sm text-muted-foreground max-w-xl">
+          AutoResearch runs hypothesis-driven agent loops tied to your goals.
+          It is available on the Pro plan.
+        </p>
+        <div className="rounded-md border border-border bg-muted/20 p-6">
+          <Button
+            onClick={() => setUpgradeOpen(true)}
+            data-testid="research-upgrade"
+          >
+            Upgrade to Pro
+          </Button>
+        </div>
+        <UpgradeDialog
+          open={upgradeOpen}
+          onOpenChange={setUpgradeOpen}
+          currentTier={tier}
+          requiredTier="pro"
+          featureName="AutoResearch"
+        />
+      </div>
+    );
+  }
+
   if (isLoading) return <div className="p-6 text-muted-foreground">Loading...</div>;
 
   const statusColors: Record<string, string> = {

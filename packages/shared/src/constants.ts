@@ -47,6 +47,7 @@ export const AGENT_ROLES = [
   "devops",
   "researcher",
   "general",
+  "assistant",
 ] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
@@ -62,6 +63,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   devops: "DevOps",
   researcher: "Researcher",
   general: "General",
+  assistant: "Assistant",
 };
 
 export const AGENT_ICON_NAMES = [
@@ -728,6 +730,20 @@ export type AgentTemplateAuthorityLevel = (typeof AGENT_TEMPLATE_AUTHORITY_LEVEL
 export const TASK_CLASSIFICATIONS = ["deterministic", "stochastic"] as const;
 export type TaskClassification = (typeof TASK_CLASSIFICATIONS)[number];
 
+// Smart Model Routing — Model Tiers
+export const MODEL_TIERS = ["small", "default"] as const;
+export type ModelTier = (typeof MODEL_TIERS)[number];
+
+// Smart Model Routing — Small model per adapter type
+export const SMALL_MODELS: Record<string, string> = {
+  claude_local: "haiku",
+  claude_api: "haiku",
+  codex_local: "codex-mini",
+  gemini_local: "gemini-flash",
+  opencode_local: "haiku",
+  pi_local: "haiku",
+};
+
 // Agent Factory — Spawn Request Statuses
 export const SPAWN_REQUEST_STATUSES = [
   "pending",
@@ -893,3 +909,6 @@ export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProvider, string> = {
 
 export const INBOX_STATUSES = ["pending", "approved", "rejected", "all"] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
+
+export const TIERS = ["free", "pro", "enterprise"] as const;
+export type Tier = (typeof TIERS)[number];

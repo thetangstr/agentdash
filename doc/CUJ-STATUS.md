@@ -1,7 +1,7 @@
 # AgentDash — CUJ & Feature Status
 
-**Last updated:** 2026-03-31
-**Test results:** 60/60 CUJ tests pass, 775 Vitest unit/integration tests pass (148 test files)
+**Last updated:** 2026-04-17
+**Test results:** 60/60 CUJ tests pass, 1406/1410 Vitest unit/integration tests pass (3–4 pre-existing order-dependent server flakes), Phase 1 + Phase 2 E2E specs green
 
 ---
 
@@ -266,7 +266,28 @@
 
 ---
 
-### Remaining P1 Work (UI gaps)
+### V1 Completion — Phase 1 (UI Stub Elimination)
+
+Completed 2026-04-16 on `feat/v1-completion-phase-1`. 12 UI stubs closed across 4 CUJs; every page now wired to a real backend surface.
+
+| CUJ | Surface | Status | E2E Spec |
+|-----|---------|--------|----------|
+| CUJ-D: Adapter Onboarding | Adapter install/health/credential management | Done | `tests/e2e/cuj-d-adapter-onboarding.spec.ts` |
+| CUJ-B: Agent Governance | Action Proposals approval queue, Feed aggregation | Done | `tests/e2e/cuj-b-agent-governance.spec.ts` |
+| CUJ-A: Sales Pipeline | Leads, Kanban drag/drop, Deal detail, HubSpot settings | Done | `tests/e2e/cuj-a-sales-pipeline.spec.ts` |
+| CUJ-C: Productivity | User Profile, user-scoped Feed | Done | `tests/e2e/cuj-c-productivity.spec.ts` |
+
+### V1 Completion — Phase 2 (Three-Tier Entitlements)
+
+Completed 2026-04-17 on `feat/v1-completion-phase-1`. `plans` + `company_plan` tables, pure `entitlements.ts` policy module, `requireTier()` middleware, `/api/companies/:id/entitlements` read endpoint, `useEntitlements()` hook, Billing page (tier + limits + feature matrix), UpgradeDialog, and inline gates on HubSpot/AutoResearch/Dashboard. `BillingProvider` interface stubs Stripe for Phase 3.
+
+| CUJ | Surface | Status | E2E Spec |
+|-----|---------|--------|----------|
+| CUJ-E: Entitlements | Billing page + tier gates + upgrade CTA | Done | `tests/e2e/cuj-e-entitlements.spec.ts` |
+
+Phase 3 (deferred): swap `StubBillingProvider` for Stripe-backed impl, add `/api/billing/webhook`, wire UpgradeDialog CTA to checkout session.
+
+### Remaining P1 Work (post Phase 1)
 
 - Task dependency DAG visualization
 - AutoResearch cycle detail pages (hypotheses, experiments, evaluations)

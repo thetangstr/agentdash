@@ -146,17 +146,23 @@ export {
   AGENT_TONES,
   CONNECTOR_PROVIDER_LABELS,
   INBOX_STATUSES,
+  TIERS,
   type ConnectorProvider,
   type ConnectorStatus,
   type CredentialMode,
   type AgentTone,
   type InboxStatus,
+  type Tier,
   PIPELINE_EXECUTION_MODES,
   PIPELINE_STAGE_TYPES,
   STAGE_EXECUTION_STATUSES,
   type PipelineExecutionMode,
   type PipelineStageType,
   type StageExecutionStatus,
+  // AgentDash: Smart model routing
+  SMALL_MODELS,
+  MODEL_TIERS,
+  type ModelTier,
 } from "./constants.js";
 
 export type {
@@ -167,6 +173,15 @@ export type {
   SelfHealEntry,
   PipelineWithCounts,
 } from "./types/pipeline.js";
+
+// AgentDash: Smart model routing types
+export type {
+  SkillVerification,
+  SkillVerificationType,
+  SkillVerificationSchema,
+  SkillVerificationEffect,
+  SkillVerificationNone,
+} from "./types/model-routing.js";
 
 export type {
   Company,
@@ -706,3 +721,9 @@ export {
   type SecretsLocalEncryptedConfig,
   type ConfigMeta,
 } from "./config-schema.js";
+
+export {
+  entitlementsForTier,
+  tierAtLeast,
+  type Entitlements,
+} from "./entitlements.js";

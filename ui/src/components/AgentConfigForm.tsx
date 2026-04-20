@@ -1054,28 +1054,19 @@ function AdapterTypeDropdown({
         {adapterList.map((item) => (
           <button
             key={item.value}
-            disabled={item.comingSoon}
             className={cn(
-              "flex items-center justify-between w-full px-2 py-1.5 text-sm rounded",
-              item.comingSoon
-                ? "opacity-40 cursor-not-allowed"
-                : "hover:bg-accent/50",
-              item.value === value && !item.comingSoon && "bg-accent",
+              "flex items-center justify-between w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
+              item.value === value && "bg-accent",
             )}
             onClick={() => {
-              if (!item.comingSoon) {
-                onChange(item.value);
-                setOpen(false);
-              }
+              onChange(item.value);
+              setOpen(false);
             }}
           >
             <span className="inline-flex items-center gap-1.5">
               {item.value === "opencode_local" ? <OpenCodeLogoIcon className="h-3.5 w-3.5" /> : null}
               <span>{item.label}</span>
             </span>
-            {item.comingSoon && (
-              <span className="text-[10px] text-muted-foreground">Coming soon</span>
-            )}
           </button>
         ))}
       </PopoverContent>

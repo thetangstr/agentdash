@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, jsonb, index, numeric } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, index, numeric } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
@@ -40,7 +40,6 @@ export const pipelineRuns = pgTable(
     executionMode: text("execution_mode").notNull().default("sync"),
     // AgentDash: tracks multiple active stages for parallel fan-out
     activeStageIds: jsonb("active_stage_ids").$type<string[]>().default([]),
-    currentStage: integer("current_stage").notNull().default(0),
     inputData: jsonb("input_data").$type<Record<string, unknown>>(),
     outputData: jsonb("output_data").$type<Record<string, unknown>>(),
     // AgentDash: cost tracking

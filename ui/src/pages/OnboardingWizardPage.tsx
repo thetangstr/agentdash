@@ -1,6 +1,9 @@
 "use client";
 import { useState } from "react";
+import { useNavigate } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
+import { api } from "../api/client";
+import { assessApi } from "../api/assess";
 
 const STEPS = [
   { key: "discovery", label: "Discovery", description: "Tell us about your company" },
@@ -12,8 +15,13 @@ const STEPS = [
 
 export function OnboardingWizardPage() {
   const { selectedCompany } = useCompany();
+  const navigate = useNavigate();
   const companyId = selectedCompany?.id;
+  const companyPrefix = selectedCompany?.issuePrefix ?? "";
   const [stepIndex, setStepIndex] = useState(0);
+  const [deploying, setDeploying] = useState(false);
+  const [researching, setResearching] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     companyInfo: "",
     scope: "company",
@@ -53,7 +61,32 @@ export function OnboardingWizardPage() {
               value={formData.companyInfo}
               onChange={(e) => setFormData({ ...formData, companyInfo: e.target.value })}
             />
-            <p className="text-xs text-muted-foreground">Or provide a URL to your docs/wiki and we'll analyze it automatically.</p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-muted-foreground">Or provide a URL to your docs/wiki and we'll analyze it automatically.</p>
+              <button
+                type="button"
+                className="text-sm text-accent hover:underline disabled:opacity-50 whitespace-nowrap"
+                onClick={async () => {
+                  if (!formData.companyInfo) return;
+                  setResearching(true);
+                  try {
+                    const result = await assessApi.research(companyId, formData.companyInfo, selectedCompany?.name ?? "");
+                    setFormData((prev) => ({
+                      ...prev,
+                      companyInfo: [
+                        prev.companyInfo,
+                        result.summary ? `\nSummary: ${result.summary}` : "",
+                        result.suggestedIndustry ? `\nIndustry: ${result.suggestedIndustry}` : "",
+                      ].join(""),
+                    }));
+                  } catch { /* ignore errors */ }
+                  setResearching(false);
+                }}
+                disabled={researching || !formData.companyInfo?.startsWith("http")}
+              >
+                {researching ? "Researching..." : "Research this URL"}
+              </button>
+            </div>
           </>
         )}
 
@@ -132,8 +165,64 @@ export function OnboardingWizardPage() {
               Based on your goals, we'll suggest an initial team of agents from your templates.
               You can customize and add more agents later.
             </p>
-            <button className="px-6 py-3 rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90">
-              Deploy Team
+            {deployError && (
+              <p className="text-sm text-destructive">{deployError}</p>
+            )}
+            <button
+              disabled={deploying}
+              onClick={async () => {
+                setDeploying(true);
+                setDeployError(null);
+                try {
+                  // 1. Create onboarding session
+                  const session = await api.post<{ id: string }>(
+                    `/companies/${companyId}/onboarding/sessions`,
+                    {},
+                  );
+                  // 2. Ingest wizard form data as a source
+                  const sourceContent = [
+                    formData.companyInfo && `Company: ${formData.companyInfo}`,
+                    `Scope: ${formData.scope}`,
+                    formData.companyGoal && `Goal: ${formData.companyGoal}`,
+                    ...formData.teamGoals.filter(Boolean).map((g) => `Team goal: ${g}`),
+                    formData.overseerName && `Overseer: ${formData.overseerName} (${formData.overseerEmail})`,
+                  ].filter(Boolean).join("\n");
+
+                  await api.post(
+                    `/companies/${companyId}/onboarding/sessions/${session.id}/sources`,
+                    { sourceType: "text", sourceLocator: "onboarding-wizard", rawContent: sourceContent },
+                  );
+                  // 3. Extract context from sources
+                  await api.post(
+                    `/companies/${companyId}/onboarding/sessions/${session.id}/extract`,
+                    {},
+                  );
+                  // 4. Generate plan (LLM-powered or fallback)
+                  await api.post(
+                    `/companies/${companyId}/onboarding/sessions/${session.id}/generate-plan`,
+                    {},
+                  );
+                  // 5. Apply the plan (creates departments, goals, templates, agents, projects)
+                  await api.post(
+                    `/companies/${companyId}/onboarding/sessions/${session.id}/apply-plan`,
+                    {},
+                  );
+                  // 6. Complete the session
+                  await api.post(
+                    `/companies/${companyId}/onboarding/sessions/${session.id}/complete`,
+                    {},
+                  );
+                  // 7. Navigate to dashboard
+                  navigate(`/${companyPrefix}/dashboard`);
+                } catch (err) {
+                  setDeployError(err instanceof Error ? err.message : "Deploy failed");
+                } finally {
+                  setDeploying(false);
+                }
+              }}
+              className="px-6 py-3 rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {deploying ? "Deploying..." : "Deploy Team"}
             </button>
           </div>
         )}

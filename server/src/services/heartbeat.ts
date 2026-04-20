@@ -28,6 +28,7 @@ import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
+import { resolveModelTier } from "./model-router.js";
 import { trackAgentFirstHeartbeat } from "@agentdash/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
@@ -2590,6 +2591,26 @@ export function heartbeatService(db: Db) {
       agent.companyId,
       executionRunConfig,
     );
+    // AgentDash: smart model routing — resolve model tier from skill/pipeline stage
+    const primarySkill = selectedSkills[0]?.skill ?? null;
+    const modelRouting = resolveModelTier({
+      agent: {
+        adapterType: agent.adapterType,
+        adapterConfig: resolvedConfig as Record<string, unknown>,
+      },
+      skill: primarySkill
+        ? {
+            modelTier: primarySkill.modelTier,
+            maxToolCalls: primarySkill.maxToolCalls,
+            verification: primarySkill.verification,
+          }
+        : null,
+      pipelineStage: null, // TODO: wire pipeline stage modelTier when pipeline runs are integrated
+    });
+    if (modelRouting.tier === "small") {
+      (resolvedConfig as Record<string, unknown>).model = modelRouting.model;
+    }
+
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId, {
       skillKeys: selectedSkills.map((selected) => selected.skill.key),
     });

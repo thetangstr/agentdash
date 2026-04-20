@@ -1,0 +1,513 @@
+{
+  "name": "Kagent",
+  "slug": "kagent",
+  "category": "open-source",
+  "subcategory": "devops",
+  "description": "Kagent is a Kubernetes-native platform for AI agents specialized in DevOps and platform engineering. Uses CRDs to define agents declaratively with Microsoft AutoGen as the multi-agent runtime. Ships with pre-built tools for kubectl, Helm, Istio, Argo CD, Prometheus, and GitHub. Built by Solo.io engineers.",
+  "oneLiner": "Kubernetes-native AI agent platform using CRDs and AutoGen for DevOps automation and cluster management.",
+  "founded": "2025",
+  "funding": "Backed by Solo.io ($56M+ total). Open-source project from Solo.io engineers.",
+  "pricing": "Open Source (Apache 2.0, free). No commercial tier.",
+  "website": "https://kagent.dev",
+  "githubRepo": "kagent-dev/kagent",
+  "githubStars": 1500,
+  "screenshots": [],
+  "capabilities": [
+    "K8s-native agent deployment via CRDs",
+    "Microsoft AutoGen multi-agent runtime",
+    "Web UI for management and chat",
+    "kubectl tool integration",
+    "Helm chart management",
+    "Istio service mesh diagnostics",
+    "Argo CD deployment management",
+    "Prometheus metrics querying",
+    "GitHub integration",
+    "K8s RBAC-based permissions",
+    "Helm chart installation",
+    "Declarative YAML agent configuration",
+    "GitOps-compatible definitions",
+    "Cluster troubleshooting and diagnostics"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "K8s-native: agents defined as CRDs via kubectl or web UI. Specs declare LLM provider, system prompt, tools, permissions in YAML. Web UI provides chat interface and management console. Pre-built templates for DevOps scenarios. Assumes K8s familiarity.",
+    "strengths": [
+      "True K8s-native — agents are first-class K8s resources",
+      "CRD definitions are GitOps-friendly and version-controllable",
+      "Leverages K8s RBAC for agent permissions",
+      "Deep DevOps tool integrations (kubectl, Helm, Istio, Prometheus)",
+      "AutoGen runtime for multi-agent capabilities",
+      "Apache 2.0, no vendor lock-in"
+    ],
+    "weaknesses": [
+      "Steep learning curve outside K8s teams",
+      "K8s-only — no standalone deployment",
+      "Narrow tool ecosystem (cloud-native only)",
+      "No RAG or knowledge base",
+      "Early-stage with limited docs",
+      "No MCP support",
+      "No cost tracking",
+      "Minimal debugging tools"
+    ],
+    "notableFeatures": [
+      "CRD-based agent lifecycle via K8s controller pattern",
+      "Automatic K8s RBAC inheritance for agents",
+      "Istio/service mesh awareness for microservices debugging",
+      "Prometheus integration for metrics-driven diagnostics",
+      "AutoGen-powered multi-agent conversations"
+    ]
+  },
+  "recentDevelopments": [
+    "2025 Q1: Initial open-source release under Apache 2.0",
+    "2025 Q1: kagent.dev docs site launched",
+    "2025 Q1: Pre-built tools for kubectl, Helm, Istio, Argo CD, Prometheus",
+    "2025 Q1: Web UI for agent management and chat"
+  ],
+  "lastResearched": "2026-04-04",
+  "dataSources": [
+    {
+      "url": "https://github.com/kagent-dev/kagent",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://kagent.dev",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": false,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Kubernetes-native. Deploys via CRDs on any K8s cluster — cloud or on-prem."
+  },
+  "scores": {
+    "total": 54,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 10.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "CRD YAML definitions + web UI. Familiar to K8s users, steep for others."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "Web UI shows conversations and tool calls. No dedicated debugging tools."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "kagent.dev covers install and basics. Young project, still maturing."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 2,
+            "rationale": "CRD updates require controller reconciliation. No hot-reload."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "AutoGen multi-agent conversations. CRDs define multiple collaborating agents."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Web UI chat interface. Basic AutoGen HITL. No structured handoff."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "CRDs are GitOps-friendly. No built-in team workspaces or promotion pipelines."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "Pre-built agent definitions for K8s tasks. Limited library."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 11.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "6-10 cloud-native tools. Deep within K8s. No business system connectors."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "K8s API primary. CRDs for config. AutoGen agent protocol. No MCP."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "K8s RBAC and ServiceAccount-based. No enterprise IAM beyond K8s."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 2,
+            "rationale": "No RAG or knowledge base. Live system queries via tools only."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10.4,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Delete CRDs to stop. K8s resource limits apply. No behavioral guardrails."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "AutoGen HITL. CRD approval configs. Web UI for review."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "K8s audit logging. Conversation history. No tamper-proof or compliance certs."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "K8s RBAC for platform access. Namespace isolation. No custom agent-level roles."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12.8,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 5,
+            "rationale": "True K8s-native: Helm chart, CRDs, runs as controller. Core differentiator. K8s-only though."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "K8s native scaling. Controller pattern inherently scalable. No benchmarks."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "Prometheus integration. K8s observability. Web UI for conversations."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "~1.5K GitHub stars. Young project. Growing cloud-native community."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "54/100 overall. Strongest: Operations (13/20). Weakest: Orchestration (9/20). Breakdown: Creation (10/20), Orchestration (9/20), Integration (11/20), Governance (10/20), Operations (13/20).",
+  "competence": "DevOps Agent Platform",
+  "targetUser": "Platform engineering teams automating Kubernetes operations",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "1.5K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "K8s Tool Integrations",
+        "value": "kubectl, Helm, Istio, Argo CD, Prometheus",
+        "source": "Docs"
+      }
+    ],
+    "funding": {
+      "total": "Solo.io backed ($56M+ parent)",
+      "lastRound": "Open-source project by Solo.io"
+    }
+  },
+  "supportedCUJs": [
+    "devops-infra"
+  ],
+  "walkthrough": {
+    "title": "Kagent: PM & CTO Walkthrough — Kubernetes AI Agent Platform",
+    "steps": [
+      {
+        "image": "/screenshots/kagent/step01_sponsor.jpg",
+        "title": "Infrastructure Setup",
+        "description": "Cloud infrastructure provisioning for Kagent deployment — Kubernetes cluster as the foundation.",
+        "pmCritique": {
+          "works": [
+            "K8s-first approach aligns with cloud-native enterprises",
+            "Infrastructure-as-code patterns familiar to DevOps teams"
+          ],
+          "doesntWork": [
+            "Requires existing K8s infrastructure — not for cloud beginners",
+            "No managed K8s setup — must provision your own cluster"
+          ],
+          "userPsychology": "Kagent's infrastructure requirement is a feature, not a bug — it guarantees the user is a K8s operator who understands the deployment model."
+        },
+        "ctoCritique": {
+          "verdict": "K8s prerequisite means only our platform team can deploy this. That's actually good — it prevents shadow IT agent deployments.",
+          "concerns": [
+            "K8s expertise required for deployment and maintenance",
+            "Cluster costs on top of agent costs"
+          ],
+          "enterpriseGaps": [
+            "No managed offering — must run your own K8s",
+            "No multi-cloud K8s support documented"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step02_cli.jpg",
+        "title": "3-Step CLI Quickstart",
+        "description": "make kind-up (local cluster), make kagent-install (install to cluster), make dashboard (open UI). Three commands to running agents.",
+        "pmCritique": {
+          "works": [
+            "3 commands to running agents is genuinely fast for K8s tools",
+            "kind-up creates a local cluster — no cloud costs for evaluation",
+            "Makefile-based — standard DevOps tooling pattern"
+          ],
+          "doesntWork": [
+            "make targets hide complexity — unclear what each command does",
+            "kind cluster ≠ production cluster — evaluation gap",
+            "No Helm chart visible for production deployment"
+          ],
+          "userPsychology": "3-step quickstart is the gold standard for developer tools. Kagent nails the 'time to running agent' metric for K8s engineers."
+        },
+        "ctoCritique": {
+          "verdict": "Local evaluation via kind is smart — zero cloud cost to try. But production deployment (real cluster, real RBAC, real networking) is a different story.",
+          "concerns": [
+            "kind cluster doesn't reflect production complexity",
+            "No production deployment guide visible",
+            "No Helm chart or operator for standard K8s deployment"
+          ],
+          "enterpriseGaps": [
+            "No HA deployment pattern",
+            "No multi-cluster support",
+            "No GitOps integration (ArgoCD, Flux)"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step03_web_ui.jpg",
+        "title": "Agent Configuration UI",
+        "description": "KubeAssist agent: system prompt with Core Capabilities (K8s Knowledge, Systematic Troubleshooting, Security-First, Clear Communication, Safety-Oriented). Model from kagent namespace.",
+        "pmCritique": {
+          "works": [
+            "Detailed system prompt with structured capabilities and guidelines",
+            "Security-First and Safety-Oriented principles built into default prompt",
+            "Model selection scoped to kagent namespace — K8s-native model management"
+          ],
+          "doesntWork": [
+            "Prompt is long and dense — hard to customize without K8s expertise",
+            "No prompt versioning or A/B testing",
+            "Model limited to kagent namespace — can't use models from other namespaces"
+          ],
+          "userPsychology": "The KubeAssist system prompt reads like a senior SRE's runbook. It's not just instructions — it's institutional knowledge encoded as an agent."
+        },
+        "ctoCritique": {
+          "verdict": "The system prompt is impressive — it encodes best practices (security-first, least privilege, safety-oriented) that I'd want in any K8s automation tool.",
+          "concerns": [
+            "System prompt quality depends on the Kagent team — no customization framework",
+            "Prompt updates require redeployment",
+            "No prompt governance or compliance checking"
+          ],
+          "enterpriseGaps": [
+            "No prompt version control integrated with K8s",
+            "No prompt rollback mechanism",
+            "No prompt effectiveness metrics"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step04_readme.jpg",
+        "title": "Demo Walkthrough",
+        "description": "README: Demo 1 (Simple k8s agent via kubectl apply), Demo 2 (Add MCP tool — website fetcher). CLI: kagent get agent, kagent invoke.",
+        "pmCritique": {
+          "works": [
+            "kubectl apply -f deploys agents — standard K8s workflow",
+            "kagent CLI for interactive agent queries",
+            "MCP tool integration shown — extensible beyond K8s"
+          ],
+          "doesntWork": [
+            "Demo uses kubectl apply of YAML — no visual builder",
+            "README-driven development — docs are the only guide",
+            "MCP website fetcher is a generic tool, not K8s-specific"
+          ],
+          "userPsychology": "kubectl apply for agent deployment is genius for K8s teams — it fits their existing workflow exactly. No new tools, no new paradigms."
+        },
+        "ctoCritique": {
+          "verdict": "kubectl apply means our existing CI/CD, GitOps, and RBAC apply to agent deployment. This is the most operationally natural agent deployment model I've seen.",
+          "concerns": [
+            "YAML-only agent definitions — no visual builder",
+            "MCP tools must be manually configured",
+            "No agent testing framework"
+          ],
+          "enterpriseGaps": [
+            "No agent health checks in K8s",
+            "No agent resource limits (CPU/memory)",
+            "No agent autoscaling"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step05_cli_interact.jpg",
+        "title": "CLI Interaction",
+        "description": "kagent CLI prompt — ask questions about cluster resources interactively. Terminal-based agent interaction.",
+        "pmCritique": {
+          "works": [
+            "Interactive CLI for K8s queries — 'what Helm charts are in my cluster?' is natural language ops",
+            "Terminal-native — DevOps teams live in terminals",
+            "Agent responses can trigger kubectl commands"
+          ],
+          "doesntWork": [
+            "Terminal-only interaction — no web-based chat interface",
+            "No command history or session persistence",
+            "Response quality depends entirely on model + prompt quality"
+          ],
+          "userPsychology": "The kagent CLI transforms K8s operations from 'memorize kubectl flags' to 'ask in English.' This is the dream for junior DevOps engineers."
+        },
+        "ctoCritique": {
+          "verdict": "Natural language K8s queries reduce tribal knowledge dependency. But the agent must be accurate — wrong kubectl commands in production can be catastrophic.",
+          "concerns": [
+            "Agent accuracy in K8s operations is safety-critical",
+            "No confirmation step before executing kubectl commands",
+            "No rollback for agent-initiated changes"
+          ],
+          "enterpriseGaps": [
+            "No destructive command prevention",
+            "No change approval workflow",
+            "No audit log of agent-initiated K8s changes"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step06_mcp_tool.jpg",
+        "title": "MCP Tool Integration",
+        "description": "Add MCP tools: website fetcher for web page retrieval. kubectl apply -f mcp/mcp-website-fetcher.yaml deploys tools as K8s resources.",
+        "pmCritique": {
+          "works": [
+            "MCP tools deployed as K8s resources — consistent with everything else",
+            "Website fetcher enables agents to pull external documentation",
+            "Tool addition is a kubectl apply — standard DevOps workflow"
+          ],
+          "doesntWork": [
+            "Only one MCP tool shown — tool ecosystem breadth unknown",
+            "Tool configuration via YAML — no visual tool config",
+            "No tool marketplace or community tools"
+          ],
+          "userPsychology": "MCP tools as K8s CRDs is the right abstraction. Every tool is a resource, managed like everything else in the cluster."
+        },
+        "ctoCritique": {
+          "verdict": "MCP tools as CRDs means standard K8s RBAC applies to tool access. This is the security model I want — namespace-scoped tool permissions.",
+          "concerns": [
+            "MCP tool ecosystem maturity unknown",
+            "No custom tool development guide",
+            "Tool reliability monitoring not shown"
+          ],
+          "enterpriseGaps": [
+            "No tool-level RBAC beyond namespace scoping",
+            "No tool version management",
+            "No tool dependency resolution"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/kagent/step07_dashboard.jpg",
+        "title": "Agent Dashboard",
+        "description": "Web dashboard for monitoring and managing K8s AI agents. Agent list, status, configuration access.",
+        "pmCritique": {
+          "works": [
+            "Web dashboard provides visibility beyond CLI",
+            "Agent management from a browser — accessible to platform teams",
+            "Dashboard + CLI dual interface serves different skill levels"
+          ],
+          "doesntWork": [
+            "Dashboard detail not fully visible in this frame",
+            "No real-time agent activity monitoring",
+            "No dashboard customization or alerting"
+          ],
+          "userPsychology": "The dashboard is the platform team's view — while DevOps use the CLI, platform engineering uses the dashboard for oversight."
+        },
+        "ctoCritique": {
+          "verdict": "Dashboard gives management visibility into agent operations. But I need: agent success rates, cost tracking, error trends, and capacity planning.",
+          "concerns": [
+            "No agent performance metrics in dashboard",
+            "No cost tracking per agent",
+            "No alerting on agent failures"
+          ],
+          "enterpriseGaps": [
+            "No dashboard RBAC",
+            "No dashboard SSO integration",
+            "No dashboard API for custom monitoring"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Kagent is a niche but powerful tool for DevOps/SRE teams. AI agents that understand Kubernetes — run as CRDs, query cluster state, apply YAML, and troubleshoot issues. The web UI with agent instructions and model config is clean. But the market is tiny (K8s-native teams only), and the product is early-stage. Best for: DevOps teams already running Kubernetes who want AI-assisted cluster operations.",
+      "score": "B- (K8s Niche)",
+      "strengths": [
+        "Only AI agent platform native to Kubernetes CRDs",
+        "KubeAssist system prompt shows deep K8s domain knowledge",
+        "CLI + Web UI dual interface serves both DevOps and platform teams",
+        "MCP tool integration for web fetching and custom tools"
+      ],
+      "risks": [
+        "Tiny addressable market — K8s operators only",
+        "Early-stage — Solo.io backed but limited community",
+        "No visual workflow builder — prompt-only configuration",
+        "Single-agent only — no multi-agent orchestration for complex ops"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Kagent is the right tool for K8s-native agent deployment — agents run as CRDs, managed by K8s operators, with native RBAC and namespace isolation. But it's a DevOps tool, not an enterprise agent platform. Use for internal K8s operations automation — not for customer-facing agents.",
+      "decision": "DEPLOY — For K8s Ops Teams Only",
+      "strengths": [
+        "K8s-native — agents are CRDs with standard RBAC and namespace isolation",
+        "Solo.io backing provides enterprise credibility in the service mesh space",
+        "3-step quickstart (make kind-up, install, dashboard) is genuinely fast",
+        "MCP support enables extensible tooling"
+      ],
+      "dealBreakers": [
+        "K8s-only deployment model",
+        "No enterprise agent platform features (audit, governance, multi-tenant)",
+        "Limited model support — kagent namespace models only",
+        "Early-stage product with small community"
+      ]
+    }
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "IYdsZA7mAYA",
+      "title": "KAgent: Run AI Agents on Kubernetes, No Cloud",
+      "channel": "Tekanaid"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The only Kubernetes-native agent platform — deploy and manage AI agents as K8s custom resources with full cloud-native operational tooling.",
+    "targetUser": "Platform engineers and DevOps teams running Kubernetes who want to manage AI agents with the same tools they use for everything else (kubectl, Argo CD, Helm).",
+    "vsAlternatives": "Wins uniquely on K8s-native deployment model — no other agent platform uses CRDs. Wins on cloud-native operational fit. Loses on accessibility — requires K8s expertise. Narrow tool ecosystem (cloud-native only)."
+  }
+}

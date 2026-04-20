@@ -1,0 +1,451 @@
+{
+  "name": "10Web",
+  "slug": "10web",
+  "category": "use-case",
+  "subcategory": "dev-tools",
+  "description": "10Web is an AI-powered WordPress platform that generates complete websites from text prompts or reference URLs. It bundles managed hosting on Google Cloud, automated backups, PageSpeed optimization, and an AI Writing Assistant for ongoing editing. Targets SMBs, freelancers, and agencies.",
+  "oneLiner": "AI-powered WordPress platform that generates, hosts, and manages complete websites from a single text prompt.",
+  "founded": "2017",
+  "funding": "~$5.5M total disclosed (Series A $2M, 2022). Previously bootstrapped.",
+  "pricing": "Free (site generation) → 1-week free trial → Plans from $10/month. Hosted on Google Cloud.",
+  "website": "https://10web.io",
+  "screenshots": [],
+  "capabilities": [
+    "AI website generation from text prompts",
+    "URL-based site recreation",
+    "Multi-page Elementor-based generation",
+    "AI Writing Assistant for content editing",
+    "Google Cloud managed WordPress hosting",
+    "Automated PageSpeed optimization (90+ scores)",
+    "Automated backups and one-click restore",
+    "Free SSL",
+    "WordPress migration tools",
+    "WooCommerce store generation",
+    "AI-generated images",
+    "Multi-site management",
+    "Agency white-label tools",
+    "AI Co-Pilot multi-agent framework for natural language site modification",
+    "Website Builder API for programmatic site generation",
+    "Figma-to-WordPress design import",
+    "Vibe Coding — AI-generated layouts from text descriptions"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Fully no-code. Enter business description or paste URL, select page types, AI generates complete Elementor-based WordPress site in 1-2 minutes. Customize in Elementor drag-and-drop editor with AI Assistant sidebar. Flow: Describe Business -> Choose Pages -> AI Generates -> Preview -> Edit -> Publish.",
+    "strengths": [
+      "Working website from a single prompt in under 5 minutes",
+      "Real contextual content, not lorem ipsum",
+      "Built on Elementor for familiar visual editing",
+      "Integrated hosting eliminates DevOps",
+      "URL-to-site recreation for migration/inspiration",
+      "Automated PageSpeed optimization"
+    ],
+    "weaknesses": [
+      "Not a general agent platform — purely vertical for WordPress",
+      "No API for AI generation capabilities",
+      "Generated content needs human review for accuracy",
+      "Locked into 10Web hosting",
+      "No enterprise governance or compliance",
+      "Limited to WordPress ecosystem"
+    ],
+    "notableFeatures": [
+      "URL-to-WordPress site recreation",
+      "AI Writing Assistant in Elementor",
+      "Automated PageSpeed optimization",
+      "One-click WordPress migration",
+      "WooCommerce AI store generation"
+    ]
+  },
+  "recentDevelopments": [
+    "2026: AI Co-Pilot multi-agent framework for real-time natural language site editing",
+    "2026: AI Website Builder API launched — text-to-WordPress-site programmatically",
+    "2026: Figma-to-WordPress import — convert designs to functional sites",
+    "2026: Vibe Coding feature — AI interprets prompts for layouts, color palettes, typography",
+    "2026: 1.5M+ websites created, Trustpilot Excellent rating (2,164 reviews)",
+    "2025 Q1: Enhanced multi-page generation with cross-page design coherence",
+    "2024 Q4: AI WooCommerce store generation",
+    "2024 Q3: AI Writing Assistant in Elementor",
+    "2024 Q1: URL-based site recreation feature",
+    "2023 Q4: 50,000 hosted websites milestone"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://10web.io",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://10web.io/ai-website-builder/",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://10web.io/pricing/",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-hosted WordPress platform. No self-hosted option."
+  },
+  "scores": {
+    "total": 43,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "Prompt-to-website in minutes. No coding required. Under 10 min to working site."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "No AI debugging tools. Preview and edit in Elementor is the only feedback loop."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 4,
+            "rationale": "Good tutorials, video guides, knowledge base. Gentle learning curve."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 4,
+            "rationale": "Regenerate sections quickly. Edit with Elementor live preview. AI Assistant for content."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 5.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "No multi-agent. Single-purpose generation tool."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Simple generate-then-edit. No structured handoff or reasoning visibility."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No collaborative AI features. Basic WordPress multi-user."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "No collaborative AI features. Basic WordPress multi-user."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 7.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 2,
+            "rationale": "WordPress ecosystem only. No CRM/ERP/database connectors."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 2,
+            "rationale": "No public API for AI builder. No MCP. Standard WordPress REST API only."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "WordPress-level auth only. No enterprise IAM."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 1,
+            "rationale": "No RAG, vector stores, or data connectors. Prompt text and URLs only."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 7.6,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "No AI-specific guardrails beyond underlying LLM safety filtering."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Natural HITL — nothing publishes without user action. Simple but effective."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 1,
+            "rationale": "No AI audit trail. No compliance certifications."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 1,
+            "rationale": "Basic dashboard roles. WordPress-level access. No enterprise RBAC."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 9,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "SaaS-only on 10Web's Google Cloud. No self-hosted option."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Google Cloud auto-scaling. PageSpeed optimized. Adequate for SMB traffic."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Basic uptime and PageSpeed dashboards. No AI-specific observability."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "50K+ hosted websites. WordPress community. No developer ecosystem for AI features."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "43/100 overall. Strongest: Creation (14/20). Weakest: Orchestration (5/20). Breakdown: Creation (14/20), Orchestration (5/20), Integration (7/20), Governance (8/20), Operations (9/20).",
+  "competence": "Vertical AI Builder (WordPress)",
+  "targetUser": "SMBs and agencies generating WordPress sites with AI",
+  "supportedCUJs": [
+    "content-generation"
+  ],
+  "walkthrough": {
+    "title": "10Web: PM & CTO Walkthrough — AI Website Builder",
+    "steps": [
+      {
+        "image": "/screenshots/10web/step01_landing.jpg",
+        "title": "AI Website Builder Landing",
+        "description": "Describe your dream website — AI generates it instantly. 1.5M+ websites, Trustpilot Excellent. Template chips for quick start.",
+        "pmCritique": {
+          "works": [
+            "1.5M+ sites and Trustpilot Excellent — strongest social proof of any product reviewed",
+            "Text input + Generate button — simplest possible creation UX",
+            "Template chips (marketing agency, eco-friendly shop) show instant value"
+          ],
+          "doesntWork": [
+            "Very competitive market — Wix, Squarespace, WordPress.com all have AI builders",
+            "No preview of AI quality before committing to generate",
+            "Free generation but hosting requires payment — conversion funnel"
+          ],
+          "userPsychology": "The landing page converts because of social proof (1.5M sites, Trustpilot). The AI generation is the hook, WordPress hosting is the business model."
+        },
+        "ctoCritique": {
+          "verdict": "10Web's AI generation is a product feature, not a platform. No relevance to agent factory evaluation except as a UX reference.",
+          "concerns": [
+            "Not relevant to agent factory evaluation",
+            "WordPress hosting is the real product, AI is the acquisition tool"
+          ],
+          "enterpriseGaps": [
+            "Not an agent platform",
+            "No API for external integration"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/10web/step02_generate.jpg",
+        "title": "Generate from Description",
+        "description": "Type business name and description — AI creates complete WordPress site with pages, content, and design.",
+        "pmCritique": {
+          "works": [
+            "Natural language to full website — the ultimate 'describe and build' experience",
+            "Multiple page types generated (Home, About, Contact, Products)",
+            "Preview before publishing gives confidence"
+          ],
+          "doesntWork": [
+            "Generated quality varies with description quality",
+            "WordPress-specific output limits platform flexibility",
+            "AI design choices may not match brand guidelines"
+          ],
+          "userPsychology": "Generate → Preview → Edit is the right creation flow. Agent factories should study this pattern for agent workflow generation."
+        },
+        "ctoCritique": {
+          "verdict": "The generation pattern is worth studying — describe intent → AI generates → human reviews → iterate. This is how agent creation should feel.",
+          "concerns": [],
+          "enterpriseGaps": []
+        }
+      },
+      {
+        "image": "/screenshots/10web/step03_editor.jpg",
+        "title": "Visual Page Editor",
+        "description": "WordPress page editor with AI-generated content about 'Our Brewing Artistry.' Professional design with images and typography.",
+        "pmCritique": {
+          "works": [
+            "AI-generated content is professional and industry-appropriate",
+            "Standard WordPress editor — familiar to millions of users",
+            "Images are contextually relevant, not generic stock photos"
+          ],
+          "doesntWork": [
+            "WordPress editor has a learning curve for non-WordPress users",
+            "AI content may need significant editing for brand voice",
+            "Image quality and licensing unclear"
+          ],
+          "userPsychology": "The editor is where AI generation meets human creativity. The AI gets you 80%, the editor lets you perfect the last 20%."
+        },
+        "ctoCritique": {
+          "verdict": "",
+          "concerns": [],
+          "enterpriseGaps": []
+        }
+      },
+      {
+        "image": "/screenshots/10web/step04_code_editor.jpg",
+        "title": "Chat-Based Code Editor",
+        "description": "Ask 10Web AI to make modifications. Code diff view with Preview button. Left panel: modification history with Restore option.",
+        "pmCritique": {
+          "works": [
+            "Chat-based code editing — 'make the header bigger' instead of CSS",
+            "Code diff shows exactly what changed — transparency for developers",
+            "Modification history with Restore — version control for non-developers"
+          ],
+          "doesntWork": [
+            "Code modifications may break existing design",
+            "No undo beyond single modifications",
+            "AI code quality may introduce technical debt"
+          ],
+          "userPsychology": "Chat-based code editing is the future of website management. 10Web proves it works at scale — 1.5M+ sites trust it."
+        },
+        "ctoCritique": {
+          "verdict": "The chat → code diff → preview → restore pattern is the right UX for AI-assisted changes. Agent factories should adopt this for agent behavior modification.",
+          "concerns": [],
+          "enterpriseGaps": []
+        }
+      },
+      {
+        "image": "/screenshots/10web/step05_modifications.jpg",
+        "title": "AI Modifications",
+        "description": "Natural language site editing — ask the AI to change design, content, or functionality.",
+        "pmCritique": {
+          "works": [
+            "Natural language modifications remove the code barrier",
+            "Instant preview of changes before committing",
+            "Iterative refinement through conversation"
+          ],
+          "doesntWork": [
+            "Complex modifications may fail or produce unexpected results",
+            "No batch modifications — one change at a time",
+            "Modification scope limited to what the AI understands"
+          ],
+          "userPsychology": ""
+        },
+        "ctoCritique": {
+          "verdict": "",
+          "concerns": [],
+          "enterpriseGaps": []
+        }
+      },
+      {
+        "image": "/screenshots/10web/step06_deploy.jpg",
+        "title": "Deploy to WordPress",
+        "description": "Publish AI-generated site to WordPress hosting. One-click deployment.",
+        "pmCritique": {
+          "works": [
+            "One-click deployment — from AI generation to live site in minutes",
+            "WordPress hosting is managed — no server configuration",
+            "SSL, CDN, and performance optimization included"
+          ],
+          "doesntWork": [
+            "WordPress hosting is a separate cost",
+            "No staging environment for testing",
+            "Migration from 10Web is WordPress-standard but still effort"
+          ],
+          "userPsychology": ""
+        },
+        "ctoCritique": {
+          "verdict": "",
+          "concerns": [],
+          "enterpriseGaps": []
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "10Web is an AI website builder for WordPress, not an agent factory. 'Describe your dream website, AI generates it instantly' — and it works. 1.5M+ sites created, 2,164 Trustpilot reviews (Excellent). The chat-based code editor with live preview is polished. But this is a web design tool with AI, not an agent platform. Relevant as a reference for how AI should be embedded in vertical products.",
+      "score": "B- (Website Builder, Not Agent Factory)",
+      "strengths": [
+        "1.5M+ sites created — proven at scale",
+        "Describe → Generate → Edit flow is genuinely simple",
+        "Chat-based code editing with live preview is impressive",
+        "Trustpilot Excellent rating from 2,164 reviews"
+      ],
+      "risks": [
+        "Not an agent factory — can't build custom AI agents",
+        "WordPress-specific — not a general platform",
+        "AI generates sites but maintenance is still manual",
+        "No agent orchestration or workflow automation"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "10Web demonstrates excellent AI product embedding — AI generates and modifies websites through natural language. Relevant as a UX reference for how agent factories should handle visual output creation. Not a competitor or integration target for agent platforms.",
+      "decision": "NOT APPLICABLE — Reference Only",
+      "strengths": [
+        "Best-in-class AI-to-visual-output UX",
+        "WordPress ecosystem integration",
+        "Proven at 1.5M+ scale"
+      ],
+      "dealBreakers": [
+        "Not an agent platform",
+        "WordPress-only",
+        "No API for agent integration",
+        "No workflow automation"
+      ]
+    }
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "G0gQSD3plqo",
+      "title": "What is 'Vibe for WordPress'? Full Tutorial | 10Web",
+      "channel": "10Web"
+    },
+    {
+      "videoId": "UyoSA_LFofI",
+      "title": "10Web AI Builder Tutorial & Review 2026",
+      "channel": "Website Learners"
+    }
+  ],
+  "marketIntelligence": {
+    "funding": {
+      "total": "$2M+",
+      "lastRound": "Series A, $2M (2021)",
+      "investors": [
+        "AI Fund",
+        "Sierra Ventures",
+        "Formula VC"
+      ]
+    }
+  },
+  "coreCompetence": {
+    "bestAt": "The fastest AI WordPress website builder — generates complete WordPress sites from text descriptions with hosting, optimization, and management included.",
+    "targetUser": "Small businesses and entrepreneurs who want a professional WordPress site without hiring a developer or learning web design.",
+    "vsAlternatives": "Wins on WordPress specificity and speed — full site in minutes. Wins on integrated hosting. Loses on flexibility vs custom development. Loses on non-WordPress use cases. Not an agent platform."
+  }
+}

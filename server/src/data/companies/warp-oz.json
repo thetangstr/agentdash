@@ -1,0 +1,522 @@
+{
+  "name": "Oz by Warp",
+  "slug": "warp-oz",
+  "category": "enterprise",
+  "subcategory": "agent-orchestration",
+  "description": "Oz is Warp's cloud-based orchestration platform for running, managing, and scaling coding agents. Launched February 2026, Oz lets individuals and teams spin up unbounded numbers of agents that write code across multiple repos, push commits, open PRs, run tests, and make fixes — all with full audit trails and controllable via CLI, API, and web dashboard. Multi-model by design (Claude, Codex, Gemini). Fully programmable with triggers, schedules, webhooks, and your own hosting.",
+  "oneLiner": "Cloud orchestration platform for coding agents at scale — multi-model, multi-repo, fully programmable.",
+  "founded": "2020",
+  "funding": "$73M+ total ($50M Series B led by Sequoia Capital, June 2023). 700K+ active developers.",
+  "pricing": "Free $0/mo; Build $18/mo; Max $180/mo; Business $45/user/mo; Enterprise custom. Oz agents priced on AI usage + compute. BYOK supported.",
+  "website": "https://www.warp.dev/oz",
+  "githubRepo": null,
+  "githubStars": null,
+  "screenshots": [],
+  "capabilities": [
+    "Unbounded cloud agent scaling — spin up any number of agents",
+    "Multi-model support (Claude, Codex, Gemini) per agent",
+    "Multi-repo code changes, commits, PRs, test runs",
+    "Triggers — schedule, webhook, CI step, API call, manual",
+    "Full audit trail — every agent action tracked and linkable",
+    "CLI, REST API, SDK, and web dashboard interfaces",
+    "Team collaboration — share sessions, review actions, steer running agents",
+    "BYOK (Bring Your Own Key) for LLM providers",
+    "Warp cloud or self-hosted agent execution",
+    "Terminal-native — built on Warp's AI terminal product",
+    "Agent environments with custom toolchains",
+    "Programmable orchestration — compose agent workflows via API"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Terminal-native: agents launched from Warp terminal or via API/CLI. Web dashboard for monitoring and management. Triggers enable automated agent execution. Multi-model selection per agent task.",
+    "strengths": [
+      "Terminal-first UX is natural for developers — no context switch",
+      "Multi-model per task enables cost-quality optimization automatically",
+      "Cloud execution means agents run without tying up developer machines",
+      "Full audit trail with shareable links per agent session",
+      "Programmable triggers integrate into existing CI/CD workflows",
+      "700K+ active developer base from Warp terminal product"
+    ],
+    "weaknesses": [
+      "No visual workflow builder — terminal/API only",
+      "Coding agents only — no general-purpose agent building",
+      "Closed source — no self-modification or framework extension",
+      "Warp terminal lock-in for the full experience",
+      "New product (Feb 2026) — production track record limited",
+      "Pricing complexity — AI usage + compute stacking"
+    ],
+    "notableFeatures": [
+      "Unbounded agent scaling — no cap on concurrent agents",
+      "Multi-repo support — agents work across multiple codebases simultaneously",
+      "Trigger system — schedule, webhook, CI, API, manual",
+      "Team steering — anyone on the team can review and redirect running agents",
+      "Terminal-Bench #1 ranking for Warp's AI terminal capabilities"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-02-10: Oz launched — cloud orchestration platform for coding agents",
+    "2026-02: New pricing with Build tier ($18/mo) and BYOK support",
+    "2026: 700K+ active developers on Warp terminal platform",
+    "2026: Multi-model support — Claude, Codex, Gemini available per agent",
+    "2026: Live Workshop published — 58min deep dive on building cloud agents",
+    "2026: 172K views on intro video — strong developer awareness"
+  ],
+  "lastResearched": "2026-04-12",
+  "dataSources": [
+    {
+      "url": "https://www.warp.dev/oz",
+      "accessedAt": "2026-04-12",
+      "type": "docs"
+    },
+    {
+      "url": "https://docs.warp.dev/agent-platform",
+      "accessedAt": "2026-04-12",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.warp.dev/blog/oz-orchestration-platform-cloud-agents",
+      "accessedAt": "2026-04-12",
+      "type": "news"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPremise": false,
+    "byoc": true,
+    "hybrid": true,
+    "notes": "Agents run on Warp's cloud or your own infrastructure. BYOK for LLM providers."
+  },
+  "scores": {
+    "total": 64,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Terminal/CLI/API-based agent creation. No visual builder. Fast for developers, inaccessible to business users."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "Quick agent spin-up from terminal or API. Templates and triggers reduce setup time."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Audit trails and shareable session links. No dedicated debugging UI beyond terminal output."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "58-min live workshop, docs site, blog posts. Growing but still early."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 4,
+            "rationale": "Core strength — unbounded agents, multi-repo, parallel execution."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 4,
+            "rationale": "Team steering — anyone can review and redirect running agents in real-time."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "Trigger system with schedules, webhooks, CI integration. Not visual templates."
+          },
+          {
+            "name": "Team Development",
+            "score": 4,
+            "rationale": "Shared sessions, collaborative agent review, team-wide visibility."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "Git/GitHub integration native. CI/CD triggers. Limited beyond code toolchain."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "REST API, SDK, CLI, webhooks. Well-designed programmable interface."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "BYOK for LLM providers. Team auth via Warp accounts."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "Multi-model routing built in. Agents access repos and file systems natively."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Agent steering and termination available. No content guardrails like PII/moderation."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Full audit trail per agent session with shareable links. No compliance certifications yet."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "Team-level access. No granular RBAC or enterprise SSO documented."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Agent actions visible in terminal/dashboard. No structured reasoning traces."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 4,
+            "rationale": "Warp cloud or self-hosted. BYOC support. Trigger-based deployment."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Unbounded agent scaling. Dashboard monitoring. Limited observability depth."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Usage-based pricing but AI + compute stacking makes costs hard to predict."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 3,
+            "rationale": "700K developers from Warp terminal. Oz is new (Feb 2026) — ecosystem building."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "64/100 overall. Strongest: Orchestration (15/20). Weakest: Governance (10/20). Breakdown: Creation (13/20), Orchestration (15/20), Integration (14/20), Governance (10/20), Operations (12/20).",
+  "competence": "agent-orchestration",
+  "targetUser": "Engineering teams scaling coding agents across repositories",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Strong developer awareness from Warp terminal brand — 700K+ active developers",
+      "Oz positioned as the orchestration layer for 2026 agent explosion",
+      "172K views on intro video signals mainstream developer interest",
+      "Sequoia-backed with $73M+ funding — credible long-term bet",
+      "Early product (Feb 2026) — limited production feedback so far"
+    ],
+    "metrics": [
+      {
+        "metric": "Active Developers",
+        "value": "700K+",
+        "source": "Warp"
+      },
+      {
+        "metric": "Total Funding",
+        "value": "$73M+",
+        "source": "PitchBook"
+      },
+      {
+        "metric": "Intro Video Views",
+        "value": "172K",
+        "source": "YouTube"
+      }
+    ],
+    "funding": "$73M+ total ($50M Series B led by Sequoia Capital, June 2023)"
+  },
+  "supportedCUJs": [
+    "code-development",
+    "code-review"
+  ],
+  "coreCompetence": {
+    "bestAt": "Cloud-native agent orchestration — unbounded scaling, multi-model, multi-repo, fully programmable triggers. The 'Kubernetes for coding agents.'",
+    "targetUser": "Engineering teams and platform engineers who need to run many coding agents at scale across repositories.",
+    "vsAlternatives": "Wins against CrewAI/LangGraph on cloud scaling and team collaboration. Loses to OpenAI Agent Builder on visual UX. Different category than Lindy/Vapi (code-only, not general purpose). Closest competitor: E2B (infrastructure) but Oz is higher-level (orchestration, not just sandboxing)."
+  },
+  "walkthrough": {
+    "title": "Oz by Warp: PM & CTO Walkthrough — Cloud Agent Orchestration",
+    "pmVerdict": {
+      "summary": "Oz fills the critical gap between 'one developer running one agent' and 'a team running hundreds of agents at scale.' The terminal-first UX is natural for developers but excludes everyone else. Multi-model per task, triggers, and team steering are genuinely differentiated. But it's coding-only — not a general-purpose agent factory. Best for: engineering orgs that have adopted AI coding agents and need orchestration infrastructure.",
+      "score": "B+",
+      "strengths": [
+        "Only platform purpose-built for scaling coding agents in the cloud",
+        "Multi-model per task — Claude for reasoning, Codex for code, Gemini for review",
+        "Trigger system integrates agents into existing CI/CD workflows",
+        "Team steering lets anyone review and redirect running agents",
+        "700K developer base from Warp terminal gives instant distribution"
+      ],
+      "risks": [
+        "Coding agents only — not general-purpose agent building",
+        "No visual builder — terminal/API excludes non-developers",
+        "New product (Feb 2026) — limited production track record",
+        "Pricing complexity — AI + compute stacking makes costs unpredictable",
+        "Warp terminal dependency for the full experience"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Oz solves a real problem: as AI coding agents multiply, someone needs to orchestrate, monitor, and budget them. The audit trail, team steering, and trigger system are enterprise-grade thinking applied to a developer tool. But: no compliance certifications, limited RBAC, and the coding-only focus means it's a point solution, not a platform. Use it for your engineering team's agent fleet — not for customer-facing agents.",
+      "decision": "EVALUATE — For Engineering Agent Fleet Management",
+      "strengths": [
+        "Full audit trail per agent — every action tracked with shareable links",
+        "Self-hosted option — agents can run on your infrastructure",
+        "BYOK — bring your own API keys for any LLM provider",
+        "Sequoia-backed ($73M) — financially stable for a startup",
+        "API-first — integrates into existing toolchains"
+      ],
+      "dealBreakers": [
+        "Coding agents only — can't orchestrate customer service, sales, or ops agents",
+        "No SOC2/HIPAA/compliance certifications documented",
+        "No granular RBAC or SSO — team-level access only",
+        "Cost predictability is poor — stacked usage-based pricing",
+        "Feb 2026 launch — no production case studies yet"
+      ]
+    },
+    "coverageGaps": [
+      "Oz web dashboard walkthrough",
+      "Agent trigger configuration",
+      "Multi-repo agent execution",
+      "Cost monitoring and budgeting",
+      "Team collaboration features"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (13/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Terminal-based agent creation shown in tutorials",
+        "gap": "No visual builder — creation is CLI/API only"
+      },
+      {
+        "dimension": "Orchestration (15/20)",
+        "score": "Core Strength",
+        "videoEvidence": "Multi-agent, multi-model, triggers all demonstrated",
+        "gap": "Orchestration is the product — well supported"
+      },
+      {
+        "dimension": "Integration (14/20)",
+        "score": "Supported",
+        "videoEvidence": "API, CLI, webhooks, CI integration shown",
+        "gap": "Integration beyond code tools not demonstrated"
+      },
+      {
+        "dimension": "Governance (10/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Audit trails and session links demonstrated",
+        "gap": "No compliance, RBAC, or content guardrails"
+      },
+      {
+        "dimension": "Operations (12/20)",
+        "score": "Supported",
+        "videoEvidence": "Cloud scaling, self-hosted option, dashboard monitoring shown",
+        "gap": "Cost management depth not demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/warp-oz/step01_architecture.jpg",
+        "title": "Oz Architecture — Agent Orchestration Hub",
+        "description": "Oz sits at the center: Cron schedules, Web hooks, API/SDK calls, CLI, and Warp terminal all trigger agents. Multiple agents run in parallel — implementing features, searching bugs, building requests, cleaning backlogs.",
+        "pmCritique": {
+          "works": [
+            "Architecture diagram is instantly comprehensible — inputs on left, agents on right, Oz in the middle",
+            "Multiple trigger types (Cron, Web, API, CLI, Warp) cover every automation pattern",
+            "Parallel agents shown doing different tasks — not just one agent, a fleet"
+          ],
+          "doesntWork": [
+            "No visual builder — the architecture is conceptual, configuration is CLI/API",
+            "Agent task descriptions are vague (implementing features, searching bugs) — no detail on how",
+            "No error handling or fallback paths visible in the architecture"
+          ],
+          "userPsychology": "This diagram sells the vision: your engineering team augmented by an army of agents. The multiple input types signal this isnt a toy — its infrastructure."
+        },
+        "ctoCritique": {
+          "verdict": "The architecture is sound — event-driven agent orchestration with multiple trigger sources. This is the Kubernetes model applied to AI agents.",
+          "concerns": [
+            "No rate limiting or concurrency controls visible",
+            "Agent-to-agent coordination not shown — are they independent or can they collaborate?",
+            "Cost scaling with unbounded agents is a budget risk"
+          ],
+          "enterpriseGaps": [
+            "No agent resource quotas",
+            "No priority queuing for agent tasks",
+            "No cross-agent dependency management"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/warp-oz/step02_docs.jpg",
+        "title": "Cloud Agents Documentation",
+        "description": "Docs page explaining Cloud Agents: triggers (Slack, Linear, GitHub, webhooks), schedules (recurring tasks), parallelism (many agents across repos), and observability (tracked, auditable, shareable).",
+        "pmCritique": {
+          "works": [
+            "Clear documentation with use cases — PR reviews, issue triage, dead code removal",
+            "How they work together section explains local + cloud agent interplay",
+            "Seamless handoff — start in cloud, take over locally when hands-on needed"
+          ],
+          "doesntWork": [
+            "Docs-heavy onboarding — no interactive quickstart or playground",
+            "Multiple browser tabs open suggests complex setup workflow",
+            "No getting-started wizard visible"
+          ],
+          "userPsychology": "The docs sell the value proposition clearly but the path from reading to doing requires switching to terminal. No in-browser try-it experience."
+        },
+        "ctoCritique": {
+          "verdict": "Documentation quality is good — clear architecture explanation with practical use cases. Shared context via MCP servers is a thoughtful design choice.",
+          "concerns": [
+            "Shared context between local and cloud agents raises data boundary questions",
+            "No security model documentation visible on this page",
+            "Integration list (Slack, Linear, GitHub) is limited compared to enterprise needs"
+          ],
+          "enterpriseGaps": [
+            "No SSO/SAML documentation",
+            "No data residency or compliance section",
+            "No SLA documentation for cloud agents"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/warp-oz/step03_agent_terminal.jpg",
+        "title": "Agent Running in Warp Terminal",
+        "description": "Warp terminal showing agent conversation with file listing, Run ID, Credits used (1.0), Run time (12.7 sec), Status (Failed), and Continue locally button for handoff.",
+        "pmCritique": {
+          "works": [
+            "Continue locally button enables seamless cloud-to-local handoff — unique feature",
+            "Run metadata (ID, credits, time, status) visible at a glance — no digging",
+            "Terminal UX is natural for developers — zero learning curve if you use Warp"
+          ],
+          "doesntWork": [
+            "Status shows Failed with no explanation — what went wrong?",
+            "1000 free cloud agent credits shown but credit consumption rate is opaque",
+            "Multiple tabs (agent conversations) can get overwhelming"
+          ],
+          "userPsychology": "The Continue locally button is the killer UX innovation — cloud agents do the heavy lifting, you take over for the tricky parts. This is genuine human-AI collaboration."
+        },
+        "ctoCritique": {
+          "verdict": "Run metadata (ID, credits, time, status) is the right level of observability for individual agent runs. The failed status needs better error reporting.",
+          "concerns": [
+            "Failed run with no error detail — debugging requires investigation",
+            "Credits as the billing unit is non-standard — hard to map to traditional cost models",
+            "Terminal-only interface limits who can monitor agent health"
+          ],
+          "enterpriseGaps": [
+            "No error categorization or automated retry",
+            "No alerting on failed agent runs",
+            "No cost forecasting based on credit usage patterns"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/warp-oz/step04_github_pr.jpg",
+        "title": "Agent Creates GitHub Pull Request",
+        "description": "@warp-agent opens PR #48 \"Update footer year to 2026\" — all checks pass (1 neutral, 4 successful), Cloudflare Pages deployed. Agent comments with code review suggestion.",
+        "pmCritique": {
+          "works": [
+            "Agent-created PR looks identical to human PR — @warp-agent is a team member",
+            "All checks pass including Cloudflare deployment — agent code is production-quality",
+            "Agent comments with specific suggestion (update starter range) — not just code, reviews too"
+          ],
+          "doesntWork": [
+            "Simple task (update year) doesnt demonstrate complex multi-file changes",
+            "No indication this was an agent PR without checking the author name",
+            "PR review by the agent on its own PR is a governance concern"
+          ],
+          "userPsychology": "Seeing a real GitHub PR created by an agent — with passing checks and deployment — is the proof point. This is what makes engineering managers say yes."
+        },
+        "ctoCritique": {
+          "verdict": "Agent PRs with CI/CD integration is the right deployment model — agents work through the same process as humans. The governance question: who reviews agent PRs?",
+          "concerns": [
+            "Agent self-reviewing its own PR is a conflict of interest",
+            "No mandatory human review gate before merge",
+            "Simple PR (year update) — complex multi-service changes need different safeguards"
+          ],
+          "enterpriseGaps": [
+            "No required human approval for agent PRs",
+            "No agent PR labeling or categorization",
+            "No agent change scope limits (max files, max lines)"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/warp-oz/step05_new_agent.jpg",
+        "title": "New Oz Agent Conversation",
+        "description": "Start screen for a new cloud agent: project context (~/Projects/bholmesdev), keyboard shortcuts, /model to switch LLMs, 972 free cloud credits remaining, Check agent status button.",
+        "pmCritique": {
+          "works": [
+            "Project context shown upfront — agent knows which codebase to work on",
+            "Keyboard shortcuts for power users (Cmd+Shift for cloud, Cmd for local)",
+            "/model switch makes LLM selection a first-class command",
+            "972 free credits — generous free tier for evaluation"
+          ],
+          "doesntWork": [
+            "Blank prompt with example text but no templates or suggested tasks",
+            "Credit counter creates cost anxiety — when will I run out?",
+            "No task history or recent agents visible from this screen"
+          ],
+          "userPsychology": "The free credits remove the purchase barrier. The keyboard shortcuts signal this is a power-user tool. But the blank prompt means the user must already know what to ask."
+        },
+        "ctoCritique": {
+          "verdict": "Good developer UX — project context, model selection, and credit visibility in one screen. But no team management, no shared agent templates, no organizational controls.",
+          "concerns": [
+            "Individual credit allocation — no team/org budget management",
+            "No approved model list — developers can use any model",
+            "No task templates for standardized agent workflows"
+          ],
+          "enterpriseGaps": [
+            "No team credit pools or chargeback",
+            "No model governance (approved model list)",
+            "No shared agent task templates across team"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "aBTG59a7Bcs",
+      "title": "Introducing Oz: the orchestration platform for cloud agents",
+      "channel": "Warp"
+    },
+    {
+      "videoId": "8pT2pljLAp0",
+      "title": "2026 Is the Year of Agent Orchestration! Enter Oz Agents by Warp",
+      "channel": "All About AI"
+    },
+    {
+      "videoId": "o4Ib_cvbjtc",
+      "title": "Oz Live Workshop: Build Your First Cloud Agent (58min)",
+      "channel": "Warp"
+    }
+  ]
+}

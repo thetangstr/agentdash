@@ -1,0 +1,56 @@
+{
+  "sector": "Insurance Claims Operations",
+  "slug": "insurance",
+  "narrative": "Insurance claims is a sequence of high-friction judgment and document tasks. Every claim starts with intake chaos: inconsistent forms, missing fields, unstructured narratives, attachments, photos, policy lookups, coverage questions, fraud concerns, and handoffs between teams. The right story is: use agents to standardize FNOL, classify documents, set up claims correctly, pull evidence together, determine whether a case belongs in a straight-through lane, and escalate edge cases with structured rationale.",
+  "buyerPromise": "We reduce claims setup drag, improve straight-through processing on simple lanes, and give adjusters a cleaner, better-grounded starting point.",
+  "pactScore": {
+    "total": 81,
+    "dimensions": [
+      {"key": "P", "name": "Performance", "score": 21, "subCriteria": [{"name": "Document parsing", "score": 5, "rationale": "Document-heavy classification and normalization is core"}, {"name": "Routing accuracy", "score": 4, "rationale": "Policy-grounded routing with lane complexity"}, {"name": "Judgment complexity", "score": 3, "rationale": "Fraud-sensitive escalation requires nuanced reasoning"}]},
+      {"key": "A", "name": "Access", "score": 19, "subCriteria": [{"name": "Claims core systems", "score": 3, "rationale": "Legacy core integration is challenging"}, {"name": "Document repositories", "score": 4, "rationale": "Photos, video, telematics accessible but varied"}, {"name": "Vendor systems", "score": 4, "rationale": "Repair and medical vendor data retrievable"}]},
+      {"key": "C", "name": "Context", "score": 22, "subCriteria": [{"name": "Policy grounding", "score": 5, "rationale": "Coverage questions require deep policy document synthesis"}, {"name": "Evidence assembly", "score": 5, "rationale": "Multi-source evidence packet creation is high value"}, {"name": "Historical patterns", "score": 4, "rationale": "SIU history and fraud signals provide context"}]},
+      {"key": "T", "name": "Trust", "score": 19, "subCriteria": [{"name": "Regulatory scrutiny", "score": 4, "rationale": "Fairness concerns and regulatory oversight are real"}, {"name": "Adjuster trust", "score": 4, "rationale": "System must feel like support, not surveillance"}, {"name": "Hallucination risk", "score": 3, "rationale": "Low tolerance for hallucinated facts in claims files"}]}
+    ]
+  },
+  "examples": [
+    {
+      "name": "Aviva Claims Transformation",
+      "source": "McKinsey case study on Aviva",
+      "challenge": "Improve claims outcomes from first notification of loss through settlement. Required better routing, liability assessment, and decision support at scale.",
+      "scale": "Deployed 80+ AI models and invested 40,000+ training hours.",
+      "humanHoursAndDollarImpact": "Average time to assess liability for complex cases fell by 23 days. Routing accuracy improved by 30%. Customer complaints fell by 65%.",
+      "whyItMatters": "Not a chatbot use case. It is an orchestration and decision-quality use case across a governed claims workflow."
+    },
+    {
+      "name": "Lemonade FNOL and Claims Automation",
+      "source": "Lemonade 2024 annual filing and investor materials",
+      "challenge": "Claims intake and low-complexity processing expensive when requiring human-first handling.",
+      "scale": "96% of the time AI claims bot handled FNOL without human intervention. ~55% of claims automated for instant or near-instant processing.",
+      "humanHoursAndDollarImpact": "Zero claims overhead for that intake step. Broader dollar impact not broken out publicly.",
+      "whyItMatters": "Proves narrow, low-complexity claims lanes can be automated aggressively when lane boundaries are tight."
+    },
+    {
+      "name": "Zurich Claims Document Automation",
+      "source": "expert.ai / Zurich case study",
+      "challenge": "Automate claims review while preserving accuracy and controlling implementation cost.",
+      "scale": "Focus on claims-document understanding and review.",
+      "humanHoursAndDollarImpact": "Claim review time reduced by 58%. 8 hours saved per policy review. $40 million in reduced annual underwriting leakage.",
+      "whyItMatters": "Claim workflows are full of document parsing, classification, and routing work that fits specialist agents well."
+    }
+  ],
+  "quickStart": ["FNOL intake normalization", "Claim setup quality checks", "Document classification and evidence packing", "Straight-through routing for low-complexity lanes"],
+  "avoid": ["Broad autonomous claims adjudication", "Disputed liability", "Complex injury, commercial, or fraud-sensitive claims"],
+  "consultantSignals": [
+    "McKinsey: AI leaders in insurance generated 6.1x total shareholder returns of laggards over five years. 3-5% accuracy improvement in claims from domain-level AI rewiring.",
+    "Deloitte: 76% of insurance executives had implemented gen AI in one or more functions by June 2024. Data security, quality, and integration are top scaling barriers."
+  ],
+  "obstacles": ["Claims-core integration", "Fraud and leakage risk", "Regulatory scrutiny and fairness concerns", "Unclear accountability when AI makes a routing error", "Low tolerance for hallucinated facts in claims files", "Adjuster resistance if system feels like surveillance"],
+  "whereDataLives": ["Policy administration systems", "FNOL channels and intake forms", "Claims core systems", "Adjuster notes", "Document repositories", "Photos, video, and telematics", "Repair and medical vendor systems", "Fraud signals and SIU history", "Customer communications"],
+  "openQuestions": ["Which lines of business and claim severities are in scope first?", "What percent of claim volume is truly low-complexity and repetitive?", "What documentation is almost always missing at intake?", "What escalation packet would an adjuster actually trust?", "How will fraud, SIU, and compliance review the system?", "Which claims KPIs matter most: cycle time, leakage, complaints, or straight-through rate?"],
+  "collaborationJourney": {
+    "stage": "FNOL Intake",
+    "humanRole": "Adjuster reviews gaps",
+    "agentRole": "Extract entities & retrieve policy docs",
+    "handoffOutput": "Adjuster evidence packet"
+  }
+}

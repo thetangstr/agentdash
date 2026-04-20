@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Moon, Settings, Sun } from "lucide-react";
+import { BookOpen, MessageSquare, Moon, Settings, Sun } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
@@ -16,6 +16,8 @@ import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
+// AgentDash: Assistant chat panel
+import { ChatPanel } from "./ChatPanel";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -70,6 +72,17 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
+  // AgentDash: chat panel state
+  const [chatOpen, setChatOpen] = useState(() => {
+    try { return localStorage.getItem("agentdash.chatPanelOpen") === "true"; } catch { return false; }
+  });
+  const toggleChat = useCallback(() => {
+    setChatOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("agentdash.chatPanelOpen", String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const nextTheme = theme === "dark" ? "light" : "dark";
   const matchedCompany = useMemo(() => {
     if (!companyPrefix) return null;
@@ -380,6 +393,18 @@ export function Layout() {
                     <TooltipContent>v{health.version}</TooltipContent>
                   </Tooltip>
                 )}
+                {/* AgentDash: chat panel toggle */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn("shrink-0", chatOpen ? "text-primary" : "text-muted-foreground")}
+                  onClick={toggleChat}
+                  aria-label="Toggle assistant chat"
+                  title="Toggle assistant chat"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                </Button>
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
                     to={instanceSettingsTarget}
@@ -421,7 +446,7 @@ export function Layout() {
               id="main-content"
               tabIndex={-1}
               className={cn(
-                "flex-1 p-4 md:p-6",
+                "flex-1 min-w-0 p-4 md:p-6",
                 isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
               )}
             >
@@ -436,6 +461,14 @@ export function Layout() {
               <CompanyTheme />
             </main>
             <PropertiesPanel />
+            {/* AgentDash: assistant chat panel */}
+            <ChatPanel
+              open={chatOpen && !isMobile}
+              onClose={() => {
+                setChatOpen(false);
+                try { localStorage.setItem("agentdash.chatPanelOpen", "false"); } catch { /* ignore */ }
+              }}
+            />
           </div>
         </div>
       </div>

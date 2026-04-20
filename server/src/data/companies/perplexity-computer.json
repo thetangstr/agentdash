@@ -1,0 +1,486 @@
+{
+  "name": "Perplexity Computer",
+  "slug": "perplexity-computer",
+  "category": "use-case",
+  "subcategory": "data-research",
+  "description": "Perplexity's computer-use agents autonomously browse the web, extract structured data, fill forms, and complete multi-step research workflows. Leverages Perplexity's web indexing and citation-grounded search for agents that navigate live websites and return structured outputs with source attribution.",
+  "oneLiner": "AI-powered computer use and web data extraction agents with citation-grounded research capabilities.",
+  "founded": "2022",
+  "funding": "$765M+ (valued at $9B+)",
+  "pricing": "Free (basic search); Pro $10/mo (unlimited Pro Search, 15 Deep Searches/mo); Max $200/mo (Computer, Personal Computer, unlimited everything)",
+  "website": "https://www.perplexity.ai",
+  "screenshots": [],
+  "capabilities": [
+    "Autonomous web browsing via computer-use",
+    "Structured data extraction",
+    "Citation-grounded research",
+    "Multi-step web research workflows",
+    "Form filling and web interaction",
+    "Competitive intelligence gathering",
+    "API-driven batch research",
+    "Multi-format output (JSON, markdown)",
+    "Computer — orchestrates 19 AI models in parallel for complex multi-step tasks",
+    "Personal Computer — dedicated local device with persistent file/app access",
+    "Tax return preparation from uploaded financial documents",
+    "Multi-model orchestration matching tasks to optimal models"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "NL prompts or API calls define research tasks. Agent browses, extracts, compiles results. Prompt-first with minimal config.",
+    "strengths": [
+      "Citation-grounded outputs eliminate trust problems",
+      "Computer-use reaches any web system",
+      "Massive user base for feedback loops",
+      "Strong financial backing"
+    ],
+    "weaknesses": [
+      "No enterprise governance layer",
+      "SaaS-only",
+      "No multi-agent orchestration",
+      "Computer-use sessions are opaque"
+    ],
+    "notableFeatures": [
+      "Citation-first architecture",
+      "Computer-use agents for live website interaction",
+      "Hybrid search combining index + real-time browsing"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-02-25: Computer launched — multi-model AI agent orchestrating 19 models for complex tasks",
+    "2026-03-11: Personal Computer launched — local Mac Mini with persistent access to files and apps",
+    "2026-03: Revenue jumped 50%, ARR tops $450M — driven by agent capabilities",
+    "2026: Tax preparation agent — drafts federal returns from uploaded financial documents",
+    "2026: $200/month Perplexity Max tier for Computer access",
+    "2025: Computer-use capabilities launched",
+    "Reached $9B+ valuation",
+    "Enterprise API with structured outputs",
+    "Exploring enterprise data platform partnerships"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://www.perplexity.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-only. Runs in Perplexity's infrastructure."
+  },
+  "scores": {
+    "total": 59,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "NL prompting is intuitive. API for programmatic creation."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Citation trails provide visibility. Dedicated tools still early."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 4,
+            "rationale": "Solid API docs. Computer-use docs newer."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 4,
+            "rationale": "Prompt-based iteration is fast. No build steps."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 8,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 2,
+            "rationale": "No native multi-agent."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "No structured handoff UX."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Shared API keys. No version control."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "Some guides. No marketplace."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 11.8,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 2,
+            "rationale": "No pre-built CRM/ERP connectors. Web-native."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "REST API well-documented. MCP emerging."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "API keys. SSO for enterprise."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Web search as context loader. No enterprise RAG."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Rate limiting and content filtering."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "No built-in approval workflows."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Query and citation logs. No SOC2 confirmed for computer-use."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Basic team management."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 14.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "SaaS-only. No self-hosted."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 4,
+            "rationale": "Search infra handles high volumes. Computer-use more resource-intensive."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "Basic usage dashboards. No advanced observability."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "100M+ monthly users. Enterprise base growing."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "59/100 overall. Strongest: Creation (15/20). Weakest: Orchestration (8/20). Breakdown: Creation (15/20), Orchestration (8/20), Integration (12/20), Governance (10/20), Operations (14/20).",
+  "competence": "Research & Data Extraction Agent",
+  "targetUser": "Teams needing citation-grounded web research at scale",
+  "marketIntelligence": {
+    "metrics": [
+      {
+        "metric": "Monthly Users",
+        "value": "100M+",
+        "source": "Reports"
+      },
+      {
+        "metric": "Search Queries",
+        "value": "Billions processed",
+        "source": "Perplexity"
+      }
+    ],
+    "funding": {
+      "total": "$765M+",
+      "lastRound": "Series C+",
+      "valuation": "$9B+",
+      "investors": [
+        "IVP",
+        "NEA",
+        "Databricks",
+        "Jeff Bezos"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "data-extraction",
+    "sales-outreach"
+  ],
+  "walkthrough": {
+    "title": "Perplexity: PM & CTO Walkthrough — AI Research Platform",
+    "steps": [
+      {
+        "image": "/screenshots/perplexity-computer/step01_profile.jpg",
+        "title": "Profile Instructions",
+        "description": "Custom AI behavior: writing style, tone, formatting. Structured guidelines for consistent responses.",
+        "pmCritique": {
+          "works": [
+            "Profile customization makes every search personalized",
+            "Structured writing guidelines ensure consistent output style",
+            "Actionable advice format preferences"
+          ],
+          "doesntWork": [
+            "Profile applies globally — no per-search customization",
+            "Free-form text with no validation",
+            "No profile sharing across team members"
+          ],
+          "userPsychology": "Profile instructions are Perplexity's version of system prompts — but for search, not agents."
+        },
+        "ctoCritique": {
+          "verdict": "Profile customization is useful for individual researchers but not manageable at enterprise scale. No team profiles, no enforcement.",
+          "concerns": [
+            "No team/org profile management",
+            "No profile versioning",
+            "No profile compliance checking"
+          ],
+          "enterpriseGaps": [
+            "No SSO-linked profiles",
+            "No profile audit trail",
+            "No profile templates for departments"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/perplexity-computer/step02_pricing.jpg",
+        "title": "Pro Plan — $10/month",
+        "description": "Pro: $10/mo (save $48/yr annual). Unlimited Pro Search, 15 Deep Searches/month, Unlimited paper Snapshots.",
+        "pmCritique": {
+          "works": [
+            "$10/mo is accessible — lower barrier than enterprise platforms",
+            "Unlimited Pro Search removes usage anxiety",
+            "Deep Search limited to 15/mo creates scarcity for premium feature"
+          ],
+          "doesntWork": [
+            "15 Deep Searches/mo is very limiting for power users",
+            "No enterprise tier visible in this view",
+            "Paper Snapshots is academic-focused — niche feature"
+          ],
+          "userPsychology": "$10/mo makes Perplexity an impulse purchase for knowledge workers. The limit on Deep Search creates natural upgrade pressure."
+        },
+        "ctoCritique": {
+          "verdict": "$10/mo per seat is cheap for research. But 15 Deep Searches/mo per user at 100 seats = 1500/mo total, which may not be enough for research-heavy teams.",
+          "concerns": [
+            "Per-user pricing doesn't scale for large teams",
+            "Deep Search limits may block research workflows",
+            "No volume or enterprise pricing visible"
+          ],
+          "enterpriseGaps": [
+            "No enterprise licensing model",
+            "No SSO/SAML visible",
+            "No usage analytics for team management"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/perplexity-computer/step03_search_results.jpg",
+        "title": "Search with Citations",
+        "description": "Paris 2024 Olympics medal table with sourced data. Clear formatting with country rankings, medal counts, and historical analysis.",
+        "pmCritique": {
+          "works": [
+            "Every claim has a source — citation-backed search builds trust",
+            "Structured data presentation (tables, charts) is clean and professional",
+            "Follow-up questions enable research drilling without re-prompting"
+          ],
+          "doesntWork": [
+            "Citations link to sources but verification is manual",
+            "Data may be outdated — no freshness indicator per fact",
+            "No export to spreadsheet or structured format"
+          ],
+          "userPsychology": "Citation-backed search is Perplexity's moat. In a world of hallucinating AI, showing sources is the trust differentiator."
+        },
+        "ctoCritique": {
+          "verdict": "Citations are valuable for agent grounding — agents that cite sources are more trustworthy. But citation accuracy needs verification infrastructure.",
+          "concerns": [
+            "Citation accuracy not guaranteed — sources may not support the claim",
+            "No citation confidence scoring",
+            "No citation freshness metadata"
+          ],
+          "enterpriseGaps": [
+            "No citation verification API for automated fact-checking",
+            "No citation export for compliance documentation",
+            "No source reliability scoring"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/perplexity-computer/step04_spaces.jpg",
+        "title": "Spaces for Research",
+        "description": "Organized research collections with shared access and file uploads. Collaborative research workspace.",
+        "pmCritique": {
+          "works": [
+            "Spaces organize research by topic — natural knowledge management",
+            "File uploads enable private data integration",
+            "Shared access enables team collaboration"
+          ],
+          "doesntWork": [
+            "Spaces UX not visible in detail — only mentioned conceptually",
+            "No space-level permissions visible",
+            "File upload limits and formats unclear"
+          ],
+          "userPsychology": "Spaces transform Perplexity from a search tool to a research platform. The ability to organize findings by project changes the workflow."
+        },
+        "ctoCritique": {
+          "verdict": "Spaces could serve as agent knowledge bases — organized, shareable research contexts. API access to Spaces would be valuable for agent integration.",
+          "concerns": [
+            "Spaces API availability unclear",
+            "No space-level access control",
+            "File processing capabilities unknown"
+          ],
+          "enterpriseGaps": [
+            "No space-level audit trail",
+            "No space data retention policy",
+            "No space export for backup"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/perplexity-computer/step05_deep_search.jpg",
+        "title": "Deep Research Mode",
+        "description": "Multi-step research: planning, searching across sources, synthesis. Comprehensive analysis for complex questions.",
+        "pmCritique": {
+          "works": [
+            "Deep Research automates multi-step research workflows",
+            "Planning → searching → synthesis mirrors how human researchers work",
+            "Comprehensive output covers multiple angles of a topic"
+          ],
+          "doesntWork": [
+            "15/month limit is restrictive for regular use",
+            "Research depth vs speed trade-off not controllable",
+            "No custom research templates or methodologies"
+          ],
+          "userPsychology": "Deep Research is Perplexity's most valuable feature for enterprise. Automated multi-source research in minutes instead of hours."
+        },
+        "ctoCritique": {
+          "verdict": "Deep Research as an API endpoint would be extremely valuable as an agent tool — any agent could trigger comprehensive research as a step in its workflow.",
+          "concerns": [
+            "API access to Deep Research unclear",
+            "Research methodology not customizable",
+            "No partial results or streaming during long research"
+          ],
+          "enterpriseGaps": [
+            "No research audit trail",
+            "No source filtering (include/exclude domains)",
+            "No research quality scoring"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/perplexity-computer/step06_api.jpg",
+        "title": "API Access",
+        "description": "Developer API for programmatic search. Integration point for agents and automated workflows.",
+        "pmCritique": {
+          "works": [
+            "API enables programmatic access — agents can use Perplexity as a tool",
+            "Developer-focused — SDK and documentation available",
+            "Structured output format for machine consumption"
+          ],
+          "doesntWork": [
+            "API capabilities vs web UI capabilities unknown — may be limited",
+            "Rate limits and pricing not shown in this view",
+            "No agent-specific SDK or integration pattern"
+          ],
+          "userPsychology": "The API is what makes Perplexity relevant to the agent factory market — not as a platform, but as a tool that every agent should have access to."
+        },
+        "ctoCritique": {
+          "verdict": "Perplexity API as an agent tool is a strong integration. Need to evaluate: rate limits, cost per query, latency, and output format compatibility with our agent framework.",
+          "concerns": [
+            "API rate limits and pricing critical for agent integration",
+            "Latency per query type unknown",
+            "Output format compatibility with agent frameworks"
+          ],
+          "enterpriseGaps": [
+            "No SLA for API availability",
+            "No dedicated enterprise API tier",
+            "No API usage analytics"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Perplexity is the best AI-powered research tool, not an agent factory. Profile customization, Pro Search with citations, Spaces for organized research, and Deep Research for multi-step analysis are excellent. But it's a search/research product, not an agent builder — you can't create custom agents or automate workflows. Relevant as a research tool that agents should integrate with, not as a platform to build agents on.",
+      "score": "B (Research Tool, Not Agent Factory)",
+      "strengths": [
+        "Best citation-backed AI search — every answer has sources",
+        "Spaces for organized research collections",
+        "Deep Research mode for comprehensive multi-step analysis",
+        "1.7M+ views = massive mainstream adoption"
+      ],
+      "risks": [
+        "Not an agent factory — can't build custom agents",
+        "No workflow automation or agent orchestration",
+        "API is search-only, not agent-creation",
+        "Consumer-focused — limited enterprise features"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Perplexity is a research tool our agents should use, not a platform to build agents on. The API enables programmatic search with citations, which is valuable as a tool in our agent toolkit. Evaluate as an integration target, not a competitor to agent platforms.",
+      "decision": "INTEGRATE — Use as Agent Tool, Not Platform",
+      "strengths": [
+        "Citation-backed search API for agent grounding",
+        "Pro Search provides depth beyond standard web search",
+        "Spaces API could enable agent-specific research contexts"
+      ],
+      "dealBreakers": [
+        "Not an agent platform — can't build or deploy agents",
+        "No workflow automation capability",
+        "Consumer pricing model, not enterprise licensing",
+        "API rate limits may constrain agent usage at scale"
+      ]
+    }
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "YoWdogtZRw8",
+      "title": "Learn 80% of Perplexity in under 10 minutes!",
+      "channel": "Jeff Su"
+    },
+    {
+      "videoId": "ISeZc6qKUSw",
+      "title": "The Complete Perplexity Tutorial 2026",
+      "channel": "Skill Leap AI"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "AI-powered web research agent backed by Perplexity search — combines real-time web search with computer-use for research-intensive tasks.",
+    "targetUser": "Knowledge workers and researchers who want AI to handle complex web research, data gathering, and synthesis tasks.",
+    "vsAlternatives": "Wins on search quality — Perplexity search engine is best-in-class for factual web queries. Wins on research use case. Loses on general agent capabilities. Cloud-only, limited enterprise features."
+  }
+}

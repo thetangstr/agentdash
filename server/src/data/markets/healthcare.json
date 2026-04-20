@@ -1,0 +1,57 @@
+{
+  "sector": "Healthcare Revenue Cycle Administration",
+  "slug": "healthcare",
+  "narrative": "Healthcare providers lose cash because revenue cycle work is a constant administrative grind across prior authorizations, denials, appeals, portals, faxed documents, payer rules, staff queues, and follow-up tasks. The Agent Factory story is that healthcare administration is full of narrow workflows where the model does not need to practice medicine. It needs to orchestrate paperwork, retrieve missing context, build packets, follow payer rules, submit through the right channels, monitor queue status, and route ambiguous cases with a full audit trail.",
+  "buyerPromise": "We compress denial and prior-auth admin work, keep every case moving, and surface the exact evidence and next action for staff instead of leaving them to chase portals and faxes.",
+  "pactScore": {
+    "total": 79,
+    "dimensions": [
+      {"key": "P", "name": "Performance", "score": 20, "subCriteria": [{"name": "Queue orchestration", "score": 4, "rationale": "Multi-step workflow coordination across payers"}, {"name": "Packet assembly", "score": 5, "rationale": "Collecting and assembling evidence packets is high-volume, rule-based"}, {"name": "Payer-rule matching", "score": 3, "rationale": "Payer-specific rules add complexity and require frequent updates"}]},
+      {"key": "A", "name": "Access", "score": 18, "subCriteria": [{"name": "EHR integration", "score": 3, "rationale": "EHR and practice-management systems have varying API maturity"}, {"name": "Payer portals", "score": 3, "rationale": "Fragmented payer portals with inconsistent interfaces"}, {"name": "Fax/document systems", "score": 4, "rationale": "Fax and PDF-heavy flows are accessible but messy"}]},
+      {"key": "C", "name": "Context", "score": 23, "subCriteria": [{"name": "Clinical documentation", "score": 5, "rationale": "Rich clinical records available for evidence assembly"}, {"name": "Payer guidelines", "score": 5, "rationale": "Published payer criteria provide clear grounding"}, {"name": "Denial patterns", "score": 4, "rationale": "Denial codes and remittance data reveal systematic patterns"}]},
+      {"key": "T", "name": "Trust", "score": 18, "subCriteria": [{"name": "HIPAA compliance", "score": 4, "rationale": "Strong regulatory framework with clear requirements"}, {"name": "Clinical boundary", "score": 3, "rationale": "Must never cross into clinical decision-making"}, {"name": "Audit requirements", "score": 4, "rationale": "Compliance and appeals require full audit trail"}]}
+    ]
+  },
+  "examples": [
+    {
+      "name": "Regional Hospital Prior Authorization Transformation",
+      "source": "Infinx case study on a regional hospital",
+      "challenge": "Prior authorization ownership fragmented across many clinical and scheduling staff. Process lacked visibility, documentation discipline, and operational control.",
+      "scale": "88 staff members involved in prior auth before redesign.",
+      "humanHoursAndDollarImpact": "Staff working on prior auth fell from 88 to 5. 30,000 clinical hours saved per year. Denials dropped materially.",
+      "whyItMatters": "Exactly the kind of workflow where clinicians are trapped in administrative coordination that should never have required them."
+    },
+    {
+      "name": "East Coast Orthopedic Group Prior Authorization",
+      "source": "Infinx case study on an East Coast orthopedic group",
+      "challenge": "Losing time on prior authorization review, eligibility checks, and payer-guideline lookups.",
+      "scale": "More than 600 prior authorizations processed per month.",
+      "humanHoursAndDollarImpact": "80+ staff hours saved per week (~$70K+ annually). Additional $55,000 in revenue in first 3 months from expanded hours and fewer lost patients.",
+      "whyItMatters": "Value is not just efficiency — it is faster patient access and lower revenue leakage from avoidable delays."
+    },
+    {
+      "name": "National Prior Authorization Burden in Medicare Advantage",
+      "source": "KFF analysis of 2024 Medicare Advantage prior authorization; AMA 2024 survey",
+      "challenge": "Prior authorization remains a huge administrative tax on providers and staff.",
+      "scale": "Nearly 53 million prior auth requests submitted to Medicare Advantage in 2024. 4.1 million denied. Physicians: average 43 prior auths per week.",
+      "humanHoursAndDollarImpact": "12 physician-and-staff hours per week per physician. More than a third of physicians employ staff who work exclusively on prior authorization.",
+      "whyItMatters": "Not a niche back-office annoyance. One of the most concentrated pools of repetitive administrative friction in healthcare."
+    }
+  ],
+  "quickStart": ["Prior auth determination and packet prep", "Denial reason extraction", "Appeal packet assembly", "Queue management and follow-up orchestration"],
+  "avoid": ["Broad end-to-end RCM replacement", "Clinical decision support framed as care guidance", "Workflows requiring deeply custom payer logic on day one"],
+  "consultantSignals": [
+    "McKinsey: Health systems spend more than $140 billion annually on revenue cycle. Nearly 20% of claims denied on average, as many as 60% never appealed.",
+    "McKinsey recommendation: Start with the highest-volume, most error-prone processes with clear, quantifiable outcomes.",
+    "AHA 2025: Prior authorization and denial prevention are real but medium-readiness AI targets that depend on workflow maturity and data availability."
+  ],
+  "obstacles": ["HIPAA and compliance constraints", "Fragmented payer portals and payer-specific rules", "EHR and practice-management integration burden", "Fax and PDF-heavy document flows", "Provider skepticism if system creates more clicks", "Long sales cycles and high proof requirements"],
+  "whereDataLives": ["EHR and practice-management systems", "Patient-access and scheduling tools", "Payer portals and clearinghouses", "Prior auth logs", "Denial codes and remittance data", "Fax inboxes and scanned clinical documents", "Appeal letters and correspondence", "Utilization-management work queues"],
+  "openQuestions": ["Which service lines have the worst prior-auth pain today?", "What share of denials are avoidable at the front end?", "Which payers and portals dominate the workload?", "Who owns the pain and budget: rev cycle, patient access, or department ops?", "What audit trail is required for compliance and appeals?", "How much human review is mandatory before a packet is submitted?"],
+  "collaborationJourney": {
+    "stage": "Packet Assembly",
+    "humanRole": "Clinician sign-off",
+    "agentRole": "Map records to payer requirements",
+    "handoffOutput": "Send-ready appeal packet"
+  }
+}

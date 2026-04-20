@@ -36,6 +36,24 @@ vi.mock("../services/autoresearch.js", () => ({
   autoresearchService: () => mockAutoresearch,
 }));
 
+// Bypass tier gating — entitlement enforcement is covered by require-tier.test.ts
+vi.mock("../services/entitlements.js", () => ({
+  entitlementsService: () => ({
+    getTier: async () => "enterprise",
+    setTier: async () => undefined,
+    getEntitlements: async () => ({
+      tier: "enterprise",
+      limits: { agents: 1000, monthlyActions: 5_000_000, pipelines: 1000 },
+      features: {
+        hubspotSync: true,
+        autoResearch: true,
+        assessMode: true,
+        prioritySupport: true,
+      },
+    }),
+  }),
+}));
+
 function createApp() {
   const app = express();
   app.use(express.json());

@@ -1,0 +1,95 @@
+{
+  "industry": "Healthcare",
+  "industrySlug": "healthcare",
+  "jobFunction": "Cybersecurity / SOC",
+  "functionSlug": "cybersecurity",
+  "disruptionScore": 9,
+  "summary": "Healthcare faces a ransomware crisis — attacks surged 36% YoY in late 2025, with mid-sized hospitals and specialty groups as prime targets. The updated HIPAA Security Rule makes continuous risk analysis a baseline expectation. Attackers are operationalizing AI for reconnaissance and phishing while most healthcare SOCs lack 24/7 monitoring. AgentDash's air-gapped, HIPAA-compliant, multi-model architecture is uniquely positioned for hospital networks where cloud-only solutions fail.",
+  "tier": "deep",
+  "workflows": [
+    {"name": "Ransomware Detection & Early Warning", "description": "Agents monitor network telemetry, endpoint behavior, and email patterns for ransomware indicators. Detect encryption attempts, lateral movement, and C2 communication before full deployment. Auto-isolate affected segments.", "agentPotential": "high", "currentPain": "Healthcare ransomware attacks surged 36% YoY. Average hospital downtime from ransomware is 18-24 days. Change Healthcare breach in 2024 disrupted claims processing for months, affecting 100M+ patients."},
+    {"name": "Medical Device Security Monitoring", "description": "Agents continuously monitor connected medical devices (infusion pumps, MRI machines, patient monitors) for anomalous behavior, unauthorized access, and firmware vulnerabilities. Map device inventory and risk exposure.", "agentPotential": "high", "currentPain": "Average hospital has 10-15 connected devices per bed. 53% of IoMT devices have known critical vulnerabilities. Most hospitals have zero visibility into medical device network behavior."},
+    {"name": "HIPAA Security Incident Triage", "description": "Agents detect potential PHI exposure events, classify severity per HIPAA breach notification thresholds (500+ records), initiate containment, and generate OCR-ready breach notification documentation.", "agentPotential": "high", "currentPain": "HIPAA breach notifications must occur within 60 days of discovery. Average healthcare breach costs $10.9M (IBM 2025). OCR is finalizing the most significant HIPAA Security Rule update in 20 years."},
+    {"name": "Access Monitoring & Insider Threat", "description": "Agents monitor EHR access patterns for anomalous behavior — staff accessing records outside their department, bulk record views, after-hours access to VIP patients, terminated employee credential use.", "agentPotential": "medium", "currentPain": "58% of healthcare breaches involve insiders. HIPAA minimum necessary standard requires access controls, but most hospitals audit reactively. Snooping on celebrity patient records is a persistent problem."},
+    {"name": "Continuous HIPAA Risk Assessment", "description": "Agents continuously scan infrastructure against HIPAA Security Rule technical safeguards, NIST CSF mappings, and HHS 405(d) practices. Generate risk assessment documentation that satisfies OCR examination requirements.", "agentPotential": "high", "currentPain": "OCR's updated HIPAA Security Rule makes system-level, ongoing risk analysis a baseline expectation rather than a periodic checkbox. Most hospitals still do annual point-in-time assessments."}
+  ],
+  "platformFit": [
+    {"companySlug": "bedrock-agentcore", "fitScore": 3, "rationale": "AWS GovCloud + HIPAA BAA available. But cloud-only — many hospital networks require on-premise security monitoring due to medical device network isolation requirements."},
+    {"companySlug": "langgraph", "fitScore": 2, "rationale": "Flexible graph orchestration but no healthcare-specific connectors, no HIPAA compliance tooling, and requires significant custom development for clinical environment integration."}
+  ],
+  "businessOutcome": "A 500-bed hospital deploying agentic cybersecurity can expect: 85% reduction in alert triage time, 24/7 monitoring replacing business-hours-only SOC, 70% faster ransomware detection (minutes vs hours), continuous HIPAA risk assessment replacing annual point-in-time reviews, and $2-5M annual savings vs outsourced MSSP. The HSCC's 2026 AI cybersecurity guidance validates the approach for healthcare organizations.",
+  "examples": [
+    "HSCC (Health Sector Coordinating Council) previewing 2026 AI cybersecurity guidance with best practices for healthcare organizations deploying AI in security operations.",
+    "Change Healthcare breach (2024): Disrupted claims processing for 100M+ patients, costing UnitedHealth $872M in Q2 2024 alone — proving catastrophic impact of inadequate healthcare security.",
+    "Hospitals are drowning in threats they can't triage (HelpNetSecurity, Jan 2026): Mid-sized hospitals and ambulatory networks identified as prime targets because they hold high-value data but lack continuous monitoring.",
+    "Darktrace predicts organizations will face first large-scale security incidents from agentic AI misbehavior in 2026 — healthcare's connected devices make this risk particularly acute."
+  ],
+  "obstacles": [
+    "Medical device networks often run on isolated VLANs with legacy protocols (HL7v2, DICOM) that standard security tools can't parse",
+    "HIPAA Business Associate Agreement requirements add 4-8 weeks to vendor onboarding",
+    "Hospital IT budgets are 3-5% of revenue vs 6-8% in other industries — chronic underinvestment in security",
+    "Clinical workflow disruption risk — false positive containment actions could affect patient care systems",
+    "Fragmented system landscape: Epic/Cerner EHR + 200+ ancillary clinical systems per hospital",
+    "Board-level cybersecurity awareness is low at many health systems despite increasing attacks"
+  ],
+  "playbook": {
+    "marketSizing": {
+      "tam": "$8.7B — Global healthcare cybersecurity market (2026), growing at 18% CAGR driven by ransomware crisis and regulatory mandates",
+      "sam": "$3.2B — AI-powered healthcare security specifically: SOC automation, medical device monitoring, HIPAA compliance automation in North America",
+      "som": "$160M — Mid-market health systems (200-1000 beds) seeking agentic security solutions capable of on-premise/hybrid deployment for medical device network monitoring",
+      "source": "Grand View Research Healthcare Cybersecurity Report, HIMSS cybersecurity survey, HHS breach statistics"
+    },
+    "currentState": "Healthcare cybersecurity is in crisis. Ransomware attacks surged 36% in late 2025, with attackers shifting to fast data-extortion that steals records in minutes. The Change Healthcare breach (2024) disrupted claims for 100M+ patients and cost $872M+ in a single quarter. Mid-sized hospitals are prime targets: they hold high-value PHI but typically lack 24/7 SOC coverage. The average hospital has 10-15 connected devices per bed, 53% with known vulnerabilities. OCR is finalizing the most significant HIPAA Security Rule update in 20 years, making continuous risk analysis a baseline expectation. Meanwhile, healthcare IT budgets remain 3-5% of revenue — half the cross-industry average. The result: hospitals need military-grade security on a retail-grade budget. This is exactly where agentic AI creates leverage.",
+    "idealCustomerProfile": {
+      "segment": "Mid-market health systems (200-1000 beds), multi-site ambulatory networks, specialty groups with high-value data (oncology, behavioral health), and radiology groups with heavy IoMT exposure",
+      "size": "200-1000 beds, $500M-$5B annual revenue, 2-10 IT security staff (usually sharing duties with general IT), 500-5000 connected medical devices",
+      "painIntensity": "Existential — a single ransomware attack causes 18-24 days of downtime costing $1-10M/day in lost revenue plus $10M+ in breach response. Board pressure is acute post-Change Healthcare.",
+      "buyerTitle": "CISO (at larger systems) or CIO/VP IT (at mid-market where CISO role doesn't exist), with approval from CEO, CFO, and Board Audit Committee",
+      "budget": "$200K-$1M for pilot from IT security or operational risk budget. Production: $1-4M/year. Many systems accessing HHS cybersecurity grant funding."
+    },
+    "entryWedge": {
+      "workflow": "Ransomware Detection & Early Warning — the highest-fear, highest-consequence workflow where 24/7 monitoring is the minimum viable security posture",
+      "why": "Every hospital board is terrified of being the next Change Healthcare. Ransomware detection is an existential threat with clear ROI: prevent one attack and the system pays for itself 100x over. No write access to clinical systems needed — purely monitoring network and endpoint telemetry. Fastest path from fear to funded.",
+      "proofOfConcept": "Deploy AgentDash agents monitoring network telemetry (NetFlow/DNS) and endpoint behavior data from existing EDR. Agents detect lateral movement, encryption staging, and C2 communication patterns. Run in shadow mode for 2 weeks alongside existing alerting. Measure: detection coverage vs current tools, false positive rate, time-to-detection for simulated attack scenarios.",
+      "timeToValue": "6-8 weeks. Week 1-2: Network tap/API integration + medical device network mapping. Week 3-4: Agent training on healthcare-specific threat patterns (ransomware TTPs, medical device anomalies). Week 5-6: Shadow mode with purple team validation. Week 7-8: Supervised production with hospital IT review."
+    },
+    "successMetrics": [
+      {"metric": "24/7 monitoring coverage", "baseline": "Business hours only (M-F 8am-5pm) at most mid-market hospitals", "target": "Continuous 24/7/365 AI-powered monitoring with human escalation for confirmed threats", "timeframe": "Immediate"},
+      {"metric": "Ransomware detection time", "baseline": "Hours to days — most attacks discovered after encryption begins", "target": "Minutes — detect lateral movement and staging before encryption deployment", "timeframe": "4 weeks post-deployment"},
+      {"metric": "Medical device visibility", "baseline": "0-20% of connected devices monitored for security anomalies", "target": "95%+ device inventory with continuous behavioral monitoring", "timeframe": "6 weeks"},
+      {"metric": "HIPAA risk assessment currency", "baseline": "Annual point-in-time assessment (immediately stale)", "target": "Continuous risk assessment with real-time compliance posture dashboard", "timeframe": "90 days"},
+      {"metric": "OCR breach notification readiness", "baseline": "Days to weeks to compile breach notification documentation", "target": "Auto-generated breach notification package within 4 hours of confirmed incident", "timeframe": "6 months"}
+    ],
+    "riskAssessment": [
+      {"risk": "False positive containment action disrupts clinical system (e.g., auto-isolating a medical device during patient care)", "severity": "high", "mitigation": "governance layer policy enforcement: NEVER auto-isolate devices tagged as 'clinical-critical' without human approval. Maintain clinical device whitelist. All containment actions on medical devices require CISO + clinical engineering approval. Shadow mode first."},
+      {"risk": "HIPAA BAA negotiation delays pilot timeline by 4-8 weeks", "severity": "medium", "mitigation": "Pre-negotiate standard BAA template with healthcare-specific terms. Offer on-premise deployment option to minimize PHI exposure to third-party infrastructure. Many health systems accept standard BAA for monitoring-only (no PHI storage)."},
+      {"risk": "Hospital IT team lacks capacity to support integration alongside daily operations", "severity": "medium", "mitigation": "White-glove deployment team handles all integration work. Read-only API access to existing SIEM/EDR — minimal IT team involvement. Provide dedicated healthcare security engineer for first 90 days."},
+      {"risk": "Agents process PHI in log data (patient IDs in system logs, IP addresses mapped to treatment areas)", "severity": "high", "mitigation": "AgentDash governance layer enforces PHI redaction at ingestion. All log processing strips identifiers before agent analysis. On-premise deployment ensures PHI never leaves hospital network. HIPAA-compliant audit trail maintained."}
+    ],
+    "regulatoryConsiderations": [
+      "HIPAA Security Rule Update (2026): OCR finalizing the most significant update in 20 years. Makes continuous, system-level risk analysis a baseline expectation — not periodic. AI-powered continuous assessment directly addresses this.",
+      "HIPAA Breach Notification Rule: 60-day notification requirement for breaches affecting 500+ individuals. Agents can accelerate breach scoping and notification package assembly.",
+      "HHS 405(d) Health Industry Cybersecurity Practices: Published best practices that AI security tools should align with. AgentDash agents can auto-map controls to 405(d) practices.",
+      "HSCC 2026 AI Cybersecurity Guidance: Health Sector Coordinating Council previewing best practices for healthcare organizations deploying AI in security — providing a framework for responsible AI security deployment.",
+      "FDA Medical Device Cybersecurity: Premarket cybersecurity requirements for connected devices. Agents monitoring device behavior can help manufacturers and hospitals comply with postmarket surveillance obligations.",
+      "State Health Data Laws: Varying state requirements (e.g., California CMIA, Texas HB 300) add complexity. Agents must be configured to state-specific breach notification timelines."
+    ],
+    "competitiveLandscape": "Healthcare cybersecurity is served by a mix of horizontal security vendors and healthcare-specific players: (1) CrowdStrike Charlotte AI — strong endpoint detection but cloud-only, no medical device specialization, no HIPAA-specific compliance automation. (2) Claroty/Medigate (now merged) — dominates medical device security but not a full SOC automation platform. Monitors devices but doesn't do alert triage or compliance. (3) Fortified Health Security — healthcare-focused MSSP but human-staffed, not agentic. Can't scale to 24/7 coverage affordably. (4) Darktrace — autonomous response capability but high false positive rates in healthcare due to medical device traffic patterns. Expensive. (5) Microsoft Sentinel + Security Copilot — integrated into Azure/M365. But cloud-only, single-model (GPT), and hospitals with on-premise medical device networks can't route that traffic to Azure. NONE can operate air-gapped on hospital LANs, orchestrate multiple models for different threat types, or self-improve using continuous evaluation. AgentDash's wedge: deploy agents ON the hospital network that monitor medical devices, EHR access, and network telemetry locally — with governance layer ensuring no clinical system disruption.",
+    "pricingModel": "Healthcare buyers are budget-constrained and risk-averse on pricing. Recommended: (1) Pilot: Fixed-fee engagement ($150-300K) covering network integration, medical device inventory, and 60-day shadow mode. Position as 'cybersecurity risk assessment' to access risk/compliance budget, not IT discretionary. (2) Production: Per-bed pricing ($15-40/bed/month) makes costs predictable and scales naturally with hospital size. 200-bed hospital = $36-96K/year. 1000-bed system = $180-480K/year. (3) Compliance add-on: Continuous HIPAA risk assessment + OCR-ready documentation: +$5-10/bed/month. (4) Managed option: For hospitals with zero security staff — fully managed agentic SOC at $50-80/bed/month, competing against $100-150/bed/month for traditional MSSP.",
+    "deploymentTimeline": [
+      {"phase": "Network Discovery & Device Inventory", "duration": "1-2 weeks", "milestone": "Complete map of hospital network segments, medical device inventory, EHR integration points, and existing security tool stack"},
+      {"phase": "Agent Configuration & Threat Modeling", "duration": "2-3 weeks", "milestone": "Healthcare-specific threat models loaded (ransomware TTPs, medical device anomalies, HIPAA access patterns). governance layer clinical device protection policies set."},
+      {"phase": "Shadow Mode Pilot", "duration": "3-4 weeks", "milestone": "Agents processing live telemetry in parallel. Purple team exercises validate detection. Zero auto-remediation — all actions are recommendations."},
+      {"phase": "Supervised Production", "duration": "2-4 weeks", "milestone": "Agents auto-suppressing confirmed false positives. All containment recommendations reviewed by IT security lead before execution. Medical device monitoring active."},
+      {"phase": "Full Deployment + Compliance", "duration": "Ongoing", "milestone": "24/7 agentic monitoring. Continuous HIPAA risk assessment. Quarterly compliance reports. Expansion to EHR access monitoring."}
+    ],
+    "buyerJourney": [
+      {"stage": "Fear Trigger", "action": "Board reads about peer hospital ransomware attack, or OCR announces updated HIPAA Security Rule, or cyber insurance renewal comes with 50%+ premium increase and new requirements", "stakeholder": "CEO, Board Audit Committee, CFO"},
+      {"stage": "CISO/CIO Mandate", "action": "CISO (or CIO at smaller systems) tasked with 'fix cybersecurity' — evaluates options: hire more staff (can't find them), outsource to MSSP (expensive, generic), or deploy AI security (emerging but promising)", "stakeholder": "CISO/CIO, VP IT"},
+      {"stage": "Vendor Evaluation", "action": "Evaluate 2-3 options. Key questions: Can it monitor medical devices? Does it work on-premise? Is it HIPAA compliant? Can we afford it? How fast can we deploy?", "stakeholder": "CISO, IT Security, Clinical Engineering, Compliance"},
+      {"stage": "Pilot Approval", "action": "Present to leadership: cost vs MSSP, deployment timeline, risk reduction metrics. Budget from IT security, operational risk, or HHS cybersecurity grants.", "stakeholder": "CEO, CFO, CISO, Board"},
+      {"stage": "Deployment & Validation", "action": "Shadow mode → supervised → full deployment. Weekly reviews with clinical engineering to ensure zero patient care impact. OCR compliance report generated.", "stakeholder": "CISO, IT Security, Clinical Engineering"},
+      {"stage": "Expansion", "action": "From network monitoring → EHR access monitoring → compliance automation → medical device lifecycle management. Cross-sell to affiliated physician practices and ambulatory sites.", "stakeholder": "CISO, Compliance Officer, VP Operations"}
+    ]
+  }
+}

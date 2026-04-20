@@ -79,6 +79,8 @@ interface CommentThreadProps {
   onInterruptQueued?: (runId: string) => Promise<void>;
   interruptingQueuedRunId?: string | null;
   composerDisabledReason?: string | null;
+  /** AgentDash: assigned agent ID for "waiting for reply" indicator */
+  assigneeAgentId?: string | null;
 }
 
 const DRAFT_DEBOUNCE_MS = 800;
@@ -253,11 +255,19 @@ function CommentCard({
   const isPending = comment.clientStatus === "pending";
   const isQueued = queued || comment.queueState === "queued" || comment.clientStatus === "queued";
 
+  // AgentDash: chat-style visual distinction for agent vs human comments
+  const isAgentComment = !!comment.authorAgentId;
+  const chatBorderClass = isAgentComment
+    ? "border-l-2 border-l-teal-500 dark:border-l-teal-400"
+    : comment.authorUserId
+      ? "border-l-2 border-l-gray-300 dark:border-l-gray-600"
+      : "";
+
   return (
     <div
       key={comment.id}
       id={`comment-${comment.id}`}
-      className={`border p-3 overflow-hidden min-w-0 rounded-sm transition-colors duration-1000 ${
+      className={`border p-3 overflow-hidden min-w-0 rounded-sm transition-colors duration-1000 ${chatBorderClass} ${
         isQueued
           ? "border-amber-300/70 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10"
           : isHighlighted
@@ -557,6 +567,7 @@ export function CommentThread({
   projectId,
   onVote,
   onAdd,
+  issueStatus,
   agentMap,
   currentUserId,
   imageUploadHandler,
@@ -571,6 +582,7 @@ export function CommentThread({
   onInterruptQueued,
   interruptingQueuedRunId = null,
   composerDisabledReason = null,
+  assigneeAgentId = null,
 }: CommentThreadProps) {
   const [body, setBody] = useState("");
   const [reopen, setReopen] = useState(true);
@@ -761,6 +773,26 @@ export function CommentThread({
         highlightCommentId={highlightCommentId}
         feedbackTermsUrl={feedbackTermsUrl}
       />
+
+      {/* AgentDash: "waiting for reply" indicator when agent's comment is latest */}
+      {(() => {
+        if (!assigneeAgentId) return null;
+        if (issueStatus === "done" || issueStatus === "cancelled") return null;
+        const lastComment = timeline.filter((t) => t.kind === "comment").at(-1);
+        if (!lastComment || lastComment.kind !== "comment") return null;
+        if (lastComment.comment.authorAgentId !== assigneeAgentId) return null;
+        return (
+          <div className="flex items-center gap-2 py-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
+            <span className="text-sm text-amber-600 dark:text-amber-400 font-medium">
+              Waiting for your reply...
+            </span>
+          </div>
+        );
+      })()}
 
       {liveRunSlot}
 

@@ -1630,6 +1630,7 @@ export function IssueDetail() {
             companyId={issue.companyId}
             projectId={issue.projectId}
             issueStatus={issue.status}
+            assigneeAgentId={issue.assigneeAgentId}
             agentMap={agentMap}
             currentUserId={currentUserId}
             draftKey={`paperclip:issue-comment-draft:${issue.id}`}

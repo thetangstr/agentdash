@@ -1,0 +1,640 @@
+{
+  "name": "AutoGen (Microsoft)",
+  "slug": "autogen",
+  "category": "open-source",
+  "subcategory": "multi-agent-orchestration",
+  "description": "AutoGen is Microsoft Research's open-source framework for building multi-agent AI applications. In April 2026, Microsoft shipped Agent Framework 1.0 — the production-ready evolution combining Semantic Kernel foundations with AutoGen orchestration, offering enterprise-grade multi-agent orchestration, multi-provider model support, and cross-runtime interoperability via A2A and MCP.",
+  "oneLiner": "Microsoft Research's multi-agent conversation framework with Azure enterprise integration and visual Studio UI.",
+  "founded": "2023",
+  "funding": "Backed by Microsoft Research. No external VC — fully Microsoft-funded.",
+  "pricing": "Open Source (MIT, free); Azure AI Agent Service (consumption-based); Copilot Studio ($200/user/mo)",
+  "website": "https://microsoft.github.io/autogen/",
+  "githubRepo": "microsoft/autogen",
+  "githubStars": 38000,
+  "screenshots": [
+    {
+      "path": "/screenshots/autogen/agent-config.png",
+      "alt": "AutoGen Studio — agent configuration with role and model settings",
+      "screen": "agent-config"
+    },
+    {
+      "path": "/screenshots/autogen/workflow-session.png",
+      "alt": "AutoGen Studio — multi-agent workflow session with conversation view",
+      "screen": "workflow-session"
+    },
+    {
+      "path": "/screenshots/autogen/drag-drop-canvas.png",
+      "alt": "AutoGen Studio — drag-and-drop canvas for agent skill assignment",
+      "screen": "visual-canvas"
+    },
+    {
+      "path": "/screenshots/autogen/profiling.png",
+      "alt": "AutoGen Studio — agent execution profiling and performance visualization",
+      "screen": "profiling"
+    }
+  ],
+  "capabilities": [
+    "Multi-agent conversations (group chat, nested, sequential, swarm)",
+    "UserProxyAgent for first-class HITL",
+    "Code execution with Docker sandboxing",
+    "Function calling and tool use",
+    "AutoGen Studio visual workflow builder",
+    "AutoGen Bench evaluation framework",
+    "Magentic-One multi-agent team",
+    "Swarm orchestration pattern",
+    "Async event-driven architecture (0.4+)",
+    "Multi-LLM support (OpenAI, Azure, Anthropic, local)",
+    "RAG via retrieval-augmented agent pattern",
+    "Azure AI Agent Service integration",
+    "Copilot Studio integration",
+    "Nested conversations for hierarchical workflows"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Code-first Python: define agents with system messages, LLM configs, tool registrations, compose into conversations. AutoGen Studio provides browser-based visual builder for drag-and-drop prototyping. 0.4 rewrite introduced AgentChat high-level API and Core runtime. Enterprise users build through Azure AI Agent Service or Copilot Studio.",
+    "strengths": [
+      "Pioneered multi-agent conversation paradigm",
+      "UserProxyAgent makes HITL first-class",
+      "Code execution provides powerful grounding",
+      "Microsoft backing ensures long-term viability",
+      "AutoGen Studio lowers prototyping barrier",
+      "Strong academic foundation",
+      "Flexible topologies — group chat, sequential, nested, swarm"
+    ],
+    "weaknesses": [
+      "0.2 to 0.4 breaking rewrite fragmented community",
+      "Multi-turn conversations are token-expensive",
+      "No production monitoring or cost tracking in OSS",
+      "Limited pre-built connectors",
+      "AutoGen Studio is prototyping, not production",
+      "No RBAC or compliance in OSS",
+      "Steep learning curve for advanced patterns"
+    ],
+    "notableFeatures": [
+      "Magentic-One: multi-agent team (Orchestrator, WebSurfer, FileSurfer, Coder, ComputerTerminal)",
+      "AutoGen Studio: visual builder for multi-agent workflows",
+      "AutoGen Bench: standardized agent evaluation",
+      "Swarm: lightweight agent handoff protocol",
+      "Nested conversations for modular decomposition",
+      "Azure AI Agent Service bridge to enterprise"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-04: Microsoft Agent Framework 1.0 shipped — production-ready release merging Semantic Kernel + AutoGen with stable APIs for .NET and Python",
+    "2026-04: Enterprise-grade multi-agent orchestration with A2A and MCP cross-runtime interoperability",
+    "2025-10: Microsoft announced combining Semantic Kernel + AutoGen into unified Microsoft Agent Framework",
+    "2025-01: AutoGen v0.4 major rewrite — reimagined for scale with new architecture",
+    "2025: AutoGen Studio v0.4 with drag-and-drop multi-agent builder, real-time updates, flow visualizations"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://github.com/microsoft/autogen",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://microsoft.github.io/autogen/",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://azure.microsoft.com/en-us/products/ai-services/ai-agent-service",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": false,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Open-source Python framework from Microsoft Research. Self-hosted. AutoGen Studio provides local web UI."
+  },
+  "scores": {
+    "total": 62,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 12,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 3,
+            "rationale": "Code-first Python SDK. 0.4 improved API but breaking changes. Studio for visual prototyping."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Studio visualizes conversations and tools. AutoGen Bench for evaluation. Interactive debugging limited."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Comprehensive with notebooks. 0.2-to-0.4 transition created parallel doc confusion."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Studio enables rapid prototyping. Code changes require restart. No hot-reload."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 5,
+            "rationale": "Category-defining. Group chat, two-agent, sequential, nested, swarm, Magentic-One. Dynamic spawning."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 4,
+            "rationale": "UserProxyAgent is first-class participant. Natural handoff. Configurable intervention."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "No collaborative features in OSS. Studio is single-user."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "Notebooks as examples. Studio has samples. No template marketplace."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 12.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 3,
+            "rationale": "Limited pre-built connectors. Azure unlocks Microsoft ecosystem."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "OpenAI function calling. Tool use patterns. Early MCP exploration. OpenAPI via Azure."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "Basic in OSS. Azure AD and managed identity via Azure AI Agent Service."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 2,
+            "rationale": "Basic RAG agent pattern. No sophisticated data pipeline or knowledge management."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10.8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "Configurable termination and max rounds. Docker sandboxing. No ML-powered guardrails."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 4,
+            "rationale": "UserProxyAgent provides native human approval. One of strongest HITL in OSS."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "Conversation logs but no tamper-proof storage. Azure inherits compliance."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 1,
+            "rationale": "No RBAC in OSS. Studio has basic user management. Enterprise needs Azure."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 13.4,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 4,
+            "rationale": "Runs anywhere Python does. Azure for managed cloud. Docker support. No K8s operator."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "0.4 async supports concurrent agents. Azure handles scaling. OSS is single-process."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "Studio has basic visualization. Azure Monitor available. No OSS production monitoring."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "~38K GitHub stars, 450+ contributors. Large Discord. Academic citations. 0.4 rewrite fragmented community."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "62/100 overall. Strongest: Orchestration (14/20). Weakest: Governance (11/20). Breakdown: Creation (12/20), Orchestration (14/20), Integration (12/20), Governance (11/20), Operations (13/20).",
+  "competence": "Multi-Agent Orchestration Framework",
+  "targetUser": "Researchers and developers building conversational multi-agent systems",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Reports of Microsoft shifting AutoGen to maintenance mode in favor of broader Agent Framework",
+      "0.2 to 0.4 rewrite fragmented the community — parallel docs causing confusion",
+      "Magentic-One gets attention but AutoGen Studio seen as prototyping tool, not production-ready",
+      "UserProxyAgent HITL pattern widely praised as best-in-class for human-agent collaboration",
+      "Azure AI Agent Service bridge seen as the real enterprise play"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "38K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Contributors",
+        "value": "450+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Status",
+        "value": "Reports of shift to maintenance mode",
+        "source": "Community"
+      },
+      {
+        "metric": "Enterprise Path",
+        "value": "Azure AI Agent Service GA",
+        "source": "Microsoft"
+      }
+    ],
+    "funding": {
+      "total": "Microsoft Research funded",
+      "lastRound": "Internal",
+      "valuation": "N/A (Microsoft subsidiary)"
+    }
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "code-development",
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "AutoGen (Microsoft Agent Framework): PM & CTO Walkthrough",
+    "pmVerdict": {
+      "summary": "AutoGen has been reborn as the Microsoft Agent Framework (MAF) — merging AutoGen + Semantic Kernel into a unified, production-ready platform. The KodeKloud lab environment provides structured learning with 5 progressive tasks. Memory (SQLite), streaming, and runtime configuration are well-designed. But the rebrand creates confusion, the framework is .NET/Python-focused, and the community is fragmented between old AutoGen and new MAF.",
+      "score": "B",
+      "strengths": [
+        "Microsoft backing provides enterprise credibility and long-term commitment",
+        "KodeKloud lab environment — best structured learning experience in the space",
+        "SQLite memory pattern is simple and effective for development",
+        "Progressive task structure (5 labs) makes learning systematic"
+      ],
+      "risks": [
+        "AutoGen → MAF rebrand creates confusion — which docs apply?",
+        "Community fragmented between old AutoGen and new MAF",
+        "No visual builder — developer-only tool",
+        "Competing with LangGraph and CrewAI with less ecosystem momentum"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Microsoft Agent Framework 1.0 merges AutoGen + Semantic Kernel — a bet on Microsoft's enterprise distribution. The framework is technically sound (async agents, structured output, runtime options) but the rebrand fractures the community and documentation. If you're a .NET/Microsoft shop, MAF is the natural choice. If you're Python-first, LangGraph has stronger ecosystem momentum.",
+      "decision": "EVALUATE — If Microsoft/.NET Shop",
+      "strengths": [
+        "Microsoft enterprise distribution (Azure, M365, Teams integration)",
+        "Semantic Kernel integration for .NET enterprise developers",
+        "Structured learning via KodeKloud — fastest onboarding for new teams",
+        "Production-ready with async patterns and streaming built in"
+      ],
+      "dealBreakers": [
+        "Rebrand fragmentation — AutoGen docs ≠ MAF docs",
+        "Community momentum behind LangGraph and CrewAI, not MAF",
+        "No visual agent builder",
+        "Azure dependency for enterprise features"
+      ]
+    },
+    "coverageGaps": [
+      "AutoGen Studio visual UI",
+      "Multi-agent team coordination",
+      "Semantic Kernel integration details",
+      "Azure deployment and scaling",
+      "Enterprise monitoring and governance"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (12/20)",
+        "score": "Supported",
+        "videoEvidence": "Agent creation with role/goal/backstory shown in Jupyter and lab environments",
+        "gap": "AutoGen Studio (visual UI) not demonstrated in this video"
+      },
+      {
+        "dimension": "Orchestration (14/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Multi-agent patterns described, task context chaining shown",
+        "gap": "Complex multi-agent orchestration not demonstrated live"
+      },
+      {
+        "dimension": "Integration (13/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "OpenAI ChatClient, tool creation, API integration patterns shown",
+        "gap": "Breadth of integrations not demonstrated"
+      },
+      {
+        "dimension": "Governance (10/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No governance features shown",
+        "gap": "Governance score relies on Azure platform, not demonstrated"
+      },
+      {
+        "dimension": "Operations (13/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Runtime options, streaming, memory shown. Deployment not shown",
+        "gap": "No production deployment or monitoring demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/autogen/step01_intro.jpg",
+        "title": "Microsoft Agent Framework",
+        "description": "Build intelligent AI agents with Python — complete course overview of Microsoft Agent Framework (formerly AutoGen).",
+        "pmCritique": {
+          "works": [
+            "Clear course structure — from basics to production patterns",
+            "Microsoft branding provides enterprise credibility",
+            "Python-focused tutorial appeals to data science and ML teams"
+          ],
+          "doesntWork": [
+            "Title still says 'AutoGen' in some places — rebrand inconsistency",
+            "Course is 1.5 hours — significant time commitment for evaluation",
+            "No quick-start for developers who just want to try it"
+          ],
+          "userPsychology": "The rebrand from AutoGen to Microsoft Agent Framework signals enterprise ambition. But the naming confusion means developers search for 'AutoGen' and find outdated docs."
+        },
+        "ctoCritique": {
+          "verdict": "Microsoft backing is a strong enterprise signal. But the AutoGen → MAF transition means documentation, community answers, and examples may reference the old API.",
+          "concerns": [
+            "Documentation fragmentation between AutoGen and MAF",
+            "Community confusion about which version to use",
+            "Migration guide quality unknown"
+          ],
+          "enterpriseGaps": [
+            "No clear deprecation timeline for old AutoGen API",
+            "No compatibility layer between AutoGen and MAF",
+            "Enterprise support SLA unclear for MAF vs Azure AI"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step02_memory_code.jpg",
+        "title": "Agent Memory System",
+        "description": "SQLite-backed memory: save_memory and get_memory functions. Key-value store with timestamp for persistence across conversations.",
+        "pmCritique": {
+          "works": [
+            "SQLite memory is simple, portable, and zero-infrastructure",
+            "Key-value pattern is universally understood",
+            "Timestamp-based retrieval enables temporal queries"
+          ],
+          "doesntWork": [
+            "SQLite isn't production-grade for concurrent agents",
+            "No memory isolation between agents — shared database",
+            "No memory size limits or cleanup policy"
+          ],
+          "userPsychology": "SQLite memory is the right choice for tutorials and prototyping. Production needs Redis or Postgres, but the pattern transfer is clean."
+        },
+        "ctoCritique": {
+          "verdict": "SQLite for development, Cosmos DB/Redis for production — the pattern is good but the migration path isn't shown. How do we switch backends without rewriting memory code?",
+          "concerns": [
+            "SQLite doesn't scale for concurrent agent access",
+            "No memory backend abstraction — coupled to SQLite",
+            "No memory encryption or access control"
+          ],
+          "enterpriseGaps": [
+            "No production memory backend guidance",
+            "No memory migration tool",
+            "No memory analytics or debugging"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step03_scenario.jpg",
+        "title": "Build a Simple Agent",
+        "description": "Scenario: smart flight planner widget. User says 'Hi, my name is John Doe' — agent must understand, remember, and plan.",
+        "pmCritique": {
+          "works": [
+            "Practical scenario — flight planning is relatable and concrete",
+            "User message shows natural language understanding requirement",
+            "Name extraction demonstrates memory + NLU together"
+          ],
+          "doesntWork": [
+            "Single-sentence scenario is oversimplified",
+            "No error case shown — what if input is ambiguous?",
+            "Flight planning requires API integration not shown yet"
+          ],
+          "userPsychology": "Starting with a relatable scenario (flight planning) is smart. Every developer has booked a flight and can imagine the agent's job. Concrete beats abstract."
+        },
+        "ctoCritique": {
+          "verdict": "The scenario is clear but toy-scale. Enterprise evaluation needs: multi-turn conversation, error recovery, concurrent users, and API integration. This is step 1 of 100.",
+          "concerns": [
+            "Toy scenario doesn't demonstrate enterprise complexity",
+            "No multi-turn conversation shown",
+            "No concurrent user handling"
+          ],
+          "enterpriseGaps": [
+            "No load testing scenario",
+            "No edge case handling",
+            "No security boundary testing"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step04_lab_environment.jpg",
+        "title": "KodeKloud Lab Environment",
+        "description": "Structured lab: 5 progressive tasks (verify env, first agent, streaming, customize, runtime). Mission: Build Your First AI Agent with MAF. 45-60 minutes.",
+        "pmCritique": {
+          "works": [
+            "Progressive task structure — each lab builds on the previous",
+            "Time estimate (45-60 min) sets realistic expectations",
+            "Lab environment means no local setup needed — browser-only"
+          ],
+          "doesntWork": [
+            "KodeKloud is a paid platform — not accessible to all evaluators",
+            "Lab environment may not match production Python environments",
+            "5 tasks cover basics only — no advanced patterns"
+          ],
+          "userPsychology": "KodeKloud is the best structured learning experience in the agent framework space. No other framework offers a browser-based lab with progressive tasks. This should be the model."
+        },
+        "ctoCritique": {
+          "verdict": "Browser-based labs eliminate setup friction. But the lab environment is KodeKloud's, not Microsoft's — the experience doesn't transfer to production Azure environments.",
+          "concerns": [
+            "KodeKloud lab ≠ production Azure environment",
+            "Lab tasks are prescriptive — no room for exploration",
+            "Lab completion doesn't mean production readiness"
+          ],
+          "enterpriseGaps": [
+            "No equivalent lab on Azure",
+            "No enterprise training program for MAF",
+            "No certification path"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step05_first_agent.jpg",
+        "title": "Create First Agent",
+        "description": "task_1_first_agent.py: OpenAI ChatClient setup with system message. File structure shows 5 progressive task files.",
+        "pmCritique": {
+          "works": [
+            "Clean code structure — imports, client, system message, run",
+            "5 task files visible in explorer — learning progression is explicit",
+            "OpenAI ChatClient is familiar to most developers"
+          ],
+          "doesntWork": [
+            "Tied to OpenAI — Azure OpenAI not shown as default",
+            "System message is the entire agent 'personality' — no structured config",
+            "No agent testing or validation step"
+          ],
+          "userPsychology": "The first agent file is clean and approachable. But 'first agent = ChatClient with system message' is identical to a basic OpenAI script. Where's the framework value?"
+        },
+        "ctoCritique": {
+          "verdict": "The first agent is essentially a ChatCompletion wrapper. Framework value comes in tasks 3-5. Enterprise evaluators should skip to task 4 for a realistic assessment.",
+          "concerns": [
+            "First agent doesn't demonstrate framework value",
+            "OpenAI dependency in a Microsoft framework is confusing",
+            "No Azure AI integration shown"
+          ],
+          "enterpriseGaps": [
+            "Should default to Azure OpenAI for Microsoft alignment",
+            "No model governance or approved model list",
+            "No cost estimation per agent run"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step06_streaming.jpg",
+        "title": "Streaming Responses",
+        "description": "Real-time token streaming with async agent execution. Stream tokens as they're generated for responsive UX.",
+        "pmCritique": {
+          "works": [
+            "Async streaming pattern — production-ready for real-time applications",
+            "Token-by-token output enables responsive UI",
+            "Standard async/await pattern — idiomatic Python"
+          ],
+          "doesntWork": [
+            "Streaming adds complexity — error handling during streams is tricky",
+            "No backpressure handling shown",
+            "UI integration for streaming not demonstrated"
+          ],
+          "userPsychology": "Streaming is a production requirement, not a feature. The fact that it's task 3 (not an afterthought) shows MAF thinks about production patterns early."
+        },
+        "ctoCritique": {
+          "verdict": "Async streaming is well-implemented. But production streaming needs: connection management, partial response recovery, and client-side buffering. The basics are solid.",
+          "concerns": [
+            "No streaming error recovery",
+            "No connection timeout handling",
+            "No partial response management"
+          ],
+          "enterpriseGaps": [
+            "No streaming rate limiting",
+            "No streaming cost attribution",
+            "No streaming monitoring"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step07_runtime_options.jpg",
+        "title": "Runtime Configuration",
+        "description": "additional_instructions for response control: length, audience adaptation, format. Experiment-driven agent customization.",
+        "pmCritique": {
+          "works": [
+            "additional_instructions enables runtime behavior modification",
+            "Audience adaptation (brief vs detailed) — practical for multi-audience agents",
+            "Experiment framing encourages iterative development"
+          ],
+          "doesntWork": [
+            "additional_instructions is prompt injection by design — security concern",
+            "No structured configuration — free-text modification of behavior",
+            "No A/B testing framework — manual experimentation only"
+          ],
+          "userPsychology": "Runtime modification via additional_instructions is flexible but dangerous. In production, 'anyone can change agent behavior with a string' is a governance nightmare."
+        },
+        "ctoCritique": {
+          "verdict": "additional_instructions enables per-request customization. But in enterprise, who controls what instructions are allowed? This needs a policy layer.",
+          "concerns": [
+            "additional_instructions is unvalidated prompt injection",
+            "No instruction approval workflow",
+            "No instruction audit logging"
+          ],
+          "enterpriseGaps": [
+            "Must add instruction validation for production",
+            "No instruction templates or guardrails",
+            "No instruction versioning"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/autogen/step08_multi_agent.jpg",
+        "title": "Multi-Agent Teams",
+        "description": "Agent coordination with Semantic Kernel integration for enterprise. Planning, execution, and result aggregation across agents.",
+        "pmCritique": {
+          "works": [
+            "Semantic Kernel integration bridges .NET and Python enterprise developers",
+            "Multi-agent coordination enables complex workflow automation",
+            "Microsoft ecosystem integration (Azure, M365) is natural"
+          ],
+          "doesntWork": [
+            "Multi-agent patterns described but not demonstrated in this frame",
+            "Semantic Kernel adds another framework to learn",
+            "No visual representation of agent team topology"
+          ],
+          "userPsychology": "Multi-agent teams are MAF's enterprise pitch — specialized agents coordinated by a supervisor. The Semantic Kernel bridge is unique to Microsoft."
+        },
+        "ctoCritique": {
+          "verdict": "Semantic Kernel integration is the enterprise differentiator — .NET teams can participate in agent development alongside Python teams. No other framework offers this.",
+          "concerns": [
+            "Multi-agent demo not shown — conceptual only",
+            "Semantic Kernel learning curve on top of MAF",
+            ".NET + Python interop complexity"
+          ],
+          "enterpriseGaps": [
+            "No multi-agent debugging tools",
+            "No agent team monitoring dashboard",
+            "No cost attribution per agent in a team"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "EAeUiipzCTE",
+      "title": "Microsoft Agent Framework Tutorial 2025 (1.5hr)",
+      "channel": "KodeKloud"
+    },
+    {
+      "videoId": "yDpV_jgO93c",
+      "title": "Agentic AI With Autogen Crash Course (4hr)",
+      "channel": "Codebasics"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "Most research-advanced multi-agent conversation framework — pioneered the conversable agent pattern where agents debate, critique, and iterate to produce better outputs.",
+    "targetUser": "ML researchers and advanced developers exploring multi-agent conversation patterns. Teams building agents that need to reason through complex problems via debate.",
+    "vsAlternatives": "Wins against CrewAI on multi-agent conversation depth and research novelty (AutoGen Studio). Wins against LangGraph on pure research flexibility. Loses to both on production deployment tooling. Loses to enterprise platforms on governance and monitoring."
+  }
+}

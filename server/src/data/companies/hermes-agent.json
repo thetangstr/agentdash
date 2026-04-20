@@ -1,0 +1,496 @@
+{
+  "name": "Hermes Agent (Nous Research)",
+  "slug": "hermes-agent",
+  "category": "open-source",
+  "subcategory": "self-improving-agent",
+  "description": "Hermes Agent is an open-source, self-improving AI agent by Nous Research. Launched Feb 2026, 64K+ stars in 2 months. The ONLY framework with a closed learning loop: Observe → Plan → Act → Learn. After complex tasks (5+ tool calls), the agent synthesizes reusable skill documents (agentskills.io standard). Three-layer memory: short-term context, episodic (past experiences), procedural (skills/workflows). Pluggable memory backends (Honcho, Mem0, Vectorize Hindsight, RetainDB). Cache-aware: freezes system prompt at session init so learning doesn't grow token bills. Benchmarked: agents with self-created skills complete tasks 40% faster than fresh instances.",
+  "oneLiner": "Open-source self-improving AI agent — gets smarter the longer it runs, deploys anywhere, speaks every platform.",
+  "founded": "2022",
+  "funding": "$70M+ (crypto-priced token rounds, used for compute reserves and team expansion). MiniMax AI partnership.",
+  "pricing": "MIT licensed, free. Hosting: $5/mo VPS. API costs: $15-80/mo typical. Zero with Ollama local models.",
+  "website": "https://hermes-agent.nousresearch.com",
+  "githubRepo": "NousResearch/hermes-agent",
+  "githubStars": 64200,
+  "screenshots": [],
+  "capabilities": [
+    "Closed learning loop: Observe → Plan → Act → Learn — only framework with this",
+    "Autonomous skill creation after 5+ tool-call tasks (agentskills.io standard)",
+    "Skills self-improve during use — measurably 40% faster than fresh instances",
+    "Three-layer memory: short-term context, episodic experiences, procedural skills",
+    "Pluggable memory backends: Honcho, Mem0, Vectorize Hindsight, RetainDB",
+    "Cache-aware architecture — learning doesn't grow token costs",
+    "15+ messaging platforms: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email, SMS, CLI + more",
+    "200+ models via OpenRouter, Nous Portal, OpenAI, or custom endpoints",
+    "MCP support for extended tool capabilities",
+    "Built-in cron scheduler — natural language scheduling for unattended automation",
+    "Browser Use integration for web automation (v0.8.0)",
+    "Plugin system with CLI subcommands, API hooks, session lifecycle events",
+    "FTS5 cross-session search with LLM summarization",
+    "Honcho dialectic user modeling for personalization",
+    "Remote backends and worktree parallelism (v0.8.0)",
+    "$5/mo VPS or free with local models — lowest cost in market"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "CLI-first: install via pip/Docker, configure YAML, run 'hermes' command. Multi-platform gateway connects to messaging apps automatically. Skills and memory develop autonomously during use. Plugin system for extensibility.",
+    "strengths": [
+      "Self-improving is genuinely novel — agent gets better without user intervention",
+      "64K+ GitHub stars in 2 months — fastest-growing agent project of 2026",
+      "Multi-platform out of the box — one agent, 15+ messaging platforms",
+      "Cost-optimized — runs on $5/mo VPS, or free with local models",
+      "MCP support + plugin system — highly extensible",
+      "MIT licensed — full freedom, no vendor lock-in"
+    ],
+    "weaknesses": [
+      "No visual builder or web UI for agent creation",
+      "Self-improving can be unpredictable — hard to audit autonomous skill changes",
+      "Crypto-funded raises governance questions for enterprise buyers",
+      "No enterprise support SLA or compliance certifications",
+      "Plugin ecosystem is early — limited community plugins",
+      "YAML configuration requires developer skills"
+    ],
+    "notableFeatures": [
+      "Autonomous skill creation — agent builds new capabilities from complex tasks",
+      "Agent-curated memory with periodic nudges — growing knowledge base",
+      "Cross-session recall via FTS5 search + LLM summarization",
+      "Built-in cron scheduler for unattended automation",
+      "Platform-agnostic deployment — $5 VPS to GPU clusters"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-02-25: v0.1.0 launched — first public release",
+    "2026-03: MiniMax AI partnership announced — multimodal expansion (vision, audio)",
+    "2026-04-08: v0.8.0 (v2026.4.8) — 209 merged PRs, Browser Use, remote backends, worktree parallelism",
+    "2026-04: 64,200+ GitHub stars — fastest-growing agent project of 2026",
+    "2026-04: Plugin system expansion — CLI subcommands, API hooks, session lifecycle events",
+    "2026-04: Matrix Tier 1 support, Discord channel controls, Signal media delivery, Mattermost attachments"
+  ],
+  "lastResearched": "2026-04-12",
+  "dataSources": [
+    {
+      "url": "https://github.com/NousResearch/hermes-agent",
+      "accessedAt": "2026-04-12",
+      "type": "github"
+    },
+    {
+      "url": "https://hermes-agent.nousresearch.com/docs/",
+      "accessedAt": "2026-04-12",
+      "type": "docs"
+    },
+    {
+      "url": "https://hermes-agent.nousresearch.com/",
+      "accessedAt": "2026-04-12",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": true,
+    "notes": "$5 VPS, GPU cluster, serverless, or local. Docker and pip install supported."
+  },
+  "scores": {
+    "total": 62,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 12,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 2,
+            "rationale": "CLI/YAML only — no visual builder. 'hermes model' command for model switching is clean but developer-only."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "pip install + YAML config + run. Fast for developers. Self-improving means value compounds over time."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Centralized logging, session search, config validation. No dedicated debugging UI."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Growing docs site, DeepWiki coverage, active GitHub community. Still maturing."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 14,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "Single agent with autonomous skill creation. Not multi-agent orchestration in the CrewAI/LangGraph sense."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Conversational interface via messaging platforms enables natural HITL interaction."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 4,
+            "rationale": "Built-in cron scheduler, plugin system, MCP tools. Rich automation patterns."
+          },
+          {
+            "name": "Team Development",
+            "score": 4,
+            "rationale": "Multi-platform gateway means the agent is accessible to the whole team via their preferred channel."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 16,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "15+ messaging platforms out of the box — broadest platform support in any agent framework."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "MCP support, OpenRouter (200+ models), plugin API hooks, webhook triggers."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "Platform-native auth per channel. No enterprise SSO."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "FTS5 session search, agent-curated memory, web extraction tools. Growing knowledge base."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "Self-improving nature makes guardrails critical but they're minimal. Autonomous skill creation is a governance risk."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "Centralized logging exists. No compliance certifications. Crypto funding raises enterprise governance questions."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "Platform-level channel controls (Discord channels). No granular RBAC."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Session search helps but autonomous skill changes are hard to audit."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 4,
+            "rationale": "$5 VPS to GPU clusters to serverless. Docker, pip, local models. Maximum flexibility."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Centralized logging. Worktree parallelism in v0.8.0. No horizontal scaling dashboard."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "$5/mo hosting + $15-80/mo API. Zero with local models. Very cost-effective."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "64K stars but only 2 months old. Plugin ecosystem early. Community growing fast."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "62/100 overall. Strongest: Integration (16/20). Weakest: Governance (8/20). Breakdown: Creation (12/20), Orchestration (14/20), Integration (16/20), Governance (8/20), Operations (12/20).",
+  "competence": "self-improving-agent",
+  "targetUser": "Developers and power users who want a personal AI agent that gets smarter over time across all their messaging platforms",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Fastest-growing AI agent project of 2026 — 64K stars in 2 months",
+      "Self-improving narrative resonates strongly with developer community",
+      "MiniMax partnership signals multimodal ambitions (vision, audio, robotics)",
+      "Crypto funding model is divisive — loved by Web3, questioned by enterprise",
+      "Compared favorably to OpenClaw (Manus) but with open-source advantage"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "64,200+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Total Funding",
+        "value": "$70M+",
+        "source": "PANews"
+      },
+      {
+        "metric": "Time to 64K Stars",
+        "value": "~2 months",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Merged PRs (v0.8.0)",
+        "value": "209",
+        "source": "GitHub Releases"
+      }
+    ],
+    "funding": "$70M+ (crypto-priced token rounds). MiniMax AI partnership."
+  },
+  "supportedCUJs": [
+    "customer-support",
+    "it-helpdesk",
+    "data-extraction",
+    "workflow-automation"
+  ],
+  "coreCompetence": {
+    "bestAt": "The ONLY agent framework with a closed learning loop — Observe, Plan, Act, Learn. Agents create reusable skills from experience (40% faster after learning). Three-layer memory (context, episodic, procedural) with pluggable backends. Cache-aware so learning doesn't increase costs.",
+    "targetUser": "Developers who want a personal AI agent that genuinely gets smarter over time — not just retrieves memory, but creates new capabilities from experience.",
+    "vsAlternatives": "Wins uniquely on self-improvement (no competitor has a closed learning loop). Loses to OpenClaw on breadth (345K stars, multi-agent, larger ecosystem). Loses to CrewAI/LangGraph on enterprise orchestration. Different category: Hermes is a single self-improving agent, not a multi-agent platform. The question isn't Hermes vs CrewAI — it's whether your agents should learn from experience."
+  },
+  "walkthrough": {
+    "title": "Hermes Agent: PM & CTO Walkthrough — Self-Improving AI Agent",
+    "pmVerdict": {
+      "summary": "Hermes Agent introduces the most important new pattern in the agent space: the closed learning loop. Observe → Plan → Act → Learn means the agent creates reusable skills from experience — measurably 40% faster after learning. Three-layer memory (context, episodic, procedural) with pluggable backends (Honcho, Mem0, etc.) is architecturally sound. 15+ platforms and $5/mo hosting make evaluation effortless. But: self-improving is also self-modifying — governance nightmare for enterprise. Crypto funding, no compliance certs, 2 months old. This is the pattern every agent factory will eventually copy — but Hermes itself is for experimenters, not production enterprise.",
+      "score": "A- (Pattern Innovation)",
+      "strengths": [
+        "Closed learning loop is genuinely novel — Observe/Plan/Act/Learn creates compound value",
+        "40% faster task completion with self-created skills — benchmarked, not just claimed",
+        "Pluggable memory backends (Honcho, Mem0, Vectorize, RetainDB) — no lock-in on memory layer",
+        "Cache-aware architecture — learning doesn't grow token costs, a real engineering achievement",
+        "64K stars in 2 months + 209 merged PRs in v0.8.0 — fastest development velocity in the space"
+      ],
+      "risks": [
+        "Self-improving = self-modifying — who audits autonomous skill changes?",
+        "Single agent, not multi-agent — doesn't compete with orchestration platforms",
+        "Crypto funding raises procurement questions for enterprise buyers",
+        "2 months old — zero production case studies at scale",
+        "Skill quality varies — autonomous creation doesn't guarantee autonomous quality"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Hermes Agent's closed learning loop is the architecture every agent platform will eventually adopt — agents that create reusable skills from experience, with measurable 40% performance improvement. The three-layer memory with pluggable backends is well-designed. But deploying self-improving agents in enterprise is a governance unsolved problem. Who approves autonomous skill creation? How do you audit procedural memory changes? Until these questions have answers, Hermes is a research project, not a production platform. The pattern, however, should be stolen immediately.",
+      "decision": "STUDY — Steal the Pattern, Not the Product",
+      "strengths": [
+        "Closed learning loop is the most important architectural innovation in 2026 agents",
+        "Cache-aware memory — learning efficiency without cost growth is genuinely hard to build",
+        "Pluggable memory backends prevent storage lock-in",
+        "agentskills.io standard for skill documents — potential industry standard",
+        "MIT licensed — we can study and adopt the pattern without using the product"
+      ],
+      "dealBreakers": [
+        "Self-improving agents are fundamentally ungovernable today",
+        "No compliance certifications (SOC2/HIPAA/FedRAMP)",
+        "Crypto-funded — token-based financing model is foreign to enterprise procurement",
+        "Single agent focus — not an orchestration platform",
+        "Autonomous skill creation without approval gates is a compliance violation in regulated industries"
+      ]
+    },
+    "coverageGaps": [
+      "Self-improvement mechanism details",
+      "Autonomous skill creation walkthrough",
+      "Memory curation and recall demonstration",
+      "Multi-platform gateway configuration",
+      "Plugin development workflow"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (12/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "CLI installation and configuration shown in tutorials",
+        "gap": "No visual builder — creation is YAML/CLI only"
+      },
+      {
+        "dimension": "Orchestration (14/20)",
+        "score": "Supported",
+        "videoEvidence": "Cron scheduler, plugin system, autonomous skills described and demonstrated",
+        "gap": "Not multi-agent orchestration — single agent with growing capabilities"
+      },
+      {
+        "dimension": "Integration (16/20)",
+        "score": "Well Supported",
+        "videoEvidence": "15+ platforms, MCP support, 200+ models all documented and demonstrated",
+        "gap": "Integration breadth is the core strength — well verified"
+      },
+      {
+        "dimension": "Governance (8/20)",
+        "score": "Weak",
+        "videoEvidence": "Logging exists but self-improving nature creates fundamental audit challenges",
+        "gap": "Governance is the Achilles heel — autonomous changes hard to control"
+      },
+      {
+        "dimension": "Operations (12/20)",
+        "score": "Supported",
+        "videoEvidence": "$5 VPS deployment, Docker, local models all shown",
+        "gap": "Scaling beyond single instance not demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/hermes-agent/step01_cli_tools.jpg",
+        "title": "CLI with Tools and Skills",
+        "description": "Terminal showing hermes v0.4.0 — Available Tools (browser, execute_code, search, patch, read_file) and 30+ Available Skills (apple-notes, claude-code, github-auth, obsidian, etc.).",
+        "pmCritique": {
+          "works": [
+            "30+ skills out of the box — apple-notes, claude-code, github-auth, obsidian. Massive breadth.",
+            "Tool categories clearly organized — browser, code execution, file operations, search",
+            "CLI aesthetic with retro Hermes banner — strong brand identity for developer community"
+          ],
+          "doesntWork": [
+            "Wall of text in terminal — overwhelming for first-time users",
+            "No visual skill browser or searchable catalog",
+            "Skill names are cryptic — what does pokemon-player do in an agent framework?"
+          ],
+          "userPsychology": "The terminal output is both the strength and weakness — developers see power, non-developers see complexity."
+        },
+        "ctoCritique": {
+          "verdict": "30+ built-in skills show ecosystem maturity for a 2-month-old project. But no governance over which skills are active.",
+          "concerns": [
+            "No skill approval workflow — all 30+ active by default",
+            "Skill quality varies — community-contributed vs core team",
+            "No skill sandboxing — each skill has full agent permissions"
+          ],
+          "enterpriseGaps": [
+            "No skill allowlist/blocklist for enterprise",
+            "No skill audit trail",
+            "No skill versioning or rollback"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/hermes-agent/step02_cron_demo.jpg",
+        "title": "Natural Language Cron Jobs",
+        "description": "User types: Every morning at 9am, pull top 5 HN stories, summarize, score. Agent finds hn-audio-briefing skill and sets up the cron job. Claude Opus 4.6 as model.",
+        "pmCritique": {
+          "works": [
+            "Natural language to cron job — no crontab syntax needed",
+            "Agent discovers the right skill autonomously — hn-audio-briefing matched to request",
+            "Claude Opus 4.6 shown — uses frontier models for reasoning"
+          ],
+          "doesntWork": [
+            "Skill synthesizing takes time (loading indicator) — latency for autonomous discovery",
+            "No confirmation before setting up cron — agent just does it",
+            "Cost of running daily cron jobs not shown"
+          ],
+          "userPsychology": "The cron demo is the killer pitch — describe what you want, agent sets it up forever. Personal AI assistant promise made real."
+        },
+        "ctoCritique": {
+          "verdict": "Natural language scheduling is compelling but autonomous cron creation without approval is a runaway-cost risk.",
+          "concerns": [
+            "No cost estimation before cron creation",
+            "No approval gate — agent creates scheduled jobs unilaterally",
+            "Cron jobs run against API credits with no budget cap"
+          ],
+          "enterpriseGaps": [
+            "No cron job budget limits",
+            "No cron approval workflow",
+            "No cron monitoring dashboard"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/hermes-agent/step04_comparison_detail.jpg",
+        "title": "Architecture Comparison Detail",
+        "description": "Purpose, Interface, Scope, Strengths side by side. Hermes: self-improving skills on the fly. OpenClaw: more stable, larger community building.",
+        "pmCritique": {
+          "works": [
+            "Multi-dimensional comparison is thorough",
+            "Self-improving as Interface differentiator is accurate",
+            "Built for Open Models is strong open-source positioning"
+          ],
+          "doesntWork": [
+            "Interface comparison oversimplifies — both have CLIs and APIs",
+            "Scope: tinkerers vs enterprise is reductive",
+            "No quantitative comparison — just adjectives"
+          ],
+          "userPsychology": "This crystallizes the decision: self-improving for hackers, or stable for production. Most CTOs choose stability."
+        },
+        "ctoCritique": {
+          "verdict": "Confirms Hermes is the research/experiment choice. Production deployments need the stability OpenClaw offers.",
+          "concerns": [
+            "Self-improving interface is ungovernable by enterprise standards",
+            "Tinkerer scope means limited enterprise use cases",
+            "Community building focus suggests enterprise is secondary"
+          ],
+          "enterpriseGaps": [
+            "No enterprise roadmap",
+            "No compliance timeline",
+            "No migration path to enterprise-grade"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/hermes-agent/step05_discord_agent.jpg",
+        "title": "Running in Discord with Sub-Agents",
+        "description": "Split view: Discord channel with Hermes resolving configs and spawning sub-agents + Terminal with coder gateway, Claude Opus sessions, resource monitoring.",
+        "pmCritique": {
+          "works": [
+            "Discord integration is native — agent responds in-channel like a team member",
+            "Agent shows reasoning — resolution chain for config lookup is transparent",
+            "Sub-agent spawning visible — creates child agents for specific tasks"
+          ],
+          "doesntWork": [
+            "Dense technical output in Discord — not user-friendly for non-developers",
+            "Terminal view shows raw process output — no dashboard",
+            "Multi-agent spawning via Discord is powerful but chaotic"
+          ],
+          "userPsychology": "The Discord split view is the most realistic demo — this is daily life with Hermes. Chatbot that runs code and spawns agents from your Discord."
+        },
+        "ctoCritique": {
+          "verdict": "Discord as the control plane for AI agents is novel but raises serious enterprise concerns about data exposure in chat channels.",
+          "concerns": [
+            "Sensitive operations visible in Discord channels — data exposure risk",
+            "Sub-agent spawning without approval creates resource sprawl",
+            "Terminal process output mixed with chat creates audit challenges"
+          ],
+          "enterpriseGaps": [
+            "No data classification for Discord messages",
+            "No sub-agent budget or permission controls",
+            "No enterprise messaging platform support (Teams/Slack enterprise)"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "tP6yf22OJdI",
+      "title": "Did Hermes Agent just kill OpenClaw? (full guide)",
+      "channel": "Matthew Berman"
+    },
+    {
+      "videoId": "cu2fgknmemA",
+      "title": "Hermes Agent: The 24/7 Self-Evolving AI Agent!",
+      "channel": "WorldofAI"
+    }
+  ]
+}

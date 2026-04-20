@@ -1,0 +1,574 @@
+{
+  "name": "OpenAI Operator",
+  "slug": "openai-operator",
+  "category": "enterprise",
+  "subcategory": "browser-automation",
+  "description": "OpenAI Operator is a browser-based autonomous agent using the Computer-Using Agent (CUA) model to navigate websites via vision-based screen understanding. Launched Jan 2025 for ChatGPT Pro, it completes multi-step web tasks without site-specific integrations. CUA API available via Responses API for programmatic browser automation.",
+  "oneLiner": "OpenAI's autonomous browser agent powered by the CUA model that navigates websites through vision-based screen interaction.",
+  "founded": "2015",
+  "funding": "Over $13B raised (Microsoft-backed); valued at $157B+",
+  "pricing": "ChatGPT Pro ($200/mo) includes Operator; CUA API: $1.50/$6.00 per 1M input/output tokens; Plus/Team/Enterprise also have access",
+  "website": "https://openai.com/operator",
+  "screenshots": [
+    {
+      "path": "/screenshots/openai-operator/operator-interface.png",
+      "alt": "OpenAI Operator — browser agent interface navigating a website autonomously",
+      "screen": "browser-agent"
+    },
+    {
+      "path": "/screenshots/openai-operator/cua-model.png",
+      "alt": "OpenAI CUA — Computer-Using Agent model architecture diagram",
+      "screen": "architecture"
+    }
+  ],
+  "capabilities": [
+    "Autonomous browser navigation via CUA model",
+    "Multi-step web task completion",
+    "Vision-based screen understanding (GPT-4o)",
+    "Mouse/keyboard/scroll actions in sandboxed Chromium",
+    "User auth pass-through with login pausing",
+    "Sensitive action confirmation prompts",
+    "Screenshot-by-screenshot session replay",
+    "CUA API via Responses API for programmatic use",
+    "Hybrid with function calling, file search, code interpreter",
+    "Cross-site workflows without API integrations",
+    "Natural language task specification",
+    "Saved custom GPTs with browser-use",
+    "Agent Builder visual canvas with drag-and-drop nodes",
+    "Built-in Guardrails node (PII, Moderation, Jailbreak, Hallucination)",
+    "AgentKit production framework",
+    "Connector Registry for enterprise integrations",
+    "Automated eval with trace grading and prompt optimization"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Consumer: type task in ChatGPT Pro, Operator opens browser and executes. Watch in real-time, intervene when prompted. API: send screenshots to CUA model, receive action responses, implement own browser loop with Playwright. No visual builder, no agent config UI.",
+    "strengths": [
+      "Universal web access without integration work",
+      "Intuitive: describe task in English, watch it happen",
+      "Strong HITL safety: auto-pauses for sensitive actions",
+      "Visual audit trail with screenshot replay",
+      "GPT-4o vision + RL-trained browser skills",
+      "Massive ecosystem and brand recognition",
+      "CUA API enables custom browser automation products"
+    ],
+    "weaknesses": [
+      "No enterprise agent builder or orchestration platform",
+      "Browser-only: no desktop apps, terminals, or non-web systems",
+      "Fragile to UI changes on target websites",
+      "High latency per action (screenshot + API + execution)",
+      "Expensive vision tokens per task",
+      "No multi-agent, templates, or reusable components",
+      "Cloud-only, no self-hosted",
+      "No RAG or proprietary data grounding"
+    ],
+    "notableFeatures": [
+      "CUA model: purpose-trained for browser via RL on web tasks",
+      "Sandboxed Chromium with session isolation",
+      "Auto sensitive-action detection with user prompts",
+      "Responses API: CUA + function calling + file search in one workflow",
+      "Vision-grounded actions from screen content, not DOM parsing"
+    ]
+  },
+  "recentDevelopments": [
+    "2026: Agent Builder visual canvas in beta — drag-and-drop nodes, guardrails, versioning, eval config",
+    "2026: AgentKit launched — production framework for building agents",
+    "2026: Connector Registry beta rollout to Enterprise and Edu customers",
+    "2026: Operator fully integrated into ChatGPT as 'agent mode' — standalone Operator site sunsetting",
+    "2026: Expanded eval capabilities — datasets, trace grading, automated prompt optimization, third-party model support",
+    "2026: Codex adds Realtime V2 with background agent streaming",
+    "Jan 2025: Operator launched for ChatGPT Pro ($200/mo)",
+    "Jan 2025: CUA model introduced (GPT-4o vision + RL)",
+    "Mar 2025: CUA API via Responses API for developers",
+    "2025 Q1: Access expanded to Plus/Team/Enterprise",
+    "2025 Q1: 87% WebVoyager, 58.1% OSWorld benchmarks",
+    "2025: CUA + function calling + file search hybrid workflows",
+    "2025: OpenAI restructured to for-profit"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://openai.com/index/introducing-operator/",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://platform.openai.com/docs/guides/tools-computer-use",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://openai.com/pricing",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Cloud-only in OpenAI's sandbox. No self-hosted. All execution on OpenAI infrastructure."
+  },
+  "scores": {
+    "total": 52,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 9.8,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 2,
+            "rationale": "No builder UI. Consumer is prompt-driven. API requires building own orchestration loop."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "No debugging suite. Manual screenshot inspection. No trace visualization or testing framework."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Good OpenAI API docs. CUA guides. Lacks enterprise patterns and production best practices."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Rapid prompt iteration. But testing requires full browser sessions (minutes per run)."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 6.4,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 1,
+            "rationale": "No multi-agent. Single agent per session. Must compose externally."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Basic but effective: works, pauses, human intervenes. No structured workflow tools."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No team features. No shared configs, version control, or collaboration."
+          },
+          {
+            "name": "Team Development",
+            "score": 1,
+            "rationale": "No templates or reusable workflow patterns. Start from prompt each time."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 10.8,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 2,
+            "rationale": "No pre-built connectors. Browser automation provides breadth but not structured depth."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "CUA via Responses API. Well-documented REST. Tool-use protocol. No MCP. Wide SDK adoption."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 2,
+            "rationale": "Standard API keys. No per-agent credentials, secret rotation, or OAuth delegation."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "No RAG. Can combine CUA with file search and code interpreter for hybrid workflows."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 12.4,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "User can stop session. Content policy guardrails. No enterprise circuit breakers."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 4,
+            "rationale": "Strong built-in HITL pausing for sensitive actions. Binary approve/deny, no multi-level."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Screenshot audit trail. SOC 2 Type II. No tamper-proof storage or compliance dashboards."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "Basic org/project access. No Operator-specific RBAC or per-agent scoping."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12.6,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "Cloud-only in OpenAI's sandbox. No self-hosted. Screenshots sent to OpenAI cloud."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "CUA API allows concurrent sessions. Browser resource overhead limits scale. Rate limits apply."
+          },
+          {
+            "name": "Cost Management",
+            "score": 2,
+            "rationale": "No production monitoring dashboard. Standard API usage metrics only."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 5,
+            "rationale": "Largest AI developer community. ChatGPT 200M+ WAU. Massive brand recognition."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "52/100 overall. Strongest: Operations (13/20). Weakest: Orchestration (6/20). Breakdown: Creation (10/20), Orchestration (6/20), Integration (11/20), Governance (12/20), Operations (13/20).",
+  "competence": "Browser/Computer Use Agent",
+  "targetUser": "Users automating web-based tasks via visual AI",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Operator now integrated into ChatGPT as agent mode — standalone interface consolidated",
+      "CUA browser agent praised for zero-integration approach but fragile to UI changes",
+      "Expensive vision tokens per task is the main cost concern",
+      "87% WebVoyager benchmark gets attention but real-world reliability is lower"
+    ],
+    "metrics": [
+      {
+        "metric": "ChatGPT Users",
+        "value": "200M+ weekly active",
+        "source": "OpenAI"
+      },
+      {
+        "metric": "WebVoyager Benchmark",
+        "value": "87% success rate",
+        "source": "OpenAI"
+      },
+      {
+        "metric": "OSWorld Benchmark",
+        "value": "58.1%",
+        "source": "OpenAI"
+      }
+    ],
+    "funding": {
+      "total": "$13B+",
+      "lastRound": "Multiple",
+      "valuation": "$157B+",
+      "investors": [
+        "Microsoft"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "data-extraction",
+    "workflow-automation",
+    "sales-outreach"
+  ],
+  "walkthrough": {
+    "title": "OpenAI Operator: PM & CTO Walkthrough — ChatGPT Agent Builder",
+    "steps": [
+      {
+        "image": "/screenshots/openai-operator/step01_guardrails.jpg",
+        "title": "Guardrails Node — Safety Controls",
+        "description": "Guardrails node: PII detection, Moderation, Jailbreak prevention, Hallucination checks. Each with toggle and config. Connected to Agent → File Search → End flow.",
+        "pmCritique": {
+          "works": [
+            "4 safety checks as toggles — PII, Moderation, Jailbreak, Hallucination — simplest governance UX ever",
+            "Guardrails as a visual node means safety is part of the flow, not an afterthought",
+            "Each check has a settings gear — configurable severity and behavior"
+          ],
+          "doesntWork": [
+            "Guardrails is between agent and end — not before agent input, creating a gap",
+            "'Continue on error' toggle suggests guardrails can be bypassed",
+            "No custom guardrail creation visible — limited to 4 built-in types"
+          ],
+          "userPsychology": "This is the frame that will be in every enterprise AI presentation for the next 2 years. Visual guardrails as drag-and-drop nodes makes AI safety tangible and manageable."
+        },
+        "ctoCritique": {
+          "verdict": "This single node solves my #1 concern about deploying AI agents. PII detection + jailbreak prevention + hallucination checks as built-in toggles is what every other platform should copy.",
+          "concerns": [
+            "Guardrails at the end of flow means agent processes before safety check",
+            "Custom guardrails not supported — only 4 built-in types",
+            "Guardrail effectiveness metrics not shown"
+          ],
+          "enterpriseGaps": [
+            "No custom guardrail creation for industry-specific rules",
+            "No guardrail audit log",
+            "No guardrail bypass alerting"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openai-operator/step03_agent_builder.jpg",
+        "title": "Agent Builder Canvas",
+        "description": "Visual canvas with MCP, Start, Agent (My agent) nodes. Right panel: Name, Instructions, Model gpt-5, Reasoning effort low, Tools, Output format, Evaluate link.",
+        "pmCritique": {
+          "works": [
+            "GPT-5 as default model — frontier capability out of the box",
+            "Reasoning effort selector (low/medium/high) enables cost-quality trade-offs",
+            "Add context button on instructions — RAG integration inline"
+          ],
+          "doesntWork": [
+            "Instructions textarea is small for complex agent behavior",
+            "'You are a helpful assistant' default is generic — no industry templates",
+            "MCP node connected but configuration not visible"
+          ],
+          "userPsychology": "The canvas feels like Figma for AI agents — clean, professional, intuitive. The dark theme with colored nodes creates clear visual hierarchy."
+        },
+        "ctoCritique": {
+          "verdict": "GPT-5 with reasoning effort control is genuinely novel. Low effort for simple tasks, high for complex reasoning — this is the cost optimization lever I need.",
+          "concerns": [
+            "Complete OpenAI lock-in — no alternative model providers",
+            "Reasoning effort impact on cost not quantified",
+            "MCP integration depth unclear"
+          ],
+          "enterpriseGaps": [
+            "No cost estimation per reasoning level",
+            "No model comparison for same task",
+            "No fallback to cheaper models"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openai-operator/step04_email_agent.jpg",
+        "title": "Email Categorizer Agent",
+        "description": "Agent configured as Email Categorizer: Instructions classify emails as Urgent/Normal/Spam. Model gpt-5, Reasoning effort low, Output format Text.",
+        "pmCritique": {
+          "works": [
+            "Real-world use case — email categorization is universally relatable",
+            "Low reasoning effort for classification — smart cost optimization",
+            "Output format selection (Text, JSON, etc.) enables structured output"
+          ],
+          "doesntWork": [
+            "Classification prompt is verbose but has a typo ('standart') — no spell check",
+            "No example inputs/outputs for testing the categorization",
+            "Single agent — no pipeline to act on the categorization"
+          ],
+          "userPsychology": "Email categorization as the demo use case is brilliant — every enterprise has this problem. The simplicity makes evaluation effortless."
+        },
+        "ctoCritique": {
+          "verdict": "Email categorization is a good starter use case but trivial. I need to see: multi-step workflows, external API calls, human approval chains, error handling.",
+          "concerns": [
+            "Trivial use case doesn't stress-test the platform",
+            "No integration with actual email systems shown",
+            "No accuracy metrics for categorization"
+          ],
+          "enterpriseGaps": [
+            "No email system connector (Gmail, Outlook, Exchange)",
+            "No categorization accuracy dashboard",
+            "No false positive handling"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openai-operator/step05_agent_flow.jpg",
+        "title": "Agent Flow with Deploy Pipeline",
+        "description": "Search agent → End node. Top bar: ... (menu), Evaluate, Code, Preview, Deploy buttons — full lifecycle in one toolbar.",
+        "pmCritique": {
+          "works": [
+            "Evaluate → Code → Preview → Deploy is the cleanest lifecycle pipeline in any agent builder",
+            "Each stage is a button, not a separate page — minimal context switching",
+            "Deploy button is green and prominent — clear call to action"
+          ],
+          "doesntWork": [
+            "Simple 2-node flow (agent → end) doesn't demonstrate real complexity",
+            "No error handling nodes visible — what happens when the agent fails?",
+            "No monitoring after deploy — lifecycle ends at deploy"
+          ],
+          "userPsychology": "The 4-button pipeline (Evaluate → Code → Preview → Deploy) is the UX pattern every agent builder should adopt. It makes the path from build to production explicit."
+        },
+        "ctoCritique": {
+          "verdict": "The deploy pipeline is correct but incomplete. I need: staging environments, canary deployments, rollback, and post-deploy monitoring. Deploy is not the end of the lifecycle.",
+          "concerns": [
+            "No staging environment before production deploy",
+            "No rollback capability visible",
+            "No post-deploy monitoring"
+          ],
+          "enterpriseGaps": [
+            "No canary or gradual rollout",
+            "No deploy approval workflow",
+            "No deploy history or audit trail"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openai-operator/step06_code_view.jpg",
+        "title": "Code View — Generated Code",
+        "description": "Code tab showing generated Python/JavaScript from the visual builder. Evaluate, Code, Preview, Deploy tabs across the top.",
+        "pmCritique": {
+          "works": [
+            "Code generation from visual builder bridges no-code and developer workflows",
+            "Generated code is exportable — not locked into the visual builder",
+            "Developers can review, modify, and version control the output"
+          ],
+          "doesntWork": [
+            "Generated code quality and readability not shown in this frame",
+            "Code modifications don't sync back to visual builder",
+            "No testing framework for the generated code"
+          ],
+          "userPsychology": "Code view is the enterprise escape hatch — start visual, export to code when you outgrow the builder. This prevents builder lock-in."
+        },
+        "ctoCritique": {
+          "verdict": "Code generation means we can version control, review in PRs, and deploy via our CI/CD pipeline. This is the bridge between no-code teams and engineering.",
+          "concerns": [
+            "Code ↔ visual sync is one-way — code changes don't update the canvas",
+            "Generated code dependencies and runtime requirements unclear",
+            "No SDK for extending generated code"
+          ],
+          "enterpriseGaps": [
+            "No CI/CD integration for code-generated agents",
+            "No code quality analysis on generated output",
+            "No code migration between agent versions"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/openai-operator/step08_publish.jpg",
+        "title": "Publish Agent Workflow",
+        "description": "Deploy button and publication flow for pushing the agent workflow to production. Final step in the Evaluate → Code → Preview → Deploy pipeline.",
+        "pmCritique": {
+          "works": [
+            "One-click deploy is the culmination of the build experience",
+            "Deploy is contextual — only available after successful preview",
+            "Publication feels like shipping code — familiar mental model"
+          ],
+          "doesntWork": [
+            "No deployment target selection visible — where does it deploy?",
+            "No deployment confirmation or summary of what's being published",
+            "No environment selection (staging vs production)"
+          ],
+          "userPsychology": "Deploy is the 'ship it' moment. The fact that it feels natural and unstressful means the builder has done its job leading up to this point."
+        },
+        "ctoCritique": {
+          "verdict": "One-click deploy is great for demos. Production needs: approval gates, staged rollout, health checks, and automatic rollback on errors.",
+          "concerns": [
+            "No deployment approval gate",
+            "No staged rollout configuration",
+            "No health check after deployment"
+          ],
+          "enterpriseGaps": [
+            "No deployment SLA",
+            "No deployment notification system",
+            "No deployment audit trail"
+          ]
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "OpenAI's Agent Builder is the most polished visual agent builder in the market. The canvas with Agent, Guardrails, MCP, If/else, While nodes creates professional-grade workflows. Built-in Guardrails node (PII, Moderation, Jailbreak, Hallucination) is a CTO's dream. GPT-5 as the default model with reasoning effort control shows frontier capability. The Evaluate → Code → Preview → Deploy pipeline is best-in-class.",
+      "score": "A",
+      "strengths": [
+        "Most polished visual agent builder — clean dark canvas with professional node design",
+        "Built-in Guardrails node with PII, Moderation, Jailbreak, Hallucination toggles",
+        "GPT-5 default with reasoning effort control (low/medium/high)",
+        "Evaluate → Code → Preview → Deploy pipeline covers full lifecycle"
+      ],
+      "risks": [
+        "Complete OpenAI lock-in — no model provider choice beyond GPT models",
+        "Agent Builder is new — maturity and reliability unproven at scale",
+        "Pricing unclear — usage-based on GPT-5 could be expensive",
+        "No self-hosted option — all data flows through OpenAI"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "OpenAI Agent Builder is the most compelling new entrant. Guardrails as a first-class node (PII detection, jailbreak prevention, hallucination checks) solves the #1 enterprise concern about AI agents. The visual builder with Code view enables both business users and developers. But: complete OpenAI lock-in, no self-hosted option, and GPT-5 pricing at scale are blockers for cost-sensitive enterprises.",
+      "decision": "EVALUATE — Most Promising New Platform",
+      "strengths": [
+        "Guardrails node with PII/Moderation/Jailbreak/Hallucination is enterprise-ready out of the box",
+        "Visual builder + Code view serves both no-code and developer users",
+        "GPT-5 with reasoning effort control enables cost-quality optimization",
+        "1.7M+ views on intro video signals massive developer interest"
+      ],
+      "dealBreakers": [
+        "Complete OpenAI vendor lock-in",
+        "No self-hosted deployment option",
+        "GPT-5 pricing at scale could be prohibitive",
+        "New product — production track record doesn't exist yet"
+      ]
+    },
+    "coverageGaps": [
+      "Production deployment and monitoring",
+      "Enterprise SSO and team management",
+      "Cost management and budgeting",
+      "Agent versioning and rollback",
+      "Integration with external systems beyond MCP"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (14/20)",
+        "score": "Fully Supported",
+        "videoEvidence": "Visual canvas builder, node types, agent config, Guardrails all demonstrated",
+        "gap": "Score should be higher — best visual builder in market"
+      },
+      {
+        "dimension": "Orchestration (10/20)",
+        "score": "Supported",
+        "videoEvidence": "If/else, While logic nodes, multi-agent flows with MCP shown",
+        "gap": "Complex orchestration patterns not deeply explored"
+      },
+      {
+        "dimension": "Integration (12/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "MCP node, File Search tool shown. Limited external integrations",
+        "gap": "Integration breadth limited to OpenAI ecosystem"
+      },
+      {
+        "dimension": "Governance (10/20)",
+        "score": "Well Supported",
+        "videoEvidence": "Guardrails node with 4 safety checks is the strongest governance UX in any platform",
+        "gap": "RBAC, audit trails, compliance certifications not shown"
+      },
+      {
+        "dimension": "Operations (6/20)",
+        "score": "Partially Shown",
+        "videoEvidence": "Deploy button visible, Evaluate tab shown",
+        "gap": "Monitoring, scaling, cost management not demonstrated"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "YlqXKDP1c5k",
+      "title": "NEW ChatGPT Agent Builder: From Zero to Automation Hero (2026)",
+      "channel": "AI Foundations"
+    },
+    {
+      "videoId": "44eFf-tRiSg",
+      "title": "Intro to Agent Builder (Official OpenAI)",
+      "channel": "OpenAI"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The most capable browser-based AI agent — uses CUA (Computer Use Agent) model to navigate any website, fill forms, and complete web-based tasks autonomously.",
+    "targetUser": "Consumers and business users who want AI to handle web-based tasks: booking, purchasing, form filling, research. Early adopters exploring browser automation.",
+    "vsAlternatives": "Wins on raw capability — OpenAI model is the most capable at web navigation. Wins on brand trust and ecosystem. Loses on enterprise features — no governance, audit trails, or deployment flexibility. Cloud-only, no self-hosted option."
+  }
+}

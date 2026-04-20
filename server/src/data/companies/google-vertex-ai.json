@@ -1,0 +1,155 @@
+{
+  "name": "Google Vertex AI Agent Builder",
+  "slug": "google-vertex-ai",
+  "category": "enterprise",
+  "subcategory": "agent-infrastructure",
+  "description": "Google's enterprise agent platform — Agent Development Kit (ADK) for building agents in under 100 lines of Python/Java/TypeScript, Agent Engine for managed runtime with evaluation, sessions, memory bank, and code execution. Pioneers the A2A (Agent-to-Agent) protocol for cross-vendor agent communication. 100+ connectors via Apigee, VPC Service Controls, and enhanced tool governance. The third hyperscaler agent platform alongside AWS Bedrock and Azure/Microsoft.",
+  "oneLiner": "Google's enterprise agent platform — ADK + Agent Engine + A2A protocol. The third hyperscaler alongside AWS Bedrock and Azure.",
+  "founded": "2017",
+  "funding": "Google Cloud (Alphabet). Not a startup — hyperscaler investment.",
+  "pricing": "Pay-per-use Google Cloud pricing. Agent Engine, ADK free to use. Compute and model inference billed separately.",
+  "website": "https://cloud.google.com/products/agent-builder",
+  "githubRepo": null,
+  "githubStars": 0,
+  "screenshots": [],
+  "capabilities": [
+    "Agent Development Kit (ADK) — production agents in <100 lines of Python/Java/TypeScript",
+    "Agent Engine — fully managed runtime with evaluation, sessions, memory bank, code execution",
+    "A2A (Agent-to-Agent) protocol — cross-vendor agent communication standard",
+    "100+ connectors via Apigee for ERP, procurement, HR platforms",
+    "Enhanced tool governance — pre-built tools + custom MCP servers",
+    "VPC Service Controls for data security and exfiltration prevention",
+    "Multi-agent orchestration with deterministic guardrails",
+    "Performance dashboard — token consumption, latency, error rates, tool calls",
+    "Gemini model integration native",
+    "Enterprise: IAM, audit logging, compliance, data residency"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "ADK for code-first agent development. Agent Engine for managed deployment. Console UI for configuration and monitoring. A2A protocol for multi-vendor agent coordination.",
+    "strengths": [
+      "A2A protocol is a genuine industry contribution — cross-vendor agent communication",
+      "ADK is impressively concise — production agents in <100 lines",
+      "100+ enterprise connectors via Apigee — deepest enterprise integration",
+      "VPC Service Controls address the #1 enterprise security concern",
+      "Google Cloud distribution — every GCP customer is a potential user"
+    ],
+    "weaknesses": [
+      "Complete Google Cloud lock-in — no multi-cloud or self-hosted",
+      "No visual workflow builder in the OpenAI/Dify sense — code + console only",
+      "ADK is new — ecosystem and community still building",
+      "Pricing complexity typical of Google Cloud — hard to predict costs",
+      "A2A adoption uncertain — competing with MCP for mindshare"
+    ],
+    "notableFeatures": [
+      "A2A protocol for agent-to-agent communication",
+      "Agent Engine managed runtime",
+      "Memory Bank for persistent agent memory",
+      "Enhanced tool governance with MCP server support"
+    ]
+  },
+  "recentDevelopments": [
+    "2026: A2A protocol launched — open standard for cross-vendor agent communication",
+    "2026: ADK with Python, Java, TypeScript support",
+    "2026: Enhanced tool governance — custom MCP servers from managed APIs",
+    "2026: Agent Engine GA with evaluation, sessions, memory bank",
+    "2026: VPC Service Controls support for agent workloads",
+    "2026: Performance dashboard for agent monitoring"
+  ],
+  "lastResearched": "2026-04-13",
+  "dataSources": [
+    { "url": "https://cloud.google.com/products/agent-builder", "accessedAt": "2026-04-13", "type": "docs" },
+    { "url": "https://docs.cloud.google.com/agent-builder/overview", "accessedAt": "2026-04-13", "type": "docs" }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Google Cloud only. No self-hosted option. VPC Service Controls for network isolation."
+  },
+  "scores": {
+    "total": 74,
+    "dimensions": [
+      { "key": "CR", "name": "Creation", "score": 14, "subCriteria": [
+        { "name": "Agent Builder UX", "score": 3, "rationale": "ADK code-first + Console UI. No visual drag-and-drop workflow builder." },
+        { "name": "Time-to-Value", "score": 4, "rationale": "ADK: production agents in <100 lines. Fast for developers." },
+        { "name": "Debugging & Testing", "score": 4, "rationale": "Evaluation framework, performance dashboard, trace logging." },
+        { "name": "Documentation & Learning", "score": 3, "rationale": "Google Cloud docs quality. ADK is new so examples still growing." }
+      ]},
+      { "key": "OR", "name": "Orchestration", "score": 15, "subCriteria": [
+        { "name": "Multi-Agent Coordination", "score": 4, "rationale": "A2A protocol enables cross-vendor multi-agent systems. Deterministic guardrails." },
+        { "name": "Human-in-the-Loop Design", "score": 4, "rationale": "Agent Engine supports sessions with human checkpoints." },
+        { "name": "Workflow Templates", "score": 3, "rationale": "Pre-built tools for Google services. Template ecosystem building." },
+        { "name": "Team Development", "score": 4, "rationale": "Google Cloud IAM, team workspaces, shared agents." }
+      ]},
+      { "key": "IN", "name": "Integration", "score": 17, "subCriteria": [
+        { "name": "Native Connectors", "score": 5, "rationale": "100+ connectors via Apigee. BigQuery, Maps, enterprise ERP/HR native." },
+        { "name": "API & Protocol Standards", "score": 5, "rationale": "A2A + MCP dual protocol support. REST APIs. ADK SDKs." },
+        { "name": "Authentication & Access", "score": 4, "rationale": "Google Cloud IAM, service accounts, VPC Controls." },
+        { "name": "Data Pipeline & RAG", "score": 3, "rationale": "Vertex AI Search for RAG. Memory Bank for agent state." }
+      ]},
+      { "key": "GV", "name": "Governance", "score": 16, "subCriteria": [
+        { "name": "Guardrails & Kill Switches", "score": 4, "rationale": "Enhanced tool governance, deterministic guardrails, VPC controls." },
+        { "name": "Audit Trail & Compliance", "score": 4, "rationale": "Google Cloud audit logging, compliance certifications (SOC2, ISO, FedRAMP)." },
+        { "name": "RBAC & Access Control", "score": 4, "rationale": "Google Cloud IAM — the most mature RBAC in any cloud platform." },
+        { "name": "Explainability & Transparency", "score": 4, "rationale": "Performance dashboard, token tracking, tool call logging." }
+      ]},
+      { "key": "OP", "name": "Operations", "score": 12, "subCriteria": [
+        { "name": "Deployment Flexibility", "score": 2, "rationale": "Google Cloud only. No multi-cloud, no self-hosted." },
+        { "name": "Scaling & Monitoring", "score": 4, "rationale": "Agent Engine auto-scales. Performance dashboard with metrics." },
+        { "name": "Cost Management", "score": 3, "rationale": "Google Cloud billing. Token consumption tracking. Complex pricing." },
+        { "name": "Ecosystem Maturity", "score": 3, "rationale": "New platform — growing but not yet at Bedrock/Azure scale for agents." }
+      ]}
+    ]
+  },
+  "scoringRationale": "74/100 overall. Strongest: Integration (17/20). Weakest: Operations (12/20). Breakdown: Creation (14/20), Orchestration (15/20), Integration (17/20), Governance (16/20), Operations (12/20).",
+  "competence": "enterprise-agent-platform",
+  "targetUser": "Google Cloud enterprise customers building governed, scalable agent systems with cross-vendor interoperability via A2A",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "A2A protocol generating significant industry interest as MCP complement",
+      "ADK praised for conciseness — production agents in <100 lines",
+      "Third hyperscaler entering the agent platform race changes the competitive landscape",
+      "Enterprise customers already on GCP have a natural migration path",
+      "Tool governance features signal enterprise-first design philosophy"
+    ],
+    "metrics": [
+      { "metric": "Connectors", "value": "100+", "source": "Google Cloud" },
+      { "metric": "Parent Revenue", "value": "$41B/quarter (Google Cloud)", "source": "Alphabet" }
+    ],
+    "funding": "Google Cloud (Alphabet). Hyperscaler investment, not venture-funded."
+  },
+  "supportedCUJs": ["customer-support", "it-helpdesk", "workflow-automation"],
+  "coreCompetence": {
+    "bestAt": "The only hyperscaler with both MCP and A2A protocol support. 100+ enterprise connectors via Apigee. Agent Engine provides managed runtime with evaluation, sessions, and memory. VPC controls for maximum security.",
+    "targetUser": "GCP enterprise customers who need governed agent systems with cross-vendor interoperability and deep enterprise integration.",
+    "vsAlternatives": "Wins against Bedrock on protocol standards (A2A + MCP vs MCP only), connector breadth (Apigee), and tool governance. Loses on model diversity (Gemini-first) and self-hosted options. Different from AgentDash: Google is infrastructure, AgentDash is product. AgentDash should build ON Google-like infrastructure, not compete WITH it."
+  },
+  "walkthrough": {
+    "title": "Google Vertex AI: The Third Hyperscaler Agent Platform",
+    "pmVerdict": {
+      "summary": "Google Vertex AI Agent Builder is infrastructure, not product — but it's the infrastructure AgentDash should consider building on. A2A protocol is a genuine contribution to the ecosystem. ADK is impressively concise. 100+ connectors via Apigee is the deepest enterprise integration. The PM lesson: Google is setting the standards (A2A) and providing the runtime (Agent Engine). AgentDash should provide the UX and intelligence layer on top.",
+      "score": "B+ (Infrastructure, Not Competitor)",
+      "strengths": ["A2A protocol — genuine industry standard contribution", "ADK: production agents in <100 lines", "100+ enterprise connectors via Apigee", "VPC Service Controls for maximum security", "Google Cloud distribution to every GCP customer"],
+      "risks": ["Complete GCP lock-in", "No visual workflow builder", "ADK ecosystem still young", "Pricing complexity", "A2A vs MCP adoption uncertainty"]
+    },
+    "ctoVerdict": {
+      "summary": "Vertex AI is the third hyperscaler entering the agent platform race. The A2A protocol is the most important development — if it gains adoption alongside MCP, agents from different vendors will be able to communicate, changing the competitive dynamics entirely. AgentDash should: (1) support A2A, (2) consider Agent Engine as a deployment target, (3) use Apigee connectors where possible.",
+      "decision": "INTEGRATE — Build On, Don't Compete With",
+      "strengths": ["A2A + MCP dual protocol support", "Managed Agent Engine runtime", "Google Cloud compliance (SOC2, ISO, FedRAMP)", "Apigee connector ecosystem", "Evaluation framework built in"],
+      "dealBreakers": ["GCP-only — no multi-cloud", "No visual builder", "New platform — limited production track record for agents", "Gemini-first model bias", "Enterprise pricing opacity"]
+    },
+    "coverageGaps": ["ADK code walkthrough", "Agent Engine deployment demo", "A2A protocol integration demo", "Performance benchmarks", "Pricing analysis"],
+    "scoringAlignment": [
+      { "dimension": "Creation (14/20)", "score": "Inferred", "videoEvidence": "ADK documentation and blog posts", "gap": "No video walkthrough available" },
+      { "dimension": "Orchestration (15/20)", "score": "Inferred", "videoEvidence": "A2A protocol and multi-agent docs", "gap": "Production multi-agent demos not available" },
+      { "dimension": "Integration (17/20)", "score": "Supported", "videoEvidence": "100+ connectors via Apigee documented", "gap": "Connector depth not verified per integration" },
+      { "dimension": "Governance (16/20)", "score": "Supported", "videoEvidence": "VPC controls, IAM, tool governance documented", "gap": "Google Cloud compliance inherited, not agent-specific" },
+      { "dimension": "Operations (12/20)", "score": "Inferred", "videoEvidence": "Agent Engine docs, performance dashboard", "gap": "GCP-only limits flexibility score" }
+    ],
+    "steps": []
+  },
+  "youtubeReviews": []
+}

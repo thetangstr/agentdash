@@ -10,6 +10,7 @@ import { pipelinesApi } from "../api/pipelines";
 import { DagPreview } from "../components/DagPreview";
 import { StatusBadge } from "../components/StatusBadge";
 import { EmptyState } from "../components/EmptyState";
+import { LuxePageHeader } from "../components/LuxePageHeader";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "../lib/utils";
 import { GitBranch, Plus, Play, Archive } from "lucide-react";
@@ -60,9 +61,16 @@ export function Pipelines() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b">
-        <GitBranch className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-lg font-semibold flex-1">Pipelines</h1>
+      <div className="flex items-start gap-3 px-6 pt-5 pb-4 border-b">
+        <GitBranch className="h-5 w-5 text-muted-foreground mt-3" />
+        <div className="flex-1">
+          <LuxePageHeader
+            eyebrow="Pipelines"
+            title={<>Multi-stage <span className="soft">workflows</span></>}
+            subtitle="DAG orchestration with HITL gates, self-healing retries, and CRM lifecycle hooks."
+            slim
+          />
+        </div>
         <Button size="sm" asChild>
           <Link to="/pipelines/new">
             <Plus className="h-3.5 w-3.5 mr-1.5" />

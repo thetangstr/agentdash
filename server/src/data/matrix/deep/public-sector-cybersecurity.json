@@ -1,0 +1,96 @@
+{
+  "industry": "Public Sector",
+  "industrySlug": "public-sector",
+  "jobFunction": "Cybersecurity / SOC",
+  "functionSlug": "cybersecurity",
+  "disruptionScore": 9,
+  "summary": "The January 2026 DoD AI Strategy established Agent Network as a Priority Strategic Program. CMMC enforcement is underway with fewer than 1% of 80,000 organizations certified. FedRAMP authorization is the mandatory gateway for cloud AI in federal systems — no major commercial AI platform has achieved FedRAMP High. AgentDash's air-gapped, multi-model architecture and certification timeline create a 24-month competitive moat that capital alone cannot compress.",
+  "tier": "deep",
+  "workflows": [
+    {"name": "SOC Alert Triage for Federal Networks", "description": "Agents correlate alerts from CDM sensors, CISA EINSTEIN, and agency SIEM systems across .gov and .mil networks. Suppress false positives, enrich with threat intelligence (CISA KEV, MITRE ATT&CK), and escalate genuine threats with evidence packets.", "agentPotential": "high", "currentPain": "Federal SOCs process thousands of daily alerts from CDM, EINSTEIN, and agency-specific sensors. Analyst shortage is acute — DHS CISA alone has 2,000+ unfilled cyber positions. Alert fatigue drives 30%+ annual turnover in government SOC roles."},
+    {"name": "CMMC Compliance Automation", "description": "Agents continuously assess contractor environments against CMMC Level 2 controls (110 NIST 800-171 practices), generate POA&Ms, collect evidence artifacts, and prepare for C3PAO assessments.", "agentPotential": "high", "currentPain": "80,000 organizations need CMMC Level 2 certification. Fewer than 800 (<1%) have achieved it as of January 2026. Assessment costs $50-200K per organization. Manual compliance documentation takes 6-12 months."},
+    {"name": "Classified Environment Monitoring", "description": "Agents operate in air-gapped IL4/IL5/IL6 environments monitoring for insider threats, data exfiltration, and adversary persistence on classified networks — without any cloud connectivity.", "agentPotential": "high", "currentPain": "Classified networks cannot use cloud-based security tools. On-premise SIEM deployments are understaffed and under-automated. Nation-state adversaries specifically target classification boundaries."},
+    {"name": "Vulnerability Prioritization for Federal Systems", "description": "Agents cross-reference CISA Known Exploited Vulnerabilities catalog with agency asset inventory, BOD 22-01 compliance deadlines, and actual exploit activity to prioritize patching.", "agentPotential": "high", "currentPain": "CISA BOD 22-01 mandates remediation timelines for KEV entries. Agencies struggle to meet deadlines across sprawling, heterogeneous infrastructure. Average federal agency has 100,000+ endpoints."},
+    {"name": "Incident Response for Government Systems", "description": "Agents execute NIST 800-61 incident response playbooks: contain, eradicate, recover, and generate CISA-formatted incident reports. Coordinate across multi-agency environments.", "agentPotential": "medium", "currentPain": "Federal incident response requires coordination across CISA, agency SOC, IG, and sometimes FBI/Secret Service. Manual playbook execution takes hours during fast-moving incidents."}
+  ],
+  "platformFit": [
+    {"companySlug": "bedrock-agentcore", "fitScore": 4, "rationale": "AWS GovCloud with FedRAMP High for some services. But Bedrock Agents specifically may not have FedRAMP High authorization for all features. Cloud-only — cannot operate in air-gapped environments."},
+    {"companySlug": "langgraph", "fitScore": 2, "rationale": "Open-source flexibility for custom deployments but no security certifications, no air-gap capability without significant custom engineering, and no compliance automation features."}
+  ],
+  "businessOutcome": "A federal civilian agency deploying agentic cybersecurity can expect: 80%+ alert noise reduction, 24/7 automated monitoring replacing business-hours SOC, CMMC compliance assessment time reduced from 12 months to 8 weeks for contractor oversight, continuous FISMA/NIST compliance posture, and $3-8M annual savings vs expanding human SOC staff in a market where GS-13/14 cyber analysts command $120-180K+ with full benefits.",
+  "examples": [
+    "FY2026 NDAA directs DoD to develop AI/ML cybersecurity framework and incorporate it into CMMC — creating mandatory demand for AI-capable security platforms in the defense industrial base.",
+    "CMMC enforcement underway: fewer than 800 of 80,000 organizations certified as of January 2026. Massive backlog creates urgent demand for compliance automation.",
+    "No major commercial AI platform (ChatGPT, Claude, Gemini) has achieved FedRAMP High authorization for standard tiers — creating a massive barrier to entry that certification-first platforms can exploit.",
+    "Secureframe launched automated CMMC compliance with AI-generated SSPs (March 2026) — proving market appetite for AI-powered compliance automation in the defense industrial base."
+  ],
+  "obstacles": [
+    "FedRAMP authorization requires 12-18 months and $1-3M investment — mandatory gateway, not optional",
+    "CMMC Level 2 certification for the platform itself if deployed in contractor environments",
+    "IL4/IL5/IL6 accreditation for classified environment deployment — additional 18-24 months",
+    "Government procurement cycles: 60-120 days via OTA, 6-18 months via traditional FAR-based contracts",
+    "ITAR/EAR restrictions on technology transfer if deploying to allied nation defense customers",
+    "Security clearance requirements for personnel supporting classified deployments"
+  ],
+  "playbook": {
+    "marketSizing": {
+      "tam": "$13.4B — DoD AI spending estimated annually, with cybersecurity as a top priority. Federal civilian cybersecurity spending exceeds $10B/year.",
+      "sam": "$4.8B — AI-powered SOC automation, compliance automation, and threat detection for federal/state/local government and the 80,000-organization defense industrial base",
+      "som": "$240M — Defense industrial base CMMC compliance automation + mid-tier federal civilian agency SOC automation where air-gapped operation is required",
+      "source": "DoD AI budget analysis, CISA budget data, CMMC PMO contractor estimates"
+    },
+    "currentState": "Government cybersecurity is at an inflection point. The FY2026 NDAA mandates a CMMC-for-AI framework. CISA is publishing AI cybersecurity guidance. FedRAMP is the mandatory gateway for cloud AI in federal systems — and no major AI platform has achieved FedRAMP High. Meanwhile, 80,000 defense contractors need CMMC certification with fewer than 1% certified. The talent shortage is structural: government pay scales (GS-13/14 = $120-180K fully loaded) cannot compete with private sector ($200-400K for senior cyber talent). The result: massive demand for AI-powered security with an enormous certification moat protecting early entrants. AgentDash's architecture — air-gapped, multi-model, self-improving — was designed for exactly this environment.",
+    "idealCustomerProfile": {
+      "segment": "Defense industrial base contractors (CMMC Level 2 required), mid-tier federal civilian agencies (CISA CDM participants), and intelligence community support contractors",
+      "size": "Defense contractors: $50M-$5B revenue with CMMC obligations. Federal agencies: 1,000-50,000 endpoints. IC support: varies by contract scope.",
+      "painIntensity": "Existential — CMMC non-compliance means loss of DoD contracts. Federal agencies face IG audit findings and FISMA scorecard pressure. IC support contractors face clearance revocation risk.",
+      "buyerTitle": "CISO, VP Cybersecurity, or Director of Security Operations. For defense contractors: VP IT/Compliance. OTA authority often held by Chief Innovation Officer or CTO.",
+      "budget": "$500K-$3M via OTA/SBIR/STTR for pilot. Production: $2-10M/year depending on scope. DIU has facilitated $4.9B+ in production contracts across 48 companies — proven pathway."
+    },
+    "entryWedge": {
+      "workflow": "CMMC Compliance Automation — the most urgent, time-bounded pain point with 80,000 organizations needing certification",
+      "why": "CMMC is a hard deadline with contract loss consequences. 80,000 organizations need it, fewer than 1% have it. The assessment process is manual, expensive ($50-200K), and slow (6-12 months). An AI-powered compliance automation tool that cuts this to 8 weeks has immediate, quantifiable value. Every defense contractor CIO is actively looking for this solution.",
+      "proofOfConcept": "Deploy AgentDash agents to automate CMMC Level 2 self-assessment: agents scan the contractor's environment against all 110 NIST 800-171 practices, identify gaps, generate POA&Ms, collect evidence artifacts, and produce an assessment-ready package. Compare: time and cost vs manual assessment. Run with 3-5 defense contractors in a 60-day pilot.",
+      "timeToValue": "8-12 weeks. Week 1-2: Contractor environment discovery + NIST 800-171 control mapping. Week 3-4: Agent assessment + gap analysis. Week 5-8: Evidence collection automation + POA&M generation. Week 9-12: C3PAO assessment preparation package delivered."
+    },
+    "successMetrics": [
+      {"metric": "CMMC assessment preparation time", "baseline": "6-12 months of manual compliance documentation", "target": "6-8 weeks with AI-powered evidence collection and gap analysis", "timeframe": "First engagement"},
+      {"metric": "CMMC assessment cost reduction", "baseline": "$50-200K per organization for manual assessment preparation", "target": "$15-40K per organization with AI automation — 60-80% cost reduction", "timeframe": "First engagement"},
+      {"metric": "Continuous compliance posture", "baseline": "Point-in-time assessment that's stale within weeks", "target": "Real-time compliance dashboard with drift detection and auto-remediation recommendations", "timeframe": "90 days post-deployment"},
+      {"metric": "SOC monitoring coverage", "baseline": "Business hours only at most government agencies", "target": "24/7 AI-powered monitoring with human escalation for confirmed threats", "timeframe": "30 days post-deployment"},
+      {"metric": "FedRAMP/CMMC certification timeline for AgentDash itself", "baseline": "N/A — no major AI platform has FedRAMP High", "target": "FedRAMP Moderate by month 12, FedRAMP High by month 18", "timeframe": "18 months from initiation"}
+    ],
+    "riskAssessment": [
+      {"risk": "FedRAMP authorization timeline delays market entry by 12-18 months", "severity": "high", "mitigation": "Pursue FedRAMP 20x (accelerated path). Start with OTA/SBIR contracts that don't require FedRAMP for initial deployments. On-premise deployment avoids FedRAMP requirement entirely for contractor environments. DIU pathway provides non-competitive follow-on production contracts."},
+      {"risk": "Platform classified as 'AI/ML technology' under new NDAA framework, requiring additional certification beyond CMMC", "severity": "medium", "mitigation": "Engage with CDAO early to shape the framework. Position AgentDash as security infrastructure (like a SIEM) rather than an AI decision-making system. Document compliance with NIST AI RMF from day one."},
+      {"risk": "Competition from Palantir/Anduril entering the agentic security space", "severity": "medium", "mitigation": "Palantir is a data fusion platform, not an agent runtime. Anduril is autonomous systems, not enterprise security. Neither offers air-gapped multi-model agent orchestration. Position AgentDash as the orchestration layer BENEATH Palantir AIP or Anduril Lattice — complementary, not competitive."},
+      {"risk": "Government shutdown or continuing resolution freezes new contract awards", "severity": "medium", "mitigation": "Target multi-year OTA contracts that survive CRs. Build pipeline across both DoD and civilian agencies to diversify funding risk. SBIR/STTR funding is typically protected during shutdowns."}
+    ],
+    "regulatoryConsiderations": [
+      "FY2026 NDAA: Directs DoD to develop AI/ML cybersecurity framework and incorporate into DFARS and CMMC — creating mandatory demand for AI-capable security in the defense industrial base.",
+      "FedRAMP: Mandatory for cloud-hosted AI in federal systems. No major AI platform has FedRAMP High. This is a 12-18 month certification moat. FedRAMP 20x may accelerate the path.",
+      "CMMC Level 2: 110 NIST 800-171 practices required for all defense contractors handling CUI. Enforcement is underway with 80,000 organizations in scope.",
+      "CISA AI Cybersecurity Guidance: Federal agencies receiving guidance on deploying AI in security operations — creating a framework for responsible adoption.",
+      "EO 14110 (Safe, Secure, Trustworthy AI): Requires Chief AI Officers and AI impact assessments at federal agencies. Security AI deployments must comply.",
+      "IL4/IL5/IL6 Classification Levels: Air-gapped environments require specific accreditation. IL5 covers controlled unclassified. IL6 covers classified up to SECRET."
+    ],
+    "competitiveLandscape": "Government cybersecurity AI is dominated by defense primes and GovTech specialists: (1) Palantir ($30.5B valuation) — data fusion and decision support via AIP. Consumes agents but doesn't build them. AgentDash positions beneath Palantir. (2) Anduril ($30.5B valuation) — autonomous systems and Lattice OS. Focused on physical domain autonomy, not enterprise cyber. (3) SAIC/Booz Allen/Leidos — traditional defense IT services adding AI. Human-staffed, not agentic. Slow to innovate. (4) CrowdStrike GovCloud — Charlotte AI has government customers but cloud-only with no air-gap. (5) Trellix (McAfee/FireEye) — legacy government installed base but aging platform. (6) Secureframe — emerging CMMC compliance automation (launched March 2026) but not agentic. NONE offer air-gapped multi-model agent orchestration with self-improving capabilities. The certification moat (FedRAMP 12-18mo, CMMC 6-12mo, IL5 18-24mo) means a competitor starting today cannot serve classified environments until 2028-2029.",
+    "pricingModel": "Government pricing follows specific models: (1) OTA Pilot: $500K-$2M via DIU Commercial Solutions Opening or service-specific OTA. Non-competitive follow-on production contracts up to $100M. (2) SBIR/STTR: Phase I $250K, Phase II $750K-$1.5M. Provides non-dilutive R&D funding. (3) Production contracts: Per-endpoint pricing ($5-15/endpoint/month) or per-user pricing for CMMC compliance ($100-500/contractor organization/month). (4) Platform licensing: $50K-500K/year depending on classification level and deployment scope. (5) Sovereign tier: Revenue-share model where AgentDash earns based on contract value enabled by its platform.",
+    "deploymentTimeline": [
+      {"phase": "OTA/SBIR Procurement", "duration": "60-120 days", "milestone": "Contract awarded via DIU CSO or service OTA. $500K-$2M initial funding secured."},
+      {"phase": "Authority to Operate (ATO) Preparation", "duration": "4-8 weeks", "milestone": "Security documentation (SSP, POAM, SAR) prepared. Penetration testing completed. ATO package submitted."},
+      {"phase": "Agent Deployment (Unclassified)", "duration": "3-4 weeks", "milestone": "Agents deployed on .gov network segment. SIEM API integration. CDM sensor correlation. Shadow mode activated."},
+      {"phase": "Pilot Validation", "duration": "4-6 weeks", "milestone": "False positive suppression rate measured. Detection accuracy validated against MITRE ATT&CK evaluations. Compliance evidence quality reviewed."},
+      {"phase": "Production & ATO", "duration": "2-4 weeks", "milestone": "Full ATO granted. Agents in autonomous triage mode. Continuous monitoring dashboards operational."},
+      {"phase": "Classified Extension (if applicable)", "duration": "12-18 months", "milestone": "IL5/IL6 accreditation. Air-gapped deployment. Cross-domain solution integration. Expanded to classified network monitoring."}
+    ],
+    "buyerJourney": [
+      {"stage": "Mandate Recognition", "action": "Agency CISO reads FY2026 NDAA AI/ML cybersecurity framework mandate. Or: defense contractor CEO realizes CMMC certification is required for contract renewal and current timeline is 12+ months.", "stakeholder": "CISO, CEO, Contracting Officer"},
+      {"stage": "Market Scan", "action": "CISO team searches for AI-capable security platforms. Key filter: can it operate in our classification environment? Does it have FedRAMP/ATO? Can it help with CMMC?", "stakeholder": "CISO, IT Security, Procurement"},
+      {"stage": "OTA/SBIR Engagement", "action": "Engage via DIU Commercial Solutions Opening, service-specific OTA, or SBIR/STTR. 60-120 day procurement timeline — 5-10x faster than traditional FAR.", "stakeholder": "CISO, Contracting Officer, Innovation Office"},
+      {"stage": "Pilot Deployment", "action": "Deploy on unclassified network segment. Validate detection accuracy, compliance evidence quality, and integration with existing security stack.", "stakeholder": "SOC Manager, IT Security, C3PAO (for CMMC)"},
+      {"stage": "Production Decision", "action": "Present pilot results to agency leadership. Build case for production ATO and multi-year funding. DIU pathway: non-competitive follow-on production contract.", "stakeholder": "CISO, CIO, CFO, Program Manager"},
+      {"stage": "Classified Expansion", "action": "Pursue IL5/IL6 accreditation for classified network monitoring. This is the 18-24 month moat — once achieved, competitors face the same timeline.", "stakeholder": "CISO, ISSM, Classification Authority"}
+    ]
+  }
+}

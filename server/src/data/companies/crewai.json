@@ -1,0 +1,1062 @@
+{
+  "name": "CrewAI",
+  "slug": "crewai",
+  "category": "open-source",
+  "subcategory": "multi-agent-orchestration",
+  "description": "CrewAI is an open-source Python framework for orchestrating autonomous AI agents that work together as a 'crew' to accomplish complex tasks. It popularized the role-based agent paradigm where each agent is assigned a specific role, goal, and backstory. In 2024-2025, CrewAI Inc launched CrewAI+ (formerly Enterprise), a hosted platform with a visual UI for building and deploying crews.",
+  "oneLiner": "Open-source multi-agent orchestration framework with role-based crews and an enterprise hosted platform.",
+  "founded": "2023",
+  "funding": "Series A: $18M led by Insight Partners (2024). Total ~$22M.",
+  "pricing": "Open Source (MIT, free); Free tier on CrewAI+ platform; Enterprise tier with custom pricing.",
+  "website": "https://www.crewai.com",
+  "githubRepo": "crewAIInc/crewAI",
+  "githubStars": 27000,
+  "screenshots": [
+    {
+      "path": "/screenshots/crewai/studio-overview.png",
+      "alt": "CrewAI Studio — visual crew builder overview with agent configuration",
+      "screen": "studio-overview"
+    },
+    {
+      "path": "/screenshots/crewai/studio-canvas.png",
+      "alt": "CrewAI Studio — drag-and-drop visual canvas for crew orchestration",
+      "screen": "visual-canvas"
+    },
+    {
+      "path": "/screenshots/crewai/studio-execution.png",
+      "alt": "CrewAI Studio — crew execution view with agent activity monitoring",
+      "screen": "execution-view"
+    },
+    {
+      "path": "/screenshots/crewai/studio-prompt.png",
+      "alt": "CrewAI Studio — AI-assisted prompt builder for agent configuration",
+      "screen": "prompt-builder"
+    },
+    {
+      "path": "/screenshots/crewai/agent-factory.png",
+      "alt": "CrewAI Studio v2 — agent factory with drag-and-drop tools and tasks",
+      "screen": "agent-factory"
+    }
+  ],
+  "capabilities": [
+    "Role-based agent definition",
+    "Sequential and hierarchical process types",
+    "Task delegation between agents",
+    "50+ built-in tools",
+    "LangChain/LlamaIndex tool compatibility",
+    "MCP protocol support",
+    "Multi-LLM support via LiteLLM",
+    "Memory systems (short-term, long-term, entity)",
+    "YAML declarative crew configuration",
+    "CLI scaffolding (crewai create)",
+    "Human-in-the-loop task approval",
+    "Structured output parsing (Pydantic)",
+    "CrewAI+ visual crew builder",
+    "Enterprise monitoring dashboards"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Code-first Python approach. Agents defined with role/goal/backstory/tools. Tasks have descriptions and expected outputs. Crew ties agents and tasks with a process type. YAML config externalizes settings. CLI scaffolds projects. CrewAI+ adds visual drag-and-drop builder.",
+    "strengths": [
+      "Intuitive API — basic crew in under 20 lines of Python",
+      "Role-based paradigm maps naturally to division of labor",
+      "YAML configs allow non-code iteration",
+      "Broad LLM provider support via LiteLLM",
+      "Large active community with abundant examples",
+      "CrewAI+ visual builder lowers bar for non-developers"
+    ],
+    "weaknesses": [
+      "Debugging multi-agent interactions is challenging",
+      "No built-in testing framework for crews",
+      "Error cascading between agents is opaque",
+      "Sequential execution limits parallel performance",
+      "API breaking changes between versions",
+      "Enterprise governance is thin in open-source",
+      "Cost visibility requires external tooling"
+    ],
+    "notableFeatures": [
+      "Hierarchical process with automatic manager agent",
+      "Agent delegation — agents autonomously delegate subtasks",
+      "YAML-based GitOps-friendly crew configuration",
+      "Multi-LLM crews with different models per agent",
+      "Flows orchestration primitive for event-driven execution"
+    ]
+  },
+  "recentDevelopments": [
+    "2025 Q1: Added MCP protocol support",
+    "2025 Q1: CrewAI Enterprise rebranded to CrewAI+ with visual builder",
+    "2024 Q4: Raised $18M Series A led by Insight Partners",
+    "2024 Q3: Launched CrewAI Enterprise platform",
+    "2024 Q3: Introduced Flows — event-driven crew execution",
+    "2024 Q2: Reached 15K+ GitHub stars, 50K+ Discord members"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://github.com/crewAIInc/crewAI",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://docs.crewai.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.crewai.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Open-source (MIT) framework self-hosts anywhere. CrewAI+ is managed cloud. Enterprise supports on-prem."
+  },
+  "scores": {
+    "total": 63,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13.4,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "Intuitive Python API. YAML configs. CLI scaffolding. Low barrier to first crew."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "YAML configs allow non-code changes. Hot-reload. CrewAI+ adds visual editor."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Good docs with quickstarts and concept guides. Some gaps in advanced patterns."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 2,
+            "rationale": "Verbose mode helps but no dedicated debugging tools or testing framework."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 13.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 4,
+            "rationale": "Core strength — sequential, hierarchical, delegation patterns."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Basic task-level approval. Limited async capabilities."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Enterprise adds workspaces. OSS is single-developer focused."
+          },
+          {
+            "name": "Team Development",
+            "score": 4,
+            "rationale": "Structured output passing, shared memory, delegation between agents."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 4,
+            "rationale": "50+ tools in crewai-tools. Active expansion. Community contributions."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "All major providers via LiteLLM. Different agents can use different LLMs."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 3,
+            "rationale": "LangChain/LlamaIndex compatible. MCP support. Limited enterprise connectors."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "Clean API via decorators or BaseTool. Well-documented. Low barrier."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 2,
+            "rationale": "No RBAC in OSS. Enterprise adds team roles."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Human input flag at task level. Enterprise adds approval chains."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 2,
+            "rationale": "Execution logs but no structured audit. Not compliance-ready."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 2,
+            "rationale": "No PII detection or encryption by default."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 12.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "Runs anywhere Python does. CrewAI+ provides managed hosting. No K8s operator."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 2,
+            "rationale": "No horizontal scaling. Single-process model. Enterprise helps but limited."
+          },
+          {
+            "name": "Cost Management",
+            "score": 3,
+            "rationale": "Enterprise platform has dashboards. OSS has basic logging and callbacks."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "~27K GitHub stars. 50K+ Discord. Very active community."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "63/100 overall. Strongest: Integration (15/20). Weakest: Governance (9/20). Breakdown: Creation (13/20), Orchestration (13/20), Integration (15/20), Governance (9/20), Operations (12/20).",
+  "competence": "Multi-Agent Orchestration Framework",
+  "targetUser": "Developers building role-based agent teams",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Wins on accessibility — lowest barrier to entry per community consensus",
+      "Role-based metaphor resonates with non-ML engineers and business teams",
+      "CrewAI+ visual builder generating positive early feedback",
+      "API breaking changes between versions frustrate production users",
+      "Active Discord (50K+) but some complaints about documentation gaps"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "27K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Discord Members",
+        "value": "50K+",
+        "source": "Discord"
+      },
+      {
+        "metric": "Built-in Tools",
+        "value": "50+",
+        "source": "crewai-tools"
+      },
+      {
+        "metric": "LLM Providers",
+        "value": "All major via LiteLLM",
+        "source": "Docs"
+      }
+    ],
+    "funding": {
+      "total": "$22M",
+      "lastRound": "Series A ($18M)",
+      "valuation": "Undisclosed",
+      "investors": [
+        "Insight Partners"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "code-development",
+    "data-extraction",
+    "sales-outreach"
+  ],
+  "walkthrough": {
+    "title": "CrewAI: PM & CTO Walkthrough — From Install to Production",
+    "pmVerdict": {
+      "summary": "CrewAI is the most complete agent framework in the market when you consider OSS + AMP together. The OSS path (steps 1-11) is the best CLI-to-agent experience available. The AMP path (steps 12-16) adds visual building, deployment, and monitoring. Knowledge/RAG (steps 17-18) is genuinely first-class. The gap: HITL approval workflows and enterprise governance are still immature. For a PM, CrewAI is the safest bet for teams that need both developer flexibility and business-user accessibility.",
+      "score": "A-",
+      "strengths": [
+        "Fastest CLI-to-working-agent in the market (~8 min in video)",
+        "YAML agent/task definitions are reviewable by non-developers in PRs",
+        "Role/goal/backstory abstraction is the most intuitive agent mental model",
+        "12 LLM providers supported out of the box — no lock-in"
+      ],
+      "risks": [
+        "Two API keys required before first run — 40-50% drop-off at this step",
+        "No visual builder in OSS — business users excluded entirely",
+        "Terminal-only execution can't be shared with stakeholders",
+        "Output quality is entirely prompt-dependent with no validation layer"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "With AMP, CrewAI moves from 'interesting OSS framework' to 'viable enterprise platform.' The deployment dashboard (step 16), API generation, and scheduling address the production gap. RAG support is native and well-designed. However: no self-hosted AMP option, unclear pricing, tokens exposed in dashboard, no RBAC, and no compliance certifications remain blockers for regulated enterprises. Recommendation: EVALUATE for non-regulated use cases, WAIT for regulated industries until governance matures.",
+      "decision": "EVALUATE — Strong Platform, Governance Gap",
+      "strengths": [
+        "MIT licensed, no vendor lock-in — we can fork if needed",
+        "Model-agnostic via LiteLLM — swap providers without code changes",
+        "Active community (27K stars, 50K Discord) signals longevity",
+        "Clean architecture — YAML configs are version-controllable and auditable"
+      ],
+      "dealBreakers": [
+        "No enterprise secrets management — API keys in .env files",
+        "No monitoring, alerting, or cost attribution in production",
+        "No RBAC or governance layer — anyone can modify agent behavior",
+        "Single-process execution model — no horizontal scaling",
+        "v0.108 version suggests API instability — breaking changes likely"
+      ]
+    },
+    "coverageGaps": [
+      "Human-in-the-loop approval workflows (mentioned but not demonstrated)",
+      "Structured output validation with Pydantic",
+      "Flows (event-driven execution)",
+      "MCP protocol integration details",
+      "Enterprise monitoring dashboards (Traces page shown but not explored)"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (13.4/20)",
+        "score": "Fully Supported",
+        "videoEvidence": "CLI scaffolding (step 4), YAML configs (steps 7-8), Studio visual builder (steps 13-14), templates (step 13)",
+        "gap": "Score is justified — both OSS and AMP creation paths demonstrated"
+      },
+      {
+        "dimension": "Orchestration (13.2/20)",
+        "score": "Mostly Supported",
+        "videoEvidence": "Sequential execution (step 10), task delegation (step 10), multi-agent teams (step 21), task context chaining (step 20)",
+        "gap": "HITL approval and Flows not demonstrated — 2-3 points may be unverified"
+      },
+      {
+        "dimension": "Integration (15/20)",
+        "score": "Well Supported",
+        "videoEvidence": "Knowledge sources/RAG (steps 17-18), tool integration architecture (step 19), multi-LLM (step 20), SerperDev tool (step 10)",
+        "gap": "50+ tools claimed but only 2-3 shown — breadth is plausible but not verified"
+      },
+      {
+        "dimension": "Governance (9.2/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "AMP has Traces (step 15 nav), execution logs (step 16), API tokens (step 16)",
+        "gap": "No RBAC, no audit trail, no guardrails demonstrated. Score of 9.2 may still be generous."
+      },
+      {
+        "dimension": "Operations (12.2/20)",
+        "score": "Mostly Supported",
+        "videoEvidence": "AMP deployment (steps 15-16), API endpoints, scheduling, metrics tabs visible, execution history",
+        "gap": "Monitoring depth unknown — Metrics tab shown but not explored. Scaling not demonstrated."
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/crewai/step01_docs.jpg",
+        "title": "Installation Documentation",
+        "description": "docs.crewai.com installation page — Python >=3.10 <3.13 required, uv as dependency manager, step-by-step guide with copy-paste commands.",
+        "pmCritique": {
+          "works": [
+            "Clean docs with copy-paste code blocks — developers can install without watching a video",
+            "Python version requirements stated upfront — no surprise failures 20 minutes in",
+            "GitHub stars (29,631) displayed in header — social proof builds immediate credibility"
+          ],
+          "doesntWork": [
+            "uv is not standard — most Python developers use pip. This adds a prerequisite most don't have",
+            "No 'try without installing' option — no playground, no sandbox, no web demo",
+            "PATH warning buried in docs — users who miss it get 'crewai: command not found' with no context"
+          ],
+          "userPsychology": "Documentation is the first product experience. CrewAI's docs are clean but assume an experienced Python developer. A business user or junior dev hitting this page would bounce within 30 seconds."
+        },
+        "ctoCritique": {
+          "verdict": "Docs signal a serious open-source project — versioned, searchable, well-organized. But the Python 3.10-3.13 constraint is a deployment concern. Many enterprise servers run 3.8/3.9.",
+          "concerns": [
+            "Python version constraint (>=3.10 <3.13) may conflict with existing enterprise Python environments",
+            "uv dependency adds a non-standard tool to the team's required toolchain",
+            "No enterprise installation guide — no Docker image, no Helm chart, no air-gapped install"
+          ],
+          "enterpriseGaps": [
+            "No SSO/SAML integration mentioned anywhere in docs",
+            "No deployment architecture guide for production workloads",
+            "No security hardening documentation or compliance certifications"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step02_install_cmd.jpg",
+        "title": "Install via uv Tool",
+        "description": "Docs show uv tool install crewai with PATH warning, verification via uv tool list, and upgrade command. Three steps to a working CLI.",
+        "pmCritique": {
+          "works": [
+            "Three clear steps: install → verify → upgrade. Linear, no branching decisions",
+            "uv tool list verification gives confidence — 'crewai v0.102.0' confirms success",
+            "PATH warning with fix command (uv tool update-shell) shows they've handled the common failure"
+          ],
+          "doesntWork": [
+            "Three separate commands to install one tool — pip install crewai would be one line",
+            "Version shown (v0.102.0) suggests rapid iteration — CTO sees 'this API will break on us'",
+            "No uninstall instructions — what if evaluation doesn't go well?"
+          ],
+          "userPsychology": "The install step is a gate. Every friction point here costs 10-20% of potential users. uv is faster than pip but unknown to most — the unfamiliarity tax is real."
+        },
+        "ctoCritique": {
+          "verdict": "The v0.102.0 version number is a yellow flag — rapid versioning suggests API instability. For a production deployment, I need to know: what's the breaking change policy?",
+          "concerns": [
+            "v0.102.0 suggests frequent releases — how stable is the API between versions?",
+            "uv tool install is non-standard — complicates CI/CD pipelines that use pip/poetry",
+            "No lockfile or reproducible install — 'uv tool install crewai' gets latest, not pinned"
+          ],
+          "enterpriseGaps": [
+            "No private PyPI/artifact registry support documented",
+            "No container image for isolated deployment",
+            "No changelog or migration guide visible from install page"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step03_prereqs.jpg",
+        "title": "Verify Prerequisites",
+        "description": "Terminal showing Python 3.12.7 and uv 0.5.1 verified. Two prerequisites confirmed before any CrewAI code is written.",
+        "pmCritique": {
+          "works": [
+            "Version output is clean and reassuring — Python 3.12.7 ✓, uv 0.5.1 ✓",
+            "Only two prereqs (Python + uv) — much simpler than frameworks requiring Docker, Node, etc.",
+            "Terminal-first approach signals this is a developer tool — sets correct expectations"
+          ],
+          "doesntWork": [
+            "If either version check fails, there's no guided fix — user must google the error",
+            "No crewai doctor or crewai check command to validate the full environment",
+            "Time-to-first-value is still zero — we've installed tools but haven't built anything yet"
+          ],
+          "userPsychology": "By frame 3, a developer has spent 2-3 minutes and produced nothing visible. Compare to Lindy where you're building an agent in 10 seconds. CrewAI's setup phase tests patience."
+        },
+        "ctoCritique": {
+          "verdict": "Lightweight prerequisites are good — but where's the system requirements doc? I need to know: memory, CPU, network requirements for production agent workloads.",
+          "concerns": [
+            "No system requirements documented — how much RAM/CPU does a crew need at scale?",
+            "Local-only so far — no mention of how this moves to a server or cloud",
+            "Developer workstation setup ≠ production deployment — the gap isn't addressed"
+          ],
+          "enterpriseGaps": [
+            "No infrastructure requirements specification",
+            "No network/firewall requirements (which APIs do agents call?)",
+            "No resource scaling guidance for multi-crew deployments"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step04_create_crew.jpg",
+        "title": "Scaffold a New Crew Project",
+        "description": "crewai create crew latest-ai-development — one command creates the entire project. Terminal shows Python environment activating.",
+        "pmCritique": {
+          "works": [
+            "One command creates everything — the scaffolding speed is genuinely impressive",
+            "Project name in the command (latest-ai-development) makes it clear and self-documenting",
+            "Automatic Python environment creation removes a common setup pain point"
+          ],
+          "doesntWork": [
+            "Command runs with no progress indicator — blank screen for several seconds while it works",
+            "No --template flag visible — every crew starts from the same generic template",
+            "Provider selection (12 options) happens next but isn't previewed — user doesn't know what's coming"
+          ],
+          "userPsychology": "This is the moment of commitment — the user has decided to try CrewAI. The single-command scaffolding needs to feel instant and magical. Any delay here risks the 'this is going to be complicated' feeling."
+        },
+        "ctoCritique": {
+          "verdict": "CLI scaffolding is developer-friendly but not enterprise-friendly. I need: project templates per use case, team-standard configurations, and integration with our existing CI/CD.",
+          "concerns": [
+            "No project template library — every team starts from scratch with the same generic scaffold",
+            "No way to enforce team standards (required tools, approved models, security policies) in the scaffold",
+            "No integration with existing project management — Jira ticket, GitLab project, etc."
+          ],
+          "enterpriseGaps": [
+            "No organizational template registry",
+            "No policy-as-code enforcement at project creation",
+            "No audit trail of who created what crew and when"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step05_project_tree.jpg",
+        "title": "Generated Project Structure",
+        "description": "File explorer shows: knowledge/, src/latest_ai_development/, tests/, .env, .gitignore, pyproject.toml, README.md. Clean, conventional Python project layout.",
+        "pmCritique": {
+          "works": [
+            "File tree is immediately familiar to Python developers — looks like Django/FastAPI project structure",
+            "knowledge/ folder signals RAG support from day one — grounding is a first-class concept",
+            "tests/ folder included — testing is expected, not an afterthought"
+          ],
+          "doesntWork": [
+            "No README content visible — the generated README likely has generic boilerplate",
+            "knowledge/ folder is empty — no example data to demonstrate RAG capabilities",
+            "Six top-level items (.env, .gitignore, pyproject.toml, README, uv.lock) before the actual code — feels cluttered"
+          ],
+          "userPsychology": "The file tree is the second 'aha moment' (after scaffolding). Developers scan it to judge project quality. This structure passes the test — it looks professional and organized."
+        },
+        "ctoCritique": {
+          "verdict": "Good project hygiene — .gitignore, tests/, pyproject.toml all present. But where's the Dockerfile? Where's the CI config? This is a local dev project, not a deployable service.",
+          "concerns": [
+            "No Dockerfile or container configuration — how do we deploy this?",
+            "No CI/CD configuration (GitHub Actions, GitLab CI) — testing is manual only",
+            "pyproject.toml likely pins to latest versions — reproducibility risk in production"
+          ],
+          "enterpriseGaps": [
+            "No infrastructure-as-code (Terraform, Pulumi, CDK)",
+            "No monitoring/observability configuration",
+            "No secrets management beyond .env files"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step06_env_example.jpg",
+        "title": "Environment Configuration",
+        "description": ".env_example shows three required variables: MODEL=gpt-4o-mini, OPENAI_API_KEY=your_openai_api_key, SERPER_API_KEY=your_serper_api_key.",
+        "pmCritique": {
+          "works": [
+            ".env_example file is a best practice — shows exactly what's needed without exposing real keys",
+            "Only 3 variables — minimal configuration to get started",
+            "MODEL=gpt-4o-mini as default is a smart choice — cheap, fast, good enough for demos"
+          ],
+          "doesntWork": [
+            "Two API keys required before the first run — OpenAI AND Serper. That's two signup flows",
+            "No guidance on which models work best for which use cases — just a default",
+            "SERPER_API_KEY is required for the default template — but users may not want web search"
+          ],
+          "userPsychology": "API key configuration is the #1 drop-off point for developer tools. Requiring TWO keys (OpenAI + Serper) doubles the friction. Many users will stop here and never come back."
+        },
+        "ctoCritique": {
+          "verdict": "API keys in .env files is a development convenience but a production security risk. Where's the secrets management integration? Where's the key rotation policy?",
+          "concerns": [
+            "API keys in plaintext .env files — unacceptable for production deployments",
+            "No support for AWS Secrets Manager, HashiCorp Vault, or Azure Key Vault",
+            "OPENAI_API_KEY means data flows to OpenAI — what about data residency requirements?"
+          ],
+          "enterpriseGaps": [
+            "No enterprise secrets management integration",
+            "No API key rotation mechanism",
+            "No data flow documentation — which external APIs receive company data?"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step07_agents_yaml.jpg",
+        "title": "Define Agent Roles in YAML",
+        "description": "agents.yaml defines researcher (Senior Data Researcher) and reporting_analyst (Reporting Analyst) with role, goal, and backstory fields.",
+        "pmCritique": {
+          "works": [
+            "Role/goal/backstory maps to how humans describe team members — intuitive abstraction",
+            "YAML is readable by non-developers — PMs can review agent definitions in PR reviews",
+            "Two complementary agents (researcher + analyst) demonstrate the multi-agent value proposition"
+          ],
+          "doesntWork": [
+            "backstory field is doing heavy prompt-engineering work disguised as a simple text field",
+            "No validation that role/goal/backstory produce good agent behavior — garbage in, garbage out",
+            "No way to preview or test an individual agent before wiring it into a crew"
+          ],
+          "userPsychology": "The agents.yaml file is CrewAI's most brilliant design decision — it makes AI agent configuration feel like writing job descriptions. Product teams can contribute without learning Python."
+        },
+        "ctoCritique": {
+          "verdict": "YAML config is version-controllable and reviewable — good. But there's no schema validation, no RBAC on who can modify agent definitions, and no approval workflow for changes.",
+          "concerns": [
+            "No JSON Schema or validation — typos in field names fail silently at runtime",
+            "Agent definitions contain prompt text — prompt injection risk if user input flows into backstory",
+            "No versioning of agent definitions — can't A/B test or rollback agent behavior"
+          ],
+          "enterpriseGaps": [
+            "No role-based access control on agent configuration",
+            "No change approval workflow (PR review is manual, not enforced)",
+            "No prompt injection guardrails or input sanitization"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step08_tasks_yaml.jpg",
+        "title": "Define Tasks with Expected Outputs",
+        "description": "tasks.yaml defines research_task and reporting_task with description, expected_output format, and agent assignment. Declarative task pipeline.",
+        "pmCritique": {
+          "works": [
+            "expected_output forces explicit deliverable definition — 'A list with 10 bullet points' is clear",
+            "Agent assignment (agent: researcher) creates accountability — every task has an owner",
+            "{topic} and {current_year} variables enable reusable templates — one crew, many inputs"
+          ],
+          "doesntWork": [
+            "Task dependencies are implicit in ordering — no explicit DAG for complex multi-step flows",
+            "No timeout or retry configuration per task — what happens when the LLM takes 5 minutes?",
+            "Edit/Chat ML buttons in the YAML editor suggest AI-assisted editing — but it's the IDE, not CrewAI"
+          ],
+          "userPsychology": "Tasks.yaml is where 'playing with AI' becomes 'building a workflow.' The shift from experimental to operational happens when users start treating expected_output seriously."
+        },
+        "ctoCritique": {
+          "verdict": "Declarative task definitions are a strength — but expected_output is a suggestion to the LLM, not an enforced contract. There's no output validation, no SLA, no fallback.",
+          "concerns": [
+            "expected_output is aspirational, not enforced — the LLM may produce anything",
+            "No task-level SLA (max duration, max cost, max retries)",
+            "No conditional logic — can't branch based on task results"
+          ],
+          "enterpriseGaps": [
+            "No output schema validation (Pydantic is available but not shown in YAML)",
+            "No task-level cost controls or budget caps",
+            "No error handling or fallback task definitions"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step09_crew_py.jpg",
+        "title": "Crew Orchestration Code",
+        "description": "crew.py — @CrewBase class with imports from crewai (Agent, Crew, Process, Task), YAML config references, and doc links in comments.",
+        "pmCritique": {
+          "works": [
+            "@CrewBase decorator hides boilerplate — class is clean and focused on composition",
+            "Config references (agents_config, tasks_config) separate code from configuration — clean architecture",
+            "Doc links in comments (https://docs.crewai.com/...) help developers learn while coding"
+          ],
+          "doesntWork": [
+            "Decorator pattern obscures execution flow — debugging @CrewBase requires framework knowledge",
+            "tools attachment point isn't visible in this view — where do custom tools plug in?",
+            "Multiple abstraction layers (YAML → Python class → decorators → runtime) create indirection"
+          ],
+          "userPsychology": "crew.py is the 'glue file' — small and clean. Developers think 'this is simple' because the complexity is distributed across YAML files and decorators. That's intentional misdirection — elegant, but potentially confusing when things break."
+        },
+        "ctoCritique": {
+          "verdict": "The @CrewBase pattern is clean for single crews but doesn't address: how do we manage 50 crews? How do we share agents across crews? How do we enforce standards?",
+          "concerns": [
+            "No crew registry or catalog — as the team builds more crews, discoverability becomes a problem",
+            "No shared agent library — same researcher agent gets redefined in every crew",
+            "CrewBase is open-source Python — no enterprise support SLA, community-only help"
+          ],
+          "enterpriseGaps": [
+            "No centralized agent/crew registry for organizational reuse",
+            "No governance layer — who approved this crew for production use?",
+            "No observability hooks — how does this integrate with Datadog/New Relic?"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step10_execution.jpg",
+        "title": "Crew Running — Agents Executing",
+        "description": "crewai run in terminal — 'Running the Crew' with agent status updates, web search tool calls, task delegation visible in real-time.",
+        "pmCritique": {
+          "works": [
+            "Real-time output creates genuine excitement — watching agents work feels like managing a team",
+            "'Running the Crew' message is clear and human-friendly",
+            "Status indicators (In Progress) show the crew is working, not frozen"
+          ],
+          "doesntWork": [
+            "Terminal-only execution — no web dashboard, no saved history, no sharing",
+            "No progress indicator — is this 10% done or 90% done?",
+            "No cost counter — API calls are happening but spend is invisible"
+          ],
+          "userPsychology": "This is CrewAI's magic moment — the YAML definitions come alive. But it only happens in a terminal window that can't be shown to stakeholders. The 'aha' moment is trapped in a developer's laptop."
+        },
+        "ctoCritique": {
+          "verdict": "Terminal execution is fine for development. But production requires: monitoring, alerting, cost tracking, audit logs, and failure recovery. None of that exists here.",
+          "concerns": [
+            "No monitoring or alerting — if a crew fails at 3am, nobody knows",
+            "No cost attribution — which crew, which agent, which task drove the API bill?",
+            "No execution history — can't answer 'what did the crew do last Tuesday?'"
+          ],
+          "enterpriseGaps": [
+            "No production execution environment (CrewAI+ exists but isn't shown)",
+            "No audit logging of agent actions and decisions",
+            "No kill switch — can't stop a runaway crew mid-execution"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step11_output.jpg",
+        "title": "Final Generated Report",
+        "description": "report.md — 'Comprehensive Report on Open Source AI Agent Frameworks' with table of contents, 10 sections, enterprise analysis. Production-quality markdown output.",
+        "pmCritique": {
+          "works": [
+            "Markdown output is immediately usable — no post-processing needed",
+            "Table of contents with 10 numbered sections shows structured agent reasoning",
+            "Content is substantive — real analysis of LangGraph, enterprise solutions, not lorem ipsum"
+          ],
+          "doesntWork": [
+            "Output quality depends entirely on prompt engineering in task descriptions",
+            "No version comparison — can't see if this run's output is better or worse than last time",
+            "Report is a local file — no sharing URL, no collaborative review, no approval workflow"
+          ],
+          "userPsychology": "The final report is what makes CrewAI shareable. This markdown file gets copy-pasted into Notion, sent to managers, and used to justify the tool choice. It's the product's best salesperson."
+        },
+        "ctoCritique": {
+          "verdict": "The output quality is impressive for a demo. But for production: where's the output validation? Where's the fact-checking? Where's the human review gate before this reaches a customer?",
+          "concerns": [
+            "No output validation or quality scoring — how do we know this is accurate?",
+            "No human-in-the-loop approval before output is finalized",
+            "No citation verification — agent may hallucinate facts in the report"
+          ],
+          "enterpriseGaps": [
+            "No output compliance checking (PII, confidential data, brand guidelines)",
+            "No approval workflow before outputs reach customers",
+            "No output versioning or audit trail"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step12_amp_overview.jpg",
+        "title": "CrewAI AMP — Agent Management Platform",
+        "description": "CrewAI AMP is the hosted platform built on top of CrewAI OSS. Build, deploy, and monitor agents visually using CrewAI Studio. Generates API endpoints for any crew.",
+        "pmCritique": {
+          "works": [
+            "AMP bridges the gap between OSS framework and production platform — same codebase, managed hosting",
+            "API endpoint generation means crews are instantly consumable by any frontend or service",
+            "'Build, deploy, and monitor' covers the full lifecycle — not just build"
+          ],
+          "doesntWork": [
+            "AMP is a separate paid product — OSS users must upgrade to get production features",
+            "No self-hosted AMP option — cloud-only, which blocks air-gapped enterprises",
+            "The gap between OSS and AMP is a cliff, not a ramp — no gradual upgrade path"
+          ],
+          "userPsychology": "AMP is the answer to every OSS limitation. But learning it exists only after hitting walls with OSS creates frustration — 'why wasn't this mentioned earlier?'"
+        },
+        "ctoCritique": {
+          "verdict": "AMP solves the production deployment gap but creates vendor dependency. The OSS-to-AMP migration path needs evaluation — can we go back if AMP pricing changes?",
+          "concerns": [
+            "Cloud-only hosting — data residency and sovereignty questions for regulated industries",
+            "Pricing model unclear — per-crew? per-execution? per-seat? Need to model TCO",
+            "AMP is the monetization layer — risk of OSS features being gated behind paid tier"
+          ],
+          "enterpriseGaps": [
+            "No self-hosted AMP deployment option",
+            "No SLA documentation visible",
+            "No SOC2/ISO27001 certification mentioned for the hosted platform"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step13_studio_ui.jpg",
+        "title": "Crew Studio — No-Code Visual Builder",
+        "description": "CrewAI Studio at app.crewai.com — describe what you want to automate in natural language. Template chips: Summarize customer support tickets, Triage GitHub issues, Score inbound leads.",
+        "pmCritique": {
+          "works": [
+            "Natural language input ('Describe the automation you want to build') is identical to Lindy's approach — proven UX pattern",
+            "Template chips show real use cases — customer support, GitHub triage, lead scoring — immediately relevant",
+            "Left nav reveals full platform: Automations, Agents Repository, Tools & Integrations, Traces — production features"
+          ],
+          "doesntWork": [
+            "Studio is at app.crewai.com — separate from docs.crewai.com — discoverability problem",
+            "Templates are limited to 3 visible options — no browsable template gallery",
+            "'Loading Projects' spinner suggests slow backend — first impression matters"
+          ],
+          "userPsychology": "Studio is the product Lindy users want but with CrewAI's flexibility underneath. The natural language builder makes business users feel empowered — but the left nav (Traces, LLM Connections) reveals the developer platform beneath."
+        },
+        "ctoCritique": {
+          "verdict": "Studio solves the 'developers only' problem. But it's a hosted SaaS — our data flows through CrewAI's infrastructure. Need to evaluate: data handling, retention, and deletion policies.",
+          "concerns": [
+            "Agents Repository and Tools & Integrations suggest shared resources — who controls access?",
+            "LLM Connections section means our API keys are stored on CrewAI's platform",
+            "Usage and Billing sections visible — cost model needs due diligence"
+          ],
+          "enterpriseGaps": [
+            "No SSO visible — email/password login only",
+            "No team management or workspace isolation shown",
+            "No data retention or deletion policy accessible from the UI"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step14_visual_editor.jpg",
+        "title": "Visual Agent Configuration",
+        "description": "Drag-and-drop agent editor within Studio — configure Role, Model (GPT-4.1), Tools (SerperDevTool), Attributes, LLM Settings, Agent Settings, Response Format. Visual flow diagram.",
+        "pmCritique": {
+          "works": [
+            "Visual flow diagram + configuration panel — see the agent graph AND edit properties simultaneously",
+            "Model dropdown shows GPT-4.1 — latest models available, keeps pace with the market",
+            "Collapsible sections (Triggers, Tools, LLM Settings) manage complexity through progressive disclosure"
+          ],
+          "doesntWork": [
+            "Configuration panel has too many sections — Attributes, Model, Tools, LLM Settings, Agent Settings, Response Format all compete",
+            "No preview or test button visible in the editor — must deploy to test changes",
+            "Flow diagram is simple (single agent) — unclear how multi-agent orchestration looks visually"
+          ],
+          "userPsychology": "The visual editor is where non-developers finally feel in control. But the gap between 'I configured an agent' and 'it actually works correctly' requires testing that isn't available inline."
+        },
+        "ctoCritique": {
+          "verdict": "Visual configuration is enterprise-friendly for non-technical team members. But who reviews these changes? There's no approval workflow before a visual change hits production.",
+          "concerns": [
+            "No version control visible — visual changes aren't tracked in git",
+            "No diff view between versions — can't see what changed between deployments",
+            "LLM Settings exposed to business users could lead to cost spikes (temperature, max tokens)"
+          ],
+          "enterpriseGaps": [
+            "No change approval workflow for visual editor modifications",
+            "No role-based access to configuration sections (e.g., prevent billing role from changing models)",
+            "No configuration audit trail"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step15_automations_live.jpg",
+        "title": "Automations Dashboard — Live Crews",
+        "description": "Dashboard at app.crewai.com showing live automations: LinkedIn Content Creator, Slack Content Automation, Linear Task Management. Status, URLs, tokens, deploy from code or Studio.",
+        "pmCritique": {
+          "works": [
+            "Multiple live crews visible — proves the platform handles real production workloads",
+            "'Deploy from Code' option alongside Studio — developers and business users both have paths",
+            "Status indicators (Online, Provisioning) give real-time visibility into crew health"
+          ],
+          "doesntWork": [
+            "Only 3 automations visible — no pagination or search for teams with 50+ crews",
+            "Delete button (red) with no confirmation visible — risky for production crews",
+            "No categorization, tagging, or folder structure for organizing automations"
+          ],
+          "userPsychology": "The automations dashboard is the 'fleet view' — where one crew becomes a platform. Teams that reach 5+ automations start thinking about governance, and the dashboard doesn't help them yet."
+        },
+        "ctoCritique": {
+          "verdict": "This is the production dashboard I need — but it's missing the controls I need. No filtering by team/owner, no cost per crew, no health alerts, no SLA monitoring.",
+          "concerns": [
+            "Tokens visible in the dashboard — Bearer and User tokens exposed to anyone with dashboard access",
+            "No cost attribution per automation — can't budget or chargeback to departments",
+            "No health monitoring beyond status — what about latency, error rates, cost trends?"
+          ],
+          "enterpriseGaps": [
+            "No RBAC on dashboard — everyone sees everything including tokens",
+            "No alerting on automation failures or cost spikes",
+            "No bulk operations (pause all, update all, tag all)"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step16_deployed_crew.jpg",
+        "title": "Deployed Crew — API, Metrics, Scheduling",
+        "description": "Individual crew detail: API URL, Bearer Token, execution history, metrics, scheduling, test, training, chat, settings, logs. Full production management.",
+        "pmCritique": {
+          "works": [
+            "Tabs cover everything: Run, Executions, Metrics, Scheduling, Test, Training, Chat, Settings, Logs",
+            "API endpoints documented inline (/inputs, /kickoff, /status) — developers can integrate immediately",
+            "'Crew is online' status badge gives instant confidence the deployment is working"
+          ],
+          "doesntWork": [
+            "Execution history shows 'Pending Run' with no ETA — user doesn't know if it's seconds or minutes",
+            "Test tab exists but wasn't shown in the video — unclear if it's functional",
+            "Training tab implies fine-tuning capability but details are hidden"
+          ],
+          "userPsychology": "This is the screen that converts evaluators into buyers. API URL + Bearer Token + execution history = 'this is production-ready.' But the Training and Chat tabs hint at features that may still be immature."
+        },
+        "ctoCritique": {
+          "verdict": "Best-in-class crew management UI in the open-source-originated space. But production deployment requires answers: what's the uptime SLA? What's the cold start latency? What happens during platform outages?",
+          "concerns": [
+            "Bearer token management is manual (copy/paste) — no rotation policy, no expiration",
+            "Scheduling shown but not demonstrated — cron-based? event-driven? both?",
+            "Logs tab visibility unclear — do logs include full LLM request/response? PII concerns?"
+          ],
+          "enterpriseGaps": [
+            "No uptime SLA documented",
+            "No token rotation or expiration management",
+            "No log retention policy or PII scrubbing"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step17_knowledge_sources.jpg",
+        "title": "Knowledge Sources — Built-in RAG",
+        "description": "crew.py with multiple knowledge source types: base_file, csv, excel, pdf, json, text. RAG is a first-class capability, not a plugin.",
+        "pmCritique": {
+          "works": [
+            "6+ knowledge source types (PDF, CSV, Excel, JSON, text, custom) — covers every enterprise data format",
+            "Knowledge sources are imported and configured in Python — clean, explicit, version-controllable",
+            "CrewBase class integrates knowledge natively — no separate RAG pipeline to manage"
+          ],
+          "doesntWork": [
+            "Knowledge configuration is code-only — no drag-and-drop file upload in OSS",
+            "No knowledge source preview or testing — can't verify documents were ingested correctly",
+            "No chunk size or embedding model configuration visible — uses defaults that may not be optimal"
+          ],
+          "userPsychology": "Built-in RAG is a major differentiator vs LangGraph (which requires external vector DB setup). Developers who need grounded agents find this in the first docs search and it often seals the deal."
+        },
+        "ctoCritique": {
+          "verdict": "Native RAG support is a strong technical decision — reduces integration complexity. But where is the data stored? What embedding model is used? Is the vector store managed or self-hosted?",
+          "concerns": [
+            "No data lifecycle management visible — how do we update/delete/version knowledge sources?",
+            "Embedding model and vector store choices are implicit — may not meet quality or performance requirements",
+            "Knowledge ingestion happens at crew startup — no incremental update or real-time sync"
+          ],
+          "enterpriseGaps": [
+            "No knowledge source access control — every agent in the crew sees all knowledge",
+            "No data classification or PII detection on ingested documents",
+            "No knowledge freshness management — stale documents stay in the index"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step18_knowledge_execution.jpg",
+        "title": "Knowledge-Grounded Execution",
+        "description": "Terminal output showing crew running with RAG — agents query knowledge base for factual answers. Shows grounding in action with real document retrieval.",
+        "pmCritique": {
+          "works": [
+            "Agents explicitly reference knowledge base — 'I would need access to specific data' shows awareness of context boundaries",
+            "Multiple agent types (User Understanding, Q&A) demonstrate knowledge-aware specialization",
+            "Terminal output shows the RAG pipeline working end-to-end in a single crewai run"
+          ],
+          "doesntWork": [
+            "Agent says 'not provided in the current context' — the knowledge grounding failed on this query",
+            "No citation or source attribution in the output — can't verify which document was used",
+            "No retrieval confidence score — user can't distinguish high-confidence from guessed answers"
+          ],
+          "userPsychology": "RAG execution is the make-or-break moment for enterprise buyers. When it works, it's magic — agents that know your company's data. When it fails ('not in context'), trust evaporates instantly."
+        },
+        "ctoCritique": {
+          "verdict": "RAG execution works but lacks the observability needed for production. I can't see: which chunks were retrieved, what scores they got, or why the agent said 'not provided.'",
+          "concerns": [
+            "No retrieval observability — black box between query and knowledge response",
+            "Failure mode is graceful but uninformative — 'not provided' doesn't help debugging",
+            "No way to measure RAG quality over time — precision/recall metrics absent"
+          ],
+          "enterpriseGaps": [
+            "No retrieval audit trail — can't verify what data influenced agent decisions",
+            "No knowledge quality dashboard — stale, irrelevant, or conflicting documents not detected",
+            "No A/B testing of knowledge configurations"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step19_agent_architecture.jpg",
+        "title": "Agent Architecture — Tool Integration",
+        "description": "Architecture diagram showing Flight Booking Agent with Expedia API + AccuWeather + LLM. Demonstrates real-world tool integration pattern.",
+        "pmCritique": {
+          "works": [
+            "Clear visual: Agent = LLM + Tools. The simplest possible explanation of how agents work",
+            "Real APIs (Expedia, AccuWeather) — not toy examples, actual production integrations",
+            "Shows the agent receiving natural language ('Book me a flight') and orchestrating multiple APIs"
+          ],
+          "doesntWork": [
+            "Diagram is from the tutorial creator, not CrewAI's product — no official architecture diagrams exist",
+            "Single-agent diagram — doesn't show multi-agent coordination which is CrewAI's differentiator",
+            "No error handling or fallback paths shown — what if Expedia API is down?"
+          ],
+          "userPsychology": "This diagram is what every CTO draws on a whiteboard when explaining agents to their board. The simplicity is the selling point — but production reality is 10x more complex."
+        },
+        "ctoCritique": {
+          "verdict": "The architecture pattern is sound — agents as LLM + tool orchestrators. But production requires: rate limiting on API calls, circuit breakers, retry logic, and cost controls per tool invocation.",
+          "concerns": [
+            "No rate limiting on external API calls — agents could hammer Expedia with 1000 requests",
+            "No circuit breaker pattern — one failing API blocks the entire agent",
+            "API credentials management for multiple tools creates a large secrets surface area"
+          ],
+          "enterpriseGaps": [
+            "No tool-level monitoring or cost tracking",
+            "No tool access policies (which agents can call which tools)",
+            "No sandbox mode for testing tool integrations without real API calls"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step20_custom_tools.jpg",
+        "title": "Custom Tools + Multi-LLM Support",
+        "description": "Jupyter notebook with Gemini 2.0 Flash model, custom email_assistant agent. Shows CrewAI's model-agnostic design — any LLM provider, any tool.",
+        "pmCritique": {
+          "works": [
+            "Gemini 2.0 Flash as the model — proves model-agnostic claims, not just OpenAI",
+            "Jupyter notebook format — great for experimentation and interactive development",
+            "LLM() class with model= parameter — switching providers is literally one string change"
+          ],
+          "doesntWork": [
+            "Notebook development doesn't translate to production deployment — different paradigm",
+            "verbose=True floods the notebook with output — no structured logging",
+            "No tool creation shown — just agent with llm= parameter, tools are referenced but not defined here"
+          ],
+          "userPsychology": "Jupyter notebooks are where data scientists and ML engineers live. CrewAI's notebook support means the evaluation can happen in their natural environment — no IDE switch required."
+        },
+        "ctoCritique": {
+          "verdict": "Multi-LLM support via LiteLLM is a genuine architectural strength — no vendor lock-in. But model-per-agent means cost optimization requires understanding which model is best for which task.",
+          "concerns": [
+            "Different models per agent means different quality/cost profiles to manage",
+            "LiteLLM dependency adds another layer — if LiteLLM has a bug, all models are affected",
+            "No model performance comparison tooling — how do we know Gemini Flash is right for this agent?"
+          ],
+          "enterpriseGaps": [
+            "No model governance policy — who approves which models are allowed?",
+            "No cost comparison dashboard across model providers",
+            "No model fallback chain (if Gemini is down, try Claude, then GPT)"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/crewai/step21_multi_agent_workflow.jpg",
+        "title": "Multi-Agent Team Workflow",
+        "description": "Marketing team: Marketing Head + Content Writer Social Media + Content Writer Blogs. Pipeline: Market Research → Strategy → Calendar → Post Drafts → Scripts → Blog Research → SEO.",
+        "pmCritique": {
+          "works": [
+            "Real-world org chart mapped to agents — Marketing Head delegates to Content Writers, mirrors actual teams",
+            "Parallel pipelines: social media track + blog track running simultaneously — efficient orchestration",
+            "SEO Optimization as a dedicated step shows domain-specific workflow design"
+          ],
+          "doesntWork": [
+            "Diagram is conceptual — no code shown implementing this specific workflow",
+            "No feedback loops — Marketing Head can't review and reject drafts in this linear pipeline",
+            "7-step pipeline with no intermediate checkpoints — long chains are fragile"
+          ],
+          "userPsychology": "This is the vision that sells CrewAI to non-technical buyers: 'AI versions of your team members working together.' The org-chart-to-agent-map is the most compelling pitch in the multi-agent space."
+        },
+        "ctoCritique": {
+          "verdict": "The multi-agent pattern is compelling but the linear pipeline architecture concerns me. Production workflows need: conditional branching, error handling, human review gates, and rollback capabilities.",
+          "concerns": [
+            "Linear pipeline has no error recovery — one failed agent blocks the entire workflow",
+            "No human-in-the-loop visible — Marketing Head should review before publishing",
+            "Agent-to-agent data passing mechanisms aren't shown — how does context flow?"
+          ],
+          "enterpriseGaps": [
+            "No workflow versioning — can't A/B test different agent team compositions",
+            "No SLA per stage — what's the max acceptable time for each step?",
+            "No cost allocation per workflow stage — can't optimize the expensive steps"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "-kSOTtYzgEw",
+      "title": "Getting Started with CrewAI Open Source",
+      "channel": "Tony Kipkemboi"
+    },
+    {
+      "videoId": "oYKAIoQBmqU",
+      "title": "CrewAI NO CODE AI Agent Builder Course",
+      "channel": "Tyler Reed AI"
+    },
+    {
+      "videoId": "05BZmeTbsrg",
+      "title": "CrewAI Knowledge Tutorial for Beginners",
+      "channel": "Tony Kipkemboi"
+    },
+    {
+      "videoId": "G42J2MSKyc8",
+      "title": "CrewAI Tutorial | Agentic AI Tutorial (1hr deep dive)",
+      "channel": "Tech With Tim"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The fastest path from zero to multi-agent workflow for Python developers — role-based crew abstraction makes multi-agent coordination intuitive without graph theory.",
+    "targetUser": "Mid-level Python developers who want multi-agent orchestration without the complexity of graph-based frameworks. Teams that think in roles and tasks, not nodes and edges.",
+    "vsAlternatives": "Wins against LangGraph on accessibility and time-to-first-agent (YAML config vs graph code). Wins against AutoGen on production readiness (CrewAI+ platform). Loses to LangGraph on flexibility and state management for complex workflows. Loses to Lindy on non-developer accessibility."
+  }
+}

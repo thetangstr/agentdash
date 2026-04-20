@@ -1,0 +1,57 @@
+{
+  "sector": "Logistics & Supply-Chain Exception Management",
+  "slug": "logistics",
+  "narrative": "Supply chains break because every exception creates a real-time coordination problem across carriers, suppliers, warehouses, inventory systems, customer commitments, and cost tradeoffs. Most logistics teams already have alerts, but alerts are not resolution. The value is in giving the control tower an autonomous response layer. An agent can detect an exception, gather the relevant operating context, compare possible responses, trigger narrow approved actions, and escalate only the cases that truly require a planner or operations lead.",
+  "buyerPromise": "We turn exception management from alert triage into guided autonomous resolution, so planners spend time on true tradeoffs instead of repetitive investigation.",
+  "pactScore": {
+    "total": 80,
+    "dimensions": [
+      {"key": "P", "name": "Performance", "score": 22, "subCriteria": [{"name": "Event-driven orchestration", "score": 5, "rationale": "Real-time exception detection and response staging"}, {"name": "Scenario comparison", "score": 4, "rationale": "Cost/SLA tradeoff analysis across multiple options"}, {"name": "Multi-system coordination", "score": 4, "rationale": "Cross-carrier, cross-warehouse coordination required"}]},
+      {"key": "A", "name": "Access", "score": 21, "subCriteria": [{"name": "TMS/WMS integration", "score": 4, "rationale": "Core logistics systems have established APIs"}, {"name": "Carrier feeds", "score": 5, "rationale": "Telematics, EDI, and API feeds well-structured"}, {"name": "Appointment systems", "score": 4, "rationale": "Yard and appointment systems accessible"}]},
+      {"key": "C", "name": "Context", "score": 19, "subCriteria": [{"name": "ETA confidence", "score": 4, "rationale": "Historical milestone data provides patterns"}, {"name": "Cost data", "score": 4, "rationale": "Claims, penalty, and expedite costs traceable"}, {"name": "Event streams", "score": 3, "rationale": "Carrier event stream reliability varies significantly"}]},
+      {"key": "T", "name": "Trust", "score": 18, "subCriteria": [{"name": "Narrow write authority", "score": 4, "rationale": "Autonomous actions bounded by clear economic rules"}, {"name": "Planner override", "score": 4, "rationale": "Human planners can override or correct agent actions"}, {"name": "Alert fatigue", "score": 3, "rationale": "Too many false alerts erode trust in the system"}]}
+    ]
+  },
+  "examples": [
+    {
+      "name": "Suntory Global Spirits",
+      "source": "project44 case study on Suntory Global Spirits",
+      "challenge": "Pandemic disruption drove stockouts, detention/demurrage, expedites, and manual exception handling across thousands of SKUs.",
+      "scale": "Logistics costs rose from 6% to 25% of goods cost.",
+      "humanHoursAndDollarImpact": "99% reduction in demurrage costs. Direct labor-hour savings not disclosed but siloed data and manual processes cited as root causes.",
+      "whyItMatters": "Exception management becomes existential when disruptions swing logistics cost by that much."
+    },
+    {
+      "name": "Georgia-Pacific",
+      "source": "project44 case study on Georgia-Pacific",
+      "challenge": "Needed to handle multimodal visibility, yard operations, customer service workload, and delay coordination more efficiently.",
+      "scale": "Multimodal logistics and yard management complexity across truckload, ocean, and yards.",
+      "humanHoursAndDollarImpact": "Manual processes reduced by 80%. Customer-service workload decreased by 87%. Detention and demurrage fees also fell.",
+      "whyItMatters": "Strongest evidence that exception handling is not a monitoring problem — it is a coordination problem."
+    },
+    {
+      "name": "Hogland Transfer Company",
+      "source": "Samsara case study on Hogland Transfer",
+      "challenge": "Time-sensitive logistics provider needed better visibility into incidents, dispatching, and claims defense.",
+      "scale": "Supports just-in-time delivery for manufacturers and aerospace customers.",
+      "humanHoursAndDollarImpact": "Investigation time fell by 52%. Up to 4 hours saved per incident. 8 hours per week freed. One false claim disproven quickly, avoiding ~$80,000 in costs.",
+      "whyItMatters": "Even framed as operations visibility, the real value comes from reducing the human cost of investigating and coordinating exceptions."
+    }
+  ],
+  "quickStart": ["One exception class, one team, one operating surface", "Detention and demurrage mitigation", "Appointment rescheduling", "Late-shipment coordination", "High-risk carrier or yard exceptions"],
+  "avoid": ["'AI control tower for the whole network'", "Broad optimization across every node on day one", "Autonomous action without clear economic rules"],
+  "consultantSignals": [
+    "Gartner: By 2030, 50% of cross-functional supply-chain solutions will use intelligent agents to autonomously execute decisions. Start where data is accessible, behavior is verifiable, and ROI is high.",
+    "BCG: Cost and resilience are inseparable — US OEM margins could fall 5-7 percentage points (up to 75%) due to tariff and supply-chain exposure.",
+    "Deloitte: 64% of business leaders feel urgency to adopt gen AI in supply chain. Emphasizes resilience, response speed, and interconnected use cases."
+  ],
+  "obstacles": ["Messy carrier and facility data", "Too many false alerts and low-confidence predictions", "Planner resistance to automated actions", "Incumbent visibility/control-tower vendors", "Unclear ownership between logistics, customer service, procurement, and supply planning", "Fragmented SOPs by site or region"],
+  "whereDataLives": ["TMS and WMS", "Carrier telematics and EDI/API feeds", "Yard-management systems", "Appointment systems", "Order and inventory systems", "ETA and milestone history", "Claims and penalty data", "Customer-service tickets related to delays and misses"],
+  "openQuestions": ["Which exception class is both frequent and expensive enough to anchor the first sale?", "Which teams own response today and where do handoffs break?", "What is the real cost of a missed appointment, expedite, or dwell hour?", "Which actions can be taken autonomously versus recommended?", "How reliable is the event stream from carriers and sites?", "How will planners override or correct agent actions without losing trust?"],
+  "collaborationJourney": {
+    "stage": "Response Options",
+    "humanRole": "Planner chooses move",
+    "agentRole": "Simulate options (expedite vs. wait)",
+    "handoffOutput": "Ranked options with cost/SLA effect"
+  }
+}

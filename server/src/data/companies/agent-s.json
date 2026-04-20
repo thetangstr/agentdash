@@ -1,0 +1,343 @@
+{
+  "name": "Agent S",
+  "slug": "agent-s",
+  "category": "open-source",
+  "subcategory": "desktop-computer-use",
+  "description": "Agent S is an open-source framework for autonomous desktop GUI interaction, building intelligent agents that learn from past experiences. Agent S3 surpasses human-level performance on OSWorld benchmark (72.6% vs ~72% human). Competes in a rapidly growing market with Manus (Meta), Claude Cowork, and OpenAI Operator.",
+  "oneLiner": "Open-source GUI computer-use agent with hierarchical planning for autonomous desktop task execution.",
+  "founded": "2024",
+  "funding": "Seed-stage, Simular AI (UC San Diego spinout). <$5M estimated.",
+  "pricing": "Open source (Apache 2.0, free). Users pay only LLM API costs.",
+  "website": "https://www.simular.ai",
+  "githubRepo": "simular-ai/Agent-S",
+  "githubStars": 3800,
+  "screenshots": [],
+  "capabilities": [
+    "Autonomous desktop GUI control",
+    "Experience-Augmented Hierarchical Planning",
+    "Manager-Worker multi-agent architecture",
+    "Web knowledge retrieval for planning",
+    "Self-experience retrieval from past trajectories",
+    "Cross-platform (macOS, Linux, Windows)",
+    "Accessibility tree parsing",
+    "Screenshot-based visual grounding",
+    "Multi-LLM backends (GPT-4o, Claude, open-source)",
+    "OSWorld benchmark evaluation"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Code-first Python. Clone repo, install deps (Python 3.10+, platform accessibility libs), configure LLM keys. Define tasks as natural language. Agent runs via CLI, captures screenshots, interacts with desktop GUI. Results in logged trajectories.",
+    "strengths": [
+      "Novel hierarchical planning advances GUI agent capabilities",
+      "State-of-the-art OSWorld benchmark (~34.5%)",
+      "Works with any desktop app — no app-specific integration",
+      "Cross-platform macOS/Linux/Windows",
+      "Apache 2.0 open source",
+      "Self-experience retrieval enables learning from past tasks"
+    ],
+    "weaknesses": [
+      "~34.5% success rate — not production-ready",
+      "No enterprise features (auth, RBAC, audit, compliance)",
+      "GUI interaction is slow and fragile to UI changes",
+      "No HITL controls or kill switches",
+      "Vision model API costs are high",
+      "Single-machine execution, no scaling"
+    ],
+    "notableFeatures": [
+      "Experience-Augmented Hierarchical Planning (Manager-Worker)",
+      "Dual knowledge retrieval (web + self-experience)",
+      "Accessibility tree integration alongside visual screenshots",
+      "OSWorld benchmark leader (first >30% on full test)"
+    ]
+  },
+  "recentDevelopments": [
+    "2025-08: Agent S2.5 released — simpler, better, faster GUI agent (gui-agents v0.2.5)",
+    "2026: Agent S3 reaches 66% on OSWorld (100-step setting), 72.6% with Behavior Best-of-N — surpassing human-level (~72%)",
+    "2026: Desktop GUI agent market explodes — Manus (Meta), Claude Cowork, ChatGPT, Genspark, Perplexity all ship desktop agents",
+    "2026: Market shifts to $20/month productivity tier for autonomous desktop agents",
+    "2025 Q1: Agent S v2 paper with experience-augmented hierarchical planning",
+    "2024 Q4: ~34.5% OSWorld success rate, surpassing previous best",
+    "2024 Q4: Windows support via WindowsAgentArena",
+    "2024 Q3: Initial release with Manager-Worker architecture"
+  ],
+  "lastResearched": "2026-04-11",
+  "dataSources": [
+    {
+      "url": "https://github.com/simular-ai/Agent-S",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://www.simular.ai",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://arxiv.org/abs/2410.08164",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": false,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Local desktop only. Requires display server for GUI interaction."
+  },
+  "scores": {
+    "total": 32,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 8,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 2,
+            "rationale": "Code-first Python. Clone repo, install deps, configure keys. 30+ min to first run."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 2,
+            "rationale": "Screenshot replay of trajectories. No interactive debugger or testing framework."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 2,
+            "rationale": "GitHub README + research paper. Limited tutorials. Steep learning curve."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 2,
+            "rationale": "Full re-execution per iteration (minutes per run). No hot-reload."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 7.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "Manager-Worker is multi-agent but fixed two-tier pattern only."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 1,
+            "rationale": "No HITL design. Agent operates independently."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 1,
+            "rationale": "No team features. Single-developer research tool."
+          },
+          {
+            "name": "Team Development",
+            "score": 2,
+            "rationale": "Benchmark configurations as informal templates. No marketplace."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 6.6,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 1,
+            "rationale": "No pre-built connectors. All interaction through GUI."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 2,
+            "rationale": "Python API. No MCP, REST API, or webhooks."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 1,
+            "rationale": "No auth management. Env var API keys only."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Web knowledge retrieval + self-experience retrieval. No enterprise RAG."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 4,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 1,
+            "rationale": "No guardrails. Agent has full GUI control with no limits."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 1,
+            "rationale": "No approval mechanism. Fully autonomous."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 1,
+            "rationale": "Screenshot trajectory logging. No structured audit or compliance."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 1,
+            "rationale": "No access control. Single-user, single-machine."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 6.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 2,
+            "rationale": "Local desktop only. Requires display server for GUI. No cloud or container deployment."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 1,
+            "rationale": "Single-instance, single-session. No horizontal scaling."
+          },
+          {
+            "name": "Cost Management",
+            "score": 1,
+            "rationale": "No monitoring dashboard. Basic file-based logging."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 2,
+            "rationale": "~3.8K GitHub stars. Small research community. Conference presence."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "32/100 overall. Strongest: Creation (8/20). Weakest: Governance (4/20). Breakdown: Creation (8/20), Orchestration (7/20), Integration (7/20), Governance (4/20), Operations (6/20).",
+  "competence": "Desktop/Computer Use Agent",
+  "targetUser": "Researchers exploring autonomous GUI interaction",
+  "supportedCUJs": [
+    "workflow-automation",
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "Autonomous Web Task Execution with Agent S2",
+    "steps": [
+      {
+        "title": "Define a Task in Natural Language",
+        "description": "Describe what you need done on the web: 'Go to Kayak, search for flights from SFO to JFK next Friday, and compile the top 5 cheapest options.' Agent S2 uses its experience-augmented hierarchical planning to break this into subtasks.",
+        "image": "/screenshots/agent-s/step-1.png",
+        "pmCritique": {
+          "works": [
+            "Vision-based GUI interaction represents cutting-edge research capability",
+            "Manager-Worker multi-agent architecture handles complex desktop tasks",
+            "Open-source MIT license enables research and commercial use"
+          ],
+          "doesntWork": [
+            "Requires local display server — cannot run headless or in cloud",
+            "Execution speed is very slow — vision processing adds latency to every action",
+            "No production deployment path — purely a research tool"
+          ],
+          "userPsychology": "Researchers are excited by the capability frontier — seeing an AI navigate a desktop application is remarkable. But the gap between research demo and practical tool is measured in years, not months."
+        }
+      },
+      {
+        "title": "Manager-Worker Planning Decomposes the Task",
+        "description": "The Manager agent creates a high-level plan, then delegates specific GUI interactions to Worker agents. Each worker specializes in a subtask — navigating to Kayak, filling search forms, scrolling results, extracting prices.",
+        "image": "/screenshots/agent-s/step-2.png",
+        "pmCritique": {
+          "works": [
+            "Step-by-step action logging shows exactly what the agent sees and does",
+            "Screenshot capture at each step creates a visual audit trail",
+            "Multi-application workflows demonstrate general-purpose capability"
+          ],
+          "doesntWork": [
+            "Action logs are verbose and hard to parse for non-researchers",
+            "Screenshot storage grows rapidly — no automatic cleanup",
+            "No way to teach the agent new applications — must retrain"
+          ],
+          "userPsychology": "The visual audit trail satisfies the researcher need to understand and reproduce results. But for practitioners, the verbosity is noise — they want outcome summaries, not step-by-step screenshots."
+        }
+      },
+      {
+        "title": "Autonomous GUI Interaction via Vision",
+        "description": "Workers interact with the actual browser UI using screen understanding — clicking buttons, typing in fields, scrolling, and reading text. The Mixture-of-Grounding technique combines visual and DOM-based element identification for precision.",
+        "image": "/screenshots/agent-s/step-3.png"
+      },
+      {
+        "title": "Experience Learning Improves Over Time",
+        "description": "Agent S2 stores successful interaction patterns in its Online Web Knowledge Graph. Next time it encounters Kayak or similar travel sites, it draws on past experience to navigate faster and avoid dead ends.",
+        "image": "/screenshots/agent-s/step-4.png"
+      },
+      {
+        "title": "Results and Full Trajectory Logging",
+        "description": "Review the compiled flight data plus a complete action trajectory — every screenshot, click, and reasoning step. Export structured results to CSV or feed into downstream automation via API.",
+        "image": "/screenshots/agent-s/step-5.png"
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Agent S — limited public demo content available. Verdict based on documentation and existing research data only. Score reflects capability claims that could not be verified through video walkthrough.",
+      "score": "Unverified",
+      "strengths": [
+        "See existing capability analysis in the product profile"
+      ],
+      "risks": [
+        "No video demo available for verification",
+        "Product capabilities based on documentation only",
+        "UX quality unverifiable without live demo"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Insufficient public demo material to evaluate Agent S for enterprise adoption. Recommend requesting a live demo from the vendor before making any commitment.",
+      "decision": "INSUFFICIENT DATA",
+      "strengths": [
+        "See existing scoring for capability assessment"
+      ],
+      "dealBreakers": [
+        "No public product demo available",
+        "Cannot verify UX claims without walkthrough",
+        "Enterprise readiness unassessable"
+      ]
+    },
+    "coverageGaps": [
+      "Complete product walkthrough needed",
+      "All capabilities unverified via video"
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "GgUC4q7MTaw",
+      "title": "Agent S2 Setup Tutorial -- Open-Source Computer Use Agent",
+      "channel": "Orgo"
+    },
+    {
+      "videoId": "FkgznWRxpbY",
+      "title": "Agent - S2 Framework: Open Source Computer Use Agent",
+      "channel": "AI Anytime"
+    }
+  ],
+  "marketIntelligence": {
+    "funding": {
+      "total": "<$5M estimated",
+      "lastRound": "Seed (Simular AI, UC San Diego spinout)"
+    }
+  },
+  "coreCompetence": {
+    "bestAt": "Research-grade computer-use agent — the most advanced open-source GUI automation agent using vision models to interact with desktop applications.",
+    "targetUser": "AI researchers studying computer-use agents. Developers exploring GUI automation beyond browser-only approaches.",
+    "vsAlternatives": "Wins on research depth and open-source accessibility for computer-use. Wins on desktop-native capability. Loses on production readiness — research tool, not enterprise platform. Local-only deployment."
+  }
+}

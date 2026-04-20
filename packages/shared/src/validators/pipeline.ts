@@ -14,6 +14,7 @@ export const pipelineStageSchema = z.object({
   mergeTimeout: z.number().int().positive().optional(),
   hitlInstructions: z.string().optional(),
   hitlTimeoutHours: z.number().positive().optional(),
+  modelTier: z.enum(["small"]).nullable().optional(),
 });
 
 // AgentDash: Pipeline edge definition

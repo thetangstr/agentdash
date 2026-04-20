@@ -1,0 +1,500 @@
+{
+  "name": "Moveworks",
+  "slug": "moveworks",
+  "category": "enterprise",
+  "subcategory": "enterprise-it-automation",
+  "description": "Moveworks is an enterprise AI platform acquired by ServiceNow in November 2024 for ~$1.5B. Now integrated as ServiceNow EmployeeWorks, it combines Moveworks conversational AI and enterprise search with ServiceNow's unified portal and autonomous workflows. In February 2026, ServiceNow launched Autonomous Workforce with Moveworks — AI specialists that autonomously diagnose and resolve IT support requests, achieving 99% faster resolution than human agents.",
+  "oneLiner": "Enterprise agentic AI platform for cross-department employee support and workflow automation, now part of ServiceNow.",
+  "founded": "2016",
+  "funding": "Acquired by ServiceNow (~$1.5B, Nov 2024). Previously raised $305M total.",
+  "pricing": "Enterprise-only, per-employee/month (~$3-8/employee). No self-serve or free tier.",
+  "website": "https://www.moveworks.com",
+  "screenshots": [],
+  "capabilities": [
+    "Natural language IT service desk automation",
+    "Cross-department support (IT, HR, Finance, Facilities, Legal)",
+    "No-code Agent Studio",
+    "Creator Studio API extensions",
+    "Reasoning Engine multi-step orchestration",
+    "100+ native enterprise integrations",
+    "Conversational AI via Slack, Teams, email, web",
+    "Automated software provisioning and access",
+    "Enterprise RAG knowledge ingestion",
+    "Ticket classification, routing, autonomous resolution",
+    "Onboarding/offboarding automation",
+    "100+ language support",
+    "ROI analytics dashboard"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Agent Studio visual no-code builder: select templates or start from scratch, define triggers, configure connected systems, set up flows, establish approval/escalation rules. Creator Studio extends with API-first for custom integrations. Targets IT admins and operations, not developers.",
+    "strengths": [
+      "100+ native enterprise connectors with deep read/write",
+      "60%+ autonomous IT ticket resolution at scale",
+      "NL interface via Slack/Teams — meets employees where they work",
+      "ServiceNow acquisition provides unmatched stability and distribution",
+      "Purpose-built for enterprise support with strong out-of-box value"
+    ],
+    "weaknesses": [
+      "Agent Studio is config tool more than visual programming",
+      "Closed ecosystem, no MCP, limited open standards",
+      "Pricing opacity — enterprise-only, no self-serve evaluation",
+      "Weak multi-agent — routing not true collaboration",
+      "Developer experience secondary — no Git workflows, limited debugging",
+      "Post-acquisition roadmap uncertainty"
+    ],
+    "notableFeatures": [
+      "MoveLM — proprietary LLM fine-tuned on hundreds of millions of enterprise interactions",
+      "Agent Studio no-code builder with templates",
+      "Creator Studio API platform for custom workflows",
+      "Reasoning Engine for multi-step agentic orchestration",
+      "Employee Experience Insights analytics"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-02: ServiceNow launched Autonomous Workforce — AI specialists that execute jobs with enterprise governance",
+    "2026-02: ServiceNow EmployeeWorks GA — combines Moveworks conversational AI with ServiceNow portal for 200M employees",
+    "2026-02: L1 Service Desk AI Specialist — resolves IT cases 99% faster than human agents (controlled availability)",
+    "2026: Scoped Assistants, no-code Assistant Builder, and Headless API for deployment anywhere",
+    "2024-11: Acquired by ServiceNow for ~$1.5B"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://www.moveworks.com",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.moveworks.com/product/agent-studio",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.servicenow.com/company/media/press-room/servicenow-acquires-moveworks.html",
+      "accessedAt": "2026-04-04",
+      "type": "news"
+    }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": false,
+    "onPrem": false,
+    "byoc": false,
+    "hybrid": true,
+    "notes": "Cloud SaaS (now part of ServiceNow). Hybrid integration with on-prem IT systems via connectors."
+  },
+  "scores": {
+    "total": 70,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 13.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 4,
+            "rationale": "Agent Studio no-code visual builder. NL descriptions scaffold logic. Templates. Under 30 min for templated agents."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 3,
+            "rationale": "Conversation analytics dashboard. Basic simulated testing. No advanced trace or regression testing."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Setup guides, API refs, Moveworks Academy. More sales-oriented than developer-oriented."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 3,
+            "rationale": "Agent Studio config changes without redeployment. Creator Studio needs more effort."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 11.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "Multi-skill routing across IT/HR/Finance. Reasoning Engine sequential. Not complex topologies."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 3,
+            "rationale": "Conversational handoff with context. Manager approval. No Board Operator-style dashboards."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 2,
+            "rationale": "Agent Studio team admin. No Git-native, collaborative editing, or CI/CD for agents."
+          },
+          {
+            "name": "Team Development",
+            "score": 3,
+            "rationale": "Pre-built templates for IT, HR, facilities. Curated by Moveworks, not community marketplace."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 16.2,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "100+ native: ServiceNow, Jira, Okta, Workday, SAP, Salesforce, Slack, Teams. Deep read/write."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 3,
+            "rationale": "REST API for Creator Studio. Webhooks. No MCP, GraphQL, gRPC. Proprietary framework."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 4,
+            "rationale": "Enterprise OAuth, SAML, SSO. Per-agent role-based permissions. Credential management."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 4,
+            "rationale": "Enterprise KB crawling. Semantic index. Handles common doc formats. Purpose-built enterprise RAG."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 14.8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 4,
+            "rationale": "Agents pausable/disableable. Guardrails prevent out-of-scope. Input/output filtering. Topic-level control."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 3,
+            "rationale": "Approval workflows for provisioning/access. Manager routing. Functional, not sophisticated."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 4,
+            "rationale": "SOC 2 Type II. Comprehensive logs. GDPR data residency. HIPAA-ready. Queryable and exportable."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 4,
+            "rationale": "Role-based admin. Team hierarchy. SSO. Per-agent permission scoping by org structure."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 15,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 3,
+            "rationale": "SaaS-delivered. Moveworks manages infra. Limited self-hosted. ServiceNow may expand."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 4,
+            "rationale": "Enterprise-scale: 50K+ employee companies, thousands of daily requests. Millions of interactions."
+          },
+          {
+            "name": "Cost Management",
+            "score": 4,
+            "rationale": "Performance insights: resolution rates, response times, satisfaction, topic trends."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 4,
+            "rationale": "500+ enterprise customers: Broadcom, Hearst, Palo Alto Networks, Databricks. Gartner/Forrester recognized."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "70/100 overall. Strongest: Integration (16/20). Weakest: Orchestration (11/20). Breakdown: Creation (13/20), Orchestration (11/20), Integration (16/20), Governance (15/20), Operations (15/20).",
+  "competence": "Enterprise IT/Support Automation",
+  "targetUser": "IT and HR teams automating employee support at scale",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "ServiceNow acquisition (.5B) seen as validation of enterprise agent category",
+      "60%+ autonomous IT ticket resolution rate frequently cited as benchmark",
+      "Post-acquisition roadmap uncertainty — will Moveworks maintain identity under ServiceNow?",
+      "Pricing opacity criticized — enterprise-only with no self-serve evaluation path"
+    ],
+    "metrics": [
+      {
+        "metric": "Enterprise Customers",
+        "value": "500+",
+        "source": "Moveworks"
+      },
+      {
+        "metric": "IT Ticket Resolution Rate",
+        "value": "60%+ autonomous",
+        "source": "Case studies"
+      },
+      {
+        "metric": "Enterprise Integrations",
+        "value": "100+ native",
+        "source": "Platform"
+      },
+      {
+        "metric": "Language Support",
+        "value": "100+ languages",
+        "source": "Docs"
+      },
+      {
+        "metric": "Forrester Recognition",
+        "value": "Leader in Conversational AI for Employee Services",
+        "source": "Forrester"
+      }
+    ],
+    "funding": {
+      "total": "$305M (pre-acquisition)",
+      "lastRound": "Acquired by ServiceNow ~$1.5B",
+      "valuation": "$1.5B (acquisition)",
+      "investors": [
+        "Bain Capital",
+        "Lightspeed",
+        "Kleiner Perkins",
+        "Tiger Global"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "it-helpdesk",
+    "customer-support",
+    "workflow-automation"
+  ],
+  "walkthrough": {
+    "title": "How Moveworks Works: Enterprise Agent Studio and Marketplace",
+    "steps": [
+      {
+        "image": "/screenshots/moveworks/step01_landing.jpg",
+        "title": "Enterprise Agent Platform",
+        "description": "Homepage — Find answers, Automate tasks, Build AI agents. Company email required to access — enterprise sales motion from the start.",
+        "pmCritique": {
+          "works": [
+            "Clear value prop in one line — three use cases, no ambiguity",
+            "Conference-on-demand section builds credibility and FOMO",
+            "Clean design with clear CTA — Get started button is prominent"
+          ],
+          "doesntWork": [
+            "Mandatory email + company name before seeing anything — maximum friction",
+            "No product screenshots or demo video — users must trust marketing copy",
+            "'Get started' implies immediate access but starts a sales process"
+          ],
+          "userPsychology": "The gated landing is a deliberate filter — Moveworks wants enterprise buyers, not tire-kickers. Every form field is a qualification signal."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step02_agent_studio.jpg",
+        "title": "Agent Studio Overview",
+        "description": "Build Intelligent AI agents, faster — three pillars: For all teams (IT/HR/Sales), For all systems (CRMs, ERPs), For all employees.",
+        "pmCritique": {
+          "works": [
+            "Three-pillar messaging covers every enterprise buying objection",
+            "Get a demo + Try now dual CTAs serve cautious and eager buyers",
+            "Cross-department positioning differentiates from vertical-only tools"
+          ],
+          "doesntWork": [
+            "No actual product UI shown — marketing messaging, not demonstration",
+            "'Faster' without a benchmark — faster than what?",
+            "No pricing signals — can't estimate budget before engaging sales"
+          ],
+          "userPsychology": "Agent Studio's page sells the vision, not the product. Enterprise buyers expect this — they buy outcomes, not features. Developer evaluators leave disappointed."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step03_integrations.jpg",
+        "title": "110+ Integrations",
+        "description": "Developer section — Agentic Automation Engine, Content Gateway, AI Agent Marketplace. Featured integrations: Jira, Salesforce, ServiceNow.",
+        "pmCritique": {
+          "works": [
+            "110+ integrations signals enterprise-grade connectivity depth",
+            "Featured integrations (Jira, Salesforce, ServiceNow) are exactly what buyers look for",
+            "Developer portal with Documentation, Academy, Community shows ecosystem investment"
+          ],
+          "doesntWork": [
+            "Marketplace preview too small to read — requires clicking through",
+            "Explore Marketplace leads to another marketing page, not a live catalog",
+            "No API-first positioning — developers must go through the Marketplace"
+          ],
+          "userPsychology": "The integration ecosystem is Moveworks' real moat — once connected to Jira + Salesforce + ServiceNow, switching costs are enormous."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step04_marketplace.jpg",
+        "title": "AI Agent Marketplace",
+        "description": "Pre-built agents with 110+ integration icons — Notion, Slack, GitHub, Zoom, Datadog. Install, configure, deploy in minutes.",
+        "pmCritique": {
+          "works": [
+            "Logo grid is visually impressive — recognizable brands build instant trust",
+            "Explore Marketplace + View All Agents serve browsing and deep-dive modes",
+            "App store mental model — familiar pattern for installing capabilities"
+          ],
+          "doesntWork": [
+            "No agent descriptions visible — logos don't explain what each agent does",
+            "No ratings or usage counts — can't tell production-tested from experimental",
+            "Generic marketing copy — no specific outcome promises per agent"
+          ],
+          "userPsychology": "The Marketplace is Moveworks' answer to 'can it work with our tools?' The logo wall closes deals that product demos alone can't."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step05_workflows.jpg",
+        "title": "Workflow Automation",
+        "description": "Agentic Automation Engine — build cross-department workflows that connect multiple systems and trigger actions automatically.",
+        "pmCritique": {
+          "works": [
+            "Cross-department automation is the killer use case — IT + HR + Finance in one flow",
+            "Agentic framing means workflows can make decisions, not just move data",
+            "Enterprise-grade means audit trails, approval chains, compliance built in"
+          ],
+          "doesntWork": [
+            "No visual workflow builder shown — only marketing description",
+            "Workflow complexity hidden behind 'agentic' buzzword",
+            "No comparison to existing automation tools (Workato, Zapier, Power Automate)"
+          ],
+          "userPsychology": "Workflow automation is where Moveworks justifies its enterprise pricing — connecting SAP to ServiceNow to Slack in one agentic flow is genuinely hard and genuinely valuable."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step06_analytics.jpg",
+        "title": "Analytics and Monitoring",
+        "description": "Track agent performance — resolution rates, response times, user satisfaction. Data-driven agent improvement over time.",
+        "pmCritique": {
+          "works": [
+            "Performance metrics turn agents from experiments into managed services",
+            "Resolution rates quantify ROI — essential for budget renewal conversations",
+            "Monitoring enables continuous improvement — agents get better over time"
+          ],
+          "doesntWork": [
+            "Analytics dashboard not shown in video — only described conceptually",
+            "No real-time alerting visible — reactive monitoring rather than proactive",
+            "Metrics definition unclear — what counts as 'resolved'?"
+          ],
+          "userPsychology": "Analytics is what separates enterprise agent platforms from open-source frameworks. The ability to prove ROI in a dashboard is worth the entire Moveworks premium."
+        }
+      },
+      {
+        "image": "/screenshots/moveworks/step07_deploy.jpg",
+        "title": "Enterprise Deployment",
+        "description": "Deploy agents across Slack, Teams, email, web portals, and service desks — meet employees where they already work.",
+        "pmCritique": {
+          "works": [
+            "Multi-channel deployment — Slack, Teams, email, web from one platform",
+            "Meet users where they work — no new app to install or learn",
+            "Enterprise channels mean IT-approved, security-reviewed, compliance-ready"
+          ],
+          "doesntWork": [
+            "Deployment options are described, not shown — no configuration walkthrough",
+            "Channel-specific behavior customization isn't visible",
+            "No self-service deployment — likely requires professional services engagement"
+          ],
+          "userPsychology": "Multi-channel deployment is Moveworks' enterprise superpower — the agent works in Slack for engineering, Teams for sales, email for executives. One agent, everywhere."
+        }
+      }
+    ],
+    "pmVerdict": {
+      "summary": "Moveworks (now ServiceNow EmployeeWorks) is the enterprise agent platform that's hardest to evaluate — fully gated behind sales, no self-serve trial, no public product demos. The 110+ integration marketplace and cross-department positioning (IT/HR/Sales/Finance) are compelling. But the acquisition by ServiceNow creates uncertainty: is this still Moveworks or just a ServiceNow feature? The PM verdict: strong vision, impossible to verify without vendor engagement.",
+      "score": "B+ (Limited Visibility)",
+      "strengths": [
+        "110+ integrations — broadest enterprise connector library",
+        "Cross-department positioning (IT + HR + Sales + Finance) in one platform",
+        "Marketplace model makes agent deployment feel like installing apps",
+        "ServiceNow backing provides enterprise credibility and distribution"
+      ],
+      "risks": [
+        "Zero self-serve evaluation path — must engage sales to see the product",
+        "Post-acquisition identity crisis — Moveworks vs ServiceNow EmployeeWorks",
+        "No public product demos or screenshots of actual agent building",
+        "Community and developer ecosystem unclear post-acquisition"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "Moveworks has the strongest enterprise integration story (110+ connectors, ServiceNow-native) but the complete lack of self-serve evaluation is a red flag. Post-ServiceNow acquisition, the platform's independence and roadmap are uncertain. If you're already a ServiceNow shop, this is the natural choice. If not, the lock-in is extreme.",
+      "decision": "EVALUATE — If ServiceNow Shop Only",
+      "strengths": [
+        "ServiceNow integration is deepest in the market — native, not bolted on",
+        "Enterprise-grade compliance and security via ServiceNow platform",
+        "Proven at scale — $2.85B acquisition validates enterprise traction",
+        "Cross-department coverage reduces vendor proliferation"
+      ],
+      "dealBreakers": [
+        "Complete ServiceNow dependency post-acquisition",
+        "No self-serve trial or sandbox — 3-6 month sales cycle minimum",
+        "Pricing opaque — enterprise-only, no published plans",
+        "Post-acquisition roadmap uncertainty — features may be absorbed into ServiceNow"
+      ]
+    },
+    "coverageGaps": [
+      "Actual product UI and agent building experience",
+      "Agent Studio visual builder walkthrough",
+      "Marketplace agent installation and configuration",
+      "Analytics and monitoring dashboards",
+      "Workflow builder details"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (12/20)",
+        "score": "Not Verified",
+        "videoEvidence": "Only marketing pages shown — no actual builder UI demonstrated",
+        "gap": "Agent Studio claimed but never seen in any public content"
+      },
+      {
+        "dimension": "Orchestration (12/20)",
+        "score": "Not Verified",
+        "videoEvidence": "Cross-department workflows described but not shown",
+        "gap": "Orchestration capabilities entirely based on marketing claims"
+      },
+      {
+        "dimension": "Integration (17/20)",
+        "score": "Partially Verified",
+        "videoEvidence": "110+ integration logos visible in marketplace page",
+        "gap": "Logo presence ≠ integration depth — no connector configuration shown"
+      },
+      {
+        "dimension": "Governance (14/20)",
+        "score": "Inferred",
+        "videoEvidence": "ServiceNow platform governance assumed but not demonstrated",
+        "gap": "Governance score relies on ServiceNow platform inheritance"
+      },
+      {
+        "dimension": "Operations (15/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No deployment, monitoring, or scaling demonstrated",
+        "gap": "Operations score entirely based on ServiceNow platform capabilities"
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "w4WE7bruksI",
+      "title": "Moveworks Tutorial for Beginners | Moveworks AI Assistant Demo",
+      "channel": "H2K Infosys"
+    },
+    {
+      "videoId": "qhXt6CTAfEQ",
+      "title": "How Moveworks Went From First Customer to $2.85B",
+      "channel": "Recall Sessions"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The deepest enterprise IT support AI — now part of ServiceNow, it has the most mature understanding of IT workflows, ticket routing, and employee experience automation.",
+    "targetUser": "Large enterprise IT departments (5000+ employees) looking to automate tier-1 IT support, HR inquiries, and internal help desk across multiple systems.",
+    "vsAlternatives": "Wins against all competitors on enterprise IT domain depth and ServiceNow integration. Wins on deployment track record (Fortune 500). Loses on flexibility — narrow to IT/HR use cases. Loses to general agent platforms on breadth of application."
+  }
+}

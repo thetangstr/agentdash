@@ -1,0 +1,676 @@
+{
+  "name": "LangGraph / LangChain",
+  "slug": "langgraph",
+  "category": "open-source",
+  "description": "LangGraph is an open-source framework by LangChain for building stateful, multi-actor agent applications as controllable graphs. It provides first-class support for cycles, branching, persistence, human-in-the-loop patterns, and streaming. The commercial LangSmith platform provides enterprise observability, evaluation, and deployment. In March 2026, LangChain launched LangSmith Fleet — an enterprise agent management platform with centralized agent registry, credential/permissions management, ABAC controls, audit logging, Deploy CLI, sandboxed code execution, and NVIDIA partnership for enterprise distribution.",
+  "oneLiner": "Open-source graph-based agent framework with LangSmith Fleet for enterprise agent management, observability, and deployment.",
+  "founded": "2022",
+  "funding": "Series A $25M (Sequoia, 2023); Series B ~$100M+ valuation, total ~$35-45M by 2025",
+  "pricing": "Open Source (MIT, free); LangSmith Free (5k traces/mo); Plus $39/seat/mo; Enterprise custom; LangGraph Platform usage-based",
+  "website": "https://langchain.com",
+  "githubRepo": "langchain-ai/langgraph",
+  "githubStars": 126000,
+  "screenshots": [
+    {
+      "path": "/screenshots/langgraph/graph-visualization.png",
+      "alt": "LangGraph Studio — graph visualization with node execution and state inspection",
+      "screen": "graph-builder"
+    },
+    {
+      "path": "/screenshots/langgraph/project-selection.png",
+      "alt": "LangGraph Studio — project selection and agent deployment management",
+      "screen": "project-management"
+    },
+    {
+      "path": "/screenshots/langgraph/studio-overview.png",
+      "alt": "LangGraph Studio — IDE overview with agent development environment",
+      "screen": "studio-overview"
+    }
+  ],
+  "capabilities": [
+    "Graph-based agent workflow orchestration",
+    "Stateful execution with typed state management",
+    "Persistence via checkpointers (SQLite, Postgres, Redis)",
+    "Human-in-the-loop (interrupt/approve/edit)",
+    "Multi-agent architectures (supervisor, hierarchical, swarm)",
+    "Streaming (token, event, custom)",
+    "Sub-graph composition",
+    "Conditional branching and dynamic routing",
+    "700+ integrations via LangChain ecosystem",
+    "Model-agnostic (every major LLM provider)",
+    "LangSmith observability and evaluation",
+    "LangSmith Fleet — centralized agent registry with versioning and rollbacks",
+    "Fleet agent identity, credentials, and permissions management",
+    "Fleet ABAC (Attribute-Based Access Control) for enterprise admins",
+    "Fleet audit logs tracking every administrative action",
+    "LangSmith Sandboxes — isolated code execution for agents (private preview)",
+    "Deploy CLI — push agents to production from terminal",
+    "Native A2A, MCP, and Agent Protocol support",
+    "LangGraph Studio visual debugger",
+    "LangGraph Platform (Cloud, BYOC, self-hosted)",
+    "NVIDIA Nemotron Coalition partnership for enterprise distribution",
+    "Python and JavaScript/TypeScript SDKs"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Code-first Python/TypeScript. Define StateGraph with typed state schema, add nodes (functions/sub-graphs), connect with edges (including conditional). Compile into runnable with streaming. LangGraph Studio renders graph topology for visual debugging, state inspection, HITL testing. Deploy via Platform CLI.",
+    "strengths": [
+      "Most flexible agent framework — graph abstraction supports any workflow pattern",
+      "First-class state persistence eliminates hardest production problems",
+      "Human-in-the-loop deeply integrated, not bolted on",
+      "LangSmith observability is best-in-class for LLM apps",
+      "700+ integrations reduce build-vs-buy decisions",
+      "Model-agnostic prevents vendor lock-in",
+      "Very active community and rapid development"
+    ],
+    "weaknesses": [
+      "Steep learning curve — graph abstraction, state reducers, checkpoints require study",
+      "No low-code/no-code builder for non-technical users",
+      "Historical API breaking changes create upgrade friction",
+      "Enterprise governance rapidly maturing with Fleet (ABAC, audit logs, credentials) but newer than dedicated platforms",
+      "Fleet Sandboxes still in private preview — not GA yet",
+      "LangChain ecosystem breadth can cause paradox-of-choice confusion"
+    ],
+    "notableFeatures": [
+      "LangGraph Studio — visual graph debugging with real-time state inspection",
+      "Checkpointers — time-travel debugging, memory, crash recovery",
+      "Multi-agent patterns — supervisor, hierarchical, swarm with inter-agent communication",
+      "Streaming modes — token, event, values, updates simultaneously",
+      "Sub-graphs — composable nested graphs with encapsulated state"
+    ]
+  },
+  "recentDevelopments": [
+    "2025: LangGraph Platform GA (Cloud, BYOC, self-hosted)",
+    "2025: LangGraph Studio web version in LangSmith",
+    "2025: Memory Store API for cross-thread long-term memory",
+    "2025: Multi-agent swarm pattern with native handoff",
+    "2025: MCP integration for tool interoperability",
+    "2025: Templates marketplace for quickstart patterns",
+    "2025: JS/TS SDK approaching Python feature parity",
+    "2026-03: LangSmith Fleet launched — centralized agent registry, identity, credentials, permissions, ABAC, audit logs",
+    "2026-03: Deploy CLI for one-command agent deployment from terminal",
+    "2026-03: LangSmith Sandboxes (private preview) — isolated code execution environments",
+    "2026-03: NVIDIA partnership — joined Nemotron Coalition for enterprise AI distribution",
+    "2026-03: Native A2A, MCP, and Agent Protocol support in Fleet"
+  ],
+  "lastResearched": "2026-04-09",
+  "dataSources": [
+    {
+      "url": "https://github.com/langchain-ai/langgraph",
+      "accessedAt": "2026-04-04",
+      "type": "github"
+    },
+    {
+      "url": "https://langchain-ai.github.io/langgraph/",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.langchain.com/langgraph",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://www.langchain.com/pricing",
+      "accessedAt": "2026-04-04",
+      "type": "docs"
+    },
+    {
+      "url": "https://blog.langchain.com/introducing-langsmith-fleet/",
+      "accessedAt": "2026-04-07",
+      "type": "news"
+    },
+    {
+      "url": "https://blog.langchain.com/march-2026-langchain-newsletter/",
+      "accessedAt": "2026-04-07",
+      "type": "news"
+    },
+    {
+      "url": "https://blog.langchain.com/introducing-langsmith-sandboxes-secure-code-execution-for-agents/",
+      "accessedAt": "2026-04-07",
+      "type": "news"
+    }
+  ],
+  "confidenceLevel": "high",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": false,
+    "notes": "Open-source framework self-hosts anywhere. LangGraph Platform offers managed cloud. Enterprise supports on-prem."
+  },
+  "scores": {
+    "total": 69,
+    "dimensions": [
+      {
+        "key": "CR",
+        "name": "Creation",
+        "score": 16.2,
+        "subCriteria": [
+          {
+            "name": "Agent Builder UX",
+            "score": 5,
+            "rationale": "Elegant Python/JS API for graphs with typed state, conditional edges, composable sub-graphs."
+          },
+          {
+            "name": "Time-to-Value",
+            "score": 4,
+            "rationale": "Desktop + web app for visualizing, debugging, state inspection, HITL testing."
+          },
+          {
+            "name": "Debugging & Testing",
+            "score": 3,
+            "rationale": "Growing template library for common patterns. Community examples supplement."
+          },
+          {
+            "name": "Documentation & Learning",
+            "score": 4,
+            "rationale": "LangSmith traces, replay, comparison views, regression testing, evaluation frameworks."
+          }
+        ]
+      },
+      {
+        "key": "OR",
+        "name": "Orchestration",
+        "score": 9.2,
+        "subCriteria": [
+          {
+            "name": "Multi-Agent Coordination",
+            "score": 3,
+            "rationale": "LangSmith workspace collaboration. Shared traces, datasets, evaluations."
+          },
+          {
+            "name": "Human-in-the-Loop Design",
+            "score": 2,
+            "rationale": "Fundamentally a developer tool. Studio helps but still requires graph concepts."
+          },
+          {
+            "name": "Workflow Templates",
+            "score": 3,
+            "rationale": "Sub-graphs enable modularity. Fleet introduces centralized agent registry with versioning and rollbacks."
+          },
+          {
+            "name": "Team Development",
+            "score": 3,
+            "rationale": "Fleet adds agent sharing, permissions, and ABAC for team collaboration. Centralized registry prevents redundant work."
+          }
+        ]
+      },
+      {
+        "key": "IN",
+        "name": "Integration",
+        "score": 16.4,
+        "subCriteria": [
+          {
+            "name": "Native Connectors",
+            "score": 5,
+            "rationale": "Broadest in the LLM space: 700+ integrations."
+          },
+          {
+            "name": "API & Protocol Standards",
+            "score": 4,
+            "rationale": "Simple @tool decorator with auto schema. ToolNode handles execution in graphs."
+          },
+          {
+            "name": "Authentication & Access",
+            "score": 4,
+            "rationale": "Core value: conditional branching, parallel execution, sub-graphs, map-reduce."
+          },
+          {
+            "name": "Data Pipeline & RAG",
+            "score": 3,
+            "rationale": "Early MCP adoption. OpenAPI tool generation. Standards still evolving."
+          }
+        ]
+      },
+      {
+        "key": "GV",
+        "name": "Governance",
+        "score": 10.8,
+        "subCriteria": [
+          {
+            "name": "Guardrails & Kill Switches",
+            "score": 3,
+            "rationale": "LangSmith Enterprise RBAC with SSO/SAML. Not fine-grained at agent level."
+          },
+          {
+            "name": "Audit Trail & Compliance",
+            "score": 2,
+            "rationale": "Fleet adds ABAC policies and audit logs. Sandboxes (preview) isolate code execution. Custom validation nodes still needed for content guardrails."
+          },
+          {
+            "name": "RBAC & Access Control",
+            "score": 3,
+            "rationale": "Trace-level audit logging. SOC2 Type II. HIPAA/GDPR require additional work."
+          },
+          {
+            "name": "Explainability & Transparency",
+            "score": 3,
+            "rationale": "Env var management. No native vault integration or secret rotation."
+          }
+        ]
+      },
+      {
+        "key": "OP",
+        "name": "Operations",
+        "score": 16.2,
+        "subCriteria": [
+          {
+            "name": "Deployment Flexibility",
+            "score": 4,
+            "rationale": "Cloud SaaS, self-hosted Docker/K8s, BYOC. CLI for building Docker images."
+          },
+          {
+            "name": "Scaling & Monitoring",
+            "score": 3,
+            "rationale": "Platform provides horizontal scaling. Self-hosted needs K8s expertise. Cloud still maturing."
+          },
+          {
+            "name": "Cost Management",
+            "score": 4,
+            "rationale": "LangSmith dashboards, latency percentiles, error rates, cost tracking. Not full APM-grade."
+          },
+          {
+            "name": "Ecosystem Maturity",
+            "score": 5,
+            "rationale": "One of the largest LLM tooling communities. ~14K+ stars, tens of thousands on Discord."
+          }
+        ]
+      }
+    ]
+  },
+  "scoringRationale": "69/100 overall. Strongest: Integration (16/20). Weakest: Orchestration (9/20). Breakdown: Creation (16/20), Orchestration (9/20), Integration (16/20), Governance (11/20), Operations (16/20).",
+  "competence": "Multi-Agent Orchestration Framework",
+  "targetUser": "Developers building complex stateful agent workflows",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "62% of developers building stateful agentic workflows chose LangGraph in 2026 dev survey",
+      "Most battle-tested for production — consistent recommendation on r/LLMDevs",
+      "LangGraph vs CrewAI vs AutoGen is the most actively debated comparison topic in agent dev communities",
+      "Praised for flexibility but steep learning curve is the #1 complaint",
+      "Graph-based approach seen as most principled architecture by senior engineers"
+    ],
+    "metrics": [
+      {
+        "metric": "GitHub Stars",
+        "value": "14.5K+",
+        "source": "GitHub"
+      },
+      {
+        "metric": "Integrations",
+        "value": "700+",
+        "source": "LangChain ecosystem"
+      },
+      {
+        "metric": "Developer Survey (2026)",
+        "value": "62% chose LangGraph for stateful workflows",
+        "source": "Dev survey"
+      },
+      {
+        "metric": "SDK Languages",
+        "value": "Python + JavaScript/TypeScript",
+        "source": "Docs"
+      }
+    ],
+    "funding": {
+      "total": "$35-45M",
+      "lastRound": "Series B",
+      "valuation": "$100M+",
+      "investors": [
+        "Sequoia Capital"
+      ]
+    }
+  },
+  "supportedCUJs": [
+    "workflow-automation",
+    "code-development",
+    "customer-support",
+    "data-extraction"
+  ],
+  "walkthrough": {
+    "title": "LangGraph: PM & CTO Walkthrough — Graph-Based Agent Framework",
+    "pmVerdict": {
+      "summary": "LangGraph is the most flexible agent framework — graph abstraction supports any workflow pattern with production-grade persistence. The 3hr course demonstrates StateGraph, conditional routing, orchestrator-worker patterns, and Studio debugging. The learning curve is steep but the payoff is maximum control. Best for: teams building complex, stateful agents who need visual debugging and production deployment options.",
+      "score": "A-",
+      "strengths": [
+        "Most flexible graph abstraction — supports any workflow pattern",
+        "LangGraph Studio provides best-in-class visual debugging",
+        "Production-grade persistence with checkpointers and memory",
+        "627K+ views on tutorial = strong community learning resources"
+      ],
+      "risks": [
+        "Steep learning curve — graph concepts, state reducers, conditional edges",
+        "No low-code/no-code path — developers only",
+        "API breaking changes between versions create upgrade friction",
+        "LangSmith Fleet (enterprise) still maturing"
+      ]
+    },
+    "ctoVerdict": {
+      "summary": "LangGraph is the framework bet for teams that need maximum control over agent architecture. Graph abstraction, state persistence, and HITL patterns are genuinely production-grade. LangGraph Platform (Cloud, BYOC, self-hosted) provides real deployment options. The risk: LangChain ecosystem complexity and API instability between versions. The 69/100 AFEF score undervalues the framework's flexibility.",
+      "decision": "BUILD ON — Best Framework for Complex Agents",
+      "strengths": [
+        "Graph abstraction supports any workflow — not limited by framework patterns",
+        "Checkpointers enable crash recovery, time-travel debugging, and memory",
+        "LangGraph Platform offers Cloud, BYOC, and self-hosted deployment",
+        "Model-agnostic via LangChain — swap providers without rewrites"
+      ],
+      "dealBreakers": [
+        "API breaking changes between versions — migration cost is real",
+        "LangChain ecosystem breadth creates paradox-of-choice confusion",
+        "No enterprise governance layer in the framework itself",
+        "LangSmith Fleet admin UX is undocumented"
+      ]
+    },
+    "coverageGaps": [
+      "LangSmith Fleet enterprise agent management",
+      "LangGraph Platform deployment walkthrough",
+      "Production monitoring and alerting",
+      "Cost management and attribution",
+      "MCP protocol integration"
+    ],
+    "scoringAlignment": [
+      {
+        "dimension": "Creation (14/20)",
+        "score": "Supported",
+        "videoEvidence": "StateGraph creation, tool definition, create_react_agent demonstrated in Jupyter and VS Code",
+        "gap": "No visual builder — creation is code-only"
+      },
+      {
+        "dimension": "Orchestration (14/20)",
+        "score": "Well Supported",
+        "videoEvidence": "Conditional edges, Gate pattern, orchestrator-worker, multi-agent all demonstrated",
+        "gap": "HITL patterns mentioned but not deeply demonstrated"
+      },
+      {
+        "dimension": "Integration (15/20)",
+        "score": "Supported",
+        "videoEvidence": "TavilySearch, tool decorator pattern, LLM provider switching shown",
+        "gap": "700+ integrations claimed — only a few demonstrated"
+      },
+      {
+        "dimension": "Governance (10/20)",
+        "score": "Not Verified",
+        "videoEvidence": "No governance features shown in any video",
+        "gap": "Governance score relies on Fleet documentation, not demonstrated"
+      },
+      {
+        "dimension": "Operations (16/20)",
+        "score": "Partially Supported",
+        "videoEvidence": "Deployment options mentioned, Studio for debugging shown",
+        "gap": "Production monitoring, scaling, and cost management not demonstrated"
+      }
+    ],
+    "steps": [
+      {
+        "image": "/screenshots/langgraph/step01_why_frameworks.jpg",
+        "title": "Why Agent Frameworks",
+        "description": "LangGraph's value proposition: Persistence (Memory, HITL), Streaming (from any step), Deployment (testing, debugging, deploying). Framework eliminates implementation overhead.",
+        "pmCritique": {
+          "works": [
+            "Clear articulation of three pillars: Persistence, Streaming, Deployment",
+            "Honest framing: 'does not require a framework' — earns trust by not overselling",
+            "Infrastructure focus — LangGraph is plumbing, not product"
+          ],
+          "doesntWork": [
+            "Presentation format — slides, not product UI",
+            "No competitive comparison — how does this differ from CrewAI/AutoGen?",
+            "Abstract concepts before concrete examples"
+          ],
+          "userPsychology": "Leading with 'why' instead of 'what' is the right pedagogical choice. Developers need to understand the problem before evaluating the solution."
+        },
+        "ctoCritique": {
+          "verdict": "The three pillars (Persistence, Streaming, Deployment) directly map to production requirements. This framing tells me LangGraph thinks about ops, not just dev.",
+          "concerns": [
+            "Pillars are promises — need to see them delivered in the tutorial",
+            "No quantification of 'implementation overhead' saved",
+            "Framework lock-in risk not addressed"
+          ],
+          "enterpriseGaps": [
+            "No performance benchmarks for persistence/streaming",
+            "No comparison of build-vs-framework TCO",
+            "No migration guide from other frameworks"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step02_state_graph.jpg",
+        "title": "StateGraph with Conditional Edges",
+        "description": "Jupyter notebook: Build workflow with StateGraph, add nodes, conditional edges, Gate pattern (Pass/Fail). Visual graph rendered inline with mermaid.",
+        "pmCritique": {
+          "works": [
+            "Jupyter integration — experiment interactively, see graphs inline",
+            "Gate pattern (Pass/Fail) demonstrates conditional routing clearly",
+            "Mermaid graph rendering makes abstract code visual"
+          ],
+          "doesntWork": [
+            "Jupyter is experimental — production code looks different",
+            "StateGraph API requires learning graph theory concepts",
+            "Conditional edge functions are implicit — logic hidden in Python functions"
+          ],
+          "userPsychology": "The Jupyter + inline graph rendering is LangGraph's secret onboarding weapon. Seeing the graph appear as you write code creates an immediate feedback loop."
+        },
+        "ctoCritique": {
+          "verdict": "StateGraph with conditional edges is genuinely powerful — any workflow pattern is expressible. But the abstraction level is high. My team needs graph-thinking skills.",
+          "concerns": [
+            "Graph concepts require training — not intuitive for most developers",
+            "Conditional edge debugging requires understanding state flow",
+            "No type checking on state transitions"
+          ],
+          "enterpriseGaps": [
+            "No formal graph validation (deadlock detection, unreachable nodes)",
+            "No graph complexity metrics or warnings",
+            "No visual graph editor — code-only"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step03_orchestrator_worker.jpg",
+        "title": "Orchestrator-Worker Pattern",
+        "description": "Sections and WorkerState with structured output. Orchestrator plans sections, workers write in parallel, results merge.",
+        "pmCritique": {
+          "works": [
+            "Orchestrator-worker is a production pattern — plan, execute in parallel, merge",
+            "Structured output (Pydantic) ensures type-safe agent communication",
+            "Parallel execution with state merging — real concurrency support"
+          ],
+          "doesntWork": [
+            "Pattern requires understanding of state management and parallel execution",
+            "Annotated list for parallel writes is a framework-specific concept",
+            "No error handling for failed workers shown"
+          ],
+          "userPsychology": "The orchestrator-worker pattern is what makes LangGraph enterprise-grade. It's not just 'agents talking to each other' — it's structured parallel execution with typed results."
+        },
+        "ctoCritique": {
+          "verdict": "This is the pattern I need for production — typed orchestration with parallel workers. But the implementation complexity is high. Need to evaluate if my team can build and maintain this.",
+          "concerns": [
+            "Parallel state merging has race condition risks",
+            "Worker failure handling unclear",
+            "State size grows with parallel workers — memory implications"
+          ],
+          "enterpriseGaps": [
+            "No worker timeout or retry configuration shown",
+            "No cost attribution per worker",
+            "No worker scaling or load balancing"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step04_agent_loop.jpg",
+        "title": "Agent Loop Architecture",
+        "description": "Core agent pattern: Human → LLM Call → Environment (Action/Feedback loop) → Stop. Tool-calling with @tool decorator.",
+        "pmCritique": {
+          "works": [
+            "Clean architecture diagram — Human, LLM, Environment, Stop in one view",
+            "Tool-calling pattern with @tool decorator — standard and clean",
+            "Action/Feedback loop shows iterative agent reasoning"
+          ],
+          "doesntWork": [
+            "Diagram is conceptual — production reality is more complex",
+            "No error handling in the loop — what happens when tools fail?",
+            "@tool decorator hides invocation complexity"
+          ],
+          "userPsychology": "This diagram is the most important conceptual frame — it shows that agents are loops, not pipelines. Understanding this changes how you think about agent design."
+        },
+        "ctoCritique": {
+          "verdict": "The agent loop is the fundamental pattern. The question: how does LangGraph handle loop termination, infinite loops, and cost runaway in production?",
+          "concerns": [
+            "No loop termination guarantees — agents could loop infinitely",
+            "No cost cap per loop iteration",
+            "No timeout configuration visible"
+          ],
+          "enterpriseGaps": [
+            "No circuit breaker for runaway agents",
+            "No maximum iteration limit shown",
+            "No cost alerting during execution"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step05_code_structure.jpg",
+        "title": "Agent Code in VS Code",
+        "description": "graph.py with TavilySearch tool, Claude model, create_react_agent — clean linear code structure in VS Code.",
+        "pmCritique": {
+          "works": [
+            "Code reads like a recipe — tools, model, prompt, agent in sequence",
+            "create_react_agent one-liner hides graph complexity",
+            "Model-agnostic — Claude today, GPT tomorrow with one line change"
+          ],
+          "doesntWork": [
+            "create_react_agent hides the graph — users who need custom routing learn a different API",
+            "Three config files (.env, langgraph.json, requirements.txt) before code",
+            "No type safety on tool returns"
+          ],
+          "userPsychology": "The linear code structure makes tutorials approachable. But production agents rarely stay this simple — the complexity cliff from create_react_agent to custom StateGraph is steep."
+        },
+        "ctoCritique": {
+          "verdict": "Clean code structure is good for evaluation. But I need to see: how does this scale to 10 tools, 5 agents, conditional routing? The simple example doesn't stress-test the framework.",
+          "concerns": [
+            "Simple example doesn't demonstrate production complexity",
+            "Config file proliferation (.env, langgraph.json, requirements.txt)",
+            "Error handling absent in example code"
+          ],
+          "enterpriseGaps": [
+            "No code quality tools or linting for LangGraph patterns",
+            "No project template for production structure",
+            "No testing framework for graph logic"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step06_studio_debug.jpg",
+        "title": "LangGraph Studio Debugging",
+        "description": "Studio showing graph topology with thread panel, state inspection, and tool execution results. Visual debugging environment.",
+        "pmCritique": {
+          "works": [
+            "Graph visualization makes architecture comprehensible to non-engineers",
+            "Thread panel with state inspection at each turn — time-travel debugging",
+            "Tool results fully visible — query, response, timing"
+          ],
+          "doesntWork": [
+            "Studio is read-only — can't restructure agents visually",
+            "Dense information layout — graph + thread + state compete for space",
+            "No cost per turn shown"
+          ],
+          "userPsychology": "Studio is LangGraph's competitive moat — the only framework where you can SEE your agent think. This creates an 'I understand' moment that code-only tools can't match."
+        },
+        "ctoCritique": {
+          "verdict": "Studio visual debugging is genuinely best-in-class. The ability to inspect state at every node is the trust layer enterprise buyers need. This is the demo that wins deals.",
+          "concerns": [
+            "Studio requires running agent + network access — no offline mode",
+            "Cloud-hosted Studio may concern security teams",
+            "No Studio API for programmatic debugging"
+          ],
+          "enterpriseGaps": [
+            "No Studio self-hosted option",
+            "No Studio SSO integration",
+            "No Studio audit logging"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step07_multi_agent.jpg",
+        "title": "Multi-Agent Orchestration",
+        "description": "Supervisor pattern with specialized worker agents, shared state, and structured output. Orchestrator coordinates multiple agents.",
+        "pmCritique": {
+          "works": [
+            "Supervisor pattern is industry-standard multi-agent architecture",
+            "Shared state enables agent collaboration without message passing",
+            "Structured output ensures type-safe inter-agent communication"
+          ],
+          "doesntWork": [
+            "Multi-agent coordination adds significant complexity",
+            "Supervisor agent can become a bottleneck",
+            "Debugging multi-agent flows requires Studio — terminal is insufficient"
+          ],
+          "userPsychology": "Multi-agent orchestration is where LangGraph's graph abstraction pays off. The supervisor pattern is clean, composable, and debuggable — if you have Studio."
+        },
+        "ctoCritique": {
+          "verdict": "Multi-agent support is essential for our use cases. The supervisor pattern is architecturally sound. But I need: agent lifecycle management, shared memory isolation, and failure recovery.",
+          "concerns": [
+            "No agent lifecycle management shown",
+            "Shared state creates coupling between agents",
+            "No failure isolation — one agent's error can crash the supervisor"
+          ],
+          "enterpriseGaps": [
+            "No agent-level monitoring or health checks",
+            "No agent versioning or A/B testing",
+            "No inter-agent security boundaries"
+          ]
+        }
+      },
+      {
+        "image": "/screenshots/langgraph/step08_deployment.jpg",
+        "title": "Production Deployment",
+        "description": "LangGraph Platform with Cloud, BYOC, and self-hosted options. Testing, debugging, and deploying agents to production.",
+        "pmCritique": {
+          "works": [
+            "Three deployment options cover every enterprise need — cloud, BYOC, self-hosted",
+            "Testing and debugging as part of the deployment pipeline",
+            "Platform abstracts infrastructure — focus on agent logic"
+          ],
+          "doesntWork": [
+            "Deployment options mentioned but not demonstrated in the video",
+            "No pricing comparison between Cloud vs BYOC vs self-hosted",
+            "No deployment walkthrough — conceptual only"
+          ],
+          "userPsychology": "Deployment options are what separate frameworks from platforms. LangGraph Platform's BYOC option is uniquely appealing — you own the infra, they manage the runtime."
+        },
+        "ctoCritique": {
+          "verdict": "Cloud + BYOC + self-hosted is the right deployment strategy. BYOC is particularly interesting — we keep data sovereignty while LangGraph manages the platform. Need pricing.",
+          "concerns": [
+            "Deployment not demonstrated — only listed as options",
+            "BYOC infrastructure requirements not specified",
+            "No cost model for Platform services"
+          ],
+          "enterpriseGaps": [
+            "No deployment SLA",
+            "No multi-region deployment support shown",
+            "No canary deployment or rolling update patterns"
+          ]
+        }
+      }
+    ]
+  },
+  "youtubeReviews": [
+    {
+      "videoId": "aHCDrAbH_go",
+      "title": "Building Effective Agents with LangGraph (Official)",
+      "channel": "LangChain"
+    },
+    {
+      "videoId": "jGg_1h0qzaM",
+      "title": "LangGraph Complete Course for Beginners (3hr)",
+      "channel": "freeCodeCamp"
+    },
+    {
+      "videoId": "Mi1gSlHwZLM",
+      "title": "LangSmith Studio v2: Agent Development Environment",
+      "channel": "LangChain"
+    }
+  ],
+  "coreCompetence": {
+    "bestAt": "The most flexible agent orchestration framework — graph abstraction supports any workflow pattern with production-grade state persistence, plus LangSmith Fleet for enterprise agent fleet management.",
+    "targetUser": "Senior developers building complex, stateful agent systems that need persistence, human-in-the-loop, and production observability. Teams already in the LangChain ecosystem.",
+    "vsAlternatives": "Wins against CrewAI on flexibility, state management, and enterprise tooling (LangSmith Fleet). Wins against AutoGen on production readiness and observability. Loses to CrewAI on learning curve. Loses to Lindy/Moveworks on business-user accessibility."
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "industry": "Public Sector",
+  "industrySlug": "public-sector",
+  "jobFunction": "Customer Support",
+  "functionSlug": "customer-support",
+  "disruptionScore": 7,
+  "summary": "High-volume citizen services like benefits inquiries, permit status, and tax questions are strong agent candidates already being deployed at federal and state levels.",
+  "tier": "deep",
+  "workflows": [
+    {
+      "name": "Citizen Benefits Inquiry Handling",
+      "description": "Agents answer questions about eligibility, application status, and required documentation for programs like SNAP, Medicaid, unemployment insurance, and housing assistance. They pull data from case management systems and provide personalized guidance based on the citizen's specific situation.",
+      "agentPotential": "high",
+      "currentPain": "Call centers are overwhelmed with hold times averaging 30-90 minutes. The IRS alone receives 100M+ calls annually. Citizens abandon 30-40% of calls. Staff turnover in government call centers exceeds 25% annually, creating perpetual training costs."
+    },
+    {
+      "name": "Permit and License Status Tracking",
+      "description": "Agents provide real-time status updates on permit applications, license renewals, and inspection scheduling by querying the agency's permitting system. They can explain what stage the application is in, what's needed next, and estimated timelines.",
+      "agentPotential": "high",
+      "currentPain": "Citizens must call or visit offices during business hours to get basic status updates. Staff spend 40-60% of their time on status inquiries rather than processing applications. Honolulu's permit backlog included 5,000+ applications with 19-month wait times."
+    },
+    {
+      "name": "Multilingual Constituent Communication",
+      "description": "Agents handle inquiries in dozens of languages, translating complex government terminology into plain language. They route cases requiring human nuance to bilingual staff while handling routine inquiries autonomously.",
+      "agentPotential": "medium",
+      "currentPain": "Agencies struggle to serve non-English-speaking populations, relying on limited interpreter services that cost $2-5/minute. Executive Order 13166 requires meaningful access for LEP individuals, but compliance is inconsistent."
+    },
+    {
+      "name": "FOIA and Public Records Request Triage",
+      "description": "Agents intake, classify, and route freedom of information requests. They identify readily available documents, flag requests that need legal review, estimate response timelines, and send status updates to requesters.",
+      "agentPotential": "medium",
+      "currentPain": "FOIA backlogs at federal agencies average 6-12 months with manual intake and classification. The federal government received 928,000+ FOIA requests in FY2023, a 5% increase year-over-year. Albuquerque grew from 4,500 to 15,900 records requests in 8 years."
+    },
+    {
+      "name": "Tax Filing and Payment Assistance",
+      "description": "Agents guide taxpayers through filing status questions, payment options, installment agreements, and refund status checks. They provide personalized guidance based on the taxpayer's account without exposing sensitive information inappropriately.",
+      "agentPotential": "high",
+      "currentPain": "The IRS answered only 29% of calls in FY2022. State tax agencies face similar volumes. Each call costs $35-45 to handle with a human agent. Simple status checks consume the same resources as complex audit inquiries."
+    }
+  ],
+  "platformFit": [
+    {"companySlug": "lindy-ai", "fitScore": 4, "rationale": "No-code visual builder enables non-technical government staff to create and modify workflows. 3,000+ integrations, SOC 2 Type II compliance, and HITL approval gates align with government requirements."},
+    {"companySlug": "moveworks", "fitScore": 4, "rationale": "Enterprise-grade with 100+ native integrations, 60%+ autonomous resolution rate proven at scale, and ServiceNow backing provides procurement credibility for government buyers."},
+    {"companySlug": "bedrock-agentcore", "fitScore": 5, "rationale": "FedRAMP authorized, HIPAA compliant, runs in GovCloud. Guardrails for PII redaction, knowledge bases for policy grounding. The only agent platform with full federal compliance stack."},
+    {"companySlug": "vapi", "fitScore": 3, "rationale": "Voice agent capability is critical for phone-based citizen services. SOC2/HIPAA/PCI compliance. But cloud-only deployment may not meet all government data residency requirements."}
+  ],
+  "businessOutcome": "A mid-size state agency (5M constituents) deploying agents for benefits inquiries and permit status can expect: 40-60% call deflection rate, $2-4M annual savings in contact center costs, 70% reduction in average hold time, and 24/7 availability replacing business-hours-only service. Seattle's utility assistance automation saved 1,500+ FTE hours on a 6,200-application backlog.",
+  "examples": [
+    "City of Seattle: Automated utility assistance intake, reducing a 6,200-application backlog by saving 1,500+ FTE hours and eliminating manual Excel-based workflows.",
+    "IRS Direct File: AI-assisted tax filing guidance helped 140,000+ taxpayers in the 2024 pilot, with plans to expand to all 50 states — proving federal appetite for citizen-facing AI.",
+    "City of Albuquerque: Restructured public records intake with a triage team handling 15,900 annual requests with 28 staff (568 per person/year). Agent-augmented intake could double throughput.",
+    "UK HMRC: Deployed AI chatbot handling 4M+ taxpayer interactions annually with 80%+ containment rate, reducing call center volume by 25%."
+  ],
+  "obstacles": [
+    "Long procurement cycles (6-18 months for competitive bids above simplified acquisition thresholds)",
+    "FedRAMP / StateRAMP / IL4-IL5 security requirements for cloud-hosted solutions",
+    "Union and civil service concerns about job displacement — framing as augmentation not replacement is critical",
+    "Section 508 / ADA accessibility compliance for all citizen-facing interfaces",
+    "Multi-system integration across legacy case management, financial, and document systems",
+    "Public accountability — AI errors in government services receive disproportionate media scrutiny",
+    "Data sovereignty and residency requirements that may preclude standard SaaS deployment",
+    "Digital divide — many citizens lack internet access, making phone-based agents essential alongside chat"
+  ],
+  "regulatoryConsiderations": [
+    "Executive Order 14110 on Safe, Secure, and Trustworthy AI requires agencies to designate Chief AI Officers and conduct AI impact assessments",
+    "OMB Memo M-24-10 mandates AI governance structures, risk management, and public transparency for federal AI use",
+    "FOIA requires that agencies respond to requests within 20 business days — AI triage must not create liability for missed deadlines",
+    "Privacy Act of 1974 restricts how agencies collect, maintain, and share personal information — agent systems must comply",
+    "Executive Order 13166 requires meaningful access for Limited English Proficiency individuals",
+    "State-level AI transparency laws (e.g., Colorado, Illinois) may require disclosure when citizens interact with AI agents"
+  ],
+  "playbook": {
+    "marketSizing": {
+      "tam": "$12B — total US government contact center spending (federal + state + local), covering 300M+ annual citizen interactions across all agencies",
+      "sam": "$4.2B — state and local government contact centers for benefits, permits, taxes, and records (the segments most amenable to agent automation)",
+      "som": "$180M — initial addressable market targeting 50 progressive mid-to-large agencies with active modernization mandates and existing cloud infrastructure",
+      "source": "Gartner Government IT Spending Forecast 2025, National Association of State CIOs survey data"
+    },
+    "currentState": "Government citizen support is overwhelmingly phone-based with 1990s-era IVR systems feeding into understaffed call centers. Most agencies use case management systems (Salesforce Government Cloud, ServiceNow, or legacy custom systems) that are not connected to their phone infrastructure. Citizens calling about benefits, permits, or records get routed through generic menu trees, wait 30-90 minutes, and often get transferred 2-3 times before reaching someone who can help. Email response times average 5-10 business days. Online self-service portals exist but are poorly designed and rarely answer specific questions about a citizen's case status. The workforce challenge is acute: government contact center salaries are 20-30% below private sector, driving chronic understaffing and 25%+ annual turnover.",
+    "idealCustomerProfile": {
+      "segment": "State-level agencies managing high-volume citizen services: departments of labor (unemployment), health & human services (benefits), revenue (taxes), or licensing/permitting",
+      "size": "Agencies serving 2M+ constituents with 50+ contact center staff, processing 500K+ annual inquiries",
+      "painIntensity": "Critical — legislative pressure to reduce wait times, budget pressure to reduce headcount costs, and federal mandates for AI governance creating urgency to deploy compliant AI solutions",
+      "buyerTitle": "Chief Information Officer (CIO) or Chief Digital Officer (CDO), with sign-off from the Agency Director and CISO",
+      "budget": "$500K-$2M for pilot (typically from IT modernization or federal grant funds like ARPA), $2-5M/year for production deployment across an agency"
+    },
+    "entryWedge": {
+      "workflow": "Benefits eligibility inquiry and application status checking — the highest-volume, most repetitive workflow with clear data sources and bounded decision logic",
+      "why": "Benefits status inquiries are 40-60% of call volume at most HHS agencies, they require no subjective judgment (just data lookup + policy matching), the ground truth is in the case management system, and errors are low-risk (telling someone to call back is an acceptable fallback). This is the 'hello world' of government agent deployment.",
+      "proofOfConcept": "Deploy a phone + chat agent that handles 'What is the status of my [SNAP/Medicaid/unemployment] application?' by authenticating the caller (SSN last 4 + DOB), querying the case management system, and providing status with next steps. Measure: deflection rate, accuracy, citizen satisfaction (CSAT), and average handle time reduction. Run for 60 days on one program in one region.",
+      "timeToValue": "8-12 weeks from contract to pilot go-live. Week 1-2: system access and API integration. Week 3-4: knowledge base from policy manuals. Week 5-6: agent configuration and testing. Week 7-8: limited release with human monitoring. Week 9-12: supervised expansion with performance tuning."
+    },
+    "successMetrics": [
+      {"metric": "Call deflection rate", "baseline": "0% (all calls handled by humans)", "target": "40-60% of benefits status inquiries resolved without human agent", "timeframe": "6 months post-launch"},
+      {"metric": "Average hold time", "baseline": "30-90 minutes", "target": "Under 2 minutes for agent-handled inquiries", "timeframe": "Immediate"},
+      {"metric": "Cost per interaction", "baseline": "$35-45 per human-handled call", "target": "$2-5 per agent-handled interaction", "timeframe": "3 months post-launch"},
+      {"metric": "Citizen satisfaction (CSAT)", "baseline": "55-65% (typical government contact center)", "target": "75-85% for agent-handled interactions", "timeframe": "6 months"},
+      {"metric": "24/7 availability", "baseline": "Business hours only (M-F 8am-5pm)", "target": "24/7/365 for agent-handled inquiries", "timeframe": "Immediate"},
+      {"metric": "Multilingual coverage", "baseline": "English + Spanish (limited interpreter services for others)", "target": "20+ languages for common inquiries", "timeframe": "3 months post-launch"}
+    ],
+    "riskAssessment": [
+      {"risk": "AI provides incorrect benefits eligibility information, leading to citizen harm or legal liability", "severity": "high", "mitigation": "Ground agent responses exclusively in official policy documents via RAG. Require human review for any eligibility DETERMINATION (agent only provides STATUS and NEXT STEPS, never adjudicates). Include disclaimer and escalation path in every interaction."},
+      {"risk": "Procurement delays push pilot past budget cycle, losing funding", "severity": "high", "mitigation": "Structure as a 'micro-purchase' under simplified acquisition threshold ($250K federal, varies by state) for the pilot. Use existing IT modernization BPA/IDIQ vehicles if available. Target innovation/CIO discretionary funds rather than program budgets."},
+      {"risk": "Union grievance claiming AI replaces bargaining unit positions", "severity": "medium", "mitigation": "Frame as augmentation: agent handles status inquiries so human staff can focus on complex casework, appeals, and in-person services. Involve union early in planning. Show that no positions are eliminated — workload is redistributed to higher-value tasks."},
+      {"risk": "Data breach or unauthorized access to citizen PII through agent system", "severity": "high", "mitigation": "Deploy on FedRAMP-authorized infrastructure. Implement PII redaction in all logs. Use multi-factor authentication for citizen identity verification. Conduct penetration testing before launch. Ensure agent cannot display full SSN or other sensitive identifiers."},
+      {"risk": "Digital equity concerns — agent creates two-tier service (tech-savvy vs. non-tech citizens)", "severity": "medium", "mitigation": "Deploy across BOTH phone (voice) and chat channels so non-internet citizens can access via phone. Maintain in-person service option. Ensure Section 508 compliance. Monitor demographic breakdown of agent usage vs. traditional channels."},
+      {"risk": "Public backlash from media coverage of AI errors in government services", "severity": "medium", "mitigation": "Start with low-risk workflows (status inquiries, not eligibility determinations). Build a 'glass box' approach with full transparency about when citizens are interacting with AI. Publish accuracy metrics publicly. Have a rapid-response plan for incidents."}
+    ],
+    "buyerJourney": [
+      {"stage": "Problem Recognition", "action": "Agency CIO or contact center director identifies unsustainable call volumes, legislative pressure on wait times, or budget pressure on headcount", "stakeholder": "Contact Center Director, CIO"},
+      {"stage": "Research & Education", "action": "CIO office researches AI chatbot and voice agent solutions, attends NASCIO/NACo conferences, reviews GSA AI marketplace, reads OMB AI guidance", "stakeholder": "CIO, Innovation Officer, Chief AI Officer"},
+      {"stage": "Internal Alignment", "action": "Build coalition: CIO (technology), Program Director (operations), CISO (security), Legal/Privacy Officer (compliance), Union Representative (workforce), Budget Office (funding)", "stakeholder": "Cross-functional steering committee"},
+      {"stage": "Requirements & RFI", "action": "Issue RFI to market to understand capabilities and pricing. Key requirements: FedRAMP/StateRAMP, Section 508, multilingual, integration with existing CMS, audit trail, HITL controls", "stakeholder": "Procurement, CIO, Program Director"},
+      {"stage": "Pilot Procurement", "action": "Issue micro-purchase or use existing BPA for 60-90 day pilot. Scope: one program, one region, one workflow (benefits status). Success criteria defined upfront.", "stakeholder": "Procurement, CIO, Program Director"},
+      {"stage": "Pilot Execution", "action": "Deploy agent with human monitoring. Measure deflection, accuracy, CSAT, cost savings. Weekly stakeholder reviews. Adjust thresholds and escalation rules.", "stakeholder": "Program Director, Contact Center Manager, Vendor"},
+      {"stage": "Production Decision", "action": "Present pilot results to agency leadership. Build business case for full deployment. Initiate competitive procurement if needed for production contract.", "stakeholder": "Agency Director, CIO, Budget Office"},
+      {"stage": "Scale & Expand", "action": "Expand to additional programs, regions, and channels. Add new workflows (permit status, records requests). Cross-agency replication playbook.", "stakeholder": "CIO, Program Directors across agency"}
+    ],
+    "competitiveLandscape": "Government citizen support AI is an emerging market with a mix of horizontal platforms and government-specific vendors. Key players: (1) Amazon Bedrock + AWS GovCloud is the dominant infrastructure play with FedRAMP High authorization — most government AI will run on AWS. (2) Google CCAI (Contact Center AI) has been deployed at several state agencies for virtual agent and agent assist. (3) ServiceNow/Moveworks is entering via IT service management beachheads in government. (4) Salesforce Government Cloud is the CRM of record at many agencies and is embedding AI into Service Cloud. (5) Govini and Palantir focus on defense/intel but are expanding into civilian citizen services. (6) Specialized GovTech startups like Euna Solutions, CivicPlus, and Granicus offer narrower solutions for specific government workflows. The market is fragmented because procurement cycles are long and each agency has different system landscapes, creating opportunity for platforms that can integrate broadly and comply with government security frameworks.",
+    "pricingModel": "Government buyers prefer consumption-based pricing (per interaction or per minute) over seat-based licensing, because contact center volumes are unpredictable and budgets are annual. Recommended model: (1) Pilot: fixed-fee engagement ($150-250K) covering setup, integration, knowledge base creation, and 60-90 day pilot with defined interaction volume. (2) Production: per-interaction pricing ($0.50-2.00 per resolved interaction, declining with volume) with an annual minimum commitment. (3) Premium tier: includes multilingual support, custom integrations, dedicated CSM, and quarterly business reviews. Avoid per-agent-seat pricing — government buyers have rigid FTE caps and hate models that look like headcount. Instead, price on value delivered (interactions resolved, wait time reduced, cost savings generated).",
+    "deploymentTimeline": [
+      {"phase": "Discovery & Procurement", "duration": "4-8 weeks", "milestone": "Contract signed, system access granted, kickoff meeting completed"},
+      {"phase": "Integration & Knowledge Base", "duration": "3-4 weeks", "milestone": "API connections to CMS verified, policy documents ingested into knowledge base, test queries returning accurate answers"},
+      {"phase": "Agent Configuration & Testing", "duration": "2-3 weeks", "milestone": "Conversation flows built, escalation rules configured, UAT completed with subject matter experts"},
+      {"phase": "Limited Pilot", "duration": "4-6 weeks", "milestone": "Live with 10-20% of traffic for one program, human monitoring every interaction, weekly metrics review"},
+      {"phase": "Supervised Expansion", "duration": "4-6 weeks", "milestone": "Expanded to 50-100% of traffic for pilot program, spot-check monitoring, CSAT surveys deployed"},
+      {"phase": "Production & Multi-Program Expansion", "duration": "Ongoing", "milestone": "Full deployment across pilot program, expansion planning for additional programs and channels"}
+    ]
+  }
+}

@@ -27,6 +27,7 @@ import {
   Columns3,
   Wallet,
   Plug,
+  CreditCard,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -63,28 +64,40 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">
-      {/* Brand wordmark + company name */}
-      <div className="flex items-center gap-1.5 px-3 h-12 shrink-0">
-        <span className="text-sm font-bold tracking-tight text-primary">AgentDash</span>
-        <span className="text-border select-none">|</span>
-        {selectedCompany?.brandColor && (
-          <div
-            className="w-3 h-3 rounded-sm shrink-0"
-            style={{ backgroundColor: selectedCompany.brandColor }}
-          />
+    <aside className="w-60 h-full min-h-0 border-r border-border bg-sidebar flex flex-col">
+      {/* Luxe brand: serif wordmark + mono control-plane tag + company line */}
+      <div className="px-3 pt-4 pb-3 shrink-0 border-b border-border/60">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="lux-brand text-[18px] leading-none text-foreground">AgentDash</div>
+            <div className="lux-mono text-[9px] tracking-[0.14em] uppercase text-muted-foreground mt-1">
+              Control plane · v2026.4
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground shrink-0"
+            onClick={openSearch}
+            title="Search (⌘K)"
+          >
+            <Search className="h-4 w-4" />
+          </Button>
+        </div>
+        {selectedCompany && (
+          <div className="mt-3 rounded-sm border border-border bg-card px-3 py-2">
+            <div className="lux-mono text-[9px] tracking-[0.14em] uppercase text-muted-foreground">Company</div>
+            <div className="flex items-center gap-2 mt-0.5">
+              {selectedCompany.brandColor && (
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: selectedCompany.brandColor }}
+                />
+              )}
+              <span className="lux-brand text-[16px] text-foreground truncate">{selectedCompany.name}</span>
+            </div>
+          </div>
         )}
-        <span className="flex-1 text-xs font-medium text-muted-foreground truncate">
-          {selectedCompany?.name ?? "Select company"}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground shrink-0"
-          onClick={openSearch}
-        >
-          <Search className="h-4 w-4" />
-        </Button>
       </div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
@@ -143,6 +156,7 @@ export function Sidebar() {
           <SidebarNavItem to="/capacity" label="Capacity" icon={BarChart3} />
           <SidebarNavItem to="/security" label="Security" icon={Shield} />
           <SidebarNavItem to="/research" label="Research" icon={FlaskConical} />
+          <SidebarNavItem to="/assess" label="Assess" icon={Search} />
         </SidebarSection>
 
         <SidebarSection label="Company">
@@ -153,6 +167,7 @@ export function Sidebar() {
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
           <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
+          <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
           <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         </SidebarSection>
 

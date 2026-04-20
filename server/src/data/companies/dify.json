@@ -1,0 +1,156 @@
+{
+  "name": "Dify",
+  "slug": "dify",
+  "category": "open-source",
+  "subcategory": "agentic-development-environment",
+  "description": "Dify is an open-source platform for developing and operating generative AI applications. Visual orchestration studio for designing AI workflows, training agents, and configuring RAG systems. 1.4M+ installs worldwide, $30M Series Pre-A at $180M valuation. Used by Maersk, ETS, Anker, Novartis. Supports OpenAI, Anthropic, Llama, Azure, Hugging Face. MCP protocol support for external integrations.",
+  "oneLiner": "Open-source visual agent workflow builder with RAG — 1.4M installs, the most direct open-source competitor to AgentDash Forge.",
+  "founded": "2023",
+  "funding": "$30M Series Pre-A at $180M valuation (March 2026)",
+  "pricing": "Sandbox free; Professional $59/mo; Team $159/mo; Enterprise custom.",
+  "website": "https://dify.ai",
+  "githubRepo": "langgenius/dify",
+  "githubStars": 200000,
+  "screenshots": [],
+  "capabilities": [
+    "Visual Studio — drag-and-drop workflow builder for AI agents",
+    "RAG pipeline builder with document ingestion and retrieval",
+    "Multi-model support — OpenAI, Anthropic, Llama, Azure, HuggingFace",
+    "MCP protocol support for external tool integration",
+    "One-click deployment as APIs, chatbots, or internal tools",
+    "Agent orchestration with tool calling and reasoning",
+    "Observability dashboard with logs, traces, and annotations",
+    "Enterprise: SSO, RBAC, audit logging, data isolation",
+    "Self-hosted or cloud deployment options",
+    "2000+ teams and 280+ enterprises on commercial versions"
+  ],
+  "uxAnalysis": {
+    "builderFlow": "Visual drag-and-drop workflow studio. Connect LLM nodes, tool nodes, conditional logic, and RAG pipelines visually. Deploy as API endpoint or chatbot with one click.",
+    "strengths": [
+      "Most complete open-source visual agent builder — direct Forge competitor",
+      "RAG is a first-class visual component, not an afterthought",
+      "1.4M installs signals massive adoption and community support",
+      "Enterprise customers (Maersk, Novartis) validate production readiness",
+      "Self-hosted option addresses data sovereignty concerns"
+    ],
+    "weaknesses": [
+      "No multi-model intelligent routing — manual model selection",
+      "No agent quality scoring or cognitive dimension measurement",
+      "No built-in scheduling or autonomous execution",
+      "Workflow complexity limited compared to LangGraph's graph abstraction",
+      "Enterprise features (SSO, RBAC) only on paid tiers"
+    ],
+    "notableFeatures": [
+      "Visual RAG pipeline builder",
+      "One-click API deployment",
+      "Annotation and feedback system for continuous improvement",
+      "Plugin marketplace for community extensions"
+    ]
+  },
+  "recentDevelopments": [
+    "2026-03: $30M Series Pre-A at $180M valuation",
+    "2026: 1.4M+ installs worldwide, 2000+ teams on commercial versions",
+    "2026: MCP protocol support for external integrations",
+    "2026: Enterprise customers include Maersk, ETS, Anker, Novartis",
+    "2026: Agent capabilities integration accelerating per roadmap"
+  ],
+  "lastResearched": "2026-04-13",
+  "dataSources": [
+    { "url": "https://dify.ai", "accessedAt": "2026-04-13", "type": "docs" },
+    { "url": "https://github.com/langgenius/dify", "accessedAt": "2026-04-13", "type": "github" }
+  ],
+  "confidenceLevel": "medium",
+  "deploymentOptions": {
+    "cloud": true,
+    "selfHosted": true,
+    "onPrem": true,
+    "byoc": false,
+    "hybrid": true,
+    "notes": "Self-hosted via Docker or cloud. Enterprise supports on-prem deployment."
+  },
+  "scores": {
+    "total": 68,
+    "dimensions": [
+      { "key": "CR", "name": "Creation", "score": 17, "subCriteria": [
+        { "name": "Agent Builder UX", "score": 5, "rationale": "Best-in-class visual workflow builder. Drag-and-drop nodes for LLM, tools, RAG, conditions." },
+        { "name": "Time-to-Value", "score": 4, "rationale": "One-click deploy as API or chatbot. Templates and prebuilt components." },
+        { "name": "Debugging & Testing", "score": 4, "rationale": "Observability dashboard with logs, traces, annotations. Feedback system." },
+        { "name": "Documentation & Learning", "score": 4, "rationale": "Comprehensive docs, large community, growing tutorial ecosystem." }
+      ]},
+      { "key": "OR", "name": "Orchestration", "score": 12, "subCriteria": [
+        { "name": "Multi-Agent Coordination", "score": 3, "rationale": "Workflow orchestration with tool calling. Not multi-agent in the CrewAI sense." },
+        { "name": "Human-in-the-Loop Design", "score": 3, "rationale": "Annotation and feedback system. No structured approval inbox." },
+        { "name": "Workflow Templates", "score": 3, "rationale": "Template library and plugin marketplace. Growing but still early." },
+        { "name": "Team Development", "score": 3, "rationale": "Team tier with collaboration features. Enterprise adds RBAC." }
+      ]},
+      { "key": "IN", "name": "Integration", "score": 15, "subCriteria": [
+        { "name": "Native Connectors", "score": 4, "rationale": "Multi-model support, RAG connectors, MCP protocol." },
+        { "name": "API & Protocol Standards", "score": 4, "rationale": "One-click API deployment, MCP support, webhook triggers." },
+        { "name": "Authentication & Access", "score": 3, "rationale": "Enterprise SSO, API keys. Basic on free tier." },
+        { "name": "Data Pipeline & RAG", "score": 4, "rationale": "Visual RAG pipeline builder is a core differentiator. Document ingestion built in." }
+      ]},
+      { "key": "GV", "name": "Governance", "score": 11, "subCriteria": [
+        { "name": "Guardrails & Kill Switches", "score": 3, "rationale": "Basic content moderation. No visual guardrail nodes." },
+        { "name": "Audit Trail & Compliance", "score": 3, "rationale": "Enterprise audit logging. No compliance certifications documented." },
+        { "name": "RBAC & Access Control", "score": 3, "rationale": "Enterprise RBAC. Team-level on paid tiers." },
+        { "name": "Explainability & Transparency", "score": 2, "rationale": "Traces and logs available. No structured reasoning traces." }
+      ]},
+      { "key": "OP", "name": "Operations", "score": 13, "subCriteria": [
+        { "name": "Deployment Flexibility", "score": 4, "rationale": "Cloud, self-hosted Docker, on-prem. Maximum flexibility." },
+        { "name": "Scaling & Monitoring", "score": 3, "rationale": "Observability dashboard. Scaling depends on self-hosted infra." },
+        { "name": "Cost Management", "score": 3, "rationale": "Token tracking in dashboard. No automatic cost optimization." },
+        { "name": "Ecosystem Maturity", "score": 3, "rationale": "1.4M installs, 200K+ stars, plugin marketplace. Large and active." }
+      ]}
+    ]
+  },
+  "scoringRationale": "68/100 overall. Strongest: Creation (17/20). Weakest: Governance (11/20). Breakdown: Creation (17/20), Orchestration (12/20), Integration (15/20), Governance (11/20), Operations (13/20).",
+  "competence": "visual-agent-builder",
+  "targetUser": "Teams building AI applications with visual workflows and RAG — from startups to enterprises like Maersk and Novartis",
+  "marketIntelligence": {
+    "communityBuzz": [
+      "Most-starred open-source agent builder — 200K+ GitHub stars",
+      "$30M funding at $180M valuation signals investor confidence",
+      "Enterprise adoption (Maersk, Novartis) validates production readiness",
+      "Direct competitor to AgentDash Forge visual builder",
+      "MCP adoption puts Dify in the emerging protocol standards camp"
+    ],
+    "metrics": [
+      { "metric": "GitHub Stars", "value": "200K+", "source": "GitHub" },
+      { "metric": "Installs", "value": "1.4M+", "source": "Dify" },
+      { "metric": "Funding", "value": "$30M Pre-A", "source": "BusinessWire" },
+      { "metric": "Enterprise Customers", "value": "280+", "source": "Dify" }
+    ],
+    "funding": "$30M Series Pre-A at $180M valuation (March 2026)"
+  },
+  "supportedCUJs": ["customer-support", "data-extraction", "workflow-automation"],
+  "coreCompetence": {
+    "bestAt": "The most complete open-source visual agent builder — drag-and-drop workflow studio with built-in RAG, multi-model support, and one-click deployment. 1.4M installs makes it the de facto open-source standard.",
+    "targetUser": "Teams who want to build AI applications visually without deep coding, with the option to self-host for data sovereignty.",
+    "vsAlternatives": "Wins against AgentDash Forge on open-source community (200K stars), self-hosted option, and RAG visual builder maturity. Loses on multi-model routing (no Zeus equivalent), agent quality scoring (no NEXUS), and governance (no Guardian). The most direct competitive threat to Forge."
+  },
+  "walkthrough": {
+    "title": "Dify: The Most Direct Open-Source Competitor to AgentDash Forge",
+    "pmVerdict": {
+      "summary": "Dify is the product AgentDash should be most concerned about. 200K+ stars, 1.4M installs, $30M funding, enterprise customers (Maersk, Novartis), and a visual workflow builder that directly competes with Forge. The RAG visual builder is more mature than Forge's. The gap: no intelligent routing, no quality scoring, no scheduling. But those gaps may not matter to teams who just want to build and deploy agents visually.",
+      "score": "A- (Direct Threat)",
+      "strengths": ["Most-starred open-source agent builder — massive community", "Visual RAG pipeline builder is best-in-class", "Self-hosted option addresses enterprise data sovereignty", "Enterprise customers validate production readiness", "$30M funding accelerates roadmap"],
+      "risks": ["No multi-model intelligent routing", "No agent quality measurement", "No built-in scheduling or autonomous execution", "Enterprise governance still maturing", "Workflow complexity ceiling vs LangGraph"]
+    },
+    "ctoVerdict": {
+      "summary": "Dify is the open-source threat to take seriously. Self-hosted deployment, visual workflow builder, RAG integration, and MCP support cover 80% of what enterprise teams need. The missing 20% (routing, quality scoring, governance) is exactly where AgentDash's moats should be. If Dify adds intelligent routing and quality measurement, the competitive distance shrinks dramatically.",
+      "decision": "WATCH CLOSELY — Most Direct Open-Source Threat",
+      "strengths": ["Self-hosted eliminates vendor dependency concern", "200K stars = massive contributor base for features and fixes", "MCP support means growing tool ecosystem", "Enterprise tier with SSO and RBAC", "Apache 2.0 license — can fork if needed"],
+      "dealBreakers": ["No automatic model routing — manual selection only", "No agent quality scoring or continuous measurement", "Governance is basic — no policy engine", "No scheduling or autonomous execution", "Community-supported, not enterprise SLA (for OSS)"]
+    },
+    "coverageGaps": ["Live product walkthrough needed", "Enterprise tier feature evaluation", "Performance benchmarks vs AgentDash Forge", "RAG pipeline quality comparison"],
+    "scoringAlignment": [
+      { "dimension": "Creation (17/20)", "score": "Inferred from docs", "videoEvidence": "Visual studio screenshots in documentation and marketing", "gap": "No video walkthrough — score based on feature documentation" },
+      { "dimension": "Orchestration (12/20)", "score": "Inferred", "videoEvidence": "Workflow orchestration documented, not multi-agent", "gap": "Multi-agent capabilities still developing" },
+      { "dimension": "Integration (15/20)", "score": "Supported", "videoEvidence": "Multi-model, MCP, API deployment documented", "gap": "Integration depth per connector not verified" },
+      { "dimension": "Governance (11/20)", "score": "Inferred", "videoEvidence": "Enterprise audit, RBAC documented", "gap": "No compliance certifications verified" },
+      { "dimension": "Operations (13/20)", "score": "Supported", "videoEvidence": "Docker self-hosted, observability dashboard documented", "gap": "Scaling performance not benchmarked" }
+    ],
+    "steps": []
+  },
+  "youtubeReviews": []
+}
