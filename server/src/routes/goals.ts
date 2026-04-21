@@ -3,8 +3,9 @@ import type { Db } from "@agentdash/db";
 import { createGoalSchema, updateGoalSchema } from "@agentdash/shared";
 import { trackGoalCreated } from "@agentdash/shared/telemetry";
 import { validate } from "../middleware/validate.js";
-import { goalService, logActivity } from "../services/index.js";
+import { accessService, goalService, logActivity } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { forbidden } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
 
 export function goalRoutes(db: Db) {
@@ -32,6 +33,27 @@ export function goalRoutes(db: Db) {
   router.post("/companies/:companyId/goals", validate(createGoalSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+
+    // AgentDash (AGE-49): company-level goals require owner role. Any
+    // authenticated member can create team-level goals. Agent callers
+    // (adapter keys) are allowed through — plan-driven sub-goal creation
+    // inside agentPlansService.approve() also bypasses this since it calls
+    // goalService.create directly rather than hitting the HTTP layer.
+    if (req.body?.level === "company" && req.actor.type === "board") {
+      const userId = req.actor.userId;
+      const isInstanceAdmin =
+        req.actor.source === "local_implicit" || req.actor.isInstanceAdmin;
+      if (!isInstanceAdmin) {
+        const access = accessService(db);
+        const membership = userId
+          ? await access.getMembership(companyId, "user", userId)
+          : null;
+        if (membership?.membershipRole !== "owner") {
+          throw forbidden("Only company owners can create company-level goals");
+        }
+      }
+    }
+
     const goal = await svc.create(companyId, req.body);
     const actor = getActorInfo(req);
     await logActivity(db, {

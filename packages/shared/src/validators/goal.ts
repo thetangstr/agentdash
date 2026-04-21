@@ -4,7 +4,7 @@ import { GOAL_LEVELS, GOAL_STATUSES } from "../constants.js";
 export const createGoalSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional().nullable(),
-  level: z.enum(GOAL_LEVELS).optional().default("task"),
+  level: z.enum(GOAL_LEVELS).optional().default("company"),
   status: z.enum(GOAL_STATUSES).optional().default("planned"),
   priority: z.enum(["critical", "high", "medium", "low"]).optional().default("medium"),
   targetDate: z.string().datetime().optional().nullable(),
