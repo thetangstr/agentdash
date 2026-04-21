@@ -3,7 +3,12 @@ import type { Db } from "@agentdash/db";
 import { createGoalSchema, updateGoalSchema } from "@agentdash/shared";
 import { trackGoalCreated } from "@agentdash/shared/telemetry";
 import { validate } from "../middleware/validate.js";
-import { accessService, goalService, logActivity } from "../services/index.js";
+import {
+  accessService,
+  cosReadinessService,
+  goalService,
+  logActivity,
+} from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
@@ -17,6 +22,16 @@ export function goalRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
+  });
+
+  // AgentDash (AGE-50 Phase 1): preconditions check for goal creation.
+  // NewGoalDialog calls this on open; disables Create + surfaces a CTA
+  // when the company lacks a ready Chief of Staff + adapter path.
+  router.get("/companies/:companyId/cos-readiness", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const readiness = await cosReadinessService(db).check(companyId);
+    res.json(readiness);
   });
 
   router.get("/goals/:id", async (req, res) => {
