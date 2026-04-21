@@ -61,7 +61,7 @@ For each issue:
 
 ```
 Use mcp__linear__save_issue with:
-- team: "PAP"
+- team: "AgentDash"
 - title: "<action verb> <object> - <brief description>"
 - description: <structured description with summary, acceptance criteria, test plan>
 - labels: ["epic:<name>", "<size>"]
@@ -118,7 +118,7 @@ This is the command the human runs most often. It does everything automatically.
 
 ```
 1. FETCH all active project issues from Linear
-   -> mcp__linear__list_issues (team: "PAP")
+   -> mcp__linear__list_issues (team: "AgentDash")
 
 2. CLASSIFY each issue by state:
    -> queued, building, testing, awaiting-human, verified, shipping, shipped, blocked
@@ -143,20 +143,20 @@ This is the command the human runs most often. It does everything automatically.
 ### Active Wave: Wave <N>
 | Issue | Title | State | PR | Action Needed |
 |-------|-------|-------|----|---------------|
-| PAP-101 | Add user schema | shipped | #42 | -- |
-| PAP-102 | Create endpoints | awaiting-human | #43 | Verify externals |
-| PAP-103 | Build profile UI | building | #44 | -- |
+| AGE-101 | Add user schema | shipped | #42 | -- |
+| AGE-102 | Create endpoints | awaiting-human | #43 | Verify externals |
+| AGE-103 | Build profile UI | building | #44 | -- |
 
 ### Progress
 - Wave 1: 3/3 shipped
 - Wave 2: 1/4 shipped, 1 awaiting human, 1 building, 1 blocked
 
 ### Actions Taken This Sync
-- Shipped PAP-101 to production (smoke tests passed)
+- Shipped AGE-101 to production (smoke tests passed)
 
 ### Human Action Required
-1. **Verify PAP-102** -> add `Human-Verified` label
-2. **Investigate PAP-105** -- Tests-Failed 2x, auto-fix exhausted
+1. **Verify AGE-102** -> add `Human-Verified` label
+2. **Investigate AGE-105** -- Tests-Failed 2x, auto-fix exhausted
 ```
 
 ### Auto-Ship Sequence
@@ -165,7 +165,7 @@ For each `Human-Verified` issue:
 
 **Step 1: Find the PR**
 ```bash
-gh pr list --search "PAP-<number>" --state open --json number,title,headRefName,baseRefName
+gh pr list --search "AGE-<number>" --state open --json number,title,headRefName,baseRefName
 ```
 
 **Step 2: Scope Audit**
@@ -183,7 +183,7 @@ git rebase origin/agentdash-main
 git push --force-with-lease origin <feature-branch>
 
 # Create PR #2 targeting agentdash-main
-gh pr create --base agentdash-main --title "PAP-<number>: <title> [production]" --body "Production PR. Staging-verified and Human-Verified."
+gh pr create --base agentdash-main --title "AGE-<number>: <title> [production]" --body "Production PR. Staging-verified and Human-Verified."
 ```
 
 **Step 4: Merge PR to agentdash-main**
@@ -248,13 +248,13 @@ After processing all issues:
 **Synced at:** <timestamp>
 
 ### Shipped This Sync
-- PAP-101: <title> (smoke passed)
+- AGE-101: <title> (smoke passed)
 
 ### Awaiting Human
-- PAP-102: <title> (Locally-Tested, needs Human-Verified)
+- AGE-102: <title> (Locally-Tested, needs Human-Verified)
 
 ### Blocked
-- PAP-105: <title> (Tests-Failed 2x, escalated)
+- AGE-105: <title> (Tests-Failed 2x, escalated)
 
 ### Next Wave
 Wave 3 has 2 issues queued. Will create workspaces when Wave 2 completes.
@@ -280,11 +280,11 @@ Shows detailed view of the current wave and creates workspaces if needed.
 ### Issues
 | Issue | Title | Size | State | PR |
 |-------|-------|------|-------|----|
-| PAP-101 | ... | M | building | #42 |
-| PAP-102 | ... | S | testing | #43 |
+| AGE-101 | ... | M | building | #42 |
+| AGE-102 | ... | S | testing | #43 |
 
 ### Dependencies
-PAP-103 (Wave 2) is waiting on: PAP-101, PAP-102
+AGE-103 (Wave 2) is waiting on: AGE-101, AGE-102
 ```
 
 ---
@@ -299,11 +299,11 @@ A fast, read-only check. No actions taken.
 ### By State
 | State | Count | Issues |
 |-------|-------|--------|
-| shipped | 3 | PAP-101, PAP-102, PAP-103 |
-| awaiting-human | 1 | PAP-104 |
-| testing | 2 | PAP-105, PAP-106 |
-| building | 1 | PAP-107 |
-| queued | 2 | PAP-108, PAP-109 |
+| shipped | 3 | AGE-101, AGE-102, AGE-103 |
+| awaiting-human | 1 | AGE-104 |
+| testing | 2 | AGE-105, AGE-106 |
+| building | 1 | AGE-107 |
+| queued | 2 | AGE-108, AGE-109 |
 | blocked | 0 | -- |
 
 ### Waves

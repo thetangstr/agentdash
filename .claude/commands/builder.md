@@ -4,6 +4,8 @@ description: 'Builder Agent: Pick up Linear issue, research requirements, implem
 
 You are the **Builder Agent** - responsible for picking up Linear issues, researching requirements, implementing features, and creating pull requests.
 
+> **OMC escalation:** if the issue spec is ambiguous or the implementation strategy isn't obvious, pause and run `/oh-my-claudecode:plan` to design before coding. For independent parallel sub-tasks (e.g. "build 4 unrelated CRM pages"), use `/oh-my-claudecode:ultrawork` to fan them out. For tricky bugs encountered mid-implementation, hand off to `/oh-my-claudecode:trace` rather than guess-and-check.
+
 > ### Quick Reference: T-Shirt Sizing & Testing Requirements
 >
 > | Size | Description | Test Requirements | Workflow |
@@ -32,15 +34,15 @@ You are the **Builder Agent** - responsible for picking up Linear issues, resear
 If no specific issue provided, find the highest priority issue:
 ```
 Use mcp__linear__list_issues with:
-- team: "PAP"
+- team: "AgentDash"
 - state: "Todo"
 - limit: 5
 ```
 
-If a specific issue was provided (e.g., `/builder PAP-109`):
+If a specific issue was provided (e.g., `/builder AGE-109`):
 ```
 Use mcp__linear__get_issue with:
-- id: "PAP-109"
+- id: "AGE-109"
 ```
 
 ### 1.2 T-Shirt Size Analysis
@@ -148,7 +150,7 @@ git checkout -b pap-<number>-<short-name> agentdash-main
 # Implement the change
 # Write unit tests + E2E tests (S+)
 git add <specific-files>
-git commit -m "feat(PAP-<number>): <description>"
+git commit -m "feat(AGE-<number>): <description>"
 
 # CRITICAL: Rebase on latest agentdash-main before creating PR
 git fetch origin agentdash-main
@@ -158,7 +160,7 @@ git rebase origin/agentdash-main
 git push -u origin pap-<number>-<short-name>
 
 # Create PR targeting agentdash-main
-gh pr create --base agentdash-main --title "PAP-<number>: <title>"
+gh pr create --base agentdash-main --title "AGE-<number>: <title>"
 ```
 
 ### Staging-Required Path (XL + `staging-required`)
@@ -177,7 +179,7 @@ git rebase origin/agentdash-main
 git push -u origin pap-<number>-<short-name>
 
 # Create PR #1 targeting staging
-gh pr create --base staging --title "PAP-<number>: <title>"
+gh pr create --base staging --title "AGE-<number>: <title>"
 ```
 
 > **Default PRs target `agentdash-main` directly.** TPM is the only agent that merges to `agentdash-main`.
@@ -229,7 +231,7 @@ Check for:
 **XS PR Template:**
 ```markdown
 ## Summary
-Closes PAP-<number>
+Closes AGE-<number>
 
 {One-line description of the change}
 
@@ -242,7 +244,7 @@ Closes PAP-<number>
 **S PR Template:**
 ```markdown
 ## Summary
-Closes PAP-<number>
+Closes AGE-<number>
 
 {Brief description}
 
@@ -261,7 +263,7 @@ Closes PAP-<number>
 **M/L/XL PR Template:**
 ```markdown
 ## Summary
-Closes PAP-<number>
+Closes AGE-<number>
 
 {Description}
 
@@ -329,7 +331,7 @@ Read failure details from Linear sub-issues or the Tester's comment.
 5. Commit the fix (to existing PR branch, do NOT create a new PR):
    ```bash
    git add <specific-files>
-   git commit -m "fix(PAP-<number>): <what was fixed>"
+   git commit -m "fix(AGE-<number>): <what was fixed>"
    git push
    ```
 

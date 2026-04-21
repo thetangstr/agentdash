@@ -46,8 +46,8 @@ If a step fails, fix it (or explicitly document it as a pre-existing failure unr
 MAW commands are installed under `.claude/commands/` with supporting docs in `doc/multi-agent-workflow/`.
 
 - Base branch for MAW PRs: `agentdash-main`
-- Default issue prefix in examples: `PAP`
-- Primary entry point: `/workon PAP-123`
+- Default issue prefix in examples: `AGE`
+- Primary entry point: `/workon AGE-123`
 - Shipping command: `/tpm sync`
 
 Staging and production steps still contain explicit `TODO_SET_*` placeholders for environment URLs and test credentials. Fill those before using the deploy/admin flows.
@@ -144,10 +144,10 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 
 ### Quick Start
 
-- `/workon AD-123` — full intake -> locally-tested workflow for one Linear issue
+- `/workon AGE-123` — full intake -> locally-tested workflow for one Linear issue
 - `/pm <description>` — elaborate requirements and create/update issue scope
-- `/builder AD-123` — implement a specific issue
-- `/tester AD-123` — run the tester workflow for a specific issue
+- `/builder AGE-123` — implement a specific issue
+- `/tester AGE-123` — run the tester workflow for a specific issue
 - `/tpm sync` — ship `Human-Verified` issues
 
 ### Agent Roles
