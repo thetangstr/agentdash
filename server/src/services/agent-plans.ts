@@ -13,6 +13,7 @@ import {
   type AgentTeamPlanPayload,
   type CreateAgentPlan,
   type GoalInterviewPayload,
+  type UpdateAgentPlanProposal,
 } from "@agentdash/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { agentService } from "./agents.js";
@@ -206,6 +207,58 @@ export function agentPlansService(db: Db) {
       }
 
       return { plan: updated, createdAgentIds };
+    },
+
+    // AgentDash (AGE-48 Phase 2): merge editor-drawer mutations into a
+    // proposed plan's payload. Only valid while the plan is still in
+    // `status='proposed'` — after approve/reject the payload is frozen.
+    // The caller threads an activity-log entry (`plan.edited`) at the route
+    // layer so this function stays focused on the db mutation itself.
+    updateProposal: async (
+      companyId: string,
+      id: string,
+      patch: UpdateAgentPlanProposal,
+    ): Promise<PlanRow> => {
+      const existing = await getForCompany(companyId, id);
+      if (existing.status !== "proposed") {
+        throw unprocessable("Only proposed plans can be edited");
+      }
+      const current = existing.proposalPayload as AgentTeamPlanPayload;
+      // Whitelist-merge so we only touch fields the schema allows and keep
+      // the rest of the payload (archetype, …) intact.
+      const nextPayload: AgentTeamPlanPayload = {
+        ...current,
+        ...(patch.rationale !== undefined ? { rationale: patch.rationale } : {}),
+        ...(patch.proposedAgents !== undefined ? { proposedAgents: patch.proposedAgents } : {}),
+        ...(patch.proposedPlaybooks !== undefined
+          ? { proposedPlaybooks: patch.proposedPlaybooks }
+          : {}),
+        ...(patch.budget !== undefined ? { budget: patch.budget } : {}),
+        ...(patch.kpis !== undefined ? { kpis: patch.kpis } : {}),
+      };
+      // Validate the merged result — prevents partial edits from producing an
+      // invalid payload (e.g., empty proposedAgents).
+      const parsed = agentTeamPlanPayloadSchema.safeParse(nextPayload);
+      if (!parsed.success) {
+        throw unprocessable(`Merged plan payload is invalid: ${parsed.error.message}`);
+      }
+      const now = new Date();
+      return db
+        .update(agentPlans)
+        .set({
+          proposalPayload: parsed.data,
+          rationale: parsed.data.rationale,
+          ...(patch.decisionNote !== undefined ? { decisionNote: patch.decisionNote } : {}),
+          updatedAt: now,
+        })
+        .where(and(eq(agentPlans.id, id), eq(agentPlans.status, "proposed")))
+        .returning()
+        .then((rows) => {
+          if (rows.length === 0) {
+            throw unprocessable("Plan was approved or rejected before the edit landed");
+          }
+          return rows[0];
+        });
     },
 
     reject: async (

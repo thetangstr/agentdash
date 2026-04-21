@@ -6,6 +6,7 @@ import {
   goalInterviewPayloadSchema,
   listAgentPlansQuerySchema,
   rejectAgentPlanSchema,
+  updateAgentPlanProposalSchema,
 } from "@agentdash/shared";
 import { validate } from "../middleware/validate.js";
 import { agentPlansService, logActivity } from "../services/index.js";
@@ -54,6 +55,33 @@ export function agentPlanRoutes(db: Db) {
         details: { goalId: plan.goalId, archetype: plan.archetype },
       });
       res.status(201).json(plan);
+    },
+  );
+
+  // AgentDash (AGE-48 Phase 2): editor-drawer PATCH. Accepts a partial
+  // update to an already-proposed plan (agents, KPIs, budget, rationale,
+  // sub-goal suggestions). Approving/rejecting freezes the payload, so a
+  // PATCH against a non-proposed plan 422s from the service layer.
+  router.patch(
+    "/companies/:companyId/agent-plans/:id",
+    validate(updateAgentPlanProposalSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const id = req.params.id as string;
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      const plan = await svc.updateProposal(companyId, id, req.body);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "plan.edited",
+        entityType: "agent_plan",
+        entityId: plan.id,
+        details: { fields: Object.keys(req.body ?? {}), goalId: plan.goalId },
+      });
+      res.json(plan);
     },
   );
 

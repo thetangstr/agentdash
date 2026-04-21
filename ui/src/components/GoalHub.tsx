@@ -19,6 +19,9 @@ import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+// AgentDash (AGE-48 Phase 2): swap the dead "No plan proposed" block for an
+// interactive approval/edit/reject card driven by agentPlansApi.
+import { PlanApprovalCard } from "./PlanApprovalCard";
 
 interface GoalHubProps {
   companyId: string;
@@ -68,6 +71,13 @@ export function GoalHub({ companyId, goalId }: GoalHubProps) {
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" data-testid="goal-hub">
       <AgentsCard agents={data.agents} />
       <PlanCard plan={data.plan} />
+      {/* AgentDash (AGE-48 Phase 2): CoS proposal approval surface. Lives
+          alongside the existing static PlanCard so an already-approved plan
+          still renders its rollup summary while a newer proposed plan (e.g.
+          re-draft after reject) surfaces editable actions. */}
+      <div className="lg:col-span-2">
+        <PlanApprovalCard companyId={companyId} goalId={goalId} />
+      </div>
       <WorkCard work={data.work} />
       <SpendCard spend={data.spend} />
       {/* AgentDash (AGE-42): Playbooks card (renamed from "Pipelines"). */}
