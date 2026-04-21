@@ -9,7 +9,6 @@ import { assistantConversations, assistantMessages, companyContext } from "@agen
 import { logger } from "../middleware/logger.js";
 import {
   streamChat,
-  resolveAssistantBackend,
   resolveAssistantConfig,
   resolveChiefOfStaffSystemPrompt,
   type AssistantChunk,
@@ -219,12 +218,8 @@ export async function* chat(
     systemPrompt = buildStandardSystemPrompt(companyProfile, userName, companyName);
   }
 
-  // 7. Get tool definitions + pick the LLM backend (AGE-52).
-  // If the CoS agent uses a `codex` adapter, route chat through the
-  // operator's OAuth codex CLI instead of the Anthropic API — saves the
-  // operator from needing a separate per-token billing relationship.
-  const backend = resolveAssistantBackend(cosResolution.agent?.adapterType ?? null);
-  const config = resolveAssistantConfig(backend);
+  // 7. Get tool definitions
+  const config = resolveAssistantConfig();
   const tools = getAssistantTools(db);
   const toolDefs = getToolDefinitions(db);
 
@@ -242,14 +237,7 @@ export async function* chat(
     const pendingToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
     let roundText = "";
 
-    // AgentDash (AGE-52): dispatch to codex subprocess when backend=codex.
-    const { streamChatViaCodex } = backend === "codex"
-      ? await import("./assistant-llm-codex.js")
-      : { streamChatViaCodex: null as never };
-    const stream = backend === "codex"
-      ? streamChatViaCodex!(systemPrompt, currentMessages, toolDefs)
-      : streamChat(config, systemPrompt, currentMessages, toolDefs);
-    for await (const chunk of stream) {
+    for await (const chunk of streamChat(config, systemPrompt, currentMessages, toolDefs)) {
       if (chunk.type === "error") {
         const errorChunk: AssistantChunk & { conversationId?: string } = chunk;
         if (firstChunk) {

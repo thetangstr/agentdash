@@ -65,10 +65,6 @@ export interface ChiefOfStaffAgent {
   role: string;
   name: string;
   companyId: string;
-  // AgentDash (AGE-52): adapter info so callers can route chat through the
-  // same adapter the agent runs on (OAuth via codex, subscription via
-  // claude_local, etc.).
-  adapterType: string | null;
 }
 
 export interface ChiefOfStaffPromptResolution {
@@ -90,7 +86,6 @@ export async function resolveChiefOfStaffSystemPrompt(
       role: agents.role,
       name: agents.name,
       companyId: agents.companyId,
-      adapterType: agents.adapterType,
     })
     .from(agents)
     .where(and(eq(agents.companyId, companyId), eq(agents.role, "chief_of_staff")))
@@ -113,39 +108,11 @@ export async function resolveChiefOfStaffSystemPrompt(
 
 // ── Config Resolution ──────────────────────────────────────────────────
 
-export type AssistantBackend = "anthropic" | "codex";
-
-// AgentDash (AGE-52): decide which backend to use based on the Chief of
-// Staff agent's configured adapter. If the CoS uses `codex`, we route
-// through the operator's OAuth session (no API key). If it uses any Claude
-// adapter (`claude_api`, `claude_local`), we fall through to the Anthropic
-// path. Operator can force via `ASSISTANT_BACKEND` env var.
-export function resolveAssistantBackend(cosAdapterType: string | null | undefined): AssistantBackend {
-  const forced = process.env.ASSISTANT_BACKEND?.trim().toLowerCase();
-  if (forced === "codex" || forced === "anthropic") return forced;
-  if (cosAdapterType === "codex_local" || cosAdapterType === "codex") return "codex";
-  return "anthropic";
-}
-
-export function resolveAssistantConfig(backend: AssistantBackend = "anthropic"): AssistantLLMConfig {
-  // AgentDash (AGE-52): codex backend doesn't need an API key — the codex
-  // CLI uses local OAuth. Caller supplies `backend: "codex"` and we return
-  // a stub config (only the model/maxTokens fields are read by the codex
-  // path).
-  if (backend === "codex") {
-    return {
-      apiKey: "__codex_oauth__",
-      model: process.env.ASSISTANT_CODEX_MODEL ?? "codex-mini-latest",
-      baseUrl: "codex://local",
-      maxTokens: Number(process.env.ASSISTANT_MAX_TOKENS) || 4096,
-    };
-  }
+export function resolveAssistantConfig(): AssistantLLMConfig {
   const apiKey = process.env.ASSISTANT_API_KEY?.trim();
   if (!apiKey) {
     throw Object.assign(
-      new Error(
-        "ASSISTANT_API_KEY is not configured and no CoS adapter was found. Either set ASSISTANT_API_KEY in .env.local, or configure a Chief of Staff agent with a `codex` adapter to use OAuth-based chat.",
-      ),
+      new Error("ASSISTANT_API_KEY is not configured. Set it in .env.local to enable the assistant."),
       { statusCode: 503 },
     );
   }
