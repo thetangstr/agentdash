@@ -8,6 +8,8 @@ import type { ToolDefinition } from "./assistant-llm.js";
 import { agentService } from "./agents.js";
 import { issueService } from "./issues.js";
 import { goalService } from "./goals.js";
+// AgentDash: Manual KPIs (AGE-45)
+import { kpisService } from "./kpis.js";
 
 // ── Tool Context (constructed from req.actor in route handler) ─────────
 
@@ -248,6 +250,68 @@ function setGoalTool(_db: Db): Tool {
   };
 }
 
+// ── Tool: update_kpi (AgentDash: AGE-45) ───────────────────────────────
+
+function updateKpiTool(_db: Db): Tool {
+  return {
+    definition: {
+      name: "update_kpi",
+      description:
+        "Update the current value of a manually-tracked KPI for the current company. Identify the KPI via either its UUID (kpiId) or its exact name (kpiName).",
+      input_schema: {
+        type: "object",
+        properties: {
+          kpiId: {
+            type: "string",
+            description: "UUID of the KPI to update. Prefer this when known.",
+          },
+          kpiName: {
+            type: "string",
+            description:
+              "Exact KPI name to update. Used only when kpiId is not provided. Must match an existing KPI for the current company.",
+          },
+          value: {
+            type: "number",
+            description: "The new current value for the KPI.",
+          },
+        },
+        required: ["value"],
+      },
+    },
+    execute: async (input, ctx, db) => {
+      assertToolAccess(ctx, ctx.companyId);
+      const svc = kpisService(db);
+      const kpiId = input.kpiId as string | undefined;
+      const kpiName = input.kpiName as string | undefined;
+      const value = input.value;
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw Object.assign(new Error("value must be a finite number"), { statusCode: 400 });
+      }
+      if (!kpiId && !kpiName) {
+        throw Object.assign(new Error("Must provide kpiId or kpiName"), { statusCode: 400 });
+      }
+
+      let target = null;
+      if (kpiId) {
+        target = await svc.getById(kpiId);
+        if (!target || target.companyId !== ctx.companyId) {
+          throw Object.assign(new Error(`KPI not found: ${kpiId}`), { statusCode: 404 });
+        }
+      } else if (kpiName) {
+        target = await svc.findByName(ctx.companyId, kpiName);
+        if (!target) {
+          throw Object.assign(new Error(`KPI not found by name: ${kpiName}`), { statusCode: 404 });
+        }
+      }
+      if (!target) {
+        throw Object.assign(new Error("KPI not found"), { statusCode: 404 });
+      }
+
+      return svc.setValue(target.id, value);
+    },
+  };
+}
+
 // ── Tool 6: get_dashboard_summary ──────────────────────────────────────
 
 function getDashboardSummaryTool(_db: Db): Tool {
@@ -310,6 +374,8 @@ export function getAssistantTools(db: Db): Tool[] {
     listIssuesTool(db),
     setGoalTool(db),
     getDashboardSummaryTool(db),
+    // AgentDash: Manual KPIs (AGE-45)
+    updateKpiTool(db),
   ];
 }
 

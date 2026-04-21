@@ -9,6 +9,8 @@ export { projectService } from "./projects.js";
 export { issueService, type IssueFilters } from "./issues.js";
 export { issueApprovalService } from "./issue-approvals.js";
 export { goalService } from "./goals.js";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpisService } from "./kpis.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";

@@ -6,6 +6,8 @@ export { projectRoutes } from "./projects.js";
 export { issueRoutes } from "./issues.js";
 export { routineRoutes } from "./routines.js";
 export { goalRoutes } from "./goals.js";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpiRoutes } from "./kpis.js";
 export { approvalRoutes } from "./approvals.js";
 export { secretRoutes } from "./secrets.js";
 export { costRoutes } from "./costs.js";
