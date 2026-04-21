@@ -203,11 +203,10 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
-  it("skips auto-propose for company-level goals (AGE-50 Phase 4b)", async () => {
-    // Company-level goals require a Socratic deep-interview, so auto-propose
-    // is intentionally skipped — PlanApprovalCard surfaces a CTA instead of
-    // a misleading stub plan.
-    const companyGoalRow = { ...goalRow, level: "company" };
+  it("skips auto-propose for company-level goals with thin descriptions (AGE-50 Phase 4b)", async () => {
+    // Company-level goals require a Socratic deep-interview when the
+    // description lacks enough signal to generate a grounded plan.
+    const companyGoalRow = { ...goalRow, level: "company", description: "" };
     const selectImpl = vi.fn().mockReturnValueOnce(thenable([companyGoalRow]));
     const insertImpl = vi.fn().mockReturnValue(thenable([companyGoalRow]));
     const db = {
@@ -229,6 +228,64 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
     expect(mockGeneratePlan).not.toHaveBeenCalled();
     expect(mockPlanCreate).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("auto-proposes for company-level goals with substantive descriptions (AGE-50 Phase 5)", async () => {
+    // When the operator supplies a rich, specific description the
+    // ambiguity gate treats the description itself as the interview and
+    // the generator can run directly — avoids forcing a Socratic Q&A on
+    // operators who already answered the questions in prose.
+    const richDescription =
+      "Launch the premium tier end-of-quarter with three concrete bets: " +
+      "Stripe billing integration, a public pricing and packaging page, " +
+      "and targeted outreach to existing B2B customers above $10k ARR. " +
+      "Constraints: no cold outreach to net-new prospects, must preserve " +
+      "our free tier, budget cap $2k monthly for agent runtime. Channels: " +
+      "email and in-app messaging. Success: 10 premium conversions and " +
+      "$30k new MRR in 90 days.";
+    const companyGoalRow = {
+      ...goalRow,
+      level: "company",
+      description: richDescription,
+    };
+
+    mockGeneratePlan.mockResolvedValueOnce({
+      plan: validPayload,
+      archetype: "revenue",
+      interviewHash: "h-phase5",
+      rubric: { average: 8.2, minimum: 8, passesAPlus: true, hardFailure: false, scores: {} },
+      cached: false,
+    });
+    mockPlanCreate.mockResolvedValueOnce({
+      id: "plan-phase5",
+      companyId,
+      goalId: companyGoalRow.id,
+      status: "proposed",
+      archetype: "revenue",
+      proposalPayload: validPayload,
+    });
+
+    const selectImpl = vi.fn().mockReturnValueOnce(thenable([companyGoalRow]));
+    const insertImpl = vi.fn().mockReturnValue(thenable([companyGoalRow]));
+    const db = {
+      select: selectImpl,
+      insert: insertImpl,
+      update: vi.fn().mockReturnValue(thenable([])),
+    };
+
+    const { goalService } = await import("../services/goals.js");
+    const created = await goalService(db as any).create(companyId, {
+      title: "Launch premium tier by EOQ2",
+      description: richDescription,
+      level: "company" as any,
+      status: "planned" as any,
+    });
+
+    expect(created?.id).toBe(companyGoalRow.id);
+    // Auto-propose ran — substantive description bypassed the interview gate.
+    expect(mockGeneratePlan).toHaveBeenCalledTimes(1);
+    expect(mockPlanCreate).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
   });
 
   it("swallows thrown errors from the orchestrator and still returns the goal", async () => {
