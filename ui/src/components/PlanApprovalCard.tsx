@@ -23,12 +23,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   ClipboardList,
+  MessageCircle,
   Pencil,
   Sparkles,
   X,
 } from "lucide-react";
 import type { AgentTeamPlanPayload } from "@agentdash/shared";
 import { agentPlansApi, type AgentPlanRow } from "@/api/agent-plans";
+import { goalsApi } from "@/api/goals";
+// AgentDash (AGE-50 Phase 4b): DialogContext exposes openChat so the
+// "Run deep interview" CTA can seed the assistant chat with a prompt.
+import { useDialog } from "../context/DialogContext";
 import { queryKeys } from "@/lib/queryKeys";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,9 +55,20 @@ function centsToUsd(dollars: number): string {
 
 export function PlanApprovalCard({ companyId, goalId }: PlanApprovalCardProps) {
   const queryClient = useQueryClient();
+  const { openChat } = useDialog();
   const [editorOpen, setEditorOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
+
+  // AgentDash (AGE-50 Phase 4b): fetch the goal to know its level — company
+  // goals without a plan surface a "Run deep interview" CTA instead of the
+  // generic "drafting…" copy.
+  const goalQuery = useQuery({
+    queryKey: queryKeys.goals.detail(goalId),
+    queryFn: () => goalsApi.get(goalId),
+    enabled: !!goalId,
+    staleTime: 30_000,
+  });
 
   const plansQuery = useQuery({
     queryKey: queryKeys.agentPlans.byGoal(companyId, goalId),
@@ -110,6 +126,46 @@ export function PlanApprovalCard({ companyId, goalId }: PlanApprovalCardProps) {
   }
 
   if (!plan) {
+    // AgentDash (AGE-50 Phase 4b): company-level goals require a Socratic
+    // deep-interview before a plan is written. Show an explicit CTA — the
+    // canned "drafting…" copy would be misleading because nothing is actually
+    // queued. Clicking seeds the assistant chat.
+    const goal = goalQuery.data;
+    if (goal && goal.level === "company") {
+      const seedMessage = [
+        `Please run /deep-interview on this goal: "${goal.title}".`,
+        goal.description ? `Description: ${goal.description}` : "",
+        `Capture the operator's intent, constraints, channels, blockers, and success criteria. Ask one question at a time (3–5 total), then summarize the answers into a GoalInterviewPayload and call submit_goal_interview with goalId="${goal.id}" and the payload. Keep it friendly and brief.`,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+      return (
+        <Card data-testid="plan-approval-card-company-interview">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Chief of Staff interview
+            </CardTitle>
+            <CardDescription>
+              Company-level goals start with a brief Q&amp;A so the Chief of
+              Staff can propose a plan grounded in your actual constraints.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              size="sm"
+              onClick={() => openChat({ seedMessage })}
+              data-testid="plan-start-interview-btn"
+            >
+              <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
+              Start deep interview
+            </Button>
+          </CardContent>
+        </Card>
+      );
+    }
+
     return (
       <Card data-testid="plan-approval-card-pending">
         <CardHeader>

@@ -45,6 +45,10 @@ export interface ProposeForGoalResult {
   ok: boolean;
   planId?: string;
   reason?: string;
+  // AgentDash (AGE-50 Phase 4b): set when the orchestrator intentionally
+  // skipped auto-propose (e.g., company-level goals that require a Socratic
+  // interview instead of a canned plan).
+  skipped?: boolean;
 }
 
 // AgentDash: derive a minimal interview payload from an existing goal row.
@@ -88,6 +92,24 @@ export function cosOrchestratorService(db: Db) {
         if (!goal || goal.companyId !== companyId) {
           return { ok: false, reason: "goal_not_found" };
         }
+
+        // AgentDash (AGE-50 Phase 4b): company-level goals require a
+        // Socratic deep-interview before a plan is written. Skip the canned
+        // auto-propose so PlanApprovalCard surfaces the "Run deep interview"
+        // CTA instead of a misleading stub plan. The submit_goal_interview
+        // tool writes the real plan after the interview completes.
+        //
+        // Callers can still force auto-propose by passing an explicit
+        // `options.interview` (that's how submit_goal_interview would route
+        // through here if we ever wire it — today it calls plansSvc directly).
+        if (goal.level === "company" && !options.interview) {
+          logger.info(
+            { companyId, goalId },
+            "cos-orchestrator: skipping auto-propose for company-level goal (awaiting deep-interview)",
+          );
+          return { ok: true, skipped: true, reason: "company_goal_awaiting_interview" };
+        }
+
         const interview = options.interview ?? defaultInterviewPayload(goal);
         const generated = await plansSvc.generatePlan(companyId, goalId, interview);
         if ("error" in generated) {

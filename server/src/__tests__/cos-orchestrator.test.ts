@@ -70,12 +70,15 @@ const validPayload = {
 // ---- shared setup ---------------------------------------------------------
 
 const companyId = "co-1";
+// AgentDash (AGE-50 Phase 4b): team-level by default so existing tests
+// still exercise the auto-propose path. Company-level now triggers the
+// skip-for-interview branch — covered by its own test below.
 const goalRow = {
   id: "g-new",
   companyId,
-  title: "Q1 revenue lift",
+  title: "Q1 team revenue standup",
   description: "ship ICP-focused outbound",
-  level: "company",
+  level: "team",
   status: "planned",
 };
 
@@ -125,7 +128,7 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
     const created = await goalService(db as any).create(companyId, {
       title: goalRow.title,
       description: goalRow.description,
-      level: "company" as any,
+      level: "team" as any,
       status: "planned" as any,
     });
 
@@ -166,7 +169,7 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
       companyId,
       {
         title: "seed-only goal",
-        level: "company" as any,
+        level: "team" as any,
         status: "planned" as any,
       },
       { skipAutoPropose: true },
@@ -189,13 +192,41 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
 
     const created = await goalService(db as any).create(companyId, {
       title: goalRow.title,
-      level: "company" as any,
+      level: "team" as any,
       status: "planned" as any,
     });
 
     // Goal creation still succeeds.
     expect(created?.id).toBe(goalRow.id);
     // No plan row was created, no activity logged.
+    expect(mockPlanCreate).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("skips auto-propose for company-level goals (AGE-50 Phase 4b)", async () => {
+    // Company-level goals require a Socratic deep-interview, so auto-propose
+    // is intentionally skipped — PlanApprovalCard surfaces a CTA instead of
+    // a misleading stub plan.
+    const companyGoalRow = { ...goalRow, level: "company" };
+    const selectImpl = vi.fn().mockReturnValueOnce(thenable([companyGoalRow]));
+    const insertImpl = vi.fn().mockReturnValue(thenable([companyGoalRow]));
+    const db = {
+      select: selectImpl,
+      insert: insertImpl,
+      update: vi.fn().mockReturnValue(thenable([])),
+    };
+
+    const { goalService } = await import("../services/goals.js");
+    const created = await goalService(db as any).create(companyId, {
+      title: "Launch premium tier by EOQ2",
+      level: "company" as any,
+      status: "planned" as any,
+    });
+
+    // Goal creation succeeds.
+    expect(created?.id).toBe(companyGoalRow.id);
+    // Auto-propose was skipped — no plan generation, no plan row, no activity.
+    expect(mockGeneratePlan).not.toHaveBeenCalled();
     expect(mockPlanCreate).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
@@ -210,7 +241,7 @@ describe("cosOrchestratorService.proposeForGoal (wired via goalService.create)",
 
     const created = await goalService(db as any).create(companyId, {
       title: goalRow.title,
-      level: "company" as any,
+      level: "team" as any,
       status: "planned" as any,
     });
 
