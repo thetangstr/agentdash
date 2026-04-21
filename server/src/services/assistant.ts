@@ -5,11 +5,12 @@
  */
 import { eq, and, desc } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
-import { assistantConversations, assistantMessages, agents, companyContext } from "@agentdash/db";
+import { assistantConversations, assistantMessages, companyContext } from "@agentdash/db";
 import { logger } from "../middleware/logger.js";
 import {
   streamChat,
   resolveAssistantConfig,
+  resolveChiefOfStaffSystemPrompt,
   type AssistantChunk,
   type AssistantMessage,
   type ContentBlock,
@@ -25,39 +26,15 @@ import { logActivity } from "./activity-log.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-async function getOrCreateAssistant(
-  db: Db,
-  userId: string,
-  companyId: string,
-  userName: string,
-) {
-  const existing = await db
-    .select()
-    .from(agents)
-    .where(and(eq(agents.companyId, companyId), eq(agents.ownerUserId, userId), eq(agents.role, "assistant")))
-    .limit(1);
-
-  if (existing.length > 0) return existing[0];
-
-  const inserted = await db
-    .insert(agents)
-    .values({
-      companyId,
-      ownerUserId: userId,
-      name: `${userName}'s Assistant`,
-      role: "assistant",
-      adapterType: "assistant",
-    })
-    .returning();
-
-  return inserted[0];
-}
-
+// AgentDash (AGE-44): Assistant conversations are attributed to the company's
+// role='chief_of_staff' agent. We no longer auto-create a per-user role='assistant'
+// agent. If no CoS agent exists, `assistantAgentId` is left null and the caller
+// uses the legacy generic prompt (with a warning).
 async function getOrCreateConversation(
   db: Db,
   userId: string,
   companyId: string,
-  assistantAgentId: string,
+  assistantAgentId: string | null,
 ) {
   const existing = await db
     .select()
@@ -158,8 +135,19 @@ export async function* chat(
 ): AsyncGenerator<AssistantChunk & { conversationId?: string }> {
   const { userId, companyId, message, userName, companyName = "your company", toolContext } = params;
 
-  // 1. Get or create the assistant agent
-  const assistant = await getOrCreateAssistant(db, userId, companyId, userName);
+  // AgentDash (AGE-44): Resolve the company's Chief of Staff agent. Its id is the
+  // assistantAgentId on new conversations and the actor for activity-log entries.
+  // If no CoS agent exists we fall back to the legacy generic prompt and log a warning.
+  const cosResolution = await resolveChiefOfStaffSystemPrompt(db, companyId);
+  const cosAgentId = cosResolution.agent?.id ?? null;
+  if (!cosAgentId) {
+    logger.warn({ companyId }, "assistant.chat: no chief_of_staff agent found — falling back to generic prompt");
+  }
+
+  // Activity-log actor: attribute chat actions to the CoS agent when available.
+  const logActor: { actorType: "agent" | "user"; actorId: string } = cosAgentId
+    ? { actorType: "agent", actorId: cosAgentId }
+    : { actorType: "user", actorId: userId };
 
   // 2. Get or create conversation
   let conversation: typeof assistantConversations.$inferSelect;
@@ -175,12 +163,12 @@ export async function* chat(
       )
       .limit(1);
     if (found.length === 0) {
-      conversation = await getOrCreateConversation(db, userId, companyId, assistant.id);
+      conversation = await getOrCreateConversation(db, userId, companyId, cosAgentId);
     } else {
       conversation = found[0];
     }
   } else {
-    conversation = await getOrCreateConversation(db, userId, companyId, assistant.id);
+    conversation = await getOrCreateConversation(db, userId, companyId, cosAgentId);
   }
 
   const conversationId = conversation.id;
@@ -188,15 +176,17 @@ export async function* chat(
   // 3. Save user message
   await saveMessage(db, conversationId, "user", message);
 
-  // Telemetry: log user message
+  // Telemetry: log user message (attributed to CoS agent when available).
   try {
     await logActivity(db, {
       companyId,
-      actorType: "user",
-      actorId: userId,
+      actorType: logActor.actorType,
+      actorId: logActor.actorId,
+      agentId: cosAgentId,
       action: "assistant.message",
       entityType: "conversation",
       entityId: conversationId,
+      details: { userId },
     });
   } catch (err) {
     logger.warn({ err }, "assistant.message telemetry failed");
@@ -212,12 +202,17 @@ export async function* chat(
   // 5. Load company profile
   const companyProfile = await loadCompanyProfile(db, companyId);
 
-  // 6. Build system prompt
+  // 6. Build system prompt.
+  // If a Chief of Staff agent exists, use its SOUL/AGENTS/HEARTBEAT/TOOLS bundle
+  // as the system prompt. Otherwise, fall back to the legacy interview / standard
+  // prompts so behavior is preserved for companies without a CoS agent.
   const metadata = (conversation.metadata as Record<string, unknown> | null) ?? {};
   const interviewComplete = Boolean(metadata.interviewComplete);
 
   let systemPrompt: string;
-  if (!interviewComplete) {
+  if (cosResolution.systemPrompt) {
+    systemPrompt = cosResolution.systemPrompt;
+  } else if (!interviewComplete) {
     systemPrompt = buildInterviewSystemPrompt(companyProfile, userName, companyName);
   } else {
     systemPrompt = buildStandardSystemPrompt(companyProfile, userName, companyName);
@@ -339,16 +334,17 @@ export async function* chat(
         tu.input,
       );
 
-      // Telemetry: log tool call
+      // Telemetry: log tool call (attributed to CoS agent when available).
       try {
         await logActivity(db, {
           companyId,
-          actorType: "user",
-          actorId: userId,
+          actorType: logActor.actorType,
+          actorId: logActor.actorId,
+          agentId: cosAgentId,
           action: "assistant.tool_call",
           entityType: "conversation",
           entityId: conversationId,
-          details: { toolName: tu.name },
+          details: { toolName: tu.name, userId },
         });
       } catch (err) {
         logger.warn({ err }, "assistant.tool_call telemetry failed");
@@ -359,11 +355,13 @@ export async function* chat(
         try {
           await logActivity(db, {
             companyId,
-            actorType: "user",
-            actorId: userId,
+            actorType: logActor.actorType,
+            actorId: logActor.actorId,
+            agentId: cosAgentId,
             action: "assistant.interview_complete",
             entityType: "conversation",
             entityId: conversationId,
+            details: { userId },
           });
         } catch (err) {
           logger.warn({ err }, "assistant.interview_complete telemetry failed");
