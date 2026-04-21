@@ -10,6 +10,7 @@ import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { GoalProperties } from "../components/GoalProperties";
+import { GoalHub } from "../components/GoalHub";
 import { GoalTree } from "../components/GoalTree";
 import { StatusBadge } from "../components/StatusBadge";
 import { InlineEditor } from "../components/InlineEditor";
@@ -145,8 +146,10 @@ export function GoalDetail() {
         />
       </div>
 
-      <Tabs defaultValue="children">
+      <Tabs defaultValue="hub">
         <TabsList>
+          {/* AgentDash: Goal hub rollup tab (AGE-40) */}
+          <TabsTrigger value="hub">Hub</TabsTrigger>
           <TabsTrigger value="children">
             Sub-Goals ({childGoals.length})
           </TabsTrigger>
@@ -154,6 +157,15 @@ export function GoalDetail() {
             Projects ({linkedProjects.length})
           </TabsTrigger>
         </TabsList>
+
+        {/* AgentDash: Goal hub rollup tab content (AGE-40) */}
+        <TabsContent value="hub" className="mt-4">
+          {resolvedCompanyId && goalId ? (
+            <GoalHub companyId={resolvedCompanyId} goalId={goalId} />
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading goal hub...</p>
+          )}
+        </TabsContent>
 
         <TabsContent value="children" className="mt-4 space-y-3">
           <div className="flex items-center justify-start">
