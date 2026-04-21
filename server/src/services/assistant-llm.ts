@@ -3,6 +3,15 @@
  * V1: Anthropic Messages API (Claude) with streaming + function-calling.
  */
 
+import { and, eq } from "drizzle-orm";
+import type { Db } from "@agentdash/db";
+import { agents } from "@agentdash/db";
+import { logger } from "../middleware/logger.js";
+import {
+  loadDefaultAgentInstructionsBundle,
+  formatInstructionsBundleAsSystemPrompt,
+} from "./default-agent-instructions.js";
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 export interface AssistantLLMConfig {
@@ -48,6 +57,54 @@ export type AssistantChunk =
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "error"; code: string; message: string }
   | { type: "done"; usage: { inputTokens: number; outputTokens: number } };
+
+// ── Chief of Staff Resolution ──────────────────────────────────────────
+
+export interface ChiefOfStaffAgent {
+  id: string;
+  role: string;
+  name: string;
+  companyId: string;
+}
+
+export interface ChiefOfStaffPromptResolution {
+  agent: ChiefOfStaffAgent | null;
+  systemPrompt: string | null;
+}
+
+// AgentDash: Resolve the company's role='chief_of_staff' agent and build its
+// system prompt by concatenating SOUL.md + AGENTS.md + HEARTBEAT.md + TOOLS.md.
+// Returns { agent: null, systemPrompt: null } if no CoS agent exists; callers
+// must log a warning and fall back to the generic prompt. Never crashes.
+export async function resolveChiefOfStaffSystemPrompt(
+  db: Db,
+  companyId: string,
+): Promise<ChiefOfStaffPromptResolution> {
+  const rows = await db
+    .select({
+      id: agents.id,
+      role: agents.role,
+      name: agents.name,
+      companyId: agents.companyId,
+    })
+    .from(agents)
+    .where(and(eq(agents.companyId, companyId), eq(agents.role, "chief_of_staff")))
+    .limit(1);
+
+  if (rows.length === 0) {
+    return { agent: null, systemPrompt: null };
+  }
+
+  const cosAgent = rows[0];
+  try {
+    const bundle = await loadDefaultAgentInstructionsBundle(db, cosAgent);
+    const systemPrompt = formatInstructionsBundleAsSystemPrompt(bundle);
+    return { agent: cosAgent, systemPrompt };
+  } catch (err) {
+    logger.warn({ err, companyId, agentId: cosAgent.id }, "failed to load chief_of_staff instructions bundle");
+    return { agent: cosAgent, systemPrompt: null };
+  }
+}
 
 // ── Config Resolution ──────────────────────────────────────────────────
 
