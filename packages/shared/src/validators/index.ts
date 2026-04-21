@@ -321,6 +321,7 @@ export {
   approveAgentPlanSchema,
   rejectAgentPlanSchema,
   listAgentPlansQuerySchema,
+  goalInterviewPayloadSchema,
   type AgentPlanArchetype,
   type ProposedAgent,
   type ProposedPlaybook,
@@ -331,6 +332,7 @@ export {
   type ApproveAgentPlan,
   type RejectAgentPlan,
   type ListAgentPlansQuery,
+  type GoalInterviewPayload,
 } from "./agent-plan.js";
 
 // AgentDash: Pipelines
