@@ -13,7 +13,8 @@ import {
   Users,
   Workflow,
 } from "lucide-react";
-import { goalsApi, type GoalHubAgentSummary, type GoalHubKpiRow, type GoalHubRollup } from "../api/goals";
+import { goalsApi, type GoalHubAgentSummary, type GoalHubKpiRow, type GoalHubPlaybookRow, type GoalHubRollup } from "../api/goals";
+import { Link } from "@/lib/router";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -69,6 +70,10 @@ export function GoalHub({ companyId, goalId }: GoalHubProps) {
       <PlanCard plan={data.plan} />
       <WorkCard work={data.work} />
       <SpendCard spend={data.spend} />
+      {/* AgentDash (AGE-42): Playbooks card (renamed from "Pipelines"). */}
+      <div className="lg:col-span-2">
+        <PlaybooksCard playbooks={data.playbooks} />
+      </div>
       <div className="lg:col-span-2">
         <KpiCard kpis={data.kpis} />
       </div>
@@ -325,6 +330,53 @@ function KpiCard({ kpis }: { kpis: GoalHubKpiRow[] }) {
                     style={{ width: `${Math.min(100, k.progressPercent)}%` }}
                   />
                 </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// AgentDash (AGE-42): Playbooks card — replaces the old top-level Pipelines nav.
+function PlaybooksCard({ playbooks }: { playbooks: GoalHubPlaybookRow[] }) {
+  return (
+    <Card data-testid="goal-hub-playbooks-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Workflow className="h-4 w-4" />
+          Playbooks ({playbooks.length})
+        </CardTitle>
+        <CardDescription>
+          Multi-stage workflows (formerly pipelines) that serve this goal.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {playbooks.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No playbooks linked to this goal yet.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border" data-testid="goal-hub-playbooks-list">
+            {playbooks.map((p) => (
+              <li key={p.id} className="flex items-center justify-between py-2">
+                <div className="min-w-0">
+                  <Link
+                    to={`/pipelines/${p.id}`}
+                    className="text-sm font-medium hover:underline"
+                    data-testid={`goal-hub-playbook-${p.id}`}
+                  >
+                    {p.name}
+                  </Link>
+                  <p className="text-xs text-muted-foreground">
+                    {p.stageCount} stage{p.stageCount === 1 ? "" : "s"} · {p.executionMode}
+                    {p.description ? ` · ${p.description}` : ""}
+                  </p>
+                </div>
+                <Badge variant={p.status === "active" ? "default" : "outline"} className="capitalize">
+                  {p.status}
+                </Badge>
               </li>
             ))}
           </ul>

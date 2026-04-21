@@ -107,7 +107,7 @@ export default function PipelineWizard() {
   const [budgetCapUsd, setBudgetCapUsd] = useState("");
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Pipelines", href: "/pipelines" }, { label: "New Pipeline" }]);
+    setBreadcrumbs([{ label: "Playbooks", href: "/goals" }, { label: "New Playbook" }]);
   }, [setBreadcrumbs]);
 
   // Stage management

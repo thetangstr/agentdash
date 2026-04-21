@@ -77,6 +77,8 @@ interface Seed {
   issuesList?: Row[];
   activityLog?: Row[];
   heartbeatRuns?: Row[];
+  // AgentDash (AGE-42): playbook rows for the Goal hub Playbooks card.
+  playbooksList?: Row[];
 }
 
 function buildMockDb(seed: Seed) {
@@ -110,9 +112,10 @@ function buildMockDb(seed: Seed) {
     [{ total: seed.costTotal ?? 0 }], // 6: spend - costs
     [{ total: seed.revenueTotal ?? 0 }], // 7: spend - revenue
     seed.budgetPolicy ? [seed.budgetPolicy] : [], // 8: budget
-    seed.issuesList ?? [], // 9: activity - issue ids
-    seed.activityLog ?? [], // 10: activity log
-    seed.heartbeatRuns ?? [], // 11: heartbeat runs
+    seed.playbooksList ?? [], // 9: loadPlaybooks (AGE-42)
+    seed.issuesList ?? [], // 10: activity - issue ids
+    seed.activityLog ?? [], // 11: activity log
+    seed.heartbeatRuns ?? [], // 12: heartbeat runs
   ];
 
   const db = {
@@ -241,6 +244,27 @@ describe("goalsHubService.getRollup", () => {
           issueId: "issue-1",
         },
       ],
+      // AgentDash (AGE-42): Playbooks rollup fixtures.
+      playbooksList: [
+        {
+          id: "pb-1",
+          name: "Outbound Cadence",
+          description: "6-touch LinkedIn + email sequence",
+          status: "active",
+          executionMode: "async",
+          stages: [{ id: "s1" }, { id: "s2" }],
+          updatedAt: new Date("2026-04-19T00:00:00.000Z"),
+        },
+        {
+          id: "pb-2",
+          name: "Discovery Flow",
+          description: null,
+          status: "draft",
+          executionMode: "sync",
+          stages: [],
+          updatedAt: new Date("2026-04-18T00:00:00.000Z"),
+        },
+      ],
     });
 
     const svc = goalsHubService(db as unknown as Parameters<typeof goalsHubService>[0]);
@@ -282,6 +306,12 @@ describe("goalsHubService.getRollup", () => {
     expect(rollup.activity.length).toBeGreaterThanOrEqual(2);
     expect(rollup.activity[0].kind).toBe("heartbeat_run"); // 2026-04-19 > 2026-04-18
     expect(rollup.activity[1].kind).toBe("activity_log");
+
+    // AgentDash (AGE-42): Playbooks roll up under the goal.
+    expect(rollup.playbooks).toHaveLength(2);
+    expect(rollup.playbooks[0].id).toBe("pb-1"); // most recently updated first
+    expect(rollup.playbooks[0].stageCount).toBe(2);
+    expect(rollup.playbooks[1].stageCount).toBe(0);
   });
 
   it("returns empty-state rollup when no plan, no agents, no spend", async () => {
@@ -312,6 +342,8 @@ describe("goalsHubService.getRollup", () => {
     expect(rollup.spend.percentOfBudget).toBeNull();
     expect(rollup.kpis).toEqual([]);
     expect(rollup.activity).toEqual([]);
+    // AgentDash (AGE-42): no playbooks linked to an empty goal.
+    expect(rollup.playbooks).toEqual([]);
   });
 
   it("prefers the expanded plan over proposed/rejected", async () => {

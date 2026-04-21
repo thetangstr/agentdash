@@ -57,6 +57,19 @@ export interface GoalHubWorkSummary {
   pipelinesByStatus: Record<string, number>;
 }
 
+// AgentDash (AGE-42): Playbooks listing for the goal hub. Playbooks are the
+// user-facing name for pipelines now that Pipelines is no longer a top-level
+// nav item — they roll up under the business Goal they serve.
+export interface GoalHubPlaybookRow {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  executionMode: string;
+  stageCount: number;
+  updatedAt: string;
+}
+
 export interface GoalHubSpendSummary {
   windowStart: string;
   windowEnd: string;
@@ -100,6 +113,8 @@ export interface GoalHubRollup {
   work: GoalHubWorkSummary;
   spend: GoalHubSpendSummary;
   kpis: GoalHubKpiRow[];
+  // AgentDash (AGE-42): Playbooks (pipelines) linked to this goal.
+  playbooks: GoalHubPlaybookRow[];
   activity: GoalHubActivityEntry[];
 }
 
@@ -324,6 +339,30 @@ export function goalsHubService(db: Db) {
     };
   }
 
+  // AgentDash (AGE-42): Playbook list for the Goal hub "Playbooks" card.
+  async function loadPlaybooks(
+    companyId: string,
+    goalId: string,
+  ): Promise<GoalHubPlaybookRow[]> {
+    const rows = await db
+      .select()
+      .from(agentPipelines)
+      .where(
+        and(eq(agentPipelines.companyId, companyId), eq(agentPipelines.goalId, goalId)),
+      );
+    return rows
+      .map((r) => ({
+        id: r.id as string,
+        name: r.name as string,
+        description: (r.description as string | null) ?? null,
+        status: r.status as string,
+        executionMode: r.executionMode as string,
+        stageCount: Array.isArray(r.stages) ? (r.stages as unknown[]).length : 0,
+        updatedAt: toIso(r.updatedAt as Date),
+      }))
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+  }
+
   async function loadSpend(
     companyId: string,
     goalId: string,
@@ -514,11 +553,12 @@ export function goalsHubService(db: Db) {
       const now = options.now ?? new Date();
       const activityLimit = options.activityLimit ?? 25;
 
-      const [roster, planResult, work, spend] = await Promise.all([
+      const [roster, planResult, work, spend, playbooks] = await Promise.all([
         loadRoster(companyId, goalId),
         loadOriginatingPlan(companyId, goalId),
         loadWork(companyId, goalId),
         loadSpend(companyId, goalId, now),
+        loadPlaybooks(companyId, goalId),
       ]);
 
       const kpis = await loadKpis(planResult.row, spend);
@@ -536,6 +576,7 @@ export function goalsHubService(db: Db) {
         work,
         spend,
         kpis,
+        playbooks,
         activity,
       };
     },
