@@ -45,3 +45,6 @@ export { agentPlansService } from "./agent-plans.js";
 export { goalsHubService } from "./goals-hub.js";
 // AgentDash (AGE-48 Phase 1): CoS auto-propose orchestrator.
 export { cosOrchestratorService, defaultInterviewPayload } from "./cos-orchestrator.js";
+// AgentDash (AGE-50 Phase 1): CoS readiness precondition check for goal creation.
+export { cosReadinessService } from "./cos-readiness.js";
+export type { CosReadiness } from "./cos-readiness.js";
