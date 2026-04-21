@@ -688,6 +688,23 @@ export async function startServer(): Promise<StartedServer> {
     server.listen(listenPort, config.host, () => {
       server.off("error", onError);
       logger.info(`Server listening on ${config.host}:${listenPort}`);
+      // AgentDash (AGE-50 Phase 4a): probe for oh-my-claudecode. Missing is
+      // non-fatal — auto-propose still works with the canned prompt path.
+      // Just surface the state so operators know deep-interview will be
+      // degraded.
+      void import("./services/omc-detection.js").then(async ({ detectOmc }) => {
+        const omc = await detectOmc();
+        if (omc.installed) {
+          logger.info({ path: omc.path }, "oh-my-claudecode detected — /deep-interview available to Chief of Staff");
+        } else {
+          logger.warn(
+            { checkedPaths: omc.checkedPaths },
+            "oh-my-claudecode not detected — /deep-interview-backed features will fall back to ad-hoc prompts. Install with `omc install`.",
+          );
+        }
+      }).catch((err) => {
+        logger.warn({ err }, "oh-my-claudecode probe failed");
+      });
       if (process.env.PAPERCLIP_OPEN_ON_LISTEN === "true") {
         const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
         const url = `http://${openHost}:${listenPort}`;

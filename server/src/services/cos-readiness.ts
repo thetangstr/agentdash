@@ -15,11 +15,16 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
 import { agents } from "@agentdash/db";
+import { detectOmc } from "./omc-detection.js";
 
 export interface CosReadiness {
   ready: boolean;
   hasChiefOfStaff: boolean;
   hasLlmAdapter: boolean;
+  // AgentDash (AGE-50 Phase 4a): whether oh-my-claudecode is installed on
+  // the adapter host. When false, `/deep-interview`-backed features fall
+  // back to ad-hoc prompts. Soft signal — not gating, just informational.
+  hasOmc: boolean;
   reasons: string[];
   chiefOfStaffAgentId: string | null;
 }
@@ -48,6 +53,9 @@ export function cosReadinessService(db: Db) {
       const cos = active.find((r) => r.adapterType && r.adapterType !== PLACEHOLDER_ADAPTER) ?? null;
       const hasLlmAdapter = Boolean(cos);
 
+      const omc = await detectOmc();
+      const hasOmc = omc.installed;
+
       const reasons: string[] = [];
       if (!hasChiefOfStaff) {
         reasons.push(
@@ -58,11 +66,21 @@ export function cosReadinessService(db: Db) {
           "Chief of Staff has no runtime adapter configured. Open the agent and pick an adapter (Claude Code, Codex, Gemini, …).",
         );
       }
+      if (!hasOmc) {
+        // AgentDash (AGE-50 Phase 4a): soft warning — not a hard gate. Deep
+        // goal-interview falls back to ad-hoc prompts without OMC, but the
+        // auto-propose path still works.
+        reasons.push(
+          "oh-my-claudecode is not installed on this host — deep goal-interview will fall back to a canned prompt. Install with `omc install`.",
+        );
+      }
 
       return {
+        // Hard gates: CoS + adapter. OMC is a soft signal and does not block.
         ready: hasChiefOfStaff && hasLlmAdapter,
         hasChiefOfStaff,
         hasLlmAdapter,
+        hasOmc,
         reasons,
         chiefOfStaffAgentId: cos?.id ?? active[0]?.id ?? null,
       };
