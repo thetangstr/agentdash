@@ -70,11 +70,13 @@ export function GoalHub({ companyId, goalId }: GoalHubProps) {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" data-testid="goal-hub">
       <AgentsCard agents={data.agents} />
-      <PlanCard plan={data.plan} />
-      {/* AgentDash (AGE-48 Phase 2): CoS proposal approval surface. Lives
-          alongside the existing static PlanCard so an already-approved plan
-          still renders its rollup summary while a newer proposed plan (e.g.
-          re-draft after reject) surfaces editable actions. */}
+      {/* AgentDash: the static Plan card only shows a post-approval rollup
+          ("expanded" = plan ran and spawned agents). While a plan is still
+          "proposed", the actionable PlanApprovalCard below is the single
+          surface — otherwise the operator sees the same plan twice. */}
+      {data.plan?.status === "expanded" || data.plan?.status === "approved" ? (
+        <PlanCard plan={data.plan} />
+      ) : null}
       <div className="lg:col-span-2">
         <PlanApprovalCard companyId={companyId} goalId={goalId} />
       </div>

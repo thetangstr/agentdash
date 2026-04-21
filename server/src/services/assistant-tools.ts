@@ -227,7 +227,7 @@ function setGoalTool(_db: Db): Tool {
           },
           level: {
             type: "string",
-            description: "Goal level: 'company', 'team', or 'task'. Defaults to 'company'.",
+            description: "Goal level: 'company' or 'team'. Defaults to 'company'. 'company' requires owner role.",
           },
           targetDate: {
             type: "string",
