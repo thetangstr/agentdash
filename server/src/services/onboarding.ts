@@ -880,14 +880,23 @@ export function onboardingService(db: Db) {
     // --- Step 3: Create goals ---
     for (const goal of plan.goals) {
       try {
-        const created = await goalSvc.create(companyId, {
-          title: goal.title,
-          description: goal.description,
-          level: goal.level as any,
-          priority: goal.priority as any,
-          status: "planned",
-          targetDate: goal.targetDate ? new Date(goal.targetDate) : null,
-        });
+        // AgentDash (AGE-48 Phase 1): the onboarding plan applier already
+        // supplies a full plan (departments, agents, security policies, …) for
+        // each goal it creates. Auto-proposing another CoS plan on top of
+        // these would produce duplicate noise, so we opt out here. The
+        // end-user-driven `POST /goals` endpoint still auto-proposes.
+        const created = await goalSvc.create(
+          companyId,
+          {
+            title: goal.title,
+            description: goal.description,
+            level: goal.level as any,
+            priority: goal.priority as any,
+            status: "planned",
+            targetDate: goal.targetDate ? new Date(goal.targetDate) : null,
+          },
+          { skipAutoPropose: true },
+        );
         result.goals.push({ title: goal.title, id: created.id });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

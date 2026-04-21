@@ -43,3 +43,5 @@ export { pipelineRunnerService } from "./pipeline-runner.js";
 export { pipelineSelfHealService } from "./pipeline-self-heal.js";
 export { agentPlansService } from "./agent-plans.js";
 export { goalsHubService } from "./goals-hub.js";
+// AgentDash (AGE-48 Phase 1): CoS auto-propose orchestrator.
+export { cosOrchestratorService, defaultInterviewPayload } from "./cos-orchestrator.js";
