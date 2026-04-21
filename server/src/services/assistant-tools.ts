@@ -16,6 +16,8 @@ import { kpisService } from "./kpis.js";
 // AgentDash (AGE-50 Phase 4a): agent-plans service for submit_goal_interview tool.
 import { agentPlansService } from "./agent-plans.js";
 import { logActivity } from "./activity-log.js";
+// AgentDash (AGE-50 Phase 2): session tracking for deep-interview resume support.
+import { goalInterviewSessionsService } from "./goal-interview-sessions.js";
 
 // ── Tool Context (constructed from req.actor in route handler) ─────────
 
@@ -457,6 +459,15 @@ function submitGoalInterviewTool(_db: Db): Tool {
         },
       );
 
+      // AgentDash (AGE-50 Phase 2): mark any open interview session for
+      // this goal as completed so the UI flips from "Resume interview" back
+      // to the normal plan-approval path.
+      const sessionsSvc = goalInterviewSessionsService(db);
+      const openSession = await sessionsSvc.findOpenForGoal(ctx.companyId, goalId);
+      if (openSession) {
+        await sessionsSvc.markCompleted(openSession.id);
+      }
+
       await logActivity(db, {
         companyId: ctx.companyId,
         actorType: "user",
@@ -469,6 +480,7 @@ function submitGoalInterviewTool(_db: Db): Tool {
           planId: plan.id,
           archetype: plan.archetype,
           supersededPlanId: existing?.id ?? null,
+          sessionId: openSession?.id ?? null,
         },
       });
 
@@ -476,6 +488,7 @@ function submitGoalInterviewTool(_db: Db): Tool {
         planId: plan.id,
         archetype: plan.archetype,
         rubricAverage: generated.rubric.average,
+        sessionId: openSession?.id ?? null,
       };
     },
   };
