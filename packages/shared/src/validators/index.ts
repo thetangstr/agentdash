@@ -331,6 +331,7 @@ export {
   approveAgentPlanSchema,
   rejectAgentPlanSchema,
   listAgentPlansQuerySchema,
+  updateAgentPlanProposalSchema,
   goalInterviewPayloadSchema,
   type AgentPlanArchetype,
   type ProposedAgent,
@@ -342,6 +343,7 @@ export {
   type ApproveAgentPlan,
   type RejectAgentPlan,
   type ListAgentPlansQuery,
+  type UpdateAgentPlanProposal,
   type GoalInterviewPayload,
 } from "./agent-plan.js";
 

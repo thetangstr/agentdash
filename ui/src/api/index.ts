@@ -8,6 +8,9 @@ export { projectsApi } from "./projects";
 export { issuesApi } from "./issues";
 export { routinesApi } from "./routines";
 export { goalsApi } from "./goals";
+// AgentDash (AGE-48 Phase 2): agent-plans API client.
+export { agentPlansApi } from "./agent-plans";
+export type { AgentPlanRow, ApproveAgentPlanResult } from "./agent-plans";
 // AgentDash: Manual KPIs (AGE-45)
 export { kpisApi } from "./kpis";
 export type { Kpi, KpiCreate, KpiUpdate } from "./kpis";

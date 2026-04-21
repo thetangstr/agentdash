@@ -74,6 +74,37 @@ export const createAgentPlanSchema = z.object({
   proposedByAgentId: z.string().uuid().optional(),
 });
 
+// AgentDash (AGE-48 Phase 2): editable fields of a proposed plan. Callers
+// PATCH a subset; the server merges them into `proposalPayload` while the
+// plan is still in `status='proposed'`. Approving freezes the payload, so
+// after approve/reject the PATCH endpoint 422s.
+export const updateAgentPlanProposalSchema = z
+  .object({
+    rationale: z.string().min(1).optional(),
+    proposedAgents: z.array(proposedAgentSchema).min(1).optional(),
+    proposedPlaybooks: z.array(proposedPlaybookSchema).optional(),
+    budget: proposedBudgetSchema.optional(),
+    kpis: z.array(proposedKpiSchema).optional(),
+    // Structured sub-goal suggestions the UI lets the operator tweak. Kept
+    // permissive (title + optional description + optional level) so a later
+    // PR can extend the shape without breaking the API.
+    subGoals: z
+      .array(
+        z.object({
+          title: z.string().min(1),
+          description: z.string().optional(),
+          level: z.enum(["company", "team", "agent", "task"]).optional(),
+        }),
+      )
+      .optional(),
+    // The user's decisionNote field — mirrors the one on approve — so the UI
+    // can stash an edit rationale while the plan is still proposed.
+    decisionNote: z.string().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "At least one field is required to update a plan proposal",
+  });
+
 export const approveAgentPlanSchema = z.object({
   decisionNote: z.string().optional(),
 });
@@ -134,3 +165,4 @@ export type CreateAgentPlan = z.infer<typeof createAgentPlanSchema>;
 export type ApproveAgentPlan = z.infer<typeof approveAgentPlanSchema>;
 export type RejectAgentPlan = z.infer<typeof rejectAgentPlanSchema>;
 export type ListAgentPlansQuery = z.infer<typeof listAgentPlansQuerySchema>;
+export type UpdateAgentPlanProposal = z.infer<typeof updateAgentPlanProposalSchema>;
