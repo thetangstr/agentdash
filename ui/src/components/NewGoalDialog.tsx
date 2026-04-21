@@ -40,7 +40,9 @@ export function NewGoalDialog() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("planned");
-  const [level, setLevel] = useState("task");
+  // AgentDash (AGE-49): Company is the primary intent for a net-new goal;
+  // team-level is the only other permitted option for members.
+  const [level, setLevel] = useState("company");
   const [parentId, setParentId] = useState("");
   const [expanded, setExpanded] = useState(false);
 
@@ -79,7 +81,7 @@ export function NewGoalDialog() {
     setTitle("");
     setDescription("");
     setStatus("planned");
-    setLevel("task");
+    setLevel("company");
     setParentId("");
     setExpanded(false);
   }
