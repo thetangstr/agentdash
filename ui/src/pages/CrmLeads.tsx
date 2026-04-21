@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { UserPlus, Plus, ArrowRightCircle, Trash2 } from "lucide-react";
+import { UserPlus, Plus, ArrowRightCircle, Trash2, Search } from "lucide-react";
 import { crmApi, type CrmLead, type NewLead } from "../api/crm";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -159,33 +159,30 @@ export function CrmLeads() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold">Leads</h1>
-          <p className="text-sm text-muted-foreground">
-            Pre-qualification contacts awaiting triage or conversion into accounts.
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={() => setDialogOpen(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
-          New Lead
-        </Button>
+      <div>
+        <h1 className="text-lg font-semibold">Leads</h1>
+        <p className="text-sm text-muted-foreground">
+          Pre-qualification contacts awaiting triage or conversion into accounts.
+        </p>
       </div>
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input
-          data-testid="leads-search"
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or email"
-          className="h-8 w-full sm:max-w-xs px-2 text-sm border border-border bg-background rounded-md"
-        />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-72">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            data-testid="leads-search"
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or email"
+            className="h-9 w-full rounded-md border border-border bg-background pl-8 pr-2 text-sm"
+          />
+        </div>
         <select
           data-testid="leads-status-filter"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="h-8 px-2 text-sm border border-border bg-background rounded-md"
+          className="h-9 rounded-md border border-border bg-background px-2 text-sm"
         >
           {LEAD_STATUS_FILTERS.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -193,6 +190,10 @@ export function CrmLeads() {
             </option>
           ))}
         </select>
+        <Button size="sm" className="h-9" onClick={() => setDialogOpen(true)}>
+          <Plus className="mr-1.5 h-3.5 w-3.5" />
+          New Lead
+        </Button>
       </div>
 
       {error && (
@@ -211,12 +212,22 @@ export function CrmLeads() {
 
       {!isLoading && data && filtered.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <UserPlus className="h-8 w-8 text-muted-foreground/30 mb-3" />
+          <UserPlus className="mb-3 h-8 w-8 text-muted-foreground/30" />
           <p className="text-sm text-muted-foreground">
             {data.length === 0
               ? "No leads yet. Create one to get started."
               : "No leads match the current filter."}
           </p>
+          {data.length === 0 && (
+            <Button
+              size="sm"
+              className="mt-4"
+              onClick={() => setDialogOpen(true)}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Create first lead
+            </Button>
+          )}
         </div>
       )}
 
