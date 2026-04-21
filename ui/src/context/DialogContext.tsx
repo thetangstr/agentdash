@@ -20,6 +20,14 @@ interface OnboardingOptions {
   companyId?: string;
 }
 
+// AgentDash (AGE-50 Phase 4b): chat open state lives in DialogContext so
+// callers outside Layout (e.g. PlanApprovalCard) can open the assistant
+// chat with a seed message. Layout drives ChatPanel from this state.
+interface ChatOpenOptions {
+  // Optional initial message to auto-send to the Chief of Staff on open.
+  seedMessage?: string;
+}
+
 interface DialogContextValue {
   newIssueOpen: boolean;
   newIssueDefaults: NewIssueDefaults;
@@ -39,6 +47,14 @@ interface DialogContextValue {
   onboardingOptions: OnboardingOptions;
   openOnboarding: (options?: OnboardingOptions) => void;
   closeOnboarding: () => void;
+  // AgentDash (AGE-50 Phase 4b): assistant chat open + seed.
+  chatOpen: boolean;
+  chatSeed: string | null;
+  openChat: (options?: ChatOpenOptions) => void;
+  closeChat: () => void;
+  // Called by ChatPanel once it has consumed the seed so subsequent opens
+  // don't re-send.
+  consumeChatSeed: () => void;
 }
 
 const DialogContext = createContext<DialogContextValue | null>(null);
@@ -99,6 +115,26 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     setOnboardingOptions({});
   }, []);
 
+  // AgentDash (AGE-50 Phase 4b): assistant chat state lives here so any
+  // component can open the chat with a seed message.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatSeed, setChatSeed] = useState<string | null>(null);
+
+  const openChat = useCallback((options: ChatOpenOptions = {}) => {
+    if (options.seedMessage) {
+      setChatSeed(options.seedMessage);
+    }
+    setChatOpen(true);
+  }, []);
+
+  const closeChat = useCallback(() => {
+    setChatOpen(false);
+  }, []);
+
+  const consumeChatSeed = useCallback(() => {
+    setChatSeed(null);
+  }, []);
+
   return (
     <DialogContext.Provider
       value={{
@@ -120,6 +156,11 @@ export function DialogProvider({ children }: { children: ReactNode }) {
         onboardingOptions,
         openOnboarding,
         closeOnboarding,
+        chatOpen,
+        chatSeed,
+        openChat,
+        closeChat,
+        consumeChatSeed,
       }}
     >
       {children}
