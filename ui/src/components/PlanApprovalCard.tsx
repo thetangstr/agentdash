@@ -31,6 +31,8 @@ import {
 import type { AgentTeamPlanPayload } from "@agentdash/shared";
 import { agentPlansApi, type AgentPlanRow } from "@/api/agent-plans";
 import { goalsApi } from "@/api/goals";
+// AgentDash (AGE-50 Phase 2): interview-session lifecycle for Start vs Resume CTA.
+import { goalInterviewSessionsApi } from "@/api/goal-interview-sessions";
 // AgentDash (AGE-50 Phase 4b): DialogContext exposes openChat so the
 // "Run deep interview" CTA can seed the assistant chat with a prompt.
 import { useDialog } from "../context/DialogContext";
@@ -68,6 +70,25 @@ export function PlanApprovalCard({ companyId, goalId }: PlanApprovalCardProps) {
     queryFn: () => goalsApi.get(goalId),
     enabled: !!goalId,
     staleTime: 30_000,
+  });
+
+  // AgentDash (AGE-50 Phase 2): latest interview session — used to flip the
+  // CTA copy between "Start" (no open session) and "Resume" (open session
+  // waiting for the operator to finish answering).
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.goalInterviewSessions.latest(companyId, goalId),
+    queryFn: () => goalInterviewSessionsApi.latest(companyId, goalId),
+    enabled: !!companyId && !!goalId,
+    staleTime: 10_000,
+  });
+
+  const startOrResumeSession = useMutation({
+    mutationFn: () => goalInterviewSessionsApi.startOrResume(companyId, goalId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.goalInterviewSessions.latest(companyId, goalId),
+      });
+    },
   });
 
   const plansQuery = useQuery({
@@ -132,13 +153,29 @@ export function PlanApprovalCard({ companyId, goalId }: PlanApprovalCardProps) {
     // queued. Clicking seeds the assistant chat.
     const goal = goalQuery.data;
     if (goal && goal.level === "company") {
+      // AgentDash (AGE-50 Phase 2): detect existing open session for Resume.
+      const session = sessionQuery.data;
+      const isResume = Boolean(
+        session && !session.completedAt && !session.abandonedAt,
+      );
+
       const seedMessage = [
-        `Please run /deep-interview on this goal: "${goal.title}".`,
+        isResume
+          ? `Please resume /deep-interview on this goal: "${goal.title}". Pick up where we left off.`
+          : `Please run /deep-interview on this goal: "${goal.title}".`,
         goal.description ? `Description: ${goal.description}` : "",
         `Capture the operator's intent, constraints, channels, blockers, and success criteria. Ask one question at a time (3–5 total), then summarize the answers into a GoalInterviewPayload and call submit_goal_interview with goalId="${goal.id}" and the payload. Keep it friendly and brief.`,
       ]
         .filter(Boolean)
         .join("\n\n");
+
+      const startInterview = async () => {
+        try {
+          await startOrResumeSession.mutateAsync();
+        } finally {
+          openChat({ seedMessage });
+        }
+      };
 
       return (
         <Card data-testid="plan-approval-card-company-interview">
@@ -148,18 +185,20 @@ export function PlanApprovalCard({ companyId, goalId }: PlanApprovalCardProps) {
               Chief of Staff interview
             </CardTitle>
             <CardDescription>
-              Company-level goals start with a brief Q&amp;A so the Chief of
-              Staff can propose a plan grounded in your actual constraints.
+              {isResume
+                ? "You already started a deep interview for this goal. Resume to let the Chief of Staff pick up where you left off."
+                : "Company-level goals start with a brief Q\u0026A so the Chief of Staff can propose a plan grounded in your actual constraints."}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button
               size="sm"
-              onClick={() => openChat({ seedMessage })}
+              onClick={() => void startInterview()}
+              disabled={startOrResumeSession.isPending}
               data-testid="plan-start-interview-btn"
             >
               <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
-              Start deep interview
+              {isResume ? "Resume deep interview" : "Start deep interview"}
             </Button>
           </CardContent>
         </Card>

@@ -89,6 +89,11 @@ export const queryKeys = {
   cosReadiness: {
     detail: (companyId: string) => ["cos-readiness", companyId] as const,
   },
+  // AgentDash (AGE-50 Phase 2): interview session state for a goal.
+  goalInterviewSessions: {
+    latest: (companyId: string, goalId: string) =>
+      ["goal-interview-sessions", "latest", companyId, goalId] as const,
+  },
   crm: {
     pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,
     accounts: (companyId: string) => ["crm", companyId, "accounts"] as const,

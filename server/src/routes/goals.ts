@@ -6,6 +6,7 @@ import { validate } from "../middleware/validate.js";
 import {
   accessService,
   cosReadinessService,
+  goalInterviewSessionsService,
   goalService,
   logActivity,
 } from "../services/index.js";
@@ -33,6 +34,45 @@ export function goalRoutes(db: Db) {
     const readiness = await cosReadinessService(db).check(companyId);
     res.json(readiness);
   });
+
+  // AgentDash (AGE-50 Phase 2): interview session lifecycle. The Goal Hub
+  // calls GET /latest to decide between "Start" and "Resume" CTAs, and
+  // POSTs to /interview-sessions to start-or-resume the session row
+  // before opening the chat. The submit_goal_interview tool marks the
+  // session completed once a plan is generated.
+  router.get(
+    "/companies/:companyId/goals/:goalId/interview-sessions/latest",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const goalId = req.params.goalId as string;
+      assertCompanyAccess(req, companyId);
+      const session = await goalInterviewSessionsService(db).latestForGoal(
+        companyId,
+        goalId,
+      );
+      res.json(session);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/goals/:goalId/interview-sessions",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const goalId = req.params.goalId as string;
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      const startedByUserId =
+        actor.actorType === "user" && actor.actorId !== "board"
+          ? actor.actorId
+          : null;
+      const session = await goalInterviewSessionsService(db).startOrResume(
+        companyId,
+        goalId,
+        startedByUserId,
+      );
+      res.status(201).json(session);
+    },
+  );
 
   router.get("/goals/:id", async (req, res) => {
     const id = req.params.id as string;
