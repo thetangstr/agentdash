@@ -63,7 +63,7 @@ FROM node:20-alpine AS runtime
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-RUN apk add --no-cache shadow gosu && \
+RUN apk add --no-cache shadow gosu git && \
     corepack enable && \
     # Remap the built-in 'node' user to the requested UID/GID so that the
     # /paperclip volume is always owned by the container user.
@@ -76,6 +76,18 @@ WORKDIR /app
 
 # Copy the complete built workspace (source + compiled artefacts + node_modules)
 COPY --chown=node:node --from=build /app /app
+
+# AgentDash (AGE-50 ops): install oh-my-claudecode into the image so the
+# Chief of Staff's /deep-interview skill works on hosted deploys. We clone
+# into /app/.claude rather than /paperclip/.claude because /paperclip is
+# a VOLUME — anything written to it during the build is masked at runtime.
+# server/src/services/omc-detection.ts resolves path (4) via
+# CLAUDE_PROJECT_DIR=/app (see ENV block below).
+RUN mkdir -p /app/.claude/plugins/marketplaces && \
+    git clone --depth 1 https://github.com/Yeachan-Heo/oh-my-claudecode.git \
+        /app/.claude/plugins/marketplaces/omc && \
+    rm -rf /app/.claude/plugins/marketplaces/omc/.git && \
+    chown -R node:node /app/.claude
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -90,6 +102,7 @@ ENV NODE_ENV=production \
     PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
     PAPERCLIP_DEPLOYMENT_MODE=authenticated \
     PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
+    CLAUDE_PROJECT_DIR=/app \
     USER_UID=${USER_UID} \
     USER_GID=${USER_GID}
 

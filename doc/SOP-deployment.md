@@ -312,3 +312,30 @@ If 15 agents replace work equivalent to 3-5 human FTEs (at ~$8K/mo each), the mo
 - [ ] Routines set up
 - [ ] Communication integrations active
 - [ ] Board Operator operating independently
+
+---
+
+## Agent skills (oh-my-claudecode)
+
+The Chief of Staff agent uses the `/deep-interview` skill from [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) when proposing plans for company-level goals (AGE-50). Without OMC installed on the host, the CoS falls back to a canned prompt — goal creation still works, but rationale is generic rather than grounded in the operator's constraints.
+
+### Docker / Railway / Fly deploys
+OMC is cloned into the runtime image at build time — see `Dockerfile` stage 3 — via `git clone` into `/app/.claude/plugins/marketplaces/omc`. The detection path is pinned with `CLAUDE_PROJECT_DIR=/app`. No operator action required.
+
+### Self-hosted / bare-metal
+Install OMC once for the server user running the API:
+
+```bash
+mkdir -p ~/.claude/plugins/marketplaces
+git clone --depth 1 https://github.com/Yeachan-Heo/oh-my-claudecode.git \
+    ~/.claude/plugins/marketplaces/omc
+```
+
+### Verify
+After server start, the log should include:
+
+```
+oh-my-claudecode detected — /deep-interview available to Chief of Staff
+```
+
+If instead you see `oh-my-claudecode not detected`, the CoS will degrade to canned prompts — harmless but the interview-backed plans won't run.
