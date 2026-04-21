@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
+deploy/.env.*
+!deploy/.env.example
 *.tsbuildinfo
 drizzle/meta/
 .vite/
@@ -38,6 +42,7 @@ feedback-export-*
 *.tmp
 .vscode/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .paperclip-local/
 /.idea/
 /.agents/
