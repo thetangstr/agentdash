@@ -71,6 +71,24 @@ export function defaultInterviewPayload(goal: {
   };
 }
 
+// AgentDash (AGE-50 Phase 5): ambiguity gate. A goal's description is
+// "substantive" enough to skip the Socratic deep-interview when it
+// contains both enough characters AND enough distinct words for the plan
+// generator to have real signal to work with. Thresholds are empirical —
+// if operators report canned plans despite substantive descriptions, tune
+// up. If they complain about being forced into interviews they don't need,
+// tune down.
+const SUBSTANTIVE_DESC_MIN_CHARS = 200;
+const SUBSTANTIVE_DESC_MIN_WORDS = 30;
+
+export function isDescriptionSubstantive(description: string | null | undefined): boolean {
+  if (!description) return false;
+  const trimmed = description.trim();
+  if (trimmed.length < SUBSTANTIVE_DESC_MIN_CHARS) return false;
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  return wordCount >= SUBSTANTIVE_DESC_MIN_WORDS;
+}
+
 export function cosOrchestratorService(db: Db) {
   const plansSvc = agentPlansService(db);
   const goalsSvc = goalService(db);
@@ -93,21 +111,33 @@ export function cosOrchestratorService(db: Db) {
           return { ok: false, reason: "goal_not_found" };
         }
 
-        // AgentDash (AGE-50 Phase 4b): company-level goals require a
-        // Socratic deep-interview before a plan is written. Skip the canned
-        // auto-propose so PlanApprovalCard surfaces the "Run deep interview"
-        // CTA instead of a misleading stub plan. The submit_goal_interview
-        // tool writes the real plan after the interview completes.
+        // AgentDash (AGE-50 Phase 4b + Phase 5): company-level goals
+        // normally require a Socratic deep-interview before a plan is
+        // written — but if the operator already supplied a rich,
+        // specific description, skip the interview and auto-propose
+        // directly (AGE-50 Phase 5 ambiguity gate). The rationale: making
+        // an operator re-answer questions they already answered in the
+        // description is a conversion killer.
         //
         // Callers can still force auto-propose by passing an explicit
-        // `options.interview` (that's how submit_goal_interview would route
-        // through here if we ever wire it — today it calls plansSvc directly).
+        // `options.interview`.
         if (goal.level === "company" && !options.interview) {
+          const descSubstantive = isDescriptionSubstantive(goal.description);
+          if (!descSubstantive) {
+            logger.info(
+              { companyId, goalId },
+              "cos-orchestrator: skipping auto-propose for company-level goal (awaiting deep-interview)",
+            );
+            return {
+              ok: true,
+              skipped: true,
+              reason: "company_goal_awaiting_interview",
+            };
+          }
           logger.info(
-            { companyId, goalId },
-            "cos-orchestrator: skipping auto-propose for company-level goal (awaiting deep-interview)",
+            { companyId, goalId, descriptionChars: goal.description?.length ?? 0 },
+            "cos-orchestrator: description is substantive — auto-proposing directly (Phase 5 ambiguity gate)",
           );
-          return { ok: true, skipped: true, reason: "company_goal_awaiting_interview" };
         }
 
         const interview = options.interview ?? defaultInterviewPayload(goal);
