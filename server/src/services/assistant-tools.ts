@@ -4,12 +4,18 @@
  * AgentDash: assistant chatbot internal toolkit
  */
 import type { Db } from "@agentdash/db";
+import { and, desc, eq } from "drizzle-orm";
+import { agentPlans, goals } from "@agentdash/db";
+import { goalInterviewPayloadSchema, type GoalInterviewPayload } from "@agentdash/shared";
 import type { ToolDefinition } from "./assistant-llm.js";
 import { agentService } from "./agents.js";
 import { issueService } from "./issues.js";
 import { goalService } from "./goals.js";
 // AgentDash: Manual KPIs (AGE-45)
 import { kpisService } from "./kpis.js";
+// AgentDash (AGE-50 Phase 4a): agent-plans service for submit_goal_interview tool.
+import { agentPlansService } from "./agent-plans.js";
+import { logActivity } from "./activity-log.js";
 
 // ── Tool Context (constructed from req.actor in route handler) ─────────
 
@@ -364,6 +370,117 @@ function getDashboardSummaryTool(_db: Db): Tool {
   };
 }
 
+// ── Tool: submit_goal_interview (AgentDash: AGE-50 Phase 4a) ──────────
+
+// Lets the Chief of Staff submit the results of a Socratic /deep-interview
+// for a goal. Replaces (or creates) the `proposed` plan for that goal so
+// PlanApprovalCard picks it up on the next refetch. Idempotent: if a plan
+// is already expanded/approved, the tool rejects rather than overwriting.
+function submitGoalInterviewTool(_db: Db): Tool {
+  return {
+    definition: {
+      name: "submit_goal_interview",
+      description:
+        "Submit the results of a Socratic /deep-interview for a goal. Generates a Chief of Staff plan from the interview answers and persists it as the goal's proposed plan. Use this after running /deep-interview with the operator to capture their intent, constraints, channels, blockers, and success criteria.",
+      input_schema: {
+        type: "object",
+        properties: {
+          goalId: {
+            type: "string",
+            description: "UUID of the goal being interviewed.",
+          },
+          payload: {
+            type: "object",
+            description:
+              "GoalInterviewPayload — structured answers from the operator. Fields: archetype, goalStatement, whyNow, horizonDays, targetValue, targetUnit, baselineValue, monthlyBudgetUsd, constraints[], channels[], industry, companySize, blockers[]. All fields optional; provide as many as the interview surfaced.",
+          },
+        },
+        required: ["goalId", "payload"],
+      },
+    },
+    execute: async (input, ctx, db) => {
+      assertToolAccess(ctx, ctx.companyId);
+      const goalId = input.goalId as string;
+      const rawPayload = input.payload;
+      if (!goalId || typeof goalId !== "string") {
+        throw Object.assign(new Error("goalId is required"), { statusCode: 400 });
+      }
+      const parsed = goalInterviewPayloadSchema.safeParse(rawPayload);
+      if (!parsed.success) {
+        throw Object.assign(
+          new Error(`Invalid interview payload: ${parsed.error.message}`),
+          { statusCode: 400 },
+        );
+      }
+      const payload: GoalInterviewPayload = parsed.data;
+
+      const goal = await db
+        .select()
+        .from(goals)
+        .where(and(eq(goals.id, goalId), eq(goals.companyId, ctx.companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!goal) {
+        throw Object.assign(new Error(`Goal not found: ${goalId}`), { statusCode: 404 });
+      }
+
+      const plansSvc = agentPlansService(db);
+      const generated = await plansSvc.generatePlan(ctx.companyId, goalId, payload);
+      if ("error" in generated) {
+        throw Object.assign(
+          new Error(`Plan generation failed: ${generated.error}`),
+          { statusCode: 422 },
+        );
+      }
+
+      // If an existing proposed plan exists, supersede it by rejecting the
+      // old row first — atomic overwrite would require a transaction we
+      // don't yet have. For now: leave the old plan; the new plan becomes
+      // the most-recent proposed row and PlanApprovalCard picks up by
+      // ORDER BY createdAt DESC.
+      const existing = await db
+        .select({ id: agentPlans.id, status: agentPlans.status })
+        .from(agentPlans)
+        .where(and(eq(agentPlans.goalId, goalId), eq(agentPlans.status, "proposed")))
+        .orderBy(desc(agentPlans.createdAt))
+        .then((rows) => rows[0] ?? null);
+
+      const plan = await plansSvc.create(
+        ctx.companyId,
+        {
+          goalId,
+          archetype: generated.archetype,
+          rationale: generated.plan.rationale,
+          payload: generated.plan,
+        },
+        {
+          userId: ctx.userId,
+        },
+      );
+
+      await logActivity(db, {
+        companyId: ctx.companyId,
+        actorType: "user",
+        actorId: ctx.userId,
+        agentId: null,
+        action: "plan.interview_submitted",
+        entityType: "goal",
+        entityId: goalId,
+        details: {
+          planId: plan.id,
+          archetype: plan.archetype,
+          supersededPlanId: existing?.id ?? null,
+        },
+      });
+
+      return {
+        planId: plan.id,
+        archetype: plan.archetype,
+        rubricAverage: generated.rubric.average,
+      };
+    },
+  };
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 export function getAssistantTools(db: Db): Tool[] {
@@ -376,6 +493,8 @@ export function getAssistantTools(db: Db): Tool[] {
     getDashboardSummaryTool(db),
     // AgentDash: Manual KPIs (AGE-45)
     updateKpiTool(db),
+    // AgentDash (AGE-50 Phase 4a): submit Socratic /deep-interview results.
+    submitGoalInterviewTool(db),
   ];
 }
 

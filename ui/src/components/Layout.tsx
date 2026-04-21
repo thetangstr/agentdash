@@ -53,7 +53,17 @@ function readRememberedInstanceSettingsPath(): string {
 
 export function Layout() {
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
-  const { openNewIssue, openOnboarding } = useDialog();
+  const {
+    openNewIssue,
+    openOnboarding,
+    // AgentDash (AGE-50 Phase 4b): chat state lives in DialogContext so any
+    // component (e.g. PlanApprovalCard) can open it with a seed message.
+    chatOpen,
+    chatSeed,
+    openChat,
+    closeChat,
+    consumeChatSeed,
+  } = useDialog();
   const { togglePanelVisible } = usePanel();
   const {
     companies,
@@ -72,17 +82,26 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
-  // AgentDash: chat panel state
-  const [chatOpen, setChatOpen] = useState(() => {
-    try { return localStorage.getItem("agentdash.chatPanelOpen") === "true"; } catch { return false; }
-  });
-  const toggleChat = useCallback(() => {
-    setChatOpen((prev) => {
-      const next = !prev;
-      try { localStorage.setItem("agentdash.chatPanelOpen", String(next)); } catch { /* ignore */ }
-      return next;
-    });
+  // AgentDash: chat panel state. Source of truth is DialogContext;
+  // localStorage persists the open-state across reloads.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("agentdash.chatPanelOpen") === "true" && !chatOpen) {
+        openChat();
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("agentdash.chatPanelOpen", String(chatOpen));
+    } catch { /* ignore */ }
+  }, [chatOpen]);
+  const toggleChat = useCallback(() => {
+    if (chatOpen) closeChat();
+    else openChat();
+  }, [chatOpen, openChat, closeChat]);
   const nextTheme = theme === "dark" ? "light" : "dark";
   const matchedCompany = useMemo(() => {
     if (!companyPrefix) return null;
@@ -461,13 +480,14 @@ export function Layout() {
               <CompanyTheme />
             </main>
             <PropertiesPanel />
-            {/* AgentDash: assistant chat panel */}
+            {/* AgentDash: assistant chat panel. Seed message (when set by
+                DialogContext.openChat({ seedMessage })) is sent on mount
+                and then consumed so subsequent opens don't re-send. */}
             <ChatPanel
               open={chatOpen && !isMobile}
-              onClose={() => {
-                setChatOpen(false);
-                try { localStorage.setItem("agentdash.chatPanelOpen", "false"); } catch { /* ignore */ }
-              }}
+              seedMessage={chatSeed}
+              onSeedConsumed={consumeChatSeed}
+              onClose={closeChat}
             />
           </div>
         </div>

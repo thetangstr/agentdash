@@ -1,7 +1,25 @@
 // AgentDash (AGE-50 Phase 1): tests for the CoS readiness precondition.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cosReadinessService } from "../services/cos-readiness.js";
+import { __resetOmcDetectionCache } from "../services/omc-detection.js";
+
+// AgentDash (AGE-50 Phase 4a): readiness now also reports OMC state.
+// We mock `detectOmc` so these tests don't depend on the test host's
+// actual ~/.claude filesystem.
+vi.mock("../services/omc-detection.js", async () => {
+  const actual = await vi.importActual<typeof import("../services/omc-detection.js")>(
+    "../services/omc-detection.js",
+  );
+  return {
+    ...actual,
+    detectOmc: vi.fn().mockResolvedValue({ installed: true, path: "/mock/omc", checkedPaths: ["/mock/omc"] }),
+  };
+});
+
+beforeEach(() => {
+  __resetOmcDetectionCache();
+});
 
 type Row = { id: string; adapterType: string | null; status: string };
 
@@ -14,7 +32,7 @@ function makeDb(rows: Row[]) {
 }
 
 describe("cosReadinessService.check", () => {
-  it("reports ready when a Chief of Staff with a real adapter exists", async () => {
+  it("reports ready when a Chief of Staff with a real adapter exists and OMC is installed", async () => {
     const db = makeDb([
       { id: "cos-1", adapterType: "claude_api", status: "active" },
     ]);
@@ -23,9 +41,28 @@ describe("cosReadinessService.check", () => {
       ready: true,
       hasChiefOfStaff: true,
       hasLlmAdapter: true,
+      hasOmc: true,
       reasons: [],
       chiefOfStaffAgentId: "cos-1",
     });
+  });
+
+  it("appends a soft warning reason when OMC is missing but does not gate readiness", async () => {
+    const omcModule = await import("../services/omc-detection.js");
+    vi.mocked(omcModule.detectOmc).mockResolvedValueOnce({
+      installed: false,
+      path: null,
+      checkedPaths: ["/nope"],
+    });
+    const db = makeDb([
+      { id: "cos-1", adapterType: "claude_api", status: "active" },
+    ]);
+    const result = await cosReadinessService(db as any).check("co-1");
+    expect(result.ready).toBe(true);
+    expect(result.hasOmc).toBe(false);
+    expect(result.reasons).toEqual([
+      expect.stringMatching(/oh-my-claudecode is not installed/),
+    ]);
   });
 
   it("reports not ready when no Chief of Staff exists at all", async () => {
