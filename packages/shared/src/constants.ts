@@ -141,7 +141,11 @@ export type IssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 export const ISSUE_RELATION_TYPES = ["blocks"] as const;
 export type IssueRelationType = (typeof ISSUE_RELATION_TYPES)[number];
 
-export const GOAL_LEVELS = ["company", "team", "agent", "task"] as const;
+// AgentDash (AGE-49): reduced goal levels to the two business-meaningful
+// tiers. Historical rows with level='agent' or level='task' are soft-
+// deprecated — the DB column is text and reads render literally; writes
+// are validated against this enum.
+export const GOAL_LEVELS = ["company", "team"] as const;
 export type GoalLevel = (typeof GOAL_LEVELS)[number];
 
 export const GOAL_STATUSES = ["planned", "active", "achieved", "cancelled"] as const;

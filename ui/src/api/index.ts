@@ -8,6 +8,18 @@ export { projectsApi } from "./projects";
 export { issuesApi } from "./issues";
 export { routinesApi } from "./routines";
 export { goalsApi } from "./goals";
+// AgentDash (AGE-48 Phase 2): agent-plans API client.
+export { agentPlansApi } from "./agent-plans";
+export type { AgentPlanRow, ApproveAgentPlanResult } from "./agent-plans";
+// AgentDash (AGE-50 Phase 1): CoS readiness precondition.
+export { cosReadinessApi } from "./cos-readiness";
+export type { CosReadiness } from "./cos-readiness";
+// AgentDash (AGE-50 Phase 2): interview session lifecycle.
+export { goalInterviewSessionsApi } from "./goal-interview-sessions";
+export type { GoalInterviewSession } from "./goal-interview-sessions";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpisApi } from "./kpis";
+export type { Kpi, KpiCreate, KpiUpdate } from "./kpis";
 export { approvalsApi } from "./approvals";
 export { costsApi } from "./costs";
 export { activityApi } from "./activity";

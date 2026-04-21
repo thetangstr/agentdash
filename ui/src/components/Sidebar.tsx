@@ -27,6 +27,7 @@ import {
   Wallet,
   Plug,
   CreditCard,
+  Gauge,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
@@ -167,6 +168,8 @@ export function Sidebar() {
           <SidebarNavItem to="/setup" label="Onboarding" icon={Compass} />
           <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
           <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+          {/* AgentDash: Manual KPIs (AGE-45) */}
+          <SidebarNavItem to="/company/settings/kpis" label="KPIs" icon={Gauge} />
         </SidebarSection>
 
         <PluginSlotOutlet

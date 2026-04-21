@@ -75,6 +75,24 @@ export const queryKeys = {
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
+    // AgentDash: goal hub rollup (AGE-40)
+    hub: (companyId: string, goalId: string) => ["goals", "hub", companyId, goalId] as const,
+  },
+  // AgentDash (AGE-48 Phase 2): agent-plans query keys for the approval card.
+  agentPlans: {
+    byGoal: (companyId: string, goalId: string) =>
+      ["agent-plans", "by-goal", companyId, goalId] as const,
+    detail: (companyId: string, planId: string) =>
+      ["agent-plans", "detail", companyId, planId] as const,
+  },
+  // AgentDash (AGE-50 Phase 1): CoS readiness precondition for NewGoalDialog.
+  cosReadiness: {
+    detail: (companyId: string) => ["cos-readiness", companyId] as const,
+  },
+  // AgentDash (AGE-50 Phase 2): interview session state for a goal.
+  goalInterviewSessions: {
+    latest: (companyId: string, goalId: string) =>
+      ["goal-interview-sessions", "latest", companyId, goalId] as const,
   },
   crm: {
     pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,

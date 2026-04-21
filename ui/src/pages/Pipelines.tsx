@@ -1,4 +1,8 @@
-// AgentDash: Pipeline list page
+// AgentDash: Pipeline list page.
+// AgentDash (AGE-42): Not surfaced in top-level nav — Pipelines are now
+// "Playbooks" and roll up under Goals. This page is retained only at
+// `/pipelines/_debug` as a dev-only admin surface for inspecting all
+// pipelines regardless of goal linkage.
 import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
@@ -22,7 +26,7 @@ export function Pipelines() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Pipelines" }]);
+    setBreadcrumbs([{ label: "Playbooks (debug)" }]);
   }, [setBreadcrumbs]);
 
   const { data: pipelines, isLoading } = useQuery({
@@ -65,7 +69,7 @@ export function Pipelines() {
         <GitBranch className="h-5 w-5 text-muted-foreground mt-3" />
         <div className="flex-1">
           <LuxePageHeader
-            eyebrow="Pipelines"
+            eyebrow="Playbooks (debug)"
             title={<>Multi-stage <span className="soft">workflows</span></>}
             subtitle="DAG orchestration with HITL gates, self-healing retries, and CRM lifecycle hooks."
             slim

@@ -9,6 +9,8 @@ export { projectService } from "./projects.js";
 export { issueService, type IssueFilters } from "./issues.js";
 export { issueApprovalService } from "./issue-approvals.js";
 export { goalService } from "./goals.js";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpisService } from "./kpis.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
@@ -40,3 +42,12 @@ export { pipelineOrchestratorService, validatePipelineDag } from "./pipeline-orc
 export { pipelineRunnerService } from "./pipeline-runner.js";
 export { pipelineSelfHealService } from "./pipeline-self-heal.js";
 export { agentPlansService } from "./agent-plans.js";
+export { goalsHubService } from "./goals-hub.js";
+// AgentDash (AGE-48 Phase 1): CoS auto-propose orchestrator.
+export { cosOrchestratorService, defaultInterviewPayload } from "./cos-orchestrator.js";
+// AgentDash (AGE-50 Phase 1): CoS readiness precondition check for goal creation.
+export { cosReadinessService } from "./cos-readiness.js";
+export type { CosReadiness } from "./cos-readiness.js";
+// AgentDash (AGE-50 Phase 2): interview session lifecycle.
+export { goalInterviewSessionsService } from "./goal-interview-sessions.js";
+export type { GoalInterviewSessionRow } from "./goal-interview-sessions.js";

@@ -9,7 +9,8 @@ test.describe("Navigation smoke tests", () => {
     { path: "/dashboard", label: "Dashboard" },
     { path: "/agents/all", label: "Agents" },
     { path: "/issues", label: "Issues" },
-    { path: "/pipelines", label: "Pipelines" },
+    // AgentDash (AGE-42): /pipelines top-level is gone — /pipelines now
+    // redirects to /goals. Covered explicitly in its own spec below.
     { path: "/crm", label: "CRM Pipeline" },
     { path: "/crm/accounts", label: "CRM Accounts" },
     { path: "/crm/contacts", label: "CRM Contacts" },
@@ -44,4 +45,28 @@ test.describe("Navigation smoke tests", () => {
       expect(bodyText!.length).toBeGreaterThan(50);
     });
   }
+
+  // AgentDash (AGE-42): "Pipelines" is no longer a top-level nav concept —
+  // everything rolls up under Goals. The sidebar Work section must not
+  // expose a Pipelines link.
+  test("sidebar Work section no longer shows 'Pipelines'", async ({ page, prefix }) => {
+    await navigateAndWait(page, "/dashboard", prefix);
+    const workSection = page.locator("aside").getByText("Work", { exact: true }).first();
+    await expect(workSection).toBeVisible();
+
+    // No sidebar nav link points to /pipelines any more.
+    const pipelinesLink = page.locator("aside a[href$='/pipelines']");
+    expect(await pipelinesLink.count()).toBe(0);
+
+    // And there's no visible "Pipelines" label in the sidebar (CRM "Pipeline"
+    // deals page lives under the CRM section and uses the singular form).
+    const pipelinesLabel = page.locator("aside").getByText("Pipelines", { exact: true });
+    expect(await pipelinesLabel.count()).toBe(0);
+  });
+
+  // AgentDash (AGE-42): /pipelines top-level route redirects to /goals.
+  test("/pipelines redirects to /goals", async ({ page, prefix }) => {
+    await navigateAndWait(page, "/pipelines", prefix);
+    await expect(page).toHaveURL(/\/goals(\?|#|$)/);
+  });
 });

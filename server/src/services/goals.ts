@@ -2,6 +2,14 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
 import { goals } from "@agentdash/db";
 
+// AgentDash (AGE-48 Phase 1): options accepted by `goalService.create()`.
+// `skipAutoPropose` suppresses the CoS auto-propose side-effect. Seed
+// scripts, test fixtures, and bulk importers must pass
+// `skipAutoPropose: true` so they do not produce phantom agent plans.
+export interface CreateGoalOptions {
+  skipAutoPropose?: boolean;
+}
+
 type GoalReader = Pick<Db, "select">;
 
 export async function getDefaultCompanyGoal(db: GoalReader, companyId: string) {
@@ -55,17 +63,35 @@ export function goalService(db: Db) {
 
     getDefaultCompanyGoal: (companyId: string) => getDefaultCompanyGoal(db, companyId),
 
-    create: (companyId: string, data: Omit<typeof goals.$inferInsert, "companyId"> & { targetDate?: string | Date | null }) => {
+    create: async (
+      companyId: string,
+      data: Omit<typeof goals.$inferInsert, "companyId"> & { targetDate?: string | Date | null },
+      options: CreateGoalOptions = {},
+    ) => {
       const values = {
         ...data,
         companyId,
         targetDate: data.targetDate ? new Date(data.targetDate) : null,
       };
-      return db
+      const created = await db
         .insert(goals)
         .values(values)
         .returning()
         .then((rows) => rows[0]);
+
+      // AgentDash (AGE-48 Phase 1): auto-propose a Chief-of-Staff plan for
+      // the new goal, unless the caller opts out (seed scripts, test
+      // fixtures, bulk importers). The orchestrator swallows its own
+      // errors — we await so tests can observe the proposed plan, but a
+      // failure here must never fail goal creation. See cos-orchestrator.ts.
+      if (!options.skipAutoPropose && created) {
+        // Dynamic import avoids a circular dep (cos-orchestrator imports
+        // goalService for its own lookups).
+        const { cosOrchestratorService } = await import("./cos-orchestrator.js");
+        await cosOrchestratorService(db).proposeForGoal(companyId, created.id);
+      }
+
+      return created;
     },
 
     update: (id: string, data: Partial<typeof goals.$inferInsert> & { targetDate?: string | Date | null }) => {

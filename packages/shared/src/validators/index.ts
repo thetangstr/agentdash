@@ -183,6 +183,16 @@ export {
   type UpdateGoal,
 } from "./goal.js";
 
+// AgentDash: Manual KPIs (AGE-45)
+export {
+  createKpiSchema,
+  updateKpiSchema,
+  setKpiValueSchema,
+  type CreateKpi,
+  type UpdateKpi,
+  type SetKpiValue,
+} from "./kpi.js";
+
 export {
   createApprovalSchema,
   resolveApprovalSchema,
@@ -321,6 +331,8 @@ export {
   approveAgentPlanSchema,
   rejectAgentPlanSchema,
   listAgentPlansQuerySchema,
+  updateAgentPlanProposalSchema,
+  goalInterviewPayloadSchema,
   type AgentPlanArchetype,
   type ProposedAgent,
   type ProposedPlaybook,
@@ -331,6 +343,8 @@ export {
   type ApproveAgentPlan,
   type RejectAgentPlan,
   type ListAgentPlansQuery,
+  type UpdateAgentPlanProposal,
+  type GoalInterviewPayload,
 } from "./agent-plan.js";
 
 // AgentDash: Pipelines

@@ -86,7 +86,20 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ChatPanel({
+  open,
+  onClose,
+  seedMessage,
+  onSeedConsumed,
+}: {
+  open: boolean;
+  onClose: () => void;
+  // AgentDash (AGE-50 Phase 4b): initial message auto-sent to the Chief of
+  // Staff when the panel opens with a seed. Used by PlanApprovalCard to
+  // trigger /deep-interview for company-level goals.
+  seedMessage?: string | null;
+  onSeedConsumed?: () => void;
+}) {
   const { selectedCompanyId } = useCompany();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -120,8 +133,11 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
     }
   }, [open]);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  // AgentDash (AGE-50 Phase 4b): internal helper that accepts an explicit
+  // message. Lets sendMessage use the current input state, and lets the
+  // seed-message effect bypass the input entirely.
+  const sendText = useCallback(async (rawText: string) => {
+    const text = rawText.trim();
     if (!text || isLoading || !selectedCompanyId) return;
 
     setInput("");
@@ -258,7 +274,25 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
       setIsLoading(false);
       abortRef.current = null;
     }
-  }, [input, isLoading, selectedCompanyId, conversationId]);
+  }, [isLoading, selectedCompanyId, conversationId]);
+
+  // AgentDash (AGE-50 Phase 4b): button/enter-key path — sends whatever is
+  // currently in the input field.
+  const sendMessage = useCallback(() => {
+    return sendText(input);
+  }, [sendText, input]);
+
+  // AgentDash (AGE-50 Phase 4b): seed-message effect. When the panel opens
+  // with a seed (e.g. PlanApprovalCard triggered a deep-interview), send
+  // it once and notify the parent to clear the seed so subsequent opens
+  // don't re-send.
+  useEffect(() => {
+    if (open && seedMessage && !isLoading && selectedCompanyId) {
+      void sendText(seedMessage);
+      onSeedConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, seedMessage, selectedCompanyId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
