@@ -12,6 +12,7 @@ interface NewIssueDefaults {
 
 interface NewGoalDefaults {
   parentId?: string;
+  hideParentSelector?: boolean;
 }
 
 interface OnboardingOptions {

@@ -233,37 +233,39 @@ export function NewGoalDialog() {
           </Popover>
 
           {/* Parent goal */}
-          <Popover open={parentOpen} onOpenChange={setParentOpen}>
-            <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors">
-                <Target className="h-3 w-3 text-muted-foreground" />
-                {currentParent ? currentParent.title : "Parent goal"}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-48 p-1" align="start">
-              <button
-                className={cn(
-                  "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
-                  !appliedParentId && "bg-accent"
-                )}
-                onClick={() => { setParentId(""); setParentOpen(false); }}
-              >
-                No parent
-              </button>
-              {(goals ?? []).map((g) => (
-                <button
-                  key={g.id}
-                  className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 truncate",
-                    g.id === appliedParentId && "bg-accent"
-                  )}
-                  onClick={() => { setParentId(g.id); setParentOpen(false); }}
-                >
-                  {g.title}
+          {!newGoalDefaults.hideParentSelector && (
+            <Popover open={parentOpen} onOpenChange={setParentOpen}>
+              <PopoverTrigger asChild>
+                <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors">
+                  <Target className="h-3 w-3 text-muted-foreground" />
+                  {currentParent ? currentParent.title : "Parent goal"}
                 </button>
-              ))}
-            </PopoverContent>
-          </Popover>
+              </PopoverTrigger>
+              <PopoverContent className="w-48 p-1" align="start">
+                <button
+                  className={cn(
+                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+                    !appliedParentId && "bg-accent"
+                  )}
+                  onClick={() => { setParentId(""); setParentOpen(false); }}
+                >
+                  No parent
+                </button>
+                {(goals ?? []).map((g) => (
+                  <button
+                    key={g.id}
+                    className={cn(
+                      "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 truncate",
+                      g.id === appliedParentId && "bg-accent"
+                    )}
+                    onClick={() => { setParentId(g.id); setParentOpen(false); }}
+                  >
+                    {g.title}
+                  </button>
+                ))}
+              </PopoverContent>
+            </Popover>
+          )}
         </div>
 
         {/* Footer */}
