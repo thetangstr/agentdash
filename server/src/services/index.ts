@@ -48,3 +48,6 @@ export { cosOrchestratorService, defaultInterviewPayload } from "./cos-orchestra
 // AgentDash (AGE-50 Phase 1): CoS readiness precondition check for goal creation.
 export { cosReadinessService } from "./cos-readiness.js";
 export type { CosReadiness } from "./cos-readiness.js";
+// AgentDash (AGE-50 Phase 2): interview session lifecycle.
+export { goalInterviewSessionsService } from "./goal-interview-sessions.js";
+export type { GoalInterviewSessionRow } from "./goal-interview-sessions.js";
