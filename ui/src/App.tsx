@@ -48,8 +48,11 @@ import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { ActionInbox } from "./pages/ActionInbox";
 import { Connectors } from "./pages/Connectors";
 import { AgentWizard } from "./pages/AgentWizard";
-import { Pipelines } from "./pages/Pipelines";
-import PipelineDetail from "./pages/PipelineDetail";
+// AgentDash (AGE-42): Pipelines is no longer a top-level concept.
+// The legacy list page is retained at /pipelines/_debug as a dev-only surface,
+// and /pipelines/:pipelineId redirects into the owning goal hub.
+import { Pipelines as PipelinesDebug } from "./pages/Pipelines";
+import { PipelineDetailRedirect } from "./pages/PipelineDetailRedirect";
 import PipelineWizard from "./pages/PipelineWizard";
 import PipelineRunDetail from "./pages/PipelineRunDetail";
 import { CrmContacts } from "./pages/CrmContacts";
@@ -221,9 +224,12 @@ function boardRoutes() {
       <Route path="assess" element={<AssessPage />} />
       <Route path="assess/history" element={<AssessHistoryPage />} />
       <Route path="feed" element={<Feed />} />
-      <Route path="pipelines" element={<Pipelines />} />
+      {/* AgentDash (AGE-42): Pipelines folded under Goals. The list view is
+          now a dev-only debug surface; detail redirects to the owning goal. */}
+      <Route path="pipelines" element={<Navigate to="/goals" replace />} />
+      <Route path="pipelines/_debug" element={<PipelinesDebug />} />
       <Route path="pipelines/new" element={<PipelineWizard />} />
-      <Route path="pipelines/:pipelineId" element={<PipelineDetail />} />
+      <Route path="pipelines/:pipelineId" element={<PipelineDetailRedirect />} />
       <Route path="pipeline-runs/:runId" element={<PipelineRunDetail />} />
       <Route path="profile" element={<UserProfile />} />
       <Route path="crm" element={<CrmPipeline />} />

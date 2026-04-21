@@ -10,6 +10,9 @@ import type {
 export interface Pipeline {
   id: string;
   companyId: string;
+  // AgentDash (AGE-42): goal this pipeline rolls up to; used to redirect
+  // /pipelines/:id into the owning goal hub and surface playbooks there.
+  goalId: string | null;
   name: string;
   description: string | null;
   stages: PipelineStageDefinition[];

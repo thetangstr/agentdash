@@ -35,7 +35,7 @@ export default function PipelineDetail() {
 
   useEffect(() => {
     setBreadcrumbs([
-      { label: "Pipelines", href: "/pipelines" },
+      { label: "Playbooks", href: "/goals" },
       { label: pipeline?.name ?? "Pipeline" },
     ]);
   }, [setBreadcrumbs, pipeline?.name]);

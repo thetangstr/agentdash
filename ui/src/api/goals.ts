@@ -59,6 +59,17 @@ export interface GoalHubKpiRow {
   onTrack: boolean;
 }
 
+// AgentDash (AGE-42): Playbooks listing for the Goal hub.
+export interface GoalHubPlaybookRow {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  executionMode: string;
+  stageCount: number;
+  updatedAt: string;
+}
+
 export interface GoalHubActivityEntry {
   id: string;
   kind: "activity_log" | "heartbeat_run";
@@ -79,6 +90,8 @@ export interface GoalHubRollup {
   work: GoalHubWorkSummary;
   spend: GoalHubSpendSummary;
   kpis: GoalHubKpiRow[];
+  // AgentDash (AGE-42): Playbooks rollup (pipelines folded under this goal).
+  playbooks: GoalHubPlaybookRow[];
   activity: GoalHubActivityEntry[];
 }
 
