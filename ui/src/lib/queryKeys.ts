@@ -75,6 +75,8 @@ export const queryKeys = {
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
+    // AgentDash: goal hub rollup (AGE-40)
+    hub: (companyId: string, goalId: string) => ["goals", "hub", companyId, goalId] as const,
   },
   crm: {
     pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,

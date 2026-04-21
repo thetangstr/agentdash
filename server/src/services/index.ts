@@ -40,3 +40,4 @@ export { pipelineOrchestratorService, validatePipelineDag } from "./pipeline-orc
 export { pipelineRunnerService } from "./pipeline-runner.js";
 export { pipelineSelfHealService } from "./pipeline-self-heal.js";
 export { agentPlansService } from "./agent-plans.js";
+export { goalsHubService } from "./goals-hub.js";
