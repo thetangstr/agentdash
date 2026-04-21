@@ -11,6 +11,9 @@ export { goalsApi } from "./goals";
 // AgentDash (AGE-48 Phase 2): agent-plans API client.
 export { agentPlansApi } from "./agent-plans";
 export type { AgentPlanRow, ApproveAgentPlanResult } from "./agent-plans";
+// AgentDash (AGE-50 Phase 1): CoS readiness precondition.
+export { cosReadinessApi } from "./cos-readiness";
+export type { CosReadiness } from "./cos-readiness";
 // AgentDash: Manual KPIs (AGE-45)
 export { kpisApi } from "./kpis";
 export type { Kpi, KpiCreate, KpiUpdate } from "./kpis";

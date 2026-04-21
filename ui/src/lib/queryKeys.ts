@@ -85,6 +85,10 @@ export const queryKeys = {
     detail: (companyId: string, planId: string) =>
       ["agent-plans", "detail", companyId, planId] as const,
   },
+  // AgentDash (AGE-50 Phase 1): CoS readiness precondition for NewGoalDialog.
+  cosReadiness: {
+    detail: (companyId: string) => ["cos-readiness", companyId] as const,
+  },
   crm: {
     pipeline: (companyId: string) => ["crm", companyId, "pipeline"] as const,
     accounts: (companyId: string) => ["crm", companyId, "accounts"] as const,

@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GOAL_STATUSES, GOAL_LEVELS } from "@agentdash/shared";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { goalsApi } from "../api/goals";
 import { assetsApi } from "../api/assets";
+import { cosReadinessApi } from "../api/cos-readiness";
 import { queryKeys } from "../lib/queryKeys";
 import {
   Dialog,
@@ -17,6 +19,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  AlertTriangle,
   Maximize2,
   Minimize2,
   Target,
@@ -58,6 +61,15 @@ export function NewGoalDialog() {
     queryKey: queryKeys.goals.list(selectedCompanyId!),
     queryFn: () => goalsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId && newGoalOpen,
+  });
+
+  // AgentDash (AGE-50 Phase 1): readiness precondition. Block goal creation
+  // unless the company has an active Chief of Staff with a real adapter.
+  const { data: readiness } = useQuery({
+    queryKey: queryKeys.cosReadiness.detail(selectedCompanyId!),
+    queryFn: () => cosReadinessApi.get(selectedCompanyId!),
+    enabled: !!selectedCompanyId && newGoalOpen,
+    staleTime: 30_000,
   });
 
   const createGoal = useMutation({
@@ -270,11 +282,49 @@ export function NewGoalDialog() {
           )}
         </div>
 
+        {/* AgentDash (AGE-50 Phase 1): readiness banner. Rendered only when
+            the company lacks a Chief of Staff or runtime adapter — otherwise
+            the dialog is unchanged. Link routes the operator to the hire
+            flow; if a CoS exists but needs an adapter, we deep-link to it. */}
+        {readiness && !readiness.ready ? (
+          <div
+            data-testid="cos-readiness-banner"
+            className="mx-4 mb-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+            role="alert"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              {readiness.reasons.map((r) => (
+                <p key={r}>{r}</p>
+              ))}
+              <p>
+                {!readiness.hasChiefOfStaff ? (
+                  <Link
+                    to="/agents/new"
+                    className="underline font-medium hover:text-destructive/80"
+                    onClick={() => { reset(); closeNewGoal(); }}
+                  >
+                    Hire a Chief of Staff →
+                  </Link>
+                ) : readiness.chiefOfStaffAgentId ? (
+                  <Link
+                    to={`/agents/${readiness.chiefOfStaffAgentId}/dashboard`}
+                    className="underline font-medium hover:text-destructive/80"
+                    onClick={() => { reset(); closeNewGoal(); }}
+                  >
+                    Configure Chief of Staff adapter →
+                  </Link>
+                ) : null}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {/* Footer */}
         <div className="flex items-center justify-end px-4 py-2.5 border-t border-border">
           <Button
             size="sm"
-            disabled={!title.trim() || createGoal.isPending}
+            disabled={!title.trim() || createGoal.isPending || (readiness ? !readiness.ready : false)}
             onClick={handleSubmit}
           >
             {createGoal.isPending ? "Creating…" : newGoalDefaults.parentId ? "Create sub-goal" : "Create goal"}
