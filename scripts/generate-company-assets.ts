@@ -96,7 +96,7 @@ function parseFrontmatter(content: string): { data: Record<string, unknown>; bod
 // ── Slug to role mapping ─────────────────────────────────────────
 
 const SLUG_TO_ROLE: Record<string, string> = {
-  ceo: "ceo",
+  ceo: "chief_of_staff",
   cto: "cto",
   cmo: "cmo",
   cfo: "cfo",
@@ -109,7 +109,7 @@ function inferRole(slug: string, title: string | null): string {
 
   // Check title for C-suite
   const t = (title || "").toLowerCase();
-  if (t.includes("chief executive")) return "ceo";
+  if (t.includes("chief executive") || t.includes("chief of staff")) return "chief_of_staff";
   if (t.includes("chief technology")) return "cto";
   if (t.includes("chief marketing")) return "cmo";
   if (t.includes("chief financial")) return "cfo";

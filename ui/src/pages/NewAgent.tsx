@@ -92,7 +92,7 @@ export function NewAgent() {
   });
 
   const isFirstAgent = !agents || agents.length === 0;
-  const effectiveRole = isFirstAgent ? "ceo" : role;
+  const effectiveRole = isFirstAgent ? "chief_of_staff" : role;
 
   useEffect(() => {
     setBreadcrumbs([
@@ -103,8 +103,8 @@ export function NewAgent() {
 
   useEffect(() => {
     if (isFirstAgent) {
-      if (!name) setName("CEO");
-      if (!title) setTitle("CEO");
+      if (!name) setName("Chief of Staff");
+      if (!title) setTitle("Chief of Staff");
     }
   }, [isFirstAgent]); // eslint-disable-line react-hooks/exhaustive-deps
 

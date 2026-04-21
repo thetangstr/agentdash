@@ -1453,14 +1453,14 @@ type JoinRequestManagerCandidate = {
 export function resolveJoinRequestAgentManagerId(
   candidates: JoinRequestManagerCandidate[]
 ): string | null {
-  const ceoCandidates = candidates.filter(
-    (candidate) => candidate.role === "ceo"
+  const chiefOfStaffCandidates = candidates.filter(
+    (candidate) => candidate.role === "chief_of_staff"
   );
-  if (ceoCandidates.length === 0) return null;
-  const rootCeo = ceoCandidates.find(
+  if (chiefOfStaffCandidates.length === 0) return null;
+  const rootChiefOfStaff = chiefOfStaffCandidates.find(
     (candidate) => candidate.reportsTo === null
   );
-  return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
+  return (rootChiefOfStaff ?? chiefOfStaffCandidates[0] ?? null)?.id ?? null;
 }
 
 function isInviteTokenHashCollisionError(error: unknown) {
@@ -1833,8 +1833,8 @@ export function accessRoutes(
       if (!actorAgent || actorAgent.companyId !== companyId) {
         throw forbidden("Agent key cannot access another company");
       }
-      if (actorAgent.role !== "ceo") {
-        throw forbidden("Only CEO agents can generate OpenClaw invite prompts");
+      if (actorAgent.role !== "chief_of_staff") {
+        throw forbidden("Only Chief of Staff agents can generate OpenClaw invite prompts");
       }
       return;
     }

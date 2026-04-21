@@ -91,7 +91,7 @@ After human adds `Human-Verified` label and `/tpm sync` runs:
 ### Required Structure
 
 ```markdown
-# PAP-XXX: <Imperative verb> <object>
+# AGE-XXX: <Imperative verb> <object>
 
 ## Summary
 <1-2 sentences: What this does and why>
@@ -161,7 +161,7 @@ After human adds `Human-Verified` label and `/tpm sync` runs:
 ```markdown
 ## Handoff: Builder -> Tester
 
-**Issue:** PAP-<number>
+**Issue:** AGE-<number>
 **PR:** #<pr_number>
 **Branch:** `pap-<number>-<short-name>`
 
@@ -196,7 +196,7 @@ After human adds `Human-Verified` label and `/tpm sync` runs:
 ```markdown
 ## Tested: Ready for Human Verification
 
-**Issue:** PAP-<number>
+**Issue:** AGE-<number>
 **PR:** #<pr_number>
 
 ### Automated Test Results
@@ -240,7 +240,7 @@ These items require human verification because agents cannot access external sys
 ```markdown
 ## Tests Failed
 
-**Issue:** PAP-<number>
+**Issue:** AGE-<number>
 **PR:** #<pr_number>
 
 ### Summary
@@ -255,14 +255,14 @@ These items require human verification because agents cannot access external sys
 - **Expected:** <expected behavior>
 - **Actual:** <actual behavior>
 - **Screenshot:** <link>
-- **Sub-issue:** PAP-<number>-1
+- **Sub-issue:** AGE-<number>-1
 
 #### 2. <Test Name>
 - **CUJ:** #<cuj-name>
 - **Expected:** <expected behavior>
 - **Actual:** <actual behavior>
 - **Screenshot:** <link>
-- **Sub-issue:** PAP-<number>-2
+- **Sub-issue:** AGE-<number>-2
 
 ### Console Errors
 ```
@@ -277,7 +277,7 @@ These items require human verification because agents cannot access external sys
 ```markdown
 ## Shipped to Production
 
-**Issue:** PAP-<number>
+**Issue:** AGE-<number>
 **Deployed:** <timestamp>
 
 ### URLs
@@ -386,7 +386,7 @@ def has_linked_pr(issue) -> bool:
 ```markdown
 ## Agent Error: <Agent Name>
 
-**Issue:** PAP-<number>
+**Issue:** AGE-<number>
 **Phase:** <current phase>
 **Timestamp:** <ISO timestamp>
 
@@ -582,7 +582,7 @@ PR #1->staging  Testing  Tests-Passed  Staging-Tested  Human-Verified  TPM: PR #
 
 | Phase | Command | Owner | Scope |
 |-------|---------|-------|-------|
-| Intake -> Tested | `/workon PAP-XXX` | Orchestrator (workspace-scoped) | PM -> Builder -> Deploy + Smoke -> Tester (auto + chrome) |
+| Intake -> Tested | `/workon AGE-XXX` | Orchestrator (workspace-scoped) | PM -> Builder -> Deploy + Smoke -> Tester (auto + chrome) |
 | Human-Verified -> Production | `/tpm sync` | TPM (global) | Scan ALL Human-Verified -> Merge -> Prod smoke -> In-Production |
 
 ### Deployment Path Routing

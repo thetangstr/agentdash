@@ -6,12 +6,12 @@
 
 | Command | Agent | Description |
 |---------|-------|-------------|
-| `/workon PAP-XXX` | Orchestrator | Drive issue from intake -> locally-tested |
+| `/workon AGE-XXX` | Orchestrator | Drive issue from intake -> locally-tested |
 | `/pm` | PM | Interactive requirements elaboration |
 | `/pm <description>` | PM | Elaborate specific feature |
 | `/builder` | Builder | Auto-pickup highest priority issue |
-| `/builder PAP-XXX` | Builder | Work on specific issue |
-| `/tester PAP-XXX` | Tester | Test specific issue |
+| `/builder AGE-XXX` | Builder | Work on specific issue |
+| `/tester AGE-XXX` | Tester | Test specific issue |
 | `/tpm sync` | TPM | Ship all Human-Verified issues |
 | `/tpm <project>` | TPM | Break project into issues + wave plan |
 | `/tpm status` | TPM | Single-issue status |
@@ -34,12 +34,12 @@
 
 | Task | Command | Notes |
 |------|---------|-------|
-| **Start any issue** | `/workon PAP-XXX` | Per-workspace orchestration |
+| **Start any issue** | `/workon AGE-XXX` | Per-workspace orchestration |
 | **Check status & ship** | `/tpm sync` | Main shipping command |
 | **Plan a project** | `/tpm <description>` | Creates issues, waves, workspaces |
 | Elaborate requirements | `/pm <description>` | Manual PM control |
-| Start implementation | `/builder PAP-XXX` | Skip PM, go direct |
-| Test a PR | `/tester PAP-XXX` | Manual test trigger |
+| Start implementation | `/builder AGE-XXX` | Skip PM, go direct |
+| Test a PR | `/tester AGE-XXX` | Manual test trigger |
 | Service health | `/admin health` | Ops monitoring |
 
 ## Documentation

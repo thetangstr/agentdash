@@ -39,7 +39,7 @@ These are the specific changes introduced by this PR:
 These areas are NOT part of this PR. If you find issues here, note them but do NOT fail the test:
 
 - {Unrelated feature 1} - Not modified in this PR
-- {Pre-existing bug} - Known issue, tracked in PAP-XX
+- {Pre-existing bug} - Known issue, tracked in AGE-XX
 - Performance optimization - Not a goal of this PR
 
 ### Dependencies

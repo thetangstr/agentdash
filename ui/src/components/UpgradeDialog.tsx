@@ -1,8 +1,9 @@
 // AgentDash: UpgradeDialog
 // Generic upgrade prompt shown wherever a gated feature requires a higher tier.
-// Phase 2: CTA is "Contact sales" — Phase 3 replaces this with a Stripe
-// checkout redirect routed through packages/billing.
+// Pro: self-serve Stripe Checkout redirect.
+// Enterprise: sales-assisted mailto (per plan section 8).
 
+import { useState } from "react";
 import { entitlementsForTier, type Tier } from "@agentdash/shared";
 import { Button } from "./ui/button";
 import {
@@ -13,6 +14,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
+import { billingApi } from "../api/billing";
+import { useCompany } from "../context/CompanyContext";
+import { useToast } from "../context/ToastContext";
 
 const TIER_LABEL: Record<Tier, string> = {
   free: "Free",
@@ -42,8 +46,28 @@ export function UpgradeDialog({
   requiredTier,
   featureName,
 }: UpgradeDialogProps) {
+  const { selectedCompanyId } = useCompany();
+  const { pushToast } = useToast();
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const current = entitlementsForTier(currentTier);
   const target = entitlementsForTier(requiredTier);
+
+  async function handleUpgradeClick() {
+    if (requiredTier === "enterprise") return; // handled by the mailto link below
+    if (!selectedCompanyId) return;
+    setIsRedirecting(true);
+    try {
+      const { url } = await billingApi.createCheckoutSession(selectedCompanyId, "pro");
+      window.location.href = url;
+    } catch (err) {
+      setIsRedirecting(false);
+      pushToast({
+        tone: "error",
+        title: "Upgrade failed",
+        body: err instanceof Error ? err.message : "Could not start checkout. Please try again.",
+      });
+    }
+  }
 
   const gainedFeatures = (
     Object.keys(target.features) as Array<keyof typeof target.features>
@@ -97,11 +121,21 @@ export function UpgradeDialog({
           >
             Not now
           </Button>
-          <Button asChild data-testid="upgrade-cta">
-            <a href="mailto:sales@agentdash.com?subject=Upgrade%20request">
-              Contact sales
-            </a>
-          </Button>
+          {requiredTier === "enterprise" ? (
+            <Button asChild data-testid="upgrade-cta">
+              <a href="mailto:sales@agentdash.com?subject=Enterprise%20upgrade">
+                Contact sales
+              </a>
+            </Button>
+          ) : (
+            <Button
+              onClick={handleUpgradeClick}
+              disabled={isRedirecting}
+              data-testid="upgrade-cta"
+            >
+              {isRedirecting ? "Redirecting…" : `Upgrade to ${TIER_LABEL[requiredTier]}`}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

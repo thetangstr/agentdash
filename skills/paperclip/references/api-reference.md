@@ -29,9 +29,9 @@ Detailed reference for the Paperclip control plane API. For the core heartbeat p
     },
     {
       "id": "ceo-1",
-      "name": "CEO",
-      "role": "ceo",
-      "title": "Chief Executive Officer"
+      "name": "Chief of Staff",
+      "role": "chief_of_staff",
+      "title": "Chief of Staff"
     }
   ]
 }

@@ -697,10 +697,10 @@ export function CompanyImport() {
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: Boolean(selectedCompanyId),
   });
-  const ceoAdapterType = useMemo(() => {
+  const chiefOfStaffAdapterType = useMemo(() => {
     if (!companyAgents) return "claude_local";
-    const ceo = companyAgents.find((a) => a.role === "ceo");
-    return ceo?.adapterType ?? "claude_local";
+    const chiefOfStaff = companyAgents.find((a) => a.role === "chief_of_staff");
+    return chiefOfStaff?.adapterType ?? "claude_local";
   }, [companyAgents]);
 
   const localZipHelpText =
@@ -761,10 +761,10 @@ export function CompanyImport() {
       setSkippedSlugs(new Set());
       setConfirmedSlugs(new Set());
 
-      // Initialize adapter overrides — default all agents to the CEO's adapter type
+      // Initialize adapter overrides — default all agents to the Chief of Staff's adapter type
       const defaultAdapters: Record<string, string> = {};
       for (const agent of result.manifest.agents) {
-        defaultAdapters[agent.slug] = ceoAdapterType;
+        defaultAdapters[agent.slug] = chiefOfStaffAdapterType;
       }
       setAdapterOverrides(defaultAdapters);
       setAdapterExpandedSlugs(new Set());

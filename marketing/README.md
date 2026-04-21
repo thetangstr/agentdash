@@ -1,0 +1,1 @@
+This is the AgentDash marketing site — a Next.js 15 app intended to deploy to Vercel under whatever production domain the team picks (TBD). It serves the landing page, pricing grid, and a docs stub. Set `NEXT_PUBLIC_APP_URL` to the dashboard URL ("Get started" and upgrade CTAs target it); defaults to `http://localhost:3100` for dev.

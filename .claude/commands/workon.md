@@ -4,9 +4,11 @@ description: 'Work On: Auto-route Linear issue through MAW pipeline'
 
 You are the **MAW Orchestrator** - responsible for automatically routing Linear issues through the complete Multi-Agent Workflow pipeline.
 
+> **OMC awareness:** every dispatched subagent must read its corresponding `.claude/commands/<agent>.md` file (pm.md / builder.md / tester.md) before acting. Those files contain OMC escalation rules — e.g., when to invoke `/oh-my-claudecode:plan`, `/oh-my-claudecode:trace`, `/oh-my-claudecode:verify`, `/oh-my-claudecode:visual-verdict` — that the orchestrator does not duplicate inline. If a dispatch prompt below omits the file reference, add it before sending.
+
 ## Overview
 
-`/workon PAP-XXX` is the **single entry point** for all feature and bug development. It automatically:
+`/workon AGE-XXX` is the **single entry point** for all feature and bug development. It automatically:
 1. Fetches the issue from Linear
 2. Determines size (uses estimate field or has PM set it)
 3. Determines deployment path (default vs staging-required)
@@ -18,7 +20,7 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 
 ```
 +-------------------------------------------------------------+
-|                     /workon PAP-XXX               |
+|                     /workon AGE-XXX               |
 +-------------------------------------------------------------+
 |                                                               |
 |  1. Fetch Issue & Check Size                                  |
@@ -53,14 +55,14 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 ### 1.1 Parse Issue ID
 
 Extract the issue identifier from the command:
-- `/workon PAP-123` -> issue ID is `PAP-123`
-- `/workon 123` -> assume `PAP-123`
+- `/workon AGE-123` -> issue ID is `AGE-123`
+- `/workon 123` -> assume `AGE-123`
 
 ### 1.2 Fetch Issue from Linear
 
 ```
 Use mcp__linear__get_issue with:
-- id: "PAP-XXX"
+- id: "AGE-XXX"
 - includeRelations: true
 ```
 
@@ -85,9 +87,11 @@ If the issue has no estimate AND no size label:
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "PM sizing for PAP-XXX"
+- description: "PM sizing for AGE-XXX"
 - prompt: |
-    You are the PM Agent sizing PAP-<number>.
+    You are the PM Agent sizing AGE-<number>.
+
+    Follow the sizing rubric in .claude/commands/pm.md before applying labels.
 
     1. Read the issue description
     2. Analyze complexity using the sizing criteria:
@@ -185,9 +189,9 @@ def get_current_phase(issue):
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "PM Agent for PAP-XXX"
+- description: "PM Agent for AGE-XXX"
 - prompt: |
-    You are the PM Agent. Elaborate requirements for PAP-<number>.
+    You are the PM Agent. Elaborate requirements for AGE-<number>.
 
     Follow the full PM workflow from .claude/commands/pm.md:
     1. Parse the raw requirements
@@ -213,9 +217,9 @@ After PM completes, re-check state and continue to Builder.
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "Builder Agent for PAP-XXX"
+- description: "Builder Agent for AGE-XXX"
 - prompt: |
-    You are the Builder Agent. Implement PAP-<number>.
+    You are the Builder Agent. Implement AGE-<number>.
 
     **PR target branch:** <agentdash-main or staging based on deployment path>
 
@@ -255,9 +259,9 @@ For **staging-required path** (PR -> staging):
 ```
 Use Task tool with:
 - subagent_type: "general-purpose"
-- description: "Tester Agent for PAP-XXX"
+- description: "Tester Agent for AGE-XXX"
 - prompt: |
-    You are the Tester Agent. Test PAP-<number>.
+    You are the Tester Agent. Test AGE-<number>.
 
     Follow the full Tester workflow from .claude/commands/tester.md:
     1. Read test plan from Linear issue description
@@ -285,7 +289,7 @@ Check issue size:
 ```
 ## Awaiting Human Validation (M+ only)
 
-PAP-<number> has passed all automated and Chrome CUJ tests.
+AGE-<number> has passed all automated and Chrome CUJ tests.
 
 **Current Status:**
 - PM elaboration: Complete

@@ -39,7 +39,7 @@ Each Conductor workspace is a **self-contained pipeline** for ONE Linear issue. 
 
 | Phase | Owner | Trigger | Stops When |
 |-------|-------|---------|------------|
-| Intake -> Locally-Tested (or Staging-Tested) | `/workon` | Human runs `/workon PAP-XXX` | `Locally-Tested` or `Staging-Tested` label set |
+| Intake -> Locally-Tested (or Staging-Tested) | `/workon` | Human runs `/workon AGE-XXX` | `Locally-Tested` or `Staging-Tested` label set |
 | XS/S auto-ship | `/workon` | `Locally-Tested` set on XS/S issue | `/workon` auto-adds `Human-Verified`, hands off to TPM |
 | Human-Verified -> Production (M+ only) | `/tpm sync` | Human adds `Human-Verified` label, runs `/tpm sync` | `In-Production` label set |
 
@@ -79,12 +79,12 @@ The pipeline is **fully autonomous** for XS/S issues (1-2 pts). For **M+ issues 
 
 ---
 
-## Quick Start: `/workon PAP-XXX`
+## Quick Start: `/workon AGE-XXX`
 
 The **single entry point** for all development in a workspace:
 
 ```bash
-/workon PAP-123   # Drives issue from intake through Locally-Tested (or Staging-Tested)
+/workon AGE-123   # Drives issue from intake through Locally-Tested (or Staging-Tested)
 ```
 
 **What `/workon` does:**
@@ -111,7 +111,7 @@ The Multi-Agent Workflow (MAW) is a CI/CD system using specialized AI agents tha
 
 ```
 +-------------------------------------------------------------+
-| /workon PAP-XXX (continuous, no human needed)    |
+| /workon AGE-XXX (continuous, no human needed)    |
 +-------------------------------------------------------------+
 |                                                               |
 |  1. PM -- elaborate requirements, size, test plan             |
@@ -248,7 +248,7 @@ The Multi-Agent Workflow (MAW) is a CI/CD system using specialized AI agents tha
 
 ```bash
 /builder         # Auto-pickup highest priority issue
-/builder PAP-5   # Work on specific issue
+/builder AGE-5   # Work on specific issue
 ```
 
 ---
@@ -282,7 +282,7 @@ The Multi-Agent Workflow (MAW) is a CI/CD system using specialized AI agents tha
 **Commands:**
 
 ```bash
-/tester PAP-5        # Test specific issue
+/tester AGE-5        # Test specific issue
 ```
 
 ---
@@ -544,9 +544,9 @@ All issues must be tagged with epics and CUJs for scoped testing. Customize thes
 
 | Task | Command |
 |------|---------|
-| **Start any issue** | `/workon PAP-XXX` |
-| Skip to Builder | `/builder PAP-XXX` |
-| Test a PR | `/tester PAP-XXX` |
+| **Start any issue** | `/workon AGE-XXX` |
+| Skip to Builder | `/builder AGE-XXX` |
+| Test a PR | `/tester AGE-XXX` |
 | Ship after Human-Verified | `/tpm sync` |
 | Project planning | `/tpm <project description>` |
 | Check status | `/tpm status` |

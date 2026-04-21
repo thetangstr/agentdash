@@ -93,7 +93,7 @@ describe("company portability routes", () => {
       .send({ include: { company: true, agents: true, projects: true } });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("Only CEO agents");
+    expect(res.body.error).toContain("Only Chief of Staff agents");
     expect(mockCompanyPortabilityService.previewExport).not.toHaveBeenCalled();
   });
 
@@ -101,7 +101,7 @@ describe("company portability routes", () => {
     mockAgentService.getById.mockResolvedValue({
       id: "agent-1",
       companyId: "11111111-1111-4111-8111-111111111111",
-      role: "ceo",
+      role: "chief_of_staff",
     });
     mockCompanyPortabilityService.previewExport.mockResolvedValue({
       rootPath: "paperclip",
@@ -134,7 +134,7 @@ describe("company portability routes", () => {
     mockAgentService.getById.mockResolvedValue({
       id: "agent-1",
       companyId: "11111111-1111-4111-8111-111111111111",
-      role: "ceo",
+      role: "chief_of_staff",
     });
     const app = await createApp({
       type: "agent",

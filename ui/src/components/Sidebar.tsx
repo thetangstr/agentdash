@@ -20,7 +20,6 @@ import {
   Building2,
   Link2,
   Rss,
-  GitBranch,
   Scale,
   Users,
   UserPlus,
@@ -132,8 +131,7 @@ export function Sidebar() {
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} textBadge="Beta" textBadgeTone="amber" />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-          {/* AgentDash: pipeline orchestrator and proposal nav items */}
-          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
+          {/* AgentDash: goal-driven workflow — workflows roll up under the goal page; no Pipelines top-level nav */}
           <SidebarNavItem to="/action-proposals" label="Proposals" icon={Scale} />
         </SidebarSection>
 

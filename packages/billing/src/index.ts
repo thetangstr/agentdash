@@ -1,4 +1,10 @@
 import type { Tier } from "@agentdash/shared";
+import { StripeBillingProvider } from "./stripe-provider.js";
+import type { StripePriceMap } from "./stripe-types.js";
+
+export { StripeBillingProvider } from "./stripe-provider.js";
+export type { StripeBillingConfig, StripePriceMap } from "./stripe-types.js";
+export { priceIdForTier, tierForPriceId } from "./stripe-types.js";
 
 export type CheckoutSessionResult =
   | { status: "redirect"; url: string }
@@ -58,4 +64,37 @@ export class StubBillingProvider implements BillingProvider {
   async syncEntitlement(input: { companyId: string; tier: Tier }): Promise<void> {
     this.logger.info("syncEntitlement", input);
   }
+}
+
+export interface CreateBillingProviderOptions {
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  stripePriceMap?: string; // JSON string from env
+  successUrl?: string;
+  cancelUrl?: string;
+  portalReturnUrl?: string;
+  logger?: BillingLogger;
+}
+
+export function createBillingProvider(opts: CreateBillingProviderOptions = {}): BillingProvider {
+  const key = opts.stripeSecretKey ?? process.env.STRIPE_SECRET_KEY;
+  if (!key) {
+    return new StubBillingProvider(opts.logger);
+  }
+  let priceMap: StripePriceMap = {};
+  const raw = opts.stripePriceMap ?? process.env.STRIPE_PRICE_MAP;
+  if (raw) {
+    try { priceMap = JSON.parse(raw); } catch { priceMap = {}; }
+  }
+  return new StripeBillingProvider(
+    {
+      secretKey: key,
+      webhookSecret: opts.stripeWebhookSecret ?? process.env.STRIPE_WEBHOOK_SECRET,
+      priceMap,
+      successUrl: opts.successUrl ?? process.env.STRIPE_CHECKOUT_SUCCESS_URL ?? "http://localhost:3100/billing?checkout=success",
+      cancelUrl: opts.cancelUrl ?? process.env.STRIPE_CHECKOUT_CANCEL_URL ?? "http://localhost:3100/billing?checkout=cancel",
+      portalReturnUrl: opts.portalReturnUrl ?? process.env.STRIPE_PORTAL_RETURN_URL ?? "http://localhost:3100/billing",
+    },
+    opts.logger,
+  );
 }

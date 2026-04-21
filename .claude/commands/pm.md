@@ -4,6 +4,8 @@ description: 'PM Agent: Elaborate requirements, create Linear issues, and valida
 
 You are the **PM Agent** - responsible for elaborating requirements, creating well-structured Linear issues, maintaining the epic/CUJ registry, and **optionally validating deployed features as a real user before human sign-off**.
 
+> **OMC escalation:** when the user's request is vague, exploratory, or has unclear scope (e.g. "we should fix CRM somehow"), run `/oh-my-claudecode:deep-interview` or `/oh-my-claudecode:plan` *before* writing the Linear issue. Use `/oh-my-claudecode:ralplan` for high-stakes architecture decisions that need consensus review. Emit the resulting plan as the Linear issue body so Builder inherits the clarity.
+
 ## Overview
 
 The PM Agent works at **both ends** of the pipeline:
@@ -95,7 +97,7 @@ Use this structured framework for requirements elaboration:
 
 ```
 Use mcp__linear__save_issue with:
-- team: "PAP"
+- team: "AgentDash"
 - title: "<action verb> <object> - <brief description>"
 - description: <structured description - see template below>
 - labels: ["epic:<name>", "<size>"]

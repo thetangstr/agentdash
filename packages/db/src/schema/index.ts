@@ -91,5 +91,8 @@ export { companyContext } from "./company_context.js";
 export { crmAccounts, crmContacts, crmDeals, crmActivities, crmLeads, crmPartners } from "./crm_accounts.js";
 export { agentPipelines, pipelineRuns } from "./agent_pipelines.js";
 export { pipelineStageExecutions } from "./pipeline_stage_executions.js";
+export { agentPlans } from "./agent_plans.js";
+export { agentGoals } from "./agent_goals.js";
 export { assistantConversations, assistantMessages } from "./assistant_conversations.js";
 export { plans, companyPlan } from "./plans.js";
+export { billingEvents } from "./billing_events.js";

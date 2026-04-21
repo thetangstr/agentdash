@@ -19,12 +19,17 @@ const FREE_FALLBACK: Entitlements = {
   },
 };
 
+export type SubscriptionStatus = "active" | "past_due" | "canceled" | "trialing";
+
 export interface UseEntitlementsResult {
   entitlements: Entitlements;
   tier: Tier;
   isLoading: boolean;
   hasFeature: (feature: keyof Entitlements["features"]) => boolean;
   isAtLeast: (min: Tier) => boolean;
+  stripeCustomerId: string | null;
+  subscriptionStatus: SubscriptionStatus | null;
+  currentPeriodEnd: string | null;
 }
 
 const TIER_ORDER: Record<Tier, number> = { free: 0, pro: 1, enterprise: 2 };
@@ -43,6 +48,11 @@ export function useEntitlements(): UseEntitlementsResult {
   });
 
   const entitlements = data ?? FREE_FALLBACK;
+  const raw = data as (Entitlements & {
+    stripeCustomerId?: string | null;
+    subscriptionStatus?: string | null;
+    currentPeriodEnd?: string | null;
+  }) | undefined;
 
   return {
     entitlements,
@@ -50,5 +60,8 @@ export function useEntitlements(): UseEntitlementsResult {
     isLoading,
     hasFeature: (feature) => entitlements.features[feature],
     isAtLeast: (min) => TIER_ORDER[entitlements.tier] >= TIER_ORDER[min],
+    stripeCustomerId: raw?.stripeCustomerId ?? null,
+    subscriptionStatus: (raw?.subscriptionStatus ?? null) as SubscriptionStatus | null,
+    currentPeriodEnd: raw?.currentPeriodEnd ?? null,
   };
 }
