@@ -1,7 +1,6 @@
 // AgentDash: Billing page
 // Surfaces the company's current tier, limits, and feature matrix. The CTA
-// to upgrade opens the shared UpgradeDialog and currently routes to sales;
-// Phase 3 wires this to a Stripe checkout session.
+// to upgrade opens the shared UpgradeDialog which routes to Stripe Checkout.
 
 import { useState } from "react";
 import {
@@ -15,6 +14,9 @@ import { UpgradeDialog } from "../components/UpgradeDialog";
 import { LuxePageHeader } from "../components/LuxePageHeader";
 import { Button } from "@/components/ui/button";
 import { Check, X } from "lucide-react";
+import { billingApi } from "../api/billing";
+import { useCompany } from "../context/CompanyContext";
+import { useToast } from "../context/ToastContext";
 
 const TIER_LABEL: Record<Tier, string> = {
   free: "Free",
@@ -39,24 +41,88 @@ function nextTier(tier: Tier): Tier | null {
 }
 
 export function Billing() {
-  const { tier, entitlements, isLoading } = useEntitlements();
+  const { tier, entitlements, isLoading, stripeCustomerId, subscriptionStatus, currentPeriodEnd } = useEntitlements();
+  const { selectedCompanyId } = useCompany();
+  const { pushToast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [isPortalRedirecting, setIsPortalRedirecting] = useState(false);
   const upgradeTarget = nextTier(tier);
+
+  async function handleManageSubscription() {
+    if (!selectedCompanyId) return;
+    setIsPortalRedirecting(true);
+    try {
+      const { url } = await billingApi.createPortalSession(selectedCompanyId);
+      window.location.href = url;
+    } catch (err) {
+      setIsPortalRedirecting(false);
+      pushToast({
+        tone: "error",
+        title: "Could not open billing portal",
+        body: err instanceof Error ? err.message : "Please try again.",
+      });
+    }
+  }
+
+  const renewalDateLabel = (() => {
+    if (!currentPeriodEnd) return null;
+    const d = new Date(currentPeriodEnd);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  })();
 
   return (
     <div
       className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6"
       data-testid="billing-page"
     >
+      {subscriptionStatus === "past_due" && (
+        <div
+          className="rounded-md border border-yellow-400 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 dark:border-yellow-600 dark:bg-yellow-950 dark:text-yellow-200"
+          data-testid="billing-past-due-banner"
+        >
+          <strong>Payment past due.</strong> Please update your payment method to avoid service interruption.
+        </div>
+      )}
+
+      {subscriptionStatus === "canceled" && (
+        <div
+          className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-200"
+          data-testid="billing-canceled-banner"
+        >
+          <strong>Subscription canceled</strong>
+          {renewalDateLabel ? ` — access ends ${renewalDateLabel}.` : "."}
+        </div>
+      )}
+
       <header className="flex items-start justify-between gap-4">
         <LuxePageHeader
           eyebrow="Billing"
           title={<>Plan &amp; <span className="soft">billing</span></>}
-          subtitle={<>Your workspace is on the <span className="font-medium text-foreground">{TIER_LABEL[tier]}</span> plan.</>}
+          subtitle={
+            <>
+              Your workspace is on the{" "}
+              <span className="font-medium text-foreground">{TIER_LABEL[tier]}</span> plan.
+              {subscriptionStatus === "active" && renewalDateLabel && (
+                <span className="ml-2 text-muted-foreground" data-testid="billing-renewal-date">
+                  Renews on {renewalDateLabel}.
+                </span>
+              )}
+            </>
+          }
           slim
         />
         <div className="flex items-center gap-2">
           <TierBadge tier={tier} />
+          {stripeCustomerId && (
+            <Button
+              variant="outline"
+              onClick={handleManageSubscription}
+              disabled={isPortalRedirecting}
+              data-testid="billing-manage-subscription"
+            >
+              {isPortalRedirecting ? "Opening…" : "Manage Subscription"}
+            </Button>
+          )}
           {upgradeTarget && (
             <Button
               onClick={() => setDialogOpen(true)}

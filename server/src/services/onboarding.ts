@@ -257,7 +257,7 @@ Return a JSON object with this EXACT structure:
 Rules:
 - policyType: "resource_access" | "action_limit" | "escalation_path" | "data_boundary" | "blast_radius"
 - targetType: "agent" | "role" | "project" | "company"
-- role: "ceo" | "cto" | "cmo" | "cfo" | "engineer" | "designer" | "pm" | "qa" | "devops" | "researcher" | "general"
+- role: "chief_of_staff" | "cto" | "cmo" | "cfo" | "engineer" | "designer" | "pm" | "qa" | "devops" | "researcher" | "general"
 - goal level: "company" | "team" | "agent" | "task"
 - goal priority: "critical" | "high" | "medium" | "low"
 - slug: lowercase kebab-case, unique

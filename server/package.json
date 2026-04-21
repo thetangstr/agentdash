@@ -44,6 +44,7 @@
     "typecheck": "pnpm run preflight:workspace-links && pnpm --filter @agentdash/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
+    "@agentdash/billing": "workspace:*",
     "@agentdash/adapter-claude-local": "workspace:*",
     "@agentdash/adapter-codex-local": "workspace:*",
     "@agentdash/adapter-cursor-local": "workspace:*",

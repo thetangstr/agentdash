@@ -31,7 +31,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agentdash/shared": "workspace:*"
+    "@agentdash/shared": "workspace:*",
+    "stripe": "^17.5.0"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

@@ -168,6 +168,19 @@ export function companyService(db: Db) {
 
     create: async (data: typeof companies.$inferInsert) => {
       const created = await createCompanyWithUniquePrefix(data);
+      // AgentDash: goal-driven workflow — every company gets a root goal so
+      // agents/pipelines/approvals always roll up to something.
+      await db
+        .insert(goals)
+        .values({
+          companyId: created.id,
+          title: "Unassigned",
+          description: "Default root goal for work not yet tied to a business goal.",
+          level: "company",
+          status: "active",
+          priority: "low",
+        })
+        .onConflictDoNothing();
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
         .then((rows) => rows[0] ?? null);

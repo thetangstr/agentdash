@@ -30,7 +30,7 @@ const SCOPE_OPTIONS: { value: Scope; label: string; desc: string }[] = [
 
 const AGENTS_BY_SCOPE: Record<Scope, StarterAgent[]> = {
   company: [
-    { name: "CEO Agent", role: "ceo", description: "Sets strategy, prioritizes initiatives, and coordinates all teams." },
+    { name: "Chief of Staff", role: "chief_of_staff", description: "Interviews stakeholders, decomposes goals, and proposes the agent team that'll execute them." },
     { name: "Sales Agent", role: "cmo", description: "Manages pipeline, drafts outreach, and closes deals." },
     { name: "Engineering Agent", role: "engineer", description: "Scopes tasks, writes code, and ships features." },
   ],

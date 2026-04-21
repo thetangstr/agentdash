@@ -1656,7 +1656,7 @@ describe("company portability", () => {
           "agents/ceo/AGENTS.md": [
             "---",
             'name: "CEO"',
-            'role: "ceo"',
+            'role: "chief_of_staff"',
             "---",
             "",
             "# CEO",
@@ -1677,7 +1677,7 @@ describe("company portability", () => {
       expect.objectContaining({
         slug: "ceo",
         name: "CEO",
-        role: "ceo",
+        role: "chief_of_staff",
       }),
     ]);
   });

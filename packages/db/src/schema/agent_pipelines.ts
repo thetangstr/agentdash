@@ -1,6 +1,6 @@
 import { pgTable, uuid, text, timestamp, jsonb, index, numeric } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
-import { agents } from "./agents.js";
+import { goals } from "./goals.js";
 
 // AgentDash: Pipeline orchestration
 export const agentPipelines = pgTable(
@@ -8,6 +8,8 @@ export const agentPipelines = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
+    // AgentDash: business goal this pipeline serves (goal-driven workflow)
+    goalId: uuid("goal_id").references(() => goals.id),
     name: text("name").notNull(),
     description: text("description"),
     stages: jsonb("stages").notNull().$type<any[]>().default([]),
@@ -26,6 +28,7 @@ export const agentPipelines = pgTable(
   },
   (table) => [
     index("agent_pipelines_company_idx").on(table.companyId),
+    index("agent_pipelines_goal_idx").on(table.goalId),
   ],
 );
 

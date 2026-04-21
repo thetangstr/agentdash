@@ -307,6 +307,32 @@ export {
   type CreateActionProposal,
 } from "./action-proposal.js";
 
+// AgentDash: Goal-driven agent team plans
+export {
+  agentPlanArchetypeSchema,
+  proposedAgentSchema,
+  proposedPlaybookStageSchema,
+  proposedPlaybookTriggerSchema,
+  proposedPlaybookSchema,
+  proposedBudgetSchema,
+  proposedKpiSchema,
+  agentTeamPlanPayloadSchema,
+  createAgentPlanSchema,
+  approveAgentPlanSchema,
+  rejectAgentPlanSchema,
+  listAgentPlansQuerySchema,
+  type AgentPlanArchetype,
+  type ProposedAgent,
+  type ProposedPlaybook,
+  type ProposedBudget,
+  type ProposedKpi,
+  type AgentTeamPlanPayload,
+  type CreateAgentPlan,
+  type ApproveAgentPlan,
+  type RejectAgentPlan,
+  type ListAgentPlansQuery,
+} from "./agent-plan.js";
+
 // AgentDash: Pipelines
 export {
   pipelineStageSchema,

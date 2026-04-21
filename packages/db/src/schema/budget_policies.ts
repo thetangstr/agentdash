@@ -1,5 +1,6 @@
 import { boolean, index, integer, pgTable, text, timestamp, uuid, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
+import { goals } from "./goals.js";
 
 export const budgetPolicies = pgTable(
   "budget_policies",
@@ -8,6 +9,8 @@ export const budgetPolicies = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     scopeType: text("scope_type").notNull(),
     scopeId: uuid("scope_id").notNull(),
+    // AgentDash: business goal this policy serves (goal-driven workflow)
+    goalId: uuid("goal_id").references(() => goals.id),
     metric: text("metric").notNull().default("billed_cents"),
     windowKind: text("window_kind").notNull(),
     amount: integer("amount").notNull().default(0),
@@ -39,5 +42,6 @@ export const budgetPolicies = pgTable(
       table.metric,
       table.windowKind,
     ),
+    goalIdx: index("budget_policies_goal_idx").on(table.goalId),
   }),
 );

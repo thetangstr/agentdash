@@ -28,8 +28,11 @@ export { crmRoutes } from "./crm.js";
 export { hubspotRoutes } from "./hubspot.js";
 export { actionProposalRoutes } from "./action-proposals.js";
 export { pipelineRoutes } from "./pipelines.js";
+export { agentPlanRoutes } from "./agent-plans.js";
 export { feedRoutes } from "./feed.js";
 export { entitlementsRoutes } from "./entitlements.js";
+// AgentDash: Billing routes
+export { billingRoutes, billingWebhookHandler } from "./billing.js";
 // AgentDash: Cockpit routes
 export { connectorRoutes } from "./connectors.js";
 export { inboxRoutes } from "./inbox.js";

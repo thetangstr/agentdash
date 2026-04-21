@@ -43,8 +43,14 @@ import { crmRoutes } from "./routes/crm.js";
 import { hubspotRoutes } from "./routes/hubspot.js";
 import { actionProposalRoutes } from "./routes/action-proposals.js";
 import { pipelineRoutes } from "./routes/pipelines.js";
+import { agentPlanRoutes } from "./routes/agent-plans.js";
 import { feedRoutes } from "./routes/feed.js";
 import { entitlementsRoutes } from "./routes/entitlements.js";
+// AgentDash: Billing
+import { billingRoutes, billingWebhookHandler } from "./routes/billing.js";
+import { createBillingProvider, StripeBillingProvider } from "@agentdash/billing";
+import type { StripePriceMap } from "@agentdash/billing";
+import { entitlementsService } from "./services/entitlements.js";
 // AgentDash: Cockpit routes
 import { connectorRoutes } from "./routes/connectors.js";
 import { inboxRoutes } from "./routes/inbox.js";
@@ -156,6 +162,21 @@ export async function createApp(
   if (opts.betterAuthHandler) {
     app.all("/api/auth/*authPath", opts.betterAuthHandler);
   }
+
+  // AgentDash: Billing — construct deps once and mount webhook BEFORE boardMutationGuard
+  const billingProvider = createBillingProvider({});
+  const stripeProvider = billingProvider instanceof StripeBillingProvider ? billingProvider : undefined;
+  let priceMap: StripePriceMap = {};
+  try { priceMap = JSON.parse(process.env.STRIPE_PRICE_MAP ?? "{}"); } catch { priceMap = {}; }
+  const billingDeps = {
+    entitlements: entitlementsService(db),
+    provider: billingProvider,
+    stripeProvider,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+    priceMap,
+  };
+  app.post("/api/billing/webhook", billingWebhookHandler(db, billingDeps));
+
   app.use(llmRoutes(db));
 
   // Mount API routes
@@ -205,9 +226,12 @@ export async function createApp(
   api.use(hubspotRoutes(db));
   api.use(actionProposalRoutes(db));
   api.use(pipelineRoutes(db));
+  api.use(agentPlanRoutes(db));
   api.use(feedRoutes(db));
   // AgentDash: Entitlements (tier gating + billing readback)
   api.use(entitlementsRoutes(db));
+  // AgentDash: Billing (checkout + portal sessions)
+  api.use(billingRoutes(db, billingDeps));
   // AgentDash: Cockpit routes
   api.use(connectorRoutes(db));
   api.use(inboxRoutes(db));

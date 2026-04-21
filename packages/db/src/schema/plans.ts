@@ -24,6 +24,8 @@ export const companyPlan = pgTable(
     activatedAt: timestamp("activated_at", { withTimezone: true }).defaultNow().notNull(),
     stripeCustomerId: text("stripe_customer_id"),
     stripeSubscriptionId: text("stripe_subscription_id"),
+    subscriptionStatus: text("subscription_status"),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   },
   (t) => [index("company_plan_plan_idx").on(t.planId)],
 );

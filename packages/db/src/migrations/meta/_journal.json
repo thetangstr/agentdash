@@ -512,6 +512,34 @@
       "when": 1776487000000,
       "tag": "0072_seed_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1776731916770,
+      "tag": "0073_chemical_proteus",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1776732011030,
+      "tag": "0074_brainy_lockheed",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1776735000000,
+      "tag": "0075_rename_ceo_role_to_chief_of_staff",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1776738020523,
+      "tag": "0076_sudden_moonstone",
+      "breakpoints": true
     }
   ]
 }
