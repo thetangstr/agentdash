@@ -61,8 +61,13 @@ export function goalRoutes(db: Db) {
       const goalId = req.params.goalId as string;
       assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
+      // AgentDash: startedByUserId is a uuid column but the actor's
+      // actorId can be a non-uuid sentinel (e.g. `local-board` for the
+      // bootstrap implicit actor). Only persist it when it matches the
+      // uuid shape — otherwise leave null.
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const startedByUserId =
-        actor.actorType === "user" && actor.actorId !== "board"
+        actor.actorType === "user" && UUID_RE.test(actor.actorId)
           ? actor.actorId
           : null;
       const session = await goalInterviewSessionsService(db).startOrResume(
