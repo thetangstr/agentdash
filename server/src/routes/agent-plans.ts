@@ -3,6 +3,7 @@ import type { Db } from "@agentdash/db";
 import {
   approveAgentPlanSchema,
   createAgentPlanSchema,
+  goalInterviewPayloadSchema,
   listAgentPlansQuerySchema,
   rejectAgentPlanSchema,
 } from "@agentdash/shared";
@@ -107,6 +108,49 @@ export function agentPlanRoutes(db: Db) {
         details: { decisionNote: req.body.decisionNote },
       });
       res.json(plan);
+    },
+  );
+
+  // AGE-41: Chief of Staff dynamic plan generation.
+  // Accepts an interview payload for a goal and returns a bespoke
+  // AgentTeamPlanPayload scored against the 8-dimension rubric. The response
+  // is cached per (goalId, interview-hash) so repeat taps of "Generate plan"
+  // are cheap.
+  router.post(
+    "/companies/:companyId/goals/:goalId/generate-plan",
+    validate(goalInterviewPayloadSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const goalId = req.params.goalId as string;
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      const result = await svc.generatePlan(companyId, goalId, req.body);
+      if ("error" in result) {
+        res.status(422).json({
+          error: result.error,
+          rubric: result.rubric ?? null,
+        });
+        return;
+      }
+      if (!result.cached) {
+        await logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          action: "agent_plan.generated",
+          entityType: "goal",
+          entityId: goalId,
+          details: {
+            archetype: result.archetype,
+            rubricAverage: result.rubric.average,
+            rubricMinimum: result.rubric.minimum,
+            passesAPlus: result.rubric.passesAPlus,
+            interviewHash: result.interviewHash,
+          },
+        });
+      }
+      res.json(result);
     },
   );
 
