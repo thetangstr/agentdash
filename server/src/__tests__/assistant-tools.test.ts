@@ -25,6 +25,12 @@ const mockGoalSvc = vi.hoisted(() => ({
   list: vi.fn(),
 }));
 
+const mockKpisSvc = vi.hoisted(() => ({
+  getById: vi.fn(),
+  findByName: vi.fn(),
+  setValue: vi.fn(),
+}));
+
 vi.mock("../services/agents.js", () => ({
   agentService: () => mockAgentSvc,
 }));
@@ -35,6 +41,10 @@ vi.mock("../services/issues.js", () => ({
 
 vi.mock("../services/goals.js", () => ({
   goalService: () => mockGoalSvc,
+}));
+
+vi.mock("../services/kpis.js", () => ({
+  kpisService: () => mockKpisSvc,
 }));
 
 // ── Fixtures ───────────────────────────────────────────────────────────
@@ -55,9 +65,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 // ── Tests: getToolDefinitions ──────────────────────────────────────────
 
 describe("getToolDefinitions", () => {
-  it("returns exactly 6 tools", () => {
+  it("returns exactly 7 tools", () => {
     const defs = getToolDefinitions(mockDb);
-    expect(defs).toHaveLength(6);
+    expect(defs).toHaveLength(7);
   });
 
   it("has the correct tool names", () => {
@@ -70,6 +80,7 @@ describe("getToolDefinitions", () => {
       "list_issues",
       "set_goal",
       "get_dashboard_summary",
+      "update_kpi",
     ]);
   });
 
@@ -188,6 +199,59 @@ describe("executeTool", () => {
       level: "company",
     }));
     expect(result).toEqual(mockGoal);
+  });
+
+  it("delegates update_kpi by id to kpisService.setValue", async () => {
+    const kpi = { id: "kpi-1", companyId: "company-1", name: "MRR" };
+    mockKpisSvc.getById.mockResolvedValue(kpi);
+    mockKpisSvc.setValue.mockResolvedValue({ ...kpi, currentValue: "1234" });
+
+    const result = await executeTool(
+      tools,
+      "update_kpi",
+      { kpiId: "kpi-1", value: 1234 },
+      ctx,
+      mockDb,
+    );
+
+    expect(mockKpisSvc.getById).toHaveBeenCalledWith("kpi-1");
+    expect(mockKpisSvc.setValue).toHaveBeenCalledWith("kpi-1", 1234);
+    expect(result).toMatchObject({ id: "kpi-1", currentValue: "1234" });
+  });
+
+  it("delegates update_kpi by name to kpisService.setValue", async () => {
+    const kpi = { id: "kpi-2", companyId: "company-1", name: "ARR" };
+    mockKpisSvc.findByName.mockResolvedValue(kpi);
+    mockKpisSvc.setValue.mockResolvedValue({ ...kpi, currentValue: "99" });
+
+    const result = await executeTool(
+      tools,
+      "update_kpi",
+      { kpiName: "ARR", value: 99 },
+      ctx,
+      mockDb,
+    );
+
+    expect(mockKpisSvc.findByName).toHaveBeenCalledWith("company-1", "ARR");
+    expect(mockKpisSvc.setValue).toHaveBeenCalledWith("kpi-2", 99);
+    expect(result).toMatchObject({ id: "kpi-2" });
+  });
+
+  it("update_kpi throws when neither kpiId nor kpiName supplied", async () => {
+    await expect(
+      executeTool(tools, "update_kpi", { value: 10 }, ctx, mockDb),
+    ).rejects.toThrow(/kpiId or kpiName/);
+  });
+
+  it("update_kpi rejects KPI belonging to another company", async () => {
+    mockKpisSvc.getById.mockResolvedValue({
+      id: "kpi-3",
+      companyId: "company-OTHER",
+      name: "X",
+    });
+    await expect(
+      executeTool(tools, "update_kpi", { kpiId: "kpi-3", value: 10 }, ctx, mockDb),
+    ).rejects.toThrow(/KPI not found/);
   });
 
   it("get_dashboard_summary returns agent + issue counts", async () => {

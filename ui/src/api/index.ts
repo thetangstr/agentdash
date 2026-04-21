@@ -8,6 +8,9 @@ export { projectsApi } from "./projects";
 export { issuesApi } from "./issues";
 export { routinesApi } from "./routines";
 export { goalsApi } from "./goals";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpisApi } from "./kpis";
+export type { Kpi, KpiCreate, KpiUpdate } from "./kpis";
 export { approvalsApi } from "./approvals";
 export { costsApi } from "./costs";
 export { activityApi } from "./activity";

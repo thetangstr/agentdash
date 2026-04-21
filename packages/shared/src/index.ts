@@ -507,6 +507,13 @@ export {
   updateGoalSchema,
   type CreateGoal,
   type UpdateGoal,
+  // AgentDash: Manual KPIs (AGE-45)
+  createKpiSchema,
+  updateKpiSchema,
+  setKpiValueSchema,
+  type CreateKpi,
+  type UpdateKpi,
+  type SetKpiValue,
   createApprovalSchema,
   upsertBudgetPolicySchema,
   resolveBudgetIncidentSchema,

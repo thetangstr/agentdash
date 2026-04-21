@@ -183,6 +183,16 @@ export {
   type UpdateGoal,
 } from "./goal.js";
 
+// AgentDash: Manual KPIs (AGE-45)
+export {
+  createKpiSchema,
+  updateKpiSchema,
+  setKpiValueSchema,
+  type CreateKpi,
+  type UpdateKpi,
+  type SetKpiValue,
+} from "./kpi.js";
+
 export {
   createApprovalSchema,
   resolveApprovalSchema,

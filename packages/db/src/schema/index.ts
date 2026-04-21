@@ -96,3 +96,5 @@ export { agentGoals } from "./agent_goals.js";
 export { assistantConversations, assistantMessages } from "./assistant_conversations.js";
 export { plans, companyPlan } from "./plans.js";
 export { billingEvents } from "./billing_events.js";
+// AgentDash: Manual KPIs (AGE-45)
+export { kpis } from "./kpis.js";

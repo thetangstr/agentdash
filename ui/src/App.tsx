@@ -25,6 +25,8 @@ import { Costs } from "./pages/Costs";
 import { Activity } from "./pages/Activity";
 import { Inbox } from "./pages/Inbox";
 import { CompanySettings } from "./pages/CompanySettings";
+// AgentDash: Manual KPIs (AGE-45)
+import { SettingsKPIs } from "./pages/SettingsKPIs";
 import { Billing } from "./pages/Billing";
 import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
@@ -160,6 +162,8 @@ function boardRoutes() {
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
+      {/* AgentDash: Manual KPIs (AGE-45) */}
+      <Route path="company/settings/kpis" element={<SettingsKPIs />} />
       <Route path="billing" element={<Billing />} />
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
