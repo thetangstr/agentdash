@@ -52,11 +52,14 @@ function ToolCard({ toolName, content, role }: ToolCardProps) {
 }
 
 function MessageBubble({ message }: { message: Message }) {
+  if (!message) return null;
+  const content = typeof message.content === "string" ? message.content : String(message.content ?? "");
+
   if (message.role === "tool_use" || message.role === "tool_result") {
     return (
       <ToolCard
         toolName={message.toolName ?? message.role}
-        content={message.content}
+        content={content}
         role={message.role}
       />
     );
@@ -80,7 +83,7 @@ function MessageBubble({ message }: { message: Message }) {
           message.isStreaming && "animate-pulse",
         )}
       >
-        {message.content || (message.isStreaming ? "…" : "")}
+        {content || (message.isStreaming ? "…" : "")}
       </div>
     </div>
   );
@@ -221,16 +224,29 @@ export function ChatPanel({
               const displayName = isResult
                 ? (chunk.name ?? "tool").replace(/_result$/, "")
                 : (chunk.name ?? "tool");
-              setMessages((prev) => [
-                ...prev.slice(0, -1),
-                {
-                  id: toolMsgId,
-                  role: isResult ? ("tool_result" as const) : ("tool_use" as const),
-                  content: chunk.input ? JSON.stringify(chunk.input, null, 2) : (chunk.content ?? ""),
-                  toolName: displayName,
-                },
-                prev[prev.length - 1]!,
-              ]);
+              let contentStr: string;
+              try {
+                contentStr = chunk.input
+                  ? JSON.stringify(chunk.input, null, 2)
+                  : (chunk.content ?? "");
+              } catch {
+                contentStr = "(unserializable tool input)";
+              }
+              const toolMsg = {
+                id: toolMsgId,
+                role: isResult ? ("tool_result" as const) : ("tool_use" as const),
+                content: contentStr,
+                toolName: displayName,
+              };
+              // Insert the tool card before the streaming assistant bubble
+              // (which is always the last entry mid-stream). If for any
+              // reason there is no tail, just append — never inject
+              // `undefined` into the array, which would crash rendering.
+              setMessages((prev) => {
+                if (prev.length === 0) return [toolMsg];
+                const tail = prev[prev.length - 1];
+                return [...prev.slice(0, -1), toolMsg, tail];
+              });
               break;
             }
 

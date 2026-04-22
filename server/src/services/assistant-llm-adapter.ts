@@ -282,7 +282,12 @@ export async function* streamChatViaAdapter(
         typeof (result.resultJson as Record<string, unknown> | null | undefined)?.result === "string"
           ? ((result.resultJson as Record<string, unknown>).result as string).trim()
           : "";
-      const replyText = summaryText || resultJsonText || stdoutText.trim();
+      // AgentDash (AGE-54): only fall back to raw stdout when the adapter
+      // exited cleanly — otherwise stdout is usually bootstrap noise
+      // ("[paperclip] Using Paperclip-managed Codex home …") rather than a
+      // model reply, and rendering it in the chat bubble confuses operators.
+      const stdoutFallback = result.exitCode === 0 ? stdoutText.trim() : "";
+      const replyText = summaryText || resultJsonText || stdoutFallback;
 
       logger.info(
         { adapterType, agentId: cosAgent.id, exitCode: result.exitCode, summaryLen: summaryText.length, resultJsonLen: resultJsonText.length, stdoutLen: stdoutText.length, replyLen: replyText.length, replyPreview: replyText.slice(0, 120) },
