@@ -238,6 +238,7 @@ export async function* streamChatViaAdapter(
   //    async generator we can yield from.
   const queue = new ChunkQueue();
   const stdoutParts: string[] = [];
+  const stderrParts: string[] = [];
   const runId = randomUUID();
 
   const executePromise = adapter
@@ -262,15 +263,40 @@ export async function* streamChatViaAdapter(
         if (stream === "stdout") {
           stdoutParts.push(chunk);
           queue.push({ type: "text", text: chunk });
+        } else {
+          stderrParts.push(chunk);
         }
       },
     })
     .then((result) => {
-      // Adapter finished. Parse accumulated stdout for tool-call markers
-      // and emit tool_use events.
-      const full = stdoutParts.join("");
-      const toolCalls = extractToolCalls(full);
+      // AgentDash (AGE-54): adapters like claude_local run the CLI with
+      // `--output-format stream-json` and parse events internally — the
+      // model's reply lands in `result.summary` / `result.resultJson.result`,
+      // not as prose on the stdout stream. Fall back to summary when the
+      // onLog bridge received nothing textual.
+      const stdoutText = stdoutParts.join("");
+      const hasStreamedText = stdoutText.trim().length > 0;
+      const summaryText = (result.summary ?? "").trim();
+      const resultJsonText =
+        typeof (result.resultJson as Record<string, unknown> | null | undefined)?.result === "string"
+          ? ((result.resultJson as Record<string, unknown>).result as string).trim()
+          : "";
+      const fallbackText = summaryText || resultJsonText;
+
+      if (!hasStreamedText && fallbackText) {
+        queue.push({ type: "text", text: fallbackText });
+      }
+
+      // Parse tool-call markers against the composite (stdout + summary)
+      // so marker-based tools work regardless of which path produced the
+      // text. De-dup by raw match so we don't double-fire when a marker
+      // appears in both streams.
+      const composite = `${stdoutText}\n${summaryText}\n${resultJsonText}`;
+      const seen = new Set<string>();
+      const toolCalls = extractToolCalls(composite);
       for (const tc of toolCalls) {
+        if (seen.has(tc.raw)) continue;
+        seen.add(tc.raw);
         queue.push({
           type: "tool_use",
           id: `marker-${randomUUID()}`,
@@ -279,6 +305,24 @@ export async function* streamChatViaAdapter(
         });
       }
       const usage = result.usage ?? { inputTokens: 0, outputTokens: 0 };
+
+      // AgentDash (AGE-54): if we got no text AND no tool calls, surface
+      // a diagnostic so the chat doesn't look empty. Adapter quirks (auth
+      // missing, bad prompt, exit != 0) would otherwise vanish silently.
+      if (!hasStreamedText && !fallbackText && toolCalls.length === 0) {
+        const stderrTail = stderrParts.join("").slice(-600).trim();
+        const diag = [
+          `(No model output. exit=${result.exitCode ?? "?"} signal=${result.signal ?? "-"}${result.timedOut ? " timed_out" : ""})`,
+          result.errorMessage ? `error: ${result.errorMessage}` : "",
+          stderrTail ? `stderr tail:\n${stderrTail}` : "",
+        ].filter(Boolean).join("\n");
+        logger.warn(
+          { adapterType, agentId: cosAgent.id, exitCode: result.exitCode, errorMessage: result.errorMessage, stderrTail },
+          "assistant-llm-adapter: adapter.execute returned no text",
+        );
+        queue.push({ type: "text", text: diag });
+      }
+
       if (result.errorMessage) {
         queue.push({
           type: "error",
