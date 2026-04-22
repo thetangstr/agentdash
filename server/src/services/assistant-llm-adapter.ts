@@ -261,8 +261,10 @@ export async function* streamChatViaAdapter(
       context: { assistantChat: true, chatRunId: runId },
       onLog: async (stream, chunk) => {
         if (stream === "stdout") {
+          // Accumulate for tool-call parsing and diagnostics, but do NOT
+          // push to the queue — adapters like claude_local emit JSONL on
+          // stdout; the prose reply lands in result.summary instead.
           stdoutParts.push(chunk);
-          queue.push({ type: "text", text: chunk });
         } else {
           stderrParts.push(chunk);
         }
@@ -272,19 +274,23 @@ export async function* streamChatViaAdapter(
       // AgentDash (AGE-54): adapters like claude_local run the CLI with
       // `--output-format stream-json` and parse events internally — the
       // model's reply lands in `result.summary` / `result.resultJson.result`,
-      // not as prose on the stdout stream. Fall back to summary when the
-      // onLog bridge received nothing textual.
+      // not as prose on the stdout stream. Prefer summary; fall back to
+      // stdout only if summary is absent (plain-script adapters).
       const stdoutText = stdoutParts.join("");
-      const hasStreamedText = stdoutText.trim().length > 0;
       const summaryText = (result.summary ?? "").trim();
       const resultJsonText =
         typeof (result.resultJson as Record<string, unknown> | null | undefined)?.result === "string"
           ? ((result.resultJson as Record<string, unknown>).result as string).trim()
           : "";
-      const fallbackText = summaryText || resultJsonText;
+      const replyText = summaryText || resultJsonText || stdoutText.trim();
 
-      if (!hasStreamedText && fallbackText) {
-        queue.push({ type: "text", text: fallbackText });
+      logger.info(
+        { adapterType, agentId: cosAgent.id, exitCode: result.exitCode, summaryLen: summaryText.length, resultJsonLen: resultJsonText.length, stdoutLen: stdoutText.length, replyLen: replyText.length, replyPreview: replyText.slice(0, 120) },
+        "assistant-llm-adapter: adapter.execute result",
+      );
+
+      if (replyText) {
+        queue.push({ type: "text", text: replyText });
       }
 
       // Parse tool-call markers against the composite (stdout + summary)
@@ -309,7 +315,7 @@ export async function* streamChatViaAdapter(
       // AgentDash (AGE-54): if we got no text AND no tool calls, surface
       // a diagnostic so the chat doesn't look empty. Adapter quirks (auth
       // missing, bad prompt, exit != 0) would otherwise vanish silently.
-      if (!hasStreamedText && !fallbackText && toolCalls.length === 0) {
+      if (!replyText && toolCalls.length === 0) {
         const stderrTail = stderrParts.join("").slice(-600).trim();
         const diag = [
           `(No model output. exit=${result.exitCode ?? "?"} signal=${result.signal ?? "-"}${result.timedOut ? " timed_out" : ""})`,

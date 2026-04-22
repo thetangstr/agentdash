@@ -574,7 +574,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           companyId: input.companyId,
           title: input.title,
           description: input.description ?? null,
-          level: input.level ?? "task",
+          level: input.level ?? "company",
           status: input.status ?? "planned",
           parentId: input.parentId ?? null,
           ownerAgentId: input.ownerAgentId ?? null,

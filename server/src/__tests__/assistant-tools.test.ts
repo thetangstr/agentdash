@@ -65,9 +65,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 // ── Tests: getToolDefinitions ──────────────────────────────────────────
 
 describe("getToolDefinitions", () => {
-  it("returns exactly 7 tools", () => {
+  it("returns exactly 8 tools", () => {
     const defs = getToolDefinitions(mockDb);
-    expect(defs).toHaveLength(7);
+    expect(defs).toHaveLength(8);
   });
 
   it("has the correct tool names", () => {
@@ -81,6 +81,7 @@ describe("getToolDefinitions", () => {
       "set_goal",
       "get_dashboard_summary",
       "update_kpi",
+      "submit_goal_interview",
     ]);
   });
 

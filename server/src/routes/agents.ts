@@ -58,6 +58,11 @@ import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { runClaudeLogin } from "@agentdash/adapter-claude-local/server";
+// AgentDash (AGE-54.1): Codex in-app login (mirrors claude-login pattern).
+import {
+  runCodexLogin,
+  readCodexAuthStatus,
+} from "@agentdash/adapter-codex-local/server";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
@@ -2198,6 +2203,60 @@ export function agentRoutes(db: Db) {
     });
 
     res.json(result);
+  });
+
+  // AgentDash (AGE-54.1): Codex in-app login. Non-technical operators
+  // click a button on the agent detail page; we spawn `codex login`,
+  // scrape the OAuth URL, and return it for the UI to render as a link.
+  router.post("/agents/:id/codex-login", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+    if (agent.adapterType !== "codex_local") {
+      res.status(400).json({ error: "Codex login is only supported for codex_local agents" });
+      return;
+    }
+
+    const config = asRecord(agent.adapterConfig) ?? {};
+    const { config: runtimeConfig } = await secretsSvc.resolveAdapterConfigForRuntime(agent.companyId, config);
+    const result = await runCodexLogin({
+      runId: `codex-login-${randomUUID()}`,
+      agent: {
+        id: agent.id,
+        companyId: agent.companyId,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        adapterConfig: agent.adapterConfig,
+      },
+      config: runtimeConfig,
+    });
+
+    res.json(result);
+  });
+
+  // AgentDash (AGE-54.1): poll endpoint the UI hits every few seconds
+  // after clicking "Sign in with ChatGPT" — flips to authenticated once
+  // the OAuth browser flow completes and the token lands in ~/.codex.
+  router.get("/agents/:id/codex-auth-status", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, agent.companyId);
+    if (agent.adapterType !== "codex_local") {
+      res.status(400).json({ error: "Codex auth status is only available for codex_local agents" });
+      return;
+    }
+    const status = await readCodexAuthStatus(process.env);
+    res.json(status);
   });
 
   router.get("/companies/:companyId/heartbeat-runs", async (req, res) => {

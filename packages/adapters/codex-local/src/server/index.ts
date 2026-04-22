@@ -1,4 +1,7 @@
 export { execute, ensureCodexSkillsInjected } from "./execute.js";
+// AgentDash (AGE-54.1): in-app Codex login for non-technical operators.
+export { runCodexLogin, readCodexAuthStatus, extractCodexLoginUrl } from "./login.js";
+export type { CodexLoginResult, CodexAuthStatus } from "./login.js";
 export { listCodexSkills, syncCodexSkills } from "./skills.js";
 export { testEnvironment } from "./test.js";
 export { parseCodexJsonl, isCodexUnknownSessionError } from "./parse.js";

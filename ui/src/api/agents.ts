@@ -44,6 +44,24 @@ export interface ClaudeLoginResult {
   stderr: string;
 }
 
+// AgentDash (AGE-54.1): in-app Codex sign-in mirrors the Claude flow so
+// non-technical operators never have to touch a terminal.
+export interface CodexLoginResult {
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  loginUrl: string | null;
+  stdout: string;
+  stderr: string;
+  authenticatedEmail: string | null;
+}
+
+export interface CodexAuthStatus {
+  authenticated: boolean;
+  email: string | null;
+  codexHome: string;
+}
+
 export interface OrgNode {
   id: string;
   name: string;
@@ -194,6 +212,10 @@ export const agentsApi = {
   ) => api.post<AgentWakeupResponse>(agentPath(id, companyId, "/wakeup"), data),
   loginWithClaude: (id: string, companyId?: string) =>
     api.post<ClaudeLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
+  loginWithCodex: (id: string, companyId?: string) =>
+    api.post<CodexLoginResult>(agentPath(id, companyId, "/codex-login"), {}),
+  codexAuthStatus: (id: string, companyId?: string) =>
+    api.get<CodexAuthStatus>(agentPath(id, companyId, "/codex-auth-status")),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
 };
