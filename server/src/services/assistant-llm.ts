@@ -1,6 +1,10 @@
 /**
- * LLM call layer for the Assistant Chatbot.
- * V1: Anthropic Messages API (Claude) with streaming + function-calling.
+ * Types + Chief of Staff resolver for the assistant chat.
+ *
+ * AgentDash (AGE-53): the actual LLM call goes through the CoS agent's
+ * own adapter (see assistant-llm-adapter.ts). This file no longer issues
+ * HTTP requests to Anthropic — no ASSISTANT_API_KEY required. It stays
+ * as the canonical home for the shared types + the CoS prompt resolver.
  */
 
 import { and, eq } from "drizzle-orm";
@@ -13,13 +17,6 @@ import {
 } from "./default-agent-instructions.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
-
-export interface AssistantLLMConfig {
-  apiKey: string;
-  model: string;           // default: "claude-sonnet-4-20250514"
-  baseUrl?: string;        // default: "https://api.anthropic.com"
-  maxTokens?: number;      // default: 4096
-}
 
 export interface ToolDefinition {
   name: string;
@@ -106,28 +103,16 @@ export async function resolveChiefOfStaffSystemPrompt(
   }
 }
 
-// ── Config Resolution ──────────────────────────────────────────────────
-
-export function resolveAssistantConfig(): AssistantLLMConfig {
-  const apiKey = process.env.ASSISTANT_API_KEY?.trim();
-  if (!apiKey) {
-    throw Object.assign(
-      new Error("ASSISTANT_API_KEY is not configured. Set it in .env.local to enable the assistant."),
-      { statusCode: 503 },
-    );
-  }
-  return {
-    apiKey,
-    model: process.env.ASSISTANT_MODEL ?? "claude-sonnet-4-20250514",
-    baseUrl: process.env.ASSISTANT_BASE_URL ?? "https://api.anthropic.com",
-    maxTokens: Number(process.env.ASSISTANT_MAX_TOKENS) || 4096,
-  };
-}
-
-// ── Streaming Chat ─────────────────────────────────────────────────────
-
-export async function* streamChat(
-  config: AssistantLLMConfig,
+// ── Legacy Anthropic path (removed in AGE-53) ──────────────────────────
+// All LLM calls now go through the CoS agent's adapter (see
+// assistant-llm-adapter.ts). The old direct Anthropic fetch is gone —
+// ASSISTANT_API_KEY is no longer required.
+//
+// The unused block below is kept only as a reference comment. Delete on
+// next pass if no new caller emerges.
+/* eslint-disable @typescript-eslint/no-unused-vars */
+async function* _removedAnthropicStreamChat_removed_in_age_53(
+  config: unknown,
   systemPrompt: string,
   messages: AssistantMessage[],
   tools?: ToolDefinition[],
