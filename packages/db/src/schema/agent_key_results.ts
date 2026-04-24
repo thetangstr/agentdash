@@ -6,7 +6,7 @@ export const agentKeyResults = pgTable(
   "agent_key_results",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     okrId: uuid("okr_id").notNull().references(() => agentOkrs.id, { onDelete: "cascade" }),
     metric: text("metric").notNull(),
     targetValue: numeric("target_value").notNull(),

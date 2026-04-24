@@ -9,7 +9,7 @@ export const spawnRequests = pgTable(
   "spawn_requests",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     approvalId: uuid("approval_id").references(() => approvals.id),
     templateId: uuid("template_id").references(() => agentTemplates.id),
     requestedByAgentId: uuid("requested_by_agent_id").references(() => agents.id),

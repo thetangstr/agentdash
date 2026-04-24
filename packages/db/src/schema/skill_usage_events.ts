@@ -10,7 +10,7 @@ export const skillUsageEvents = pgTable(
   "skill_usage_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     skillId: uuid("skill_id").notNull().references(() => companySkills.id),
     versionId: uuid("version_id").references(() => skillVersions.id),
     agentId: uuid("agent_id").notNull().references(() => agents.id),

@@ -7,7 +7,7 @@ export const policyEvaluations = pgTable(
   "policy_evaluations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     agentId: uuid("agent_id").references(() => agents.id),
     runId: uuid("run_id").references(() => heartbeatRuns.id),
     action: text("action").notNull(),

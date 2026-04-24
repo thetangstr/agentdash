@@ -5,7 +5,7 @@ export const killSwitchEvents = pgTable(
   "kill_switch_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     scope: text("scope").notNull(),
     scopeId: uuid("scope_id").notNull(),
     action: text("action").notNull(),

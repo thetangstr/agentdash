@@ -5,7 +5,7 @@ export const departments = pgTable(
   "departments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     parentId: uuid("parent_id").references((): AnyPgColumn => departments.id),

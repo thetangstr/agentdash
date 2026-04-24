@@ -5,7 +5,7 @@ export const invites = pgTable(
   "invites",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").references(() => companies.id),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
     inviteType: text("invite_type").notNull().default("company_join"),
     tokenHash: text("token_hash").notNull(),
     allowedJoinTypes: text("allowed_join_types").notNull().default("both"),

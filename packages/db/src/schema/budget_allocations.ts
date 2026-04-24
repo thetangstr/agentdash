@@ -6,7 +6,7 @@ export const budgetAllocations = pgTable(
   "budget_allocations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     parentPolicyId: uuid("parent_policy_id").notNull().references(() => budgetPolicies.id),
     childPolicyId: uuid("child_policy_id").notNull().references(() => budgetPolicies.id),
     allocatedAmount: integer("allocated_amount").notNull(),

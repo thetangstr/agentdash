@@ -10,7 +10,7 @@ export const agentGoals = pgTable(
   {
     agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
     goalId: uuid("goal_id").notNull().references(() => goals.id, { onDelete: "cascade" }),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

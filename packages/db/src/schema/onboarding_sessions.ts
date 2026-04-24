@@ -5,7 +5,7 @@ export const onboardingSessions = pgTable(
   "onboarding_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("in_progress"),
     currentStep: text("current_step").notNull().default("discovery"),
     context: jsonb("context").notNull().$type<Record<string, unknown>>().default({}),

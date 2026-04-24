@@ -8,7 +8,7 @@ export const measurements = pgTable(
   "measurements",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     metricDefinitionId: uuid("metric_definition_id").notNull().references(() => metricDefinitions.id),
     experimentId: uuid("experiment_id").references(() => experiments.id),
     cycleId: uuid("cycle_id").references(() => researchCycles.id),

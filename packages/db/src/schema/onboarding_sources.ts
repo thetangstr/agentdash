@@ -6,7 +6,7 @@ export const onboardingSources = pgTable(
   "onboarding_sources",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     sessionId: uuid("session_id").notNull().references(() => onboardingSessions.id, { onDelete: "cascade" }),
     sourceType: text("source_type").notNull(),
     sourceLocator: text("source_locator").notNull(),

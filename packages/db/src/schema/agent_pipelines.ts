@@ -7,7 +7,7 @@ export const agentPipelines = pgTable(
   "agent_pipelines",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     // AgentDash: business goal this pipeline serves (goal-driven workflow)
     goalId: uuid("goal_id").references(() => goals.id),
     name: text("name").notNull(),
@@ -37,7 +37,7 @@ export const pipelineRuns = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     pipelineId: uuid("pipeline_id").notNull().references(() => agentPipelines.id),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("pending"),
     // AgentDash: sync or async execution mode for this run
     executionMode: text("execution_mode").notNull().default("sync"),

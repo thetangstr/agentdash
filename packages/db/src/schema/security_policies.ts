@@ -5,7 +5,7 @@ export const securityPolicies = pgTable(
   "security_policies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     policyType: text("policy_type").notNull(),
