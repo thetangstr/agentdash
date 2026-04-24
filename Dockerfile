@@ -17,6 +17,7 @@ WORKDIR /app
 # Copy only manifests first so this layer is invalidated only when deps change
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY cli/package.json cli/
+COPY marketing/package.json marketing/
 COPY server/package.json server/
 COPY ui/package.json ui/
 COPY packages/adapter-utils/package.json packages/adapter-utils/
