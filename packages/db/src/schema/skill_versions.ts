@@ -7,7 +7,7 @@ export const skillVersions = pgTable(
   "skill_versions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     skillId: uuid("skill_id").notNull().references(() => companySkills.id, { onDelete: "cascade" }),
     versionNumber: integer("version_number").notNull(),
     semver: text("semver"),

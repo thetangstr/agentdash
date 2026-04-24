@@ -6,7 +6,7 @@ export const companyContext = pgTable(
   "company_context",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     contextType: text("context_type").notNull(),
     key: text("key").notNull(),
     value: text("value").notNull(),

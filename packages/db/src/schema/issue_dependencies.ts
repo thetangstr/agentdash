@@ -7,7 +7,7 @@ export const issueDependencies = pgTable(
   "issue_dependencies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
     blockedByIssueId: uuid("blocked_by_issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
     dependencyType: text("dependency_type").notNull().default("blocks"),

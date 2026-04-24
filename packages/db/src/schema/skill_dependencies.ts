@@ -6,7 +6,7 @@ export const skillDependencies = pgTable(
   "skill_dependencies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     skillId: uuid("skill_id").notNull().references(() => companySkills.id, { onDelete: "cascade" }),
     dependsOnSkillId: uuid("depends_on_skill_id").notNull().references(() => companySkills.id, { onDelete: "cascade" }),
     versionConstraint: text("version_constraint"),

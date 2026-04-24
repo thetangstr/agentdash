@@ -10,7 +10,7 @@ export const crmAccounts = pgTable(
   "crm_accounts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     domain: text("domain"),
     industry: text("industry"),
@@ -35,7 +35,7 @@ export const crmContacts = pgTable(
   "crm_contacts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     accountId: uuid("account_id").references(() => crmAccounts.id),
     firstName: text("first_name"),
     lastName: text("last_name"),
@@ -62,7 +62,7 @@ export const crmDeals = pgTable(
   "crm_deals",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     accountId: uuid("account_id").references(() => crmAccounts.id),
     contactId: uuid("contact_id").references(() => crmContacts.id),
     name: text("name").notNull(),
@@ -94,7 +94,7 @@ export const crmActivities = pgTable(
   "crm_activities",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     accountId: uuid("account_id").references(() => crmAccounts.id),
     contactId: uuid("contact_id").references(() => crmContacts.id),
     dealId: uuid("deal_id").references(() => crmDeals.id),
@@ -125,7 +125,7 @@ export const crmLeads = pgTable(
   "crm_leads",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     firstName: text("first_name"),
     lastName: text("last_name"),
     email: text("email"),
@@ -162,7 +162,7 @@ export const crmPartners = pgTable(
   "crm_partners",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     type: text("type").notNull().default("referral"),
     contactName: text("contact_name"),

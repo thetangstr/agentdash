@@ -15,7 +15,7 @@ export const goalInterviewSessions = pgTable(
   "goal_interview_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     goalId: uuid("goal_id")
       .notNull()
       .references(() => goals.id, { onDelete: "cascade" }),

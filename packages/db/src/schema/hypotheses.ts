@@ -7,7 +7,7 @@ export const hypotheses = pgTable(
   "hypotheses",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     cycleId: uuid("cycle_id").notNull().references(() => researchCycles.id, { onDelete: "cascade" }),
     parentHypothesisId: uuid("parent_hypothesis_id").references((): AnyPgColumn => hypotheses.id),
     title: text("title").notNull(),

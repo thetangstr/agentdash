@@ -8,7 +8,7 @@ export const budgetIncidents = pgTable(
   "budget_incidents",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     policyId: uuid("policy_id").notNull().references(() => budgetPolicies.id),
     scopeType: text("scope_type").notNull(),
     scopeId: uuid("scope_id").notNull(),

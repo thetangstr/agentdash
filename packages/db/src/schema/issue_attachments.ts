@@ -8,7 +8,7 @@ export const issueAttachments = pgTable(
   "issue_attachments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
     assetId: uuid("asset_id").notNull().references(() => assets.id, { onDelete: "cascade" }),
     issueCommentId: uuid("issue_comment_id").references(() => issueComments.id, { onDelete: "set null" }),

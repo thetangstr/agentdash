@@ -18,7 +18,7 @@ export const agentServiceAccounts = pgTable(
       .references(() => agents.id, { onDelete: "cascade" }),
     companyId: uuid("company_id")
       .notNull()
-      .references(() => companies.id),
+      .references(() => companies.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     email: text("email"),
     displayName: text("display_name"),

@@ -15,7 +15,7 @@ export const companyConnectors = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id")
       .notNull()
-      .references(() => companies.id),
+      .references(() => companies.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     displayName: text("display_name").notNull(),
     status: text("status").notNull().default("disconnected"),

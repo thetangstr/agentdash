@@ -16,7 +16,7 @@ export const companySkills = pgTable(
   "company_skills",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),

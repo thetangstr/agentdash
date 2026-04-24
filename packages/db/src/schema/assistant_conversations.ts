@@ -6,7 +6,7 @@ export const assistantConversations = pgTable(
   "assistant_conversations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
     assistantAgentId: uuid("assistant_agent_id").references(() => agents.id),
     title: text("title"),

@@ -7,7 +7,7 @@ export const agentOkrs = pgTable(
   "agent_okrs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
     goalId: uuid("goal_id").references(() => goals.id),
     objective: text("objective").notNull(),

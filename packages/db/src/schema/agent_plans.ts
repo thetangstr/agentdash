@@ -9,7 +9,7 @@ export const agentPlans = pgTable(
   "agent_plans",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     goalId: uuid("goal_id").notNull().references(() => goals.id),
     status: text("status").notNull().default("proposed"),
     archetype: text("archetype").notNull(),

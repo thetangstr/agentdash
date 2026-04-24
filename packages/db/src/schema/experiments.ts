@@ -12,7 +12,7 @@ export const experiments = pgTable(
   "experiments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     cycleId: uuid("cycle_id").notNull().references(() => researchCycles.id, { onDelete: "cascade" }),
     hypothesisId: uuid("hypothesis_id").notNull().references(() => hypotheses.id),
     projectId: uuid("project_id").references(() => projects.id),
