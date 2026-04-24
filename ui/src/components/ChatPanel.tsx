@@ -52,11 +52,14 @@ function ToolCard({ toolName, content, role }: ToolCardProps) {
 }
 
 function MessageBubble({ message }: { message: Message }) {
+  if (!message) return null;
+  const content = typeof message.content === "string" ? message.content : String(message.content ?? "");
+
   if (message.role === "tool_use" || message.role === "tool_result") {
     return (
       <ToolCard
         toolName={message.toolName ?? message.role}
-        content={message.content}
+        content={content}
         role={message.role}
       />
     );
@@ -80,7 +83,7 @@ function MessageBubble({ message }: { message: Message }) {
           message.isStreaming && "animate-pulse",
         )}
       >
-        {message.content || (message.isStreaming ? "…" : "")}
+        {content || (message.isStreaming ? "…" : "")}
       </div>
     </div>
   );
@@ -133,6 +136,21 @@ export function ChatPanel({
     }
   }, [open]);
 
+  // AgentDash: close the panel and reset conversation state when the
+  // operator switches company. A conversation is scoped to one company, so
+  // carrying it across would send the next message to the wrong backend.
+  const prevCompanyIdRef = useRef<string | null | undefined>(selectedCompanyId);
+  useEffect(() => {
+    if (prevCompanyIdRef.current === selectedCompanyId) return;
+    prevCompanyIdRef.current = selectedCompanyId;
+    abortRef.current?.abort();
+    setMessages([]);
+    setConversationId(undefined);
+    setError(null);
+    setInput("");
+    onClose();
+  }, [selectedCompanyId, onClose]);
+
   // AgentDash (AGE-50 Phase 4b): internal helper that accepts an explicit
   // message. Lets sendMessage use the current input state, and lets the
   // seed-message effect bypass the input entirely.
@@ -180,7 +198,7 @@ export function ChatPanel({
           const data = line.slice(6);
           if (data === "[DONE]") break;
 
-          let chunk: { type: string; text?: string; toolName?: string; toolInput?: Record<string, unknown>; content?: string; conversationId?: string; error?: string };
+          let chunk: { type: string; text?: string; name?: string; input?: Record<string, unknown>; content?: string; conversationId?: string; message?: string };
           try {
             chunk = JSON.parse(data);
           } catch {
@@ -198,33 +216,37 @@ export function ChatPanel({
               );
               break;
 
+            // Server sends both tool calls and tool results as type="tool_use";
+            // results have names ending in "_result".
             case "tool_use": {
               const toolMsgId = crypto.randomUUID();
-              setMessages((prev) => [
-                ...prev.slice(0, -1), // temporarily remove assistant bubble
-                {
-                  id: toolMsgId,
-                  role: "tool_use",
-                  content: chunk.toolInput ? JSON.stringify(chunk.toolInput, null, 2) : "",
-                  toolName: chunk.toolName ?? "tool",
-                },
-                prev[prev.length - 1]!, // put assistant bubble back
-              ]);
-              break;
-            }
-
-            case "tool_result": {
-              const resultMsgId = crypto.randomUUID();
-              setMessages((prev) => [
-                ...prev.slice(0, -1),
-                {
-                  id: resultMsgId,
-                  role: "tool_result",
-                  content: chunk.content ?? "",
-                  toolName: chunk.toolName ?? "tool",
-                },
-                prev[prev.length - 1]!,
-              ]);
+              const isResult = (chunk.name ?? "").endsWith("_result");
+              const displayName = isResult
+                ? (chunk.name ?? "tool").replace(/_result$/, "")
+                : (chunk.name ?? "tool");
+              let contentStr: string;
+              try {
+                contentStr = chunk.input
+                  ? JSON.stringify(chunk.input, null, 2)
+                  : (chunk.content ?? "");
+              } catch {
+                contentStr = "(unserializable tool input)";
+              }
+              const toolMsg = {
+                id: toolMsgId,
+                role: isResult ? ("tool_result" as const) : ("tool_use" as const),
+                content: contentStr,
+                toolName: displayName,
+              };
+              // Insert the tool card before the streaming assistant bubble
+              // (which is always the last entry mid-stream). If for any
+              // reason there is no tail, just append — never inject
+              // `undefined` into the array, which would crash rendering.
+              setMessages((prev) => {
+                if (prev.length === 0) return [toolMsg];
+                const tail = prev[prev.length - 1];
+                return [...prev.slice(0, -1), toolMsg, tail];
+              });
               break;
             }
 
@@ -240,11 +262,11 @@ export function ChatPanel({
               break;
 
             case "error":
-              setError(chunk.error ?? "An error occurred.");
+              setError(chunk.message ?? "An error occurred.");
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: chunk.error ?? "An error occurred.", isStreaming: false }
+                    ? { ...m, content: chunk.message ?? "An error occurred.", isStreaming: false }
                     : m,
                 ),
               );
@@ -324,7 +346,7 @@ export function ChatPanel({
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         <Bot className="h-4 w-4 text-primary" />
-        <span className="flex-1 text-sm font-semibold">Assistant</span>
+        <span className="flex-1 text-sm font-semibold">Chief of Staff</span>
         {messages.length > 0 && (
           <Button
             type="button"
@@ -353,7 +375,7 @@ export function ChatPanel({
         {!selectedCompanyId ? (
           <div className="flex flex-1 items-center justify-center">
             <p className="text-center text-sm text-muted-foreground">
-              Select a company to start chatting with the assistant.
+              Select a company to start chatting with your Chief of Staff.
             </p>
           </div>
         ) : messages.length === 0 ? (
@@ -362,9 +384,9 @@ export function ChatPanel({
               <Bot className="h-6 w-6 text-primary" />
             </div>
             <div className="text-center">
-              <p className="text-sm font-medium">AgentDash Assistant</p>
+              <p className="text-sm font-medium">Chief of Staff</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Ask about agents, pipelines, tasks, or anything about your workspace.
+                Talk through goals, delegate work, or get a read on what your agents are doing.
               </p>
             </div>
           </div>

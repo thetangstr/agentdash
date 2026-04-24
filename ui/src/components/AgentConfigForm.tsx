@@ -49,6 +49,7 @@ import { shouldShowLegacyWorkingDirectoryField } from "../lib/legacy-agent-confi
 import { listAdapterOptions, listVisibleAdapterTypes } from "../adapters/metadata";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
+import { CodexLoginBlock } from "./CodexLoginBlock";
 
 /* ---- Create mode values ---- */
 
@@ -645,6 +646,19 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
 
           {testEnvironment.data && (
             <AdapterEnvironmentResult result={testEnvironment.data} />
+          )}
+
+          {/* AgentDash (AGE-54.1): surface Codex sign-in inline when the
+              test-environment probe detects missing auth, so non-technical
+              operators can complete OAuth without leaving the agent page. */}
+          {!isCreate && adapterType === "codex_local" && testEnvironment.data?.checks.some((c) =>
+            c.code === "codex_hello_probe_auth_required" ||
+            c.code === "codex_openai_api_key_missing"
+          ) && (
+            <CodexLoginBlock
+              agentId={props.agent.id}
+              companyId={props.agent.companyId}
+            />
           )}
 
           {/* Working directory */}

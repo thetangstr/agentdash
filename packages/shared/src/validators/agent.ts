@@ -56,6 +56,10 @@ export const createAgentSchema = z.object({
   adapterConfig: adapterConfigSchema.optional().default({}),
   runtimeConfig: z.record(z.unknown()).optional().default({}),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
+  // AgentDash: identity mode. "claw" = agent has its own service-account
+  // identity; "assistant" = agent inherits the triggering user's OAuth
+  // tokens (OpenClaw gateway). Column defaults to "claw" at the DB layer.
+  credentialMode: z.enum(["claw", "assistant"]).optional(),
   permissions: agentPermissionsSchema.optional(),
   metadata: z.record(z.unknown()).optional().nullable(),
 });

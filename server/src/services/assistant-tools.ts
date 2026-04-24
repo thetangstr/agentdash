@@ -6,7 +6,7 @@
 import type { Db } from "@agentdash/db";
 import { and, desc, eq } from "drizzle-orm";
 import { agentPlans, goals } from "@agentdash/db";
-import { goalInterviewPayloadSchema, type GoalInterviewPayload } from "@agentdash/shared";
+import { goalInterviewPayloadSchema, type GoalInterviewPayload, type AgentPlanArchetype } from "@agentdash/shared";
 import type { ToolDefinition } from "./assistant-llm.js";
 import { agentService } from "./agents.js";
 import { issueService } from "./issues.js";
@@ -450,7 +450,7 @@ function submitGoalInterviewTool(_db: Db): Tool {
         ctx.companyId,
         {
           goalId,
-          archetype: generated.archetype,
+          archetype: generated.archetype as AgentPlanArchetype,
           rationale: generated.plan.rationale,
           payload: generated.plan,
         },

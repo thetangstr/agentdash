@@ -23,6 +23,7 @@ import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { AgentConfigForm } from "../components/AgentConfigForm";
+import { CodexLoginBlock } from "../components/CodexLoginBlock";
 import { PageTabBar } from "../components/PageTabBar";
 import { adapterLabels, roleLabels, help } from "../components/agent-config-primitives";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
@@ -3228,6 +3229,12 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 <span className="text-red-600 dark:text-red-400">{run.error}</span>
                 {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
               </div>
+            )}
+            {adapterType === "codex_local" && (
+              run.errorCode === "codex_auth_required" ||
+              /codex[_\s-]?(auth|login|api[_\s-]?key)/i.test(run.error ?? "")
+            ) && (
+              <CodexLoginBlock agentId={run.agentId} companyId={run.companyId} />
             )}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">

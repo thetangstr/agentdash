@@ -419,8 +419,8 @@ export function Layout() {
                   size="icon-sm"
                   className={cn("shrink-0", chatOpen ? "text-primary" : "text-muted-foreground")}
                   onClick={toggleChat}
-                  aria-label="Toggle assistant chat"
-                  title="Toggle assistant chat"
+                  aria-label="Toggle Chief of Staff chat"
+                  title="Toggle Chief of Staff chat"
                 >
                   <MessageSquare className="h-4 w-4" />
                 </Button>

@@ -53,9 +53,11 @@ export function assistantRoutes(db: Db) {
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders();
 
-      // Handle client disconnect
+      // Handle client disconnect: use res "close" (fires when the client drops
+      // the SSE connection). req "close" fires when the POST body is consumed
+      // (too early for SSE) so must NOT be used here.
       let aborted = false;
-      req.on("close", () => {
+      res.on("close", () => {
         aborted = true;
       });
 
