@@ -54,6 +54,8 @@ import { entitlementsRoutes } from "./routes/entitlements.js";
 import { billingRoutes, billingWebhookHandler } from "./routes/billing.js";
 // AgentDash (AGE-58): WorkOS webhook ingestion
 import { workosWebhookHandler } from "./routes/auth-webhooks.js";
+// AgentDash (AGE-59): Transactional email
+import { createEmailService } from "./services/email/index.js";
 import { createBillingProvider, StripeBillingProvider } from "@agentdash/billing";
 import type { StripePriceMap } from "@agentdash/billing";
 import { entitlementsService } from "./services/entitlements.js";
@@ -120,6 +122,15 @@ export async function createApp(
     localPluginDir?: string;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    // AgentDash (AGE-59): Email delivery configuration.
+    // Factory called per company scope (activity logging requires a companyId).
+    emailConfig?: {
+      emailBackend: "relay" | "workos";
+      emailRelayUrl?: string;
+      emailRelayInstanceId?: string;
+      emailRelaySigningKey?: string;
+      resendApiKey?: string;
+    };
   },
 ) {
   const app = express();
@@ -334,6 +345,10 @@ export async function createApp(
       deploymentExposure: opts.deploymentExposure,
       bindHost: opts.bindHost,
       allowedHostnames: opts.allowedHostnames,
+      // AgentDash (AGE-59): wire EmailService factory when email config is present.
+      emailServiceFactory: opts.emailConfig
+        ? (companyId) => createEmailService(opts.emailConfig!, db, companyId)
+        : undefined,
     }),
   );
   app.use("/api", api);

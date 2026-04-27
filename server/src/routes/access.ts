@@ -48,6 +48,12 @@ import {
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
+// AgentDash (AGE-59): Import EmailService types so invite-create can attempt
+// to send the invite email and catch relay failures (copy-link fallback).
+import {
+  EmailRelayUnavailableError,
+  type EmailService,
+} from "../services/email/index.js";
 import { assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
@@ -1573,6 +1579,12 @@ export function accessRoutes(
     deploymentExposure: DeploymentExposure;
     bindHost: string;
     allowedHostnames: string[];
+    // AgentDash (AGE-59): optional factory for transactional email.
+    // Called per request with the current companyId (needed for activity logging).
+    // When present, the invite-create route attempts to send the invite email;
+    // on EmailRelayUnavailableError the response includes emailRelayUnavailable:true
+    // so the UI can show a copy-link banner.
+    emailServiceFactory?: (companyId: string) => EmailService;
   }
 ) {
   const router = Router();
@@ -1973,6 +1985,30 @@ export function accessRoutes(
         created,
         companyName
       );
+
+      // AgentDash (AGE-59): Attempt to send the invite email via EmailService.
+      // If the relay is unreachable, include emailRelayUnavailable=true in the
+      // response so the UI can show a copy-link banner. The invite is still valid.
+      let emailRelayUnavailable = false;
+      if (opts.emailServiceFactory && created.allowedJoinTypes !== "agent") {
+        const emailSvc = opts.emailServiceFactory(companyId);
+        const inviteUrl = `/invite/${token}`;
+        try {
+          await emailSvc.sendInvite({
+            to: req.body.email ?? "",
+            orgName: companyName ?? "your organisation",
+            inviteUrl,
+            expiresAt: created.expiresAt,
+          });
+        } catch (err) {
+          if (err instanceof EmailRelayUnavailableError) {
+            emailRelayUnavailable = true;
+          } else {
+            throw err;
+          }
+        }
+      }
+
       res.status(201).json({
         ...created,
         token,
@@ -1980,7 +2016,10 @@ export function accessRoutes(
         companyName,
         onboardingTextPath: inviteSummary.onboardingTextPath,
         onboardingTextUrl: inviteSummary.onboardingTextUrl,
-        inviteMessage: inviteSummary.inviteMessage
+        inviteMessage: inviteSummary.inviteMessage,
+        // AGE-59: present when the email relay was unreachable so the UI can
+        // display a copy-link banner.
+        ...(emailRelayUnavailable && { emailRelayUnavailable: true }),
       });
     }
   );

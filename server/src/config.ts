@@ -89,6 +89,19 @@ export interface Config {
   workosClientId: string | undefined;
   /** WorkOS webhook signing secret — required for /api/auth/webhooks/workos signature validation. */
   workosWebhookSecret: string | undefined;
+  // AgentDash (AGE-59): Email delivery backend.
+  // "relay" = AgentDash-hosted Resend relay (self-hosted Free, default).
+  // "workos" = WorkOS-managed email + direct Resend for non-WorkOS-originated mail.
+  // Defaults to "relay" when authProvider="better-auth", "workos" when authProvider="workos".
+  emailBackend: "relay" | "workos";
+  /** URL of the AgentDash-hosted Resend relay (relay backend only). */
+  emailRelayUrl: string | undefined;
+  /** Stable identifier for this self-hosted instance, sent to relay for rate-limiting. */
+  emailRelayInstanceId: string | undefined;
+  /** HMAC-SHA256 signing key for relay payloads. */
+  emailRelaySigningKey: string | undefined;
+  /** Resend API key for direct sends (workos backend) or relay auth. */
+  resendApiKey: string | undefined;
 }
 
 export function loadConfig(): Config {
@@ -230,6 +243,17 @@ export function loadConfig(): Config {
   const workosApiKey = process.env.WORKOS_API_KEY?.trim() || undefined;
   const workosClientId = process.env.WORKOS_CLIENT_ID?.trim() || undefined;
   const workosWebhookSecret = process.env.WORKOS_WEBHOOK_SECRET?.trim() || undefined;
+  // AgentDash (AGE-59): EMAIL_BACKEND selects the transactional email backend.
+  // Defaults to "workos" when authProvider="workos", "relay" otherwise.
+  const emailBackendRaw = process.env.EMAIL_BACKEND?.trim().toLowerCase();
+  const emailBackend: "relay" | "workos" =
+    emailBackendRaw === "workos" || (emailBackendRaw === undefined && authProvider === "workos")
+      ? "workos"
+      : "relay";
+  const emailRelayUrl = process.env.EMAIL_RELAY_URL?.trim() || undefined;
+  const emailRelayInstanceId = process.env.EMAIL_RELAY_INSTANCE_ID?.trim() || undefined;
+  const emailRelaySigningKey = process.env.EMAIL_RELAY_SIGNING_KEY?.trim() || undefined;
+  const resendApiKey = process.env.RESEND_API_KEY?.trim() || undefined;
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -302,5 +326,10 @@ export function loadConfig(): Config {
     workosApiKey,
     workosClientId,
     workosWebhookSecret,
+    emailBackend,
+    emailRelayUrl,
+    emailRelayInstanceId,
+    emailRelaySigningKey,
+    resendApiKey,
   };
 }
