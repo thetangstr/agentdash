@@ -27,10 +27,13 @@ Epic (labeled in Linear)
 
 | Epic Label | Description | Example CUJs |
 |-----------|-------------|--------------|
-| `epic:auth` | Authentication, sessions, login | #auth-login, #auth-signup, #auth-logout |
-| `epic:billing` | Payments, subscriptions, invoicing | #pay-checkout, #pay-subscribe |
-| `epic:core` | Core product features | #core-create, #core-edit, #core-delete |
-| `epic:admin` | Admin tools, analytics | #admin-dashboard, #admin-users |
+| `epic:onboarding` | Human onboarding, auth providers, sign-up flows, request-to-join, ACL, people directory | #onboarding-pro-signup, #onboarding-request-to-join, #onboarding-jit-toggle, #onboarding-welcome, #onboarding-people-directory |
+| `epic:auth` | Pre-existing auth flows (better-auth path) — being subsumed by `epic:onboarding` | #auth-login, #auth-signup, #auth-session |
+| `epic:agents` | Agent factory, lifecycle, identity, runtimes | TBD |
+| `epic:goals` | Business Goals, Chief-of-Staff, KPIs | TBD |
+| `epic:crm` | CRM, HubSpot integration, contacts, opportunities | TBD |
+| `epic:billing` | Plan tiers, Stripe, agent-count slider | TBD (gated on pricing decision) |
+| `epic:admin` | Admin/CEO tools, audit log, instance settings | #admin-join-requests, #admin-agent-grants |
 
 ---
 
@@ -49,37 +52,54 @@ Examples:
 
 ---
 
-## Example Epic Detail: AUTH
+## Epic Detail: ONBOARDING
 
-Authentication and session management.
+Multi-human × multi-agent onboarding. Two deployment shapes (self-hosted Free / cloud Pro) behind a single `IAuthProvider` adapter. Owns: auth provider abstraction, sign-up flows, invitations, request-to-join + admin approval, per-user welcome, agent-access grants, people directory.
 
-| CUJ ID | CUJ Name | Description | User Type |
-|--------|----------|-------------|-----------|
-| `#auth-login` | Login | User signs in with credentials | All |
-| `#auth-signup` | Signup | User creates new account | Visitor |
-| `#auth-logout` | Logout | User signs out, session cleared | All |
-| `#auth-session` | Session | Session persistence and refresh | All |
-
-**Test Files:**
-- `tests/e2e/auth/login.spec.ts` -> @auth #auth-login
-- `tests/e2e/auth/signup.spec.ts` -> @auth #auth-signup
-
----
-
-## Example Epic Detail: BILLING
-
-Payments, subscriptions, and invoicing.
+**Linear epic:** AGE-56. **Children:** AGE-57 → AGE-63.
 
 | CUJ ID | CUJ Name | Description | User Type |
 |--------|----------|-------------|-----------|
-| `#pay-checkout` | Checkout | User completes purchase | Customer |
-| `#pay-subscribe` | Subscribe | User subscribes to plan | Customer |
-| `#pay-cancel` | Cancel | User cancels subscription | Customer |
-| `#pay-billing` | Billing History | User views payment history | Customer |
+| `#onboarding-auth-adapter` | Auth provider adapter | Backend code routes through `IAuthProvider`; provider selected by `AUTH_PROVIDER` env | Internal |
+| `#onboarding-workos-auth` | WorkOS sign-in/sign-up | Cloud Pro sign-in/sign-up backed by WorkOS AuthKit (free tier) | Cloud admin/member |
+| `#onboarding-org-claim` | Domain claim (DNS) | WorkOS DNS-verified corp domain claim creates/joins org | Cloud admin |
+| `#onboarding-jit` | JIT auto-join | Verified-domain user auto-added to org when JIT toggle is on | Cloud member |
+| `#onboarding-jit-toggle` | JIT toggle | Admin flips per-org `allowJitProvisioning`; subsequent sign-ups skip request flow | Cloud admin |
+| `#onboarding-user-mirror` | WorkOS user mirror | WorkOS users mirrored to local `authUsers` via webhooks | Internal |
+| `#onboarding-pro-signup` | Pro corp-domain sign-up | First human at corp domain becomes admin/CEO | Cloud admin |
+| `#onboarding-free-signup` | Free single-user sign-up | Solo user signs up on self-hosted Free | Self-hosted admin |
+| `#onboarding-free-mail-block` | Free-mail block on Pro | Pro sign-up at gmail/yahoo/etc → 400 with clear error | Cloud visitor |
+| `#onboarding-free-seat-cap` | Free single-seat hard cap | 2nd sign-up on self-hosted Free → blocked with upgrade CTA | Self-hosted visitor |
+| `#onboarding-request-to-join` | Request to join | 2nd human at corp domain submits request, lands in admin inbox | Cloud member |
+| `#onboarding-admin-approve` | Admin approves request | Admin one-click approves; member joins; activity logged | Cloud admin |
+| `#onboarding-admin-deny` | Admin denies request | Admin denies with optional reason | Cloud admin |
+| `#onboarding-email-invite` | Invite email delivered | Invite email reaches recipient (WorkOS or Resend relay) | All |
+| `#onboarding-email-notify` | Admin notification email | Admin gets email on join requests | Cloud admin |
+| `#onboarding-email-fallback` | Copy-link fallback | Self-hosted offline → invite UI shows copy-link banner | Self-hosted admin |
+| `#onboarding-welcome` | Per-human welcome | New human's first visit; basic profile + tour | All members |
+| `#onboarding-welcome-skip` | Welcome skip | Returning user with completed welcome → straight to dashboard | All members |
+| `#onboarding-agent-acl` | Agent access grants | Admin grants/revokes per-agent access (read/use/edit) | Cloud admin |
+| `#onboarding-people-directory` | People directory | All humans + agents in `/people` | All members |
+| `#onboarding-people-search` | People filter | Search/filter by role / by agent | All members |
 
-**Test Files:**
-- `tests/e2e/billing/checkout.spec.ts` -> @billing #pay-checkout
-- `tests/e2e/billing/subscription.spec.ts` -> @billing #pay-subscribe
+**Test Files (planned):**
+- `server/src/__tests__/auth-provider-contract.test.ts` -> @onboarding #onboarding-auth-adapter
+- `server/src/__tests__/workos-provider.test.ts` -> @onboarding #onboarding-workos-auth #onboarding-jit
+- `server/src/__tests__/workos-webhook-route.test.ts` -> @onboarding #onboarding-user-mirror
+- `server/src/__tests__/email-service.test.ts` -> @onboarding #onboarding-email-invite #onboarding-email-fallback
+- `server/src/__tests__/signup-pro-free-mail-block.test.ts` -> @onboarding #onboarding-free-mail-block
+- `server/src/__tests__/signup-free-seat-cap.test.ts` -> @onboarding #onboarding-free-seat-cap
+- `server/src/__tests__/companies-email-domain-route.test.ts` -> @onboarding #onboarding-pro-signup (already exists, AGE-55)
+- `server/src/__tests__/join-requests-routes.test.ts` -> @onboarding #onboarding-request-to-join #onboarding-admin-approve #onboarding-admin-deny
+- `server/src/__tests__/jit-toggle-route.test.ts` -> @onboarding #onboarding-jit-toggle
+- `server/src/__tests__/welcome-state-route.test.ts` -> @onboarding #onboarding-welcome
+- `ui/src/pages/__tests__/WelcomePage.test.tsx` -> @onboarding #onboarding-welcome
+- `server/src/__tests__/agent-access-grants-routes.test.ts` -> @onboarding #onboarding-agent-acl
+- `ui/src/pages/__tests__/PeoplePage.test.tsx` -> @onboarding #onboarding-people-directory #onboarding-people-search
+- `tests/e2e/onboarding/multi-human.spec.ts` (planned, epic-closure) -> @onboarding (full flow)
+
+**Spec:** `.omc/specs/deep-interview-human-onboarding-2026-04-25.md` (gitignored — interview output)
+**Memories:** `project_deployment_dual_path.md`, `project_auth_provider_direction.md`, `project_fre_account_model.md`
 
 ---
 
