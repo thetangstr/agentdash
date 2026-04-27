@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, integer, timestamp, boolean, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const companies = pgTable(
   "companies",
@@ -24,11 +25,23 @@ export const companies = pgTable(
     feedbackDataSharingTermsVersion: text("feedback_data_sharing_terms_version"),
     brandColor: text("brand_color"),
     themeAccentColor: text("theme_accent_color"),
+    // AgentDash (AGE-55): FRE Plan B — domain-keyed companies. NULL is allowed
+    // for grandfathered rows; new rows derive this via
+    // `deriveCompanyEmailDomain(creatorEmail)` and the partial unique index
+    // below enforces one company per non-NULL domain.
+    emailDomain: text("email_domain"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     issuePrefixUniqueIdx: uniqueIndex("companies_issue_prefix_idx").on(table.issuePrefix),
+    // AgentDash (AGE-55): partial unique index — grandfathered NULL rows do
+    // not collide, so we can ship the constraint without a destructive
+    // backfill. Creators of new corp/free-mail companies hit this when they
+    // try to claim a domain another company already owns.
+    emailDomainUniqueIdx: uniqueIndex("companies_email_domain_unique_idx")
+      .on(table.emailDomain)
+      .where(sql`${table.emailDomain} IS NOT NULL`),
   }),
 );

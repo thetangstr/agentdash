@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
 import {
   companyMemberships,
@@ -6,12 +6,19 @@ import {
   principalPermissionGrants,
 } from "@agentdash/db";
 import type { PermissionKey, PrincipalType } from "@agentdash/shared";
+import { conflict } from "../errors.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
   permissionKey: PermissionKey;
   scope?: Record<string, unknown> | null;
 };
+
+// AgentDash (AGE-55): Roles that count as a "board" / admin seat for the
+// at-least-one-admin invariant. We treat both "owner" (legacy) and "board"
+// as board-equivalent — the LAST one of these on a company can never be
+// removed or demoted.
+const BOARD_MEMBERSHIP_ROLES = new Set(["owner", "board"]);
 
 export function accessService(db: Db) {
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
@@ -176,9 +183,17 @@ export function accessService(db: Db) {
     const existing = await listUserCompanyAccess(userId);
     const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
     const target = new Set(companyIds);
+    const removed = existing.filter((row) => !target.has(row.companyId));
+
+    // AgentDash (AGE-55): centralized last-board guard. Reject the entire
+    // mutation if dropping any of the user's memberships would leave a
+    // company with no remaining board admin.
+    for (const row of removed) {
+      await assertNotLastBoardOnRemoval(row);
+    }
 
     await db.transaction(async (tx) => {
-      const toDelete = existing.filter((row) => !target.has(row.companyId)).map((row) => row.id);
+      const toDelete = removed.map((row) => row.id);
       if (toDelete.length > 0) {
         await tx.delete(companyMemberships).where(inArray(companyMemberships.id, toDelete));
       }
@@ -196,6 +211,98 @@ export function accessService(db: Db) {
     });
 
     return listUserCompanyAccess(userId);
+  }
+
+  // AgentDash (AGE-55): centralized last-board guards. Every membership
+  // mutation that could remove or demote a board user MUST funnel through
+  // these helpers so the at-least-one-admin invariant cannot be violated.
+  async function countActiveBoardUserMemberships(
+    companyId: string,
+    excludeMembershipId?: string,
+  ): Promise<number> {
+    const baseFilters = [
+      eq(companyMemberships.companyId, companyId),
+      eq(companyMemberships.principalType, "user"),
+      eq(companyMemberships.status, "active"),
+      inArray(companyMemberships.membershipRole, Array.from(BOARD_MEMBERSHIP_ROLES)),
+    ];
+    const whereExpr = excludeMembershipId
+      ? and(...baseFilters, ne(companyMemberships.id, excludeMembershipId))
+      : and(...baseFilters);
+    const rows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(companyMemberships)
+      .where(whereExpr);
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  function isBoardRole(role: string | null | undefined): boolean {
+    return role !== null && role !== undefined && BOARD_MEMBERSHIP_ROLES.has(role);
+  }
+
+  async function assertNotLastBoardOnRemoval(membership: MembershipRow): Promise<void> {
+    if (membership.principalType !== "user") return;
+    if (membership.status !== "active") return;
+    if (!isBoardRole(membership.membershipRole)) return;
+    const remaining = await countActiveBoardUserMemberships(membership.companyId, membership.id);
+    if (remaining === 0) {
+      throw conflict("Cannot remove the last board admin", {
+        code: "last_admin",
+        companyId: membership.companyId,
+      });
+    }
+  }
+
+  async function assertNotLastBoardOnRoleChange(
+    membership: MembershipRow,
+    nextRole: string | null,
+    nextStatus: "pending" | "active" | "suspended",
+  ): Promise<void> {
+    if (membership.principalType !== "user") return;
+    const wasBoardActive = membership.status === "active" && isBoardRole(membership.membershipRole);
+    const willBeBoardActive = nextStatus === "active" && isBoardRole(nextRole);
+    // Only reject when this membership is currently a board admin and the
+    // change would strip board-admin status (role demotion or suspension).
+    if (!wasBoardActive || willBeBoardActive) return;
+    const remaining = await countActiveBoardUserMemberships(membership.companyId, membership.id);
+    if (remaining === 0) {
+      throw conflict("Cannot demote the last board admin", {
+        code: "last_admin",
+        companyId: membership.companyId,
+      });
+    }
+  }
+
+  async function removeMembership(membershipId: string): Promise<MembershipRow | null> {
+    const existing = await db
+      .select()
+      .from(companyMemberships)
+      .where(eq(companyMemberships.id, membershipId))
+      .then((rows) => rows[0] ?? null);
+    if (!existing) return null;
+    await assertNotLastBoardOnRemoval(existing);
+    await db.delete(companyMemberships).where(eq(companyMemberships.id, membershipId));
+    return existing;
+  }
+
+  async function setMembershipRole(
+    membershipId: string,
+    nextRole: string | null,
+    nextStatus: "pending" | "active" | "suspended" = "active",
+  ): Promise<MembershipRow | null> {
+    const existing = await db
+      .select()
+      .from(companyMemberships)
+      .where(eq(companyMemberships.id, membershipId))
+      .then((rows) => rows[0] ?? null);
+    if (!existing) return null;
+    await assertNotLastBoardOnRoleChange(existing, nextRole, nextStatus);
+    return db
+      .update(companyMemberships)
+      .set({ membershipRole: nextRole, status: nextStatus, updatedAt: new Date() })
+      .where(eq(companyMemberships.id, membershipId))
+      .returning()
+      .then((rows) => rows[0] ?? null);
   }
 
   async function ensureMembership(
@@ -376,5 +483,11 @@ export function accessService(db: Db) {
     setPrincipalGrants,
     listPrincipalGrants,
     setPrincipalPermission,
+    // AgentDash (AGE-55): centralized last-board-admin guards. New
+    // membership-mutation endpoints MUST go through these helpers so the
+    // at-least-one-admin invariant is enforced everywhere.
+    countActiveBoardUserMemberships,
+    removeMembership,
+    setMembershipRole,
   };
 }

@@ -110,6 +110,9 @@ export async function createApp(
     bindHost: string;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    // AgentDash (AGE-55): FRE Plan B flags
+    disableSignUp?: boolean;
+    allowMultiTenantPerDomain?: boolean;
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
@@ -193,9 +196,17 @@ export async function createApp(
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,
       companyDeletionEnabled: opts.companyDeletionEnabled,
+      // AgentDash (AGE-55): expose to the login UI so it can hide the signup tab.
+      disableSignUp: opts.disableSignUp ?? false,
     }),
   );
-  api.use("/companies", companyRoutes(db, opts.storageService));
+  api.use(
+    "/companies",
+    companyRoutes(db, opts.storageService, {
+      // AgentDash (AGE-55): per-domain uniqueness toggle for company creation.
+      allowMultiTenantPerDomain: opts.allowMultiTenantPerDomain ?? false,
+    }),
+  );
   api.use(companySkillRoutes(db));
   api.use(agentRoutes(db));
   api.use(assetRoutes(db, opts.storageService));

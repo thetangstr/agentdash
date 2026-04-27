@@ -1,11 +1,14 @@
 import { Router, type Request } from "express";
+import { eq } from "drizzle-orm";
 import type { Db } from "@agentdash/db";
+import { authUsers } from "@agentdash/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
   companyPortabilityExportSchema,
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
   createCompanySchema,
+  deriveCompanyEmailDomain,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
   feedbackVoteValueSchema,
@@ -23,10 +26,22 @@ import {
   feedbackService,
   logActivity,
 } from "../services/index.js";
+import { DomainAlreadyClaimedError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 
-export function companyRoutes(db: Db, storage?: StorageService) {
+// AgentDash (AGE-55): per-route options. Mirrors the env-var-driven flag
+// from server/src/config.ts so test/integration harnesses can override.
+export interface CompanyRoutesOptions {
+  allowMultiTenantPerDomain?: boolean;
+}
+
+export function companyRoutes(
+  db: Db,
+  storage?: StorageService,
+  options: CompanyRoutesOptions = {},
+) {
+  const allowMultiTenantPerDomain = options.allowMultiTenantPerDomain ?? false;
   const router = Router();
   const svc = companyService(db);
   const agents = agentService(db);
@@ -262,7 +277,66 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     if (!(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
       throw forbidden("Instance admin required");
     }
-    const company = await svc.create(req.body);
+
+    // AgentDash (AGE-55): FRE Plan B — derive email_domain from the creator's
+    // authenticated email. local_implicit actors (single-machine dev) have no
+    // email, so we leave the domain NULL and grandfather them in.
+    let emailDomain: string | null = null;
+    let creatorEmail: string | null = null;
+    if (req.actor.source !== "local_implicit" && req.actor.userId) {
+      const userRow = await db
+        .select({ email: authUsers.email })
+        .from(authUsers)
+        .where(eq(authUsers.id, req.actor.userId))
+        .then((rows) => rows[0] ?? null);
+      creatorEmail = userRow?.email ?? null;
+      if (creatorEmail) {
+        try {
+          emailDomain = deriveCompanyEmailDomain(creatorEmail);
+        } catch (err) {
+          throw badRequest(`Could not derive company email domain from "${creatorEmail}"`);
+        }
+        if (!allowMultiTenantPerDomain) {
+          // Pre-flight check so we can surface a friendly contactEmail in the
+          // 409 body. The DB unique index is the actual safety net for races.
+          const existingCompany = await svc.findByEmailDomain(emailDomain);
+          if (existingCompany) {
+            res.status(409).json({
+              code: "domain_already_claimed",
+              existingCompanyId: existingCompany.id,
+              contactEmail: null,
+            });
+            return;
+          }
+        }
+      }
+    }
+
+    let company: Awaited<ReturnType<typeof svc.create>>;
+    try {
+      company = await svc.create({
+        ...req.body,
+        // When the flag is ON we still persist the domain (so the historical
+        // record reflects who created it) but we skip the uniqueness check.
+        // When the partial unique index would fire, the catch below converts
+        // it to a 409.
+        emailDomain,
+      });
+    } catch (err) {
+      if (err instanceof DomainAlreadyClaimedError) {
+        res.status(409).json({
+          code: "domain_already_claimed",
+          existingCompanyId: err.existingCompanyId,
+          contactEmail: null,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    // AgentDash (AGE-55): existing behavior already promotes the creator to a
+    // board ("owner") membership. We rely on that here so the at-least-one-
+    // admin invariant holds from the moment the company exists.
     await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
     await logActivity(db, {
       companyId: company.id,
@@ -271,7 +345,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
       action: "company.created",
       entityType: "company",
       entityId: company.id,
-      details: { name: company.name },
+      details: { name: company.name, emailDomain, creatorEmail },
     });
     if (company.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(

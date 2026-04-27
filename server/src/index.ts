@@ -539,6 +539,9 @@ export async function startServer(): Promise<StartedServer> {
     bindHost: config.host,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
+    // AgentDash (AGE-55): FRE Plan B flags
+    disableSignUp: config.authDisableSignUp,
+    allowMultiTenantPerDomain: config.allowMultiTenantPerDomain,
     betterAuthHandler,
     resolveSession,
   });
