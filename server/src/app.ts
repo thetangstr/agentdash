@@ -52,6 +52,8 @@ import { feedRoutes } from "./routes/feed.js";
 import { entitlementsRoutes } from "./routes/entitlements.js";
 // AgentDash: Billing
 import { billingRoutes, billingWebhookHandler } from "./routes/billing.js";
+// AgentDash (AGE-58): WorkOS webhook ingestion
+import { workosWebhookHandler } from "./routes/auth-webhooks.js";
 import { createBillingProvider, StripeBillingProvider } from "@agentdash/billing";
 import type { StripePriceMap } from "@agentdash/billing";
 import { entitlementsService } from "./services/entitlements.js";
@@ -183,6 +185,13 @@ export async function createApp(
     priceMap,
   };
   app.post("/api/billing/webhook", billingWebhookHandler(db, billingDeps));
+
+  // AgentDash (AGE-58): WorkOS webhook — mounted outside boardMutationGuard + auth.
+  // Validates HMAC signature; no AUTH_PROVIDER guard needed (harmless if not using WorkOS).
+  app.post(
+    "/api/auth/webhooks/workos",
+    workosWebhookHandler(db, process.env.WORKOS_WEBHOOK_SECRET ?? ""),
+  );
 
   app.use(llmRoutes(db));
 

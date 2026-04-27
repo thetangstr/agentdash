@@ -44,7 +44,6 @@
     "typecheck": "pnpm run preflight:workspace-links && pnpm --filter @agentdash/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
-    "@agentdash/billing": "workspace:*",
     "@agentdash/adapter-claude-local": "workspace:*",
     "@agentdash/adapter-codex-local": "workspace:*",
     "@agentdash/adapter-cursor-local": "workspace:*",
@@ -53,11 +52,13 @@
     "@agentdash/adapter-opencode-local": "workspace:*",
     "@agentdash/adapter-pi-local": "workspace:*",
     "@agentdash/adapter-utils": "workspace:*",
+    "@agentdash/billing": "workspace:*",
     "@agentdash/db": "workspace:*",
     "@agentdash/plugin-sdk": "workspace:*",
     "@agentdash/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.86.1",
     "@aws-sdk/client-s3": "^3.888.0",
+    "@workos-inc/node": "^9.1.1",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
     "better-auth": "1.4.18",

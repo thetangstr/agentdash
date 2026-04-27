@@ -211,12 +211,22 @@ describe("IAuthProvider contract — BetterAuthProvider (AGE-57)", () => {
   });
 });
 
-describe("createAuthProvider — provider selection guard (AGE-57)", () => {
-  it("throws a clear error when AUTH_PROVIDER=workos (not yet implemented)", () => {
+describe("createAuthProvider — provider selection guard (AGE-57 / AGE-58)", () => {
+  it("throws a clear error when AUTH_PROVIDER=workos but env vars are missing (AGE-58)", () => {
     const db = buildStubDb({});
-    expect(() =>
-      createAuthProvider("workos", db, fakeResolveSession(null)),
-    ).toThrow(/WorkOSProvider is not yet implemented/);
+    // Ensure WorkOS env vars are not set so the boot-time validation fires.
+    const originalApiKey = process.env.WORKOS_API_KEY;
+    const originalClientId = process.env.WORKOS_CLIENT_ID;
+    delete process.env.WORKOS_API_KEY;
+    delete process.env.WORKOS_CLIENT_ID;
+    try {
+      expect(() =>
+        createAuthProvider("workos", db, fakeResolveSession(null)),
+      ).toThrow(/WORKOS_API_KEY/);
+    } finally {
+      if (originalApiKey !== undefined) process.env.WORKOS_API_KEY = originalApiKey;
+      if (originalClientId !== undefined) process.env.WORKOS_CLIENT_ID = originalClientId;
+    }
   });
 
   it("does NOT throw for AUTH_PROVIDER=better-auth (default)", () => {

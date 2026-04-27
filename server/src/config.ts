@@ -82,6 +82,13 @@ export interface Config {
   // AgentDash (AGE-57): Selects the IAuthProvider implementation at boot.
   // "better-auth" = self-hosted Free (default); "workos" = cloud Pro (AGE-58).
   authProvider: "better-auth" | "workos";
+  // AgentDash (AGE-58): WorkOS AuthKit cloud Pro env vars.
+  /** WorkOS API key — required when authProvider="workos". */
+  workosApiKey: string | undefined;
+  /** WorkOS Client ID — required when authProvider="workos". */
+  workosClientId: string | undefined;
+  /** WorkOS webhook signing secret — required for /api/auth/webhooks/workos signature validation. */
+  workosWebhookSecret: string | undefined;
 }
 
 export function loadConfig(): Config {
@@ -219,6 +226,10 @@ export function loadConfig(): Config {
     authProviderRaw === "workos"
       ? "workos"
       : "better-auth";
+  // AgentDash (AGE-58): WorkOS AuthKit cloud Pro env vars.
+  const workosApiKey = process.env.WORKOS_API_KEY?.trim() || undefined;
+  const workosClientId = process.env.WORKOS_CLIENT_ID?.trim() || undefined;
+  const workosWebhookSecret = process.env.WORKOS_WEBHOOK_SECRET?.trim() || undefined;
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -288,5 +299,8 @@ export function loadConfig(): Config {
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
     allowMultiTenantPerDomain,
     authProvider,
+    workosApiKey,
+    workosClientId,
+    workosWebhookSecret,
   };
 }
