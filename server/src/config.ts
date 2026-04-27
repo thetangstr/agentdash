@@ -79,6 +79,9 @@ export interface Config {
   // AgentDash (AGE-55): FRE Plan B — when true, the company-create path
   // skips the per-domain uniqueness check. Internal-only, env-var only.
   allowMultiTenantPerDomain: boolean;
+  // AgentDash (AGE-57): Selects the IAuthProvider implementation at boot.
+  // "better-auth" = self-hosted Free (default); "workos" = cloud Pro (AGE-58).
+  authProvider: "better-auth" | "workos";
 }
 
 export function loadConfig(): Config {
@@ -209,6 +212,13 @@ export function loadConfig(): Config {
   // (PAPERCLIP_* + simple boolean parse). Default OFF so single-tenant
   // domain-uniqueness is the safe default.
   const allowMultiTenantPerDomain = process.env.PAPERCLIP_ALLOW_MULTI_TENANT_PER_DOMAIN === "true";
+  // AgentDash (AGE-57): AUTH_PROVIDER selects the IAuthProvider implementation.
+  // Default is "better-auth". "workos" is reserved for AGE-58 and throws at boot.
+  const authProviderRaw = process.env.AUTH_PROVIDER?.trim().toLowerCase();
+  const authProvider: "better-auth" | "workos" =
+    authProviderRaw === "workos"
+      ? "workos"
+      : "better-auth";
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -277,5 +287,6 @@ export function loadConfig(): Config {
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
     allowMultiTenantPerDomain,
+    authProvider,
   };
 }
