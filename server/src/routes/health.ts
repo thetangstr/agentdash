@@ -14,11 +14,14 @@ export function healthRoutes(
     deploymentExposure: DeploymentExposure;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    // AgentDash (AGE-55): exposed to the login UI so it can hide signup.
+    disableSignUp?: boolean;
   } = {
     deploymentMode: "local_trusted",
     deploymentExposure: "private",
     authReady: true,
     companyDeletionEnabled: true,
+    disableSignUp: false,
   },
 ) {
   const router = Router();
@@ -95,6 +98,8 @@ export function healthRoutes(
       bootstrapInviteActive,
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
+        // AgentDash (AGE-55): UI Auth.tsx hides the signup tab when this is true.
+        disableSignUp: opts.disableSignUp ?? false,
       },
       ...(devServer ? { devServer } : {}),
     });

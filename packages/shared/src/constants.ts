@@ -916,3 +916,72 @@ export type InboxStatus = (typeof INBOX_STATUSES)[number];
 
 export const TIERS = ["free", "pro", "enterprise"] as const;
 export type Tier = (typeof TIERS)[number];
+
+// AgentDash (AGE-55): FRE Plan B — invite-only signup with domain-keyed
+// companies. Free-mail providers are blocklisted from corp-domain claiming so
+// any individual `*@gmail.com` user can still create their own personal
+// workspace without colliding with another `gmail.com` user.
+export const FREE_MAIL_DOMAINS: ReadonlySet<string> = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "aol.com",
+  "gmx.com",
+  "mail.com",
+  "zoho.com",
+  "fastmail.com",
+  "hey.com",
+  "duck.com",
+]);
+
+/**
+ * Derive the canonical `email_domain` value for a company from the creator's
+ * authenticated email address.
+ *
+ * - Corp emails (domain NOT in {@link FREE_MAIL_DOMAINS}) → bare lowercased
+ *   domain (e.g. `acme.com`). One company per domain is enforced.
+ * - Free-mail emails (domain IN {@link FREE_MAIL_DOMAINS}) → full lowercased
+ *   email address (e.g. `kailortang@gmail.com`) so each personal user gets
+ *   their own personal workspace without colliding on `gmail.com`.
+ *
+ * Throws when the input is not parseable as a single `local@host` email.
+ *
+ * @see AGE-55 FRE Plan B
+ */
+export function deriveCompanyEmailDomain(creatorEmail: string): string {
+  if (typeof creatorEmail !== "string") {
+    throw new TypeError("deriveCompanyEmailDomain: email must be a string");
+  }
+  const trimmed = creatorEmail.trim().toLowerCase();
+  const atIdx = trimmed.lastIndexOf("@");
+  if (atIdx <= 0 || atIdx === trimmed.length - 1) {
+    throw new Error(`deriveCompanyEmailDomain: invalid email "${creatorEmail}"`);
+  }
+  const localRaw = trimmed.slice(0, atIdx);
+  const domain = trimmed.slice(atIdx + 1);
+  if (!domain.includes(".")) {
+    throw new Error(`deriveCompanyEmailDomain: invalid email domain "${creatorEmail}"`);
+  }
+  // Strip plus-addressing from the local part so `me+foo@gmail.com` and
+  // `me@gmail.com` both produce the same personal-workspace key.
+  const plusIdx = localRaw.indexOf("+");
+  const local = plusIdx >= 0 ? localRaw.slice(0, plusIdx) : localRaw;
+  if (!local) {
+    throw new Error(`deriveCompanyEmailDomain: invalid email local part "${creatorEmail}"`);
+  }
+  if (FREE_MAIL_DOMAINS.has(domain)) {
+    return `${local}@${domain}`;
+  }
+  return domain;
+}

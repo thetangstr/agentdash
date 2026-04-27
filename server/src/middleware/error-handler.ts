@@ -49,6 +49,23 @@ export function errorHandler(
       const tc = getTelemetryClient();
       if (tc) trackErrorHandlerCrash(tc, { errorCode: err.name });
     }
+    // AgentDash (AGE-55): canonical error shape for FRE-Plan-B 409s.
+    // The membership and company-create services throw HttpError with
+    // a `details.code` so the body carries `{ code, ... }` at the top
+    // level rather than nested under `details`.
+    const detailsAsRecord =
+      err.details && typeof err.details === "object" && !Array.isArray(err.details)
+        ? (err.details as Record<string, unknown>)
+        : null;
+    const codedError = detailsAsRecord?.code === "last_admin"
+      || detailsAsRecord?.code === "domain_already_claimed";
+    if (codedError) {
+      res.status(err.status).json({
+        error: err.message,
+        ...detailsAsRecord,
+      });
+      return;
+    }
     res.status(err.status).json({
       error: err.message,
       ...(err.details ? { details: err.details } : {}),

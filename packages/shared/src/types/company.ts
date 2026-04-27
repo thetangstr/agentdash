@@ -19,6 +19,11 @@ export interface Company {
   brandColor: string | null;
   logoAssetId: string | null;
   logoUrl: string | null;
+  // AgentDash (AGE-55): FRE Plan B — bare lowercased corp domain (e.g.
+  // `acme.com`) or full lowercased free-mail address (e.g.
+  // `me@gmail.com`). NULL on grandfathered rows. See
+  // `deriveCompanyEmailDomain` in `@agentdash/shared`.
+  emailDomain: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

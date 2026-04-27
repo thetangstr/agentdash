@@ -163,6 +163,9 @@ export {
   SMALL_MODELS,
   MODEL_TIERS,
   type ModelTier,
+  // AgentDash (AGE-55): FRE Plan B — domain-keyed companies
+  FREE_MAIL_DOMAINS,
+  deriveCompanyEmailDomain,
 } from "./constants.js";
 
 export type {

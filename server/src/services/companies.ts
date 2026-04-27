@@ -28,6 +28,22 @@ import {
 } from "@agentdash/db";
 import { notFound, unprocessable } from "../errors.js";
 
+// AgentDash (AGE-55): typed conflict surfaced when a creator tries to claim
+// a domain another company already owns. Routes catch this and turn it into
+// the FRE-Plan-B 409 body shape.
+export class DomainAlreadyClaimedError extends Error {
+  readonly code = "domain_already_claimed" as const;
+  readonly emailDomain: string;
+  readonly existingCompanyId: string;
+
+  constructor(emailDomain: string, existingCompanyId: string) {
+    super(`Email domain ${emailDomain} is already claimed by company ${existingCompanyId}`);
+    this.name = "DomainAlreadyClaimedError";
+    this.emailDomain = emailDomain;
+    this.existingCompanyId = existingCompanyId;
+  }
+}
+
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
 
@@ -46,6 +62,8 @@ export function companyService(db: Db) {
     feedbackDataSharingConsentByUserId: companies.feedbackDataSharingConsentByUserId,
     feedbackDataSharingTermsVersion: companies.feedbackDataSharingTermsVersion,
     brandColor: companies.brandColor,
+    // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
+    emailDomain: companies.emailDomain,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
     updatedAt: companies.updatedAt,
@@ -118,17 +136,20 @@ export function companyService(db: Db) {
     return "A".repeat(attempt - 1);
   }
 
+  function pgUniqueConstraintName(error: unknown): string | undefined {
+    if (typeof error !== "object" || error === null) return undefined;
+    if (!("code" in error) || (error as { code?: string }).code !== "23505") return undefined;
+    if ("constraint" in error) return (error as { constraint?: string }).constraint;
+    if ("constraint_name" in error) return (error as { constraint_name?: string }).constraint_name;
+    return undefined;
+  }
+
   function isIssuePrefixConflict(error: unknown) {
-    const constraint = typeof error === "object" && error !== null && "constraint" in error
-      ? (error as { constraint?: string }).constraint
-      : typeof error === "object" && error !== null && "constraint_name" in error
-        ? (error as { constraint_name?: string }).constraint_name
-        : undefined;
-    return typeof error === "object"
-      && error !== null
-      && "code" in error
-      && (error as { code?: string }).code === "23505"
-      && constraint === "companies_issue_prefix_idx";
+    return pgUniqueConstraintName(error) === "companies_issue_prefix_idx";
+  }
+
+  function isEmailDomainConflict(error: unknown) {
+    return pgUniqueConstraintName(error) === "companies_email_domain_unique_idx";
   }
 
   async function createCompanyWithUniquePrefix(data: typeof companies.$inferInsert) {
@@ -143,6 +164,19 @@ export function companyService(db: Db) {
           .returning();
         return rows[0];
       } catch (error) {
+        // AgentDash (AGE-55): if the email_domain unique constraint fires,
+        // bubble up as a typed error so the route can return the FRE 409.
+        if (isEmailDomainConflict(error)) {
+          const claimedDomain = data.emailDomain ?? "";
+          const existing = claimedDomain
+            ? await db
+                .select({ id: companies.id })
+                .from(companies)
+                .where(eq(companies.emailDomain, claimedDomain))
+                .then((rows) => rows[0] ?? null)
+            : null;
+          throw new DomainAlreadyClaimedError(claimedDomain, existing?.id ?? "");
+        }
         if (!isIssuePrefixConflict(error)) throw error;
       }
       suffix += 1;
@@ -166,6 +200,18 @@ export function companyService(db: Db) {
       return enrichCompany(hydrated);
     },
 
+    findByEmailDomain: async (emailDomain: string) => {
+      if (!emailDomain) return null;
+      const row = await db
+        .select(companySelection)
+        .from(companies)
+        .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id))
+        .where(eq(companies.emailDomain, emailDomain))
+        .then((rows) => rows[0] ?? null);
+      if (!row) return null;
+      const [hydrated] = await hydrateCompanySpend([row], db);
+      return enrichCompany(hydrated);
+    },
     create: async (data: typeof companies.$inferInsert) => {
       const created = await createCompanyWithUniquePrefix(data);
       // AgentDash: goal-driven workflow — every company gets a root goal so

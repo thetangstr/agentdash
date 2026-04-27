@@ -76,6 +76,9 @@ export interface Config {
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
+  // AgentDash (AGE-55): FRE Plan B — when true, the company-create path
+  // skips the per-domain uniqueness check. Internal-only, env-var only.
+  allowMultiTenantPerDomain: boolean;
 }
 
 export function loadConfig(): Config {
@@ -202,6 +205,10 @@ export function loadConfig(): Config {
     companyDeletionEnvRaw !== undefined
       ? companyDeletionEnvRaw === "true"
       : deploymentMode === "local_trusted";
+  // AgentDash (AGE-55): env-var-only flag matching the existing convention
+  // (PAPERCLIP_* + simple boolean parse). Default OFF so single-tenant
+  // domain-uniqueness is the safe default.
+  const allowMultiTenantPerDomain = process.env.PAPERCLIP_ALLOW_MULTI_TENANT_PER_DOMAIN === "true";
   const databaseBackupEnabled =
     process.env.PAPERCLIP_DB_BACKUP_ENABLED !== undefined
       ? process.env.PAPERCLIP_DB_BACKUP_ENABLED === "true"
@@ -269,5 +276,6 @@ export function loadConfig(): Config {
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
+    allowMultiTenantPerDomain,
   };
 }

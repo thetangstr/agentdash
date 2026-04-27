@@ -9,11 +9,48 @@ import { Sparkles } from "lucide-react";
 
 type AuthMode = "sign_in" | "sign_up";
 
+// AgentDash (AGE-55): FRE Plan B — read disableSignUp from /api/health so the
+// UI can hide the signup affordance when the server runs in invite-only mode.
+type HealthResponse = {
+  features?: {
+    disableSignUp?: boolean;
+  };
+};
+
+async function fetchAuthFeatures(): Promise<{ disableSignUp: boolean }> {
+  try {
+    const res = await fetch("/api/health", { credentials: "include" });
+    if (!res.ok) return { disableSignUp: false };
+    const payload = (await res.json()) as HealthResponse;
+    return { disableSignUp: Boolean(payload.features?.disableSignUp) };
+  } catch {
+    return { disableSignUp: false };
+  }
+}
+
 export function AuthPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<AuthMode>("sign_in");
+
+  // AgentDash (AGE-55): hide the signup tab/CTA when the server reports
+  // disableSignUp=true. Defaults to allowing signup so existing dev flows
+  // keep working until the health request returns.
+  const { data: authFeatures } = useQuery({
+    queryKey: ["auth", "features"],
+    queryFn: fetchAuthFeatures,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const disableSignUp = authFeatures?.disableSignUp ?? false;
+  // Force sign-in mode if signup is disabled (defensive against race where the
+  // user toggled to sign_up before health resolved).
+  useEffect(() => {
+    if (disableSignUp && mode === "sign_up") {
+      setMode("sign_in");
+    }
+  }, [disableSignUp, mode]);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -155,19 +192,34 @@ export function AuthPage() {
             </Button>
           </form>
 
-          <div className="mt-5 text-sm text-muted-foreground">
-            {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
-            <button
-              type="button"
-              className="font-medium text-foreground underline underline-offset-2"
-              onClick={() => {
-                setError(null);
-                setMode(mode === "sign_in" ? "sign_up" : "sign_in");
-              }}
-            >
-              {mode === "sign_in" ? "Create one" : "Sign in"}
-            </button>
-          </div>
+          {/* AgentDash (AGE-55): hide the signup affordance when server
+              reports disableSignUp=true. Invite-only instances surface a
+              brief explanation instead. */}
+          {disableSignUp ? (
+            mode === "sign_in" ? (
+              <p
+                className="mt-5 text-sm text-muted-foreground"
+                data-testid="auth-invite-only-notice"
+              >
+                Sign-up is disabled on this instance. Ask a teammate to invite you.
+              </p>
+            ) : null
+          ) : (
+            <div className="mt-5 text-sm text-muted-foreground">
+              {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
+              <button
+                type="button"
+                className="font-medium text-foreground underline underline-offset-2"
+                onClick={() => {
+                  setError(null);
+                  setMode(mode === "sign_in" ? "sign_up" : "sign_in");
+                }}
+                data-testid="auth-toggle-mode"
+              >
+                {mode === "sign_in" ? "Create one" : "Sign in"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

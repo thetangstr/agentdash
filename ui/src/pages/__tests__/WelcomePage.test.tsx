@@ -42,6 +42,7 @@ function makeCompany(overrides: Partial<Company> = {}): Company {
     brandColor: null,
     logoAssetId: null,
     logoUrl: null,
+    emailDomain: null,
     createdAt: new Date("2026-04-17T00:00:00.000Z"),
     updatedAt: new Date("2026-04-17T00:00:00.000Z"),
     ...overrides,
