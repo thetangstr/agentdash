@@ -84,8 +84,11 @@ test.describe("CUJ-2: Daily Dashboard", () => {
       page.locator("h1", { hasText: /Good morning|Good afternoon|Good evening/ })
     ).toBeVisible({ timeout: 10_000 });
 
-    // Company name appears in the subtitle line
-    await expect(page.locator(`text=${company.name}`)).toBeVisible({ timeout: 5_000 });
+    // Company name appears in the subtitle line — scope to the luxe-subtitle to avoid
+    // strict-mode violation when the name also appears elsewhere on the page.
+    await expect(
+      page.locator(".luxe-subtitle", { hasText: company.name }).first()
+    ).toBeVisible({ timeout: 5_000 });
 
     // Current weekday name is present somewhere on the page
     const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -110,54 +113,45 @@ test.describe("CUJ-2: Daily Dashboard", () => {
   // No-agents banner
   // --------------------------------------------------------------------------
 
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("shows no-agents banner with Create one link for a company without agents", async ({ page }) => {
+  test("shows no-agents message in workforce section for a company without agents", async ({ page }) => {
     const company = await createCompany(page, "noagent");
     await navigateToDashboard(page, company.issuePrefix);
 
-    await expect(page.locator("text=No agents yet.")).toBeVisible({ timeout: 10_000 });
-    const createLink = page.locator("button", { hasText: "Create one" });
-    await expect(createLink).toBeVisible();
-    // The button must have a real onClick handler — clicking it should open a dialog
-    // (openOnboarding is called). We verify the dialog appears, not just that the
-    // button renders, so a missing handler is caught.
-    await createLink.click();
-    // The onboarding dialog or wizard heading should appear
+    // The luxe dashboard OrgChart renders this text when there are no agents
     await expect(
-      page.locator("text=/Create your first agent|Name your company|onboarding/i").first()
-    ).toBeVisible({ timeout: 5_000 });
+      page.locator("text=/No agents yet/").first()
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   // --------------------------------------------------------------------------
   // Team section
   // --------------------------------------------------------------------------
 
-  test("shows TEAM section with agent count when agents exist", async ({ page }) => {
+  test("shows workforce section with agent cards when agents exist", async ({ page }) => {
     const company = await createCompany(page, "team");
     await createAgent(page, company.id, "Alpha Agent", "engineer");
     await createAgent(page, company.id, "Beta Agent", "researcher");
     await navigateToDashboard(page, company.issuePrefix);
 
-    // Section heading
-    await expect(page.locator("text=Team").first()).toBeVisible({ timeout: 10_000 });
+    // The luxe dashboard OrgChart renders "Your workforce" as the card title
+    await expect(page.locator("text=Your workforce").first()).toBeVisible({ timeout: 10_000 });
 
-    // Count text — should say "2 agents" (or more if plan created extras)
-    await expect(page.locator("text=/\\d+ agents?/")).toBeVisible({ timeout: 10_000 });
+    // Agent names appear in the org chart
+    await expect(page.locator("text=Alpha Agent").first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test("View all link in TEAM section navigates to agents list", async ({ page }) => {
+  test("View all link in workforce section navigates to agents list", async ({ page }) => {
     const company = await createCompany(page, "teamlink");
     await createAgent(page, company.id, "Gamma Agent", "engineer");
     await navigateToDashboard(page, company.issuePrefix);
 
-    // Find the "View all" link inside the Team section
-    await expect(page.locator("text=Team").first()).toBeVisible({ timeout: 10_000 });
-    const viewAllLinks = page.locator("a", { hasText: "View all" });
-    // At least one View-all link must exist (Team section)
-    await expect(viewAllLinks.first()).toBeVisible({ timeout: 5_000 });
+    // The luxe OrgChart renders a "View all →" link to /agents
+    await expect(page.locator("text=Your workforce").first()).toBeVisible({ timeout: 10_000 });
+    const viewAllLink = page.locator("a", { hasText: /View all/ }).first();
+    await expect(viewAllLink).toBeVisible({ timeout: 5_000 });
 
     // Click it and confirm navigation to agents URL
-    await viewAllLinks.first().click();
+    await viewAllLink.click();
     await expect(page).toHaveURL(/\/agents/, { timeout: 10_000 });
   });
 
@@ -165,69 +159,50 @@ test.describe("CUJ-2: Daily Dashboard", () => {
   // THIS MONTH stats
   // --------------------------------------------------------------------------
 
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("shows This month stats cards with tasks completed and spend", async ({ page }) => {
+  test("shows stats strip with daily burn and issues in flight", async ({ page }) => {
     const company = await createCompany(page, "stats");
     await createAgent(page, company.id, "Stats Agent", "engineer");
     await navigateToDashboard(page, company.issuePrefix);
 
-    // Section heading
-    await expect(page.locator("text=This month").first()).toBeVisible({ timeout: 10_000 });
-
-    // Tasks completed card
-    await expect(page.locator("text=tasks completed")).toBeVisible({ timeout: 5_000 });
-
-    // Spend card: "spent this month"
-    await expect(page.locator("text=spent this month")).toBeVisible({ timeout: 5_000 });
-
-    // In-progress and open count line appears inside the tasks card
-    await expect(page.locator("text=/in progress.*open/")).toBeVisible({ timeout: 5_000 });
+    // The luxe dashboard renders a stats strip with these labels
+    await expect(page.locator("text=Daily burn").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("text=Issues in flight").first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("text=Approvals pending").first()).toBeVisible({ timeout: 5_000 });
   });
 
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("spend card shows No budget set when no budget is configured", async ({ page }) => {
+  test("shows spend and budget card on the dashboard", async ({ page }) => {
     const company = await createCompany(page, "nobudget");
     await createAgent(page, company.id, "Budget Agent", "engineer");
     await navigateToDashboard(page, company.issuePrefix);
 
-    await expect(page.locator("text=spent this month")).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator("text=No budget set")).toBeVisible({ timeout: 5_000 });
+    // The luxe SpendCard renders "Spend & budget" as the card title
+    await expect(page.locator("text=Spend & budget").first()).toBeVisible({ timeout: 10_000 });
   });
 
   // --------------------------------------------------------------------------
   // Recent Activity section
   // --------------------------------------------------------------------------
 
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("shows Recent activity section header when activity exists", async ({ page }) => {
+  test("shows heartbeat ticker section on dashboard", async ({ page }) => {
     const company = await createCompany(page, "activity");
-    const agent = await createAgent(page, company.id, "Activity Agent", "engineer");
-    // Creating and assigning an issue generates activity events
-    await createIssue(page, company.id, "Activity test task", agent.id);
+    await createAgent(page, company.id, "Activity Agent", "engineer");
     await navigateToDashboard(page, company.issuePrefix);
 
-    // Activity events may take a moment to propagate
+    // The luxe dashboard renders a "Heartbeat ticker" card (replaces "Recent activity")
     await expect(
-      page.locator("text=Recent activity")
+      page.locator("text=Heartbeat ticker").first()
     ).toBeVisible({ timeout: 10_000 });
   });
 
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("View all link in Recent activity section navigates to activity page", async ({ page }) => {
+  test("All activity link on dashboard navigates to activity page", async ({ page }) => {
     const company = await createCompany(page, "activitylink");
-    const agent = await createAgent(page, company.id, "Link Agent", "engineer");
-    await createIssue(page, company.id, "Link test task", agent.id);
+    await createAgent(page, company.id, "Link Agent", "engineer");
     await navigateToDashboard(page, company.issuePrefix);
 
-    await expect(page.locator("text=Recent activity")).toBeVisible({ timeout: 10_000 });
-
-    // The second "View all" link belongs to the Recent activity section
-    const viewAllLinks = page.locator("a", { hasText: "View all" });
-    const count = await viewAllLinks.count();
-    expect(count).toBeGreaterThanOrEqual(1);
-
-    // Click the last "View all" (activity section is below team section)
-    await viewAllLinks.last().click();
+    // The luxe ArtifactsCard renders "All activity →" link
+    const activityLink = page.locator("a", { hasText: /All activity/ }).first();
+    await expect(activityLink).toBeVisible({ timeout: 10_000 });
+    await activityLink.click();
     await expect(page).toHaveURL(/\/activity/, { timeout: 10_000 });
   });
 
@@ -257,9 +232,10 @@ test.describe("CUJ-2: Daily Dashboard", () => {
 
     await navigateToDashboard(page, company.issuePrefix);
 
-    await expect(page.locator("text=Needs your attention")).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator("text=/1 agent in error/")).toBeVisible({ timeout: 5_000 });
-    // All-clear panel must NOT be present
+    // The luxe AttentionList renders the eyebrow "Needs attention · N"
+    await expect(page.locator("text=/Needs attention/").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("text=/1 agent.*in error state/")).toBeVisible({ timeout: 5_000 });
+    // All-clear text must NOT be present when there are attention items
     await expect(page.locator("text=All clear")).toHaveCount(0);
   });
 

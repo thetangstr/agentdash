@@ -133,6 +133,64 @@ export function budgetForecastService(db: Db) {
     },
 
     /**
+     * Compute a company-wide burn rate aggregate (no scope filter).
+     * Returns the same shape as computeBurnRate so the UI can treat it uniformly.
+     * Used when the client passes scopeType=company to the burn-rate endpoint.
+     */
+    computeCompanyBurnRate: async (companyId: string) => {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+      const [thirtyDayRow] = await db
+        .select({ total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int` })
+        .from(costEvents)
+        .where(and(eq(costEvents.companyId, companyId), gte(costEvents.occurredAt, thirtyDaysAgo), lte(costEvents.occurredAt, now)));
+
+      const [lastSevenRow] = await db
+        .select({ total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int` })
+        .from(costEvents)
+        .where(and(eq(costEvents.companyId, companyId), gte(costEvents.occurredAt, sevenDaysAgo), lte(costEvents.occurredAt, now)));
+
+      const [priorSevenRow] = await db
+        .select({ total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int` })
+        .from(costEvents)
+        .where(and(eq(costEvents.companyId, companyId), gte(costEvents.occurredAt, fourteenDaysAgo), lte(costEvents.occurredAt, sevenDaysAgo)));
+
+      const thirtyDayTotal = Number(thirtyDayRow?.total ?? 0);
+      const lastSevenTotal = Number(lastSevenRow?.total ?? 0);
+      const priorSevenTotal = Number(priorSevenRow?.total ?? 0);
+
+      const dailyAvgCents = Math.round(thirtyDayTotal / 30);
+      const lastSevenDailyAvg = lastSevenTotal / 7;
+      const priorSevenDailyAvg = priorSevenTotal / 7;
+      const weeklyTrendPercent =
+        priorSevenDailyAvg > 0
+          ? Math.round(((lastSevenDailyAvg - priorSevenDailyAvg) / priorSevenDailyAvg) * 100)
+          : 0;
+
+      const projectedMonthEndCents = dailyAvgCents * 30;
+
+      // UI expects these field names (BurnRateData interface in BudgetForecast.tsx)
+      return {
+        scopeType: "company",
+        scopeId: companyId,
+        dailyBurn: Math.round(dailyAvgCents / 100),
+        weeklyBurn: Math.round(lastSevenTotal / 100),
+        monthlyBurn: Math.round(thirtyDayTotal / 100),
+        projectedMonthlyTotal: Math.round(projectedMonthEndCents / 100),
+        daysUntilBudgetExhausted: null,
+        weeklyTrendPercent,
+        // legacy fields kept for backwards-compat with other callers
+        dailyAvgCents,
+        weeklyTrendPercentLegacy: weeklyTrendPercent,
+        daysUntilExhausted: null,
+        projectedMonthEndCents,
+      };
+    },
+
+    /**
      * Compute a simple ROI metric for a project: total cost vs issues completed.
      */
     computeProjectROI: async (companyId: string, projectId: string) => {
