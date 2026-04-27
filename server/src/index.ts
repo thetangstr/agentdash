@@ -544,6 +544,14 @@ export async function startServer(): Promise<StartedServer> {
     allowMultiTenantPerDomain: config.allowMultiTenantPerDomain,
     betterAuthHandler,
     resolveSession,
+    // AgentDash (AGE-59): wire email backend from config
+    emailConfig: {
+      emailBackend: config.emailBackend,
+      emailRelayUrl: config.emailRelayUrl,
+      emailRelayInstanceId: config.emailRelayInstanceId,
+      emailRelaySigningKey: config.emailRelaySigningKey,
+      resendApiKey: config.resendApiKey,
+    },
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
   
