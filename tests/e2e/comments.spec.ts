@@ -5,9 +5,16 @@ import { test, expect, navigateAndWait, getIssues } from "./fixtures/test-helper
  * Issue detail → comment thread → chat-style rendering → waiting indicator
  */
 test.describe("CUJ-15: Agent-Human Conversation", () => {
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  test.skip("issue detail page loads with comment section", async ({ page, company, prefix }) => {
-    const issues = await getIssues(page, company.id);
+  test("issue detail page loads with comment section", async ({ page, company, prefix }) => {
+    // Ensure at least one issue exists in the fixture company before asserting
+    let issues = await getIssues(page, company.id);
+    if (issues.length === 0) {
+      const res = await page.request.post(`/api/companies/${company.id}/issues`, {
+        data: { title: "E2E comment test issue" },
+      });
+      expect(res.ok(), `create seed issue failed: ${await res.text()}`).toBe(true);
+      issues = await getIssues(page, company.id);
+    }
     expect(issues.length).toBeGreaterThan(0);
 
     await navigateAndWait(page, `/issues/${issues[0].id}`, prefix);

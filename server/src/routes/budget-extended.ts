@@ -98,6 +98,20 @@ export function budgetExtendedRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const scopeType = req.query.scopeType as string;
       const scopeId = req.query.scopeId as string;
+
+      // AgentDash: scopeType=company returns a company-wide aggregate burn rate
+      // using the capacity service summary instead of a per-agent/project lookup.
+      if (scopeType === "company" || (!scopeType && !scopeId)) {
+        const companyBurn = await forecast.computeCompanyBurnRate(companyId);
+        res.status(200).json(companyBurn);
+        return;
+      }
+
+      if (scopeType !== "agent" && scopeType !== "project") {
+        res.status(400).json({ error: `Invalid scopeType: ${scopeType}. Must be "agent", "project", or "company".` });
+        return;
+      }
+
       const burnRate = await forecast.computeBurnRate(companyId, scopeType as "agent" | "project", scopeId);
       res.status(200).json(burnRate);
     } catch (err: unknown) {
