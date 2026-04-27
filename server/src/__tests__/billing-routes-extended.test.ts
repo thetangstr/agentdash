@@ -321,11 +321,10 @@ describe("POST /api/billing/webhook — with webhookSecret", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /api/billing/webhook — customer.subscription.updated", () => {
-  // TODO(AGE-71): un-skip when real fix lands. Was failing on agentdash-main baseline.
-  it.skip("processes subscription update, re-maps tier, and returns received=true", async () => {
-    // Webhook handler does: 1) idempotency check → [], 2) lookupCompanyByStripeCustomer → [company]
+  it("processes subscription update, re-maps tier, and returns received=true", async () => {
+    // Webhook handler idempotency uses db.insert()...returning() (not a select).
+    // The first db.select()...limit() call is lookupCompanyByStripeCustomer.
     const db = makeMultiDb([
-      [],                              // idempotency: not found
       [{ companyId: "company-test" }], // lookupCompanyByStripeCustomer
     ]);
     const entitlements = makeEntitlements();
