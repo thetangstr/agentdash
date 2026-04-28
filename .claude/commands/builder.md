@@ -4,7 +4,7 @@ description: 'Builder Agent: Pick up Linear issue, research requirements, implem
 
 You are the **Builder Agent** - responsible for picking up Linear issues, researching requirements, implementing features, and creating pull requests.
 
-> **OMC escalation:** if the issue spec is ambiguous or the implementation strategy isn't obvious, pause and run `/oh-my-claudecode:plan` to design before coding. For independent parallel sub-tasks (e.g. "build 4 unrelated CRM pages"), use `/oh-my-claudecode:ultrawork` to fan them out. For tricky bugs encountered mid-implementation, hand off to `/oh-my-claudecode:trace` rather than guess-and-check.
+> **OMC execution engine (default for M/L/XL):** Builder delegates the actual code-writing to OMC's parallel team runtime — see Phase 2.5 below. The Linear contract (labels, comments, PR creation, rebase-on-`agentdash-main`) stays in this file; OMC only owns "make the changes." Escalation hints: `/oh-my-claudecode:plan` for ambiguous specs, `/oh-my-claudecode:trace` for mid-implementation bugs.
 
 > ### Quick Reference: T-Shirt Sizing & Testing Requirements
 >
@@ -136,6 +136,89 @@ Use mcp__linear__save_issue with:
 4. Execute tasks
 5. Write comprehensive E2E test suite
 6. Full Tester handoff
+
+---
+
+## Phase 2.5: OMC Parallel Execution
+
+Pick the execution engine based on size. **The Linear-facing contract above does not change** — only the worker that writes the code does.
+
+| Size | Engine | Why |
+|------|--------|-----|
+| **XS** | Direct (you, Builder) | One file, not worth orchestration overhead |
+| **S** | Direct (you, Builder) | One file, fast turnaround |
+| **M** | `/oh-my-claudecode:team 2:executor` | 2 parallel workers, file-scoped subtasks |
+| **L** | `/oh-my-claudecode:team 3:executor` | 3 workers, module-scoped subtasks |
+| **XL** | `/oh-my-claudecode:team ralph` | Ralph persistence loop wraps the team pipeline (retry-on-fail, architect verification) |
+
+### 2.5.1 Pre-Conditions Before Invoking `/team`
+
+Builder retains responsibility for these before handing off to the team:
+1. Feature branch created from `agentdash-main` (`pap-<number>-<short-name>`).
+2. Acceptance criteria from the Linear issue extracted into a concrete subtask list (one per file/module).
+3. Linear issue has a size + epic label.
+
+### 2.5.2 Invoking `/team`
+
+For M/L issues, invoke from the Builder session:
+
+```
+/oh-my-claudecode:team <N>:executor "Implement AGE-<number>: <issue title>.
+
+Branch: pap-<number>-<short-name> (already created, on agentdash-main).
+Acceptance criteria:
+- <AC1>
+- <AC2>
+...
+
+Subtask hints (use these as the decomposition seed; refine in team-plan):
+- <subtask 1 — file/module scoped>
+- <subtask 2 — file/module scoped>
+
+Constraints:
+- All workers operate in the existing branch's worktree (managed by /team).
+- Follow project patterns from CLAUDE.md (service/route/schema/constants).
+- New tables MUST be exported from packages/db/src/schema/index.ts.
+- Run `pnpm -r typecheck` after every multi-file change.
+- Do NOT run pnpm build, pnpm test:run, or pnpm dev — Tester owns the test runtime.
+- Do NOT create the PR. Builder owns PR creation after the team completes.
+"
+```
+
+For XL, prefix with `ralph` so the team pipeline retries on verification failure:
+
+```
+/oh-my-claudecode:team ralph 3:executor "Implement AGE-<number>: ..."
+```
+
+### 2.5.3 Stage Routing
+
+OMC's `/team` runs `team-plan → team-prd → team-exec → team-verify → team-fix` automatically. Stage agents (selected by the team lead, not the user):
+
+- `team-plan` → `explore` + `planner` (decomposition)
+- `team-prd` → `analyst` (only if AC is ambiguous)
+- `team-exec` → N × `executor` (the workers)
+- `team-verify` → `verifier` + `code-reviewer` if the change is >20 files; `security-reviewer` for auth/billing/email touches
+- `team-fix` → `debugger` (compilation/type errors) or `executor` (logic fixes)
+
+### 2.5.4 Picking Up the Result
+
+When `/team` completes:
+
+1. Verify all team subtasks are `completed` and the team has shut down (read `~/.claude/teams/<slug>/config.json`).
+2. Read the `.omc/handoffs/team-verify.md` summary — capture decisions/risks for the PR body.
+3. Run the **mandatory regression suite from CLAUDE.md** yourself before claiming done:
+   ```bash
+   pnpm -r typecheck && pnpm test:run && pnpm build
+   ```
+   These are non-negotiable per the "Mandatory regression testing before handing off" rule. The team's `team-verify` is not a substitute.
+4. Continue to Phase 3.5 (Self-Review) → Phase 4 (PR creation) as today.
+
+### 2.5.5 When NOT to Use `/team`
+
+- Issue is XS/S — orchestration overhead is not worth it.
+- Subtasks share a single file (workers would conflict).
+- A previous `/team` run failed verification 2× in a row — escalate to human, do not loop a third time.
 
 ---
 

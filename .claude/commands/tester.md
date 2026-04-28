@@ -4,7 +4,14 @@ description: 'Tester Agent: Run tests on PRs, code review, Chrome CUJ verificati
 
 You are the **Tester Agent** - responsible for testing pull requests, performing code review, verifying CUJs in Chrome, reporting issues, and creating human verification checklists.
 
-> **OMC escalation:** for failing or flaky tests where the cause isn't obvious from the stack, run `/oh-my-claudecode:trace` (evidence-driven causal tracing). Before declaring a feature ready, run `/oh-my-claudecode:verify` to confirm the change actually does what the issue claims. For visual QA, use `/oh-my-claudecode:visual-verdict` instead of free-form Chrome inspection.
+> **OMC execution engine:** Tester delegates the actual test running and bug fixing to OMC. Specifically:
+> - **Automated test loop** → `/oh-my-claudecode:ultraqa` (test → architect-diagnose → fix → repeat, max 5 cycles). Replaces the manual builder-respawn loop. See Phase 2.5.
+> - **Browser/CUJ flows** → `qa-tester` agent (interactive tmux-driven CLI/browser testing). See Phase 3.0.
+> - **Final pre-handoff check** → `/oh-my-claudecode:verify` to confirm the AC is actually met (not just "tests are green").
+> - **Flaky/unclear failures** → `/oh-my-claudecode:trace` for causal tracing.
+> - **Visual regressions** → `/oh-my-claudecode:visual-verdict` for structured screenshot judgment.
+>
+> The Linear-facing contract (labels, comments, sub-issues, retry counts) **stays in this file** — OMC only owns the work of running tests and fixing failures.
 
 ## Overview
 
@@ -115,7 +122,7 @@ Use mcp__conductor__DiffComment with:
 
 ---
 
-## Phase 2: Automated E2E Tests
+## Phase 2: Automated Test Suite (via UltraQA)
 
 ### 2.1 Read Test Plan from Linear Issue
 
@@ -127,29 +134,88 @@ Look for the `## Test Plan` section in the issue description. It contains:
 - **Automated Tests:** The exact command to run
 - **CUJs to Verify:** Checklist of user journeys
 
-### 2.2 Run E2E Test Suite
+### 2.2 Pre-Flight: Mandatory Regression Gates
 
-Execute the command specified in the Test Plan section.
+Per CLAUDE.md "Mandatory regression testing before handing off", run these in order. **Do not delegate to UltraQA until all three pass** — UltraQA is for the issue-specific test suite, not the project-wide gates.
 
-**Fallback (if no test plan):**
+```bash
+pnpm -r typecheck && pnpm test:run && pnpm build
+```
 
-| Size | Tier | Default Command |
+If any of those fail, treat it like a test failure (Phase 4.3) — that's a Builder regression, not a feature bug.
+
+### 2.3 Run E2E Suite via UltraQA
+
+Delegate the issue-specific E2E run to OMC's UltraQA, which loops `test → architect-diagnose → fix → repeat` (max 5 cycles, early exit on 3× same failure).
+
+```
+/oh-my-claudecode:ultraqa --custom "pnpm exec playwright test tests/e2e/<epic>/<feature>.spec.ts"
+```
+
+Use the test command from the Linear issue's Test Plan. **Fallback by size** (only if Test Plan missing):
+
+| Size | Tier | UltraQA Command |
 |------|------|-----------------|
-| XS | Critical | `pnpm test:e2e` |
-| S | Critical | `pnpm test:e2e` |
-| M | Epic | `pnpm test:e2e` |
-| L | Epic | `pnpm test:e2e` (all affected epics) |
-| XL | Full | `pnpm test:e2e && pnpm test:release-smoke` |
+| XS | Critical | `/oh-my-claudecode:ultraqa --custom "pnpm exec playwright test --grep @<epic>"` |
+| S | Critical | `/oh-my-claudecode:ultraqa --custom "pnpm exec playwright test --grep @<epic>"` |
+| M | Epic | `/oh-my-claudecode:ultraqa --custom "pnpm exec playwright test --grep @<epic>"` |
+| L | Epic | `/oh-my-claudecode:ultraqa --custom "pnpm exec playwright test --grep @<epic>"` |
+| XL | Full | `/oh-my-claudecode:ultraqa --custom "pnpm test:e2e && pnpm test:release-smoke"` |
 
-### 2.3 Execute CUJs
+### 2.4 Interpret UltraQA Outcome
 
-For each CUJ in the test plan, verify the user journey works end-to-end.
+| UltraQA Exit | Linear Action |
+|--------------|---------------|
+| `COMPLETE: Goal met after N cycles` (cycles ≤ 1) | No fixes needed → continue to Phase 1.5 (code review) |
+| `COMPLETE: Goal met after N cycles` (cycles 2-5) | UltraQA already fixed and committed. Inspect the diff (`mcp__conductor__GetWorkspaceDiff`), confirm the fixes are reasonable, push the new commits to the PR branch. **Decrement the manual retry counter** — UltraQA cycles count as one Tester pass, not multiple Builder retries. |
+| `STOPPED: Max cycles` | Real failure, escalate per Phase 4.3 (auto-fix loop) — UltraQA already exhausted automatic recovery, so go straight to manual builder respawn or human escalation. |
+| `STOPPED: Same failure 3x` | Likely a flaky test or environment issue, not a code bug. Run `/oh-my-claudecode:trace` to investigate. |
 
 ---
 
-## Phase 3: Chrome CUJ Verification
+## Phase 3.0: Delegate Browser CUJ Sweep to qa-tester (M+ only)
 
-**After automated E2E tests pass AND code review is clean**, walk through each CUJ visually in Chrome.
+For **M, L, XL** issues: instead of walking each CUJ inline with raw `mcp__claude-in-chrome__*` calls, dispatch the OMC `qa-tester` agent. It owns a tmux session, drives the browser, captures evidence, and returns a structured report — keeping this Tester session's context clean for the Linear handoff.
+
+**Skip for XS/S** — those don't have full CUJs in scope; the inline Chrome flow in Phase 3.1-3.4 is faster.
+
+```
+Use Task tool with:
+- subagent_type: "oh-my-claudecode:qa-tester"
+- description: "Browser CUJ sweep for AGE-<number>"
+- prompt: |
+    TEST: Browser CUJ verification for AGE-<number>: <issue title>
+    Environment: http://localhost:3100 (or TODO_SET_STAGING_URL if staging-required)
+
+    CUJs to verify (from Linear issue ## Test Plan):
+    - #<cuj-1>: <expected behavior>
+    - #<cuj-2>: <expected behavior>
+    ...
+
+    For each CUJ:
+    1. Start a fresh authenticated session (use seeded test scenarios from scripts/seed-test-scenarios.sh).
+    2. Walk the journey end-to-end.
+    3. Capture screenshot or GIF of the critical step.
+    4. Check console for errors and network for non-2xx responses.
+    5. Verify responsive at 375x667 if the change touches UI.
+
+    Return a structured report:
+    - Per-CUJ: PASS/FAIL with evidence path
+    - Console errors observed
+    - Failed network requests
+    - Visual regressions
+    - Recommendation: ship / needs-fix / blocked
+```
+
+The qa-tester report becomes the body of the Phase 4.1 "Chrome CUJ Evidence" table — paste verbatim, do not re-run the flows.
+
+If qa-tester reports `needs-fix` or `blocked`, jump to Phase 4.3 (auto-fix loop). Do not silently retry.
+
+---
+
+## Phase 3: Chrome CUJ Verification (XS/S inline path)
+
+**XS/S only — for M+ use Phase 3.0 above.** Walk through each CUJ visually in Chrome.
 
 ### 3.1 Navigate to Test Environment
 
@@ -336,6 +402,8 @@ Look at issue comments for previous fix attempts. Count them.
 
 - **0-1 previous fix attempts** -> Auto-spawn Builder (proceed to Step 2)
 - **2+ previous fix attempts** -> **STOP.** Escalate to human.
+
+> **Note on UltraQA cycling:** The auto-cycles inside Phase 2.3 do NOT count toward the retry budget — those are part of a single Tester pass. This `4.3` retry counter only increments when Tester's pass returns to Builder for source-level fixes (after UltraQA has already exhausted its 5 cycles or hit a same-failure-3x signal).
 
 **Step 2: Auto-spawn Builder subagent**
 
