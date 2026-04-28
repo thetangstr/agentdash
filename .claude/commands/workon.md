@@ -8,6 +8,8 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 
 ## Overview
 
+> **MAW MODE: `pre-real-users` (set 2026-04-28)** — Until AgentDash has its first paying customer, **all sizes auto-add `Human-Verified`** after `Locally-Tested`. The size-conditional human gate below is preserved but disabled. Revert by deleting the auto-verify block in Phase 3.6 / Phase 4.1 and restoring the size check.
+
 `/workon AGE-XXX` is the **single entry point** for all feature and bug development. It automatically:
 1. Fetches the issue from Linear
 2. Determines size (uses estimate field or has PM set it)
@@ -15,8 +17,8 @@ You are the **MAW Orchestrator** - responsible for automatically routing Linear 
 4. Routes to the correct agent based on current state
 5. Chains agents: PM -> Builder -> Deploy + Smoke -> Tester (automated + code review + Chrome CUJ)
 6. Stops at `Locally-Tested` or `Staging-Tested`
-7. For XS/S: auto-adds `Human-Verified` (no human gate)
-8. For M+: posts human checklist, waits for human to add `Human-Verified`
+7. **`pre-real-users` mode:** auto-adds `Human-Verified` for ALL sizes; no human gate
+8. (Disabled — original behavior: XS/S auto-verified, M+ waited for human)
 
 ```
 +-------------------------------------------------------------+
@@ -222,16 +224,26 @@ Use Task tool with:
     You are the Builder Agent. Implement AGE-<number>.
 
     **PR target branch:** <agentdash-main or staging based on deployment path>
+    **Size:** <XS|S|M|L|XL>
+    **OMC execution engine (per builder.md Phase 2.5):**
+      - XS/S → write the change directly yourself.
+      - M → invoke `/oh-my-claudecode:team 2:executor` with the AC list as the task.
+      - L → invoke `/oh-my-claudecode:team 3:executor`.
+      - XL → invoke `/oh-my-claudecode:team ralph 3:executor` (Ralph persistence loop).
+      Either way, YOU still own: branch creation, rebase, PR creation, Linear labels,
+      and the mandatory regression suite (`pnpm -r typecheck && pnpm test:run && pnpm build`).
 
     Follow the full Builder workflow from .claude/commands/builder.md:
     1. Read the spec and acceptance criteria
     2. Create feature branch
-    3. Implement the feature
-    4. Write unit tests + E2E tests (S+)
-    5. **REBASE on `agentdash-main`**: `git fetch origin agentdash-main && git rebase origin/agentdash-main`
-    6. Create PR targeting appropriate branch
-    7. Add `PR-Ready` label to Linear
-    8. Add comment: "@tester Ready for E2E testing"
+    3. Pick the execution engine per the size above (Phase 2.5)
+    4. Implement the feature (directly or via /team)
+    5. Write unit tests + E2E tests (S+)
+    6. Run the mandatory regression suite — non-negotiable
+    7. **REBASE on `agentdash-main`**: `git fetch origin agentdash-main && git rebase origin/agentdash-main`
+    8. Create PR targeting appropriate branch
+    9. Add `PR-Ready` label to Linear
+    10. Add comment: "@tester Ready for E2E testing"
 
     When complete, return "BUILDER_COMPLETE" so orchestrator can continue.
 ```
@@ -263,13 +275,28 @@ Use Task tool with:
 - prompt: |
     You are the Tester Agent. Test AGE-<number>.
 
+    **Size:** <XS|S|M|L|XL>
+    **OMC execution engine (per tester.md):**
+      - Phase 2.2 — run the mandatory project-wide gates yourself FIRST:
+        `pnpm -r typecheck && pnpm test:run && pnpm build`. Do not skip.
+      - Phase 2.3 — wrap the issue-specific E2E run in
+        `/oh-my-claudecode:ultraqa --custom "<test command from Linear test plan>"`.
+        UltraQA's internal cycles do NOT count against the manual retry budget (Phase 4.3).
+      - Phase 3.0 (M+) — delegate browser CUJ sweep to `qa-tester` agent
+        (Task subagent_type "oh-my-claudecode:qa-tester"). Paste its report verbatim
+        into the Linear handoff. XS/S use the inline Chrome flow (Phase 3.1-3.4).
+      - Final check — run `/oh-my-claudecode:verify` to confirm AC is actually met
+        before posting Locally-Tested.
+
     Follow the full Tester workflow from .claude/commands/tester.md:
     1. Read test plan from Linear issue description
-    2. Execute E2E tests based on epic/CUJ scope
-    3. Code review: GetWorkspaceDiff + DiffComment
-    4. Chrome CUJ verification: walk each CUJ, record GIFs
-    5. If pass: Add `Locally-Tested` (or `Staging-Tested`) label
-    6. If fail: Add `Tests-Failed` label, create sub-issues
+    2. Run mandatory regression gates (Phase 2.2)
+    3. Run E2E suite via UltraQA (Phase 2.3) and interpret outcome (Phase 2.4)
+    4. Code review: GetWorkspaceDiff + DiffComment
+    5. Chrome CUJ verification: qa-tester for M+, inline for XS/S
+    6. /oh-my-claudecode:verify to confirm the change meets AC
+    7. If pass: Add `Locally-Tested` (or `Staging-Tested`) label
+    8. If fail: Add `Tests-Failed` label, create sub-issues, follow Phase 4.3 retry rules
 
     **CRITICAL - Human Verification Checklist:**
     When all tests pass, post a checklist containing ONLY
@@ -282,9 +309,11 @@ Use Task tool with:
 
 **If `Locally-Tested` or `Staging-Tested` is set:**
 
-Check issue size:
-- **XS/S (1-2 pts):** Auto-add `Human-Verified` label. No human gate needed.
-- **M+ (3+ pts):** Post human verification checklist. Stop and wait for human.
+**`pre-real-users` mode (current):** Auto-add `Human-Verified` label regardless of size. Post the human checklist as an informational comment but do NOT block on it. Hand off to TPM.
+
+Original size-gated logic (disabled — preserved for revert):
+- ~~**XS/S (1-2 pts):** Auto-add `Human-Verified` label. No human gate needed.~~
+- ~~**M+ (3+ pts):** Post human verification checklist. Stop and wait for human.~~
 
 ```
 ## Awaiting Human Validation (M+ only)
