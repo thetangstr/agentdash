@@ -4,6 +4,23 @@ import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
 import { MarketingShell } from "../MarketingShell";
+import { Hero } from "../sections/Hero";
+import { LayeredDescent } from "../sections/LayeredDescent";
+import { CapabilitiesGrid } from "../sections/CapabilitiesGrid";
+import { HowItWorks } from "../sections/HowItWorks";
+import { ConsultingBand } from "../sections/ConsultingBand";
+import { FinalCTA } from "../sections/FinalCTA";
+import { SectionContainer } from "../components/SectionContainer";
+import { LogoStrip } from "../components/LogoStrip";
+import { QuoteBlock } from "../components/QuoteBlock";
+
+const PLACEHOLDER_LOGOS = [
+  { name: "Logo 1" },
+  { name: "Logo 2" },
+  { name: "Logo 3" },
+  { name: "Logo 4" },
+  { name: "Logo 5" },
+];
 
 export function Landing() {
   const healthQuery = useQuery({
@@ -20,15 +37,26 @@ export function Landing() {
   });
 
   if (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading)) return null;
-
-  // local_trusted mode = no auth boundary; logged-in semantics apply.
-  // authenticated mode + session = logged in.
   const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
   if (loggedIn) return <Navigate to="/companies" replace />;
 
   return (
     <MarketingShell>
-      <h1>Landing — placeholder</h1>
+      <Hero />
+      <SectionContainer>
+        <LogoStrip items={PLACEHOLDER_LOGOS} />
+      </SectionContainer>
+      <SectionContainer background="cream-2">
+        <QuoteBlock
+          quote="The first week our agents shipped, we caught up on six months of backlog. By month two, the board stopped asking how we'd staff the new initiative."
+          attribution="— Placeholder: replace with a real operator quote"
+        />
+      </SectionContainer>
+      <LayeredDescent />
+      <CapabilitiesGrid />
+      <HowItWorks />
+      <ConsultingBand />
+      <FinalCTA />
     </MarketingShell>
   );
 }
