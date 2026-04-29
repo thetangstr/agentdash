@@ -64,6 +64,10 @@ export function companyService(db: Db) {
     brandColor: companies.brandColor,
     // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
     emailDomain: companies.emailDomain,
+    // AgentDash (AGE-98): structured client metadata (industry, expected
+    // team size, primary CRM, pilot stage, etc.). The column existed in the
+    // schema; the read endpoints were silently dropping it.
+    metadata: companies.metadata,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
     updatedAt: companies.updatedAt,

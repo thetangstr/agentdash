@@ -10,6 +10,10 @@ export const createCompanySchema = z.object({
   description: z.string().optional().nullable(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   brandColor: brandColorSchema,
+  // AgentDash (AGE-98): structured client metadata (industry, expected team
+  // size, primary CRM, pilot stage). Persisted in companies.metadata; read
+  // back via getCompanyQuery (server/src/services/companies.ts).
+  metadata: z.record(z.unknown()).optional().nullable(),
 });
 
 export type CreateCompany = z.infer<typeof createCompanySchema>;
@@ -26,6 +30,8 @@ export const updateCompanySchema = createCompanySchema
     feedbackDataSharingTermsVersion: feedbackDataSharingTermsVersionSchema,
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
+    // AgentDash (AGE-98): allow PATCH /companies/:id to update metadata.
+    metadata: z.record(z.unknown()).optional().nullable(),
   });
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;
