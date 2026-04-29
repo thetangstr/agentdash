@@ -216,13 +216,19 @@ export function TaskDependencyDag() {
               );
             })}
 
-            {/* Nodes */}
+            {/* Nodes — wrapped in <a> so SVG nodes are click-to-navigate (AGE-96) */}
             {dagIssues.map((issue) => {
               const pos = layout.positions.get(issue.id);
               if (!pos) return null;
               const color = statusColor(issue.status);
               return (
-                <g key={issue.id}>
+                <a
+                  key={issue.id}
+                  href={`/issues/${issue.id}`}
+                  aria-label={`Open ${issue.identifier} — ${issue.title}`}
+                  style={{ cursor: "pointer" }}
+                >
+                  <title>{`${issue.identifier} — ${issue.title} (${issue.status})`}</title>
                   <rect
                     x={pos.x} y={pos.y}
                     width={NODE_W} height={NODE_H}
@@ -230,7 +236,6 @@ export function TaskDependencyDag() {
                     fill="white"
                     stroke={color}
                     strokeWidth={2}
-                    className="cursor-pointer"
                   />
                   <text
                     x={pos.x + 8} y={pos.y + 18}
@@ -249,7 +254,7 @@ export function TaskDependencyDag() {
                     {issue.title.length > 22 ? issue.title.slice(0, 19) + "..." : issue.title}
                   </text>
                   <circle cx={pos.x + NODE_W - 14} cy={pos.y + 14} r={5} fill={color} />
-                </g>
+                </a>
               );
             })}
           </svg>
