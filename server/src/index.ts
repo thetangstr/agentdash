@@ -542,6 +542,9 @@ export async function startServer(): Promise<StartedServer> {
     // AgentDash (AGE-55): FRE Plan B flags
     disableSignUp: config.authDisableSignUp,
     allowMultiTenantPerDomain: config.allowMultiTenantPerDomain,
+    // AgentDash (AGE-60): Pro deployments enforce corp-email signup; Free
+    // (local_trusted) does not.
+    requireCorpEmail: config.deploymentMode === "authenticated",
     betterAuthHandler,
     resolveSession,
     // AgentDash (AGE-59): wire email backend from config

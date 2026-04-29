@@ -117,6 +117,9 @@ export async function createApp(
     // AgentDash (AGE-55): FRE Plan B flags
     disableSignUp?: boolean;
     allowMultiTenantPerDomain?: boolean;
+    // AgentDash (AGE-60): on Pro deployments, require a corp-email creator
+    // for new companies. Self-hosted Free leaves this off.
+    requireCorpEmail?: boolean;
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
@@ -225,6 +228,8 @@ export async function createApp(
     companyRoutes(db, opts.storageService, {
       // AgentDash (AGE-55): per-domain uniqueness toggle for company creation.
       allowMultiTenantPerDomain: opts.allowMultiTenantPerDomain ?? false,
+      // AgentDash (AGE-60): block free-mail creator emails on Pro.
+      requireCorpEmail: opts.requireCorpEmail ?? false,
     }),
   );
   api.use(companySkillRoutes(db));
