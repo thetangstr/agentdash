@@ -94,15 +94,17 @@ echo "    extracted $CTX context items"
 # library shipped via migration; this is a tide-over so the seed script
 # alone delivers a usable demo.
 # ----------------------------------------------------------------------------
-echo "  Creating starter agent templates (will be replaced by AGE-93)..."
+echo "  Creating starter agent templates (will be replaced by AGE-99 cross-company library)..."
 for tpl in \
   '{"slug":"submittal-coord","name":"Submittal Coordinator","role":"engineer","adapterType":"claude_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":15000,"okrs":[{"objective":"Cut submittal cycle time by 30%","keyResults":[{"metric":"cycle_time_days","target":7,"unit":"days"}]}]}' \
   '{"slug":"rfi-tracker","name":"RFI Tracker","role":"engineer","adapterType":"claude_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":10000,"okrs":[{"objective":"Surface every open RFI within 1 day","keyResults":[{"metric":"rfi_surfacing_lag_hours","target":24,"unit":"hours"}]}]}' \
-  '{"slug":"lead-qualifier","name":"Lead Qualifier (SDR)","role":"engineer","adapterType":"opencode_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":12000,"okrs":[{"objective":"Qualify all inbound leads within 1 hour","keyResults":[{"metric":"lead_qual_lag_minutes","target":60,"unit":"minutes"}]}]}'
+  '{"slug":"lead-qualifier","name":"Lead Qualifier (SDR)","role":"engineer","adapterType":"opencode_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":12000,"okrs":[{"objective":"Qualify all inbound leads within 1 hour","keyResults":[{"metric":"lead_qual_lag_minutes","target":60,"unit":"minutes"}]}]}' \
+  '{"slug":"weekly-pipeline-report","name":"Weekly Pipeline Report","role":"engineer","adapterType":"gemini_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":5000,"okrs":[{"objective":"CEO gets pipeline summary every Monday 8am","keyResults":[{"metric":"reports_delivered","target":4,"unit":"per_month"}]}]}' \
+  '{"slug":"proposal-drafter","name":"Proposal First-Drafter","role":"engineer","adapterType":"claude_local","authorityLevel":"executor","taskClassification":"deterministic","budgetMonthlyCents":10000,"okrs":[{"objective":"First draft of proposal within 4 hours of RFP","keyResults":[{"metric":"draft_lag_hours","target":4,"unit":"hours"}]}]}'
 do
   curl -s -X POST "$BASE/companies/$CID/agent-templates" -H "Content-Type: application/json" -d "$tpl" > /dev/null
 done
-echo "    3 starter templates created"
+echo "    5 starter templates created (Submittal Coord, RFI Tracker, Lead Qualifier, Pipeline Report, Proposal Drafter)"
 
 # ----------------------------------------------------------------------------
 # Suggest team (returns ranked templates if LLM enabled, all otherwise).
@@ -116,7 +118,7 @@ echo ""
 echo "Done."
 echo "  Company: $COMPANY_NAME (id=$CID, prefix=MK)"
 echo "  Onboarding session: $SESS"
-echo "  Templates: 3 starter (Submittal Coord, RFI Tracker, Lead Qualifier)"
+echo "  Templates: 5 starter (Submittal Coord, RFI Tracker, Lead Qualifier, Pipeline Report, Proposal Drafter)"
 echo ""
 echo "  Open the dashboard: http://localhost:3100/"
 echo "  Run again to verify idempotence — should print [SKIP]."
