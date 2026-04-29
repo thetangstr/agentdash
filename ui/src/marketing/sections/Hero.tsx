@@ -31,44 +31,54 @@ export function Hero() {
 }
 
 function BriefingCardSvg() {
+  const rows = [
+    { name: "Avery (CEO)",  status: "ok",   detail: "reviewing Q3 priorities" },
+    { name: "Mira (CMO)",   status: "ATTN", detail: "needs your input on launch" },
+    { name: "Theo (CTO)",   status: "ok",   detail: "shipping migrations" },
+    { name: "Quinn (CFO)",  status: "ok",   detail: "closing April books" },
+    { name: "Sam (Sales)",  status: "ok",   detail: "qualifying 12 leads" },
+  ];
   return (
-    <svg viewBox="0 0 360 280" fill="none" stroke="currentColor" strokeWidth="1.2" role="img" aria-label="Sample morning briefing">
-      <text x="20" y="32" fontSize="14" fill="currentColor" fontFamily="var(--mkt-font-serif)">AgentDash · Morning briefing</text>
-      <line x1="20" y1="44" x2="340" y2="44" />
-      {[0, 1, 2, 3, 4].map((i) => {
-        const y = 70 + i * 36;
-        const isHighlighted = i === 1;
+    <svg viewBox="0 0 420 320" fill="none" stroke="currentColor" strokeWidth="1.2" role="img" aria-label="Sample morning briefing">
+      <text x="24" y="34" fontSize="15" fill="currentColor" fontFamily="var(--mkt-font-serif)">AgentDash · Morning briefing</text>
+      <text x="396" y="34" textAnchor="end" fontSize="11" fill="currentColor" fontFamily="var(--mkt-font-mono)" opacity="0.6">TUE · APR 29</text>
+      <line x1="24" y1="48" x2="396" y2="48" />
+      {rows.map((row, i) => {
+        const y = 78 + i * 34;
+        const isHighlighted = row.status === "ATTN";
         return (
-          <g key={i}>
-            <circle cx="34" cy={y} r="10" />
-            <text x="56" y={y + 4} fontSize="11" fill="currentColor">Agent {i + 1}</text>
+          <g key={row.name}>
+            <circle cx="38" cy={y} r="9" />
+            <text x="56" y={y + 4} fontSize="11" fontWeight="500" fill="currentColor">{row.name}</text>
             <rect
-              x="160"
-              y={y - 10}
-              width="60"
-              height="20"
-              rx="10"
+              x="170"
+              y={y - 9}
+              width="56"
+              height="18"
+              rx="9"
               fill={isHighlighted ? "var(--mkt-accent)" : "none"}
               stroke={isHighlighted ? "none" : "currentColor"}
             />
             <text
-              x="190"
+              x="198"
               y={y + 4}
               textAnchor="middle"
               fontSize="10"
+              fontFamily="var(--mkt-font-mono)"
               fill={isHighlighted ? "#fff" : "currentColor"}
-            >{isHighlighted ? "ATTN" : "ok"}</text>
-            <text x="240" y={y + 4} fontSize="11" fill="currentColor">working: drafting Q3 report…</text>
+              stroke="none"
+            >{row.status}</text>
+            <text x="240" y={y + 4} fontSize="11" fill="currentColor" opacity="0.75">{row.detail}</text>
           </g>
         );
       })}
-      <line x1="20" y1="252" x2="340" y2="252" />
-      <text x="40" y="272" fontSize="11" fill="currentColor" fontFamily="var(--mkt-font-mono)">$182</text>
-      <text x="40" y="278" fontSize="9" fill="currentColor">today</text>
-      <text x="160" y="272" fontSize="11" fill="currentColor" fontFamily="var(--mkt-font-mono)">17</text>
-      <text x="160" y="278" fontSize="9" fill="currentColor">tasks done</text>
-      <text x="280" y="272" fontSize="11" fill="currentColor" fontFamily="var(--mkt-font-mono)">3</text>
-      <text x="280" y="278" fontSize="9" fill="currentColor">flagged</text>
+      <line x1="24" y1="266" x2="396" y2="266" />
+      <text x="40"  y="290" fontSize="20" fill="currentColor" fontFamily="var(--mkt-font-serif)" fontWeight="500">$182</text>
+      <text x="40"  y="306" fontSize="10" fill="currentColor" fontFamily="var(--mkt-font-mono)" opacity="0.6" letterSpacing="0.08em">SPEND TODAY</text>
+      <text x="170" y="290" fontSize="20" fill="currentColor" fontFamily="var(--mkt-font-serif)" fontWeight="500">17</text>
+      <text x="170" y="306" fontSize="10" fill="currentColor" fontFamily="var(--mkt-font-mono)" opacity="0.6" letterSpacing="0.08em">TASKS DONE</text>
+      <text x="290" y="290" fontSize="20" fill="currentColor" fontFamily="var(--mkt-font-serif)" fontWeight="500">3</text>
+      <text x="290" y="306" fontSize="10" fill="currentColor" fontFamily="var(--mkt-font-mono)" opacity="0.6" letterSpacing="0.08em">FLAGGED</text>
     </svg>
   );
 }
