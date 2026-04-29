@@ -23,6 +23,7 @@ function makeCompany(overrides: Partial<Company>): Company {
     logoAssetId: null,
     logoUrl: null,
     emailDomain: null,
+    metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

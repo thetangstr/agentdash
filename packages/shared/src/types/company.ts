@@ -24,6 +24,9 @@ export interface Company {
   // `me@gmail.com`). NULL on grandfathered rows. See
   // `deriveCompanyEmailDomain` in `@agentdash/shared`.
   emailDomain: string | null;
+  // AgentDash (AGE-98): structured client metadata exposed via the read
+  // endpoints (industry, expected team size, primary CRM, pilot stage, etc).
+  metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }
