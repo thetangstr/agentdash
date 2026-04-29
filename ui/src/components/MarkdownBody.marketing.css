@@ -1,0 +1,21 @@
+.mkt-root .paperclip-markdown {
+  font-family: var(--mkt-font-sans);
+  color: var(--mkt-ink);
+  font-size: 17px;
+  line-height: 1.65;
+}
+.mkt-root .paperclip-markdown h1,
+.mkt-root .paperclip-markdown h2,
+.mkt-root .paperclip-markdown h3 {
+  font-family: var(--mkt-font-serif);
+  font-weight: 500;
+  color: var(--mkt-ink);
+}
+.mkt-root .paperclip-markdown h1 { font-size: 40px; line-height: 1.1; margin: 48px 0 16px; }
+.mkt-root .paperclip-markdown h2 { font-size: 28px; line-height: 1.15; margin: 40px 0 12px; }
+.mkt-root .paperclip-markdown h3 { font-size: 20px; line-height: 1.2; margin: 32px 0 8px; }
+.mkt-root .paperclip-markdown a { color: var(--mkt-accent-ink); }
+.mkt-root .paperclip-markdown code { background: var(--mkt-surface-cream-2); padding: 2px 6px; border-radius: 4px; font-family: var(--mkt-font-mono); font-size: 0.9em; }
+.mkt-root .paperclip-markdown pre { background: var(--mkt-surface-cream-2); padding: 16px; border-radius: 8px; overflow-x: auto; }
+.mkt-root .paperclip-markdown pre code { background: transparent; padding: 0; }
+.mkt-root .paperclip-markdown ul, .mkt-root .paperclip-markdown ol { margin: 16px 0; padding-left: 24px; }
