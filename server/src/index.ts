@@ -545,6 +545,8 @@ export async function startServer(): Promise<StartedServer> {
     // AgentDash (AGE-60): Pro deployments enforce corp-email signup; Free
     // (local_trusted) does not.
     requireCorpEmail: config.deploymentMode === "authenticated",
+    // AgentDash (AGE-100): Free deployments cap to one human user.
+    freeSeatCap: config.deploymentMode === "local_trusted",
     betterAuthHandler,
     resolveSession,
     // AgentDash (AGE-59): wire email backend from config
