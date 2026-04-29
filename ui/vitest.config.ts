@@ -10,5 +10,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    environmentMatchGlobs: [
+      ["src/marketing/hooks/**", "jsdom"],
+    ],
   },
 });
