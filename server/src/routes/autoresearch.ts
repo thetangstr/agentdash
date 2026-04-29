@@ -243,7 +243,14 @@ export function autoresearchRoutes(db: Db) {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
-      const result = await svc.recordMeasurement(companyId, { ...req.body, experimentId: req.params.experimentId });
+      const body = req.body as Record<string, unknown>;
+      const collectedAt =
+        typeof body.collectedAt === "string" ? new Date(body.collectedAt) : body.collectedAt;
+      const result = await svc.recordMeasurement(companyId, {
+        ...body,
+        collectedAt,
+        experimentId: req.params.experimentId,
+      } as Parameters<typeof svc.recordMeasurement>[1]);
       res.status(201).json(result);
     } catch (err: unknown) {
       const status = (err as { statusCode?: number }).statusCode ?? 500;
