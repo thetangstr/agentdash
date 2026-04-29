@@ -24,6 +24,20 @@ function toSession(value: unknown): AuthSession | null {
   };
 }
 
+// AgentDash (AGE-101): typed auth error so the signup form can recognize
+// AGE-60 (pro_requires_corp_email) and AGE-100 (free_tier_seat_cap) codes
+// and render an inline upgrade CTA instead of a generic toast.
+export class AuthRequestError extends Error {
+  readonly code: string | null;
+  readonly status: number;
+  constructor(message: string, code: string | null, status: number) {
+    super(message);
+    this.name = "AuthRequestError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 async function authPost(path: string, body: Record<string, unknown>) {
   const res = await fetch(`/api/auth${path}`, {
     method: "POST",
@@ -38,7 +52,11 @@ async function authPost(path: string, body: Record<string, unknown>) {
       typeof (payload as { error?: { message?: string } | string }).error === "object"
         ? ((payload as { error?: { message?: string } }).error?.message ?? `Request failed: ${res.status}`)
         : (payload as { error?: string } | null)?.error ?? `Request failed: ${res.status}`;
-    throw new Error(message);
+    const code =
+      typeof (payload as { code?: unknown } | null)?.code === "string"
+        ? ((payload as { code: string }).code)
+        : null;
+    throw new AuthRequestError(message, code, res.status);
   }
   return payload;
 }
