@@ -24,19 +24,15 @@ curl -sf "$BASE/health" > /dev/null || {
 echo "MKthink seed — target $BASE"
 
 # ----------------------------------------------------------------------------
-# Idempotence: we embed a unique sentinel in the description so this script
-# only collides with prior runs of itself, not unrelated rows that happen to
-# be named "MKthink" (e.g. older manual test data).
-#
-# (We'd prefer a structured `metadata` field, but the GET /companies query
-# doesn't project the column today — tracked in AGE-98.)
+# Idempotence: AGE-98 exposed the metadata JSONB column on the company
+# read endpoints, so we can check for our marker (`isFirstClient: true`)
+# directly. This is more robust than the description-string sentinel we
+# used pre-AGE-98 — survives description edits and is structured.
 # ----------------------------------------------------------------------------
-SEED_SENTINEL="[seed:mkthink-first-client]"
-
 EXISTING=$(curl -s "$BASE/companies" | jq_ "
 existing = [c for c in d
             if c['name'] == '$COMPANY_NAME'
-            and '$SEED_SENTINEL' in (c.get('description') or '')]
+            and (c.get('metadata') or {}).get('isFirstClient') is True]
 print(existing[0]['id'] if existing else '')")
 
 if [ -n "$EXISTING" ]; then
@@ -46,18 +42,31 @@ if [ -n "$EXISTING" ]; then
 fi
 
 # ----------------------------------------------------------------------------
-# Create the company. Industry/HubSpot context lives in `metadata` JSONB
-# (companies schema has no first-class industry column today).
+# Create the company. Industry / HubSpot / pilot context lives in
+# `metadata` JSONB. The wizard surfaces this on the dashboard.
 # ----------------------------------------------------------------------------
 echo "  Creating company..."
-# Description embeds the sentinel above so future re-runs skip cleanly.
-# Industry / workflow context is duplicated into the onboarding source below
-# (which IS persisted and surfaces in the wizard).
 COMPANY_PAYLOAD=$(python3 -c "
 import json
 print(json.dumps({
     'name': 'MKthink',
-    'description': '$SEED_SENTINEL SMB construction services company on HubSpot CRM, ~30 people. First AgentDash pilot client.',
+    'description': 'SMB construction services company on HubSpot CRM, ~30 people. First AgentDash pilot client.',
+    'metadata': {
+        'isFirstClient': True,
+        'industry': 'construction',
+        'subIndustry': 'construction-services',
+        'expectedTeamSize': 30,
+        'primaryCRM': 'hubspot',
+        'primaryWorkflows': [
+            'lead-qualification',
+            'submittal-coordination',
+            'rfi-tracking',
+            'weekly-pipeline-report',
+            'proposal-first-draft',
+        ],
+        'pilotStage': 'discovery',
+        'pilotStartedAt': None,
+    },
 }))")
 CID=$(curl -s -X POST "$BASE/companies" -H "Content-Type: application/json" \
   -d "$COMPANY_PAYLOAD" | jq_ "print(d['id'])")
