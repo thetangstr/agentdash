@@ -1,0 +1,75 @@
+/*
+ * Marketing type scale. Only applied within `.mkt-root` so it never leaks.
+ */
+.mkt-root {
+  font-family: var(--mkt-font-sans);
+  color: var(--mkt-ink);
+  background: var(--mkt-surface-cream);
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mkt-root .mkt-display-hero {
+  font-family: var(--mkt-font-serif);
+  font-weight: 500;
+  font-size: clamp(48px, 7vw, 80px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+.mkt-root .mkt-display-section {
+  font-family: var(--mkt-font-serif);
+  font-weight: 500;
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: 1.1;
+  letter-spacing: -0.005em;
+}
+
+.mkt-root .mkt-display-page {
+  font-family: var(--mkt-font-serif);
+  font-weight: 500;
+  font-size: clamp(40px, 6vw, 56px);
+  line-height: 1.05;
+}
+
+.mkt-root .mkt-mission {
+  font-family: var(--mkt-font-serif);
+  font-weight: 400;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.25;
+  max-width: 28ch;
+  margin-inline: auto;
+  text-align: center;
+}
+
+.mkt-root .mkt-body-lg {
+  font-size: 19px;
+  line-height: 1.55;
+}
+
+.mkt-root .mkt-eyebrow {
+  font-family: var(--mkt-font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--mkt-ink-soft);
+}
+
+.mkt-root .mkt-caption {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--mkt-ink-soft);
+}
+
+.mkt-root a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.mkt-root a:hover { color: var(--mkt-accent-ink); }
+
+.mkt-root *:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+  border-radius: 2px;
+}
