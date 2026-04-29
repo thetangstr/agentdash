@@ -29,6 +29,10 @@ CID=$(curl -s -X POST "$BASE/companies" -H "Content-Type: application/json" \
   -d '{"name":"CUJ Test Corp","description":"Testing all CUJs","issuePrefix":"CUJ"}' | jq_ "print(d['id'])")
 [ -n "$CID" ] && pass "Create company" || fail "Create company" "no ID returned"
 
+# Bump tier so entitlement-gated CUJs (AutoResearch, etc.) can run.
+curl -s -X PATCH "$BASE/companies/$CID/entitlements" -H "Content-Type: application/json" \
+  -d '{"tier":"pro"}' > /dev/null
+
 # Start onboarding session
 SESS=$(curl -s -X POST "$BASE/companies/$CID/onboarding/sessions" -H "Content-Type: application/json" \
   -d '{"createdByUserId":"test-user"}' 2>/dev/null | jq_ "print(d.get('id',''))")
