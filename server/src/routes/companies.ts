@@ -4,6 +4,7 @@ import type { Db } from "@agentdash/db";
 import { authUsers } from "@agentdash/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
+  FREE_MAIL_DOMAINS,
   companyPortabilityExportSchema,
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
@@ -34,6 +35,11 @@ import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 // from server/src/config.ts so test/integration harnesses can override.
 export interface CompanyRoutesOptions {
   allowMultiTenantPerDomain?: boolean;
+  // AgentDash (AGE-60): when true, reject company creation if the creator's
+  // email is a free-mail address (gmail, yahoo, etc). Pro deployments turn
+  // this on; self-hosted Free leaves it off so a single user with any
+  // email can stand up a workspace.
+  requireCorpEmail?: boolean;
 }
 
 export function companyRoutes(
@@ -42,6 +48,7 @@ export function companyRoutes(
   options: CompanyRoutesOptions = {},
 ) {
   const allowMultiTenantPerDomain = options.allowMultiTenantPerDomain ?? false;
+  const requireCorpEmail = options.requireCorpEmail ?? false;
   const router = Router();
   const svc = companyService(db);
   const agents = agentService(db);
@@ -291,6 +298,23 @@ export function companyRoutes(
         .then((rows) => rows[0] ?? null);
       creatorEmail = userRow?.email ?? null;
       if (creatorEmail) {
+        // AgentDash (AGE-60): on Pro deployments, reject free-mail addresses
+        // before we even derive the domain — they get a friendlier error
+        // code than the generic "could not derive". local_implicit is
+        // already exempt above (the outer if).
+        if (requireCorpEmail) {
+          const lower = creatorEmail.trim().toLowerCase();
+          const at = lower.lastIndexOf("@");
+          const rawDomain = at >= 0 ? lower.slice(at + 1) : "";
+          if (FREE_MAIL_DOMAINS.has(rawDomain)) {
+            res.status(400).json({
+              code: "pro_requires_corp_email",
+              error:
+                "Pro accounts require a company email. Please sign up with your work email or use the Free self-hosted plan.",
+            });
+            return;
+          }
+        }
         try {
           emailDomain = deriveCompanyEmailDomain(creatorEmail);
         } catch (err) {
