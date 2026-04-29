@@ -88,6 +88,21 @@ export function AuthPage() {
       navigate(nextPath, { replace: true });
     },
     onError: (err) => {
+      // AgentDash (AGE-101): translate AGE-60 / AGE-100 server codes to
+      // friendlier inline copy instead of dumping the raw server message.
+      const code = (err as { code?: unknown }).code;
+      if (code === "pro_requires_corp_email") {
+        setError(
+          "Pro accounts require a company email. Please sign up with your work email or use the Free self-hosted plan.",
+        );
+        return;
+      }
+      if (code === "free_tier_seat_cap") {
+        setError(
+          "Self-hosted Free supports one human user. Upgrade to Pro to invite teammates.",
+        );
+        return;
+      }
       setError(err instanceof Error ? err.message : "Authentication failed");
     },
   });
