@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useCompany } from "../context/CompanyContext";
 import { assessApi, type ResearchResult, type InterviewResponse } from "../api/assess";
 import { MarkdownBody } from "../components/MarkdownBody";
+import { MarketingShell } from "../marketing/MarketingShell";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -689,12 +690,16 @@ export function AssessPage() {
   };
 
   if (!companyId) {
-    return <div className="p-6 text-muted-foreground">Select a company to get started.</div>;
+    return (
+      <MarketingShell>
+        <div className="p-6" style={{ color: "var(--mkt-ink-soft)" }}>Select a company to get started.</div>
+      </MarketingShell>
+    );
   }
 
   /* ---------------------------------------------------------------- */
   return (
-    <div className="min-h-screen bg-background">
+    <MarketingShell>
 
       {/* ════ PHASE: START ════ */}
       {phase === "start" && (
@@ -705,10 +710,10 @@ export function AssessPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
               </svg>
             </div>
-            <h1 className="text-3xl font-bold mb-3 text-foreground" style={{ letterSpacing: "-0.03em" }}>
+            <h1 className="mkt-display-section mb-3">
               Agent Readiness Assessment
             </h1>
-            <p className="text-sm mb-8 text-muted-foreground">
+            <p className="text-sm mb-8" style={{ color: "var(--mkt-ink-soft)" }}>
               We'll research your company, then walk you through a quick assessment to identify where AI agents can drive the most impact.
             </p>
 
@@ -774,8 +779,8 @@ export function AssessPage() {
                   </svg>
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-foreground">We found {form.companyName}</h2>
-                  <p className="text-xs text-muted-foreground">Please confirm this is correct</p>
+                  <h2 className="mkt-display-section" style={{ fontSize: "1.25rem", margin: 0 }}>We found {form.companyName}</h2>
+                  <p className="text-xs" style={{ color: "var(--mkt-ink-soft)" }}>Please confirm this is correct</p>
                 </div>
               </div>
 
@@ -1201,8 +1206,8 @@ export function AssessPage() {
                   </svg>
                 </div>
                 <div>
-                  <h1 className="text-lg font-bold text-foreground">Agent Readiness Report — {form.companyName}</h1>
-                  <p className="text-xs text-muted-foreground">
+                  <h1 className="mkt-display-section" style={{ fontSize: "1.5rem", margin: 0 }}>Agent Readiness Report — {form.companyName}</h1>
+                  <p className="text-xs" style={{ color: "var(--mkt-ink-soft)" }}>
                     {form.industry} &middot; {form.scope || "Entire organization"} &middot;{" "}
                     {new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
                   </p>
@@ -1217,6 +1222,6 @@ export function AssessPage() {
           </div>
         </div>
       )}
-    </div>
+    </MarketingShell>
   );
 }
