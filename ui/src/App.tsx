@@ -81,6 +81,9 @@ import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
 import { NotFoundPage } from "./pages/NotFound";
+import { Landing as MarketingLanding } from "./marketing/pages/Landing";
+import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
+import { About as MarketingAbout } from "./marketing/pages/About";
 import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
@@ -370,9 +373,11 @@ export function App() {
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
+        <Route path="/" element={<MarketingLanding />} />
+        <Route path="consulting" element={<MarketingConsulting />} />
+        <Route path="about" element={<MarketingAbout />} />
 
         <Route element={<CloudAccessGate />}>
-          <Route index element={<CompanyRootRedirect />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />
           <Route path="instance/settings" element={<Layout />}>
