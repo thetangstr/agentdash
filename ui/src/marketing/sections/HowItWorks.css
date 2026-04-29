@@ -1,0 +1,11 @@
+.mkt-how-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; }
+.mkt-how-step__num {
+  font-family: var(--mkt-font-serif);
+  font-size: 64px;
+  line-height: 1;
+  color: var(--mkt-accent);
+  margin-bottom: 16px;
+}
+.mkt-how-step__title { font-weight: 600; font-size: 20px; margin-bottom: 8px; }
+.mkt-how-step__body { color: var(--mkt-ink-soft); }
+@media (max-width: 800px) { .mkt-how-grid { grid-template-columns: 1fr; } }
