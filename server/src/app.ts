@@ -9,6 +9,7 @@ import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
+import { freeSeatCapMiddleware } from "./middleware/free-seat-cap.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
@@ -120,6 +121,9 @@ export async function createApp(
     // AgentDash (AGE-60): on Pro deployments, require a corp-email creator
     // for new companies. Self-hosted Free leaves this off.
     requireCorpEmail?: boolean;
+    // AgentDash (AGE-100): Free single-seat cap — block 2nd signup on
+    // self-hosted Free with HTTP 403 free_tier_seat_cap.
+    freeSeatCap?: boolean;
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
@@ -183,6 +187,11 @@ export async function createApp(
     });
   });
   if (opts.betterAuthHandler) {
+    // AgentDash (AGE-100): seat-cap gate runs before the better-auth handler
+    // so we can short-circuit before better-auth's internal signup flow.
+    app.use(
+      freeSeatCapMiddleware(db, { enabled: opts.freeSeatCap ?? false }),
+    );
     app.all("/api/auth/*authPath", opts.betterAuthHandler);
   }
 
