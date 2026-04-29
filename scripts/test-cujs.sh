@@ -269,10 +269,15 @@ MET=$(curl -s -X POST "$BASE/companies/$CID/metric-definitions" -H "Content-Type
   -d '{"key":"signup_rate","displayName":"Daily Signup Rate","unit":"percent","dataSourceType":"manual","collectionMethod":"manual"}' | jq_ "print(d['id'])")
 [ -n "$MET" ] && pass "Create metric definition" || fail "Create metric" "no ID"
 
-# Record measurement
-MEAS=$(curl -s -X POST "$BASE/companies/$CID/experiments/$EXP/measurements" -H "Content-Type: application/json" \
-  -d "{\"metricDefinitionId\":\"$MET\",\"value\":22.5,\"collectedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"collectionMethod\":\"manual\"}" | jq_ "print(d.get('id', d.get('error','unknown')))")
-[ -n "$MEAS" ] && pass "Record measurement (22.5%) [$MEAS]" || fail "Record measurement" "no ID"
+# Record measurement — assert a real id (not an error string), to catch silent backend errors
+MEAS_RESP=$(curl -s -X POST "$BASE/companies/$CID/experiments/$EXP/measurements" -H "Content-Type: application/json" \
+  -d "{\"metricDefinitionId\":\"$MET\",\"value\":22.5,\"collectedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"collectionMethod\":\"manual\"}")
+MEAS=$(echo "$MEAS_RESP" | jq_ "print(d.get('id',''))")
+if [ -n "$MEAS" ]; then
+  pass "Record measurement (22.5%) id=$MEAS"
+else
+  fail "Record measurement" "no id in response: $MEAS_RESP"
+fi
 
 # Create evaluation
 EVAL=$(curl -s -X POST "$BASE/companies/$CID/experiments/$EXP/evaluations" -H "Content-Type: application/json" \
