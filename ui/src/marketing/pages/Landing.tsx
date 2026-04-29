@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Navigate } from "@/lib/router";
+import { Navigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../../api/auth";
 import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
@@ -23,6 +23,11 @@ const PLACEHOLDER_LOGOS = [
 ];
 
 export function Landing() {
+  const [searchParams] = useSearchParams();
+  // ?preview=1 skips the logged-in redirect so the marketing landing is
+  // viewable locally even in local_trusted mode (where the user is implicitly
+  // logged in and would otherwise be sent straight to /companies).
+  const previewMode = searchParams.get("preview") === "1";
   const healthQuery = useQuery({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
@@ -36,9 +41,9 @@ export function Landing() {
     retry: false,
   });
 
-  if (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading)) return null;
+  if (!previewMode && (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading))) return null;
   const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
-  if (loggedIn) return <Navigate to="/companies" replace />;
+  if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
 
   return (
     <MarketingShell>
