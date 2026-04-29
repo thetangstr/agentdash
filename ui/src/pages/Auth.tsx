@@ -196,7 +196,8 @@ export function AuthPage() {
             {error && <p className="text-xs text-destructive">{error}</p>}
             <Button
               type="submit"
-              className={`w-full ${(!canSubmit || mutation.isPending) ? "opacity-50" : ""}`}
+              className="w-full"
+              disabled={!canSubmit || mutation.isPending}
             >
               {mutation.isPending
                 ? "Working…"

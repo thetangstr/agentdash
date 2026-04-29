@@ -35,3 +35,11 @@
   text-underline-offset: 3px;
 }
 .mkt-btn--link:hover { color: var(--mkt-accent-ink); }
+.mkt-btn--disabled,
+.mkt-btn--disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--mkt-rule);
+  color: var(--mkt-ink-soft);
+  border-color: transparent;
+}
