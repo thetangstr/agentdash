@@ -20,13 +20,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Block manual lockfile edits
+      - name: Block manual lockfile-only edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
           changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")"
           if printf '%s\n' "$changed" | grep -qx 'pnpm-lock.yaml'; then
-            echo "Do not commit pnpm-lock.yaml in pull requests. CI owns lockfile updates."
-            exit 1
+            # Lockfile is allowed when accompanied by a package.json change
+            # (legitimate dependency add/update). Lockfile-only PRs must come
+            # from the dedicated chore/refresh-lockfile branch (already exempt
+            # via the `if` above). AGE-97 follow-up.
+            if printf '%s\n' "$changed" | grep -qE '(^|/)package\.json$'; then
+              echo "pnpm-lock.yaml change accompanies a package.json change — allowed."
+            else
+              echo "Do not commit pnpm-lock.yaml in pull requests without a corresponding package.json change. CI owns lockfile-only updates."
+              exit 1
+            fi
           fi
 
       - name: Setup pnpm
