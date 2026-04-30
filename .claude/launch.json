@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agentdash-full-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 3100
+    },
+    {
+      "name": "agentdash-server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@agentdash/server", "dev:watch"],
+      "port": 3101
+    },
+    {
+      "name": "agentdash-ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@agentdash/ui", "dev"],
+      "port": 3100
+    },
+    {
+      "name": "agentdash-marketing",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@agentdash/marketing", "dev"],
+      "port": 3200
+    }
+  ]
+}
