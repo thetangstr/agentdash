@@ -388,6 +388,11 @@ export function App() {
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="tests/ux/runs" element={<UnprefixedBoardRedirect />} />
+          {/* AgentDash: bare /assess and /assess/history live inside the gate so
+              unauth users get bounced to /auth, and logged-in users get redirected
+              into their company-prefixed assess page. Marketing CTAs hit /assess. */}
+          <Route path="assess" element={<UnprefixedBoardRedirect />} />
+          <Route path="assess/history" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>
