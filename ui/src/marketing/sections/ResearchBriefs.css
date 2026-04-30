@@ -1,0 +1,18 @@
+.mkt-briefs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+.mkt-brief {
+  border: 1px solid var(--mkt-rule);
+  border-radius: 8px;
+  padding: 24px;
+  display: grid;
+  gap: 12px;
+  background: var(--mkt-surface-cream);
+  transition: background-color 160ms var(--mkt-ease);
+  text-decoration: none;
+  color: inherit;
+}
+.mkt-brief:hover { background: var(--mkt-surface-cream-2); }
+.mkt-brief__tag { font-family: var(--mkt-font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--mkt-ink-soft); }
+.mkt-brief__title { font-family: var(--mkt-font-serif); font-weight: 500; font-size: 22px; line-height: 1.2; }
+.mkt-brief__abstract { color: var(--mkt-ink-soft); font-size: 15px; }
+.mkt-brief__cta { color: var(--mkt-accent-ink); font-size: 14px; }
+@media (max-width: 800px) { .mkt-briefs { grid-template-columns: 1fr; } }

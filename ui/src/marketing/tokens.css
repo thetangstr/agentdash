@@ -1,0 +1,31 @@
+/*
+ * Marketing surface design tokens.
+ * Used only by ui/src/marketing/**. Do not import from product UI.
+ */
+:root {
+  --mkt-surface-cream: #faf9f5;
+  --mkt-surface-cream-2: #f3efe6;
+  --mkt-ink: #1f1e1d;
+  --mkt-ink-soft: #54524f;
+  --mkt-rule: #e8e3d6;
+  --mkt-accent: #cc785c;
+  --mkt-accent-ink: #7a3f2a;
+
+  /* spacing scale (8px base) */
+  --mkt-space-1: 8px;
+  --mkt-space-2: 16px;
+  --mkt-space-3: 24px;
+  --mkt-space-4: 32px;
+  --mkt-space-6: 48px;
+  --mkt-space-8: 64px;
+  --mkt-space-12: 96px;
+  --mkt-space-16: 128px;
+  --mkt-space-20: 160px;
+
+  /* container */
+  --mkt-container-max: 1200px;
+  --mkt-container-gutter: 32px;
+
+  /* motion */
+  --mkt-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}

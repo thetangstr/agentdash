@@ -1,0 +1,2 @@
+.mkt-readiness { display: grid; grid-template-columns: 1.4fr 1fr; gap: 64px; align-items: center; }
+@media (max-width: 800px) { .mkt-readiness { grid-template-columns: 1fr; } }

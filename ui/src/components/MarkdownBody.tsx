@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { cn } from "../lib/utils";
 import { useTheme } from "../context/ThemeContext";
 import { mentionChipInlineStyle, parseMentionChipHref } from "../lib/mention-chips";
+import "./MarkdownBody.marketing.css";
 
 interface MarkdownBodyProps {
   children: string;

@@ -81,6 +81,9 @@ import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
 import { NotFoundPage } from "./pages/NotFound";
+import { Landing as MarketingLanding } from "./marketing/pages/Landing";
+import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
+import { About as MarketingAbout } from "./marketing/pages/About";
 import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
 import { useDialog } from "./context/DialogContext";
@@ -305,30 +308,6 @@ function OnboardingRoutePage() {
   );
 }
 
-function CompanyRootRedirect() {
-  const { companies, selectedCompany, loading } = useCompany();
-  const location = useLocation();
-
-  if (loading) {
-    return <div className="mx-auto max-w-xl py-10 text-sm text-muted-foreground">Loading...</div>;
-  }
-
-  const targetCompany = selectedCompany ?? companies[0] ?? null;
-  if (!targetCompany) {
-    if (
-      shouldRedirectCompanylessRouteToOnboarding({
-        pathname: location.pathname,
-        hasCompanies: false,
-      })
-    ) {
-      return <Navigate to="/onboarding" replace />;
-    }
-    return <NoCompaniesStartPage />;
-  }
-
-  return <Navigate to={`/${targetCompany.issuePrefix}/dashboard`} replace />;
-}
-
 function UnprefixedBoardRedirect() {
   const location = useLocation();
   const { companies, selectedCompany, loading } = useCompany();
@@ -370,9 +349,11 @@ export function App() {
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
+        <Route path="/" element={<MarketingLanding />} />
+        <Route path="consulting" element={<MarketingConsulting />} />
+        <Route path="about" element={<MarketingAbout />} />
 
         <Route element={<CloudAccessGate />}>
-          <Route index element={<CompanyRootRedirect />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />
           <Route path="instance/settings" element={<Layout />}>
@@ -407,6 +388,11 @@ export function App() {
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
           <Route path="tests/ux/runs" element={<UnprefixedBoardRedirect />} />
+          {/* AgentDash: bare /assess and /assess/history live inside the gate so
+              unauth users get bounced to /auth, and logged-in users get redirected
+              into their company-prefixed assess page. Marketing CTAs hit /assess. */}
+          <Route path="assess" element={<UnprefixedBoardRedirect />} />
+          <Route path="assess/history" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>

@@ -1,12 +1,42 @@
-// AgentDash: Assess Page — 6-phase flow (Start → Confirm → Form → DeepDive → Generating → Report)
-import { useState, useRef, useEffect, useCallback } from "react";
+// AgentDash: Agent Readiness Assessment — 4-step wizard ported from
+// agent-factory-research, restyled to inherit the marketing surface
+// (cream + coral, Newsreader serif, Inter Tight body).
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Building2,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Cpu,
+  Loader2,
+  RotateCcw,
+  Settings,
+  Sparkles,
+  Target,
+} from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
-import { assessApi, type ResearchResult, type InterviewResponse } from "../api/assess";
+import { useQuery } from "@tanstack/react-query";
+import { assessApi, type StoredAssessment } from "../api/assess";
 import { MarkdownBody } from "../components/MarkdownBody";
+import { MarketingShell } from "../marketing/MarketingShell";
+import { SectionContainer } from "../marketing/components/SectionContainer";
+import { Eyebrow } from "../marketing/components/Eyebrow";
+import { Button } from "../marketing/components/Button";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
+
+const INDUSTRIES = [
+  "Public Sector", "E-Commerce", "Insurance", "Healthcare", "Logistics",
+  "Financial Services", "Manufacturing", "Real Estate", "Legal", "Education",
+  "Tech/SaaS", "Retail", "Energy/Utilities", "Telecom",
+  "Media/Entertainment", "Construction", "Hospitality", "Agriculture",
+];
+
+function toSlug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
 const EMPLOYEE_RANGES = ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"];
 const REVENUE_RANGES = ["< $5M", "$5–25M", "$25–100M", "$100M–1B", "> $1B"];
@@ -18,40 +48,6 @@ const AUTOMATION_LEVELS = [
 const GOALS = ["Revenue growth", "Cost reduction", "Both"];
 const TIMELINES = ["Immediate need", "3-6 months", "Just exploring"];
 const BUDGETS = ["< $50K", "$50–150K", "$150–500K", "> $500K", "Not sure yet"];
-
-const INDUSTRIES = [
-  { label: "Public Sector", slug: "public-sector" },
-  { label: "E-Commerce", slug: "e-commerce" },
-  { label: "Insurance", slug: "insurance" },
-  { label: "Healthcare", slug: "healthcare" },
-  { label: "Logistics", slug: "logistics" },
-  { label: "Financial Services", slug: "financial-services" },
-  { label: "Manufacturing", slug: "manufacturing" },
-  { label: "Real Estate", slug: "real-estate" },
-  { label: "Legal", slug: "legal" },
-  { label: "Education", slug: "education" },
-  { label: "Tech/SaaS", slug: "tech-saas" },
-  { label: "Retail", slug: "retail" },
-  { label: "Energy/Utilities", slug: "energy-utilities" },
-  { label: "Telecom", slug: "telecom" },
-  { label: "Media/Entertainment", slug: "media-entertainment" },
-  { label: "Construction", slug: "construction" },
-  { label: "Hospitality", slug: "hospitality" },
-  { label: "Agriculture", slug: "agriculture" },
-];
-
-const SOFTWARE_SUITES = [
-  { category: "CRM & Sales", tools: ["Salesforce", "HubSpot", "Dynamics 365", "Pipedrive", "Zoho CRM"] },
-  { category: "ERP", tools: ["SAP", "Oracle", "NetSuite", "Sage", "Odoo"] },
-  { category: "IT & Support", tools: ["ServiceNow", "Jira", "Zendesk", "Freshdesk", "PagerDuty"] },
-  { category: "Healthcare", tools: ["Epic", "Cerner", "Athenahealth", "MEDITECH"] },
-  { category: "Cloud & Infra", tools: ["AWS", "Azure", "GCP", "IBM Cloud"] },
-  { category: "Collaboration", tools: ["Slack", "Microsoft Teams", "Google Workspace", "Zoom"] },
-  { category: "Finance & HR", tools: ["Workday", "QuickBooks", "Xero", "ADP", "BambooHR", "Gusto"] },
-  { category: "Engineering", tools: ["GitHub", "GitLab", "Jenkins", "Datadog", "Splunk"] },
-  { category: "Project & Ops", tools: ["Asana", "Monday.com", "Smartsheet", "Procore", "Airtable"] },
-  { category: "Data & Analytics", tools: ["Snowflake", "Databricks", "Tableau", "Power BI", "Looker"] },
-];
 
 const FUNCTION_CATEGORIES = [
   {
@@ -101,35 +97,30 @@ const FUNCTION_CATEGORIES = [
   },
 ];
 
-const SCOPE_OPTIONS = [
-  { v: "entire", l: "The entire organization" },
-  { v: "marketing", l: "Marketing & Sales" },
-  { v: "operations", l: "Operations & Supply Chain" },
-  { v: "it", l: "IT & Engineering" },
-  { v: "finance", l: "Finance & Accounting" },
-  { v: "support", l: "Customer Support & Service" },
-  { v: "hr", l: "HR & People" },
-  { v: "custom", l: "A specific department or business unit" },
+const SOFTWARE_SUITES = [
+  { category: "CRM & Sales", tools: ["Salesforce", "HubSpot", "Dynamics 365", "Pipedrive", "Zoho CRM"] },
+  { category: "ERP", tools: ["SAP", "Oracle", "NetSuite", "Sage", "Odoo"] },
+  { category: "IT & Support", tools: ["ServiceNow", "Jira", "Zendesk", "Freshdesk", "PagerDuty"] },
+  { category: "Healthcare", tools: ["Epic", "Cerner", "Athenahealth", "MEDITECH"] },
+  { category: "Cloud & Infra", tools: ["AWS", "Azure", "GCP", "IBM Cloud"] },
+  { category: "Collaboration", tools: ["Slack", "Microsoft Teams", "Google Workspace", "Zoom"] },
+  { category: "Finance & HR", tools: ["Workday", "QuickBooks", "Xero", "ADP", "BambooHR", "Gusto"] },
+  { category: "Engineering", tools: ["GitHub", "GitLab", "Jenkins", "Datadog", "Splunk"] },
+  { category: "Project & Ops", tools: ["Asana", "Monday.com", "Smartsheet", "Procore", "Airtable"] },
+  { category: "Data & Analytics", tools: ["Snowflake", "Databricks", "Tableau", "Power BI", "Looker"] },
 ];
-
-function toSlug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-type Phase = "start" | "confirm" | "form" | "deepdive" | "generating" | "report";
-
 interface FormData {
   companyName: string;
   companyUrl: string;
   industry: string;
-  industrySlug: string;
-  scope: string;
   employeeRange: string;
   revenueRange: string;
+  description: string;
   currentSystems: string[];
   customSystems: string;
   automationLevel: string;
@@ -146,210 +137,470 @@ interface FormData {
 }
 
 const INITIAL_FORM: FormData = {
-  companyName: "", companyUrl: "", industry: "", industrySlug: "", scope: "",
-  employeeRange: "", revenueRange: "", currentSystems: [], customSystems: "",
-  automationLevel: "", aiUsageLevel: "", aiGovernance: "", agentExperience: "",
-  aiOwnership: "", challenges: "", selectedFunctions: [], primaryGoal: "Both",
-  targets: "", timeline: "", budgetRange: "",
+  companyName: "",
+  companyUrl: "",
+  industry: "",
+  employeeRange: "",
+  revenueRange: "",
+  description: "",
+  currentSystems: [],
+  customSystems: "",
+  automationLevel: "",
+  aiUsageLevel: "",
+  aiGovernance: "",
+  agentExperience: "",
+  aiOwnership: "",
+  challenges: "",
+  selectedFunctions: [],
+  primaryGoal: "Both",
+  targets: "",
+  timeline: "",
+  budgetRange: "",
 };
 
-interface ConversationRound {
-  question: string;
-  options: string[];
-  answer: string;
-  insights: Array<{ label: string; value: string; icon: string }>;
-  clarityScore: number;
-  thinkingSummary?: string;
-}
+const STEPS = [
+  { num: 1, label: "Company", icon: Building2 },
+  { num: 2, label: "Operations", icon: Settings },
+  { num: 3, label: "Functions", icon: Cpu },
+  { num: 4, label: "Goals", icon: Target },
+];
 
 /* ------------------------------------------------------------------ */
-/*  Small UI helpers                                                   */
+/*  Page Component                                                     */
 /* ------------------------------------------------------------------ */
 
-function Chip({ label, selected, onClick }: { label: string; selected: boolean; onClick: () => void }) {
+export function AssessPage() {
+  const { selectedCompany } = useCompany();
+  const companyId = selectedCompany?.id;
+
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState<FormData>(INITIAL_FORM);
+  const [output, setOutput] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState("");
+  const [showResults, setShowResults] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Hydrate the form with the active company's name on mount
+  useEffect(() => {
+    if (selectedCompany?.name && !form.companyName) {
+      setForm((prev) => ({ ...prev, companyName: selectedCompany.name }));
+    }
+  }, [selectedCompany?.name, form.companyName]);
+
+  // Load any prior assessment for this company so the user lands on the report
+  // instead of a blank wizard if one already exists.
+  const storedQuery = useQuery<StoredAssessment | null>({
+    queryKey: ["assess", "stored", companyId],
+    queryFn: async () => {
+      if (!companyId) return null;
+      try {
+        return await assessApi.getAssessment(companyId);
+      } catch {
+        return null;
+      }
+    },
+    enabled: Boolean(companyId),
+    staleTime: 60_000,
+  });
+
+  const update = <K extends keyof FormData>(key: K, val: FormData[K]) =>
+    setForm((prev) => ({ ...prev, [key]: val }));
+
+  const toggleFunction = (fnKey: string) => {
+    setForm((prev) => ({
+      ...prev,
+      selectedFunctions: prev.selectedFunctions.includes(fnKey)
+        ? prev.selectedFunctions.filter((f) => f !== fnKey)
+        : [...prev.selectedFunctions, fnKey],
+    }));
+  };
+
+  const toggleSystem = (tool: string) => {
+    setForm((prev) => ({
+      ...prev,
+      currentSystems: prev.currentSystems.includes(tool)
+        ? prev.currentSystems.filter((t) => t !== tool)
+        : [...prev.currentSystems, tool],
+    }));
+  };
+
+  const canNext = (): boolean => {
+    if (step === 1) return Boolean(form.companyName && form.industry && form.companyUrl);
+    if (step === 2) return Boolean(form.automationLevel);
+    return true;
+  };
+
+  const runAssessment = useCallback(async () => {
+    if (!companyId) return;
+    setOutput("");
+    setError("");
+    setIsStreaming(true);
+    setShowResults(true);
+    abortRef.current = new AbortController();
+
+    try {
+      const stream = await assessApi.runAssessment(companyId, {
+        ...form,
+        industrySlug: toSlug(form.industry),
+        currentSystems: [...form.currentSystems, form.customSystems].filter(Boolean).join(", "),
+        companyUrl: form.companyUrl || undefined,
+      }, abortRef.current.signal);
+
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        setOutput((prev) => prev + decoder.decode(value, { stream: true }));
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // user cancelled
+      } else {
+        setError(err instanceof Error ? err.message : "Network error");
+      }
+    } finally {
+      setIsStreaming(false);
+      abortRef.current = null;
+    }
+  }, [form, companyId]);
+
+  const handleReset = () => {
+    setForm({ ...INITIAL_FORM, companyName: selectedCompany?.name ?? "" });
+    setOutput("");
+    setError("");
+    setStep(1);
+    setShowResults(false);
+  };
+
+  const showStored = !showResults && Boolean(storedQuery.data?.markdown);
+
+  /* ---------------------------------------------------------------- */
+  /*  No-company guard                                                  */
+  /* ---------------------------------------------------------------- */
+  if (!companyId) {
+    return (
+      <MarketingShell>
+        <SectionContainer>
+          <Eyebrow>Agent Readiness Assessment</Eyebrow>
+          <h1 className="mkt-display-page" style={{ marginTop: 16, marginBottom: 16 }}>
+            Select a company first.
+          </h1>
+          <p className="mkt-body-lg" style={{ color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
+            The assessment is scoped to a company. Pick or create one from the company switcher,
+            then come back to run a readiness analysis.
+          </p>
+        </SectionContainer>
+      </MarketingShell>
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  Render                                                            */
+  /* ---------------------------------------------------------------- */
   return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
-        selected
-          ? "bg-primary text-primary-foreground border-primary"
-          : "bg-transparent text-muted-foreground border-border hover:bg-accent"
-      }`}
-    >
-      {label}
-    </button>
+    <MarketingShell>
+      <SectionContainer>
+        <Eyebrow>Agent Readiness Assessment</Eyebrow>
+        <h1 className="mkt-display-page" style={{ marginTop: 16, marginBottom: 16, maxWidth: "20ch" }}>
+          Where does {selectedCompany?.name ?? "your company"} sit on the readiness curve?
+        </h1>
+        <p className="mkt-body-lg" style={{ color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
+          Four short steps. Our research data — 378 industry × function cells, deep playbooks, and
+          market reports — powers a tailored agent deployment proposal.
+        </p>
+
+        {showStored && (
+          <div style={{ marginTop: 32 }}>
+            <StoredReportCard
+              stored={storedQuery.data!}
+              companyName={selectedCompany?.name ?? form.companyName}
+              onRunNew={() => {
+                setShowResults(false);
+                setOutput("");
+                setStep(1);
+              }}
+            />
+          </div>
+        )}
+
+        {!showResults && !showStored && (
+          <div style={{ marginTop: 48 }}>
+            <StepIndicator step={step} onJump={(n) => n < step && setStep(n)} />
+            <WizardCard>
+              {step === 1 && <Step1 form={form} update={update} />}
+              {step === 2 && <Step2 form={form} update={update} toggleSystem={toggleSystem} />}
+              {step === 3 && <Step3 form={form} toggleFunction={toggleFunction} />}
+              {step === 4 && <Step4 form={form} update={update} />}
+
+              <div className="mkt-assess__nav">
+                {step > 1 ? (
+                  <Button variant="link" onClick={() => setStep(step - 1)}>
+                    <ChevronLeft size={14} strokeWidth={1.75} aria-hidden /> Back
+                  </Button>
+                ) : <span />}
+                {step < 4 ? (
+                  <Button onClick={() => setStep(step + 1)} disabled={!canNext()}>
+                    Next <ChevronRight size={14} strokeWidth={1.75} aria-hidden />
+                  </Button>
+                ) : (
+                  <Button onClick={runAssessment} disabled={!canNext()}>
+                    <Sparkles size={14} strokeWidth={1.75} aria-hidden /> Generate assessment
+                  </Button>
+                )}
+              </div>
+            </WizardCard>
+          </div>
+        )}
+
+        {showResults && (
+          <div style={{ marginTop: 32 }}>
+            <ResultsHeader
+              companyName={form.companyName}
+              isStreaming={isStreaming}
+              onReset={handleReset}
+              onCancel={() => abortRef.current?.abort()}
+              badges={[
+                form.industry,
+                form.employeeRange ? `${form.employeeRange} employees` : "",
+                form.primaryGoal,
+                form.selectedFunctions.length > 0
+                  ? `${form.selectedFunctions.length} functions selected`
+                  : "",
+              ].filter(Boolean)}
+            />
+            <ReportPanel
+              error={error}
+              output={output}
+              isStreaming={isStreaming}
+              companyName={form.companyName}
+            />
+          </div>
+        )}
+      </SectionContainer>
+
+      <AssessLocalStyles />
+    </MarketingShell>
   );
 }
 
-function MaturitySelect({ label, value, onChange, options }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { v: string; l: string }[];
+/* ------------------------------------------------------------------ */
+/*  Step indicator + wizard chrome                                     */
+/* ------------------------------------------------------------------ */
+
+function StepIndicator({ step, onJump }: { step: number; onJump: (n: number) => void }) {
+  return (
+    <div className="mkt-assess__steps">
+      {STEPS.map((s) => {
+        const Icon = s.icon;
+        const isActive = s.num === step;
+        const isDone = s.num < step;
+        const isClickable = s.num < step;
+        return (
+          <button
+            key={s.num}
+            type="button"
+            onClick={() => isClickable && onJump(s.num)}
+            className={`mkt-assess__step ${isActive ? "mkt-assess__step--active" : ""} ${isDone ? "mkt-assess__step--done" : ""}`}
+            style={{ cursor: isClickable ? "pointer" : "default" }}
+            aria-current={isActive ? "step" : undefined}
+            aria-label={`Step ${s.num}: ${s.label}`}
+          >
+            {isDone ? <CheckCircle2 size={14} strokeWidth={1.75} /> : <Icon size={14} strokeWidth={1.75} />}
+            <span>{s.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WizardCard({ children }: { children: React.ReactNode }) {
+  return <div className="mkt-assess__card">{children}</div>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Step 1: Company                                                    */
+/* ------------------------------------------------------------------ */
+
+function Step1({ form, update }: {
+  form: FormData;
+  update: <K extends keyof FormData>(k: K, v: FormData[K]) => void;
 }) {
   return (
     <div>
-      <label className="block text-[10px] font-bold uppercase tracking-wide mb-1.5 text-muted-foreground">{label}</label>
-      <div className="space-y-1">
-        {options.map((o) => {
-          const sel = value === o.v;
-          return (
-            <button
-              key={o.v}
-              onClick={() => onChange(o.v)}
-              className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors flex items-center gap-2 ${
-                sel ? "border-2 border-primary bg-accent" : "border border-transparent hover:bg-accent/50"
-              }`}
-            >
-              <span className={`flex-shrink-0 w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${
-                sel ? "border-primary" : "border-muted-foreground"
-              }`}>
-                {sel && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
-              </span>
-              <span className="text-foreground">{o.l}</span>
-            </button>
-          );
-        })}
+      <StepHeading title="Company profile" sub="Tell us about the company we're assessing." />
+      <div className="mkt-assess__grid-2">
+        <Field label="Company name *" value={form.companyName} onChange={(v) => update("companyName", v)} placeholder="e.g. AgentDash" />
+        <Field label="Company website or LinkedIn *" value={form.companyUrl} onChange={(v) => update("companyUrl", v)} placeholder="https://www.example.com" />
+
+        <div>
+          <label className="mkt-assess__label">Industry *</label>
+          <select
+            className="mkt-assess__select"
+            value={form.industry}
+            onChange={(e) => update("industry", e.target.value)}
+          >
+            <option value="">Select industry...</option>
+            {INDUSTRIES.map((ind) => <option key={ind} value={ind}>{ind}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label className="mkt-assess__label">Employee count</label>
+          <ChipRow
+            options={EMPLOYEE_RANGES}
+            value={form.employeeRange}
+            onSelect={(v) => update("employeeRange", v)}
+          />
+        </div>
+
+        <div>
+          <label className="mkt-assess__label">Annual revenue</label>
+          <ChipRow
+            options={REVENUE_RANGES}
+            value={form.revenueRange}
+            onSelect={(v) => update("revenueRange", v)}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <Field
+          label="Company description"
+          value={form.description}
+          onChange={(v) => update("description", v)}
+          placeholder="What does the company do? Products, services, market position…"
+          multiline
+        />
       </div>
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/*  Form sub-steps                                                     */
+/*  Step 2: Operations                                                 */
 /* ------------------------------------------------------------------ */
 
-function FormOperations({ form, update, toggleSystem }: {
+function Step2({ form, update, toggleSystem }: {
   form: FormData;
   update: <K extends keyof FormData>(k: K, v: FormData[K]) => void;
-  toggleSystem: (t: string) => void;
+  toggleSystem: (tool: string) => void;
 }) {
   return (
     <div>
-      <h2 className="text-base font-semibold mb-1 text-foreground">Current Operations</h2>
-      <p className="text-xs mb-4 text-muted-foreground">Tech stack, automation, and AI maturity for {form.companyName}.</p>
+      <StepHeading title="Current operations" sub="What's their tech stack, and where does work get stuck?" />
 
-      <div className="grid md:grid-cols-2 gap-4 mb-4">
+      <div style={{ display: "grid", gap: 24 }}>
         <div>
-          <label className="block text-xs font-medium mb-1.5 text-foreground">Employee Count</label>
-          <div className="flex flex-wrap gap-1.5">
-            {EMPLOYEE_RANGES.map((r) => (
-              <Chip key={r} label={r} selected={form.employeeRange === r} onClick={() => update("employeeRange", r)} />
-            ))}
-          </div>
-        </div>
-        <div>
-          <label className="block text-xs font-medium mb-1.5 text-foreground">Revenue</label>
-          <div className="flex flex-wrap gap-1.5">
-            {REVENUE_RANGES.map((r) => (
-              <Chip key={r} label={r} selected={form.revenueRange === r} onClick={() => update("revenueRange", r)} />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <label className="block text-xs font-medium mb-2 text-foreground">
-            Key Systems {form.currentSystems.length > 0 && <span className="text-primary">({form.currentSystems.length})</span>}
+          <label className="mkt-assess__label">
+            Key systems &amp; tools
+            {form.currentSystems.length > 0 && (
+              <span className="mkt-assess__count"> · {form.currentSystems.length} selected</span>
+            )}
           </label>
-          <div className="space-y-3">
-            {SOFTWARE_SUITES.map((g) => (
-              <div key={g.category}>
-                <div className="text-[10px] font-bold uppercase tracking-wide mb-1.5 text-muted-foreground">{g.category}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {g.tools.map((t) => (
-                    <Chip key={t} label={t} selected={form.currentSystems.includes(t)} onClick={() => toggleSystem(t)} />
-                  ))}
+          <div style={{ display: "grid", gap: 16 }}>
+            {SOFTWARE_SUITES.map((group) => (
+              <div key={group.category}>
+                <div className="mkt-assess__group-tag">{group.category}</div>
+                <div className="mkt-assess__chips">
+                  {group.tools.map((tool) => {
+                    const selected = form.currentSystems.includes(tool);
+                    return (
+                      <button
+                        key={tool}
+                        type="button"
+                        onClick={() => toggleSystem(tool)}
+                        className={`mkt-assess__chip ${selected ? "mkt-assess__chip--selected" : ""}`}
+                      >{tool}</button>
+                    );
+                  })}
                 </div>
               </div>
             ))}
           </div>
-          <input
-            value={form.customSystems}
-            onChange={(e) => update("customSystems", e.target.value)}
-            placeholder="Other systems (comma-separated)"
-            className="w-full px-3 py-2 rounded-lg text-xs mt-3 focus:outline-none border border-border bg-card text-foreground"
+          <div style={{ marginTop: 12 }}>
+            <input
+              className="mkt-assess__input"
+              value={form.customSystems}
+              onChange={(e) => update("customSystems", e.target.value)}
+              placeholder="Other systems not listed (comma-separated)"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="mkt-assess__label">Current automation level *</label>
+          <div style={{ display: "grid", gap: 8 }}>
+            {AUTOMATION_LEVELS.map((al) => (
+              <RadioOption
+                key={al.value}
+                selected={form.automationLevel === al.value}
+                onClick={() => update("automationLevel", al.value)}
+                title={al.label}
+                desc={al.desc}
+              />
+            ))}
+          </div>
+        </div>
+
+        <Field
+          label="Biggest operational challenges"
+          value={form.challenges}
+          onChange={(v) => update("challenges", v)}
+          placeholder="What keeps them up at night? Where do they waste the most time/money?"
+          multiline
+        />
+
+        <div className="mkt-assess__divider">
+          <Eyebrow>AI maturity snapshot</Eyebrow>
+          <span className="mkt-assess__hint">Helps detect readiness gaps</span>
+        </div>
+
+        <div className="mkt-assess__grid-2">
+          <SmallRadioGroup
+            label="Current AI usage"
+            options={[
+              { value: "none", label: "No AI tools in use" },
+              { value: "individual", label: "Individual use (ChatGPT, Copilot)" },
+              { value: "embedded", label: "AI embedded in some workflows" },
+              { value: "agents", label: "Running autonomous AI agents" },
+            ]}
+            value={form.aiUsageLevel}
+            onSelect={(v) => update("aiUsageLevel", v)}
           />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium mb-2 text-foreground">Automation Level *</label>
-          <div className="space-y-2">
-            {AUTOMATION_LEVELS.map((al) => {
-              const sel = form.automationLevel === al.value;
-              return (
-                <button
-                  key={al.value}
-                  onClick={() => update("automationLevel", al.value)}
-                  className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-start gap-3 ${
-                    sel ? "border-2 border-primary bg-accent" : "border border-transparent hover:bg-accent/50"
-                  }`}
-                >
-                  <span className={`flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center mt-0.5 ${
-                    sel ? "border-primary" : "border-muted-foreground"
-                  }`}>
-                    {sel && <span className="w-2 h-2 rounded-full bg-primary" />}
-                  </span>
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{al.label}</div>
-                    <div className="text-xs text-muted-foreground">{al.desc}</div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="pt-2 border-t border-border">
-          <span className="text-xs font-bold uppercase tracking-wide text-primary">AI Maturity</span>
-          <div className="grid md:grid-cols-2 gap-3 mt-3">
-            <MaturitySelect
-              label="AI Usage" value={form.aiUsageLevel} onChange={(v) => update("aiUsageLevel", v)}
-              options={[
-                { v: "none", l: "No AI tools" },
-                { v: "individual", l: "Individual (ChatGPT, Copilot)" },
-                { v: "embedded", l: "Embedded in workflows" },
-                { v: "agents", l: "Running autonomous agents" },
-              ]}
-            />
-            <MaturitySelect
-              label="Governance" value={form.aiGovernance} onChange={(v) => update("aiGovernance", v)}
-              options={[
-                { v: "none", l: "No policy" },
-                { v: "informal", l: "Informal guidelines" },
-                { v: "formal", l: "Formal policy" },
-                { v: "regulated", l: "Regulated (HIPAA, etc.)" },
-              ]}
-            />
-            <MaturitySelect
-              label="Agent Experience" value={form.agentExperience} onChange={(v) => update("agentExperience", v)}
-              options={[
-                { v: "none", l: "Never deployed" },
-                { v: "experimented", l: "Experimented / POC" },
-                { v: "production", l: "In production" },
-              ]}
-            />
-            <MaturitySelect
-              label="AI Ownership" value={form.aiOwnership} onChange={(v) => update("aiOwnership", v)}
-              options={[
-                { v: "nobody", l: "No one identified" },
-                { v: "it", l: "IT / Engineering" },
-                { v: "business", l: "Business leads" },
-                { v: "dedicated", l: "Dedicated AI team" },
-              ]}
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium mb-1.5 text-foreground">Biggest Challenges</label>
-          <textarea
-            value={form.challenges}
-            onChange={(e) => update("challenges", e.target.value)}
-            placeholder="Where do you waste the most time/money?"
-            rows={3}
-            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none border border-border bg-card text-foreground"
+          <SmallRadioGroup
+            label="AI governance"
+            options={[
+              { value: "none", label: "No AI policy" },
+              { value: "informal", label: "Informal guidelines" },
+              { value: "formal", label: "Formal AI governance policy" },
+              { value: "regulated", label: "Regulated (HIPAA, FedRAMP, etc.)" },
+            ]}
+            value={form.aiGovernance}
+            onSelect={(v) => update("aiGovernance", v)}
+          />
+          <SmallRadioGroup
+            label="Agent experience"
+            options={[
+              { value: "none", label: "Never deployed an AI agent" },
+              { value: "experimented", label: "Experimented / POC stage" },
+              { value: "production", label: "Agents in production" },
+            ]}
+            value={form.agentExperience}
+            onSelect={(v) => update("agentExperience", v)}
+          />
+          <SmallRadioGroup
+            label="Who would own AI agents?"
+            options={[
+              { value: "nobody", label: "No one identified yet" },
+              { value: "it", label: "IT / Engineering team" },
+              { value: "business", label: "Business unit leads" },
+              { value: "dedicated", label: "Dedicated AI / Innovation team" },
+            ]}
+            value={form.aiOwnership}
+            onSelect={(v) => update("aiOwnership", v)}
           />
         </div>
       </div>
@@ -357,38 +608,38 @@ function FormOperations({ form, update, toggleSystem }: {
   );
 }
 
-function FormFunctions({ form, toggleFunction }: {
+/* ------------------------------------------------------------------ */
+/*  Step 3: Functions                                                  */
+/* ------------------------------------------------------------------ */
+
+function Step3({ form, toggleFunction }: {
   form: FormData;
-  toggleFunction: (k: string) => void;
+  toggleFunction: (key: string) => void;
 }) {
   return (
     <div>
-      <h2 className="text-base font-semibold mb-1 text-foreground">Functions to Analyze</h2>
-      <p className="text-xs mb-5 text-muted-foreground">Select relevant functions or leave empty for a broad scan.</p>
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <StepHeading
+        title="Functions to analyze"
+        sub="Pick which business functions to focus on. Leave empty for a broad scan of all 21."
+      />
+      <div className="mkt-assess__grid-3">
         {FUNCTION_CATEGORIES.map((cat) => (
-          <div key={cat.key} className="rounded-lg p-3 border border-border">
-            <span className="text-xs font-bold uppercase tracking-wide text-foreground">{cat.name}</span>
-            <div className="space-y-1 mt-2">
+          <div key={cat.key} className="mkt-assess__fn-group">
+            <div className="mkt-assess__fn-group-tag">{cat.name}</div>
+            <div style={{ display: "grid", gap: 4 }}>
               {cat.subs.map((sub) => {
-                const sel = form.selectedFunctions.includes(sub.key);
+                const selected = form.selectedFunctions.includes(sub.key);
                 return (
                   <button
                     key={sub.key}
+                    type="button"
                     onClick={() => toggleFunction(sub.key)}
-                    className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors hover:bg-accent/50"
-                    style={{ background: sel ? "var(--accent)" : "transparent", color: sel ? "var(--primary)" : undefined, fontWeight: sel ? 600 : 400 }}
+                    className={`mkt-assess__fn-row ${selected ? "mkt-assess__fn-row--selected" : ""}`}
                   >
-                    <div className={`w-3.5 h-3.5 rounded flex-shrink-0 flex items-center justify-center ${
-                      sel ? "bg-primary" : "border border-border"
-                    }`}>
-                      {sel && (
-                        <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-                    <span className={sel ? "text-primary" : "text-muted-foreground"}>{sub.name}</span>
+                    <span className={`mkt-assess__fn-check ${selected ? "mkt-assess__fn-check--selected" : ""}`}>
+                      {selected && <CheckCircle2 size={10} strokeWidth={2} />}
+                    </span>
+                    {sub.name}
                   </button>
                 );
               })}
@@ -396,56 +647,49 @@ function FormFunctions({ form, toggleFunction }: {
           </div>
         ))}
       </div>
+      {form.selectedFunctions.length > 0 && (
+        <div className="mkt-assess__count-line">
+          {form.selectedFunctions.length} function{form.selectedFunctions.length === 1 ? "" : "s"} selected
+        </div>
+      )}
     </div>
   );
 }
 
-function FormGoals({ form, update }: {
+/* ------------------------------------------------------------------ */
+/*  Step 4: Goals                                                      */
+/* ------------------------------------------------------------------ */
+
+function Step4({ form, update }: {
   form: FormData;
   update: <K extends keyof FormData>(k: K, v: FormData[K]) => void;
 }) {
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-base font-semibold mb-1 text-foreground">Goals & Timeline</h2>
-        <p className="text-xs text-muted-foreground">Define your investment objectives.</p>
-      </div>
+    <div>
+      <StepHeading title="Agentification goals" sub="What does the company want to achieve?" />
 
-      <div>
-        <label className="block text-xs font-medium mb-2 text-foreground">Primary Goal</label>
-        <div className="flex flex-wrap gap-2">
-          {GOALS.map((g) => (
-            <Chip key={g} label={g} selected={form.primaryGoal === g} onClick={() => update("primaryGoal", g)} />
-          ))}
+      <div style={{ display: "grid", gap: 24 }}>
+        <div>
+          <label className="mkt-assess__label">Primary goal</label>
+          <ChipRow options={GOALS} value={form.primaryGoal} onSelect={(v) => update("primaryGoal", v)} />
         </div>
-      </div>
 
-      <div>
-        <label className="block text-xs font-medium mb-1.5 text-foreground">Targets / Success Metrics</label>
-        <textarea
+        <Field
+          label="Specific targets"
           value={form.targets}
-          onChange={(e) => update("targets", e.target.value)}
-          placeholder="e.g. Reduce cost per ticket by 40%, increase ARR by $2M..."
-          rows={3}
-          className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none border border-border bg-card text-foreground"
+          onChange={(v) => update("targets", v)}
+          placeholder="e.g. Reduce support costs by 30%, accelerate proposal turnaround by 50%…"
+          multiline
         />
-      </div>
 
-      <div>
-        <label className="block text-xs font-medium mb-2 text-foreground">Timeline</label>
-        <div className="flex flex-wrap gap-2">
-          {TIMELINES.map((t) => (
-            <Chip key={t} label={t} selected={form.timeline === t} onClick={() => update("timeline", t)} />
-          ))}
+        <div>
+          <label className="mkt-assess__label">Timeline</label>
+          <ChipRow options={TIMELINES} value={form.timeline} onSelect={(v) => update("timeline", v)} />
         </div>
-      </div>
 
-      <div>
-        <label className="block text-xs font-medium mb-2 text-foreground">Budget Range</label>
-        <div className="flex flex-wrap gap-2">
-          {BUDGETS.map((b) => (
-            <Chip key={b} label={b} selected={form.budgetRange === b} onClick={() => update("budgetRange", b)} />
-          ))}
+        <div>
+          <label className="mkt-assess__label">Pilot budget range</label>
+          <ChipRow options={BUDGETS} value={form.budgetRange} onSelect={(v) => update("budgetRange", v)} />
         </div>
       </div>
     </div>
@@ -453,770 +697,425 @@ function FormGoals({ form, update }: {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Main Page Component                                                */
+/*  Reusable bits                                                      */
 /* ------------------------------------------------------------------ */
 
-export function AssessPage() {
-  const { selectedCompany } = useCompany();
-  const companyId = selectedCompany?.id;
-
-  const [phase, setPhase] = useState<Phase>("start");
-  const [form, setForm] = useState<FormData>(INITIAL_FORM);
-  const [formStep, setFormStep] = useState(1);
-  const [researching, setResearching] = useState(false);
-  const [companySummary, setCompanySummary] = useState("");
-  const [webContent, setWebContent] = useState("");
-  const [error, setError] = useState("");
-
-  // Deep dive state
-  const [rounds, setRounds] = useState<ConversationRound[]>([]);
-  const [currentQuestion, setCurrentQuestion] = useState<InterviewResponse | null>(null);
-  const [allInsights, setAllInsights] = useState<Array<{ label: string; value: string; icon: string }>>([]);
-  const [isThinking, setIsThinking] = useState(false);
-  const [customAnswer, setCustomAnswer] = useState("");
-  const [clarityScore, setClarityScore] = useState(0);
-
-  // Report state
-  const [reportMarkdown, setReportMarkdown] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [rounds, currentQuestion]);
-
-  const update = <K extends keyof FormData>(key: K, val: FormData[K]) =>
-    setForm((p) => ({ ...p, [key]: val }));
-
-  const toggleSystem = (t: string) =>
-    setForm((p) => ({
-      ...p,
-      currentSystems: p.currentSystems.includes(t)
-        ? p.currentSystems.filter((x) => x !== t)
-        : [...p.currentSystems, t],
-    }));
-
-  const toggleFunction = (k: string) =>
-    setForm((p) => ({
-      ...p,
-      selectedFunctions: p.selectedFunctions.includes(k)
-        ? p.selectedFunctions.filter((x) => x !== k)
-        : [...p.selectedFunctions, k],
-    }));
-
-  /* ── Research company ── */
-  const researchCompany = useCallback(async () => {
-    if (!form.companyUrl || !form.companyName || !companyId) return;
-    setResearching(true);
-    setError("");
-    try {
-      const data: ResearchResult = await assessApi.research(companyId, form.companyUrl, form.companyName);
-      setCompanySummary(data.summary);
-      setWebContent(data.webContent);
-      if (data.suggestedIndustry) {
-        const matched = INDUSTRIES.find(
-          (i) => i.label.toLowerCase() === data.suggestedIndustry.toLowerCase() ||
-                 i.slug === toSlug(data.suggestedIndustry)
-        );
-        if (matched) {
-          setForm((p) => ({ ...p, industry: matched.label, industrySlug: matched.slug }));
-        } else {
-          setForm((p) => ({ ...p, industry: data.suggestedIndustry, industrySlug: toSlug(data.suggestedIndustry) }));
-        }
-      }
-      setPhase("confirm");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Research failed");
-    } finally {
-      setResearching(false);
-    }
-  }, [form.companyUrl, form.companyName, companyId]);
-
-  /* ── Build form summary for interview ── */
-  const buildFormSummary = (f: FormData) =>
-    [
-      `Company: ${f.companyName} (${f.companyUrl})`,
-      `Industry: ${f.industry}`,
-      `Scope: ${f.scope || "Entire organization"}`,
-      `Size: ${f.employeeRange} employees, Revenue: ${f.revenueRange}`,
-      `Systems: ${[...f.currentSystems, f.customSystems].filter(Boolean).join(", ")}`,
-      `Automation: ${f.automationLevel}`,
-      `AI Usage: ${f.aiUsageLevel || "N/A"}, Governance: ${f.aiGovernance || "N/A"}, Agent Experience: ${f.agentExperience || "N/A"}, AI Owner: ${f.aiOwnership || "N/A"}`,
-      `Challenges: ${f.challenges || "N/A"}`,
-      `Functions: ${f.selectedFunctions.length > 0 ? f.selectedFunctions.join(", ") : "broad scan"}`,
-      `Goal: ${f.primaryGoal}, Targets: ${f.targets || "N/A"}, Timeline: ${f.timeline || "N/A"}, Budget: ${f.budgetRange || "N/A"}`,
-    ].join("\n");
-
-  /* ── Start deep dive ── */
-  const startDeepDive = useCallback(async () => {
-    if (!companyId) return;
-    setPhase("deepdive");
-    setIsThinking(true);
-    setError("");
-    try {
-      const data: InterviewResponse = await assessApi.interview(companyId, {
-        conversationHistory: [],
-        companyWebContent: webContent,
-        industry: form.industry,
-        industrySlug: form.industrySlug || toSlug(form.industry),
-        formSummary: buildFormSummary(form),
-        selectedFunctions: form.selectedFunctions,
-      });
-      setCurrentQuestion(data);
-      setClarityScore(data.clarityScore);
-      if (data.insights?.length) setAllInsights(data.insights);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start interview");
-    } finally {
-      setIsThinking(false);
-    }
-  }, [form, webContent, companyId]);
-
-  /* ── Generate report ── */
-  const generateReport = useCallback(async (interviewRounds: ConversationRound[]) => {
-    if (!companyId) return;
-    setPhase("generating");
-    setReportMarkdown("");
-    const transcript = interviewRounds.map((r, i) => `Q${i + 1}: ${r.question}\nA: ${r.answer}`).join("\n\n");
-    try {
-      const stream = await assessApi.runAssessment(companyId, {
-        companyName: form.companyName,
-        industry: form.industry,
-        industrySlug: form.industrySlug || toSlug(form.industry),
-        description: `${buildFormSummary(form)}\n\nScope: ${form.scope || "Entire organization"}\n\nDeep Dive:\n${transcript}`,
-        companyUrl: form.companyUrl,
-        employeeRange: form.employeeRange,
-        revenueRange: form.revenueRange,
-        currentSystems: [...form.currentSystems, form.customSystems].filter(Boolean).join(", "),
-        automationLevel: form.automationLevel,
-        challenges: form.challenges,
-        selectedFunctions: form.selectedFunctions,
-        primaryGoal: form.primaryGoal,
-        targets: form.targets,
-        timeline: form.timeline,
-        budgetRange: form.budgetRange,
-        aiUsageLevel: form.aiUsageLevel,
-        aiGovernance: form.aiGovernance,
-        agentExperience: form.agentExperience,
-        aiOwnership: form.aiOwnership,
-      });
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-      let out = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        out += decoder.decode(value, { stream: true });
-        setReportMarkdown(out);
-      }
-      setPhase("report");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate report");
-      setPhase("deepdive");
-    }
-  }, [form, companyId]);
-
-  /* ── Submit interview answer ── */
-  const submitAnswer = useCallback(async (answer: string) => {
-    if (!currentQuestion || isThinking || !companyId) return;
-    const round: ConversationRound = {
-      question: currentQuestion.question,
-      options: currentQuestion.options,
-      answer,
-      insights: currentQuestion.insights ?? [],
-      clarityScore: currentQuestion.clarityScore,
-      thinkingSummary: currentQuestion.thinkingSummary,
-    };
-    const newRounds = [...rounds, round];
-    setRounds(newRounds);
-    setCustomAnswer("");
-
-    if (currentQuestion.done || newRounds.length >= 5) {
-      generateReport(newRounds);
-      return;
-    }
-
-    setIsThinking(true);
-    setCurrentQuestion(null);
-
-    const history: Array<{ role: "assistant" | "user"; content: string }> = [];
-    for (const r of newRounds) {
-      history.push({ role: "assistant", content: JSON.stringify({ question: r.question, options: r.options }) });
-      history.push({ role: "user", content: r.answer });
-    }
-
-    try {
-      const data: InterviewResponse = await assessApi.interview(companyId, {
-        conversationHistory: history,
-        companyWebContent: webContent,
-        industry: form.industry,
-        industrySlug: form.industrySlug || toSlug(form.industry),
-        formSummary: buildFormSummary(form),
-        selectedFunctions: form.selectedFunctions,
-      });
-      setCurrentQuestion(data);
-      setClarityScore(data.clarityScore);
-      if (data.insights?.length) setAllInsights((p) => [...p, ...data.insights]);
-      if (data.done) {
-        setTimeout(() => generateReport([...newRounds, {
-          question: data.question, options: [], answer: "",
-          insights: data.insights ?? [], clarityScore: data.clarityScore,
-          thinkingSummary: data.thinkingSummary,
-        }]), 1500);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-    } finally {
-      setIsThinking(false);
-    }
-  }, [currentQuestion, isThinking, rounds, webContent, form, companyId, generateReport]);
-
-  /* ── Reset ── */
-  const handleReset = () => {
-    setPhase("start");
-    setFormStep(1);
-    setForm(INITIAL_FORM);
-    setRounds([]);
-    setCurrentQuestion(null);
-    setAllInsights([]);
-    setIsThinking(false);
-    setCustomAnswer("");
-    setClarityScore(0);
-    setWebContent("");
-    setCompanySummary("");
-    setError("");
-    setReportMarkdown("");
-  };
-
-  if (!companyId) {
-    return <div className="p-6 text-muted-foreground">Select a company to get started.</div>;
-  }
-
-  /* ---------------------------------------------------------------- */
+function StepHeading({ title, sub }: { title: string; sub: string }) {
   return (
-    <div className="min-h-screen bg-background">
+    <div style={{ marginBottom: 24 }}>
+      <h2 className="mkt-display-section" style={{ fontSize: 32, marginBottom: 8 }}>{title}</h2>
+      <p className="mkt-caption" style={{ fontSize: 15 }}>{sub}</p>
+    </div>
+  );
+}
 
-      {/* ════ PHASE: START ════ */}
-      {phase === "start" && (
-        <div className="flex items-center justify-center min-h-screen px-4">
-          <div className="max-w-md w-full text-center">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-6 bg-primary shadow-lg">
-              <svg className="w-6 h-6 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-              </svg>
-            </div>
-            <h1 className="text-3xl font-bold mb-3 text-foreground" style={{ letterSpacing: "-0.03em" }}>
-              Agent Readiness Assessment
-            </h1>
-            <p className="text-sm mb-8 text-muted-foreground">
-              We'll research your company, then walk you through a quick assessment to identify where AI agents can drive the most impact.
-            </p>
+function Field({
+  label, value, onChange, placeholder, multiline,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  multiline?: boolean;
+}) {
+  const common = {
+    value,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange(e.target.value),
+    placeholder,
+    className: "mkt-assess__input",
+  };
+  return (
+    <div>
+      <label className="mkt-assess__label">{label}</label>
+      {multiline ? <textarea {...common} rows={3} /> : <input {...common} />}
+    </div>
+  );
+}
 
-            <div className="space-y-3 text-left mb-6">
-              <div>
-                <label className="block text-xs font-medium mb-1.5 text-foreground">Company Name *</label>
-                <input
-                  value={form.companyName}
-                  onChange={(e) => update("companyName", e.target.value)}
-                  placeholder="e.g. Acme Corp"
-                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring border border-border bg-card text-foreground"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-1.5 text-foreground">Company Website *</label>
-                <input
-                  value={form.companyUrl}
-                  onChange={(e) => update("companyUrl", e.target.value)}
-                  placeholder="www.acme.com"
-                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring border border-border bg-card text-foreground"
-                />
-              </div>
-            </div>
+function ChipRow({ options, value, onSelect }: {
+  options: string[]; value: string; onSelect: (v: string) => void;
+}) {
+  return (
+    <div className="mkt-assess__chips">
+      {options.map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          onClick={() => onSelect(opt)}
+          className={`mkt-assess__chip ${value === opt ? "mkt-assess__chip--selected" : ""}`}
+        >{opt}</button>
+      ))}
+    </div>
+  );
+}
 
-            {error && <p className="text-xs mb-3 text-destructive">{error}</p>}
+function RadioOption({ selected, onClick, title, desc }: {
+  selected: boolean; onClick: () => void; title: string; desc: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`mkt-assess__radio ${selected ? "mkt-assess__radio--selected" : ""}`}
+    >
+      <div className="mkt-assess__radio-title">{title}</div>
+      <div className="mkt-assess__radio-desc">{desc}</div>
+    </button>
+  );
+}
 
-            <button
-              onClick={researchCompany}
-              disabled={!form.companyName || !form.companyUrl || researching}
-              className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40 bg-primary text-primary-foreground shadow-lg"
-            >
-              {researching ? (
-                <>
-                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Researching your company...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
-                  </svg>
-                  Find Agents for My Company
-                </>
-              )}
-            </button>
-            <p className="text-xs mt-4 text-muted-foreground">~5 minutes total &middot; Personalized report</p>
-          </div>
+function SmallRadioGroup({ label, options, value, onSelect }: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onSelect: (v: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mkt-assess__sub-label">{label}</div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onSelect(opt.value)}
+            className={`mkt-assess__small-radio ${value === opt.value ? "mkt-assess__small-radio--selected" : ""}`}
+          >{opt.label}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Stored report card (shown when company has a prior assessment)     */
+/* ------------------------------------------------------------------ */
+
+function StoredReportCard({ stored, companyName, onRunNew }: {
+  stored: StoredAssessment;
+  companyName: string;
+  onRunNew: () => void;
+}) {
+  return (
+    <div className="mkt-assess__card">
+      <div className="mkt-assess__results-head">
+        <div>
+          <Eyebrow>Most recent assessment</Eyebrow>
+          <h2 className="mkt-display-section" style={{ fontSize: 32, marginTop: 8 }}>
+            Agent Readiness Report — {companyName}
+          </h2>
         </div>
-      )}
-
-      {/* ════ PHASE: CONFIRM ════ */}
-      {phase === "confirm" && (
-        <div className="flex items-center justify-center min-h-screen px-4">
-          <div className="max-w-lg w-full">
-            <div className="rounded-2xl p-6 bg-card border border-border">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-accent border border-border">
-                  <svg className="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-foreground">We found {form.companyName}</h2>
-                  <p className="text-xs text-muted-foreground">Please confirm this is correct</p>
-                </div>
-              </div>
-
-              {companySummary && (
-                <div className="rounded-xl px-4 py-3 mb-4 bg-accent border border-border">
-                  <p className="text-sm leading-relaxed text-muted-foreground">{companySummary}</p>
-                </div>
-              )}
-
-              {/* Industry */}
-              <div className="mb-4">
-                <label className="block text-xs font-medium mb-1.5 text-foreground">
-                  Industry{" "}
-                  {form.industry && <span className="font-normal text-primary">(auto-detected)</span>}
-                </label>
-                <select
-                  value={form.industry}
-                  onChange={(e) => {
-                    const matched = INDUSTRIES.find((i) => i.label === e.target.value);
-                    update("industry", e.target.value);
-                    update("industrySlug", matched?.slug ?? toSlug(e.target.value));
-                  }}
-                  className="w-full px-3 py-2 rounded-lg text-sm border border-border bg-card text-foreground focus:outline-none"
-                >
-                  <option value="">Select industry...</option>
-                  {INDUSTRIES.map((ind) => (
-                    <option key={ind.slug} value={ind.label}>{ind.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Scope */}
-              <div className="mb-6">
-                <label className="block text-xs font-medium mb-2 text-foreground">Is this assessment for...</label>
-                <div className="space-y-2">
-                  {SCOPE_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.v}
-                      onClick={() => update("scope", opt.v === "custom" ? "" : opt.l)}
-                      className={`w-full text-left px-4 py-2.5 rounded-lg text-sm transition-colors ${
-                        form.scope === opt.l
-                          ? "border-2 border-primary bg-accent"
-                          : "border border-border hover:bg-accent/50"
-                      } text-foreground`}
-                    >
-                      {opt.l}
-                    </button>
-                  ))}
-                  {/* Custom scope input */}
-                  {!SCOPE_OPTIONS.slice(0, -1).some((o) => o.l === form.scope) && form.scope !== "" && (
-                    <input
-                      value={form.scope}
-                      onChange={(e) => update("scope", e.target.value)}
-                      placeholder="Enter department or business unit name..."
-                      className="w-full px-4 py-2.5 rounded-lg text-sm focus:outline-none border border-border bg-card text-foreground mt-2"
-                    />
-                  )}
-                  {form.scope === "" && (
-                    <input
-                      value={form.scope}
-                      onChange={(e) => update("scope", e.target.value)}
-                      placeholder="Enter department or business unit name..."
-                      className="w-full px-4 py-2.5 rounded-lg text-sm focus:outline-none border border-border bg-card text-foreground mt-2"
-                    />
-                  )}
-                </div>
-              </div>
-
-              {error && <p className="text-xs mb-3 text-destructive">{error}</p>}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setPhase("start")}
-                  className="px-4 py-2.5 rounded-lg text-sm font-medium text-muted-foreground border border-border hover:bg-accent/50"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={() => { if (form.industry && form.scope) setPhase("form"); }}
-                  disabled={!form.industry || !form.scope}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40 bg-primary text-primary-foreground"
-                >
-                  Continue
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              </div>
-            </div>
+        <Button variant="ghost" onClick={onRunNew}>
+          <RotateCcw size={14} strokeWidth={1.75} aria-hidden /> Run new assessment
+        </Button>
+      </div>
+      <div className="mkt-assess__report">
+        <MarkdownBody>{stored.markdown}</MarkdownBody>
+      </div>
+      {stored.jumpstart && (
+        <details className="mkt-assess__jumpstart">
+          <summary>Jumpstart document</summary>
+          <div className="mkt-assess__report" style={{ marginTop: 16 }}>
+            <MarkdownBody>{stored.jumpstart}</MarkdownBody>
           </div>
-        </div>
-      )}
-
-      {/* ════ PHASE: FORM (3 steps) ════ */}
-      {phase === "form" && (
-        <div className="max-w-2xl mx-auto px-4 py-10">
-          {/* Step tabs */}
-          <div className="flex items-center justify-center gap-1 mb-6">
-            {["Operations", "Functions", "Goals"].map((label, i) => (
-              <button
-                key={label}
-                onClick={() => i + 1 < formStep && setFormStep(i + 1)}
-                className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium ${
-                  formStep === i + 1
-                    ? "bg-primary text-primary-foreground"
-                    : i + 1 < formStep
-                    ? "bg-accent text-primary"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {i + 1 < formStep && (
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                )}
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="rounded-2xl p-6 bg-card border border-border">
-            {formStep === 1 && (
-              <FormOperations form={form} update={update} toggleSystem={toggleSystem} />
-            )}
-            {formStep === 2 && (
-              <FormFunctions form={form} toggleFunction={toggleFunction} />
-            )}
-            {formStep === 3 && (
-              <FormGoals form={form} update={update} />
-            )}
-
-            <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
-              <button
-                onClick={() => formStep > 1 ? setFormStep(formStep - 1) : setPhase("confirm")}
-                className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:bg-accent/50"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
-                Back
-              </button>
-              {formStep < 3 ? (
-                <button
-                  onClick={() => setFormStep(formStep + 1)}
-                  disabled={formStep === 1 && !form.automationLevel}
-                  className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40 bg-primary text-primary-foreground"
-                >
-                  Next
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              ) : (
-                <button
-                  onClick={startDeepDive}
-                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm font-semibold bg-primary text-primary-foreground shadow-lg"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                  </svg>
-                  Continue to Deep Dive
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════ PHASE: DEEP DIVE + GENERATING ════ */}
-      {(phase === "deepdive" || phase === "generating") && (
-        <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-8">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-primary shadow-md">
-                <svg className="w-4 h-4 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                </svg>
-              </div>
-              <div>
-                <span className="text-sm font-semibold block text-foreground">Deep Dive — {form.companyName}</span>
-                <span className="text-xs text-muted-foreground">{form.industry} &middot; {form.scope || "Entire organization"}</span>
-              </div>
-            </div>
-            <button
-              onClick={handleReset}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground border border-border hover:bg-accent/50"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Start Over
-            </button>
-          </div>
-
-          <div className="grid lg:grid-cols-5 gap-6">
-            {/* Chat column */}
-            <div className="lg:col-span-3 space-y-4">
-              <div className="rounded-xl px-4 py-3 bg-accent border border-border">
-                <p className="text-xs text-muted-foreground">
-                  We have your company profile, tech stack, and goals. Now a few strategic follow-up questions to refine your assessment.
-                </p>
-              </div>
-
-              {/* Past rounds */}
-              {rounds.map((r, i) => (
-                <div key={i}>
-                  <div className="flex gap-3 mb-3">
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-accent border border-border">
-                      <svg className="w-3 h-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                      </svg>
-                    </div>
-                    <p className="text-sm leading-relaxed flex-1 text-foreground">{r.question}</p>
-                  </div>
-                  {r.answer && (
-                    <div className="flex justify-end mb-2">
-                      <div className="px-4 py-2.5 rounded-xl max-w-md bg-primary text-primary-foreground">
-                        <p className="text-sm">{r.answer}</p>
-                      </div>
-                    </div>
-                  )}
-                  {r.thinkingSummary && (
-                    <div className="ml-10 mb-3 px-3 py-2 rounded-lg bg-accent border border-border">
-                      <p className="text-xs italic text-muted-foreground">{r.thinkingSummary}</p>
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* Current question */}
-              {currentQuestion && !currentQuestion.done && phase === "deepdive" && (
-                <div>
-                  <div className="flex gap-3 mb-4">
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-accent border border-border">
-                      <svg className="w-3 h-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                      </svg>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm leading-relaxed mb-4 text-foreground">{currentQuestion.question}</p>
-                      <div className="flex flex-wrap gap-2 mb-4">
-                        {currentQuestion.options.map((opt) => (
-                          <button
-                            key={opt}
-                            onClick={() => submitAnswer(opt)}
-                            disabled={isThinking}
-                            className="px-4 py-2.5 rounded-xl text-sm font-medium transition-all disabled:opacity-40 bg-card border border-border text-foreground hover:bg-accent"
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex gap-2">
-                        <input
-                          value={customAnswer}
-                          onChange={(e) => setCustomAnswer(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && customAnswer.trim() && submitAnswer(customAnswer.trim())}
-                          placeholder="Or type your own answer..."
-                          disabled={isThinking}
-                          className="flex-1 px-4 py-2.5 rounded-xl text-sm focus:outline-none disabled:opacity-40 bg-accent border border-border text-foreground"
-                        />
-                        <button
-                          onClick={() => customAnswer.trim() && submitAnswer(customAnswer.trim())}
-                          disabled={!customAnswer.trim() || isThinking}
-                          className="px-3 py-2.5 rounded-xl disabled:opacity-20 bg-primary text-primary-foreground"
-                        >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Thinking indicator */}
-              {isThinking && (
-                <div className="flex gap-3 items-center">
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-accent border border-border">
-                    <svg className="w-3 h-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                    </svg>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "300ms" }} />
-                  </div>
-                  <span className="text-xs text-muted-foreground">Analyzing...</span>
-                </div>
-              )}
-
-              {/* Generating phase overlay */}
-              {phase === "generating" && (
-                <div className="rounded-xl p-6 text-center bg-card border border-border">
-                  <svg className="animate-spin w-6 h-6 mx-auto mb-3 text-primary" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <p className="text-sm font-medium mb-1 text-foreground">Generating your Agent Readiness Report</p>
-                  <p className="text-xs text-muted-foreground">Analyzing against our industry research and your context...</p>
-                  {reportMarkdown && (
-                    <div className="mt-4 text-left max-h-48 overflow-auto px-4 rounded-lg bg-accent">
-                      <p className="text-xs font-mono whitespace-pre-wrap py-2 text-muted-foreground">
-                        {reportMarkdown.slice(-400)}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {error && (
-                <div className="rounded-xl px-4 py-3 bg-destructive/10 border border-destructive/30">
-                  <p className="text-sm text-destructive">{error}</p>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Insights sidebar */}
-            <div className="lg:col-span-2">
-              <div className="sticky top-20 space-y-4">
-                {/* Clarity score ring */}
-                <div className="rounded-xl p-5 text-center bg-card border border-border">
-                  <div className="relative w-24 h-24 mx-auto mb-3">
-                    <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-                      <circle cx="50" cy="50" r="45" fill="none" className="stroke-border" strokeWidth="6" />
-                      <circle
-                        cx="50" cy="50" r="45" fill="none"
-                        className="stroke-primary"
-                        strokeWidth="6"
-                        strokeLinecap="round"
-                        strokeDasharray="283"
-                        strokeDashoffset={283 - (283 * clarityScore) / 100}
-                        style={{ transition: "stroke-dashoffset 0.5s ease" }}
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-2xl font-bold text-foreground">{clarityScore}</span>
-                    </div>
-                  </div>
-                  <p className="text-xs font-medium text-muted-foreground">Assessment Clarity</p>
-                  <p className="text-[10px] mt-1 text-muted-foreground">Deep dive {rounds.length} of 5</p>
-                </div>
-
-                {/* Insights panel */}
-                {allInsights.length > 0 && (
-                  <div className="rounded-xl p-4 bg-card border border-border">
-                    <p className="text-xs font-bold uppercase tracking-wide mb-3 text-muted-foreground">Insights</p>
-                    <div className="space-y-2">
-                      {allInsights.map((ins, i) => (
-                        <div
-                          key={`${ins.label}-${i}`}
-                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-accent border border-border"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{ins.label}</p>
-                            <p className="text-xs font-medium truncate text-foreground">{ins.value}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════ PHASE: REPORT ════ */}
-      {phase === "report" && (
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          {/* Action buttons */}
-          <div className="flex items-center gap-3 mb-4">
-            <button
-              onClick={handleReset}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground border border-border hover:bg-accent/50"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              New Assessment
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-primary border border-primary/30 hover:bg-primary/10"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Print PDF
-            </button>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(reportMarkdown);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground border border-border hover:bg-accent/50"
-            >
-              {copied ? (
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              ) : (
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              )}
-              {copied ? "Copied!" : "Copy Markdown"}
-            </button>
-          </div>
-
-          <div className="rounded-2xl overflow-hidden bg-card border border-border">
-            {/* Report header */}
-            <div className="px-8 py-6 border-b border-border bg-accent">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-primary shadow-md">
-                  <svg className="w-5 h-5 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <div>
-                  <h1 className="text-lg font-bold text-foreground">Agent Readiness Report — {form.companyName}</h1>
-                  <p className="text-xs text-muted-foreground">
-                    {form.industry} &middot; {form.scope || "Entire organization"} &middot;{" "}
-                    {new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Report body */}
-            <div className="px-8 py-6">
-              <MarkdownBody className="text-foreground">{reportMarkdown}</MarkdownBody>
-            </div>
-          </div>
-        </div>
+        </details>
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Results header + report panel (live streaming)                     */
+/* ------------------------------------------------------------------ */
+
+function ResultsHeader({
+  companyName, isStreaming, badges, onReset, onCancel,
+}: {
+  companyName: string;
+  isStreaming: boolean;
+  badges: string[];
+  onReset: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mkt-assess__results-head">
+      <div>
+        <Eyebrow>Generating</Eyebrow>
+        <h2 className="mkt-display-section" style={{ fontSize: 32, marginTop: 8 }}>
+          Agent Readiness Report — {companyName}
+        </h2>
+        <div className="mkt-assess__badges">
+          {badges.map((b) => <span key={b} className="mkt-assess__badge">{b}</span>)}
+        </div>
+      </div>
+      <div className="mkt-assess__results-actions">
+        <Button variant="ghost" onClick={onReset}>
+          <RotateCcw size={14} strokeWidth={1.75} aria-hidden /> New
+        </Button>
+        {isStreaming && (
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReportPanel({ output, error, isStreaming, companyName }: {
+  output: string;
+  error: string;
+  isStreaming: boolean;
+  companyName: string;
+}) {
+  return (
+    <div className="mkt-assess__card" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="mkt-assess__report-head">
+        <Sparkles size={14} strokeWidth={1.75} aria-hidden style={{ color: "var(--mkt-accent)" }} />
+        <span>Live report — {companyName}</span>
+      </div>
+      <div className="mkt-assess__report-body">
+        {error && (
+          <div className="mkt-assess__error" role="alert">
+            <strong>Error:</strong> {error}
+          </div>
+        )}
+        {!output && !error && (
+          <div className="mkt-assess__loading" aria-live="polite">
+            <Loader2 size={16} className="mkt-assess__spin" />
+            <span>Retrieving research data and generating the assessment…</span>
+          </div>
+        )}
+        {output && (
+          <div className="mkt-assess__report">
+            <MarkdownBody>{output}</MarkdownBody>
+            {isStreaming && (
+              <div className="mkt-assess__streaming-tail" aria-live="polite">
+                <Loader2 size={14} className="mkt-assess__spin" />
+                <span>Streaming…</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Page-local styles                                                  */
+/*  (kept inline so the new wizard stays portable as a single file —    */
+/*   the marketing surface is the source of truth for tokens)           */
+/* ------------------------------------------------------------------ */
+
+function AssessLocalStyles() {
+  return (
+    <style>{`
+      .mkt-assess__steps { display: flex; gap: 4px; margin-bottom: 24px; flex-wrap: wrap; }
+      .mkt-assess__step {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-radius: 8px; border: none; background: transparent;
+        font-family: var(--mkt-font-sans); font-size: 13px; font-weight: 500;
+        color: var(--mkt-ink-soft); transition: background-color 160ms var(--mkt-ease);
+      }
+      .mkt-assess__step--active { background: var(--mkt-surface-cream-2); color: var(--mkt-ink); }
+      .mkt-assess__step--done { color: var(--mkt-accent-ink); }
+      .mkt-assess__card {
+        background: #fff; border: 1px solid var(--mkt-rule); border-radius: 16px;
+        padding: 40px; box-shadow: 0 4px 24px -16px rgba(31,30,29,0.12);
+      }
+      .mkt-assess__nav {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; margin-top: 32px; padding-top: 24px;
+        border-top: 1px solid var(--mkt-rule);
+      }
+      .mkt-assess__grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .mkt-assess__grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+      @media (max-width: 800px) {
+        .mkt-assess__grid-2 { grid-template-columns: 1fr; }
+        .mkt-assess__grid-3 { grid-template-columns: 1fr; }
+      }
+      .mkt-assess__label {
+        display: block; margin-bottom: 6px;
+        font-size: 12px; font-weight: 600; color: var(--mkt-ink);
+        font-family: var(--mkt-font-sans);
+      }
+      .mkt-assess__sub-label {
+        font-family: var(--mkt-font-mono); font-size: 11px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.1em;
+        color: var(--mkt-ink-soft); margin-bottom: 8px;
+      }
+      .mkt-assess__count {
+        font-family: var(--mkt-font-mono); font-weight: 400;
+        color: var(--mkt-accent-ink);
+      }
+      .mkt-assess__hint {
+        margin-left: 12px; padding: 2px 8px; border-radius: 999px;
+        font-size: 11px; color: var(--mkt-accent-ink);
+        background: var(--mkt-surface-cream-2); border: 1px solid var(--mkt-rule);
+      }
+      .mkt-assess__divider {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        padding-top: 16px; border-top: 1px solid var(--mkt-rule);
+      }
+      .mkt-assess__input, .mkt-assess__select {
+        width: 100%; padding: 10px 12px; border-radius: 8px;
+        border: 1px solid var(--mkt-rule); background: #fff;
+        font-family: var(--mkt-font-sans); font-size: 14px; color: var(--mkt-ink);
+        transition: border-color 160ms var(--mkt-ease);
+      }
+      .mkt-assess__input:focus, .mkt-assess__select:focus {
+        outline: none; border-color: var(--mkt-accent);
+      }
+      textarea.mkt-assess__input { min-height: 80px; resize: vertical; }
+      .mkt-assess__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .mkt-assess__chip {
+        padding: 7px 14px; border-radius: 999px;
+        background: transparent; color: var(--mkt-ink-soft);
+        border: 1px solid var(--mkt-rule);
+        font-size: 13px; font-weight: 500; cursor: pointer;
+        transition: all 160ms var(--mkt-ease);
+      }
+      .mkt-assess__chip:hover { color: var(--mkt-ink); border-color: var(--mkt-ink-soft); }
+      .mkt-assess__chip--selected,
+      .mkt-assess__chip--selected:hover {
+        background: var(--mkt-accent); color: #fff;
+        border-color: var(--mkt-accent);
+      }
+      .mkt-assess__group-tag {
+        font-family: var(--mkt-font-mono); font-size: 10px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.1em;
+        color: var(--mkt-ink-soft); margin-bottom: 6px;
+      }
+      .mkt-assess__radio {
+        text-align: left; padding: 14px 16px; border-radius: 10px;
+        border: 1px solid var(--mkt-rule); background: transparent;
+        cursor: pointer; transition: all 160ms var(--mkt-ease);
+      }
+      .mkt-assess__radio:hover { border-color: var(--mkt-ink-soft); }
+      .mkt-assess__radio--selected,
+      .mkt-assess__radio--selected:hover {
+        border: 2px solid var(--mkt-accent);
+        background: var(--mkt-surface-cream-2);
+        padding: 13px 15px;
+      }
+      .mkt-assess__radio-title {
+        font-size: 14px; font-weight: 600; color: var(--mkt-ink);
+      }
+      .mkt-assess__radio-desc {
+        margin-top: 4px; font-size: 12px; color: var(--mkt-ink-soft);
+      }
+      .mkt-assess__small-radio {
+        text-align: left; padding: 10px 12px; border-radius: 8px;
+        border: 1px solid var(--mkt-rule); background: transparent;
+        font-family: var(--mkt-font-sans); font-size: 13px; color: var(--mkt-ink);
+        cursor: pointer; transition: all 160ms var(--mkt-ease);
+      }
+      .mkt-assess__small-radio:hover { border-color: var(--mkt-ink-soft); }
+      .mkt-assess__small-radio--selected,
+      .mkt-assess__small-radio--selected:hover {
+        border: 2px solid var(--mkt-accent);
+        background: var(--mkt-surface-cream-2);
+        padding: 9px 11px;
+      }
+      .mkt-assess__fn-group {
+        border: 1px solid var(--mkt-rule); border-radius: 10px; padding: 14px;
+      }
+      .mkt-assess__fn-group-tag {
+        font-family: var(--mkt-font-mono); font-size: 11px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.1em;
+        color: var(--mkt-ink); margin-bottom: 10px;
+      }
+      .mkt-assess__fn-row {
+        display: flex; align-items: center; gap: 8px;
+        width: 100%; padding: 6px 8px; border-radius: 6px;
+        background: transparent; border: none;
+        font-family: var(--mkt-font-sans); font-size: 13px; color: var(--mkt-ink-soft);
+        text-align: left; cursor: pointer; transition: background-color 160ms var(--mkt-ease);
+      }
+      .mkt-assess__fn-row:hover { background: var(--mkt-surface-cream-2); }
+      .mkt-assess__fn-row--selected {
+        background: var(--mkt-surface-cream-2);
+        color: var(--mkt-ink); font-weight: 600;
+      }
+      .mkt-assess__fn-check {
+        width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+        border: 1.5px solid var(--mkt-rule); display: inline-flex;
+        align-items: center; justify-content: center;
+      }
+      .mkt-assess__fn-check--selected {
+        border: none; background: var(--mkt-accent); color: #fff;
+      }
+      .mkt-assess__count-line {
+        margin-top: 12px; font-size: 13px; color: var(--mkt-accent-ink);
+      }
+      .mkt-assess__results-head {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 24px; margin-bottom: 24px; flex-wrap: wrap;
+      }
+      .mkt-assess__results-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .mkt-assess__badges {
+        display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px;
+      }
+      .mkt-assess__badge {
+        padding: 4px 10px; border-radius: 999px;
+        font-family: var(--mkt-font-mono); font-size: 11px;
+        background: var(--mkt-surface-cream-2);
+        color: var(--mkt-accent-ink);
+        border: 1px solid var(--mkt-rule);
+      }
+      .mkt-assess__report-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 14px 24px;
+        border-bottom: 1px solid var(--mkt-rule);
+        background: var(--mkt-surface-cream-2);
+        font-family: var(--mkt-font-mono); font-size: 11px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.1em;
+        color: var(--mkt-ink);
+      }
+      .mkt-assess__report-body {
+        padding: 32px; max-height: 75vh; overflow: auto;
+      }
+      .mkt-assess__report :is(h1, h2, h3, h4) {
+        font-family: var(--mkt-font-serif); color: var(--mkt-ink);
+      }
+      .mkt-assess__report h1 { font-size: 32px; margin: 24px 0 12px; line-height: 1.15; }
+      .mkt-assess__report h2 { font-size: 26px; margin: 32px 0 12px; line-height: 1.2;
+        padding-bottom: 6px; border-bottom: 2px solid var(--mkt-rule); }
+      .mkt-assess__report h3 { font-size: 19px; margin: 24px 0 8px; color: var(--mkt-accent-ink); }
+      .mkt-assess__report p { margin: 8px 0; line-height: 1.6; }
+      .mkt-assess__report ul, .mkt-assess__report ol { margin: 12px 0; padding-left: 24px; }
+      .mkt-assess__report li { margin: 4px 0; line-height: 1.55; }
+      .mkt-assess__report strong { color: var(--mkt-ink); font-weight: 600; }
+      .mkt-assess__report code {
+        font-family: var(--mkt-font-mono); font-size: 0.9em;
+        background: var(--mkt-surface-cream-2); padding: 2px 6px; border-radius: 4px;
+      }
+      .mkt-assess__error {
+        margin-bottom: 16px; padding: 12px 16px; border-radius: 8px;
+        background: #fdecea; color: #9a2418; border: 1px solid #f5b8b1;
+        font-size: 13px;
+      }
+      .mkt-assess__loading {
+        display: flex; align-items: center; gap: 10px; padding: 32px;
+        justify-content: center; color: var(--mkt-ink-soft); font-size: 14px;
+      }
+      .mkt-assess__streaming-tail {
+        display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
+        font-family: var(--mkt-font-mono); font-size: 12px; color: var(--mkt-accent-ink);
+      }
+      .mkt-assess__spin {
+        animation: mkt-assess-spin 1.1s linear infinite;
+      }
+      @keyframes mkt-assess-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      .mkt-assess__jumpstart { margin-top: 24px; }
+      .mkt-assess__jumpstart > summary {
+        cursor: pointer; padding: 8px 0;
+        font-family: var(--mkt-font-mono); font-size: 12px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--mkt-accent-ink);
+      }
+    `}</style>
   );
 }

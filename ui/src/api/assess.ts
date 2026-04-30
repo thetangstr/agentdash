@@ -9,15 +9,6 @@ export interface ResearchResult {
   allIndustries: string[];
 }
 
-export interface InterviewResponse {
-  question: string;
-  options: string[];
-  insights: Array<{ label: string; value: string; icon: string }>;
-  clarityScore: number;
-  done: boolean;
-  thinkingSummary?: string;
-}
-
 export interface StoredAssessment {
   markdown: string;
   jumpstart: string | null;
@@ -28,22 +19,17 @@ export const assessApi = {
   research: (companyId: string, companyUrl: string, companyName: string) =>
     api.post<ResearchResult>(`/companies/${companyId}/assess/research`, { companyUrl, companyName }),
 
-  interview: (companyId: string, body: {
-    conversationHistory: Array<{ role: "assistant" | "user"; content: string }>;
-    companyWebContent?: string;
-    industry: string;
-    industrySlug: string;
-    formSummary: string;
-    selectedFunctions: string[];
-  }) => api.post<InterviewResponse>(`/companies/${companyId}/assess/interview`, body),
-
-  runAssessment: async (companyId: string, body: Record<string, unknown>): Promise<ReadableStream<Uint8Array>> => {
+  runAssessment: async (companyId: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> => {
     const res = await fetch(`/api/companies/${companyId}/assess`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
-    if (!res.ok) throw new Error(`Assessment failed: ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(errBody.error ?? `Assessment failed: ${res.status}`);
+    }
     return res.body!;
   },
 

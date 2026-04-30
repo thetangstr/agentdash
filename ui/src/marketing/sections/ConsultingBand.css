@@ -1,0 +1,4 @@
+.mkt-cb { display: grid; grid-template-columns: 1.2fr 1fr; gap: 64px; align-items: center; }
+.mkt-cb__copy { display: grid; gap: 24px; }
+.mkt-cb__art { color: var(--mkt-ink); }
+@media (max-width: 800px) { .mkt-cb { grid-template-columns: 1fr; } }

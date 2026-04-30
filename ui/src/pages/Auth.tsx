@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
-import { Button } from "@/components/ui/button";
+import { Button } from "../marketing/components/Button";
 import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
 import { Sparkles } from "lucide-react";
 
@@ -121,7 +121,8 @@ export function AuthPage() {
   }
 
   return (
-    <div className="fixed inset-0 flex bg-background">
+    <div className="mkt-root" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+      <div className="fixed inset-0 flex">
       {/* Left half — form */}
       <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
         <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
@@ -130,7 +131,7 @@ export function AuthPage() {
             <span className="text-sm font-medium">AgentDash</span>
           </div>
 
-          <h1 className="text-xl font-semibold">
+          <h1 className="mkt-display-section">
             {mode === "sign_in" ? "Sign in to AgentDash" : "Create your AgentDash account"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -195,9 +196,8 @@ export function AuthPage() {
             {error && <p className="text-xs text-destructive">{error}</p>}
             <Button
               type="submit"
-              disabled={mutation.isPending}
-              aria-disabled={!canSubmit || mutation.isPending}
-              className={`w-full ${!canSubmit && !mutation.isPending ? "opacity-50" : ""}`}
+              className="w-full"
+              disabled={!canSubmit || mutation.isPending}
             >
               {mutation.isPending
                 ? "Working…"
@@ -241,6 +241,7 @@ export function AuthPage() {
       {/* Right half — ASCII art animation (hidden on mobile) */}
       <div className="hidden md:block w-1/2 overflow-hidden">
         <AsciiArtAnimation />
+      </div>
       </div>
     </div>
   );

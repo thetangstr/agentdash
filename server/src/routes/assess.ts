@@ -27,20 +27,6 @@ export function assessRoutes(db: Db) {
     }
   });
 
-  // POST /companies/:companyId/assess/interview — WACT interview round
-  router.post("/companies/:companyId/assess/interview", async (req, res) => {
-    try {
-      assertBoard(req);
-      const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
-      const result = await svc.interview(req.body);
-      res.json(result);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Internal server error";
-      res.status(httpStatus(err)).json({ error: message });
-    }
-  });
-
   // POST /companies/:companyId/assess — run full assessment (streaming)
   router.post("/companies/:companyId/assess", async (req, res) => {
     try {

@@ -1,5 +1,5 @@
 // AgentDash — Dashboard
-// Re-skinned to the "luxury control-plane" design handoff (Granola.ai):
+// "Luxury control-plane" treatment:
 // editorial type, warm paper, single jade accent, live heartbeat pulse,
 // org chart, stats strip, attention list, spend card, artifacts. Styles
 // live in ui/src/styles/luxe.css and are scoped to the `luxe-root` container
