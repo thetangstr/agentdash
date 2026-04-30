@@ -1,17 +1,10 @@
 /*
- * Marketing fonts. Imports Fontsource subsets so we ship only Latin glyphs.
+ * Marketing fonts. Loaded via the Google Fonts <link> in ui/index.html so we
+ * stay in sync with the rest of the app and avoid lockfile churn from
+ * Fontsource npm packages.
  */
-@import "@fontsource/newsreader/latin-400.css";
-@import "@fontsource/newsreader/latin-500.css";
-@import "@fontsource/newsreader/latin-600.css";
-
-@import "@fontsource-variable/inter-tight/index.css";
-
-@import "@fontsource/jetbrains-mono/latin-400.css";
-@import "@fontsource/jetbrains-mono/latin-500.css";
-
 :root {
   --mkt-font-serif: "Newsreader", "Times New Roman", serif;
-  --mkt-font-sans: "Inter Tight Variable", "Inter Tight", "Inter", system-ui, sans-serif;
+  --mkt-font-sans: "Inter Tight", "Inter", system-ui, sans-serif;
   --mkt-font-mono: "JetBrains Mono", ui-monospace, monospace;
 }

@@ -10,9 +10,5 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    environmentMatchGlobs: [
-      ["src/marketing/**", "jsdom"],
-    ],
-    setupFiles: ["src/marketing/test-setup.ts"],
   },
 });
