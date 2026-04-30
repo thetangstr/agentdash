@@ -44,7 +44,7 @@ We provide sensible defaults — a default agent that shells out to Claude Code 
 Task management is hierarchical. At any moment, every piece of work must trace back to the company's top-level goal through a chain of parent tasks:
 
 ```
-I am researching the Facebook ads Granola uses (current task)
+I am researching the Facebook ads a top competitor uses (current task)
   because → I need to create Facebook ads for our software (parent)
     because → I need to grow new signups by 100 users (parent)
       because → I need to get revenue to $2,000 this week (parent)

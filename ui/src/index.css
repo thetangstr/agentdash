@@ -45,9 +45,9 @@
 /* ==========================================================================
    AgentDash Design System — Luxury Control-Plane (v2, 2026-04-18)
    Palette: warm paper + deep ink + muted jade accent (archival tone).
-   Mapped from the Claude Design handoff (mifal-agent-factory). The same
-   scalars power every shadcn component via the semantic --color-* vars.
-   Accent stays overridable per-company via --primary-accent / --ring-accent.
+   The same scalars power every shadcn component via the semantic --color-*
+   vars. Accent stays overridable per-company via --primary-accent /
+   --ring-accent.
    ========================================================================== */
 
 :root {
