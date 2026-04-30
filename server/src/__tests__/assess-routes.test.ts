@@ -8,13 +8,6 @@ const mockAssess = vi.hoisted(() => ({
     webContent: "healthcare hospital patient",
     allIndustries: ["Healthcare", "Tech/SaaS"],
   })),
-  interview: vi.fn(async () => ({
-    question: "How structured?",
-    options: ["Very", "Mixed"],
-    insights: [],
-    clarityScore: 30,
-    done: false,
-  })),
   runAssessment: vi.fn(async () => ({
     stream: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("# Report")); c.close(); } }),
     onComplete: vi.fn(),
@@ -74,18 +67,6 @@ describe("Assess routes", () => {
         .post("/api/companies/company-1/assess/research")
         .send({ companyUrl: "https://example.com" })
         .expect(403);
-    });
-  });
-
-  describe("POST /companies/:cid/assess/interview", () => {
-    it("returns interview question", async () => {
-      const app = createApp();
-      const res = await request(app)
-        .post("/api/companies/company-1/assess/interview")
-        .send({ conversationHistory: [], industry: "Healthcare", industrySlug: "healthcare", formSummary: "", selectedFunctions: [] })
-        .expect(200);
-
-      expect(res.body.question).toBe("How structured?");
     });
   });
 

@@ -50,48 +50,6 @@ describe("assessService", () => {
     });
   });
 
-  describe("interview", () => {
-    it("calls MiniMax and returns parsed JSON", async () => {
-      const llmResponse = {
-        content: [
-          { type: "text", text: JSON.stringify({
-            question: "How structured are your workflows?",
-            options: ["Very structured", "Mixed", "Ad hoc"],
-            insights: [],
-            clarityScore: 30,
-            done: false,
-          }) },
-        ],
-      };
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => llmResponse,
-      });
-
-      const svc = assessService(mockDb);
-      const result = await svc.interview({
-        conversationHistory: [],
-        industry: "Healthcare",
-        industrySlug: "healthcare",
-        formSummary: "Company: Test Corp",
-        selectedFunctions: [],
-      });
-
-      expect(result.question).toBeTruthy();
-      expect(result.done).toBe(false);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("throws when API key is missing", async () => {
-      delete process.env.ASSESS_MINIMAX_API_KEY;
-      const svc = assessService(mockDb);
-      await expect(
-        svc.interview({ conversationHistory: [], industry: "Healthcare", industrySlug: "healthcare", formSummary: "", selectedFunctions: [] }),
-      ).rejects.toThrow("ASSESS_MINIMAX_API_KEY");
-    });
-  });
-
   describe("getAssessment", () => {
     it("returns null when no assessment exists", async () => {
       mockDb.where.mockResolvedValueOnce([]);

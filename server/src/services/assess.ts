@@ -11,8 +11,6 @@ import {
   serializeContext,
   buildSystemPrompt,
   buildUserPrompt,
-  buildInterviewSystemPrompt,
-  buildInterviewMessages,
   buildJumpstartPrompt,
 } from "./assess-prompts.js";
 
@@ -103,83 +101,6 @@ export function assessService(db: Db) {
         webContent: websiteText.slice(0, 3000),
         allIndustries: INDUSTRIES,
       };
-    },
-
-    async interview(params: {
-      conversationHistory: Array<{ role: "assistant" | "user"; content: string }>;
-      companyWebContent?: string;
-      industry: string;
-      industrySlug: string;
-      formSummary: string;
-      selectedFunctions: string[];
-    }) {
-      const apiKey = getApiKey();
-
-      let ragContext: string | undefined;
-      if (params.industrySlug) {
-        const input: AssessmentInput = {
-          companyName: "", industry: params.industry, industrySlug: params.industrySlug,
-          employeeRange: "", revenueRange: "", description: "", currentSystems: "",
-          automationLevel: "", challenges: "", selectedFunctions: params.selectedFunctions,
-          primaryGoal: "", targets: "", timeline: "", budgetRange: "",
-          aiUsageLevel: "", aiGovernance: "", agentExperience: "", aiOwnership: "",
-        };
-        const ctx = retrieveContext(input);
-        if (ctx.matrixCells.length > 0) ragContext = serializeContext(ctx, input);
-      }
-
-      const systemPrompt = buildInterviewSystemPrompt(ragContext, params.selectedFunctions);
-      const messages = buildInterviewMessages(
-        params.conversationHistory,
-        params.companyWebContent,
-        params.formSummary,
-      );
-
-      const res = await fetch(`${MINIMAX_BASE_URL}/v1/messages`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: MINIMAX_MODEL,
-          max_tokens: 4096,
-          temperature: 1.0,
-          system: systemPrompt,
-          messages,
-          thinking: { type: "enabled", budget_tokens: 8000 },
-        }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "unknown");
-        throw Object.assign(new Error(`MiniMax error ${res.status}: ${errText}`), { statusCode: 502 });
-      }
-
-      const data = await res.json() as { content: Array<{ type: string; text?: string }> };
-      const responseText = data.content
-        ?.filter((b) => b.type === "text")
-        ?.map((b) => b.text)
-        ?.join("") ?? "";
-
-      // Parse JSON response
-      const cleaned = responseText.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      try {
-        return JSON.parse(cleaned);
-      } catch {
-        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try { return JSON.parse(jsonMatch[0]); } catch { /* fall through */ }
-        }
-        return {
-          question: "Could you tell me what your organization does and what industry you're in?",
-          options: ["Healthcare", "Financial Services", "Technology/SaaS", "Another industry"],
-          insights: [],
-          clarityScore: 0,
-          done: false,
-        };
-      }
     },
 
     async runAssessment(companyId: string, input: AssessmentInput, companyWebContent?: string) {
