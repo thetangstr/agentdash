@@ -117,6 +117,7 @@ export function assessService(db: Db) {
         headers: {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
+          "Authorization": `Bearer ${apiKey}`,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
@@ -170,6 +171,7 @@ export function assessService(db: Db) {
               headers: {
                 "Content-Type": "application/json",
                 "x-api-key": apiKey,
+                "Authorization": `Bearer ${apiKey}`,
                 "anthropic-version": "2023-06-01",
               },
               body: JSON.stringify({
