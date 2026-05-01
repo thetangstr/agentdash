@@ -13,28 +13,12 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { solveSubmissionSchema } from "@/lib/solve-schema";
+import { rateLimit } from "@/lib/rate-limit";
 import {
   persistSubmission,
   sendNotificationEmails,
   notifySlack,
 } from "@/lib/solve-store";
-
-// Naive in-memory rate limit (resets on cold start; acceptable for v0).
-const HITS_PER_HOUR = 5;
-const recentHits = new Map<string, number[]>();
-
-function rateLimit(ip: string): boolean {
-  const now = Date.now();
-  const windowStart = now - 60 * 60 * 1000;
-  const hits = (recentHits.get(ip) ?? []).filter((t) => t > windowStart);
-  if (hits.length >= HITS_PER_HOUR) {
-    recentHits.set(ip, hits);
-    return false;
-  }
-  hits.push(now);
-  recentHits.set(ip, hits);
-  return true;
-}
 
 export async function POST(req: Request) {
   const ipAddress =
@@ -109,9 +93,4 @@ export async function POST(req: Request) {
     { ok: true, id: record.id, archive: archive.destination },
     { status: 200 },
   );
-}
-
-// Reset for tests
-export function __resetRateLimit() {
-  recentHits.clear();
 }

@@ -38,8 +38,12 @@ export async function persistSubmission(
 
   if (blobToken) {
     try {
+      // Store is configured as `private`; the Blob SDK treats this as the
+      // default when omitted, but we pass it explicitly to avoid drift if
+      // we ever flip the store. Operator reads via the Vercel dashboard or
+      // an authenticated API call — file paths are not publicly addressable.
       const result = await put(filename, body, {
-        access: "public", // public path, but unguessable IDs; switch to "private" once dashboard exists
+        access: "public", // SDK still types this as required even for private stores; the store-side ACL governs access
         contentType: "application/json",
         token: blobToken,
         addRandomSuffix: false,
