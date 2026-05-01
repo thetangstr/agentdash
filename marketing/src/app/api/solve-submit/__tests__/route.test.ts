@@ -14,7 +14,8 @@ vi.mock("@/lib/solve-store", () => ({
   notifySlack: (...args: unknown[]) => slackMock(...args),
 }));
 
-import { POST, __resetRateLimit } from "../route";
+import { POST } from "../route";
+import { _resetRateLimitForTests } from "@/lib/rate-limit";
 
 const VALID_BODY = {
   name: "Maya Founder",
@@ -43,7 +44,7 @@ function makeReq(body: unknown, ip: string = "10.0.0.1"): Request {
 
 describe("POST /api/solve-submit", () => {
   beforeEach(() => {
-    __resetRateLimit();
+    _resetRateLimitForTests();
     persistMock.mockReset();
     sendMock.mockReset();
     slackMock.mockReset();
