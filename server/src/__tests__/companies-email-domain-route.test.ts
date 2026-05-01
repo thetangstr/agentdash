@@ -11,11 +11,16 @@ import { companyRoutes } from "../routes/companies.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { DomainAlreadyClaimedError } from "../services/companies.js";
 
+// AGE-104: a freshly signed-up user has isInstanceAdmin=false. The route
+// must allow them to create their first company; downstream rules
+// (free-mail block, domain uniqueness, ensureMembership=owner) handle the
+// real business logic. Setting this to `true` in earlier tests masked the
+// "Instance admin required" regression.
 const ACTOR = {
   type: "board" as const,
   userId: "user-1",
   companyIds: [],
-  isInstanceAdmin: true,
+  isInstanceAdmin: false,
   source: "session" as const,
 };
 
@@ -185,6 +190,29 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(res.status).toBe(201);
     expect(findByEmailDomainMock).not.toHaveBeenCalled();
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: "acme.com" }));
+  });
+
+  it("AGE-104: a non-admin signed-up user can create their first company and is promoted to owner", async () => {
+    findByEmailDomainMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({
+      id: "company-fre",
+      name: "Acme",
+      budgetMonthlyCents: 0,
+      emailDomain: "acme.com",
+    });
+
+    // ACTOR has isInstanceAdmin: false (set at the top of the file).
+    const app = buildApp({ actorEmail: acmeUser.email });
+    const res = await request(app).post("/api/companies").send({ name: "Acme" });
+
+    expect(res.status).toBe(201);
+    expect(ensureMembershipMock).toHaveBeenCalledWith(
+      "company-fre",
+      "user",
+      "user-1",
+      "owner",
+      "active",
+    );
   });
 
   it("local_implicit actors (no email) leave email_domain NULL", async () => {
