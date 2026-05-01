@@ -10,6 +10,7 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { freeSeatCapMiddleware } from "./middleware/free-seat-cap.js";
+import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
@@ -191,6 +192,12 @@ export async function createApp(
     // so we can short-circuit before better-auth's internal signup flow.
     app.use(
       freeSeatCapMiddleware(db, { enabled: opts.freeSeatCap ?? false }),
+    );
+    // AgentDash (AGE-104 follow-up): block free-mail signups on Pro at the
+    // signup endpoint itself, not at company-creation time. Same rule as
+    // AGE-60 but surfaced before the user has an account they can't use.
+    app.use(
+      corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
     );
     app.all("/api/auth/*authPath", opts.betterAuthHandler);
   }
