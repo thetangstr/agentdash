@@ -281,9 +281,11 @@ export function companyRoutes(
 
   router.post("/", validate(createCompanySchema), async (req, res) => {
     assertBoard(req);
-    if (!(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
-      throw forbidden("Instance admin required");
-    }
+    // AgentDash (AGE-104): no instance-admin gate here. The FRE Plan B
+    // contract (AGE-55) is that any authenticated board user can create
+    // their first company and is promoted to `owner` membership below.
+    // Free-mail rejection (AGE-60), domain uniqueness (AGE-55), and the
+    // free single-seat cap (AGE-100) are the real safeguards.
 
     // AgentDash (AGE-55): FRE Plan B — derive email_domain from the creator's
     // authenticated email. local_implicit actors (single-machine dev) have no
