@@ -33,8 +33,9 @@ These flip the server out of `local_trusted` (no auth) into real auth-required m
 | `PAPERCLIP_AUTH_PUBLIC_BASE_URL` | `https://your-domain.com` | The canonical public URL of the app. Used as the auth callback origin and to build the hostname allow-list. |
 | `BETTER_AUTH_SECRET` | a 32+ char random string (`openssl rand -hex 32`) | Signs Better Auth session JWTs. **Don't lose it** — rotating it logs everyone out. |
 | `DATABASE_URL` | `postgres://user:pass@host:5432/agentdash` | Your managed Postgres connection string. |
+| `PAPERCLIP_MIGRATION_AUTO_APPLY` | `true` | Auto-applies pending Drizzle migrations on boot. Without it, the server interactively prompts (which fails in a headless container) and exits with `Refusing to start against a stale schema`. |
 
-Without `BETTER_AUTH_SECRET` the server crashes on first start in authenticated mode.
+Without `BETTER_AUTH_SECRET` the server crashes on first start in authenticated mode. Without `PAPERCLIP_MIGRATION_AUTO_APPLY=true`, the container exits the first time the schema is stale (every redeploy with new migrations).
 
 ---
 
@@ -123,6 +124,7 @@ PAPERCLIP_AUTH_PUBLIC_BASE_URL=https://your-domain.com
 # Auth + DB
 BETTER_AUTH_SECRET=<openssl rand -hex 32>
 DATABASE_URL=postgres://user:pass@host:5432/agentdash
+PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
 # LLM
 ANTHROPIC_API_KEY=sk-ant-…
@@ -135,4 +137,4 @@ STRIPE_TRIAL_DAYS=14
 BILLING_PUBLIC_BASE_URL=https://your-domain.com
 ```
 
-That's it. With those eight vars and a Postgres connection string, AgentDash launches.
+That's it. With those env vars and a Postgres connection string, AgentDash launches.
