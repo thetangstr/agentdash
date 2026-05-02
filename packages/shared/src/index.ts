@@ -968,3 +968,8 @@ export type {
   EnvironmentProviderCapability,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
+
+export * from "./mention-parser.js";
+
+// AgentDash: chat substrate card payload types
+export * from "./cards.js";

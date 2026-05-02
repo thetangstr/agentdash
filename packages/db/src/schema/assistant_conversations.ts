@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, varchar, timestamp, jsonb, integer, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
@@ -30,6 +30,8 @@ export const assistantMessages = pgTable(
     toolName: text("tool_name"),
     toolInput: jsonb("tool_input"),
     tokenCount: integer("token_count"),
+    cardKind: varchar("card_kind", { length: 32 }),
+    cardPayload: jsonb("card_payload"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

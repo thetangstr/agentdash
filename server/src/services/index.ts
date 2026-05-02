@@ -54,3 +54,9 @@ export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js
 export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
+export { conversationService } from "./conversations.js";
+export { conversationDispatch } from "./conversation-dispatch.js";
+export { cosReplier } from "./cos-replier.js";
+export { agentSummoner } from "./agent-summoner.js";
+export { activityRouter } from "./activity-router.js";
+export { cosProactive } from "./cos-proactive.js";
