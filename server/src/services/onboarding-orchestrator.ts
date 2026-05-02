@@ -15,10 +15,25 @@ interface BootstrapResult {
   conversationId: string;
 }
 
+// In `local_trusted` deployment mode, the synthetic actor has userId="local-board"
+// and there is NO auth_users row. The orchestrator must still bootstrap a working
+// workspace so the founding user can hit /cos and start chatting.
+const LOCAL_BOARD_USER_ID = "local-board";
+
+function resolveLocalUser(userId: string): { id: string; email: string | null } | null {
+  if (userId !== LOCAL_BOARD_USER_ID) return null;
+  // Optional override: AGENTDASH_BOOTSTRAP_EMAIL lets the founding user supply a
+  // real email so the company name + email_domain are set correctly. Falls back
+  // to a generic "Local Workspace" when unset.
+  const email = process.env.AGENTDASH_BOOTSTRAP_EMAIL?.trim() || null;
+  return { id: LOCAL_BOARD_USER_ID, email };
+}
+
 export function onboardingOrchestrator(deps: Deps) {
   return {
     bootstrap: async (userId: string): Promise<BootstrapResult> => {
-      const user = await deps.users.getById(userId);
+      // Try the real auth_users lookup first; fall back to local-trusted sentinel.
+      const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
 
       // Step 1: ensure a company. Use email-domain lookup first (idempotency).

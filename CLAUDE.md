@@ -63,6 +63,29 @@ MAW commands are installed under `.claude/commands/` with supporting docs in `do
 
 Staging and production steps still contain explicit `TODO_SET_*` placeholders for environment URLs and test credentials. Fill those before using the deploy/admin flows.
 
+## Local development bootstrap (first run)
+
+For your very first run as the founding user, AgentDash works in `local_trusted` deployment mode without a sign-up flow. The orchestrator detects the synthetic `local-board` actor and provisions a workspace + CoS agent for you:
+
+```sh
+# Optional: name your workspace properly (defaults to "Local Workspace")
+export AGENTDASH_BOOTSTRAP_EMAIL=you@yourdomain.com
+
+pnpm dev
+# Open http://localhost:3100/cos
+# CoS chat is ready — start the interview.
+```
+
+To test billing-gated flows (invites, agent hires) without wiring Stripe:
+
+```sh
+# Caps bypassed when STRIPE_SECRET_KEY is unset, OR explicitly:
+export AGENTDASH_BILLING_DISABLED=true
+pnpm dev
+```
+
+When `STRIPE_SECRET_KEY` is set in production, caps are enforced as designed (Free: 1 human + 1 agent; Pro: unlimited). The bypass is dev-only.
+
 ## Architecture
 
 **Monorepo** (pnpm workspaces): `server/`, `ui/`, `cli/`, `packages/*`

@@ -10,8 +10,24 @@ interface Deps {
 
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
+/**
+ * Billing is "disabled" — and all caps bypass — when the operator explicitly opts out
+ * via AGENTDASH_BILLING_DISABLED=true, OR when no Stripe key is configured (the
+ * implicit signal that this is a dev/test deployment without payments wired). In
+ * both cases we treat every company as if it's on Pro.
+ *
+ * Production deployments set STRIPE_SECRET_KEY → caps are enforced as designed.
+ * Local-trusted dev never sets the key → caps never block.
+ */
+function isBillingDisabled(): boolean {
+  if (process.env.AGENTDASH_BILLING_DISABLED === "true") return true;
+  if (!process.env.STRIPE_SECRET_KEY) return true;
+  return false;
+}
+
 export function requireTierFor(action: "invite" | "hire", deps: Deps): RequestHandler {
   return async (req, res, next) => {
+    if (isBillingDisabled()) return next();
     const companyId = (req as any).companyId ?? req.params.companyId ?? (req.body as any)?.companyId;
     if (!companyId) return next();
     const company = await deps.getCompany(companyId);
