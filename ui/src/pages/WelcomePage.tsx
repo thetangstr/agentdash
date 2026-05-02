@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
@@ -20,6 +21,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useCompany } from "../context/CompanyContext";
+import { authApi } from "../api/auth";
+import { ApiError } from "../api/client";
+import { queryKeys } from "../lib/queryKeys";
 
 type FeatureCard = {
   title: string;
@@ -129,13 +133,45 @@ const setupSteps = [
   },
 ];
 
+// AgentDash (AGE-104 frictionless): derive a sensible default workspace
+// name from the signed-in user. "Kailor Tang" → "Kailor's Workspace".
+// Empty / single-word names degrade to "<name>'s Workspace". Returns null
+// when there's nothing usable so we leave the input blank.
+function suggestWorkspaceName(userName: string | null | undefined): string | null {
+  if (!userName) return null;
+  const trimmed = userName.trim();
+  if (!trimmed) return null;
+  const first = trimmed.split(/\s+/)[0];
+  if (!first) return null;
+  // Don't suggest if the value looks like an email (some auth providers
+  // store the email as the name when the user hasn't set a display name).
+  if (first.includes("@")) return null;
+  return `${first}'s Workspace`;
+}
+
 export function WelcomePage() {
   const { createCompany } = useCompany();
   const navigate = useNavigate();
   const [companyName, setCompanyName] = useState("");
+  const [hasUserEdited, setHasUserEdited] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submittingRef = useRef(false);
+
+  // Pre-fill the workspace name from the user's profile so the field
+  // isn't blank on first paint. Only auto-fills if the user hasn't typed.
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (hasUserEdited) return;
+    const suggestion = suggestWorkspaceName(sessionQuery.data?.user?.name);
+    if (suggestion && companyName === "") {
+      setCompanyName(suggestion);
+    }
+  }, [sessionQuery.data?.user?.name, hasUserEdited, companyName]);
 
   async function handleGetStarted() {
     if (submittingRef.current) return;
@@ -148,7 +184,24 @@ export function WelcomePage() {
       const company = await createCompany({ name });
       navigate(`/${company.issuePrefix}/setup-wizard`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create company");
+      // AgentDash (AGE-104 frictionless): translate known server codes
+      // to copy that gives the user a forward path instead of a dead-end.
+      if (err instanceof ApiError) {
+        const code = (err.body as { code?: string } | null)?.code;
+        if (code === "pro_requires_corp_email") {
+          setError(
+            "This account already has a workspace and uses a personal email. To create another workspace on Pro, sign in with a work email — or stick with the existing one.",
+          );
+        } else if (code === "domain_already_claimed") {
+          setError(
+            "Someone with this email domain already created a workspace. Ask them to invite you, or use a different email to start your own.",
+          );
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to create company");
+      }
       submittingRef.current = false;
     } finally {
       setLoading(false);
@@ -242,7 +295,10 @@ export function WelcomePage() {
                         type="text"
                         placeholder="Northstar Studio"
                         value={companyName}
-                        onChange={(event) => setCompanyName(event.target.value)}
+                        onChange={(event) => {
+                          setHasUserEdited(true);
+                          setCompanyName(event.target.value);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter") handleGetStarted();
                         }}

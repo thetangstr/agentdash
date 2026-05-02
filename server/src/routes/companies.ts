@@ -300,11 +300,16 @@ export function companyRoutes(
         .then((rows) => rows[0] ?? null);
       creatorEmail = userRow?.email ?? null;
       if (creatorEmail) {
-        // AgentDash (AGE-60): on Pro deployments, reject free-mail addresses
-        // before we even derive the domain — they get a friendlier error
-        // code than the generic "could not derive". local_implicit is
-        // already exempt above (the outer if).
-        if (requireCorpEmail) {
+        // AgentDash (AGE-60 + AGE-104): on Pro deployments, reject free-mail
+        // addresses ONLY when the user is creating an additional company.
+        // For a user's first company we let them through and store the full
+        // email as `email_domain` (the AGE-55 fallback) so they get a
+        // single personal workspace — this is what unblocks legacy WorkOS
+        // webhook accounts that bypassed the AGE-104 signup-time guard.
+        // The signup-time guard (corp-email-signup-guard.ts) is the real
+        // safeguard for new signups.
+        const userHasExistingCompanies = (req.actor.companyIds ?? []).length > 0;
+        if (requireCorpEmail && userHasExistingCompanies) {
           const lower = creatorEmail.trim().toLowerCase();
           const at = lower.lastIndexOf("@");
           const rawDomain = at >= 0 ? lower.slice(at + 1) : "";
@@ -312,7 +317,7 @@ export function companyRoutes(
             res.status(400).json({
               code: "pro_requires_corp_email",
               error:
-                "Pro accounts require a company email. Please sign up with your work email or use the Free self-hosted plan.",
+                "Pro accounts require a company email to create additional workspaces.",
             });
             return;
           }
