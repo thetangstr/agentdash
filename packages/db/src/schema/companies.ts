@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const companies = pgTable(
   "companies",
@@ -26,10 +27,18 @@ export const companies = pgTable(
     feedbackDataSharingConsentByUserId: text("feedback_data_sharing_consent_by_user_id"),
     feedbackDataSharingTermsVersion: text("feedback_data_sharing_terms_version"),
     brandColor: text("brand_color"),
+    // AgentDash (AGE-55): FRE Plan B — domain-keyed companies. Nullable so
+    // local_implicit actors (single-machine dev) aren't forced to provide one.
+    emailDomain: text("email_domain"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     issuePrefixUniqueIdx: uniqueIndex("companies_issue_prefix_idx").on(table.issuePrefix),
+    // AGE-55: partial unique index — NULL domains are excluded so multiple
+    // local_implicit workspaces can coexist without colliding.
+    emailDomainUniqueIdx: uniqueIndex("companies_email_domain_unique_idx")
+      .on(table.emailDomain)
+      .where(sql`${table.emailDomain} IS NOT NULL`),
   }),
 );
