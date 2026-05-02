@@ -617,6 +617,9 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
     pluginWorkerManager,
+    // AgentDash (AGE-60): Pro deployments enforce corp-email signup; Free
+    // (local_trusted) does not.
+    requireCorpEmail: config.deploymentMode === "authenticated",
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

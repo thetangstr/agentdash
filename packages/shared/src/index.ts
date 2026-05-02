@@ -110,6 +110,9 @@ export {
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_EVENT_TYPES,
   PLUGIN_BRIDGE_ERROR_CODES,
+  // AgentDash (AGE-55): FRE Plan B — domain-keyed companies
+  FREE_MAIL_DOMAINS,
+  deriveCompanyEmailDomain,
   type CompanyStatus,
   type DeploymentMode,
   type DeploymentExposure,

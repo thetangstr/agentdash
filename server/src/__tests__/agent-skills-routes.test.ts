@@ -7,6 +7,13 @@ const mockAgentService = vi.hoisted(() => ({
   update: vi.fn(),
   create: vi.fn(),
   resolveByReference: vi.fn(),
+  // GH #71 carry-forward: POST /companies/:companyId/agents now auto-creates a default API key.
+  createApiKey: vi.fn().mockResolvedValue({
+    id: "key-1",
+    name: "default",
+    token: "agk_test_token",
+    createdAt: new Date("2026-05-02T00:00:00.000Z"),
+  }),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
@@ -320,6 +327,12 @@ describe.sequential("agent skill routes", () => {
     mockAccessService.listPrincipalGrants.mockResolvedValue([]);
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
+    mockAgentService.createApiKey.mockResolvedValue({
+      id: "key-1",
+      name: "default",
+      token: "agk_test_token",
+      createdAt: new Date("2026-05-02T00:00:00.000Z"),
+    });
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {

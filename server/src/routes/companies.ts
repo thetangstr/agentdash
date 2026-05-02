@@ -1,11 +1,14 @@
 import { Router, type Request } from "express";
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { authUsers } from "@paperclipai/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
   companyPortabilityExportSchema,
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
   createCompanySchema,
+  deriveCompanyEmailDomain,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
   feedbackVoteValueSchema,
@@ -23,10 +26,24 @@ import {
   feedbackService,
   logActivity,
 } from "../services/index.js";
+import { DomainAlreadyClaimedError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 
-export function companyRoutes(db: Db, storage?: StorageService) {
+// AgentDash (AGE-55): per-route options. Mirrors the env-var-driven flag
+// from server/src/config.ts so test/integration harnesses can override.
+export interface CompanyRoutesOptions {
+  allowMultiTenantPerDomain?: boolean;
+  // AgentDash (AGE-60): when true, reject company creation if the creator's
+  // email is a free-mail address (gmail, yahoo, etc). Pro deployments turn
+  // this on; self-hosted Free leaves it off so a single user with any
+  // email can stand up a workspace.
+  requireCorpEmail?: boolean;
+}
+
+export function companyRoutes(db: Db, storage?: StorageService, options: CompanyRoutesOptions = {}) {
+  const allowMultiTenantPerDomain = options.allowMultiTenantPerDomain ?? false;
+  const requireCorpEmail = options.requireCorpEmail ?? false;
   const router = Router();
   const svc = companyService(db);
   const agents = agentService(db);
@@ -266,11 +283,111 @@ export function companyRoutes(db: Db, storage?: StorageService) {
 
   router.post("/", validate(createCompanySchema), async (req, res) => {
     assertBoard(req);
-    if (!(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
-      throw forbidden("Instance admin required");
+    // AgentDash (AGE-104): no instance-admin gate here. The FRE Plan B
+    // contract (AGE-55) is that any authenticated board user can create
+    // their first company and is promoted to `owner` membership below.
+    // Free-mail rejection (AGE-60), domain uniqueness (AGE-55), and the
+    // free single-seat cap (AGE-100) are the real safeguards.
+
+    // AgentDash (AGE-55): FRE Plan B — derive email_domain from the creator's
+    // authenticated email. local_implicit actors (single-machine dev) have no
+    // email, so we leave the domain NULL and grandfather them in.
+    let emailDomain: string | null = null;
+    let creatorEmail: string | null = null;
+    if (req.actor.source !== "local_implicit" && req.actor.userId) {
+      const userRow = await db
+        .select({ email: authUsers.email })
+        .from(authUsers)
+        .where(eq(authUsers.id, req.actor.userId))
+        .then((rows) => rows[0] ?? null);
+      creatorEmail = userRow?.email ?? null;
+      if (creatorEmail) {
+        // AgentDash (AGE-60 + AGE-104): on Pro deployments, reject free-mail
+        // addresses ONLY when the user is creating an additional company.
+        // For a user's first company we let them through and store the full
+        // email as `email_domain` (the AGE-55 fallback) so they get a
+        // single personal workspace — this is what unblocks legacy WorkOS
+        // webhook accounts that bypassed the AGE-104 signup-time guard.
+        // The signup-time guard (corp-email-signup-guard.ts) is the real
+        // safeguard for new signups.
+        //
+        // Derive the canonical domain first so the free-mail rejection path
+        // and the storage path use identical extraction logic (no divergence).
+        try {
+          emailDomain = deriveCompanyEmailDomain(creatorEmail);
+        } catch (err) {
+          throw badRequest(`Could not derive company email domain from "${creatorEmail}"`);
+        }
+        // deriveCompanyEmailDomain returns the full email (e.g. alice@gmail.com)
+        // for free-mail addresses, and the bare domain (e.g. acme.com) for corp
+        // addresses. The presence of "@" in the result is the canonical signal.
+        const isFreeMail = emailDomain.includes("@");
+        const userHasExistingCompanies = (req.actor.companyIds ?? []).length > 0;
+        if (requireCorpEmail && userHasExistingCompanies && isFreeMail) {
+          res.status(400).json({
+            code: "pro_requires_corp_email",
+            error:
+              "Pro accounts require a company email to create additional workspaces.",
+          });
+          return;
+        }
+        if (!allowMultiTenantPerDomain) {
+          // Pre-flight check so we can surface a friendly contactEmail in the
+          // 409 body. The DB unique index is the actual safety net for races.
+          const existingCompany = await svc.findByEmailDomain(emailDomain);
+          if (existingCompany) {
+            res.status(409).json({
+              code: "domain_already_claimed",
+              existingCompanyId: existingCompany.id,
+              contactEmail: null,
+            });
+            return;
+          }
+        }
+      }
     }
-    const company = await svc.create(req.body);
-    await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
+
+    let company: Awaited<ReturnType<typeof svc.create>>;
+    try {
+      company = await svc.create({
+        ...req.body,
+        // When the flag is ON we still persist the domain (so the historical
+        // record reflects who created it) but we skip the uniqueness check.
+        // When the partial unique index would fire, the catch below converts
+        // it to a 409.
+        emailDomain,
+      });
+    } catch (err) {
+      if (err instanceof DomainAlreadyClaimedError) {
+        res.status(409).json({
+          code: "domain_already_claimed",
+          // null when the winning row couldn't be re-fetched (rare race).
+          existingCompanyId: err.existingCompanyId,
+          contactEmail: null,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    // AgentDash (AGE-55): existing behavior already promotes the creator to a
+    // board ("owner") membership. We rely on that here so the at-least-one-
+    // admin invariant holds from the moment the company exists.
+    //
+    // GH #72: owners need `agents:create` to hit the agent-hires endpoint and
+    // configuration reads. setPrincipalPermission internally upserts membership
+    // as "member", so it must run BEFORE the "owner" promotion below — otherwise
+    // the second ensureMembership demotes the creator back to "member".
+    const ownerPrincipalId = req.actor.userId ?? "local-board";
+    await access.setPrincipalPermission(
+      company.id,
+      "user",
+      ownerPrincipalId,
+      "agents:create",
+      true,
+      ownerPrincipalId,
+    );
+    await access.ensureMembership(company.id, "user", ownerPrincipalId, "owner", "active");
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",
@@ -278,7 +395,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
       action: "company.created",
       entityType: "company",
       entityId: company.id,
-      details: { name: company.name },
+      details: { name: company.name, emailDomain },
     });
     if (company.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(
