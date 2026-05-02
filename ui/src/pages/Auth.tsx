@@ -52,7 +52,9 @@ export function AuthPage() {
       setError(null);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-      navigate(nextPath, { replace: true });
+      // AgentDash: new sign-ups land on the CoS onboarding v2 conversation.
+      const destination = mode === "sign_up" ? "/cos" : nextPath;
+      navigate(destination, { replace: true });
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : "Authentication failed");

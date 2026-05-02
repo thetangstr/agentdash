@@ -134,6 +134,36 @@ export function onboardingV2Routes(db: Db) {
     });
   });
 
+  // POST /api/onboarding/agent/reject
+  router.post("/agent/reject", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const { conversationId, cosAgentId, reason } = req.body as {
+      conversationId: string;
+      cosAgentId: string;
+      reason?: string;
+    };
+    if (!conversationId || !cosAgentId) {
+      throw badRequest("conversationId and cosAgentId required");
+    }
+    // Append a user message capturing the rejection reason.
+    await conversations.postMessage({
+      conversationId,
+      authorKind: "user",
+      authorId: req.actor.userId,
+      body: reason ?? "Try a different proposal.",
+    });
+    // Append a CoS acknowledgement.
+    await conversations.postMessage({
+      conversationId,
+      authorKind: "agent",
+      authorId: cosAgentId,
+      body: "Got it — let me think differently. One sec.",
+    });
+    res.json({ ok: true });
+  });
+
   // POST /api/onboarding/invites
   router.post("/invites", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
