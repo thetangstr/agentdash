@@ -45,6 +45,7 @@ import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
+import BillingPage from "./pages/BillingPage";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
@@ -56,6 +57,13 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
+
+// AgentDash: billing page wrapper — pulls companyId from context.
+function BillingPageRoute() {
+  const { selectedCompany } = useCompany();
+  if (!selectedCompany) return <div className="p-8">Loading…</div>;
+  return <BillingPage companyId={selectedCompany.id} />;
+}
 
 function boardRoutes() {
   return (
@@ -75,6 +83,7 @@ function boardRoutes() {
       <Route path="settings" element={<LegacySettingsRedirect />} />
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
       <Route path="plugins/:pluginId" element={<PluginPage />} />
+      <Route path="billing" element={<BillingPageRoute />} />
       <Route path="org" element={<OrgChart />} />
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       <Route path="agents/all" element={<Agents />} />

@@ -378,6 +378,13 @@ export function companyService(db: Db) {
       return enrichCompany(hydrated);
     },
 
+    // AgentDash: billing reconcile — find pro_trial companies past their period end.
+    listExpiredTrials: async () => {
+      return db.select().from(companies).where(
+        and(eq(companies.planTier, "pro_trial"), lt(companies.planPeriodEnd, new Date())),
+      );
+    },
+
     stats: () =>
       Promise.all([
         db

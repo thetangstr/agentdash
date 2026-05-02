@@ -68,3 +68,5 @@ export { heartbeatDigest } from "./heartbeat-digest.js";
 export { billingService } from "./billing.js";
 export { entitlementSync } from "./entitlement-sync.js";
 export { stripeWebhookLedger } from "./stripe-webhook-ledger.js";
+export { seatQuantitySyncer } from "./seat-quantity-syncer.js";
+export { billingReconcile } from "./billing-reconcile.js";
