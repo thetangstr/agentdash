@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd server && pnpm exec vitest run --no-color src/__tests__/agent-adapter-validation-routes.test.ts 2>&1 | grep -E \\\"Error|error|res.body\\\" | head -10\",\"timeout\":60000,\"description\":\"Get 50...",
+  "error": "Exit code 1\n(eval):cd:1: no such file or directory: server",
+  "timestamp": "2026-05-02T09:07:52.466Z",
+  "retry_count": 2
+}

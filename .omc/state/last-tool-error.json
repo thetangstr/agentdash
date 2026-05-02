@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls /Users/Kailor/Documents/Projects/agentdash/.claude/worktrees/nice-dijkstra-91c55b/packages/db/src/schema/ | grep onboarding && grep -rn \\\"onboardingSessions\\\\|onboarding_sessions\\\" /Use...",
+  "error": "Exit code 1",
+  "timestamp": "2026-05-02T10:58:22.626Z",
+  "retry_count": 1
+}

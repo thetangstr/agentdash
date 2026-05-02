@@ -1,0 +1,684 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1777700038067,
+  "projectRoot": "/Users/Kailor/Documents/Projects/agentdash/.claude/worktrees/nice-dijkstra-91c55b",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=20",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "@playwright/test",
+        "version": "1.58.2",
+        "category": "testing"
+      },
+      {
+        "name": "esbuild",
+        "version": "0.27.3",
+        "category": "build"
+      },
+      {
+        "name": "vitest",
+        "version": "3.0.5",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": "Node.js 20"
+  },
+  "build": {
+    "buildCommand": "ls ui/src/realtime/ 2>&1 | head; echo '---'; ls ui/src/components/__tests__/ 2>&1; echo '---'; pnpm --filter @paperclipai/ui exec tsc --noEmit 2>&1 | tail -10",
+    "testCommand": "pnpm --filter @paperclipai/server exec vitest run src/__tests__/assess-prompts.test.ts src/__tests__/assess-retrieval.test.ts src/__tests__/assess-routes.test.ts src/__tests__/assess-service.test.ts 2>&1 | tail -10",
+    "lintCommand": null,
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "agentdash": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+      "paperclipai": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+      "dev": "node scripts/dev-runner.mjs watch",
+      "dev:watch": "node scripts/dev-runner.mjs watch",
+      "dev:once": "node scripts/dev-runner.mjs dev",
+      "dev:list": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts list",
+      "dev:stop": "pnpm --filter @agentdash/server exec tsx ../scripts/dev-service.ts stop",
+      "dev:server": "pnpm --filter @agentdash/server dev",
+      "dev:ui": "pnpm --filter @agentdash/ui dev",
+      "build": "pnpm -r build",
+      "typecheck": "pnpm -r typecheck",
+      "test": "vitest",
+      "test:run": "vitest run",
+      "db:generate": "pnpm --filter @agentdash/db generate",
+      "db:migrate": "pnpm --filter @agentdash/db migrate",
+      "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
+      "db:backup": "./scripts/backup-db.sh",
+      "build:npm": "./scripts/build-npm.sh",
+      "release": "./scripts/release.sh",
+      "release:canary": "./scripts/release.sh canary",
+      "release:stable": "./scripts/release.sh stable",
+      "release:github": "./scripts/create-github-release.sh",
+      "release:rollback": "./scripts/rollback-latest.sh",
+      "check:tokens": "node scripts/check-forbidden-tokens.mjs",
+      "docs:dev": "cd docs && npx mintlify dev",
+      "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
+      "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",
+      "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh",
+      "test:e2e": "npx playwright test --config tests/e2e/playwright.config.ts",
+      "test:e2e:headed": "npx playwright test --config tests/e2e/playwright.config.ts --headed",
+      "evals:smoke": "cd evals/promptfoo && npx promptfoo@0.103.3 eval",
+      "test:release-smoke": "npx playwright test --config tests/release-smoke/playwright.config.ts",
+      "test:release-smoke:headed": "npx playwright test --config tests/release-smoke/playwright.config.ts --headed",
+      "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "agentdash-main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "cli": {
+      "path": "cli",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1777700038030,
+      "keyFiles": [
+        "CHANGELOG.md",
+        "README.md",
+        "esbuild.config.mjs",
+        "package.json",
+        "tsconfig.json"
+      ]
+    },
+    "deploy": {
+      "path": "deploy",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1777700038043,
+      "keyFiles": [
+        "docker-compose.remote.yml",
+        "remote.env.example"
+      ]
+    },
+    "doc": {
+      "path": "doc",
+      "purpose": null,
+      "fileCount": 38,
+      "lastAccessed": 1777700038044,
+      "keyFiles": [
+        "2026-04-22-goal-cos-cao-prd.md",
+        "2026-04-22-testing-strategy-spec.md",
+        "AGENTCOMPANIES_SPEC_INVENTORY.md",
+        "AGENTDASH-ONE-PAGER.md",
+        "BRAND-REFERENCE-MAP.md"
+      ]
+    },
+    "docker": {
+      "path": "docker",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1777700038044,
+      "keyFiles": [
+        "Dockerfile.onboard-smoke",
+        "docker-compose.quickstart.yml",
+        "docker-compose.untrusted-review.yml",
+        "docker-compose.yml",
+        "nginx.conf"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 4,
+      "lastAccessed": 1777700038044,
+      "keyFiles": [
+        "agents-runtime.md",
+        "docs.json",
+        "favicon.svg",
+        "feedback-voting.md"
+      ]
+    },
+    "eval": {
+      "path": "eval",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777700038045,
+      "keyFiles": []
+    },
+    "evals": {
+      "path": "evals",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777700038045,
+      "keyFiles": [
+        "README.md"
+      ]
+    },
+    "marketing": {
+      "path": "marketing",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1777700038045,
+      "keyFiles": [
+        "README.md",
+        "next-env.d.ts",
+        "next.config.js",
+        "package.json",
+        "postcss.config.js"
+      ]
+    },
+    "packages": {
+      "path": "packages",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777700038045,
+      "keyFiles": []
+    },
+    "patches": {
+      "path": "patches",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777700038046,
+      "keyFiles": [
+        "embedded-postgres@18.1.0-beta.16.patch"
+      ]
+    },
+    "releases": {
+      "path": "releases",
+      "purpose": null,
+      "fileCount": 9,
+      "lastAccessed": 1777700038047,
+      "keyFiles": [
+        "TEMPLATE.md",
+        "v0.2.7.md",
+        "v0.3.0.md",
+        "v0.3.1.md",
+        "v2026.318.0.md"
+      ]
+    },
+    "report": {
+      "path": "report",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777700038047,
+      "keyFiles": [
+        "2026-03-13-08-46-token-optimization-implementation.md"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 43,
+      "lastAccessed": 1777700038048,
+      "keyFiles": [
+        "backup-db.sh",
+        "build-npm.sh",
+        "check-forbidden-tokens.mjs",
+        "clean-onboard-git.sh",
+        "clean-onboard-npm.sh"
+      ]
+    },
+    "server": {
+      "path": "server",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1777700038048,
+      "keyFiles": [
+        "CHANGELOG.md",
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts"
+      ]
+    },
+    "skills": {
+      "path": "skills",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777700038048,
+      "keyFiles": []
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 0,
+      "lastAccessed": 1777700038048,
+      "keyFiles": []
+    },
+    "ui": {
+      "path": "ui",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1777700038049,
+      "keyFiles": [
+        "README.md",
+        "components.json",
+        "index.html",
+        "package.json",
+        "tsconfig.json"
+      ]
+    },
+    "website": {
+      "path": "website",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1777700038049,
+      "keyFiles": [
+        "next-env.d.ts",
+        "next.config.js",
+        "package-lock.json",
+        "package.json",
+        "postcss.config.mjs"
+      ]
+    },
+    "cli/src": {
+      "path": "cli/src",
+      "purpose": "Source code",
+      "fileCount": 3,
+      "lastAccessed": 1777700038049,
+      "keyFiles": [
+        "index.ts",
+        "telemetry.ts",
+        "version.ts"
+      ]
+    },
+    "docs/api": {
+      "path": "docs/api",
+      "purpose": "API routes",
+      "fileCount": 12,
+      "lastAccessed": 1777700038050,
+      "keyFiles": [
+        "activity.md",
+        "agents.md",
+        "approvals.md"
+      ]
+    },
+    "marketing/src": {
+      "path": "marketing/src",
+      "purpose": "Source code",
+      "fileCount": 0,
+      "lastAccessed": 1777700038050,
+      "keyFiles": []
+    },
+    "server/scripts": {
+      "path": "server/scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1777700038050,
+      "keyFiles": [
+        "dev-watch.ts"
+      ]
+    },
+    "server/src": {
+      "path": "server/src",
+      "purpose": "Source code",
+      "fileCount": 19,
+      "lastAccessed": 1777700038050,
+      "keyFiles": [
+        "agent-auth-jwt.ts",
+        "app.ts",
+        "attachment-types.ts"
+      ]
+    },
+    "ui/public": {
+      "path": "ui/public",
+      "purpose": "Public files",
+      "fileCount": 13,
+      "lastAccessed": 1777700038051,
+      "keyFiles": [
+        "android-chrome-192x192.png",
+        "android-chrome-512x512.png",
+        "apple-touch-icon.png"
+      ]
+    },
+    "ui/src": {
+      "path": "ui/src",
+      "purpose": "Source code",
+      "fileCount": 4,
+      "lastAccessed": 1777700038051,
+      "keyFiles": [
+        "App.tsx",
+        "index.css",
+        "main.tsx"
+      ]
+    },
+    "website/src": {
+      "path": "website/src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1777700038051,
+      "keyFiles": [
+        "global.d.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "server/src/app.ts",
+      "accessCount": 23,
+      "lastAccessed": 1777719154263,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/companies.ts",
+      "accessCount": 23,
+      "lastAccessed": 1777719360201,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/index.ts",
+      "accessCount": 16,
+      "lastAccessed": 1777719277392,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/agents.ts",
+      "accessCount": 15,
+      "lastAccessed": 1777711075696,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/companies.ts",
+      "accessCount": 15,
+      "lastAccessed": 1777711644334,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/agent-permissions-routes.test.ts",
+      "accessCount": 14,
+      "lastAccessed": 1777716046644,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/conversations-service.test.ts",
+      "accessCount": 10,
+      "lastAccessed": 1777716104862,
+      "type": "file"
+    },
+    {
+      "path": "packages/shared/src/index.ts",
+      "accessCount": 9,
+      "lastAccessed": 1777717087297,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/agent-skills-routes.test.ts",
+      "accessCount": 8,
+      "lastAccessed": 1777713262310,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/conversations.ts",
+      "accessCount": 8,
+      "lastAccessed": 1777717020162,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/index.ts",
+      "accessCount": 8,
+      "lastAccessed": 1777719543710,
+      "type": "file"
+    },
+    {
+      "path": "scripts/upstream-digest.sh",
+      "accessCount": 6,
+      "lastAccessed": 1777704917304,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/companies-email-domain-route.test.ts",
+      "accessCount": 6,
+      "lastAccessed": 1777711714133,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/companies.ts",
+      "accessCount": 6,
+      "lastAccessed": 1777718467705,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/agent-adapter-validation-routes.test.ts",
+      "accessCount": 5,
+      "lastAccessed": 1777712900434,
+      "type": "file"
+    },
+    {
+      "path": "packages/shared/src/constants.ts",
+      "accessCount": 5,
+      "lastAccessed": 1777715915391,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-onboarding-implementation.md",
+      "accessCount": 4,
+      "lastAccessed": 1777708869829,
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "accessCount": 4,
+      "lastAccessed": 1777712325362,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/wizard.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777700395489,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/signup-pro-free-mail-block.test.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777711742008,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/assistant_conversations.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777714293971,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/agents.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777717044019,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/api/wizard.ts",
+      "accessCount": 2,
+      "lastAccessed": 1777700505050,
+      "type": "file"
+    },
+    {
+      "path": "doc/UPSTREAM-POLICY.md",
+      "accessCount": 2,
+      "lastAccessed": 1777704952647,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-02-onboarding-design.md",
+      "accessCount": 2,
+      "lastAccessed": 1777708134904,
+      "type": "file"
+    },
+    {
+      "path": "server/src/index.ts",
+      "accessCount": 2,
+      "lastAccessed": 1777711059402,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/access.ts",
+      "accessCount": 2,
+      "lastAccessed": 1777719145616,
+      "type": "file"
+    },
+    {
+      "path": "server/src/routes/wizard.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777700278996,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/__tests__/wizard.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777700486627,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/pro-signup-flow.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777700769830,
+      "type": "file"
+    },
+    {
+      "path": "server/src/middleware/auth.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777702326581,
+      "type": "file"
+    },
+    {
+      "path": ".claude/commands/upstream-digest.md",
+      "accessCount": 1,
+      "lastAccessed": 1777704806709,
+      "type": "file"
+    },
+    {
+      "path": "doc/upstream-digests/2026-05-02.md",
+      "accessCount": 1,
+      "lastAccessed": 1777704847004,
+      "type": "file"
+    },
+    {
+      "path": "ui/src/pages/WelcomePage.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1777707369818,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-02-v2-base-migration-design.md",
+      "accessCount": 1,
+      "lastAccessed": 1777709165461,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-v2-base-migration-implementation.md",
+      "accessCount": 1,
+      "lastAccessed": 1777709266143,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-02-chat-substrate-design.md",
+      "accessCount": 1,
+      "lastAccessed": 1777709502410,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-chat-substrate-implementation.md",
+      "accessCount": 1,
+      "lastAccessed": 1777709719994,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-02-billing-design.md",
+      "accessCount": 1,
+      "lastAccessed": 1777709891591,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-billing-implementation.md",
+      "accessCount": 1,
+      "lastAccessed": 1777710066477,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-ui-claude-design-implementation.md",
+      "accessCount": 1,
+      "lastAccessed": 1777710208190,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-02-assess-port-implementation.md",
+      "accessCount": 1,
+      "lastAccessed": 1777710336489,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/backlog/v2-enterprise-tier.md",
+      "accessCount": 1,
+      "lastAccessed": 1777710363676,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/backlog/v2-cloud-deployment.md",
+      "accessCount": 1,
+      "lastAccessed": 1777710396139,
+      "type": "file"
+    },
+    {
+      "path": "server/src/middleware/corp-email-signup-guard.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777711028400,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/auth.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777714257625,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/activity-service.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777714266755,
+      "type": "file"
+    },
+    {
+      "path": "server/src/services/activity.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777714271845,
+      "type": "file"
+    },
+    {
+      "path": "packages/db/src/schema/assistant_conversation_participants.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777714287278,
+      "type": "file"
+    },
+    {
+      "path": "server/src/__tests__/helpers/embedded-postgres.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777714349395,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

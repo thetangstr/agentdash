@@ -74,3 +74,7 @@ export { pluginLogs } from "./plugin_logs.js";
 export * from "./assistant_conversations.js";
 export { assistantConversationParticipants } from "./assistant_conversation_participants.js";
 export { stripeWebhookEvents } from "./stripe_webhook_events.js";
+// AgentDash: Assess / onboarding context tables
+export { onboardingSessions } from "./onboarding_sessions.js";
+export { onboardingSources } from "./onboarding_sources.js";
+export { companyContext } from "./company_context.js";
