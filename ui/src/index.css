@@ -1,7 +1,41 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+@import "./styles/tokens.css";
+@import "./styles/typography.css";
+
 @custom-variant dark (&:is(.dark *));
+
+/* AgentDash: Claude design tokens mapped into Tailwind v4 @theme */
+@theme inline {
+  --color-surface-page:     var(--surface-page);
+  --color-surface-raised:   var(--surface-raised);
+  --color-surface-sunken:   var(--surface-sunken);
+  --color-border-soft:      var(--border-soft);
+  --color-border-strong:    var(--border-strong);
+  --color-text-primary:     var(--text-primary);
+  --color-text-secondary:   var(--text-secondary);
+  --color-text-tertiary:    var(--text-tertiary);
+  --color-text-inverse:     var(--text-inverse);
+  --color-accent-50:        var(--accent-50);
+  --color-accent-100:       var(--accent-100);
+  --color-accent-200:       var(--accent-200);
+  --color-accent-300:       var(--accent-300);
+  --color-accent-400:       var(--accent-400);
+  --color-accent-500:       var(--accent-500);
+  --color-accent-600:       var(--accent-600);
+  --color-accent-700:       var(--accent-700);
+  --color-success-500:      var(--success-500);
+  --color-warn-500:         var(--warn-500);
+  --color-danger-500:       var(--danger-500);
+  --color-info-500:         var(--info-500);
+  --shadow-sm:              var(--shadow-sm);
+  --shadow-md:              var(--shadow-md);
+  --shadow-lg:              var(--shadow-lg);
+  --font-serif:             var(--font-serif);
+  --font-sans:              var(--font-sans);
+  --font-mono:              var(--font-mono);
+}
 
 @theme inline {
   --color-background: var(--background);
