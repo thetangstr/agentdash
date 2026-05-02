@@ -64,3 +64,4 @@ export { onboardingOrchestrator } from "./onboarding-orchestrator.js";
 export { cosInterview } from "./cos-interview.js";
 export { agentProposer } from "./agent-proposer.js";
 export { agentCreatorFromProposal } from "./agent-creator-from-proposal.js";
+export { heartbeatDigest } from "./heartbeat-digest.js";

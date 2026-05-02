@@ -43,6 +43,7 @@ import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
+import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -223,6 +224,7 @@ export async function createApp(
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
   api.use("/conversations", conversationRoutes(db));
+  api.use("/onboarding", onboardingV2Routes(db));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
