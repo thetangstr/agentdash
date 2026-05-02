@@ -1,0 +1,21 @@
+.mkt-hero {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+  padding-block: clamp(64px, 10vh, 128px);
+}
+.mkt-hero__copy { display: grid; gap: 32px; }
+.mkt-hero__cta-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.mkt-hero__reassure { color: var(--mkt-ink-soft); font-size: 14px; }
+.mkt-hero__art {
+  border: 1px solid var(--mkt-rule);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 24px 48px -24px rgba(31, 30, 29, 0.18);
+  padding: 24px;
+  color: var(--mkt-ink);
+}
+@media (max-width: 900px) {
+  .mkt-hero { grid-template-columns: 1fr; }
+}

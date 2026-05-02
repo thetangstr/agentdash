@@ -1,0 +1,7 @@
+.mkt-phases { display: grid; gap: 64px; max-width: 760px; }
+.mkt-phase { display: grid; grid-template-columns: 80px 1fr; gap: 32px; padding-bottom: 48px; border-bottom: 1px solid var(--mkt-rule); }
+.mkt-phase:last-child { border-bottom: none; }
+.mkt-phase__num { font-family: var(--mkt-font-serif); font-weight: 500; font-size: 56px; line-height: 1; color: var(--mkt-accent); }
+.mkt-phase__name { font-family: var(--mkt-font-serif); font-weight: 500; font-size: 32px; line-height: 1.1; margin-bottom: 12px; }
+.mkt-phase__body { color: var(--mkt-ink-soft); margin-bottom: 12px; }
+.mkt-phase__meta { display: flex; gap: 24px; font-family: var(--mkt-font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mkt-ink-soft); }

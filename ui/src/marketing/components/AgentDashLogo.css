@@ -1,0 +1,36 @@
+/*
+ * AgentDash brand lockup. Mark + wordmark, vertically centered, with
+ * size-specific tracking. The mark itself is in AgentDashLogo.tsx as
+ * inline SVG so it inherits currentColor when desired.
+ */
+
+.mkt-logo {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.mkt-logo__mark {
+  display: block;
+  flex-shrink: 0;
+}
+
+.mkt-logo__wordmark {
+  font-family: var(--mkt-font-serif, "Iowan Old Style", "Palatino Linotype", Georgia, serif);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1;
+  color: var(--mkt-ink, #1f1e1d);
+  white-space: nowrap;
+}
+
+/* Size-specific micro-adjustments — small sizes need tighter tracking. */
+.mkt-logo--sm .mkt-logo__wordmark {
+  letter-spacing: -0.01em;
+}
+
+.mkt-logo--lg .mkt-logo__wordmark {
+  letter-spacing: -0.02em;
+}

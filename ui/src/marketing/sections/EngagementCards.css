@@ -1,0 +1,10 @@
+.mkt-eng { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.mkt-eng-card {
+  border: 1px solid var(--mkt-rule);
+  border-radius: 12px;
+  padding: 40px;
+  background: var(--mkt-surface-cream);
+}
+.mkt-eng-card__name { font-family: var(--mkt-font-serif); font-weight: 500; font-size: 32px; margin-bottom: 16px; }
+.mkt-eng-card__body { color: var(--mkt-ink-soft); }
+@media (max-width: 800px) { .mkt-eng { grid-template-columns: 1fr; } }

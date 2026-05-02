@@ -1,0 +1,34 @@
+.mkt-founder-card {
+  background: var(--mkt-surface-cream-2);
+  border: 1px solid var(--mkt-rule);
+  border-radius: 16px;
+  padding: 80px 64px;
+  max-width: 960px;
+  margin-inline: auto;
+}
+.mkt-founder-card__title {
+  text-align: center;
+  font-family: var(--mkt-font-serif);
+  font-weight: 600;
+  font-size: 56px;
+  margin-bottom: 56px;
+}
+.mkt-founder { display: grid; grid-template-columns: auto 1fr; gap: 48px; align-items: center; }
+.mkt-founder__portrait {
+  width: 160px;
+  height: 160px;
+  border-radius: 999px;
+  border: 4px solid var(--mkt-accent);
+  background: var(--mkt-rule);
+  object-fit: cover;
+  display: block;
+}
+.mkt-founder__name { font-family: var(--mkt-font-sans); font-weight: 600; font-size: 28px; margin-bottom: 16px; }
+.mkt-founder__bio { color: var(--mkt-ink-soft); font-size: 17px; line-height: 1.55; margin-bottom: 16px; }
+.mkt-founder__linkedin { display: inline-flex; align-items: center; gap: 8px; color: var(--mkt-accent-ink); text-decoration: none; }
+.mkt-founder__linkedin:hover { text-decoration: underline; }
+@media (max-width: 700px) {
+  .mkt-founder-card { padding: 48px 24px; }
+  .mkt-founder { grid-template-columns: 1fr; text-align: center; }
+  .mkt-founder__portrait { margin-inline: auto; }
+}
