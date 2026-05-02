@@ -19,22 +19,30 @@ export default function BillingPage({ companyId }: { companyId: string }) {
 
   return (
     <div className="billing-page p-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-6">Billing</h1>
-      <div className="border rounded p-4 bg-white">
-        <div className="mb-2">Plan: <strong>{status.tier}</strong></div>
-        <div className="mb-2">Seats paid: {status.seatsPaid}</div>
+      <h1 className="text-2xl font-semibold text-text-primary mb-6">Billing</h1>
+      <div className="border border-border-soft rounded-lg p-6 bg-surface-raised shadow-sm">
+        <div className="mb-2 text-text-primary">
+          Plan: <strong className="text-text-primary">{status.tier}</strong>
+        </div>
+        <div className="mb-2 text-text-primary">Seats paid: {status.seatsPaid}</div>
         {status.periodEnd && (
-          <div className="mb-2 text-sm text-gray-600">
+          <div className="mb-2 text-sm text-text-secondary">
             Renews / ends: {new Date(status.periodEnd).toLocaleDateString()}
           </div>
         )}
-        <div className="mt-4">
+        <div className="mt-6">
           {!isPro ? (
-            <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={upgrade}>
+            <button
+              className="bg-accent-500 text-text-inverse px-4 py-2 rounded-md font-medium hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
+              onClick={upgrade}
+            >
               Start Pro trial (14 days, no card)
             </button>
           ) : (
-            <button className="border px-4 py-2 rounded" onClick={manage}>
+            <button
+              className="border border-border-soft px-4 py-2 rounded-md font-medium text-text-primary hover:bg-surface-sunken transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
+              onClick={manage}
+            >
               Manage subscription
             </button>
           )}

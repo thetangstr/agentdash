@@ -15,15 +15,15 @@ export function MessageList({
         const author = m.role ?? m.authorKind;
         const text = m.content ?? m.body ?? "";
         return (
-          <div key={m.id} className={`msg msg--${author}`}>
-            <div className="text-xs text-gray-500">
+          <div key={m.id} className={`msg msg--${author} space-y-1`}>
+            <div className="text-xs text-text-tertiary">
               {author === "agent" ? "Agent" : "You"} ·{" "}
               {new Date(m.createdAt).toLocaleTimeString()}
             </div>
             {m.cardKind ? (
               <CardRenderer cardKind={m.cardKind} payload={m.cardPayload} context={cardContext} />
             ) : (
-              <div className="msg__body whitespace-pre-wrap">{text}</div>
+              <div className="msg__body whitespace-pre-wrap text-text-primary leading-relaxed">{text}</div>
             )}
           </div>
         );

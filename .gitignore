@@ -56,3 +56,10 @@ tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
 .superset/
 .claude/worktrees/
+
+# OMC runtime state
+.omc/
+**/.omc/
+
+# Stale marketing tree from v1 (no Next.js app on v2 trunk)
+marketing/

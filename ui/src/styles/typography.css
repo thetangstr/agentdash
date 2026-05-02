@@ -1,0 +1,6 @@
+/* AgentDash: Claude typography — serif headings + Inter body */
+:root {
+  --font-serif:  "Source Serif 4", Georgia, serif;
+  --font-sans:   "Inter", "SF Pro Text", system-ui, -apple-system, sans-serif;
+  --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}

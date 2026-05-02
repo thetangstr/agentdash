@@ -15,9 +15,12 @@ export function UpgradePromptCard({
     window.location.href = r.url;
   }
   return (
-    <div className="card border-2 border-blue-500 rounded p-4 bg-blue-50">
-      <div className="mb-2">{message}</div>
-      <button className="bg-blue-600 text-white px-3 py-1 rounded" onClick={go}>
+    <div className="border-2 border-accent-400 rounded-lg p-6 bg-accent-50 shadow-sm">
+      <div className="mb-3 text-text-primary">{message}</div>
+      <button
+        className="bg-accent-500 text-text-inverse px-4 py-2 rounded-md text-sm font-medium hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
+        onClick={go}
+      >
         Start Pro trial →
       </button>
     </div>

@@ -5,9 +5,11 @@ export function InterviewQuestion({ payload }: { payload: InterviewQuestionPaylo
   return (
     <div className="interview-question">
       {typeof payload.fixedIndex === "number" && (
-        <div className="text-xs text-gray-500 mb-1">Step {payload.fixedIndex + 1}</div>
+        <div className="text-xs text-text-tertiary mb-1 font-medium tracking-wide uppercase">
+          Step {payload.fixedIndex + 1}
+        </div>
       )}
-      <div>{payload.question}</div>
+      <div className="text-text-primary">{payload.question}</div>
     </div>
   );
 }

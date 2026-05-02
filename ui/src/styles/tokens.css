@@ -1,0 +1,81 @@
+/* AgentDash: Claude design tokens — warm coral accent, off-cream surface */
+:root {
+  /* Surface */
+  --surface-page:       #FAF9F6;
+  --surface-raised:     #FFFFFF;
+  --surface-sunken:     #F1EFEA;
+  --border-soft:        #E8E5DD;
+  --border-strong:      #C7C2B5;
+
+  /* Text */
+  --text-primary:       #1F1B16;
+  --text-secondary:     #5A544A;
+  --text-tertiary:      #8C8678;
+  --text-inverse:       #FAF9F6;
+
+  /* Brand accent — Claude coral */
+  --accent-50:          #FFF4F0;
+  --accent-100:         #FFE0D5;
+  --accent-200:         #FFC2AA;
+  --accent-300:         #FF9E82;
+  --accent-400:         #F46F4D;
+  --accent-500:         #DD523A;
+  --accent-600:         #C24332;
+  --accent-700:         #9D3527;
+
+  /* Semantic */
+  --success-500:        #4D8A6A;
+  --warn-500:           #C99237;
+  --danger-500:         #B5453E;
+  --info-500:           #4D6F8A;
+
+  /* Shadow */
+  --shadow-sm:          0 1px 2px rgba(31, 27, 22, 0.05);
+  --shadow-md:          0 4px 12px rgba(31, 27, 22, 0.08);
+  --shadow-lg:          0 16px 40px rgba(31, 27, 22, 0.12);
+
+  /* Radius */
+  --radius-sm:          6px;
+  --radius-md:          10px;
+  --radius-lg:          16px;
+  --radius-pill:        999px;
+
+  /* Spacing scale (4-px grid) */
+  --space-1:            4px;
+  --space-2:            8px;
+  --space-3:            12px;
+  --space-4:            16px;
+  --space-6:            24px;
+  --space-8:            32px;
+  --space-12:           48px;
+  --space-16:           64px;
+
+  /* Type sizes */
+  --text-xs:            12px;
+  --text-sm:            14px;
+  --text-base:          16px;
+  --text-lg:            18px;
+  --text-xl:            22px;
+  --text-2xl:           28px;
+  --text-3xl:           36px;
+  --text-display:       48px;
+
+  /* Line heights */
+  --leading-tight:      1.2;
+  --leading-snug:       1.4;
+  --leading-normal:     1.6;
+}
+
+/* Dark mode overrides via class (existing app uses .dark class toggled by JS) */
+.dark {
+  --surface-page:     #1A1814;
+  --surface-raised:   #232017;
+  --surface-sunken:   #15130F;
+  --border-soft:      #2D2920;
+  --border-strong:    #4A4536;
+  --text-primary:     #F6F3EC;
+  --text-secondary:   #B8B0A0;
+  --text-tertiary:    #807868;
+  --text-inverse:     #1A1814;
+  /* accent stays the same in dark mode */
+}
