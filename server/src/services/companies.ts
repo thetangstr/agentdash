@@ -71,6 +71,12 @@ export function companyService(db: Db) {
     brandColor: companies.brandColor,
     // AgentDash (AGE-55): FRE Plan B — domain claim on the company.
     emailDomain: companies.emailDomain,
+    // AgentDash: billing fields.
+    planTier: companies.planTier,
+    planSeatsPaid: companies.planSeatsPaid,
+    planPeriodEnd: companies.planPeriodEnd,
+    stripeCustomerId: companies.stripeCustomerId,
+    stripeSubscriptionId: companies.stripeSubscriptionId,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
     updatedAt: companies.updatedAt,
@@ -345,6 +351,32 @@ export function companyService(db: Db) {
           .returning();
         return rows[0] ?? null;
       }),
+
+    findByStripeCustomerId: async (stripeCustomerId: string) => {
+      if (!stripeCustomerId) return null;
+      const row = await db
+        .select(companySelection)
+        .from(companies)
+        .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id))
+        .where(eq(companies.stripeCustomerId, stripeCustomerId))
+        .then((rows: any[]) => rows[0] ?? null);
+      if (!row) return null;
+      const [hydrated] = await hydrateCompanySpend([row], db);
+      return enrichCompany(hydrated);
+    },
+
+    findByStripeSubscriptionId: async (stripeSubscriptionId: string) => {
+      if (!stripeSubscriptionId) return null;
+      const row = await db
+        .select(companySelection)
+        .from(companies)
+        .leftJoin(companyLogos, eq(companyLogos.companyId, companies.id))
+        .where(eq(companies.stripeSubscriptionId, stripeSubscriptionId))
+        .then((rows: any[]) => rows[0] ?? null);
+      if (!row) return null;
+      const [hydrated] = await hydrateCompanySpend([row], db);
+      return enrichCompany(hydrated);
+    },
 
     stats: () =>
       Promise.all([

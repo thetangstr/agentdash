@@ -65,3 +65,6 @@ export { cosInterview } from "./cos-interview.js";
 export { agentProposer } from "./agent-proposer.js";
 export { agentCreatorFromProposal } from "./agent-creator-from-proposal.js";
 export { heartbeatDigest } from "./heartbeat-digest.js";
+export { billingService } from "./billing.js";
+export { entitlementSync } from "./entitlement-sync.js";
+export { stripeWebhookLedger } from "./stripe-webhook-ledger.js";

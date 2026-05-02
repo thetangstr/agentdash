@@ -44,6 +44,7 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
+import { billingRoutes } from "./routes/billing.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -225,6 +226,19 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use("/conversations", conversationRoutes(db));
   api.use("/onboarding", onboardingV2Routes(db));
+  // AgentDash: billing — mount only when Stripe is configured.
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (stripeKey) {
+    const { default: Stripe } = await import("stripe");
+    const stripe = new Stripe(stripeKey);
+    api.use("/billing", billingRoutes(db, {
+      stripe,
+      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+      proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
+      trialDays: parseInt(process.env.STRIPE_TRIAL_DAYS ?? "14", 10),
+      publicBaseUrl: process.env.BILLING_PUBLIC_BASE_URL ?? "",
+    }));
+  }
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
