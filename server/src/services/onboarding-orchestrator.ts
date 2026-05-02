@@ -116,6 +116,9 @@ function deriveEmailDomain(email: string | null | undefined): string | null {
 function companyNameFromEmail(email: string | null | undefined): string {
   const domain = deriveEmailDomain(email);
   if (!domain) return "My Workspace";
+  // AgentDash bootstrap: the local-trusted seed email lives at agentdash.local
+  // and "Agentdash" (lower 'd') reads off-brand. Map it to the proper casing.
+  if (domain === "agentdash.local") return "AgentDash Workspace";
   const root = domain.split(".")[0];
   return root.charAt(0).toUpperCase() + root.slice(1);
 }

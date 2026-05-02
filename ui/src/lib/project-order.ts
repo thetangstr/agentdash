@@ -1,8 +1,32 @@
 import type { Project } from "@paperclipai/shared";
 
-export const PROJECT_ORDER_UPDATED_EVENT = "paperclip:project-order-updated";
-const PROJECT_ORDER_STORAGE_PREFIX = "paperclip.projectOrder";
+export const PROJECT_ORDER_UPDATED_EVENT = "agentdash:project-order-updated";
+const PROJECT_ORDER_STORAGE_PREFIX = "agentdash.projectOrder";
+const LEGACY_PROJECT_ORDER_STORAGE_PREFIX = "paperclip.projectOrder";
 const ANONYMOUS_USER_ID = "anonymous";
+
+// One-time migration of legacy paperclip.projectOrder:<companyId>:<userId> keys.
+if (typeof window !== "undefined") {
+  try {
+    const legacyKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(`${LEGACY_PROJECT_ORDER_STORAGE_PREFIX}:`)) {
+        legacyKeys.push(key);
+      }
+    }
+    for (const legacyKey of legacyKeys) {
+      const newKey = `${PROJECT_ORDER_STORAGE_PREFIX}${legacyKey.slice(LEGACY_PROJECT_ORDER_STORAGE_PREFIX.length)}`;
+      if (!localStorage.getItem(newKey)) {
+        const value = localStorage.getItem(legacyKey);
+        if (value !== null) localStorage.setItem(newKey, value);
+      }
+      localStorage.removeItem(legacyKey);
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 type ProjectOrderUpdatedDetail = {
   storageKey: string;

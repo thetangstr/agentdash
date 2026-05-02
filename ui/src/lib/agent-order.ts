@@ -1,8 +1,32 @@
 import type { Agent } from "@paperclipai/shared";
 
-export const AGENT_ORDER_UPDATED_EVENT = "paperclip:agent-order-updated";
-const AGENT_ORDER_STORAGE_PREFIX = "paperclip.agentOrder";
+export const AGENT_ORDER_UPDATED_EVENT = "agentdash:agent-order-updated";
+const AGENT_ORDER_STORAGE_PREFIX = "agentdash.agentOrder";
+const LEGACY_AGENT_ORDER_STORAGE_PREFIX = "paperclip.agentOrder";
 const ANONYMOUS_USER_ID = "anonymous";
+
+// One-time migration of legacy paperclip.agentOrder:<companyId>:<userId> keys.
+if (typeof window !== "undefined") {
+  try {
+    const legacyKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(`${LEGACY_AGENT_ORDER_STORAGE_PREFIX}:`)) {
+        legacyKeys.push(key);
+      }
+    }
+    for (const legacyKey of legacyKeys) {
+      const newKey = `${AGENT_ORDER_STORAGE_PREFIX}${legacyKey.slice(LEGACY_AGENT_ORDER_STORAGE_PREFIX.length)}`;
+      if (!localStorage.getItem(newKey)) {
+        const value = localStorage.getItem(legacyKey);
+        if (value !== null) localStorage.setItem(newKey, value);
+      }
+      localStorage.removeItem(legacyKey);
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 type AgentOrderUpdatedDetail = {
   storageKey: string;
