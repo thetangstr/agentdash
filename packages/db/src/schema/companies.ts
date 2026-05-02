@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const companies = pgTable(
@@ -30,6 +30,12 @@ export const companies = pgTable(
     // AgentDash (AGE-55): FRE Plan B — domain-keyed companies. Nullable so
     // local_implicit actors (single-machine dev) aren't forced to provide one.
     emailDomain: text("email_domain"),
+    // AgentDash: billing tier — written only by Stripe webhook handlers.
+    planTier: varchar("plan_tier", { length: 32 }).notNull().default("free"),
+    planSeatsPaid: integer("plan_seats_paid").notNull().default(0),
+    planPeriodEnd: timestamp("plan_period_end", { withTimezone: true }),
+    stripeCustomerId: varchar("stripe_customer_id", { length: 64 }),
+    stripeSubscriptionId: varchar("stripe_subscription_id", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -40,5 +46,6 @@ export const companies = pgTable(
     emailDomainUniqueIdx: uniqueIndex("companies_email_domain_unique_idx")
       .on(table.emailDomain)
       .where(sql`${table.emailDomain} IS NOT NULL`),
+    planTierIdx: index("companies_plan_tier_idx").on(table.planTier),
   }),
 );
