@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
-  Bot,
   BriefcaseBusiness,
   Building2,
   ChartNoAxesCombined,
@@ -24,6 +23,7 @@ import { useCompany } from "../context/CompanyContext";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
+import { AgentDashLogo } from "../marketing/components/AgentDashLogo";
 
 type FeatureCard = {
   title: string;
@@ -220,14 +220,9 @@ export function WelcomePage() {
 
         <div className="mx-auto flex max-w-7xl flex-col px-6 pb-20 pt-7 lg:px-10">
           <header className="flex flex-col gap-5 border-b border-slate-200/70 pb-6 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/70 bg-white/90 shadow-[0_18px_40px_-20px_rgba(34,87,122,0.35)]">
-                <Bot className="h-6 w-6 text-sky-700" />
-              </div>
-              <div>
-                <p className="text-lg font-semibold tracking-tight text-slate-900">AgentDash</p>
-                <p className="text-sm text-slate-600">Premium control for AI work that needs adult supervision.</p>
-              </div>
+            <div className="flex flex-col gap-1">
+              <AgentDashLogo size="lg" />
+              <p className="text-sm text-slate-600 ml-[58px]">Premium control for AI work that needs adult supervision.</p>
             </div>
 
             <div className="flex flex-wrap gap-2 text-xs font-medium text-slate-700">

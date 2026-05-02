@@ -16,11 +16,11 @@
   gap: 24px;
 }
 .mkt-header__brand {
-  font-family: var(--mkt-font-serif);
-  font-weight: 500;
-  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
   color: var(--mkt-ink);
+  /* Wordmark size + tracking come from AgentDashLogo's size prop. */
 }
 .mkt-header__nav {
   display: flex;

@@ -5,7 +5,7 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "../marketing/components/Button";
 import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
-import { Sparkles } from "lucide-react";
+import { AgentDashLogo } from "../marketing/components/AgentDashLogo";
 
 type AuthMode = "sign_in" | "sign_up";
 
@@ -126,9 +126,8 @@ export function AuthPage() {
       {/* Left half — form */}
       <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
         <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
-          <div className="flex items-center gap-2 mb-8">
-            <Sparkles className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">AgentDash</span>
+          <div className="mb-8">
+            <AgentDashLogo size="sm" />
           </div>
 
           <h1 className="mkt-display-section">
