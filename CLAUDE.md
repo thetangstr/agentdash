@@ -34,10 +34,10 @@ pnpm db:migrate           # Apply pending migrations
 pnpm -r typecheck && pnpm test:run && pnpm build
 ```
 
-### CUJ integration tests
+### End-to-end Playwright specs
 ```sh
-bash scripts/test-cujs.sh    # 60 end-to-end tests against live API
-bash scripts/seed-test-scenarios.sh  # Seed 2 demo companies
+pnpm exec playwright test --config tests/e2e/playwright-multiuser.config.ts
+pnpm exec playwright test --config tests/e2e/playwright-multiuser-authenticated.config.ts
 ```
 
 ### Mandatory regression testing before handing off
@@ -47,13 +47,13 @@ bash scripts/seed-test-scenarios.sh  # Seed 2 demo companies
 1. `pnpm -r typecheck` — all packages pass
 2. `pnpm test:run` — report pass count and explicitly flag any failures (even pre-existing flakes must be named)
 3. `pnpm build` — all packages build
-4. For any UI-touching change: relevant `tests/e2e/*.spec.ts` Playwright specs (or `bash scripts/test-cujs.sh` for API CUJs)
+4. For any UI-touching change: relevant `tests/e2e/*.spec.ts` Playwright specs
 
 If a step fails, fix it (or explicitly document it as a pre-existing failure unrelated to your change) before the handoff. "Works for me" or "should work" is not acceptable. Ship the test evidence with the request.
 
 ## Multi-Agent Workflow
 
-MAW commands are installed under `.claude/commands/` with supporting docs in `doc/multi-agent-workflow/`.
+MAW slash commands are installed under `.claude/commands/` (`pm.md`, `builder.md`, `tester.md`, `tpm.md`, `admin.md`, `workon.md`, `upstream-digest.md`).
 
 - Base branch for MAW PRs: `main` (during v2 build; flips back to `agentdash-main` after the cutover described in [docs/superpowers/specs/2026-05-02-v2-base-migration-design.md](docs/superpowers/specs/2026-05-02-v2-base-migration-design.md))
 - Default issue prefix in examples: `AGE` (Linear) and `GH #` (GitHub)
@@ -194,7 +194,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 | **TPM** | `/tpm sync` | Sole merge authority to `main` |
 | **Admin** | `/admin` | Ops health, deploy, environment checks |
 
-Deployment: XS/S auto-ship after local test. M+ requires human verification. XL may use `staging` branch. See `doc/multi-agent-workflow/sop.md` for full details.
+Deployment: XS/S auto-ship after local test. M+ requires human verification. XL may use `staging` branch. The detailed handoff/sizing rules live inline in each agent's `.claude/commands/*.md` file.
 
 ## Upstream Policy
 
@@ -208,25 +208,14 @@ See `doc/UPSTREAM-POLICY.md` for the full rubric, what we still inherit vs what 
 
 | Doc | Purpose |
 |-----|---------|
-| `ARCHITECTURE.md` | Full system design |
-| `doc/PRD.md` | Product requirements, 13 CUJs, deployment modes |
-| `doc/BUSINESS-PLAN.md` | Pricing, GTM, client guide |
-| `doc/SOP-deployment.md` | 50-person company deployment |
+| `doc/UPSTREAM-POLICY.md` | Cherry-pick rubric for paperclip upstream commits |
 | `doc/SPEC-implementation.md` | Inherited V1 build contract |
 | `doc/DEVELOPING.md` | Detailed dev guide |
-| `doc/CUJ-STATUS.md` | Feature status and test coverage |
-| `doc/ONBOARDING-FLOW.md` | Client onboarding flow diagram |
-| `doc/agentdash_adapter_strategy.md` | Adapter design strategy |
-| `doc/multi-agent-workflow/sop.md` | MAW standard operating procedure |
-| `doc/multi-agent-workflow/protocol.md` | Agent handoff and comment protocol |
+| `doc/PRODUCT.md` | Paperclip product overview (vendor doc) |
+| `.claude/commands/*.md` | MAW slash commands — PM, Builder, Tester, TPM, Admin |
+
+V1-era PRD/BUSINESS-PLAN/CUJ-STATUS/ONBOARDING-FLOW/adapter-strategy docs live on `origin/archive/agentdash-v1` and have not been forward-ported. Treat them as historical reference, not v2 source of truth.
 
 ## Document Lifecycle
 
-Agents generate docs, plans, and specs that accumulate over time. Run `bash scripts/doc-hygiene.sh` periodically to detect staleness and bloat.
-
-Rules: docs under 40KB (split if larger), date-prefix plans (`YYYY-MM-DD-name.md`), archive superseded plans to `doc/plans/archive/`, one canonical location per topic, CLAUDE.md under 200 lines.
-
-```sh
-bash scripts/doc-hygiene.sh              # Scan for staleness, bloat, duplicates
-bash scripts/doc-hygiene.sh --archive    # Auto-archive superseded plans
-```
+Rules for any new doc: keep individual files under 40KB (split if larger), date-prefix plans (`YYYY-MM-DD-name.md`), archive superseded plans under a clearly-named archive folder, one canonical location per topic, keep CLAUDE.md under 200 lines.
