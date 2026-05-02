@@ -45,8 +45,8 @@ export default function ChatPanel({
   };
 
   return (
-    <div className="chat-panel flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4">
+    <div className="chat-panel flex flex-col h-full bg-surface-page">
+      <div className="flex-1 overflow-y-auto px-4 py-8">
         <div className="max-w-2xl mx-auto">
           <MessageList
             messages={messages}
@@ -54,7 +54,7 @@ export default function ChatPanel({
           />
         </div>
       </div>
-      <div className="border-t bg-white p-4">
+      <div className="border-t border-border-soft bg-surface-raised px-4 py-4">
         <div className="max-w-2xl mx-auto">
           <Composer onSend={send} agentDirectory={agentDirectory} />
         </div>
