@@ -46,6 +46,8 @@ import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
 import BillingPage from "./pages/BillingPage";
+import { AssessPage } from "./pages/AssessPage";
+import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
@@ -279,6 +281,9 @@ export function App() {
           <Route index element={<CompanyRootRedirect />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
+          {/* AgentDash: Assess (port from v1) — global routes */}
+          <Route path="assess" element={<AssessPage />} />
+          <Route path="assess/history" element={<AssessHistoryPage />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />
           <Route path="instance/settings" element={<Layout />}>
