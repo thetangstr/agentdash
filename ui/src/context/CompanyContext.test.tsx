@@ -153,7 +153,7 @@ describe("CompanyProvider", () => {
   });
 
   it("does not expose a stale stored company id before companies load", async () => {
-    localStorage.setItem("paperclip.selectedCompanyId", "stale-company");
+    localStorage.setItem("agentdash.selectedCompanyId", "stale-company");
     mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
     const seen: Array<string | null> = [];
 
@@ -171,7 +171,7 @@ describe("CompanyProvider", () => {
   });
 
   it("replaces a stale stored company id with the first loaded company", async () => {
-    localStorage.setItem("paperclip.selectedCompanyId", "stale-company");
+    localStorage.setItem("agentdash.selectedCompanyId", "stale-company");
     queryClient.setQueryData(queryKeys.companies.all, {
       companies: [makeCompany("company-1")],
       unauthorized: false,
@@ -190,6 +190,6 @@ describe("CompanyProvider", () => {
     });
 
     expect(seen).toEqual([null, "company-1"]);
-    expect(localStorage.getItem("paperclip.selectedCompanyId")).toBe("company-1");
+    expect(localStorage.getItem("agentdash.selectedCompanyId")).toBe("company-1");
   });
 });

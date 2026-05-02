@@ -41,7 +41,22 @@ import { scheduleMainContentFocus } from "../lib/main-content-focus";
 import { cn } from "../lib/utils";
 import { NotFoundPage } from "../pages/NotFound";
 
-const INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
+const INSTANCE_SETTINGS_MEMORY_KEY = "agentdash.lastInstanceSettingsPath";
+const LEGACY_INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
+
+if (typeof window !== "undefined") {
+  try {
+    if (!window.localStorage.getItem(INSTANCE_SETTINGS_MEMORY_KEY)) {
+      const legacy = window.localStorage.getItem(LEGACY_INSTANCE_SETTINGS_MEMORY_KEY);
+      if (legacy) {
+        window.localStorage.setItem(INSTANCE_SETTINGS_MEMORY_KEY, legacy);
+        window.localStorage.removeItem(LEGACY_INSTANCE_SETTINGS_MEMORY_KEY);
+      }
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 function readRememberedInstanceSettingsPath(): string {
   if (typeof window === "undefined") return DEFAULT_INSTANCE_SETTINGS_PATH;
