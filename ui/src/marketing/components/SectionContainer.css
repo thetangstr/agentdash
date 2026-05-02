@@ -1,0 +1,9 @@
+.mkt-section {
+  padding-block: clamp(96px, 12vh, 160px);
+}
+.mkt-section--cream-2 { background: var(--mkt-surface-cream-2); }
+.mkt-section__inner {
+  max-width: var(--mkt-container-max);
+  margin-inline: auto;
+  padding-inline: var(--mkt-container-gutter);
+}

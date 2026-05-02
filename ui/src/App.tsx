@@ -55,6 +55,10 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSConversation } from "./pages/CoSConversation";
+// AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
+import { Landing as MarketingLanding } from "./marketing/pages/Landing";
+import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
+import { About as MarketingAbout } from "./marketing/pages/About";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
@@ -276,14 +280,18 @@ export function App() {
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
+        {/* AgentDash: marketing routes — render outside CloudAccessGate so the
+            cream/light surface isn't fighting the dashboard's html.dark theme.
+            Landing redirects logged-in users to /companies on its own. */}
+        <Route path="/" element={<MarketingLanding />} />
+        <Route path="consulting" element={<MarketingConsulting />} />
+        <Route path="about" element={<MarketingAbout />} />
+        <Route path="assess" element={<AssessPage />} />
+        <Route path="assess/history" element={<AssessHistoryPage />} />
 
         <Route element={<CloudAccessGate />}>
-          <Route index element={<CompanyRootRedirect />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
-          {/* AgentDash: Assess (port from v1) — global routes */}
-          <Route path="assess" element={<AssessPage />} />
-          <Route path="assess/history" element={<AssessHistoryPage />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />
           <Route path="instance/settings" element={<Layout />}>

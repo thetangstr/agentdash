@@ -19,6 +19,10 @@ import { initPluginBridge } from "./plugins/bridge-init";
 import { PluginLauncherProvider } from "./plugins/launchers";
 import "@mdxeditor/editor/style.css";
 import "./index.css";
+// AgentDash: marketing surface tokens — required for `var(--mkt-*)` to resolve.
+import "./marketing/tokens.css";
+import "./marketing/fonts.css";
+import "./marketing/typography.css";
 
 initPluginBridge(React, ReactDOM);
 

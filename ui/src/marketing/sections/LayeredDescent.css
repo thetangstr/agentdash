@@ -1,0 +1,116 @@
+.mkt-descent {
+  /* 7 layers × 100vh of scroll travel */
+  height: 700vh;
+  position: relative;
+}
+.mkt-descent__stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 80px;
+  padding: 0 var(--mkt-container-gutter);
+  max-width: var(--mkt-container-max);
+  margin-inline: auto;
+  --descent-progress: 0;
+  --layer-count: 7;
+  --active-index: calc(var(--descent-progress) * (var(--layer-count) - 1));
+}
+.mkt-descent__rail {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  gap: 16px;
+  font-family: var(--mkt-font-mono);
+  font-size: 11px;
+  color: var(--mkt-ink-soft);
+}
+.mkt-descent__rail-item--active {
+  color: var(--mkt-accent);
+}
+.mkt-descent__slabs {
+  position: relative;
+  height: 80vh;
+  perspective: 1200px;
+  transform-style: preserve-3d;
+}
+.mkt-descent__slab {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--mkt-rule);
+  background: var(--mkt-surface-cream-2);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* the per-slab JS sets --offset (signed integer relative to active) */
+  --offset: 0;
+  transform: translateY(calc(var(--offset) * 24px)) rotateX(calc(var(--offset) * 4deg));
+  opacity: calc(1 - min(abs(var(--offset)), 3) * 0.25);
+  transition: transform 320ms var(--mkt-ease), opacity 320ms var(--mkt-ease);
+}
+.mkt-descent__slab--active {
+  border-color: var(--mkt-accent);
+  background: var(--mkt-surface-cream);
+  z-index: 10;
+}
+.mkt-descent__slab-edge {
+  height: 4px;
+  background: var(--mkt-accent);
+  border-radius: 2px;
+  width: 48px;
+  margin-bottom: 16px;
+}
+.mkt-descent__panel {
+  display: grid;
+  gap: 24px;
+}
+.mkt-descent__panel h3 {
+  font-family: var(--mkt-font-serif);
+  font-weight: 500;
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: 1.1;
+  margin: 0;
+}
+.mkt-descent__panel-diagram {
+  border: 1px solid var(--mkt-rule);
+  border-radius: 8px;
+  background: var(--mkt-surface-cream-2);
+  padding: 16px;
+  color: var(--mkt-ink);
+}
+
+/* reduced-motion fallback: no pin, no perspective, vertical stack */
+.mkt-descent--reduced {
+  height: auto;
+}
+.mkt-descent--reduced .mkt-descent__stage {
+  position: static;
+  height: auto;
+  display: block;
+  padding-block: 64px;
+}
+.mkt-descent--reduced .mkt-descent__slabs {
+  height: auto;
+  perspective: none;
+}
+.mkt-descent--reduced .mkt-descent__slab {
+  position: static;
+  transform: none;
+  opacity: 1;
+  margin-bottom: 24px;
+  transition: none;
+}
+.mkt-descent--reduced .mkt-descent__rail { display: none; }
+@media (max-width: 800px) {
+  .mkt-descent { height: auto; }
+  .mkt-descent__stage { position: static; height: auto; display: block; }
+  .mkt-descent__slabs { height: auto; perspective: none; }
+  .mkt-descent__slab { position: static; transform: none; opacity: 1; margin-bottom: 24px; }
+  .mkt-descent__rail { display: none; }
+}

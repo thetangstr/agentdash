@@ -61,5 +61,6 @@ tests/release-smoke/playwright-report/
 .omc/
 **/.omc/
 
-# Stale marketing tree from v1 (no Next.js app on v2 trunk)
-marketing/
+# Stale Next.js marketing tree from v1 — only the repo-root /marketing dir is dead.
+# (ui/src/marketing/ IS our active React marketing surface; keep tracking it.)
+/marketing/
