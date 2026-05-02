@@ -1,7 +1,6 @@
 import { useCompany } from "../context/CompanyContext";
 import { useQuery } from "@tanstack/react-query";
 import { assessApi } from "../api/assess";
-import { queryKeys } from "../lib/queryKeys";
 import { useNavigate } from "../lib/router";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { MarketingShell } from "../marketing/MarketingShell";
@@ -12,7 +11,7 @@ export function AssessHistoryPage() {
   const navigate = useNavigate();
 
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.agentResearch.assessment(selectedCompanyId!),
+    queryKey: ["assess", "company-assessment", selectedCompanyId],
     queryFn: () => assessApi.getAssessment(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
