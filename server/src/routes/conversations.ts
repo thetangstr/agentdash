@@ -9,6 +9,7 @@ import {
   cosReplier,
   agentSummoner,
 } from "../services/index.js";
+import { anthropicLLM } from "../services/anthropic-llm.js";
 
 export function conversationRoutes(db: Db) {
   const router = Router();
@@ -20,11 +21,6 @@ export function conversationRoutes(db: Db) {
       const all = await agents.list(companyId);
       return all.find((a: any) => a.role === "chief_of_staff") ?? null;
     },
-  };
-
-  const llmStub = async (_input: any): Promise<string> => {
-    // TODO: wire real LLM (Anthropic SDK). Stub for now.
-    return "Got it. (stub reply — wire real LLM in onboarding plan)";
   };
 
   const dispatcher = conversationDispatch({
@@ -40,7 +36,10 @@ export function conversationRoutes(db: Db) {
         execute: async () => ({ output: "Stub agent reply" }),
       }),
     }),
-    replier: cosReplier({ conversations: svc, llm: llmStub } as any),
+    // anthropicLLM auto-falls back to a stub when ANTHROPIC_API_KEY is unset
+    // (so dev without keys still works); when set, it calls Claude with prompt
+    // caching on the system prompt.
+    replier: cosReplier({ conversations: svc, llm: anthropicLLM } as any),
     cosResolver,
   });
 
