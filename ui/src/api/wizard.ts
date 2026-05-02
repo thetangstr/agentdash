@@ -16,6 +16,13 @@ export interface WizardInput {
 export interface WizardResult {
   agent: { id: string; name: string; [key: string]: unknown };
   routineId: string | null;
+  // GH #71: surfaced once at creation; never re-exposed by GET /agents/:id/keys.
+  apiKey?: {
+    id: string;
+    name: string;
+    token: string;
+    createdAt: string;
+  } | null;
 }
 
 export const wizardApi = {

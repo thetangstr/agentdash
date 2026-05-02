@@ -8,6 +8,12 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
   create: vi.fn(),
+  createApiKey: vi.fn().mockResolvedValue({
+    id: "key-1",
+    name: "default",
+    token: "agk_test_token",
+    createdAt: new Date("2026-03-19T00:00:00.000Z"),
+  }),
   resolveByReference: vi.fn(),
 }));
 
@@ -223,6 +229,12 @@ describe("agent skill routes", () => {
     mockAccessService.listPrincipalGrants.mockResolvedValue([]);
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
+    mockAgentService.createApiKey.mockResolvedValue({
+      id: "key-1",
+      name: "default",
+      token: "agk_test_token",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {

@@ -36,6 +36,8 @@ const baseAgent = {
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   create: vi.fn(),
+  createApiKey: vi.fn(),
+  update: vi.fn(),
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
@@ -138,6 +140,12 @@ describe("agent permission routes", () => {
     mockAgentService.getChainOfCommand.mockResolvedValue([]);
     mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: baseAgent });
     mockAgentService.create.mockResolvedValue(baseAgent);
+    mockAgentService.createApiKey.mockResolvedValue({
+      id: "key-1",
+      name: "default",
+      token: "agk_test_token",
+      createdAt: new Date("2026-03-19T00:00:00.000Z"),
+    });
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
     mockAccessService.getMembership.mockResolvedValue({
       id: "membership-1",
@@ -272,6 +280,76 @@ describe("agent permission routes", () => {
     );
     expect(res.body.access.canAssignTasks).toBe(true);
     expect(res.body.access.taskAssignSource).toBe("agent_creator");
+  });
+
+  it("auto-creates a default API key on agent creation and returns the token (GH #71)", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({
+        name: "Builder",
+        role: "engineer",
+        adapterType: "process",
+        adapterConfig: {},
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockAgentService.createApiKey).toHaveBeenCalledWith(agentId, "default");
+    expect(res.body.apiKey).toEqual({
+      id: "key-1",
+      name: "default",
+      token: "agk_test_token",
+      createdAt: "2026-03-19T00:00:00.000Z",
+    });
+  });
+
+  it("synchronously materializes instructions for managed adapters (GH #70)", async () => {
+    mockAgentService.create.mockResolvedValueOnce({
+      ...baseAgent,
+      adapterType: "claude_local",
+      adapterConfig: {},
+    });
+    mockAgentService.getById.mockResolvedValueOnce({
+      ...baseAgent,
+      adapterType: "claude_local",
+      adapterConfig: {
+        instructionsBundleMode: "managed",
+        instructionsRootPath: `/tmp/${agentId}/instructions`,
+        instructionsEntryFile: "AGENTS.md",
+        instructionsFilePath: `/tmp/${agentId}/instructions/AGENTS.md`,
+      },
+    });
+
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({
+        name: "Builder",
+        role: "engineer",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalled();
+    expect(res.body.adapterConfig.instructionsFilePath).toBe(
+      `/tmp/${agentId}/instructions/AGENTS.md`,
+    );
+    expect(res.body.adapterConfig.instructionsBundleMode).toBe("managed");
   });
 
   it("exposes a dedicated agent route for the inbox mine view", async () => {
