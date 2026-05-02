@@ -119,6 +119,14 @@ A commit that only edits these files is almost never worth cherry-picking; the v
 
 Don't run `git fetch upstream`. Don't run any sync script. Don't read upstream PRs looking for things to merge. Work on AgentDash.
 
+### Weekly check (sanctioned)
+
+`/upstream-digest` (skill in `.claude/commands/upstream-digest.md`, backed by `scripts/upstream-digest.sh`) fetches upstream and writes a classified report to `doc/upstream-digests/YYYY-MM-DD.md`. It is **read-only** — never merges, never cherry-picks. The report buckets every new upstream commit into:
+- **Worth a look** — touches files in the "still inherited" list (security-keyword commits get a +2 boost on top, so the highest-scoring rows surface first).
+- **Skip — agentdash-owned / conflict-only / other** — buckets we ignore.
+
+Run it manually, or schedule it weekly via `/schedule` (Claude Code's remote-agent scheduler). The report is the receipt — if nothing in the "Worth a look" table passes the four-gate rubric below, you're done. Cherry-picks remain ad-hoc and human-driven; the digest never merges anything.
+
 ### Ad-hoc cherry-pick (rare)
 
 ```sh
