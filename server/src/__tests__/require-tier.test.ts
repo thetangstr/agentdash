@@ -1,5 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { requireTierFor } from "../middleware/require-tier.js";
+
+// requireTierFor bypasses all checks when STRIPE_SECRET_KEY is unset (so dev/test
+// envs aren't forced into Pro-or-pay). Set it for these tests so the caps actually fire.
+const originalKey = process.env.STRIPE_SECRET_KEY;
+beforeAll(() => { process.env.STRIPE_SECRET_KEY = "sk_test_for_require_tier_tests"; });
+afterAll(() => {
+  if (originalKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = originalKey;
+});
 
 function makeDeps(planTier: string, humanCount: number, agentCount: number) {
   return {
@@ -23,6 +32,36 @@ function makeReqRes(companyId: string) {
   const next = vi.fn();
   return { req, res, next };
 }
+
+describe("requireTierFor billing-disabled bypass", () => {
+  it("bypasses all caps when STRIPE_SECRET_KEY is unset", async () => {
+    const saved = process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_SECRET_KEY;
+    try {
+      const deps = makeDeps("free", 99, 99);
+      const { req, res, next } = makeReqRes("company-1");
+      await requireTierFor("invite", deps)(req, res, next);
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+      expect(deps.getCompany).not.toHaveBeenCalled();
+    } finally {
+      process.env.STRIPE_SECRET_KEY = saved;
+    }
+  });
+
+  it("bypasses all caps when AGENTDASH_BILLING_DISABLED=true (even with Stripe key set)", async () => {
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
+    try {
+      const deps = makeDeps("free", 99, 99);
+      const { req, res, next } = makeReqRes("company-1");
+      await requireTierFor("hire", deps)(req, res, next);
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.AGENTDASH_BILLING_DISABLED;
+    }
+  });
+});
 
 describe("requireTierFor invite", () => {
   it("allows invite when free workspace has 0 humans", async () => {
