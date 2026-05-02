@@ -24,6 +24,17 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@agentdash/marketing", "dev"],
       "port": 3200
+    },
+    {
+      "name": "agentdash-auth-mode",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["agentdash", "run"],
+      "port": 3199,
+      "env": {
+        "PAPERCLIP_INSTANCE_ID": "e2e-frictionless",
+        "BETTER_AUTH_SECRET": "test-better-auth-secret-32-chars-min-foobar",
+        "AUTH_PROVIDER": "better_auth"
+      }
     }
   ]
 }

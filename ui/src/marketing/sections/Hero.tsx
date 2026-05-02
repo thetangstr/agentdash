@@ -2,7 +2,7 @@ import "./Hero.css";
 import { Eyebrow } from "../components/Eyebrow";
 import { Button } from "../components/Button";
 import { SectionContainer } from "../components/SectionContainer";
-import { AgentOrgChart } from "./AgentOrgChart";
+import { LiveBriefing } from "./LiveBriefing";
 
 export function Hero() {
   return (
@@ -23,8 +23,8 @@ export function Hero() {
           </div>
           <p className="mkt-hero__reassure">No credit card · Free single-seat tier</p>
         </div>
-        <div className="mkt-hero__art" aria-hidden>
-          <AgentOrgChart />
+        <div className="mkt-hero__art">
+          <LiveBriefing />
         </div>
       </div>
     </SectionContainer>
