@@ -1,0 +1,311 @@
+/*
+ * LiveBriefing — premium editorial hero illustration.
+ *
+ * Single focal motion: a coral 2px indicator on the left of the active
+ * row. The indicator slides between rows on a slow cycle (~7s). The only
+ * other motion is a barely-perceptible "Live" dot pulse. Everything else
+ * is composed typography, restraint, and depth.
+ *
+ * Inherits the marketing palette (cream / warm ink / coral accent).
+ */
+
+.mkt-brief {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfaf6 100%);
+  border: 1px solid var(--mkt-rule);
+  border-radius: 14px;
+  padding: 24px 28px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: var(--mkt-ink);
+  /* layered depth: a hairline + a soft cast shadow */
+  box-shadow:
+    0 1px 0 rgba(31, 30, 29, 0.04),
+    0 22px 56px -34px rgba(31, 30, 29, 0.22);
+  font-family: var(--mkt-font-serif, "Iowan Old Style", "Palatino Linotype", Georgia, serif);
+}
+
+/* ── header ───────────────────────────────────────────────────────── */
+
+.mkt-brief__header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mkt-brief__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mkt-ink-soft);
+}
+
+.mkt-brief__live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mkt-accent);
+  box-shadow: 0 0 0 0 rgba(204, 120, 92, 0.45);
+  animation: mkt-brief-live 2.6s ease-in-out infinite;
+}
+
+@keyframes mkt-brief-live {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 0 rgba(204, 120, 92, 0);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 6px rgba(204, 120, 92, 0);
+  }
+}
+
+.mkt-brief__title {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--mkt-ink);
+}
+
+.mkt-brief__subtitle {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--mkt-ink-soft);
+  margin: 0;
+}
+
+/* ── rule ─────────────────────────────────────────────────────────── */
+
+.mkt-brief__rule {
+  height: 1px;
+  background: var(--mkt-rule);
+  width: 100%;
+}
+
+/* ── activity rows ─────────────────────────────────────────────────── */
+
+.mkt-brief__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mkt-brief__row {
+  display: grid;
+  grid-template-columns: 4px 32px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(232, 227, 214, 0.55);
+  position: relative;
+  transition:
+    background-color 380ms var(--mkt-ease, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.mkt-brief__row:last-child {
+  border-bottom: none;
+}
+
+.mkt-brief__indicator {
+  width: 2px;
+  height: 28px;
+  border-radius: 1px;
+  background: var(--mkt-accent);
+  opacity: 0;
+  transform: translateX(-8px);
+  transition:
+    opacity 420ms var(--mkt-ease, cubic-bezier(0.16, 1, 0.3, 1)),
+    transform 420ms var(--mkt-ease, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.mkt-brief__row.is-active .mkt-brief__indicator {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.mkt-brief__row.is-active .mkt-brief__activity {
+  color: var(--mkt-ink);
+}
+
+.mkt-brief__row.is-active .mkt-brief__name {
+  color: var(--mkt-ink);
+}
+
+.mkt-brief__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--mkt-rule);
+  flex-shrink: 0;
+}
+
+.mkt-brief__avatar svg {
+  display: block;
+}
+
+/* Human avatars sit on a warm cream wash with a darkened person glyph —
+ * earthy and supervisory. Agent avatars use a soft coral wash with the
+ * accent-ink robot glyph — clearly machine-driven without shouting. */
+.mkt-brief__avatar--human {
+  background: linear-gradient(180deg, #fbf6ec 0%, #f3ecda 100%);
+  border-color: #ddd1b6;
+  color: var(--mkt-ink);
+}
+
+.mkt-brief__avatar--agent {
+  background: linear-gradient(180deg, #fcf2ed 0%, #f6e6dd 100%);
+  border-color: rgba(204, 120, 92, 0.42);
+  color: var(--mkt-accent-ink, #7a3f2a);
+}
+
+.mkt-brief__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.mkt-brief__identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.mkt-brief__name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--mkt-ink);
+  letter-spacing: -0.005em;
+}
+
+.mkt-brief__sep {
+  color: var(--mkt-ink-soft);
+  opacity: 0.5;
+  font-size: 11px;
+}
+
+.mkt-brief__role {
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mkt-ink-soft);
+}
+
+/* AGENT / HUMAN type chip. Coral accent for AI agents (the work doers),
+ * neutral ink for humans (the operators). Kept small and uppercase so it
+ * reads as metadata, not as a primary headline. */
+.mkt-brief__kind {
+  margin-left: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+
+.mkt-brief__kind--agent {
+  color: var(--mkt-accent-ink, #7a3f2a);
+  background: rgba(204, 120, 92, 0.1);
+  border-color: rgba(204, 120, 92, 0.28);
+}
+
+.mkt-brief__kind--human {
+  color: var(--mkt-ink-soft);
+  background: rgba(31, 30, 29, 0.045);
+  border-color: rgba(31, 30, 29, 0.12);
+}
+
+.mkt-brief__activity {
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.45;
+  margin: 0;
+  color: var(--mkt-ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 380ms var(--mkt-ease, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.mkt-brief__time {
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--mkt-ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── footer / metrics ──────────────────────────────────────────────── */
+
+.mkt-brief__footer {
+  display: flex;
+  align-items: baseline;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.mkt-brief__footer-label {
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mkt-ink-soft);
+}
+
+.mkt-brief__metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mkt-brief__metric strong {
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--mkt-ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  font-style: normal;
+}
+
+.mkt-brief__metric-label {
+  font-family: var(--mkt-font-mono, ui-monospace, "SFMono-Regular", monospace);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--mkt-ink-soft);
+  text-transform: lowercase;
+}
+
+/* ── reduced motion ────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .mkt-brief__live-dot,
+  .mkt-brief__row,
+  .mkt-brief__indicator,
+  .mkt-brief__activity {
+    animation: none !important;
+    transition: none !important;
+  }
+  .mkt-brief__row.is-active .mkt-brief__indicator {
+    transform: none;
+  }
+}
