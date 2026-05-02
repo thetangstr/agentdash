@@ -5,6 +5,7 @@ import {
   assistantConversationParticipants,
   assistantMessages,
 } from "@paperclipai/db";
+import { emitMessageCreated, emitMessageRead } from "../realtime/conversation-events.js";
 
 export function conversationService(db: Db) {
   return {
@@ -51,6 +52,7 @@ export function conversationService(db: Db) {
       conversationId: string,
       userId: string,
       lastReadMessageId: string,
+      companyId?: string,
     ) => {
       await db
         .update(assistantConversationParticipants)
@@ -61,6 +63,9 @@ export function conversationService(db: Db) {
             eq(assistantConversationParticipants.userId, userId),
           ),
         );
+      if (companyId) {
+        emitMessageRead({ conversationId, userId, lastReadMessageId, companyId });
+      }
     },
 
     postMessage: async (input: {
@@ -70,6 +75,7 @@ export function conversationService(db: Db) {
       body: string;
       cardKind?: string | null;
       cardPayload?: Record<string, unknown> | null;
+      companyId?: string;
     }) => {
       const rows = await db
         .insert(assistantMessages)
@@ -81,7 +87,11 @@ export function conversationService(db: Db) {
           cardPayload: input.cardPayload ?? null,
         })
         .returning();
-      return rows[0]!;
+      const row = rows[0]!;
+      if (input.companyId) {
+        emitMessageCreated({ ...row, companyId: input.companyId });
+      }
+      return row;
     },
 
     paginate: async (

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   assistantConversationParticipants,
   assistantConversations,
@@ -129,5 +129,89 @@ describeEmbeddedPostgres("conversationService", () => {
     expect(rows).toHaveLength(3);
     expect(rows[0]!.content).toBe("third");
     expect(rows[2]!.content).toBe("first");
+  });
+});
+
+// WS event emission tests — these use a stub DB so they run without embedded postgres.
+describe("conversationService WS bus emission", () => {
+  const mockEmitMessageCreated = vi.hoisted(() => vi.fn());
+  const mockEmitMessageRead = vi.hoisted(() => vi.fn());
+
+  const fakeMessageRow = {
+    id: "msg-1",
+    conversationId: "conv-1",
+    role: "user" as const,
+    content: "hello",
+    cardKind: null,
+    cardPayload: null,
+    createdAt: new Date(),
+  };
+
+  function buildFakeDb(messageRow = fakeMessageRow) {
+    return {
+      insert: () => ({
+        values: () => ({
+          returning: async () => [messageRow],
+        }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: async () => undefined,
+        }),
+      }),
+    } as any;
+  }
+
+  beforeAll(() => {
+    vi.mock("../realtime/conversation-events.js", () => ({
+      emitMessageCreated: mockEmitMessageCreated,
+      emitMessageRead: mockEmitMessageRead,
+    }));
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("postMessage emits message.created when companyId provided", async () => {
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb());
+    await svc.postMessage({
+      conversationId: "conv-1",
+      authorKind: "user",
+      authorId: "user-1",
+      body: "hello",
+      companyId: "company-1",
+    });
+    expect(mockEmitMessageCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg-1", companyId: "company-1" }),
+    );
+  });
+
+  it("postMessage does NOT emit when companyId is omitted", async () => {
+    mockEmitMessageCreated.mockClear();
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb());
+    await svc.postMessage({
+      conversationId: "conv-1",
+      authorKind: "user",
+      authorId: "user-1",
+      body: "hello",
+    });
+    expect(mockEmitMessageCreated).not.toHaveBeenCalled();
+  });
+
+  it("setReadPointer emits message.read when companyId provided", async () => {
+    const { conversationService } = await import("../services/conversations.js");
+    const svc = conversationService(buildFakeDb());
+    await svc.setReadPointer("conv-1", "user-1", "msg-1", "company-1");
+    expect(mockEmitMessageRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv-1",
+        userId: "user-1",
+        lastReadMessageId: "msg-1",
+        companyId: "company-1",
+      }),
+    );
   });
 });
