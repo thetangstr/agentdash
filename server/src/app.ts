@@ -45,6 +45,8 @@ import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
+import { assessRoutes } from "./routes/assess.js";
+import { HttpError } from "./errors.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -226,19 +228,24 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use("/conversations", conversationRoutes(db));
   api.use("/onboarding", onboardingV2Routes(db));
-  // AgentDash: billing — mount only when Stripe is configured.
+  api.use(assessRoutes(db));
+  // AgentDash: billing — always mount so /api/billing/status responds with
+  // sensible defaults in dev. When Stripe is configured (STRIPE_SECRET_KEY set)
+  // checkout/portal/webhook do real work; otherwise those endpoints return 503
+  // "Billing not configured" and the requireTier middleware bypasses caps.
   const stripeKey = process.env.STRIPE_SECRET_KEY;
+  let stripeSdk: any = stripeStubForDev();
   if (stripeKey) {
     const { default: Stripe } = await import("stripe");
-    const stripe = new Stripe(stripeKey);
-    api.use("/billing", billingRoutes(db, {
-      stripe,
-      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
-      proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
-      trialDays: parseInt(process.env.STRIPE_TRIAL_DAYS ?? "14", 10),
-      publicBaseUrl: process.env.BILLING_PUBLIC_BASE_URL ?? "",
-    }));
+    stripeSdk = new Stripe(stripeKey);
   }
+  api.use("/billing", billingRoutes(db, {
+    stripe: stripeSdk,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+    proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
+    trialDays: parseInt(process.env.STRIPE_TRIAL_DAYS ?? "14", 10),
+    publicBaseUrl: process.env.BILLING_PUBLIC_BASE_URL ?? "",
+  }));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
@@ -473,4 +480,22 @@ export async function createApp(
   });
 
   return app;
+}
+
+// Dev-mode stub for the Stripe SDK so billingRoutes can mount even when
+// STRIPE_SECRET_KEY isn't set. Endpoints that exercise the real SDK
+// (checkout-session, portal-session, webhook constructEvent) throw a
+// typed "Billing not configured" error that the routes translate to 503.
+// Read-only endpoints (status) work via the DB unchanged.
+function stripeStubForDev() {
+  const notConfigured = () => {
+    throw new HttpError(503, "Billing not configured. Set STRIPE_SECRET_KEY to enable checkout/portal/webhook.");
+  };
+  return {
+    customers: { create: notConfigured, retrieve: notConfigured },
+    checkout: { sessions: { create: notConfigured } },
+    billingPortal: { sessions: { create: notConfigured } },
+    subscriptions: { update: notConfigured, retrieve: notConfigured },
+    webhooks: { constructEvent: notConfigured },
+  };
 }
