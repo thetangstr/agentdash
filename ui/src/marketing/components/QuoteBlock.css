@@ -1,0 +1,13 @@
+.mkt-quote {
+  font-family: var(--mkt-font-serif);
+  font-weight: 400;
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.3;
+  text-align: center;
+  max-width: 28ch;
+  margin-inline: auto;
+}
+.mkt-quote__attr {
+  margin-top: 24px;
+  text-align: center;
+}

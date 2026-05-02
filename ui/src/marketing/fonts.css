@@ -1,0 +1,10 @@
+/*
+ * Marketing fonts. Loaded via the Google Fonts <link> in ui/index.html so we
+ * stay in sync with the rest of the app and avoid lockfile churn from
+ * Fontsource npm packages.
+ */
+:root {
+  --mkt-font-serif: "Newsreader", "Times New Roman", serif;
+  --mkt-font-sans: "Inter Tight", "Inter", system-ui, sans-serif;
+  --mkt-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}

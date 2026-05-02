@@ -7,8 +7,8 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Paperclip" />
-    <title>Paperclip</title>
+    <meta name="apple-mobile-web-app-title" content="AgentDash" />
+    <title>AgentDash</title>
     <!-- PAPERCLIP_RUNTIME_BRANDING_START -->
     <!-- PAPERCLIP_RUNTIME_BRANDING_END -->
     <!-- AgentDash: Claude design typography -->
@@ -25,11 +25,20 @@
     <link rel="manifest" href="/site.webmanifest" />
     <script>
       (() => {
-        const key = "paperclip.theme";
+        const key = "agentdash.theme";
+        const legacyKey = "paperclip.theme";
         const darkThemeColor = "#18181b";
         const lightThemeColor = "#ffffff";
         try {
-          const stored = window.localStorage.getItem(key);
+          let stored = window.localStorage.getItem(key);
+          if (!stored) {
+            const legacy = window.localStorage.getItem(legacyKey);
+            if (legacy === "light" || legacy === "dark") {
+              stored = legacy;
+              window.localStorage.setItem(key, legacy);
+              window.localStorage.removeItem(legacyKey);
+            }
+          }
           const theme = stored === "light" || stored === "dark" ? stored : "dark";
           const isDark = theme === "dark";
           document.documentElement.classList.toggle("dark", isDark);

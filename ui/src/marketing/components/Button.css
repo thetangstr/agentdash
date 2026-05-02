@@ -1,0 +1,45 @@
+.mkt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-radius: 8px;
+  font-family: var(--mkt-font-sans);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 160ms var(--mkt-ease), color 160ms var(--mkt-ease), border-color 160ms var(--mkt-ease);
+  white-space: nowrap;
+}
+.mkt-btn--primary {
+  background: var(--mkt-accent);
+  color: #fff;
+}
+.mkt-btn--primary:hover { background: var(--mkt-accent-ink); }
+.mkt-btn--ghost {
+  background: transparent;
+  color: var(--mkt-ink);
+  border-color: var(--mkt-ink);
+}
+.mkt-btn--ghost:hover { background: var(--mkt-ink); color: var(--mkt-surface-cream); }
+.mkt-btn--link {
+  background: transparent;
+  color: var(--mkt-ink);
+  padding: 0;
+  border: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.mkt-btn--link:hover { color: var(--mkt-accent-ink); }
+.mkt-btn--disabled,
+.mkt-btn--disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--mkt-rule);
+  color: var(--mkt-ink-soft);
+  border-color: transparent;
+}

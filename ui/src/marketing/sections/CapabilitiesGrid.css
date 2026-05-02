@@ -1,0 +1,10 @@
+.mkt-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 48px;
+}
+.mkt-cap-tile { display: grid; gap: 12px; }
+.mkt-cap-tile__icon { color: var(--mkt-ink); }
+.mkt-cap-tile__title { font-weight: 600; font-size: 20px; }
+.mkt-cap-tile__body { color: var(--mkt-ink-soft); }
+@media (max-width: 800px) { .mkt-cap-grid { grid-template-columns: 1fr; } }
