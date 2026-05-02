@@ -39,6 +39,13 @@ const mockAgentService = vi.hoisted(() => ({
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
+  // GH #71 carry-forward: POST /companies/:companyId/agents now auto-creates a default API key.
+  createApiKey: vi.fn().mockResolvedValue({
+    id: "key-1",
+    name: "default",
+    token: "agk_test_token",
+    createdAt: new Date("2026-05-02T00:00:00.000Z"),
+  }),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
@@ -333,6 +340,12 @@ describe.sequential("agent permission routes", () => {
     });
     mockAgentService.update.mockResolvedValue(baseAgent);
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
+    mockAgentService.createApiKey.mockResolvedValue({
+      id: "key-1",
+      name: "default",
+      token: "agk_test_token",
+      createdAt: new Date("2026-05-02T00:00:00.000Z"),
+    });
     mockAccessService.canUser.mockResolvedValue(true);
     mockAccessService.hasPermission.mockResolvedValue(false);
     mockAccessService.getMembership.mockResolvedValue({

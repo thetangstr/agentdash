@@ -6,6 +6,13 @@ import type { ServerAdapterModule } from "../adapters/index.js";
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   getById: vi.fn(),
+  // GH #71 carry-forward: POST /companies/:companyId/agents now auto-creates a default API key.
+  createApiKey: vi.fn().mockResolvedValue({
+    id: "key-1",
+    name: "default",
+    token: "agk_test_token",
+    createdAt: new Date("2026-05-02T00:00:00.000Z"),
+  }),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
