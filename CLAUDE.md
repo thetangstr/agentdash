@@ -208,6 +208,7 @@ See `doc/UPSTREAM-POLICY.md` for the full rubric, what we still inherit vs what 
 
 | Doc | Purpose |
 |-----|---------|
+| `doc/LAUNCH.md` | Step-by-step from clean clone to first paying customer (env vars, Stripe, deploy) |
 | `doc/UPSTREAM-POLICY.md` | Cherry-pick rubric for paperclip upstream commits |
 | `doc/SPEC-implementation.md` | Inherited V1 build contract |
 | `doc/DEVELOPING.md` | Detailed dev guide |
