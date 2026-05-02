@@ -276,6 +276,14 @@ export type {
   UserCompanyAccessResponse,
 } from "./access.js";
 export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
+export {
+  INTERVIEW_MAX_TURNS,
+  FIXED_QUESTIONS,
+  type InterviewTurnRole,
+  type InterviewTurn,
+  type InterviewState,
+  type AgentProposal,
+} from "./interview.js";
 export type {
   CompanyPortabilityInclude,
   CompanyPortabilityEnvInput,
