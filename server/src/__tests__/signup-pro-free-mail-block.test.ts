@@ -68,6 +68,7 @@ vi.mock("../services/index.js", () => ({
   accessService: () => ({
     canUser: vi.fn(),
     ensureMembership: (...args: unknown[]) => ensureMembershipMock(...args),
+    setPrincipalPermission: vi.fn().mockResolvedValue(undefined),
   }),
   budgetService: () => ({ upsertPolicy: vi.fn() }),
   agentService: () => ({ getById: vi.fn() }),

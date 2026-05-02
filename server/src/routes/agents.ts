@@ -202,18 +202,24 @@ export function agentRoutes(db: Db) {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
       const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
       if (!allowed) {
-        throw forbidden("Missing permission: agents:create");
+        throw forbidden(
+          "Missing permission: agents:create. Ask a company owner or instance admin to grant this " +
+            `permission via PATCH /api/companies/${companyId}/members/:memberId/permissions.`,
+        );
       }
       return null;
     }
-    if (!req.actor.agentId) throw forbidden("Agent authentication required");
+    if (!req.actor.agentId) throw forbidden("Agent authentication required (missing or invalid X-Agent-Key header)");
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== companyId) {
       throw forbidden("Agent key cannot access another company");
     }
     const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
     if (!allowedByGrant && !canCreateAgents(actorAgent)) {
-      throw forbidden("Missing permission: can create agents");
+      throw forbidden(
+        `Agent ${actorAgent.name} lacks the agents:create capability. ` +
+          "A Chief of Staff agent must enable this via PATCH /api/agents/:id/permissions { canCreateAgents: true }.",
+      );
     }
     return actorAgent;
   }
@@ -1525,7 +1531,27 @@ export function agentRoutes(db: Db) {
       );
     }
 
-    res.status(201).json(agent);
+    // GH #71: every agent needs an API key to authenticate callbacks against
+    // /api/* (especially adapters like claude_api). Create a default key
+    // synchronously so the create response carries the only viewable copy of
+    // the token (subsequent GET /agents/:id/keys never re-exposes it).
+    let apiKey: Awaited<ReturnType<typeof svc.createApiKey>> | null = null;
+    if (agent.status !== "pending_approval") {
+      apiKey = await svc.createApiKey(agent.id, "default");
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.key_created",
+        entityType: "agent",
+        entityId: agent.id,
+        details: { keyId: apiKey.id, name: apiKey.name, autoCreated: true },
+      });
+    }
+
+    res.status(201).json({ ...agent, apiKey });
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {

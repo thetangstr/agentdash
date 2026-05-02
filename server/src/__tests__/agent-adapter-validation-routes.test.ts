@@ -9,6 +9,12 @@ import { registerServerAdapter, unregisterServerAdapter } from "../adapters/inde
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   getById: vi.fn(),
+  createApiKey: vi.fn().mockResolvedValue({
+    id: "key-1",
+    name: "default",
+    token: "agk_test_token",
+    createdAt: new Date("2026-03-19T00:00:00.000Z"),
+  }),
 }));
 
 const mockAccessService = vi.hoisted(() => ({

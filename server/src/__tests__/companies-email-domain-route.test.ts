@@ -34,6 +34,7 @@ const fakeDb = {
 let createMock: ReturnType<typeof vi.fn>;
 let findByEmailDomainMock: ReturnType<typeof vi.fn>;
 let ensureMembershipMock: ReturnType<typeof vi.fn>;
+let setPrincipalPermissionMock: ReturnType<typeof vi.fn>;
 
 vi.mock("../services/index.js", () => ({
   companyService: () => ({
@@ -55,6 +56,7 @@ vi.mock("../services/index.js", () => ({
   accessService: () => ({
     canUser: vi.fn(),
     ensureMembership: (...args: unknown[]) => ensureMembershipMock(...args),
+    setPrincipalPermission: (...args: unknown[]) => setPrincipalPermissionMock(...args),
   }),
   budgetService: () => ({ upsertPolicy: vi.fn() }),
   agentService: () => ({ getById: vi.fn() }),
@@ -91,6 +93,7 @@ beforeEach(() => {
   createMock = vi.fn();
   findByEmailDomainMock = vi.fn();
   ensureMembershipMock = vi.fn().mockResolvedValue({});
+  setPrincipalPermissionMock = vi.fn().mockResolvedValue(undefined);
 });
 
 describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
@@ -212,6 +215,28 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
       "user-1",
       "owner",
       "active",
+    );
+  });
+
+  it("GH #72: grants agents:create to the company creator on POST", async () => {
+    findByEmailDomainMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({
+      id: "company-72",
+      name: "Acme",
+      budgetMonthlyCents: 0,
+      emailDomain: "acme.com",
+    });
+
+    const app = buildApp({ actorEmail: acmeUser.email });
+    await request(app).post("/api/companies").send({ name: "Acme" }).expect(201);
+
+    expect(setPrincipalPermissionMock).toHaveBeenCalledWith(
+      "company-72",
+      "user",
+      "user-1",
+      "agents:create",
+      true,
+      "user-1",
     );
   });
 

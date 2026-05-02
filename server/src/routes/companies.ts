@@ -368,7 +368,21 @@ export function companyRoutes(
     // AgentDash (AGE-55): existing behavior already promotes the creator to a
     // board ("owner") membership. We rely on that here so the at-least-one-
     // admin invariant holds from the moment the company exists.
-    await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
+    //
+    // GH #72: owners need `agents:create` to hit the agent-hires endpoint and
+    // configuration reads. setPrincipalPermission internally upserts membership
+    // as "member", so it must run BEFORE the "owner" promotion below — otherwise
+    // the second ensureMembership demotes the creator back to "member".
+    const ownerPrincipalId = req.actor.userId ?? "local-board";
+    await access.setPrincipalPermission(
+      company.id,
+      "user",
+      ownerPrincipalId,
+      "agents:create",
+      true,
+      ownerPrincipalId,
+    );
+    await access.ensureMembership(company.id, "user", ownerPrincipalId, "owner", "active");
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",

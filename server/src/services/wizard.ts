@@ -203,6 +203,11 @@ export function wizardService(db: Db) {
       // Step 4: update agent with the new adapterConfig from materialization
       const updatedAgent = await agentSvc.update(agent.id, { adapterConfig });
 
+      // GH #71: provision a default API key so external adapters can call
+      // back to /api/* immediately. The token is returned once here and is
+      // never re-exposed by GET /agents/:id/keys.
+      const apiKey = await agentSvc.createApiKey(agent.id, "default");
+
       // Step 5: optionally create a routine if a schedule was provided
       let routineId: string | null = null;
       if (input.schedule) {
@@ -229,7 +234,7 @@ export function wizardService(db: Db) {
         }
       }
 
-      return { agent: updatedAgent ?? agent, routineId };
+      return { agent: updatedAgent ?? agent, routineId, apiKey };
     },
   };
 }
