@@ -968,3 +968,5 @@ export type {
   EnvironmentProviderCapability,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
+
+export * from "./mention-parser.js";

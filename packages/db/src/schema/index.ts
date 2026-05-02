@@ -72,3 +72,4 @@ export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export * from "./assistant_conversations.js";
+export { assistantConversationParticipants } from "./assistant_conversation_participants.js";
