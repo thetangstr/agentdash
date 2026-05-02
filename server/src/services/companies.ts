@@ -38,10 +38,11 @@ import { environmentService } from "./environments.js";
 export class DomainAlreadyClaimedError extends Error {
   readonly code = "domain_already_claimed" as const;
   readonly emailDomain: string;
-  readonly existingCompanyId: string;
+  // null when the winning row couldn't be re-fetched (rare race).
+  readonly existingCompanyId: string | null;
 
-  constructor(emailDomain: string, existingCompanyId: string) {
-    super(`Email domain ${emailDomain} is already claimed by company ${existingCompanyId}`);
+  constructor(emailDomain: string, existingCompanyId: string | null) {
+    super(`Email domain ${emailDomain} is already claimed by company ${existingCompanyId ?? "(unknown)"}`);
     this.name = "DomainAlreadyClaimedError";
     this.emailDomain = emailDomain;
     this.existingCompanyId = existingCompanyId;
@@ -181,7 +182,7 @@ export function companyService(db: Db) {
                 .where(eq(companies.emailDomain, claimedDomain))
                 .then((rows) => rows[0] ?? null)
             : null;
-          throw new DomainAlreadyClaimedError(claimedDomain, existing?.id ?? "");
+          throw new DomainAlreadyClaimedError(claimedDomain, existing?.id ?? null);
         }
         if (!isIssuePrefixConflict(error)) throw error;
       }

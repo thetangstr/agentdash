@@ -4,7 +4,6 @@ import type { Db } from "@paperclipai/db";
 import { authUsers } from "@paperclipai/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
-  FREE_MAIL_DOMAINS,
   companyPortabilityExportSchema,
   companyPortabilityImportSchema,
   companyPortabilityPreviewSchema,
@@ -311,24 +310,26 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         // webhook accounts that bypassed the AGE-104 signup-time guard.
         // The signup-time guard (corp-email-signup-guard.ts) is the real
         // safeguard for new signups.
-        const userHasExistingCompanies = (req.actor.companyIds ?? []).length > 0;
-        if (requireCorpEmail && userHasExistingCompanies) {
-          const lower = creatorEmail.trim().toLowerCase();
-          const at = lower.lastIndexOf("@");
-          const rawDomain = at >= 0 ? lower.slice(at + 1) : "";
-          if (FREE_MAIL_DOMAINS.has(rawDomain)) {
-            res.status(400).json({
-              code: "pro_requires_corp_email",
-              error:
-                "Pro accounts require a company email to create additional workspaces.",
-            });
-            return;
-          }
-        }
+        //
+        // Derive the canonical domain first so the free-mail rejection path
+        // and the storage path use identical extraction logic (no divergence).
         try {
           emailDomain = deriveCompanyEmailDomain(creatorEmail);
         } catch (err) {
           throw badRequest(`Could not derive company email domain from "${creatorEmail}"`);
+        }
+        // deriveCompanyEmailDomain returns the full email (e.g. alice@gmail.com)
+        // for free-mail addresses, and the bare domain (e.g. acme.com) for corp
+        // addresses. The presence of "@" in the result is the canonical signal.
+        const isFreeMail = emailDomain.includes("@");
+        const userHasExistingCompanies = (req.actor.companyIds ?? []).length > 0;
+        if (requireCorpEmail && userHasExistingCompanies && isFreeMail) {
+          res.status(400).json({
+            code: "pro_requires_corp_email",
+            error:
+              "Pro accounts require a company email to create additional workspaces.",
+          });
+          return;
         }
         if (!allowMultiTenantPerDomain) {
           // Pre-flight check so we can surface a friendly contactEmail in the
@@ -360,6 +361,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       if (err instanceof DomainAlreadyClaimedError) {
         res.status(409).json({
           code: "domain_already_claimed",
+          // null when the winning row couldn't be re-fetched (rare race).
           existingCompanyId: err.existingCompanyId,
           contactEmail: null,
         });
@@ -393,7 +395,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       action: "company.created",
       entityType: "company",
       entityId: company.id,
-      details: { name: company.name, emailDomain, creatorEmail },
+      details: { name: company.name, emailDomain },
     });
     if (company.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(
