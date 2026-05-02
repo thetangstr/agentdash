@@ -221,7 +221,10 @@ export function SetupWizard() {
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="block text-sm font-medium">Tell us about your company</label>
+                <label className="block text-sm font-medium">
+                  Tell us about your company
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">(optional)</span>
+                </label>
                 <textarea
                   className="w-full rounded-lg border bg-background p-3 text-sm min-h-[100px] focus:outline-none focus:ring-2 focus:ring-ring"
                   placeholder="Paste a description, your website URL, or a few sentences about what you do..."
@@ -253,7 +256,10 @@ export function SetupWizard() {
                 </button>
               </div>
               <div className="space-y-2">
-                <label className="block text-sm font-medium">What's your main goal?</label>
+                <label className="block text-sm font-medium">
+                  What's your main goal?
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">(optional)</span>
+                </label>
                 <input
                   className="w-full rounded-lg border bg-background p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   placeholder="e.g., Close 100 deals by Q3"
@@ -314,7 +320,7 @@ export function SetupWizard() {
               <p className="text-sm text-destructive text-center">{deployError}</p>
             )}
 
-            <div className="flex justify-between">
+            <div className="flex items-center justify-between">
               <button
                 onClick={() => setStepIndex(0)}
                 disabled={deploying}
@@ -322,13 +328,25 @@ export function SetupWizard() {
               >
                 Back
               </button>
-              <button
-                onClick={handleDeploy}
-                disabled={deploying || selectedAgents.size === 0}
-                className="px-6 py-3 rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                {deploying ? "Deploying..." : "Deploy Team"}
-              </button>
+              {/* AgentDash (AGE-104 frictionless): users who don't want to
+                  pick a starter team yet can skip straight to the dashboard
+                  and add agents later from settings. */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => navigate(`/${companyPrefix}/dashboard`)}
+                  disabled={deploying}
+                  className="text-sm text-muted-foreground hover:text-foreground hover:underline disabled:opacity-30"
+                >
+                  Skip for now
+                </button>
+                <button
+                  onClick={handleDeploy}
+                  disabled={deploying || selectedAgents.size === 0}
+                  className="px-6 py-3 rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50"
+                >
+                  {deploying ? "Deploying..." : "Deploy Team"}
+                </button>
+              </div>
             </div>
           </div>
         )}

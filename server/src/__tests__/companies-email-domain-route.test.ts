@@ -215,6 +215,82 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     );
   });
 
+  it("AGE-104 frictionless: a free-mail user with NO existing companies can create their first personal workspace even with requireCorpEmail=true", async () => {
+    // Legacy WorkOS-webhook-created users (or anyone who slipped past the
+    // signup-time corp-email guard) must have a forward path.
+    findByEmailDomainMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({
+      id: "company-personal",
+      name: "Personal",
+      budgetMonthlyCents: 0,
+      emailDomain: "alice@gmail.com",
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = {
+        type: "board",
+        userId: "user-1",
+        companyIds: [], // <-- no existing companies
+        isInstanceAdmin: false,
+        source: "session",
+      };
+      next();
+    });
+    app.use("/api/companies", companyRoutes(fakeDb, undefined, {
+      allowMultiTenantPerDomain: false,
+      requireCorpEmail: true, // Pro deployment
+    }));
+    app.use(errorHandler);
+
+    // Stub authUsers lookup to return gmail
+    fakeDb.select = vi.fn(() => ({
+      from: () => ({
+        where: () => Promise.resolve([{ email: gmailUser.email }]),
+      }),
+    }));
+
+    const res = await request(app).post("/api/companies").send({ name: "Personal" });
+
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      emailDomain: "alice@gmail.com",
+    }));
+  });
+
+  it("AGE-104 still gates additional workspaces: a free-mail user WITH an existing company cannot create a second under requireCorpEmail", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = {
+        type: "board",
+        userId: "user-1",
+        companyIds: ["company-existing"], // <-- already has one
+        isInstanceAdmin: false,
+        source: "session",
+      };
+      next();
+    });
+    app.use("/api/companies", companyRoutes(fakeDb, undefined, {
+      allowMultiTenantPerDomain: false,
+      requireCorpEmail: true,
+    }));
+    app.use(errorHandler);
+
+    fakeDb.select = vi.fn(() => ({
+      from: () => ({
+        where: () => Promise.resolve([{ email: gmailUser.email }]),
+      }),
+    }));
+
+    const res = await request(app).post("/api/companies").send({ name: "Personal Two" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("pro_requires_corp_email");
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("local_implicit actors (no email) leave email_domain NULL", async () => {
     createMock.mockResolvedValue({
       id: "company-local",

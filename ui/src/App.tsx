@@ -1,6 +1,5 @@
-import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+import { Navigate, Outlet, Route, Routes, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { authApi } from "./api/auth";
@@ -86,9 +85,7 @@ import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting"
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
-import { useDialog } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
-import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
   return (
@@ -162,7 +159,9 @@ function boardRoutes() {
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
-      <Route path="onboarding" element={<OnboardingRoutePage />} />
+      {/* AgentDash (AGE-104): /{prefix}/onboarding lands on the same WelcomePage
+          as the no-companies redirect — single canonical first-run flow. */}
+      <Route path="onboarding" element={<WelcomePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
       {/* AgentDash: Manual KPIs (AGE-45) */}
@@ -268,46 +267,10 @@ function LegacySettingsRedirect() {
   return <Navigate to={`/instance/settings/general${location.search}${location.hash}`} replace />;
 }
 
-function OnboardingRoutePage() {
-  const { companies } = useCompany();
-  const { openOnboarding } = useDialog();
-  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
-  const matchedCompany = companyPrefix
-    ? companies.find((company) => company.issuePrefix.toUpperCase() === companyPrefix.toUpperCase()) ?? null
-    : null;
-
-  const title = matchedCompany
-    ? `Add another agent to ${matchedCompany.name}`
-    : companies.length > 0
-      ? "Create another company"
-      : "Create your first company";
-  const description = matchedCompany
-    ? "Run onboarding again to add an agent and a starter task for this company."
-    : companies.length > 0
-      ? "Run onboarding again to create another company and seed its first agent."
-      : "Get started by creating a company and your first agent.";
-
-  return (
-    <div className="mx-auto max-w-xl py-10">
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h1 className="text-xl font-semibold">{title}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{description}</p>
-        <div className="mt-4">
-          <Button
-            onClick={() =>
-              matchedCompany
-                ? openOnboarding({ initialStep: 2, companyId: matchedCompany.id })
-                : openOnboarding()
-            }
-          >
-            {matchedCompany ? "Add Agent" : "Start Onboarding"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// AgentDash (AGE-104 frictionless): WelcomePage is now the single canonical
+// first-run surface. The deprecated OnboardingRoutePage middleman + the
+// /onboarding redirect dance were removed so users land on one consistent
+// page no matter which deep link sent them there.
 function UnprefixedBoardRedirect() {
   const location = useLocation();
   const { companies, selectedCompany, loading } = useCompany();
@@ -318,15 +281,7 @@ function UnprefixedBoardRedirect() {
 
   const targetCompany = selectedCompany ?? companies[0] ?? null;
   if (!targetCompany) {
-    if (
-      shouldRedirectCompanylessRouteToOnboarding({
-        pathname: location.pathname,
-        hasCompanies: false,
-      })
-    ) {
-      return <Navigate to="/onboarding" replace />;
-    }
-    return <NoCompaniesStartPage />;
+    return <WelcomePage />;
   }
 
   return (
@@ -335,10 +290,6 @@ function UnprefixedBoardRedirect() {
       replace
     />
   );
-}
-
-function NoCompaniesStartPage() {
-  return <WelcomePage />;
 }
 
 export function App() {
@@ -354,7 +305,9 @@ export function App() {
         <Route path="about" element={<MarketingAbout />} />
 
         <Route element={<CloudAccessGate />}>
-          <Route path="onboarding" element={<OnboardingRoutePage />} />
+          {/* AgentDash (AGE-104): /onboarding lands on the same WelcomePage
+              as the no-companies redirect — single canonical first-run flow. */}
+          <Route path="onboarding" element={<WelcomePage />} />
           <Route path="instance" element={<Navigate to="/instance/settings/general" replace />} />
           <Route path="instance/settings" element={<Layout />}>
             <Route index element={<Navigate to="general" replace />} />
