@@ -226,6 +226,15 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
       emailDomain: "alice@gmail.com",
     });
 
+    // Stub authUsers lookup to return gmail BEFORE mounting routes (mirrors
+    // buildApp ordering — companyRoutes captures the db reference but the
+    // route handler reads db.select at request time).
+    fakeDb.select = vi.fn(() => ({
+      from: () => ({
+        where: () => Promise.resolve([{ email: gmailUser.email }]),
+      }),
+    }));
+
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
@@ -243,13 +252,6 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
       requireCorpEmail: true, // Pro deployment
     }));
     app.use(errorHandler);
-
-    // Stub authUsers lookup to return gmail
-    fakeDb.select = vi.fn(() => ({
-      from: () => ({
-        where: () => Promise.resolve([{ email: gmailUser.email }]),
-      }),
-    }));
 
     const res = await request(app).post("/api/companies").send({ name: "Personal" });
 
