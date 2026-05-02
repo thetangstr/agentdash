@@ -973,3 +973,6 @@ export * from "./mention-parser.js";
 
 // AgentDash: chat substrate card payload types
 export * from "./cards.js";
+
+// AgentDash: onboarding interview types
+export * from "./types/interview.js";

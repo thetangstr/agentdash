@@ -4,15 +4,18 @@ import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
 import { conversationsApi } from "../api/conversations";
+import type { CardContext } from "../components/cards";
 
 export default function ChatPanel({
   conversationId,
   companyId,
   agentDirectory = [],
+  cardContext,
 }: {
   conversationId: string;
   companyId: string;
   agentDirectory?: Array<{ id: string; name: string; role: string }>;
+  cardContext?: CardContext;
 }) {
   const messages = useMessages(conversationId);
 
@@ -34,26 +37,20 @@ export default function ChatPanel({
     });
   }
 
+  const resolvedCardContext: CardContext = cardContext ?? {
+    onProposalConfirm: () => {},
+    onProposalReject: () => {},
+    onInviteSend: async () => {},
+    onInviteSkip: () => {},
+  };
+
   return (
     <div className="chat-panel flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-2xl mx-auto">
           <MessageList
             messages={messages}
-            cardContext={{
-              onProposalConfirm: () => {
-                // wired by onboarding plan
-              },
-              onProposalReject: (_r) => {
-                // wired by onboarding plan
-              },
-              onInviteSend: async (_emails) => {
-                // wired by onboarding plan
-              },
-              onInviteSkip: () => {
-                // wired by onboarding plan
-              },
-            }}
+            cardContext={resolvedCardContext}
           />
         </div>
       </div>
