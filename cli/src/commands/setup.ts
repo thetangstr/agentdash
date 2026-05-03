@@ -201,8 +201,21 @@ async function getFounderEmail(opts: { yes?: boolean; email?: string }): Promise
     p.log.error("Refusing to run --yes without --email — the founding user's email is required.");
     return null;
   }
+  // Explain BEFORE asking — users (rightly) get suspicious when an installer
+  // wants their email and the prompt doesn't say what it'll be used for.
+  // No email is ever sent: there's no nodemailer/resend/smtp dependency in
+  // the codebase. The address only exists locally for naming + first-user
+  // identity. Verified via grep on this branch (2026-05-03).
+  p.note(
+    [
+      `${pc.bold("Names your workspace")} — we use the part after the @ (so ${pc.cyan("you@acme.com")} → "Acme").`,
+      `${pc.bold("You're the first member")}, with full access.`,
+      `${pc.bold("Saved on this computer only.")} ${pc.bold(pc.green("No email is ever sent."))}`,
+    ].join("\n"),
+    "About this email",
+  );
   const value = await p.text({
-    message: "Your email (used as the founding user / company owner):",
+    message: "Your email:",
     placeholder: "you@yourdomain.com",
     validate: (v) => (EMAIL_RE.test(v.trim()) ? undefined : "Please enter a valid email."),
   });

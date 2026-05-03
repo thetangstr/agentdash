@@ -275,12 +275,32 @@ export function loadConfig(): Config {
   if (bindValidationErrors.length > 0) {
     throw new Error(bindValidationErrors[0]);
   }
-  const resolvedBind = resolveRuntimeBind({
+  let resolvedBind = resolveRuntimeBind({
     bind,
     host: configuredHost,
     customBindHost,
     tailnetBindHost,
   });
+  // Graceful degrade: a previous `agentdash setup` run may have saved
+  // server.bind=tailnet while Tailscale was up, but Tailscale isn't
+  // running right now (laptop sleep, daemon stopped, MagicDNS off, …).
+  // Hard-failing the boot leaves the user staring at a stack trace with
+  // no obvious recovery. Drop back to loopback so the dashboard still
+  // works on http://localhost:3100, and warn loudly so the user knows
+  // to re-run `agentdash setup server` if they wanted tailnet exposure.
+  // Other resolveRuntimeBind errors (e.g. custom bind without a host)
+  // are still real misconfigurations — we re-throw those below.
+  if (resolvedBind.errors.length > 0 && bind === "tailnet" && !tailnetBindHost) {
+    console.warn(
+      "[paperclip] server.bind=tailnet but Tailscale isn't running on this machine — falling back to loopback (http://localhost:3100). Re-run `agentdash setup server` to pick a different bind once Tailscale is back up.",
+    );
+    resolvedBind = resolveRuntimeBind({
+      bind: "loopback",
+      host: configuredHost,
+      customBindHost,
+      tailnetBindHost,
+    });
+  }
   if (resolvedBind.errors.length > 0) {
     throw new Error(resolvedBind.errors[0]);
   }
