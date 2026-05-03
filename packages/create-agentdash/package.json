@@ -1,0 +1,35 @@
+{
+  "name": "create-agentdash",
+  "version": "0.1.0",
+  "description": "Bootstrap AgentDash on your machine: clone the repo, install deps, link the CLI to PATH, and chain into `agentdash setup`.",
+  "type": "module",
+  "bin": {
+    "create-agentdash": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "agentdash",
+    "agents",
+    "ai",
+    "cli",
+    "create"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/thetangstr/agentdash",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thetangstr/agentdash.git",
+    "directory": "packages/create-agentdash"
+  },
+  "bugs": {
+    "url": "https://github.com/thetangstr/agentdash/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
