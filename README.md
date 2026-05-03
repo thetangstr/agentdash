@@ -8,32 +8,21 @@ Built on [paperclipai/paperclip](https://github.com/paperclipai/paperclip).
 
 ## Get started
 
-Three commands, in order:
-
-### 1. Install
+One command, three prompts.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash
 ```
 
-Clones AgentDash to `~/agentdash`, installs deps, links the `agentdash` CLI onto your PATH, and chains directly into the setup wizard. Requires Node 20+, pnpm, and git.
+That clones AgentDash to `~/agentdash`, installs deps, links the `agentdash` CLI onto your PATH, and runs the setup wizard. The wizard asks:
 
-### 2. Setup (the bootstrap auto-runs this)
-
-The wizard asks two things:
-
-1. **Pick an adapter** (Claude Code / Codex / Hermes / Cursor / …) — runs `<adapter> --version` to verify it's installed and prints the install command if not.
+1. **Pick an adapter** — Claude Code / Codex / Hermes / Cursor / … Runs `<adapter> --version` to verify it's installed; prints the install command if not.
 2. **Your email** — founding user / workspace owner.
+3. **Start setting up the agents now?** — press Enter to boot the dev server. You land in your Chief of Staff at <http://localhost:3100/cos>.
 
-Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults. To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server` / `setup bootstrap` for one section).
+Requires Node 20+, pnpm, and git. Set `ANTHROPIC_API_KEY` in the shell beforehand for real Claude replies (otherwise you get a stub). Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
 
-### 3. Start the server
-
-```sh
-cd ~/agentdash && pnpm dev
-```
-
-Open <http://localhost:3100/cos> — your Chief of Staff is ready. Set `ANTHROPIC_API_KEY` in the shell first for real Claude replies (otherwise you get a stub).
+To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server` / `setup bootstrap` for one section).
 
 ---
 
@@ -43,7 +32,7 @@ Open <http://localhost:3100/cos> — your Chief of Staff is ready. Set `ANTHROPI
 pnpm install && pnpm install-cli && agentdash setup
 ```
 
-`pnpm install-cli` symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable).
+`pnpm install-cli` symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable). The wizard's last step offers to start the server; if you skip it, run `pnpm dev` from the repo root.
 
 ### Going to production
 
