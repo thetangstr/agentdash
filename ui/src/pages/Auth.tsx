@@ -5,7 +5,12 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { getRememberedInvitePath } from "../lib/invite-memory";
 import { Button } from "@/components/ui/button";
-import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
+import { LiveBriefing } from "../marketing/sections/LiveBriefing";
+// LiveBriefing's "Live · Tue 29 Apr" hero card is the same illustration
+// the marketing landing page uses. tokens.css / typography.css are
+// loaded globally from main.tsx; we just need the section's own styles
+// for the brief card itself.
+import "../marketing/sections/LiveBriefing.css";
 import { Sparkles } from "lucide-react";
 
 type AuthMode = "sign_in" | "sign_up";
@@ -182,9 +187,16 @@ export function AuthPage() {
         </div>
       </div>
 
-      {/* Right half — ASCII art animation (hidden on mobile) */}
-      <div className="hidden md:block w-1/2 overflow-hidden">
-        <AsciiArtAnimation />
+      {/* Right half — Live Briefing card from the marketing landing page
+          (one human + four AI agents, with a slow coral row indicator).
+          Wrapped in `mkt-root` so the marketing typography vars
+          (`--mkt-rule`, `--mkt-ink`, `--mkt-font-serif`, etc.) resolve
+          for the LiveBriefing styles. Hidden on mobile to keep the form
+          column readable on small viewports. */}
+      <div className="hidden md:flex w-1/2 items-center justify-center overflow-hidden bg-surface-page px-12">
+        <div className="mkt-root w-full max-w-xl">
+          <LiveBriefing />
+        </div>
       </div>
     </div>
   );
