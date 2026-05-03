@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "@/lib/router";
+import { useNavigate, useSearchParams, Link } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { getRememberedInvitePath } from "../lib/invite-memory";
@@ -145,7 +145,17 @@ export function AuthPage() {
               />
             </div>
             <div>
-              <label htmlFor="password" className="text-xs text-text-secondary mb-1 block font-medium">Password</label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="password" className="text-xs text-text-secondary font-medium">Password</label>
+                {mode === "sign_in" && (
+                  <Link
+                    to="/forgot-password"
+                    className="text-xs text-text-secondary underline underline-offset-2 hover:text-accent-500 transition-colors"
+                  >
+                    Forgot password?
+                  </Link>
+                )}
+              </div>
               <input
                 id="password"
                 name="password"

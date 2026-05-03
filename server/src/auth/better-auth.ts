@@ -12,6 +12,8 @@ import {
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
+import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
+import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
   id: string;
@@ -119,6 +121,44 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
       enabled: true,
       requireEmailVerification: false,
       disableSignUp: config.authDisableSignUp,
+      // Better Auth fires this when the user requests a password reset
+      // via /api/auth/forget-password. The `url` it builds points at
+      // /api/auth/reset-password?token=… on the auth server itself.
+      // We rewrite it to /reset-password?token=… so the SPA's reset
+      // page handles the token; that page POSTs back to /api/auth.
+      sendResetPassword: async ({ user, url }: { user: { email: string }; url: string }) => {
+        const appUrl = derivePublicAppUrl(publicUrl);
+        const resetUrl = appUrl
+          ? `${appUrl}/reset-password?${extractQuery(url)}`
+          : url; // fallback: use whatever Better Auth built
+        const { subject, html, text } = resetPasswordEmailTemplate({ resetUrl });
+        await sendEmail({ to: user.email, subject, html, text });
+      },
+    },
+    // Welcome email after a fresh sign-up. We hook the user create
+    // event so we don't need a separate verification flow — the user
+    // is already authenticated when this fires, and the email is just
+    // a nice-to-have.
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user: { email: string; name: string | null }) => {
+            try {
+              const appUrl = derivePublicAppUrl(publicUrl) ?? "http://localhost:3100";
+              const { subject, html, text } = welcomeEmailTemplate({
+                name: user.name,
+                appUrl,
+              });
+              await sendEmail({ to: user.email, subject, html, text });
+            } catch (err) {
+              logger.warn(
+                { error: err instanceof Error ? err.message : String(err) },
+                "[email] welcome email hook failed",
+              );
+            }
+          },
+        },
+      },
     },
     advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies: isHttpOnly }),
   };
@@ -128,6 +168,30 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
   }
 
   return betterAuth(authConfig);
+}
+
+/**
+ * Better Auth's `baseURL` points at the auth API root (typically the
+ * same origin the SPA serves from). We send users to the SPA's reset
+ * page, not the auth API, so the React route can POST back to
+ * /api/auth/reset-password with the token. Strip any /api suffix and
+ * fall back to localhost when no public URL is configured.
+ */
+function derivePublicAppUrl(publicUrl: string | undefined): string | null {
+  if (!publicUrl) return null;
+  const trimmed = publicUrl.trim().replace(/\/+$/, "");
+  return trimmed.replace(/\/api$/, "");
+}
+
+/**
+ * Extract just the query string from a Better Auth-generated URL so we
+ * can re-attach it to the SPA route. Better Auth produces URLs like
+ * `https://host/api/auth/reset-password?token=…`; we want just
+ * `token=…` to hand off to /reset-password on the SPA.
+ */
+function extractQuery(url: string): string {
+  const idx = url.indexOf("?");
+  return idx >= 0 ? url.slice(idx + 1) : "";
 }
 
 export function createBetterAuthHandler(auth: BetterAuthInstance): RequestHandler {

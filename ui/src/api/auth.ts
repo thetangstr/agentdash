@@ -131,4 +131,18 @@ export const authApi = {
   signOut: async () => {
     await authPost("/sign-out", {});
   },
+
+  // Better Auth's "forget password" endpoint takes the email and a
+  // redirect URL; the server sends a reset link to that email pointing
+  // at /reset-password?token=… on the SPA.
+  forgetPassword: async (input: { email: string; redirectTo: string }) => {
+    await authPost("/forget-password", input);
+  },
+
+  // The reset page POSTs the new password + token from the query string
+  // back to Better Auth, which validates the token and writes the new
+  // hash. After this resolves the user must sign in again.
+  resetPassword: async (input: { newPassword: string; token: string }) => {
+    await authPost("/reset-password", input);
+  },
 };
