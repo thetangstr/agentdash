@@ -60,22 +60,24 @@ pnpm install --silent
 echo "agentdash bootstrap: linking the CLI onto your PATH…"
 pnpm install-cli
 
-# ---------- next steps ----------
+# ---------- chain into setup ----------
+# Call the wrapper by absolute path so we don't depend on the symlink
+# we just created being on PATH in this exact shell session.
+
+echo ""
+"$TARGET_DIR/bin/agentdash" setup
+
+# ---------- start hint ----------
 
 cat <<EOF
 
 ──────────────────────────────────────────────────
-✓ AgentDash installed at $TARGET_DIR
+✓ AgentDash installed and configured at $TARGET_DIR
 
-Next:
-  agentdash setup       # 2 prompts: pick adapter + your email
-
-Then:
+Start the server:
   cd $TARGET_DIR && pnpm dev
-  open http://localhost:3100/cos
 
-If \`agentdash\` isn't found, the install-cli step above already printed
-the \`export PATH=…\` line you need to add to your shell rc.
+Then open http://localhost:3100/cos.
 
 Docs: $REPO_URL
 ──────────────────────────────────────────────────
