@@ -10,8 +10,35 @@
 #   curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash -s -- /custom/path
 set -euo pipefail
 
+# Defaults are env-var driven so `curl | bash` works without depending on
+# positional args (which don't pass through a pipe anyway). Users can still
+# override the target dir via env: `AGENTDASH_TARGET_DIR=/foo curl ... | bash`.
+# We also accept a single positional arg ($1) for back-compat with users who
+# downloaded the script and ran it directly: `bash bootstrap.sh /foo`.
 REPO_URL="${AGENTDASH_REPO_URL:-https://github.com/thetangstr/agentdash.git}"
-TARGET_DIR="${1:-$HOME/agentdash}"
+TARGET_DIR_DEFAULT="$HOME/agentdash"
+
+# Resolve the target dir without ever touching $1 directly under `set -u`.
+# When this script is curl-piped into bash, $# is 0 and accessing $1 has
+# triggered "unbound variable" errors on certain bash builds even with the
+# `:-` operator. Branch on $# explicitly to sidestep that whole class.
+TARGET_DIR="${AGENTDASH_TARGET_DIR:-}"
+if [ -z "$TARGET_DIR" ]; then
+  if [ "$#" -gt 0 ]; then
+    TARGET_DIR="$1"
+  else
+    TARGET_DIR="$TARGET_DIR_DEFAULT"
+  fi
+fi
+
+# Fail-fast guard. If a pathological shell or transport ever drops the
+# expansion above and leaves TARGET_DIR empty, we'd later try `cd ""` or
+# `git clone "$URL" ""` which produces confusing errors. Catch it here.
+if [ -z "${TARGET_DIR:-}" ]; then
+  echo "agentdash bootstrap: internal error — TARGET_DIR resolved to empty." >&2
+  echo "agentdash bootstrap: report this at https://github.com/thetangstr/agentdash/issues" >&2
+  exit 1
+fi
 
 # ---------- prereq checks ----------
 
