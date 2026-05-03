@@ -2,19 +2,21 @@
 // the user asked for after #96 ("we need a frictionless way for user to
 // get started").
 //
-// The default `agentdash setup` flow is two steps, period:
+// The default `agentdash setup` flow is one step:
 //
-//   1. Pick an adapter — verify its binary is on PATH; if not, print the
-//      install command and the line that failed.
-//   2. Ask for the founding user's email — used as
-//      AGENTDASH_BOOTSTRAP_EMAIL so the workspace name + emailDomain
-//      derive cleanly on first boot.
+//   1. Pick an adapter — verify its binary is on PATH, env hints,
+//      optional hello probe; if missing, print the install command.
+//
+// The founding user's email used to be a second prompt here. We dropped
+// it — the email/password are collected by Better Auth's sign-up screen
+// when the user lands on the dashboard. That keeps personal info out of
+// the CLI and gives us a real auth account from the start.
 //
 // Everything else uses safe defaults — embedded Postgres, local-disk
-// storage, local-encrypted secrets, loopback bind, local_trusted mode,
-// info logging. If the user wants to tune any of those, the existing
-// `agentdash onboard` (the older paperclip-inherited wizard) and the
-// per-section subcommands below stay around as escape hatches.
+// storage, local-encrypted secrets, info logging. Bind mode auto-detects
+// Tailscale: if Tailscale is running on the host we pick `tailnet`
+// (which forces authenticated mode); otherwise we fall back to
+// `loopback` (local_trusted, no auth, single user).
 //
 // Subcommands kept for re-running a single step later:
 //   setup server     — switch bind mode (loopback / lan / tailnet)
@@ -78,11 +80,12 @@ interface AdapterOpts extends CommonOpts {
 }
 
 interface SetupAllOpts extends CommonOpts {
+  /** @deprecated kept for back-compat with old `agentdash setup --email`
+   *  invocations; the wizard no longer collects an email — sign-up
+   *  happens in the Better Auth flow on the dashboard. */
   email?: string;
   adapter?: string;
 }
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ---------- safe-defaults config builder ----------
 
@@ -94,9 +97,19 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 function buildDefaultConfig(): PaperclipConfig {
   const instanceId = resolvePaperclipInstanceId();
-  const { server, auth } = buildPresetServerConfig("loopback", {
+  // Auto-detect Tailscale at config-write time. If Tailscale is running
+  // we want the install to "just work" over the tailnet hostname out of
+  // the box (auth-protected, MagicDNS-friendly). If not, fall back to
+  // loopback (single-user local_trusted, no auth UI). Either way the
+  // runtime fallback in server/src/config.ts (PR #116) safely degrades
+  // tailnet → loopback if Tailscale stops running between sessions.
+  const tailnetHost = detectTailnetBindHost();
+  const bind: "loopback" | "tailnet" = tailnetHost ? "tailnet" : "loopback";
+  const allowedHostnames = ["localhost", "127.0.0.1"];
+  if (tailnetHost) allowedHostnames.push(tailnetHost);
+  const { server, auth } = buildPresetServerConfig(bind, {
     port: 3100,
-    allowedHostnames: ["localhost", "127.0.0.1"],
+    allowedHostnames,
     serveUi: true,
   });
   return {
@@ -270,46 +283,6 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-// ---------- step 2: get founding user's email ----------
-
-async function getFounderEmail(opts: { yes?: boolean; email?: string }): Promise<string | null> {
-  if (opts.email) {
-    if (!EMAIL_RE.test(opts.email)) {
-      p.log.error(`${pc.cyan(opts.email)} doesn't look like a valid email.`);
-      return null;
-    }
-    p.log.info(`Founding user: ${pc.cyan(opts.email)}`);
-    return opts.email;
-  }
-  if (opts.yes) {
-    p.log.error("Refusing to run --yes without --email — the founding user's email is required.");
-    return null;
-  }
-  // Explain BEFORE asking — users (rightly) get suspicious when an installer
-  // wants their email and the prompt doesn't say what it'll be used for.
-  // No email is ever sent: there's no nodemailer/resend/smtp dependency in
-  // the codebase. The address only exists locally for naming + first-user
-  // identity. Verified via grep on this branch (2026-05-03).
-  p.note(
-    [
-      `${pc.bold("Names your workspace")} — we use the part after the @ (so ${pc.cyan("you@acme.com")} → "Acme").`,
-      `${pc.bold("You're the first member")}, with full access.`,
-      `${pc.bold("Saved on this computer only.")} ${pc.bold(pc.green("No email is ever sent."))}`,
-    ].join("\n"),
-    "About this email",
-  );
-  const value = await p.text({
-    message: "Your email:",
-    placeholder: "you@yourdomain.com",
-    validate: (v) => (EMAIL_RE.test(v.trim()) ? undefined : "Please enter a valid email."),
-  });
-  if (p.isCancel(value)) {
-    p.cancel("Setup cancelled.");
-    return null;
-  }
-  return value.trim();
-}
-
 // ---------- top-level orchestrator ----------
 
 export async function setup(opts: SetupAllOpts): Promise<void> {
@@ -321,28 +294,24 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
   if (!hadConfig) {
     const fresh = buildDefaultConfig();
     writeConfig(fresh, configPath);
-    p.log.info(`Wrote a fresh config at ${pc.dim(configPath)} with safe defaults (loopback, embedded Postgres, local storage).`);
+    const bindLabel = fresh.server.bind === "tailnet"
+      ? `tailnet (${fresh.server.host})`
+      : "loopback (127.0.0.1)";
+    p.log.info(`Wrote a fresh config at ${pc.dim(configPath)} — bind=${pc.cyan(bindLabel)}, embedded Postgres, local storage.`);
   }
 
-  // Step 1 — adapter
+  // Step 1 — adapter (binary check, env-hint check, optional hello probe).
   const adapter = await pickAndVerifyAdapter({ yes: opts.yes, preselected: opts.adapter });
   if (!adapter) return;
 
-  // Step 2 — email
-  const email = await getFounderEmail({ yes: opts.yes, email: opts.email });
-  if (!email) return;
-
-  // Persist email + JWT secret
+  // Back-compat: if --email was passed, save it as a hint for local_trusted
+  // mode bootstrap. We no longer prompt for it.
   const envPath = resolvePaperclipEnvFile(opts.config);
-  mergePaperclipEnvEntries(
-    {
-      AGENTDASH_BOOTSTRAP_EMAIL: email,
-      AGENTDASH_DEFAULT_ADAPTER: adapter.type,
-    },
-    envPath,
-  );
+  const envEntries: Record<string, string> = { AGENTDASH_DEFAULT_ADAPTER: adapter.type };
+  if (opts.email) envEntries.AGENTDASH_BOOTSTRAP_EMAIL = opts.email;
+  mergePaperclipEnvEntries(envEntries, envPath);
   ensureAgentJwtSecret(opts.config);
-  p.log.success(`Saved founding-user email and adapter preference to ${pc.dim(envPath)}`);
+  p.log.success(`Saved adapter preference to ${pc.dim(envPath)}`);
 
   // Surface adapter caveats inside the @clack box so they aren't drowned
   // out by a 30-line dev-server boot log if the user accepts the start
@@ -474,19 +443,32 @@ async function runDevServer(cwd: string): Promise<void> {
 }
 
 /**
- * Compute the CoS URL the user should land on, honoring whatever port
- * we wrote to config (defaults to 3100). Always loopback because the
- * dev server boots on 127.0.0.1 by default; advanced users with custom
- * binds can re-run `agentdash setup server` later.
+ * Compute the URL the user should land on after the dev server boots:
+ *
+ *   - `local_trusted`: `/cos` — no auth, single user, drops them
+ *     straight into the Chief of Staff conversation.
+ *   - `authenticated`: `/?mode=sign_up` — Better Auth's combined
+ *     sign-up/sign-in screen; the `?mode=sign_up` query param tells
+ *     ui/src/pages/Auth.tsx to default the form to "Create account".
+ *
+ * Honors whatever port we wrote to config (defaults to 3100). We use
+ * `localhost` rather than the bind host so the URL works even when the
+ * user is on the same machine as the server but Tailscale isn't
+ * currently routing.
  */
 function resolveCosUrl(configOpt?: string): string {
+  let port = 3100;
+  let isAuthenticated = false;
   try {
     const cfg = readConfig(resolveConfigPath(configOpt));
-    const port = cfg?.server?.port ?? 3100;
-    return `http://localhost:${port}/cos`;
+    port = cfg?.server?.port ?? 3100;
+    isAuthenticated = cfg?.server?.deploymentMode === "authenticated";
   } catch {
-    return "http://localhost:3100/cos";
+    // Fall through with defaults — better than blowing up the wizard.
   }
+  return isAuthenticated
+    ? `http://localhost:${port}/?mode=sign_up`
+    : `http://localhost:${port}/cos`;
 }
 
 /**

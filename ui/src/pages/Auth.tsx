@@ -14,7 +14,12 @@ export function AuthPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [mode, setMode] = useState<AuthMode>("sign_in");
+  // Default to sign-in, but honor `?mode=sign_up` so the CLI's first-run
+  // wizard can deep-link new users straight to the "Create your workspace"
+  // form. The toggle link still lets them switch back to sign-in if they
+  // already have an account.
+  const initialMode: AuthMode = searchParams.get("mode") === "sign_up" ? "sign_up" : "sign_in";
+  const [mode, setMode] = useState<AuthMode>(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
