@@ -278,13 +278,21 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
   const canStartDev = workspaceRoot !== null;
   const interactive = !opts.yes && process.stdin.isTTY && process.stdout.isTTY;
 
+  const cosUrl = resolveCosUrl(opts.config);
+
   if (canStartDev && interactive) {
     const startNow = await p.confirm({
-      message: "Start setting up the agents now? (this runs `pnpm dev` and opens your Chief of Staff at http://localhost:3100/cos)",
+      message: `Start setting up the agents now? (this runs \`pnpm dev\` and opens your Chief of Staff at ${cosUrl})`,
       initialValue: true,
     });
     if (!p.isCancel(startNow) && startNow === true) {
-      p.outro(pc.green("Starting AgentDash — Ctrl-C to stop. Open http://localhost:3100/cos once you see \"VITE ready\"."));
+      p.outro(pc.green(`Starting AgentDash — your browser will open at ${cosUrl} when the server is ready. Ctrl-C to stop.`));
+      // Fire-and-forget: poll /api/health until the server is up, then
+      // openUrlInBrowser. We deliberately don't `await` this — we want
+      // runDevServer below to take over stdio immediately so the user
+      // sees the boot log. The opener prints its own success/timeout
+      // line that interleaves naturally with Vite's output.
+      void waitForServerThenOpen(cosUrl);
       await runDevServer(workspaceRoot!);
       return;
     }
@@ -299,7 +307,7 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
   } else {
     console.log(`  ${pc.cyan("pnpm dev")} ${pc.dim("(from your AgentDash workspace)")}`);
   }
-  console.log(`  Open ${pc.cyan("http://localhost:3100/cos")} — your Chief of Staff is ready.`);
+  console.log(`  Open ${pc.cyan(cosUrl)} — your Chief of Staff is ready.`);
 }
 
 // ---------- helpers for the optional "start now" prompt ----------
@@ -379,6 +387,63 @@ async function runDevServer(cwd: string): Promise<void> {
     });
     child.on("close", () => resolve());
   });
+}
+
+/**
+ * Compute the CoS URL the user should land on, honoring whatever port
+ * we wrote to config (defaults to 3100). Always loopback because the
+ * dev server boots on 127.0.0.1 by default; advanced users with custom
+ * binds can re-run `agentdash setup server` later.
+ */
+function resolveCosUrl(configOpt?: string): string {
+  try {
+    const cfg = readConfig(resolveConfigPath(configOpt));
+    const port = cfg?.server?.port ?? 3100;
+    return `http://localhost:${port}/cos`;
+  } catch {
+    return "http://localhost:3100/cos";
+  }
+}
+
+/**
+ * Poll the dev server's health endpoint and open the user's browser as
+ * soon as it's responding. Runs in the background while `pnpm dev`
+ * inherits stdio, so the user sees the Vite boot log AND lands in CoS
+ * chat without typing anything else.
+ *
+ * We deliberately swallow all errors — this is a UX nicety, not a
+ * correctness path. If we can't open the browser (no DISPLAY, no
+ * `open`/`xdg-open` binary, sandboxed CI, etc.) the user still has the
+ * URL printed in the outro and can paste it manually.
+ */
+async function waitForServerThenOpen(cosUrl: string): Promise<void> {
+  const healthUrl = cosUrl.replace(/\/cos\/?$/, "/api/health");
+  const deadline = Date.now() + 90_000;
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        // Newline so our message doesn't smash into Vite's last log line.
+        console.log("");
+        console.log(pc.cyan(`→ Opening ${cosUrl} in your browser…`));
+        console.log("");
+        try {
+          openUrlInBrowser(cosUrl);
+        } catch {
+          // openUrlInBrowser already prints its own fallback hint.
+        }
+        return;
+      }
+    } catch {
+      // Server not up yet — keep polling.
+    }
+    await sleep(500);
+  }
+  console.log("");
+  console.log(pc.yellow(`! Server didn't respond within 90s — open ${cosUrl} manually once you see "Server listening".`));
+  console.log("");
 }
 
 // ---------- subcommands (escape hatches for re-running a step) ----------
