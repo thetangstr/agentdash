@@ -1,25 +1,25 @@
-// AgentDash: first-run wizard. Closes GH #94.
+// AgentDash: frictionless first-run wizard. Closes GH #94 + the cleanup
+// the user asked for after #96 ("we need a frictionless way for user to
+// get started").
 //
-// `agentdash setup` is the canonical first-run path. It orchestrates three
-// focused subcommands:
+// The default `agentdash setup` flow is two steps, period:
 //
-//   setup server     — Tailscale-aware bind mode + allowed hostnames
-//   setup bootstrap  — generate the CEO invite and open it in the browser
-//   setup adapter    — pick + install an initial agent adapter
+//   1. Pick an adapter — verify its binary is on PATH; if not, print the
+//      install command and the line that failed.
+//   2. Ask for the founding user's email — used as
+//      AGENTDASH_BOOTSTRAP_EMAIL so the workspace name + emailDomain
+//      derive cleanly on first boot.
 //
-// Plain `agentdash setup` runs all three in order. Each subcommand is also
-// runnable on its own so a user can revisit a step later (e.g. add an
-// adapter after the server is up).
+// Everything else uses safe defaults — embedded Postgres, local-disk
+// storage, local-encrypted secrets, loopback bind, local_trusted mode,
+// info logging. If the user wants to tune any of those, the existing
+// `agentdash onboard` (the older paperclip-inherited wizard) and the
+// per-section subcommands below stay around as escape hatches.
 //
-// Design notes:
-// - The server step is a SLIM alternative to `agentdash onboard` for users
-//   who only need bind/host config. Power users still have `onboard` for
-//   database/LLM/storage prompts.
-// - The bootstrap step calls `bootstrapCeoInvite()` directly (which now
-//   returns the invite URL) and opens it in the browser unless --no-open.
-// - The adapter step doesn't actually install adapter packages globally
-//   (paperclip core's responsibility) — it prints the canonical install
-//   command for the chosen adapter so the user knows what to run.
+// Subcommands kept for re-running a single step later:
+//   setup server     — switch bind mode (loopback / lan / tailnet)
+//   setup bootstrap  — re-issue the CEO invite for authenticated mode
+//   setup adapter    — pick + verify a different adapter
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
@@ -31,8 +31,18 @@ import {
 import { configExists, readConfig, resolveConfigPath, writeConfig } from "../config/store.js";
 import { buildPresetServerConfig, detectTailnetBindHost } from "../config/server-bind.js";
 import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
+import { mergePaperclipEnvEntries, resolvePaperclipEnvFile, ensureAgentJwtSecret } from "../config/env.js";
 import { openUrlInBrowser } from "../utils/open-url.js";
 import { printPaperclipCliBanner } from "../utils/banner.js";
+import { ADAPTER_CHECKS, checkAdapterBinary, findAdapterCheck } from "../utils/adapter-check.js";
+import { defaultStorageConfig } from "../prompts/storage.js";
+import { defaultSecretsConfig } from "../prompts/secrets.js";
+import {
+  resolveDefaultBackupDir,
+  resolveDefaultEmbeddedPostgresDir,
+  resolveDefaultLogsDir,
+  resolvePaperclipInstanceId,
+} from "../config/home.js";
 import type { PaperclipConfig } from "../config/schema.js";
 
 interface CommonOpts {
@@ -57,43 +67,225 @@ interface AdapterOpts extends CommonOpts {
 }
 
 interface SetupAllOpts extends CommonOpts {
-  bind?: BindMode;
-  port?: number;
-  open?: boolean;
-  skipAdapter?: boolean;
-  skipBootstrap?: boolean;
+  email?: string;
+  adapter?: string;
 }
 
-const ADAPTER_CHOICES: Array<{ value: AgentAdapterType; label: string; install?: string }> = [
-  { value: "claude_local", label: "Claude Code (local)", install: "npm install -g @anthropic-ai/claude-code" },
-  { value: "codex_local", label: "Codex (local)", install: "npm install -g @openai/codex" },
-  { value: "cursor", label: "Cursor (local)" },
-  { value: "gemini_local", label: "Gemini (local)" },
-  { value: "opencode_local", label: "OpenCode (local)" },
-  { value: "pi_local", label: "Pi (local)" },
-  { value: "acpx_local", label: "ACPX (local)" },
-  { value: "openclaw_gateway", label: "OpenClaw (gateway)" },
-  { value: "process", label: "Generic process adapter" },
-  { value: "http", label: "Generic HTTP adapter" },
-];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// ---------- setup server ----------
+// ---------- safe-defaults config builder ----------
+
+/**
+ * Build a minimal, valid PaperclipConfig from scratch — used when the user
+ * runs `agentdash setup` on a fresh machine with no prior config. Mirrors
+ * what `agentdash onboard` produces in quickstart-loopback mode but skips
+ * every prompt.
+ */
+function buildDefaultConfig(): PaperclipConfig {
+  const instanceId = resolvePaperclipInstanceId();
+  const { server, auth } = buildPresetServerConfig("loopback", {
+    port: 3100,
+    allowedHostnames: ["localhost", "127.0.0.1"],
+    serveUi: true,
+  });
+  return {
+    $meta: {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      source: "onboard",
+    },
+    database: {
+      mode: "embedded-postgres",
+      embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(instanceId),
+      embeddedPostgresPort: 54329,
+      backup: {
+        enabled: true,
+        intervalMinutes: 60,
+        retentionDays: 7,
+        dir: resolveDefaultBackupDir(instanceId),
+      },
+    },
+    logging: {
+      mode: "file",
+      logDir: resolveDefaultLogsDir(instanceId),
+    },
+    server,
+    telemetry: { enabled: true },
+    auth,
+    storage: defaultStorageConfig(),
+    secrets: defaultSecretsConfig(),
+  };
+}
+
+// ---------- step 1: pick + verify adapter ----------
+
+interface AdapterPickResult {
+  type: AgentAdapterType;
+  ok: boolean;
+  detail?: string;
+  fix?: string;
+}
+
+async function pickAndVerifyAdapter(opts: { yes?: boolean; preselected?: string }): Promise<AdapterPickResult | null> {
+  let selected: AgentAdapterType;
+
+  if (opts.preselected) {
+    if (!AGENT_ADAPTER_TYPES.includes(opts.preselected as (typeof AGENT_ADAPTER_TYPES)[number])) {
+      p.log.error(`Unknown adapter type ${pc.cyan(opts.preselected)}. Known: ${AGENT_ADAPTER_TYPES.join(", ")}`);
+      return null;
+    }
+    selected = opts.preselected as AgentAdapterType;
+    p.log.info(`Adapter: ${pc.cyan(selected)}`);
+  } else if (opts.yes) {
+    // Default to claude_local in non-interactive mode — it's the most common
+    // first-time pick. The user can change later in the dashboard.
+    selected = "claude_local";
+    p.log.info(`Adapter: ${pc.cyan(selected)} (default in --yes mode)`);
+  } else {
+    const picked = await p.select({
+      message: "Pick the adapter for your first agent:",
+      options: ADAPTER_CHECKS.map((spec) => ({
+        value: spec.type,
+        label: spec.label,
+        hint: spec.command ? pc.dim(`runs \`${spec.command}\``) : pc.dim("configured later"),
+      })),
+      initialValue: "claude_local",
+    });
+    if (p.isCancel(picked)) {
+      p.cancel("Setup cancelled.");
+      return null;
+    }
+    selected = picked as AgentAdapterType;
+  }
+
+  const spec = findAdapterCheck(selected);
+  if (!spec) {
+    return { type: selected, ok: true };
+  }
+
+  const result = checkAdapterBinary(spec);
+  switch (result.status) {
+    case "configured":
+      p.log.success(`${spec.label} ready  ${pc.dim(`(${result.detail})`)}`);
+      return { type: selected, ok: true, detail: result.detail };
+    case "manual":
+      p.log.info(`${spec.label} — ${pc.dim(result.detail ?? "configure when you hire your first agent")}`);
+      return { type: selected, ok: true, detail: result.detail };
+    case "missing":
+    case "errored":
+      p.log.warn(`${spec.label} not ready: ${result.detail}`);
+      if (result.fix) {
+        p.log.message(`  ${pc.cyan("Fix:")} ${result.fix}`);
+      }
+      p.log.message(pc.dim("  You can keep going and install it later — agents using this adapter will fail to run until then."));
+      return { type: selected, ok: false, detail: result.detail, fix: result.fix };
+  }
+}
+
+// ---------- step 2: get founding user's email ----------
+
+async function getFounderEmail(opts: { yes?: boolean; email?: string }): Promise<string | null> {
+  if (opts.email) {
+    if (!EMAIL_RE.test(opts.email)) {
+      p.log.error(`${pc.cyan(opts.email)} doesn't look like a valid email.`);
+      return null;
+    }
+    p.log.info(`Founding user: ${pc.cyan(opts.email)}`);
+    return opts.email;
+  }
+  if (opts.yes) {
+    p.log.error("Refusing to run --yes without --email — the founding user's email is required.");
+    return null;
+  }
+  const value = await p.text({
+    message: "Your email (used as the founding user / company owner):",
+    placeholder: "you@yourdomain.com",
+    validate: (v) => (EMAIL_RE.test(v.trim()) ? undefined : "Please enter a valid email."),
+  });
+  if (p.isCancel(value)) {
+    p.cancel("Setup cancelled.");
+    return null;
+  }
+  return value.trim();
+}
+
+// ---------- top-level orchestrator ----------
+
+export async function setup(opts: SetupAllOpts): Promise<void> {
+  printPaperclipCliBanner();
+  p.intro(pc.cyan("AgentDash setup"));
+
+  const configPath = resolveConfigPath(opts.config);
+  const hadConfig = configExists(configPath);
+  if (!hadConfig) {
+    const fresh = buildDefaultConfig();
+    writeConfig(fresh, configPath);
+    p.log.info(`Wrote a fresh config at ${pc.dim(configPath)} with safe defaults (loopback, embedded Postgres, local storage).`);
+  }
+
+  // Step 1 — adapter
+  const adapter = await pickAndVerifyAdapter({ yes: opts.yes, preselected: opts.adapter });
+  if (!adapter) return;
+
+  // Step 2 — email
+  const email = await getFounderEmail({ yes: opts.yes, email: opts.email });
+  if (!email) return;
+
+  // Persist email + JWT secret
+  const envPath = resolvePaperclipEnvFile(opts.config);
+  mergePaperclipEnvEntries(
+    {
+      AGENTDASH_BOOTSTRAP_EMAIL: email,
+      AGENTDASH_DEFAULT_ADAPTER: adapter.type,
+    },
+    envPath,
+  );
+  ensureAgentJwtSecret(opts.config);
+  p.log.success(`Saved founding-user email and adapter preference to ${pc.dim(envPath)}`);
+
+  // Done — print next steps
+  p.outro(pc.green("Setup complete."));
+  console.log("");
+  console.log(pc.bold("Next:"));
+  console.log(`  ${pc.cyan("pnpm dev")}`);
+  console.log(`  Open ${pc.cyan("http://localhost:3100/cos")} — your Chief of Staff is ready.`);
+  if (!adapter.ok) {
+    console.log("");
+    console.log(pc.yellow(`  ⚠  ${adapter.type} isn't installed yet — agents using it will fail until you fix it.`));
+    if (adapter.fix) console.log(`    ${pc.cyan("Fix:")} ${adapter.fix}`);
+  }
+}
+
+// ---------- subcommands (escape hatches for re-running a step) ----------
+
+export async function setupAdapter(opts: AdapterOpts): Promise<void> {
+  if (!opts.yes) {
+    printPaperclipCliBanner();
+    p.intro(pc.cyan("Re-pick adapter"));
+  }
+  const result = await pickAndVerifyAdapter({ yes: opts.yes, preselected: opts.type });
+  if (!result) return;
+  // Persist the chosen adapter type so the dashboard can default to it.
+  mergePaperclipEnvEntries({ AGENTDASH_DEFAULT_ADAPTER: result.type }, resolvePaperclipEnvFile(opts.config));
+  if (!opts.yes) p.outro(pc.green("Done."));
+}
 
 export async function setupServer(opts: ServerOpts): Promise<void> {
   const configPath = resolveConfigPath(opts.config);
   if (!configExists(configPath)) {
-    p.log.error(`No config found at ${pc.dim(configPath)}.`);
-    p.log.message(`Run ${pc.cyan("agentdash onboard")} first to create the base config (database, LLM, storage), then come back to ${pc.cyan("agentdash setup")}.`);
+    p.log.error(`No config at ${pc.dim(configPath)}. Run ${pc.cyan("agentdash setup")} first.`);
     return;
   }
   const existing = readConfig(configPath);
   if (!existing) {
-    p.log.error(`Config at ${pc.dim(configPath)} could not be parsed.`);
+    p.log.error(`Config at ${pc.dim(configPath)} couldn't be parsed.`);
     return;
   }
 
-  if (!opts.yes) printPaperclipCliBanner();
-  p.log.info(pc.cyan("Server reachability"));
+  if (!opts.yes) {
+    printPaperclipCliBanner();
+    p.intro(pc.cyan("Server reachability"));
+  }
 
   const detectedTailnet = detectTailnetBindHost();
   const detectedBind: BindMode = opts.bind
@@ -102,16 +294,15 @@ export async function setupServer(opts: ServerOpts): Promise<void> {
   let bind: BindMode;
   if (opts.yes || opts.bind) {
     bind = detectedBind;
-    p.log.info(`Using bind mode ${pc.cyan(bind)}${detectedTailnet ? ` (Tailscale detected at ${pc.dim(detectedTailnet)})` : ""}`);
+    p.log.info(`Bind: ${pc.cyan(bind)}${detectedTailnet ? ` ${pc.dim(`(Tailscale at ${detectedTailnet})`)}` : ""}`);
   } else {
-    const choices: Array<{ value: BindMode; label: string; hint?: string }> = [
-      { value: "loopback", label: "loopback (localhost only)", hint: "Single-machine dev. local_trusted mode — no auth." },
-      { value: "lan", label: "lan (any IP)", hint: "Reachable from your LAN. Authenticated mode." },
-      { value: "tailnet", label: "tailnet (Tailscale)", hint: detectedTailnet ? `Detected: ${detectedTailnet}` : "No Tailscale detected — falls back to loopback at runtime." },
-    ];
     const picked = await p.select({
       message: "How should the server be reachable?",
-      options: choices,
+      options: [
+        { value: "loopback", label: "loopback (localhost only)", hint: "Single-machine, no auth." },
+        { value: "lan", label: "lan (any IP)", hint: "Reachable from your LAN." },
+        { value: "tailnet", label: "tailnet (Tailscale)", hint: detectedTailnet ? `Detected: ${detectedTailnet}` : "Falls back to loopback if no Tailscale." },
+      ],
       initialValue: detectedBind === "custom" ? "loopback" : detectedBind,
     });
     if (p.isCancel(picked)) {
@@ -122,26 +313,19 @@ export async function setupServer(opts: ServerOpts): Promise<void> {
   }
 
   if (bind === "custom") {
-    p.log.warn("Custom bind hosts aren't supported by `setup server` — use `agentdash onboard` for advanced server config.");
+    p.log.warn("Custom hosts: use `agentdash onboard` for advanced server config.");
     return;
   }
 
   const port = opts.port ?? existing.server.port ?? 3100;
   const allowedHostnames = collectAllowedHostnames(existing, detectedTailnet, bind);
-
   const { server, auth } = buildPresetServerConfig(bind, {
     port,
     allowedHostnames,
     serveUi: existing.server.serveUi ?? true,
   });
-
-  const next: PaperclipConfig = { ...existing, server, auth };
-  writeConfig(next, configPath);
-  p.log.success(`Wrote server config to ${pc.dim(configPath)}`);
-  p.log.message(`Bind: ${pc.cyan(bind)}  Host: ${pc.cyan(server.host)}  Port: ${pc.cyan(String(server.port))}`);
-  if (allowedHostnames.length > 0) {
-    p.log.message(`Allowed hostnames: ${pc.dim(allowedHostnames.join(", "))}`);
-  }
+  writeConfig({ ...existing, server, auth }, configPath);
+  p.log.success(`Server: bind=${pc.cyan(bind)} host=${pc.cyan(server.host)} port=${pc.cyan(String(server.port))}`);
 }
 
 function collectAllowedHostnames(existing: PaperclipConfig, tailnet: string | undefined, bind: BindMode): string[] {
@@ -152,108 +336,22 @@ function collectAllowedHostnames(existing: PaperclipConfig, tailnet: string | un
   return Array.from(set);
 }
 
-// ---------- setup bootstrap ----------
-
 export async function setupBootstrap(opts: BootstrapOpts): Promise<void> {
   if (!opts.yes) {
     printPaperclipCliBanner();
-    p.log.info(pc.cyan("Bootstrap CEO invite"));
+    p.intro(pc.cyan("Bootstrap CEO invite"));
   }
-
   const result = await bootstrapCeoInvite({
     config: opts.config,
     force: opts.force,
     expiresHours: opts.expiresHours,
     baseUrl: opts.baseUrl,
   });
-
   if (result.status !== "created" || !result.inviteUrl) return;
-
   const shouldOpen = opts.open ?? true;
   if (shouldOpen) {
     const opened = openUrlInBrowser(result.inviteUrl);
-    if (opened) {
-      p.log.message(pc.dim("Opened the invite URL in your browser."));
-    } else {
-      p.log.warn("Could not auto-open the URL — copy/paste it from above.");
-    }
-  } else {
-    p.log.message(pc.dim("Skipping browser auto-open (--no-open)."));
+    if (opened) p.log.message(pc.dim("Opened in your browser."));
+    else p.log.warn("Couldn't auto-open — copy/paste the URL above.");
   }
-}
-
-// ---------- setup adapter ----------
-
-export async function setupAdapter(opts: AdapterOpts): Promise<void> {
-  if (!opts.yes) {
-    printPaperclipCliBanner();
-    p.log.info(pc.cyan("Adapter selection"));
-  }
-
-  let adapter: AgentAdapterType | "skip";
-  if (opts.type) {
-    if (!AGENT_ADAPTER_TYPES.includes(opts.type as (typeof AGENT_ADAPTER_TYPES)[number])) {
-      p.log.error(`Unknown adapter type ${pc.cyan(opts.type)}. Known: ${AGENT_ADAPTER_TYPES.join(", ")}`);
-      return;
-    }
-    adapter = opts.type as AgentAdapterType;
-  } else if (opts.yes) {
-    p.log.info("Skipping adapter selection in --yes mode. Run `agentdash setup adapter` interactively to pick one.");
-    return;
-  } else {
-    const picked = await p.select({
-      message: "Pick an initial adapter to use for your first agent:",
-      options: [
-        { value: "skip" as const, label: "Skip — pick later from the dashboard" },
-        ...ADAPTER_CHOICES.map((c) => ({ value: c.value, label: c.label, hint: c.install })),
-      ],
-      initialValue: "skip" as const,
-    });
-    if (p.isCancel(picked)) {
-      p.cancel("Setup cancelled.");
-      return;
-    }
-    adapter = picked as AgentAdapterType | "skip";
-  }
-
-  if (adapter === "skip") {
-    p.log.message(pc.dim("Skipped. You can hire an agent and pick its adapter from the dashboard."));
-    return;
-  }
-
-  const choice = ADAPTER_CHOICES.find((c) => c.value === adapter);
-  p.log.success(`Selected ${pc.cyan(choice?.label ?? adapter)}.`);
-  if (choice?.install) {
-    p.log.message(`Install the adapter binary if you haven't:`);
-    p.log.message(`  ${pc.cyan(choice.install)}`);
-  }
-  p.log.message(`When you hire your first agent in the dashboard, set ${pc.cyan("adapterType")} to ${pc.cyan(adapter)}.`);
-}
-
-// ---------- setup (orchestrator) ----------
-
-export async function setup(opts: SetupAllOpts): Promise<void> {
-  printPaperclipCliBanner();
-  p.log.info(pc.cyan("First-run setup"));
-
-  // 1. Server
-  await setupServer({ config: opts.config, yes: opts.yes, bind: opts.bind, port: opts.port });
-
-  // 2. Bootstrap (only meaningful when server is in authenticated mode)
-  if (!opts.skipBootstrap) {
-    const cfg = readConfig(resolveConfigPath(opts.config));
-    if (cfg?.server.deploymentMode === "authenticated") {
-      await setupBootstrap({ config: opts.config, yes: opts.yes, open: opts.open });
-    } else {
-      p.log.info(pc.dim("Skipping bootstrap step — local_trusted mode doesn't need a CEO invite."));
-    }
-  }
-
-  // 3. Adapter
-  if (!opts.skipAdapter) {
-    await setupAdapter({ config: opts.config, yes: opts.yes });
-  }
-
-  p.log.success("Setup complete.");
-  p.log.message(`Next: ${pc.cyan("pnpm dev")} (or ${pc.cyan("agentdash run")}) to start the server.`);
 }

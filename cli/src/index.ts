@@ -49,7 +49,7 @@ program.hook("preAction", (_thisCommand, actionCommand) => {
 
 program
   .command("onboard")
-  .description("Interactive first-run setup wizard")
+  .description("Advanced setup wizard (database / LLM / storage). Most users want `agentdash setup` instead.")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--bind <mode>", "Quickstart reachability preset (loopback, lan, tailnet)")
@@ -57,25 +57,31 @@ program
   .option("--run", "Start Paperclip immediately after saving config", false)
   .action(onboard);
 
-// AgentDash: focused first-run wizard with subcommands (closes GH #94).
-// `setup` (no arg) runs server -> bootstrap -> adapter in order. Each
-// subcommand is also runnable standalone for re-running a single step.
+// AgentDash: frictionless first-run wizard. Two prompts (adapter + email)
+// + safe defaults autowritten if no config exists. Subcommands stay
+// available as escape hatches for re-running a single step.
 const setupCmd = program
   .command("setup")
-  .description("AgentDash first-run wizard (server, bootstrap, adapter)")
+  .description("AgentDash first-run wizard — pick adapter + founding user email")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
-  .option("--bind <mode>", "Reachability preset (loopback, lan, tailnet)")
-  .option("--port <number>", "Server port", (value) => Number(value))
-  .option("-y, --yes", "Non-interactive — accept detected defaults", false)
-  .option("--no-open", "Don't auto-open the bootstrap invite in the browser")
-  .option("--skip-adapter", "Skip the adapter selection step", false)
-  .option("--skip-bootstrap", "Skip the CEO bootstrap step", false)
+  .option("--email <address>", "Founding user email (skips the prompt)")
+  .option("--adapter <type>", "Adapter type to use for the first agent (skips the prompt)")
+  .option("-y, --yes", "Non-interactive — requires --email; defaults adapter to claude_local", false)
   .action(setup);
 
 setupCmd
+  .command("adapter")
+  .description("Pick + verify an agent adapter (re-run after install)")
+  .option("-c, --config <path>", "Path to config file")
+  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
+  .option("--type <adapter>", "Adapter type (e.g. claude_local, codex_local, hermes_local, cursor)")
+  .option("-y, --yes", "Non-interactive — requires --type", false)
+  .action(setupAdapter);
+
+setupCmd
   .command("server")
-  .description("Configure server reachability (bind mode + Tailscale + allowed hostnames)")
+  .description("Switch server bind mode (loopback / lan / tailnet)")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--bind <mode>", "Reachability preset (loopback, lan, tailnet)")
@@ -85,7 +91,7 @@ setupCmd
 
 setupCmd
   .command("bootstrap")
-  .description("Generate the bootstrap CEO invite and open it in the browser")
+  .description("Generate the CEO invite (authenticated mode only) and open in the browser")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--force", "Create new invite even if admin already exists", false)
@@ -94,15 +100,6 @@ setupCmd
   .option("--no-open", "Don't auto-open the invite URL in the browser")
   .option("-y, --yes", "Non-interactive", false)
   .action(setupBootstrap);
-
-setupCmd
-  .command("adapter")
-  .description("Pick + install an initial agent adapter")
-  .option("-c, --config <path>", "Path to config file")
-  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
-  .option("--type <adapter>", "Adapter type (e.g. claude_local, codex_local, cursor)")
-  .option("-y, --yes", "Non-interactive — skip if no --type given", false)
-  .action(setupAdapter);
 
 program
   .command("doctor")

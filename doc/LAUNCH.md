@@ -4,7 +4,7 @@ How to take AgentDash from a clean clone to your first paying customer. Read top
 
 The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs none of this. Everything below is for a real cloud deployment with a real signed-up user paying through Stripe.
 
-> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), use `agentdash onboard` then `agentdash setup` — the wizard handles bind mode, Tailscale auto-detect, allowed hostnames, the CEO invite, and adapter selection interactively. See the README's *First-run setup on a real host* section. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path; the wizard handles steps 1–2.
+> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), `agentdash setup` is enough — two prompts (pick adapter + email) and safe defaults for everything else. See the README's *First-run setup on a real host* section. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies; the wizard handles bind mode, allowed hostnames, and the founding-user identity.
 
 ---
 
