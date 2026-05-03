@@ -146,6 +146,19 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
     agentAdapterConfig.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
   }
+  // Codex command defaults (parallel to hermesCommand pattern)
+  if (config && !config.command && configCommand) {
+    config.command = configCommand;
+  }
+  if (config && !config.command) {
+    config.command = "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp";
+  }
+  if (agentAdapterConfig && !agentAdapterConfig.command && agentCommand) {
+    agentAdapterConfig.command = agentCommand;
+  }
+  if (agentAdapterConfig && !agentAdapterConfig.command) {
+    agentAdapterConfig.command = "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp";
+  }
 
   return ctx;
 }
