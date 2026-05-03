@@ -8,63 +8,46 @@ Built on [paperclipai/paperclip](https://github.com/paperclipai/paperclip).
 
 ## Get started
 
-### Try it locally — no install
+Three commands, in order:
 
-```sh
-git clone https://github.com/thetangstr/agentdash.git
-cd agentdash
-pnpm install
-pnpm dev
-```
-
-Open <http://localhost:3100/cos>. The Chief of Staff is ready, no sign-up. Set `ANTHROPIC_API_KEY` in your shell first if you want real Claude replies instead of the stub.
-
-### Run it on a real host (Mac mini, Tailscale, cloud VM)
-
-```sh
-npx create-agentdash
-```
-
-Defaults to `~/agentdash`; pass a custom path with `npx create-agentdash /your/path`. Requires Node 20+, pnpm, and git.
-
-Equivalent shell-only flow if you'd rather not use npx:
+### 1. Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash
 ```
 
-Or if you've already cloned the repo:
+Clones AgentDash to `~/agentdash`, installs deps, links the `agentdash` CLI onto your PATH, and chains directly into the setup wizard. Requires Node 20+, pnpm, and git.
+
+### 2. Setup (the bootstrap auto-runs this)
+
+The wizard asks two things:
+
+1. **Pick an adapter** (Claude Code / Codex / Hermes / Cursor / …) — runs `<adapter> --version` to verify it's installed and prints the install command if not.
+2. **Your email** — founding user / workspace owner.
+
+Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults. To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server` / `setup bootstrap` for one section).
+
+### 3. Start the server
 
 ```sh
-pnpm install
-pnpm install-cli      # symlinks `agentdash` into /usr/local/bin, /opt/homebrew/bin, or ~/.local/bin
+cd ~/agentdash && pnpm dev
 ```
 
-After any of those, from any directory:
+Open <http://localhost:3100/cos> — your Chief of Staff is ready. Set `ANTHROPIC_API_KEY` in the shell first for real Claude replies (otherwise you get a stub).
+
+---
+
+### Already cloned the repo?
 
 ```sh
-agentdash setup
+pnpm install && pnpm install-cli && agentdash setup
 ```
 
-Two prompts:
-
-1. Pick an adapter (Claude Code / Codex / Hermes / Cursor / …) — the wizard runs `<adapter> --version` to verify it's installed and prints the install command if not.
-2. Your email — used as the founding user / company owner.
-
-Everything else (embedded Postgres, local-disk storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
-
-Non-interactive:
-
-```sh
-agentdash setup --yes --email you@yourdomain.com
-agentdash setup --yes --email you@yourdomain.com --adapter hermes_local
-```
-
-Re-run a single step later: `agentdash setup adapter` / `agentdash setup server` / `agentdash setup bootstrap`.
+`pnpm install-cli` symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable).
 
 ### Going to production
 
-`pnpm dev` covers local dev. To deploy AgentDash with real auth, real Stripe billing, and real Claude — see **[doc/LAUNCH.md](doc/LAUNCH.md)**: the dependency-ordered checklist from clean clone to first paying customer.
+The flow above runs in `local_trusted` mode — no auth, no billing, single user. To deploy AgentDash with real auth, real Stripe, and real Claude, see **[doc/LAUNCH.md](doc/LAUNCH.md)**: the dependency-ordered checklist from clean clone to first paying customer.
 
 ---
 
