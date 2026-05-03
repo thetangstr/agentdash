@@ -202,6 +202,7 @@ export async function createApp(
   );
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
+    allowMultiTenantPerDomain: true,
   }));
   api.use(companySkillRoutes(db));
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));

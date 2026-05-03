@@ -356,7 +356,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         // When the partial unique index would fire, the catch below converts
         // it to a 409.
         emailDomain,
-      });
+      }, allowMultiTenantPerDomain);
     } catch (err) {
       if (err instanceof DomainAlreadyClaimedError) {
         res.status(409).json({
