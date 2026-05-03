@@ -60,12 +60,21 @@ pnpm install --silent
 echo "agentdash bootstrap: linking the CLI onto your PATH…"
 pnpm install-cli
 
-# ---------- chain into setup ----------
+# ---------- chain into setup (interactive only) ----------
 # Call the wrapper by absolute path so we don't depend on the symlink
-# we just created being on PATH in this exact shell session.
+# we just created being on PATH in this exact shell session. Skip
+# automatically in non-TTY environments (CI, Docker without -it,
+# `curl | bash` in scripts) so the bootstrap succeeds cleanly even
+# when no human is at the terminal.
 
-echo ""
-"$TARGET_DIR/bin/agentdash" setup
+if [ -t 0 ] && [ -t 1 ]; then
+  echo ""
+  "$TARGET_DIR/bin/agentdash" setup
+else
+  echo ""
+  echo "agentdash bootstrap: non-interactive shell detected — skipping the setup wizard."
+  echo "agentdash bootstrap: run \`agentdash setup\` from a real terminal to finish."
+fi
 
 # ---------- start hint ----------
 
