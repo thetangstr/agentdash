@@ -75,14 +75,30 @@ pnpm install --silent
 echo "agentdash bootstrap: linking the CLI onto your PATH…"
 pnpm install-cli
 
-# ---------- chain into setup (interactive only) ----------
+# ---------- chain into setup ----------
 # Call the wrapper by absolute path so we don't depend on the symlink
-# we just created being on PATH in this exact shell session. Skip
-# automatically in non-TTY environments (CI, Docker without -it,
-# `curl | bash` in scripts) so the bootstrap succeeds cleanly even
-# when no human is at the terminal.
+# we just created being on PATH in this exact shell session.
+#
+# The hard part is: under `curl … | bash`, stdin is the curl pipe (not a
+# TTY), even though there's a real human at the terminal. The naïve
+# `[ -t 0 ]` check fails and we'd skip the wizard with the user just
+# staring at the manual hint. The fix is the standard one for piped
+# installers: if stdout is a TTY and /dev/tty is readable, we re-open
+# stdin from /dev/tty before calling the wizard. Then @clack/prompts
+# sees a real TTY on both fds and the wizard runs normally.
+#
+# We only fall through to the non-interactive hint when neither stdin
+# nor /dev/tty is usable (CI, Docker without -it, scripted curl|bash).
 
+setup_via_tty=false
 if [ -t 0 ] && [ -t 1 ]; then
+  setup_via_tty=true
+elif [ -t 1 ] && [ -r /dev/tty ]; then
+  # curl|bash case: stdin is the pipe, but /dev/tty gives us the user.
+  setup_via_tty=true
+fi
+
+if [ "$setup_via_tty" = "true" ]; then
   echo ""
   # The setup wizard owns its own next-steps UX (it asks the user whether
   # to start `pnpm dev` immediately, prints adapter caveats, and shows the
@@ -90,7 +106,12 @@ if [ -t 0 ] && [ -t 1 ]; then
   # banner after it returns — that would either duplicate the wizard's
   # next-steps copy or appear right after the user Ctrl-C'd the dev
   # server, which feels like noise.
-  "$TARGET_DIR/bin/agentdash" setup
+  if [ -t 0 ]; then
+    "$TARGET_DIR/bin/agentdash" setup
+  else
+    # Re-open stdin from the controlling terminal so @clack/prompts works.
+    "$TARGET_DIR/bin/agentdash" setup </dev/tty
+  fi
 else
   echo ""
   echo "agentdash bootstrap: non-interactive shell detected — skipping the setup wizard."
