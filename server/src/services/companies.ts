@@ -167,7 +167,10 @@ export function companyService(db: Db) {
     return pgUniqueConstraintName(error) === "companies_email_domain_unique_idx";
   }
 
-  async function createCompanyWithUniquePrefix(data: typeof companies.$inferInsert) {
+  async function createCompanyWithUniquePrefix(
+    data: typeof companies.$inferInsert,
+    allowMultiTenantPerDomain = false,
+  ) {
     const base = deriveIssuePrefixBase(data.name);
     let suffix = 1;
     while (suffix < 10000) {
@@ -181,7 +184,17 @@ export function companyService(db: Db) {
       } catch (error) {
         // AgentDash (AGE-55): if the email_domain unique constraint fires,
         // bubble up as a typed error so the route can return the FRE 409.
+        // When allowMultiTenantPerDomain is true, retry with emailDomain null
+        // so multi-tenant deployments (e.g. self-hosted) aren't blocked by
+        // users sharing a free-mail domain.
         if (isEmailDomainConflict(error)) {
+          if (allowMultiTenantPerDomain && data.emailDomain) {
+            const rows = await db
+              .insert(companies)
+              .values({ ...data, issuePrefix: candidate, emailDomain: null })
+              .returning();
+            return rows[0];
+          }
           const claimedDomain = data.emailDomain ?? "";
           const existing = claimedDomain
             ? await db
@@ -228,8 +241,8 @@ export function companyService(db: Db) {
       return enrichCompany(hydrated);
     },
 
-    create: async (data: typeof companies.$inferInsert) => {
-      const created = await createCompanyWithUniquePrefix(data);
+    create: async (data: typeof companies.$inferInsert, allowMultiTenantPerDomain = false) => {
+      const created = await createCompanyWithUniquePrefix(data, allowMultiTenantPerDomain);
       await environmentsSvc.ensureLocalEnvironment(created.id);
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
