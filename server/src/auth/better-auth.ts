@@ -121,16 +121,20 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
       enabled: true,
       requireEmailVerification: false,
       disableSignUp: config.authDisableSignUp,
-      // Better Auth fires this when the user requests a password reset
-      // via /api/auth/forget-password. The `url` it builds points at
-      // /api/auth/reset-password?token=… on the auth server itself.
-      // We rewrite it to /reset-password?token=… so the SPA's reset
-      // page handles the token; that page POSTs back to /api/auth.
-      sendResetPassword: async ({ user, url }: { user: { email: string }; url: string }) => {
-        const appUrl = derivePublicAppUrl(publicUrl);
-        const resetUrl = appUrl
-          ? `${appUrl}/reset-password?${extractQuery(url)}`
-          : url; // fallback: use whatever Better Auth built
+      // Better Auth 1.4.x fires this from POST /api/auth/request-password-reset
+      // (not /forget-password — that was the 1.3.x path). It hands us:
+      //   user  — the row to email
+      //   url   — `${baseURL}/reset-password/${token}?callbackURL=…`
+      //           (an API endpoint that validates the token and 302s)
+      //   token — the raw token, suitable for the SPA route
+      //
+      // We deep-link straight to the SPA's /reset-password?token=…
+      // route and skip the redirect. That keeps the email URL on the
+      // user's own origin and matches what ui/src/pages/ResetPassword.tsx
+      // reads from the query string.
+      sendResetPassword: async ({ user, token }: { user: { email: string }; token: string }) => {
+        const appUrl = derivePublicAppUrl(publicUrl) ?? "http://localhost:3100";
+        const resetUrl = `${appUrl}/reset-password?token=${encodeURIComponent(token)}`;
         const { subject, html, text } = resetPasswordEmailTemplate({ resetUrl });
         await sendEmail({ to: user.email, subject, html, text });
       },
@@ -181,17 +185,6 @@ function derivePublicAppUrl(publicUrl: string | undefined): string | null {
   if (!publicUrl) return null;
   const trimmed = publicUrl.trim().replace(/\/+$/, "");
   return trimmed.replace(/\/api$/, "");
-}
-
-/**
- * Extract just the query string from a Better Auth-generated URL so we
- * can re-attach it to the SPA route. Better Auth produces URLs like
- * `https://host/api/auth/reset-password?token=…`; we want just
- * `token=…` to hand off to /reset-password on the SPA.
- */
-function extractQuery(url: string): string {
-  const idx = url.indexOf("?");
-  return idx >= 0 ? url.slice(idx + 1) : "";
 }
 
 export function createBetterAuthHandler(auth: BetterAuthInstance): RequestHandler {
