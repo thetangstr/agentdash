@@ -137,8 +137,14 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
   }
+  if (config && !config.hermesCommand) {
+    config.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
+  }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand && agentCommand) {
     agentAdapterConfig.hermesCommand = agentCommand;
+  }
+  if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
+    agentAdapterConfig.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
   }
 
   return ctx;
