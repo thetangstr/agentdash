@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { onboard } from "./commands/onboard.js";
+import { setup, setupServer, setupBootstrap, setupAdapter } from "./commands/setup.js";
 import { doctor } from "./commands/doctor.js";
 import { envCommand } from "./commands/env.js";
 import { configure } from "./commands/configure.js";
@@ -55,6 +56,53 @@ program
   .option("-y, --yes", "Accept quickstart defaults (trusted local loopback unless --bind is set) and start immediately", false)
   .option("--run", "Start Paperclip immediately after saving config", false)
   .action(onboard);
+
+// AgentDash: focused first-run wizard with subcommands (closes GH #94).
+// `setup` (no arg) runs server -> bootstrap -> adapter in order. Each
+// subcommand is also runnable standalone for re-running a single step.
+const setupCmd = program
+  .command("setup")
+  .description("AgentDash first-run wizard (server, bootstrap, adapter)")
+  .option("-c, --config <path>", "Path to config file")
+  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
+  .option("--bind <mode>", "Reachability preset (loopback, lan, tailnet)")
+  .option("--port <number>", "Server port", (value) => Number(value))
+  .option("-y, --yes", "Non-interactive — accept detected defaults", false)
+  .option("--no-open", "Don't auto-open the bootstrap invite in the browser")
+  .option("--skip-adapter", "Skip the adapter selection step", false)
+  .option("--skip-bootstrap", "Skip the CEO bootstrap step", false)
+  .action(setup);
+
+setupCmd
+  .command("server")
+  .description("Configure server reachability (bind mode + Tailscale + allowed hostnames)")
+  .option("-c, --config <path>", "Path to config file")
+  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
+  .option("--bind <mode>", "Reachability preset (loopback, lan, tailnet)")
+  .option("--port <number>", "Server port", (value) => Number(value))
+  .option("-y, --yes", "Non-interactive — accept detected defaults", false)
+  .action(setupServer);
+
+setupCmd
+  .command("bootstrap")
+  .description("Generate the bootstrap CEO invite and open it in the browser")
+  .option("-c, --config <path>", "Path to config file")
+  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
+  .option("--force", "Create new invite even if admin already exists", false)
+  .option("--expires-hours <hours>", "Invite expiration window in hours", (value) => Number(value))
+  .option("--base-url <url>", "Public base URL used to print invite link")
+  .option("--no-open", "Don't auto-open the invite URL in the browser")
+  .option("-y, --yes", "Non-interactive", false)
+  .action(setupBootstrap);
+
+setupCmd
+  .command("adapter")
+  .description("Pick + install an initial agent adapter")
+  .option("-c, --config <path>", "Path to config file")
+  .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
+  .option("--type <adapter>", "Adapter type (e.g. claude_local, codex_local, cursor)")
+  .option("-y, --yes", "Non-interactive — skip if no --type given", false)
+  .action(setupAdapter);
 
 program
   .command("doctor")
@@ -161,7 +209,12 @@ auth
   .option("--force", "Create new invite even if admin already exists", false)
   .option("--expires-hours <hours>", "Invite expiration window in hours", (value) => Number(value))
   .option("--base-url <url>", "Public base URL used to print invite link")
-  .action(bootstrapCeoInvite);
+  // bootstrapCeoInvite now returns BootstrapCeoResult so callers (like
+  // `setup bootstrap`) can open the URL in the browser. Commander's .action
+  // expects Promise<void>, so wrap to discard the return value.
+  .action(async (opts) => {
+    await bootstrapCeoInvite(opts);
+  });
 
 registerClientAuthCommands(auth);
 

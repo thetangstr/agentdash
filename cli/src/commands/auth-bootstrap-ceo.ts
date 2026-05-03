@@ -51,24 +51,31 @@ function resolveBaseUrl(configPath?: string, explicitBaseUrl?: string) {
   return `http://${publicHost}:${port}`;
 }
 
+export interface BootstrapCeoResult {
+  status: "created" | "skipped_local_trusted" | "skipped_admin_exists" | "error";
+  inviteUrl?: string;
+  expiresAt?: Date;
+  reason?: string;
+}
+
 export async function bootstrapCeoInvite(opts: {
   config?: string;
   force?: boolean;
   expiresHours?: number;
   baseUrl?: string;
   dbUrl?: string;
-}) {
+}): Promise<BootstrapCeoResult> {
   const configPath = resolveConfigPath(opts.config);
   loadPaperclipEnvFile(configPath);
   const config = readConfig(configPath);
   if (!config) {
     p.log.error(`No config found at ${configPath}. Run ${pc.cyan("paperclip onboard")} first.`);
-    return;
+    return { status: "error", reason: "no_config" };
   }
 
   if (config.server.deploymentMode !== "authenticated") {
     p.log.info("Deployment mode is local_trusted. Bootstrap CEO invite is only required for authenticated mode.");
-    return;
+    return { status: "skipped_local_trusted" };
   }
 
   const dbUrl = resolveDbUrl(configPath, opts.dbUrl);
@@ -76,7 +83,7 @@ export async function bootstrapCeoInvite(opts: {
     p.log.error(
       "Could not resolve database connection for bootstrap.",
     );
-    return;
+    return { status: "error", reason: "no_db_url" };
   }
 
   const db = createDb(dbUrl);
@@ -94,7 +101,7 @@ export async function bootstrapCeoInvite(opts: {
 
     if (existingAdminCount > 0 && !opts.force) {
       p.log.info("Instance already has an admin user. Use --force to generate a new bootstrap invite.");
-      return;
+      return { status: "skipped_admin_exists" };
     }
 
     const now = new Date();
@@ -129,9 +136,12 @@ export async function bootstrapCeoInvite(opts: {
     p.log.success("Created bootstrap CEO invite.");
     p.log.message(`Invite URL: ${pc.cyan(inviteUrl)}`);
     p.log.message(`Expires: ${pc.dim(created.expiresAt.toISOString())}`);
+    return { status: "created", inviteUrl, expiresAt: created.expiresAt };
   } catch (err) {
-    p.log.error(`Could not create bootstrap invite: ${err instanceof Error ? err.message : String(err)}`);
+    const reason = err instanceof Error ? err.message : String(err);
+    p.log.error(`Could not create bootstrap invite: ${reason}`);
     p.log.info("If using embedded-postgres, start the Paperclip server and run this command again.");
+    return { status: "error", reason };
   } finally {
     await closableDb.$client?.end?.({ timeout: 5 }).catch(() => undefined);
   }
