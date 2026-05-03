@@ -1,15 +1,20 @@
-// AgentDash (AGE-104 follow-up): corp-email signup guard.
+// AgentDash: corp-email signup guard.
 //
-// Pro deployments (deploymentMode === "authenticated") reject signups from
-// free-mail providers (gmail, yahoo, outlook, ...). Until now this only
-// fired at company-creation time (AGE-60), which surfaced the error AFTER
-// the user had already created an account — too late to act on the
-// "use your work email" hint. This middleware moves the same rule to the
-// signup endpoint so the friendly inline error renders BEFORE the user
-// commits to an account.
+// **Disabled by default as of 2026-05-03.** Both Free and Pro users may
+// sign up with any email domain. The middleware is still wired so a
+// self-hoster who wants to require work emails can flip
+// `AGENTDASH_REQUIRE_CORP_EMAIL=true` (see server/src/index.ts) to
+// re-enforce without a code change.
 //
-// The Auth.tsx form already maps the `pro_requires_corp_email` code to a
-// dedicated inline message (see ui/src/pages/Auth.tsx).
+// Original rationale (AGE-60 / AGE-104): Pro deployments rejected
+// gmail/yahoo/outlook signups at the company-creation step, which
+// surfaced the error AFTER the user already had an account. This
+// middleware moved the rule to the signup endpoint so the friendly
+// inline error rendered BEFORE the user committed. With the rule now
+// off, both code paths short-circuit on `enabled: false`.
+//
+// Auth.tsx still maps the `pro_requires_corp_email` code to a dedicated
+// inline message in case a self-hoster turns the rule back on.
 
 import type { RequestHandler } from "express";
 import { FREE_MAIL_DOMAINS } from "@paperclipai/shared";
