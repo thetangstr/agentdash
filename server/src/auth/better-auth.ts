@@ -92,7 +92,24 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   return Array.from(trustedOrigins);
 }
 
-export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins: string[]): BetterAuthInstance {
+export interface CreateBetterAuthInstanceOptions {
+  /**
+   * Fires after Better Auth has fully written a new user row. Used to
+   * bootstrap a workspace + CoS agent + conversation for them so the
+   * SPA's CloudAccessGate (which checks for ≥1 company membership)
+   * doesn't block them at "No company access". Errors here are caught
+   * by the caller and logged — sign-up still completes, the user just
+   * has to retry workspace bootstrap manually.
+   */
+  onUserCreated?: (user: { id: string; email: string; name: string | null }) => Promise<void>;
+}
+
+export function createBetterAuthInstance(
+  db: Db,
+  config: Config,
+  trustedOrigins: string[],
+  opts?: CreateBetterAuthInstanceOptions,
+): BetterAuthInstance {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
   const secret = process.env.BETTER_AUTH_SECRET ?? process.env.PAPERCLIP_AGENT_JWT_SECRET;
   if (!secret) {
@@ -146,7 +163,23 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
     databaseHooks: {
       user: {
         create: {
-          after: async (user: { email: string; name: string | null }) => {
+          after: async (user: { id: string; email: string; name: string | null }) => {
+            // Two independent best-effort steps. Either failing must NOT
+            // abort the user-create transaction — the account is already
+            // committed by the time this runs, so all we'd do is leave a
+            // user without a welcome email or without a workspace.
+            // Bootstrap before email so a slow Resend call doesn't delay
+            // the workspace becoming visible to the SPA.
+            try {
+              if (opts?.onUserCreated) {
+                await opts.onUserCreated(user);
+              }
+            } catch (err) {
+              logger.warn(
+                { userId: user.id, error: err instanceof Error ? err.message : String(err) },
+                "[auth] onUserCreated hook failed — user signed up without a workspace",
+              );
+            }
             try {
               const appUrl = derivePublicAppUrl(publicUrl) ?? "http://localhost:3100";
               const { subject, html, text } = welcomeEmailTemplate({
