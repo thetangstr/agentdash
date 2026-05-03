@@ -34,6 +34,7 @@ import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
 import { openUrlInBrowser } from "../utils/open-url.js";
 import { printPaperclipCliBanner } from "../utils/banner.js";
 import type { PaperclipConfig } from "../config/schema.js";
+import { onboard } from "./onboard.js";
 
 interface CommonOpts {
   config?: string;
@@ -235,6 +236,22 @@ export async function setupAdapter(opts: AdapterOpts): Promise<void> {
 export async function setup(opts: SetupAllOpts): Promise<void> {
   printPaperclipCliBanner();
   p.log.info(pc.cyan("First-run setup"));
+
+  const configPath = resolveConfigPath(opts.config);
+
+  // If no config exists yet, run onboard first to create the base config,
+  // then continue with AgentDash-specific steps (server bind + adapter).
+  // This mirrors the hermes-agent pattern: `hermes setup` runs automatically
+  // after install and handles the full first-run experience.
+  if (!configExists(configPath)) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      p.log.error("No config found and terminal is non-interactive.");
+      p.log.message(`Run ${pc.cyan("agentdash onboard")} first, then retry ${pc.cyan("agentdash setup")}.`);
+      process.exit(1);
+    }
+    p.log.step("No config found. Starting base setup...");
+    await onboard({ config: configPath, invokedByRun: true, bind: opts.bind });
+  }
 
   // 1. Server
   await setupServer({ config: opts.config, yes: opts.yes, bind: opts.bind, port: opts.port });
