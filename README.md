@@ -1,28 +1,14 @@
 # AgentDash
 
-**A CoS-led, multi-human AI workspace.** AgentDash is what happens when you take an autonomous-agent harness and front it with a Chief of Staff a real operator can talk to: type a request, the CoS routes work to the right agent, multiple humans on the same workspace see the same thread.
+**A CoS-led, multi-human AI workspace.** Type a request to your Chief of Staff, the CoS routes work to the right agent, multiple humans on the same workspace see the same thread.
+
+Built on [paperclipai/paperclip](https://github.com/paperclipai/paperclip).
 
 ---
 
-## About this fork
+## Get started
 
-AgentDash is a fork of [paperclipai/paperclip](https://github.com/paperclipai/paperclip), built on Paperclip's main agent harness — heartbeats, adapters, the agent execution loop, and the plugin SDK come from upstream and stay close to it.
-
-We layer five things on top:
-
-1. **UI redesign** with the Claude design system — editorial marketing landing at `/`, cream/light surface for marketing pages, dark dashboard for the operator workspace, full AgentDash branding.
-2. **Assess + agent research** — `/assess` flow that runs a four-step company-wide readiness scan or a project-scoped assessment that produces a downloadable Word doc.
-3. **Onboarding (rescoped)** — sign-up → CoS chat (`/cos`) → first agent hire → invite teammates. Replaces v1's WelcomePage wizard.
-4. **Subscription + billing** — Free + Pro per-seat tiers with a 14-day no-card Stripe trial. Free workspaces are capped at 1 human + 1 agent (the CoS); Pro is unlimited.
-5. **Multi-human + CoS chat substrate** — typed conversation cards, `@`-mention summons, a WebSocket bus so multiple humans on the same workspace see the same thread in real time.
-
-We **do not** carry forward upstream's CRM, HubSpot stub, AutoResearch stub, Action Proposals + Policy Engine, Pipeline Orchestrator, Budget+Capacity, Skills Registry workflow, or Smart Model Routing. See [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) for the full rubric — we don't bulk-merge upstream; we cherry-pick when there's a specific reason.
-
-For Paperclip's own product story, agent-runtime docs, and adapter authoring guides, see the [upstream README](https://github.com/paperclipai/paperclip) and [doc/PRODUCT.md](doc/PRODUCT.md).
-
----
-
-## Quickstart (local dev)
+### Try it locally — no install
 
 ```sh
 git clone https://github.com/thetangstr/agentdash.git
@@ -31,79 +17,51 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:3100/cos> — the CoS chat is ready, no sign-up needed. AgentDash bootstraps a workspace + Chief of Staff agent on first run via `local_trusted` mode.
+Open <http://localhost:3100/cos>. The Chief of Staff is ready, no sign-up. Set `ANTHROPIC_API_KEY` in your shell first if you want real Claude replies instead of the stub.
 
-```sh
-# Optional: name your workspace properly (defaults to "AgentDash Workspace")
-export AGENTDASH_BOOTSTRAP_EMAIL=you@yourdomain.com
-
-# Optional: real Claude replies on /cos (otherwise you get a stub)
-export ANTHROPIC_API_KEY=sk-ant-…
-
-pnpm dev
-```
-
-To exercise billing-gated flows (invites, agent hires) without wiring Stripe:
-
-```sh
-# Caps bypass when STRIPE_SECRET_KEY is unset, OR explicitly:
-export AGENTDASH_BILLING_DISABLED=true
-pnpm dev
-```
-
-When `STRIPE_SECRET_KEY` is set in production, the Free / Pro caps enforce as designed (Free: 1 human + 1 agent; Pro: unlimited). The bypass is dev-only.
-
----
-
-## First-run setup on a real host (`agentdash setup`)
-
-Use this path when you're deploying AgentDash to a host you'll actually serve from — a Mac mini on your LAN, a workstation behind Tailscale, a cloud VM.
+### Run it on a real host (Mac mini, Tailscale, cloud VM)
 
 ```sh
 agentdash setup
 ```
 
-That's it. Two prompts:
+Two prompts:
 
-1. **Pick an adapter** for your first agent (Claude Code / Codex / Hermes / Cursor / Gemini / OpenCode / Pi / ACPX / OpenClaw / process / http). The wizard runs `<adapter-binary> --version` to verify it's installed; if it's not, it prints the exact install command and lets you keep going.
-2. **Your email** — used as `AGENTDASH_BOOTSTRAP_EMAIL` so the workspace name + email-domain claim derive cleanly on first boot.
+1. Pick an adapter (Claude Code / Codex / Hermes / Cursor / …) — the wizard runs `<adapter> --version` to verify it's installed and prints the install command if not.
+2. Your email — used as the founding user / company owner.
 
-Everything else (embedded Postgres, local-disk storage, local-encrypted secrets, loopback bind, local_trusted mode, info logging) uses safe defaults. If the host has no config yet, the wizard writes one in place.
+Everything else (embedded Postgres, local-disk storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
 
-Non-interactive (CI / scripted):
+Non-interactive:
+
 ```sh
 agentdash setup --yes --email you@yourdomain.com
 agentdash setup --yes --email you@yourdomain.com --adapter hermes_local
 ```
 
-Re-run a single step later:
-```sh
-agentdash setup adapter            # pick + verify a different adapter
-agentdash setup server             # switch bind mode (loopback / lan / tailnet)
-agentdash setup bootstrap          # re-issue the CEO invite (authenticated mode only)
-```
+Re-run a single step later: `agentdash setup adapter` / `agentdash setup server` / `agentdash setup bootstrap`.
 
-> **`agentdash onboard`** is the legacy advanced wizard (full database / LLM / storage / secrets prompts). Use it only if you need to override the defaults — most operators won't.
+### Going to production
+
+`pnpm dev` covers local dev. To deploy AgentDash with real auth, real Stripe billing, and real Claude — see **[doc/LAUNCH.md](doc/LAUNCH.md)**: the dependency-ordered checklist from clean clone to first paying customer.
 
 ---
 
-## Going to production
+## About this fork
 
-[doc/LAUNCH.md](doc/LAUNCH.md) is the dependency-ordered checklist from a clean clone to first paying customer:
+AgentDash is a fork of Paperclip. We use Paperclip's main agent harness (heartbeats, adapters, plugin SDK) and layer five named features on top: a UI redesign with Claude design system, the `/assess` agent-readiness flow, a CoS-led onboarding flow, Free + Pro per-seat billing with a Stripe trial, and a multi-human + CoS chat substrate (typed cards, `@`-mention summons, WebSocket bus).
 
-1. Pick a cloud host (Railway / Fly.io / Render) and provision Postgres
-2. Set deployment-mode env vars — `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, `PAPERCLIP_AUTH_PUBLIC_BASE_URL`, `BETTER_AUTH_SECRET`, `DATABASE_URL`, `PAPERCLIP_MIGRATION_AUTO_APPLY=true`
-3. Set up Stripe — Product, Price, Webhook endpoint at `/api/billing/webhook`, copy the 5 `STRIPE_*` keys + `BILLING_PUBLIC_BASE_URL`
-4. Set `ANTHROPIC_API_KEY` for real CoS replies
-5. Deploy + 6-step smoke test (landing → signup → CoS chat → checkout → webhook fires → `planTier` flips to `pro_trial`)
+We **don't** carry forward upstream's CRM, HubSpot stub, AutoResearch stub, Action Proposals + Policy Engine, Pipeline Orchestrator, Budget+Capacity, Skills Registry workflow, or Smart Model Routing. See [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) for the cherry-pick rubric — we don't bulk-merge upstream.
 
-Nine env vars and a Postgres connection string are everything required to launch.
+For Paperclip's product story, see the [upstream README](https://github.com/paperclipai/paperclip) and [doc/PRODUCT.md](doc/PRODUCT.md).
 
 ---
 
-## Project layout
+## Reference
 
-Monorepo (pnpm workspaces). The interesting AgentDash-specific code is marked with `// AgentDash:` comments throughout.
+### Project layout
+
+Monorepo (pnpm workspaces). AgentDash-specific code is tagged with `// AgentDash:` comments.
 
 | Layer | Tech | Entry |
 |---|---|---|
@@ -116,43 +74,33 @@ Monorepo (pnpm workspaces). The interesting AgentDash-specific code is marked wi
 | Agent adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, Hermes | [packages/adapters/](packages/adapters/) |
 | Plugins | JSON-RPC workers, event bus | [packages/plugins/](packages/plugins/) |
 
----
-
-## Common commands
+### Common commands
 
 ```sh
-pnpm dev                           # server + UI with file watching (localhost:3100)
-pnpm dev:once                      # without watching
-pnpm -r typecheck                  # type-check all packages
-pnpm test:run                      # run all tests once
-pnpm build                         # build server + UI + CLI
-pnpm db:generate                   # generate migration after schema change
-pnpm db:migrate                    # apply pending migrations
+pnpm dev                  # server + UI with watching (localhost:3100)
+pnpm dev:once             # without watching
+pnpm -r typecheck         # type-check all packages
+pnpm test:run             # run all tests once
+pnpm build                # build server + UI + CLI
+pnpm db:generate          # generate migration after schema change
+pnpm db:migrate           # apply pending migrations
 
 # E2E
 pnpm exec playwright test --config tests/e2e/playwright-multiuser.config.ts
 pnpm exec playwright test --config tests/e2e/playwright-multiuser-authenticated.config.ts
 ```
 
-Run the regression suite before any handoff:
+Run the regression suite before any handoff: `pnpm -r typecheck && pnpm test:run && pnpm build`.
 
-```sh
-pnpm -r typecheck && pnpm test:run && pnpm build
-```
-
----
-
-## Documentation
+### Docs
 
 | Doc | What it covers |
 |---|---|
-| [doc/LAUNCH.md](doc/LAUNCH.md) | From clean clone to first paying customer |
-| [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) | Cherry-pick rubric for paperclip upstream commits |
+| [doc/LAUNCH.md](doc/LAUNCH.md) | Step-by-step from clean clone to first paying customer |
+| [doc/UPSTREAM-POLICY.md](doc/UPSTREAM-POLICY.md) | Cherry-pick rubric for upstream paperclip commits |
 | [doc/DEVELOPING.md](doc/DEVELOPING.md) | Detailed dev guide |
-| [doc/SPEC-implementation.md](doc/SPEC-implementation.md) | Inherited V1 build contract |
-| [doc/PRODUCT.md](doc/PRODUCT.md) | Paperclip product overview (vendor doc) |
-| [docs/superpowers/specs/](docs/superpowers/specs/) | Per-sub-project design specs (assess, billing, chat substrate, etc.) |
-| [.claude/commands/](.claude/commands/) | MAW slash commands — PM, Builder, Tester, TPM, Admin, `/workon`, `/upstream-digest` |
+| [docs/superpowers/specs/](docs/superpowers/specs/) | Per-sub-project design specs |
+| [.claude/commands/](.claude/commands/) | MAW slash commands (PM, Builder, Tester, TPM, Admin) |
 | [CLAUDE.md](CLAUDE.md) | Codebase entry point for AI coding assistants |
 
 ---
