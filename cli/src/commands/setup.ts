@@ -38,7 +38,14 @@ import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
 import { mergePaperclipEnvEntries, resolvePaperclipEnvFile, ensureAgentJwtSecret } from "../config/env.js";
 import { openUrlInBrowser } from "../utils/open-url.js";
 import { printPaperclipCliBanner } from "../utils/banner.js";
-import { ADAPTER_CHECKS, checkAdapterBinary, findAdapterCheck } from "../utils/adapter-check.js";
+import {
+  ADAPTER_CHECKS,
+  checkAdapterBinary,
+  checkAdapterEnvHints,
+  findAdapterCheck,
+  probeAdapter,
+  type AdapterCheckSpec,
+} from "../utils/adapter-check.js";
 import { defaultStorageConfig } from "../prompts/storage.js";
 import { defaultSecretsConfig } from "../prompts/secrets.js";
 import {
@@ -169,9 +176,17 @@ async function pickAndVerifyAdapter(opts: { yes?: boolean; preselected?: string 
 
   const result = checkAdapterBinary(spec);
   switch (result.status) {
-    case "configured":
+    case "configured": {
       p.log.success(`${spec.label} ready  ${pc.dim(`(${result.detail})`)}`);
+      // Binary works — now check env auth and optionally run a hello probe.
+      // Both paths print their own inline warnings if anything's off; we
+      // deliberately do NOT propagate env-hint or probe failures into
+      // `ok`, because the existing outro copy ("X isn't installed yet")
+      // is specifically about a missing binary. Auth/probe issues get
+      // their own targeted hints at the moment they happen.
+      await runPostBinaryChecks(spec, { yes: opts.yes });
       return { type: selected, ok: true, detail: result.detail };
+    }
     case "manual":
       p.log.info(`${spec.label} — ${pc.dim(result.detail ?? "configure when you hire your first agent")}`);
       return { type: selected, ok: true, detail: result.detail };
@@ -184,6 +199,75 @@ async function pickAndVerifyAdapter(opts: { yes?: boolean; preselected?: string 
       p.log.message(pc.dim("  You can keep going and install it later — agents using this adapter will fail to run until then."));
       return { type: selected, ok: false, detail: result.detail, fix: result.fix };
   }
+}
+
+/**
+ * After the version probe passes, do the deeper checks:
+ *   1. Read env hints (no spawn) — warn if no API key is set in the shell.
+ *   2. If a hello probe is configured and we're interactive, offer to
+ *      run it. The probe actually calls the model and is the strongest
+ *      signal that the adapter is wired up correctly. Default = no,
+ *      since 30-45s of "did this thing hang?" can scare a non-tech
+ *      first-run user; we surface it as a clear opt-in instead of an
+ *      automatic step.
+ *
+ * Returns void: every step prints its own inline warning, so there's
+ * nothing to bubble up. The wizard's outro caveat ("X isn't installed
+ * yet") is reserved for binary-level failures; auth/probe issues are
+ * communicated where they happen.
+ */
+async function runPostBinaryChecks(spec: AdapterCheckSpec, opts: { yes?: boolean }): Promise<void> {
+  // ---- env-hint check ----
+  const envHint = checkAdapterEnvHints(spec);
+  if (envHint.status === "ok" && envHint.found) {
+    p.log.success(`${pc.cyan(envHint.found)} found in your shell — auth looks ready.`);
+  } else if (envHint.status === "missing") {
+    p.log.warn(`No ${envHint.expected} in your shell — model calls will fail until you set one.`);
+    p.log.message(pc.dim(`  Fix once: ${pc.cyan(`export ${(spec.envHints?.[0] ?? "API_KEY")}=…`)} in your shell rc, then re-run \`agentdash setup\`.`));
+  }
+  // status === "skipped" → adapter handles its own auth (Cursor / Hermes / etc.); no print.
+
+  // ---- optional hello probe ----
+  if (!spec.probe || !spec.command) return;
+  const interactive = !opts.yes && process.stdin.isTTY && process.stdout.isTTY;
+  if (!interactive) return;
+
+  const runProbe = await p.confirm({
+    message: `Run a quick test prompt against ${spec.label}? (~30s; calls the model with "say hello" to verify auth + network)`,
+    initialValue: false,
+  });
+  if (p.isCancel(runProbe) || runProbe !== true) return;
+
+  const spinner = p.spinner();
+  spinner.start(`Asking ${spec.label} to say hello…`);
+  const probe = probeAdapter(spec);
+  switch (probe.status) {
+    case "passed":
+      spinner.stop(`${spec.label} responded ${pc.dim(`(${formatDuration(probe.durationMs)})`)} — wired up correctly.`);
+      break;
+    case "unexpected":
+      spinner.stop(`${spec.label} responded but the reply didn't include "hello" ${pc.dim(`(${formatDuration(probe.durationMs)})`)}`);
+      if (probe.detail) p.log.message(pc.dim(`  Got: ${probe.detail}`));
+      break;
+    case "auth":
+      spinner.stop(`${spec.label} needs login — auth not configured.`);
+      if (probe.detail) p.log.message(pc.dim(`  ${probe.detail}`));
+      p.log.message(`  ${pc.cyan("Try:")} \`${spec.command} login\` (or set ${spec.envHints?.[0] ?? "the API key env var"})`);
+      break;
+    case "errored":
+      spinner.stop(`${spec.label} probe failed ${pc.dim(`(${formatDuration(probe.durationMs)})`)}`);
+      if (probe.detail) p.log.message(pc.dim(`  ${probe.detail}`));
+      break;
+    case "timed_out":
+      spinner.stop(`${spec.label} probe timed out ${pc.dim(`(${formatDuration(probe.durationMs)})`)}`);
+      p.log.message(pc.dim(`  Network or model is slow. The adapter may still work — try hiring an agent in the dashboard.`));
+      break;
+  }
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // ---------- step 2: get founding user's email ----------
