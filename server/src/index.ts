@@ -617,9 +617,15 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
     pluginWorkerManager,
-    // AgentDash (AGE-60): Pro deployments enforce corp-email signup; Free
-    // (local_trusted) does not.
-    requireCorpEmail: config.deploymentMode === "authenticated",
+    // AgentDash: corp-email requirement removed at user request
+    // (2026-05-03) — applies to both Free and Pro tiers, so gmail/yahoo/
+    // outlook etc. can sign up freely. Originally introduced in AGE-60
+    // to gate Pro deployments behind a "work email" check.
+    //
+    // The toggle is preserved as an env-var escape hatch for self-hosters
+    // who want the old behavior back without a code change. Set
+    // AGENTDASH_REQUIRE_CORP_EMAIL=true on the server to re-enforce.
+    requireCorpEmail: process.env.AGENTDASH_REQUIRE_CORP_EMAIL === "true",
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 
