@@ -12,6 +12,7 @@ import { bootstrapDevRunnerWorktreeEnv } from "../server/src/dev-runner-worktree
 import {
   findAdoptableLocalService,
   removeLocalServiceRegistryRecord,
+  terminateLocalService,
   touchLocalServiceRegistryRecord,
   writeLocalServiceRegistryRecord,
 } from "../server/src/services/local-service-supervisor.ts";
@@ -81,12 +82,21 @@ const tailscaleAuthFlagNames = new Set([
 let tailscaleAuth = false;
 let bindMode: BindMode | null = null;
 let bindHost: string | null = null;
+let restartRequested = false;
 const forwardedArgs: string[] = [];
 
 for (let index = 0; index < cliArgs.length; index += 1) {
   const arg = cliArgs[index];
   if (tailscaleAuthFlagNames.has(arg)) {
     tailscaleAuth = true;
+    continue;
+  }
+  // --restart: kill any pre-existing dev supervisor for this service key
+  // and continue, instead of adopting it. Useful when a previous run
+  // was SIGKILL'd or detached (e.g. SSH-launched nohup) and you can't
+  // easily reach the parent terminal to Ctrl-C it.
+  if (arg === "--restart") {
+    restartRequested = true;
     continue;
   }
   if (arg === "--bind") {
@@ -194,10 +204,30 @@ const existingRunner = await findAdoptableLocalService({
   port: serverPort,
 });
 if (existingRunner) {
+  const childInfo = typeof existingRunner.metadata?.childPid === "number"
+    ? `, child ${existingRunner.metadata.childPid}`
+    : "";
+  const port = existingRunner.port ?? serverPort;
   console.log(
-    `[paperclip] ${devService.serviceName} already running (pid ${existingRunner.pid}${typeof existingRunner.metadata?.childPid === "number" ? `, child ${existingRunner.metadata.childPid}` : ""})`,
+    `[paperclip] ${devService.serviceName} already running (pid ${existingRunner.pid}${childInfo}).`,
   );
-  process.exit(0);
+
+  if (restartRequested) {
+    // Force-restart path: kill the running supervisor (and its child via
+    // process group), drop the registry record, and fall through to spawn
+    // a fresh dev tree. terminateLocalService waits up to ~2s for clean
+    // SIGTERM exit before SIGKILL.
+    console.log(`[paperclip] --restart: terminating pid ${existingRunner.pid}…`);
+    await terminateLocalService(existingRunner, { signal: "SIGTERM", forceAfterMs: 5_000 });
+    await removeLocalServiceRegistryRecord(devService.serviceKey);
+    console.log(`[paperclip] terminated. starting fresh…`);
+    // Continue past this `if` block — the spawn happens below.
+  } else {
+    // Adopt path: tell the user the server is fine + how to restart.
+    console.log(`[paperclip] Server is up at http://localhost:${port}`);
+    console.log(`[paperclip] To force-restart it, run: ${process.env.npm_lifecycle_event === "dev" ? "pnpm dev --restart" : "pnpm dev:once --restart"}`);
+    process.exit(0);
+  }
 }
 
 const pnpmBin = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
