@@ -21,22 +21,26 @@ Open <http://localhost:3100/cos>. The Chief of Staff is ready, no sign-up. Set `
 
 ### Run it on a real host (Mac mini, Tailscale, cloud VM)
 
-One-line install (clone + deps + CLI on PATH):
+```sh
+npx create-agentdash
+```
+
+Defaults to `~/agentdash`; pass a custom path with `npx create-agentdash /your/path`. Requires Node 20+, pnpm, and git.
+
+Equivalent shell-only flow if you'd rather not use npx:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash
 ```
 
-Defaults to `~/agentdash`; pass a custom path with `bash -s -- /your/path`. Requires Node 20+, pnpm, and git.
-
-If you already have the repo cloned:
+Or if you've already cloned the repo:
 
 ```sh
 pnpm install
 pnpm install-cli      # symlinks `agentdash` into /usr/local/bin, /opt/homebrew/bin, or ~/.local/bin
 ```
 
-Then from any directory:
+After any of those, from any directory:
 
 ```sh
 agentdash setup
