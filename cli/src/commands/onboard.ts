@@ -329,6 +329,12 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   printPaperclipCliBanner();
   p.intro(pc.bgCyan(pc.black(" paperclipai onboard ")));
+  // AgentDash: most first-time users want the lighter `agentdash setup`
+  // wizard. `onboard` is the advanced path with full database / LLM /
+  // storage / secrets prompts. Surface the nudge once so it's discoverable.
+  p.log.info(
+    `${pc.dim("Most users only need")} ${pc.cyan("agentdash setup")} ${pc.dim("— pick adapter + email, safe defaults for everything else.")}`,
+  );
   const configPath = resolveConfigPath(opts.config);
   const instance = describeLocalInstancePaths(resolvePaperclipInstanceId());
   p.log.message(

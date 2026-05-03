@@ -57,29 +57,33 @@ When `STRIPE_SECRET_KEY` is set in production, the Free / Pro caps enforce as de
 
 ## First-run setup on a real host (`agentdash setup`)
 
-Use this path when you're deploying AgentDash to a host you'll actually serve from — a Mac mini on your LAN, a workstation behind Tailscale, a cloud VM. The CLI ships an `agentdash setup` wizard that walks the three things `pnpm dev` skips for local-trusted dev:
+Use this path when you're deploying AgentDash to a host you'll actually serve from — a Mac mini on your LAN, a workstation behind Tailscale, a cloud VM.
 
 ```sh
-agentdash onboard           # one-time: database, LLM, storage, secrets
-agentdash setup             # then: server reachability + CEO invite + adapter
+agentdash setup
 ```
 
-`agentdash setup` runs three subcommands you can also invoke individually:
+That's it. Two prompts:
 
-| Subcommand | What it does |
-|---|---|
-| `agentdash setup server` | Picks the bind mode. Auto-detects Tailscale via `tailscale ip -4` and defaults to `tailnet` when found, falling back to `loopback` otherwise. Updates `allowedHostnames`. |
-| `agentdash setup bootstrap` | Generates the one-time CEO invite URL (only meaningful in `authenticated` mode), prints it, and opens it in the default browser. Use `--no-open` to skip the auto-open. |
-| `agentdash setup adapter` | Lets you pick an initial agent adapter (Claude Code, Codex, Cursor, etc.) and prints the install command for adapters that need a separate CLI binary. |
+1. **Pick an adapter** for your first agent (Claude Code / Codex / Hermes / Cursor / Gemini / OpenCode / Pi / ACPX / OpenClaw / process / http). The wizard runs `<adapter-binary> --version` to verify it's installed; if it's not, it prints the exact install command and lets you keep going.
+2. **Your email** — used as `AGENTDASH_BOOTSTRAP_EMAIL` so the workspace name + email-domain claim derive cleanly on first boot.
 
-Useful flags:
+Everything else (embedded Postgres, local-disk storage, local-encrypted secrets, loopback bind, local_trusted mode, info logging) uses safe defaults. If the host has no config yet, the wizard writes one in place.
 
+Non-interactive (CI / scripted):
 ```sh
-agentdash setup --yes                  # non-interactive, accept detected defaults
-agentdash setup --bind tailnet         # force a specific bind mode
-agentdash setup --no-open              # don't auto-launch the browser for the invite
-agentdash setup --skip-adapter         # partial run
+agentdash setup --yes --email you@yourdomain.com
+agentdash setup --yes --email you@yourdomain.com --adapter hermes_local
 ```
+
+Re-run a single step later:
+```sh
+agentdash setup adapter            # pick + verify a different adapter
+agentdash setup server             # switch bind mode (loopback / lan / tailnet)
+agentdash setup bootstrap          # re-issue the CEO invite (authenticated mode only)
+```
+
+> **`agentdash onboard`** is the legacy advanced wizard (full database / LLM / storage / secrets prompts). Use it only if you need to override the defaults — most operators won't.
 
 ---
 
