@@ -21,6 +21,16 @@ Open <http://localhost:3100/cos>. The Chief of Staff is ready, no sign-up. Set `
 
 ### Run it on a real host (Mac mini, Tailscale, cloud VM)
 
+After cloning + `pnpm install`, put `agentdash` on your PATH (one-time):
+
+```sh
+pnpm install-cli
+```
+
+That symlinks `agentdash` and `paperclipai` into `/usr/local/bin` (Intel Mac), `/opt/homebrew/bin` (Apple Silicon), or `~/.local/bin` (Linux fallback) — whichever is writable first. If the chosen dir isn't on your PATH yet, the script tells you the exact `export PATH=…` line to add to your shell rc.
+
+Then from any directory:
+
 ```sh
 agentdash setup
 ```

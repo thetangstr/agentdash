@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# AgentDash CLI wrapper — runs the workspace CLI from anywhere on the host.
+#
+# This file is meant to be symlinked onto your PATH. The user-facing
+# installer that does the symlinking is `scripts/install-cli.sh`
+# (also exposed as `pnpm install-cli`).
+#
+# The wrapper resolves through symlinks so it can live at
+# /usr/local/bin/agentdash or ~/.local/bin/agentdash — the symlink
+# target is what matters; we always exec from the actual repo root
+# so pnpm finds the workspace.
+set -e
+
+# Resolve the real path of this script even when invoked via symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$( cd "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$( readlink "$SOURCE" )"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$( cd "$( dirname "$SOURCE" )" && pwd )"
+REPO_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+# Sanity check — bail with a helpful message if the wrapper got moved
+# outside the repo or the symlink target is stale.
+if [ ! -f "$REPO_ROOT/cli/src/index.ts" ]; then
+  echo "agentdash: wrapper at $SOURCE no longer points at a valid AgentDash repo." >&2
+  echo "agentdash: re-run \`pnpm install-cli\` from a fresh clone to fix the symlink." >&2
+  exit 1
+fi
+
+# Exec via tsx so dev mode works without a build step. tsx is already a
+# dev dep of the cli package, so pnpm install is enough to make this work.
+cd "$REPO_ROOT"
+exec pnpm --silent --filter paperclipai exec tsx src/index.ts "$@"
