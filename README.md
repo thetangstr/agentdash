@@ -55,6 +55,34 @@ When `STRIPE_SECRET_KEY` is set in production, the Free / Pro caps enforce as de
 
 ---
 
+## First-run setup on a real host (`agentdash setup`)
+
+Use this path when you're deploying AgentDash to a host you'll actually serve from — a Mac mini on your LAN, a workstation behind Tailscale, a cloud VM. The CLI ships an `agentdash setup` wizard that walks the three things `pnpm dev` skips for local-trusted dev:
+
+```sh
+agentdash onboard           # one-time: database, LLM, storage, secrets
+agentdash setup             # then: server reachability + CEO invite + adapter
+```
+
+`agentdash setup` runs three subcommands you can also invoke individually:
+
+| Subcommand | What it does |
+|---|---|
+| `agentdash setup server` | Picks the bind mode. Auto-detects Tailscale via `tailscale ip -4` and defaults to `tailnet` when found, falling back to `loopback` otherwise. Updates `allowedHostnames`. |
+| `agentdash setup bootstrap` | Generates the one-time CEO invite URL (only meaningful in `authenticated` mode), prints it, and opens it in the default browser. Use `--no-open` to skip the auto-open. |
+| `agentdash setup adapter` | Lets you pick an initial agent adapter (Claude Code, Codex, Cursor, etc.) and prints the install command for adapters that need a separate CLI binary. |
+
+Useful flags:
+
+```sh
+agentdash setup --yes                  # non-interactive, accept detected defaults
+agentdash setup --bind tailnet         # force a specific bind mode
+agentdash setup --no-open              # don't auto-launch the browser for the invite
+agentdash setup --skip-adapter         # partial run
+```
+
+---
+
 ## Going to production
 
 [doc/LAUNCH.md](doc/LAUNCH.md) is the dependency-ordered checklist from a clean clone to first paying customer:
