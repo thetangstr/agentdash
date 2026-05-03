@@ -512,7 +512,39 @@ export async function startServer(): Promise<StartedServer> {
       },
       "Authenticated mode auth origin configuration",
     );
-    const auth = createBetterAuthInstance(db as any, config, effectiveTrustedOrigins);
+    // Lazy-imported so the auth bootstrap doesn't pull in service deps
+    // (and their plugin SDK pinholes) at module load. The callback runs
+    // once per fresh sign-up and provisions a company + CoS agent +
+    // conversation for the new user — without it the SPA's
+    // CloudAccessGate parks them at "No company access" because they
+    // have zero memberships.
+    const onUserCreated = async (user: { id: string; email: string; name: string | null }) => {
+      const services = await import("./services/index.js");
+      const { authUsers } = await import("@paperclipai/db");
+      const { eq } = await import("drizzle-orm");
+      const orch = services.onboardingOrchestrator({
+        access: services.accessService(db as any),
+        companies: services.companyService(db as any),
+        agents: services.agentService(db as any),
+        instructions: services.agentInstructionsService(),
+        conversations: services.conversationService(db as any),
+        users: {
+          getById: async (id: string) => {
+            const rows = await (db as any)
+              .select()
+              .from(authUsers)
+              .where(eq(authUsers.id, id));
+            return rows[0] ?? null;
+          },
+        },
+      });
+      const result = await orch.bootstrap(user.id);
+      logger.info(
+        { userId: user.id, companyId: result.companyId, cosAgentId: result.cosAgentId },
+        "[auth] bootstrapped workspace for new sign-up",
+      );
+    };
+    const auth = createBetterAuthInstance(db as any, config, effectiveTrustedOrigins, { onUserCreated });
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
