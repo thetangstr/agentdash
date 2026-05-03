@@ -8,6 +8,18 @@
   min-height: 100vh;
 }
 
+/* AgentDash: marketing pages need normal page scroll. The dashboard sets
+   `html, body { height: 100%; overflow: hidden }` so its inner panes scroll
+   independently — but that clips long marketing pages (Landing, Consulting,
+   About, Assess) at the viewport. When a `.mkt-root` is mounted, restore
+   normal browser scroll. Uses `:has()` (Chrome 105+, Safari 15.4+, Firefox
+   121+ — all current). */
+html:has(.mkt-root),
+body:has(.mkt-root) {
+  height: auto;
+  overflow: auto;
+}
+
 .mkt-skip-link {
   position: absolute;
   top: -100px;
