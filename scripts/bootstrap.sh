@@ -84,25 +84,34 @@ pnpm install-cli
 
 if [ -t 0 ] && [ -t 1 ]; then
   echo ""
+  # The setup wizard owns its own next-steps UX (it asks the user whether
+  # to start `pnpm dev` immediately, prints adapter caveats, and shows the
+  # http://localhost:3100/cos URL). We deliberately do NOT print another
+  # banner after it returns — that would either duplicate the wizard's
+  # next-steps copy or appear right after the user Ctrl-C'd the dev
+  # server, which feels like noise.
   "$TARGET_DIR/bin/agentdash" setup
 else
   echo ""
   echo "agentdash bootstrap: non-interactive shell detected — skipping the setup wizard."
   echo "agentdash bootstrap: run \`agentdash setup\` from a real terminal to finish."
-fi
 
-# ---------- start hint ----------
-
-cat <<EOF
+  # Non-interactive ship hint. Only printed in CI / curl|bash-without-tty
+  # paths; the interactive branch above lets `agentdash setup` do this.
+  cat <<EOF
 
 ──────────────────────────────────────────────────
-✓ AgentDash installed and configured at $TARGET_DIR
+✓ AgentDash installed at $TARGET_DIR
 
-Start the server:
-  cd $TARGET_DIR && pnpm dev
+Finish setup:
+  cd $TARGET_DIR && agentdash setup
 
-Then open http://localhost:3100/cos.
+Then start the server:
+  pnpm dev
+
+…and open http://localhost:3100/cos.
 
 Docs: $REPO_URL
 ──────────────────────────────────────────────────
 EOF
+fi

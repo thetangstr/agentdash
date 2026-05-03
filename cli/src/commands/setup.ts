@@ -20,6 +20,10 @@
 //   setup server     — switch bind mode (loopback / lan / tailnet)
 //   setup bootstrap  — re-issue the CEO invite for authenticated mode
 //   setup adapter    — pick + verify a different adapter
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
@@ -243,17 +247,125 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
   ensureAgentJwtSecret(opts.config);
   p.log.success(`Saved founding-user email and adapter preference to ${pc.dim(envPath)}`);
 
-  // Done — print next steps
+  // Surface adapter caveats inside the @clack box so they aren't drowned
+  // out by a 30-line dev-server boot log if the user accepts the start
+  // prompt below.
+  if (!adapter.ok) {
+    p.log.warn(`${adapter.type} isn't installed yet — agents using it will fail until you fix it.`);
+    if (adapter.fix) p.log.message(`${pc.cyan("Fix:")} ${adapter.fix}`);
+  }
+
+  // Offer to start the server right now so the user lands in CoS chat
+  // without needing to remember `pnpm dev`. Skip in --yes mode (CI) and
+  // when stdin/stdout aren't a TTY (curl|bash piped, no way to confirm).
+  // Skip too if we can't find a workspace root — we don't want to spawn
+  // pnpm dev from a published-package install where no workspace exists
+  // on disk.
+  const workspaceRoot = findWorkspaceRoot();
+  const canStartDev = workspaceRoot !== null;
+  const interactive = !opts.yes && process.stdin.isTTY && process.stdout.isTTY;
+
+  if (canStartDev && interactive) {
+    const startNow = await p.confirm({
+      message: "Start setting up the agents now? (this runs `pnpm dev` and opens your Chief of Staff at http://localhost:3100/cos)",
+      initialValue: true,
+    });
+    if (!p.isCancel(startNow) && startNow === true) {
+      p.outro(pc.green("Starting AgentDash — Ctrl-C to stop. Open http://localhost:3100/cos once you see \"VITE ready\"."));
+      await runDevServer(workspaceRoot!);
+      return;
+    }
+  }
+
+  // User declined OR we can't auto-start — print the manual hint.
   p.outro(pc.green("Setup complete."));
   console.log("");
   console.log(pc.bold("Next:"));
-  console.log(`  ${pc.cyan("pnpm dev")}`);
-  console.log(`  Open ${pc.cyan("http://localhost:3100/cos")} — your Chief of Staff is ready.`);
-  if (!adapter.ok) {
-    console.log("");
-    console.log(pc.yellow(`  ⚠  ${adapter.type} isn't installed yet — agents using it will fail until you fix it.`));
-    if (adapter.fix) console.log(`    ${pc.cyan("Fix:")} ${adapter.fix}`);
+  if (canStartDev) {
+    console.log(`  ${pc.cyan(`cd ${workspaceRoot}`)} && ${pc.cyan("pnpm dev")}`);
+  } else {
+    console.log(`  ${pc.cyan("pnpm dev")} ${pc.dim("(from your AgentDash workspace)")}`);
   }
+  console.log(`  Open ${pc.cyan("http://localhost:3100/cos")} — your Chief of Staff is ready.`);
+}
+
+// ---------- helpers for the optional "start now" prompt ----------
+
+/**
+ * Locate the AgentDash *workspace root* — the monorepo top-level that has
+ * `pnpm-workspace.yaml` next to a `dev` script. We deliberately do NOT
+ * accept any directory with a "dev" script: `cli/package.json` has its
+ * own `dev` (which just runs the CLI itself), and pointing the user
+ * there would loop instead of starting the server.
+ *
+ * Search order:
+ *   1. walk up from cwd (the bin/agentdash wrapper cd's to repo root,
+ *      but `pnpm exec tsx` from inside cli/ leaves cwd at cli/)
+ *   2. walk up from this file's location (handles dev mode where
+ *      setup.ts lives at <repo>/cli/src/commands/setup.ts)
+ *
+ * Returns null when neither path is a workspace root. We then fall back
+ * to a manual hint instead of risking a misleading auto-start.
+ */
+function findWorkspaceRoot(): string | null {
+  const isWorkspaceRoot = (dir: string): boolean => {
+    if (!fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) return false;
+    const pkgPath = path.join(dir, "package.json");
+    if (!fs.existsSync(pkgPath)) return false;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { scripts?: Record<string, string> };
+      return typeof pkg.scripts?.dev === "string";
+    } catch {
+      return false;
+    }
+  };
+
+  // Walk up from `start` looking for the first workspace root. Stops at
+  // the filesystem root. Returns null if none found.
+  const walkUp = (start: string): string | null => {
+    let dir = path.resolve(start);
+    while (true) {
+      if (isWorkspaceRoot(dir)) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  };
+
+  const fromCwd = walkUp(process.cwd());
+  if (fromCwd) return fromCwd;
+
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const fromSource = walkUp(here);
+    if (fromSource) return fromSource;
+  } catch {
+    // import.meta.url not available in some bundle modes — ignore.
+  }
+
+  return null;
+}
+
+/**
+ * Spawn `pnpm dev` and inherit stdio so the user sees the boot log and
+ * can Ctrl-C to stop. Resolves when the child exits — control returns to
+ * setup() and then back to the bootstrap script (which suppresses its own
+ * post-setup banner in the interactive branch — see scripts/bootstrap.sh).
+ */
+async function runDevServer(cwd: string): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn("pnpm", ["dev"], {
+      cwd,
+      stdio: "inherit",
+      shell: false,
+    });
+    child.on("error", (err) => {
+      p.log.error(`Failed to start the dev server: ${err.message}`);
+      console.log(`  Try running ${pc.cyan("pnpm dev")} manually from ${pc.dim(cwd)}.`);
+      resolve();
+    });
+    child.on("close", () => resolve());
+  });
 }
 
 // ---------- subcommands (escape hatches for re-running a step) ----------
