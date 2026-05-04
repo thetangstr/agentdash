@@ -56,9 +56,7 @@ export function ForgotPasswordPage() {
                 sent a reset link. Check your inbox (and spam folder) — the link expires in 1 hour.
               </p>
               <p className="mt-3 text-xs text-text-secondary">
-                No email arriving? In dev mode AgentDash skips outbound mail unless{" "}
-                <code className="font-mono text-[11px]">RESEND_API_KEY</code> is set — the reset
-                link is logged to the server console instead.
+                Having trouble? The email service may not be working — please contact the administrator.
               </p>
             </div>
           ) : (

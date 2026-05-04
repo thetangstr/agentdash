@@ -151,6 +151,9 @@ BETTER_AUTH_SECRET=<openssl rand -hex 32>
 DATABASE_URL=postgres://user:pass@host:5432/agentdash
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
+# Required for password-reset + invite emails to use correct public URLs (not localhost)
+PAPERCLIP_PUBLIC_URL=https://your-domain.com  # e.g. http://100.83.171.56:3100 for Tailscale
+
 # Optional: re-enable the corp-email signup gate (off by default since 2026-05-03)
 # AGENTDASH_REQUIRE_CORP_EMAIL=true
 
