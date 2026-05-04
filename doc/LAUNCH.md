@@ -4,7 +4,7 @@ How to take AgentDash from a clean clone to your first paying customer. Read top
 
 The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs none of this. Everything below is for a real cloud deployment with a real signed-up user paying through Stripe.
 
-> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), `agentdash setup` is enough — two prompts (pick adapter + email) and safe defaults for everything else. See the README's *First-run setup on a real host* section. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies; the wizard handles bind mode, allowed hostnames, and the founding-user identity.
+> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), `agentdash setup` is enough — one prompt (pick adapter) and safe defaults for everything else; the founding-user account is created on the dashboard's sign-up form (Better Auth), not in the CLI. The wizard auto-detects Tailscale and picks `bind=tailnet` if available, else falls back to loopback. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
 
 ---
 
@@ -73,17 +73,40 @@ When `STRIPE_SECRET_KEY` is unset the server falls back to a stub that returns 5
 
 ---
 
-## 4. Set the LLM key
+## 4. Pick how the CoS replies (LLM dispatch)
 
-CoS chat (`/cos`) uses Claude. Without the key, the server returns a stub reply.
+CoS chat (`/cos`) routes replies through `server/src/services/dispatch-llm.ts` based on the `AGENTDASH_DEFAULT_ADAPTER` env var (which the wizard writes from the user's adapter pick). Three first-class paths:
+
+| Adapter | What it spawns | Required env |
+|---|---|---|
+| `claude_api` *(default)* | Direct HTTP call to Anthropic's Messages API with prompt caching | `ANTHROPIC_API_KEY=sk-ant-…` |
+| `claude_local` | Spawns `claude --print -` with conversation piped to stdin | the `claude` CLI on PATH; auth handled by `claude login` |
+| `hermes_local` | Spawns `hermes chat -q "<prompt>" -Q` | the `hermes` CLI on PATH; Hermes manages its own auth via `hermes setup` |
+
+Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) currently fall back to the `claude_api` path with a warning log; they get adapter coverage at agent-execution time, not at CoS-chat time. Without ANY of these, the dispatch falls back to a stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
 
 | Var | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com |
+| `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed for `claude_api` path or fallback) |
+| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` / `gemini_local` / `codex_local` / `opencode_local` / `acpx_local` / `cursor` (default `claude_api` if unset) |
 
-Costs are minimal at chat scale — the system prompt is cached (`cache_control: ephemeral`), so each repeat turn within a conversation is ~10% the input cost of the first.
+Costs for the API path are minimal at chat scale — the system prompt is cached (`cache_control: ephemeral`), so each repeat turn within a conversation is ~10% the input cost of the first.
 
-Real LLM-powered **agent execution** (the "hire an agent and have it actually do work" flow) is a separate path through the adapter system and is **not** wired in v2 yet. The CoS chat is the only Claude-call surface today.
+Real LLM-powered **agent execution** (the "hire an agent and have it actually do work" flow) is a separate path through the adapter system. CoS chat is the only LLM-call surface wired today.
+
+---
+
+## 4b. Email — welcome + password reset (Resend)
+
+After sign-up the server fires a welcome email; on `POST /api/auth/request-password-reset` it sends a templated reset link. Both go through `server/src/auth/email.ts`, which is a fetch-based wrapper over Resend's REST API. With no key set the wrapper logs an info line and silently no-ops — sign-up still succeeds, the user just doesn't get the email.
+
+| Var | Value | Default |
+|---|---|---|
+| `RESEND_API_KEY` | `re_…` from resend.com/api-keys | unset → no-op |
+| `AGENTDASH_EMAIL_FROM` | `AgentDash <noreply@your-domain.com>` (verify the domain at resend.com/domains for production) | `AgentDash <onboarding@resend.dev>` |
+| `AGENTDASH_EMAIL_REPLY_TO` | optional reply-to | unset |
+
+Until you verify your own sending domain in Resend, the shared `onboarding@resend.dev` sender will only deliver to the email tied to your Resend account.
 
 ---
 
@@ -92,9 +115,9 @@ Real LLM-powered **agent execution** (the "hire an agent and have it actually do
 After the container boots:
 
 1. Visit `https://your-domain.com/` — should render the AgentDash marketing landing on cream surface.
-2. Visit `/auth?mode=sign_up` — sign up with a real corporate email. (Free-mail addresses like gmail.com / yahoo.com are blocked at signup time on Pro per [server/src/middleware/corp-email-signup-guard.ts](../server/src/middleware/corp-email-signup-guard.ts) — that's deliberate, not a bug. Use a domain you own.)
-3. After verifying the email, you should land in the dashboard with a workspace named after your email domain.
-4. Click into `/cos` and send a message — you should get a real Claude reply within ~2s.
+2. Visit `/?mode=sign_up` — sign up with any email. Free-mail addresses (gmail / yahoo / outlook / hotmail / icloud) are accepted by default; if you want the legacy "corp email required" gate back, set `AGENTDASH_REQUIRE_CORP_EMAIL=true` (the middleware at [server/src/middleware/corp-email-signup-guard.ts](../server/src/middleware/corp-email-signup-guard.ts) is still wired — just disabled by default).
+3. After sign-up, the orchestrator's `databaseHooks.user.create.after` hook auto-creates a fresh per-user workspace (no domain auto-merging — every user gets their own; cross-team membership happens via invite). You land at `/cos` with a CoS-led welcome conversation: 3 plain-text intro bubbles + 1 interview-question card.
+4. Reply to the question — you should get a real reply within ~2s via whichever adapter `AGENTDASH_DEFAULT_ADAPTER` selects (Anthropic API, Claude Code CLI, Hermes CLI, …).
 5. Try `/{prefix}/billing` and click upgrade — Stripe Checkout should open with the 14-day trial. Use a real card (Stripe handles fraud protection).
 6. Watch the container logs while the webhook fires after card-on-file — you should see `customer.subscription.created` processed and the company's `planTier` flip to `pro_trial` in the DB.
 
@@ -110,8 +133,8 @@ If you find these missing, it's not an oversight — they were dropped from v2 b
 - Action Proposals + Policy Engine
 - Pipeline Orchestrator, Budget+Capacity, Skills Registry workflow
 - Smart Model Routing
-- v1's WelcomePage onboarding (replaced by `/cos` + `OnboardingRoutePage`)
-- Real LLM wired for agent **execution** (chat is wired; agent runtimes still stub via the adapter shim — wire when you have a real customer ask)
+- v1's WelcomePage onboarding (replaced by `/cos` with a CoS-led welcome sequence + `interview_question_v1` card flow)
+- Real LLM wired for agent **execution** (chat is wired through `dispatch-llm.ts`; agent runtimes still stub via the adapter shim — wire when you have a real customer ask)
 
 ---
 
@@ -128,8 +151,17 @@ BETTER_AUTH_SECRET=<openssl rand -hex 32>
 DATABASE_URL=postgres://user:pass@host:5432/agentdash
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
-# LLM
+# Optional: re-enable the corp-email signup gate (off by default since 2026-05-03)
+# AGENTDASH_REQUIRE_CORP_EMAIL=true
+
+# LLM (CoS chat dispatch)
 ANTHROPIC_API_KEY=sk-ant-…
+AGENTDASH_DEFAULT_ADAPTER=claude_api  # or claude_local / hermes_local / …
+
+# Email (welcome + password reset, via Resend)
+RESEND_API_KEY=re_…
+AGENTDASH_EMAIL_FROM='AgentDash <noreply@your-domain.com>'  # verified at resend.com/domains
+# AGENTDASH_EMAIL_REPLY_TO=support@your-domain.com           # optional
 
 # Stripe (Pro tier)
 STRIPE_SECRET_KEY=sk_live_…
