@@ -79,6 +79,12 @@ export {
   type CosOnboardingPhase,
   type CosOnboardingGoals,
 } from "./cos_onboarding_states.js";
+export {
+  deepInterviewStates,
+  DI_SCOPES,
+  type DeepInterviewScope,
+} from "./deep_interview_states.js";
+export { deepInterviewSpecs } from "./deep_interview_specs.js";
 export { stripeWebhookEvents } from "./stripe_webhook_events.js";
 // AgentDash: Assess / onboarding context tables
 export { onboardingSessions } from "./onboarding_sessions.js";

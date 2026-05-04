@@ -976,3 +976,8 @@ export * from "./cards.js";
 
 // AgentDash: onboarding interview types
 export * from "./types/interview.js";
+
+// AgentDash: deep-interview engine types + scope const
+// (DI_SCOPES re-exported here so server-side code can import without crossing
+// the db-package boundary at the type level — see plan Phase B condition #5)
+export * from "./deep-interview.js";

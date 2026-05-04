@@ -554,6 +554,13 @@
       "when": 1777864574704,
       "tag": "0078_pretty_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1777870902977,
+      "tag": "0079_fair_power_pack",
+      "breakpoints": true
     }
   ]
 }
