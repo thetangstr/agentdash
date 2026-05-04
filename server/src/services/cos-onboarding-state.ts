@@ -17,6 +17,9 @@ export interface CosOnboardingStateRow {
   goals: CosOnboardingGoals;
   proposalMessageId: string | null;
   turnsInPhase: number;
+  // AgentDash (Phase F): set when the deep-interview engine has crystallized
+  // a spec for this conversation. The cos-replier reads it to skip Phase 1.
+  deepInterviewSpecId: string | null;
   updatedAt: Date;
 }
 
@@ -47,6 +50,7 @@ function normalizeRow(row: typeof cosOnboardingStates.$inferSelect): CosOnboardi
     goals: (row.goals ?? {}) as CosOnboardingGoals,
     proposalMessageId: row.proposalMessageId,
     turnsInPhase: row.turnsInPhase,
+    deepInterviewSpecId: row.deepInterviewSpecId ?? null,
     updatedAt: row.updatedAt,
   };
 }

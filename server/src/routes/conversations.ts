@@ -1,5 +1,6 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest } from "../errors.js";
 import {
@@ -10,6 +11,7 @@ import {
   cosOnboardingStateService,
   agentSummoner,
 } from "../services/index.js";
+import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 
 export function conversationRoutes(db: Db) {
@@ -44,6 +46,7 @@ export function conversationRoutes(db: Db) {
       conversations: svc,
       llm: dispatchLLM,
       cosState: cosOnboardingStateService(db),
+      deepInterviewSpecs: deepInterviewSpecsLoader(db),
     } as any),
     cosResolver,
   });
@@ -128,4 +131,26 @@ export function conversationRoutes(db: Db) {
   });
 
   return router;
+}
+
+// AgentDash (Phase F): minimal spec loader the cos-replier uses to fetch a
+// crystallized deep_interview_specs row by id. Kept inline here (not a full
+// service) because no other call site reads specs in v1.
+function deepInterviewSpecsLoader(db: Db): DeepInterviewSpecsService {
+  return {
+    getById: async (specId: string) => {
+      const rows = await db
+        .select()
+        .from(deepInterviewSpecsTable)
+        .where(eq(deepInterviewSpecsTable.id, specId))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        goal: row.goal,
+        constraints: Array.isArray(row.constraints) ? (row.constraints as unknown[]) : [],
+        criteria: Array.isArray(row.criteria) ? (row.criteria as unknown[]) : [],
+      };
+    },
+  };
 }

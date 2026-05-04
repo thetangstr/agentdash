@@ -105,9 +105,19 @@ export interface CompanyWizardProps {
   companyId: string;
   defaultCompanyName?: string;
   onSwitchMode?: () => void;
+  /**
+   * AgentDash (Phase F): callback fired when the deep-interview engine emits
+   * the structured `[deep-interview-ready] {…}` marker into the streamed
+   * output. The parent (AssessPage on `?onboarding=1`) uses this to call
+   * /api/onboarding/finalize-assessment and navigate to /cos.
+   *
+   * Passes both the parsed stateId and the raw envelope JSON so the parent
+   * can log/telemeter as needed.
+   */
+  onReadyToFinalize?: (info: { stateId: string; round: number; ambiguity: number }) => void;
 }
 
-export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode }: CompanyWizardProps) {
+export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onReadyToFinalize }: CompanyWizardProps) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormData>(INITIAL_FORM);
   const [output, setOutput] = useState("");
@@ -122,6 +132,35 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode }: C
       setForm((prev) => ({ ...prev, companyName: defaultCompanyName }));
     }
   }, [defaultCompanyName, form.companyName]);
+
+  // AgentDash (Phase F): scan streamed output for the deep-interview ready
+  // marker. Format: `[deep-interview-ready] {"stateId":"…","round":N,"ambiguity":0.x}`
+  // Fires the callback exactly once per page lifetime (firedRef guards repeats
+  // when output continues mutating after the marker lands).
+  const firedReadyRef = useRef(false);
+  useEffect(() => {
+    if (firedReadyRef.current || !onReadyToFinalize) return;
+    const match = output.match(
+      /\[deep-interview-ready\]\s*(\{[^\n}]*"stateId"[^\n}]*\})/,
+    );
+    if (!match) return;
+    try {
+      const env = JSON.parse(match[1]!) as {
+        stateId?: unknown;
+        round?: unknown;
+        ambiguity?: unknown;
+      };
+      if (typeof env.stateId !== "string" || env.stateId.length === 0) return;
+      firedReadyRef.current = true;
+      onReadyToFinalize({
+        stateId: env.stateId,
+        round: typeof env.round === "number" ? env.round : 0,
+        ambiguity: typeof env.ambiguity === "number" ? env.ambiguity : 1,
+      });
+    } catch {
+      // Malformed envelope — ignore. Engine should always emit valid JSON.
+    }
+  }, [output, onReadyToFinalize]);
 
   // Load any prior assessment for this company so the user lands on the report
   // instead of a blank wizard if one already exists.
