@@ -24,6 +24,8 @@
     "issue-references:backfill": "pnpm run preflight:workspace-links && tsx scripts/backfill-issue-reference-mentions.ts",
     "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
     "db:backup": "./scripts/backup-db.sh",
+    "sync-skill-md": "node scripts/sync-skill-md.mjs",
+    "verify-skill-md": "node scripts/sync-skill-md.mjs && git diff --exit-code packages/shared/src/deep-interview-skill.ts",
     "paperclipai": "node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts",
     "build:npm": "./scripts/build-npm.sh",
     "release": "./scripts/release.sh",

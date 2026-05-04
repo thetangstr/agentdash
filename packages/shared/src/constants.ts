@@ -27,13 +27,20 @@ export const AGENT_STATUSES = [
 ] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+// AgentDash (cos-onboarding Phase A): `claude_api` and `hermes_local` are
+// added for discoverability (autocomplete + exhaustive-switch hints used by
+// CoS deep-interview prompt-depth selection). The type already widens to
+// `(string & {})`, so no exhaustive switches break — verified across
+// packages/, server/, ui/, cli/.
 export const AGENT_ADAPTER_TYPES = [
   "process",
   "http",
   "acpx_local",
+  "claude_api",
   "claude_local",
   "codex_local",
   "gemini_local",
+  "hermes_local",
   "opencode_local",
   "pi_local",
   "cursor",
