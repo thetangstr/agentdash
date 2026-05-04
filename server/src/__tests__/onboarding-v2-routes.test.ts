@@ -68,7 +68,7 @@ describe("POST /api/onboarding/bootstrap", () => {
     mockConversations.postMessage.mockResolvedValue({ id: "m1" });
   });
 
-  it("returns the bootstrapped IDs and seeds the first CoS message", async () => {
+  it("returns the bootstrapped IDs (welcome sequence is owned by orchestrator, not the route)", async () => {
     mockOrchestrator.bootstrap.mockResolvedValue({
       companyId: "c1",
       cosAgentId: "a1",
@@ -77,13 +77,14 @@ describe("POST /api/onboarding/bootstrap", () => {
     const app = buildApp({ type: "board", userId: "u1", source: "session" });
     const res = await request(app).post("/api/onboarding/bootstrap").send({});
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
+    expect(res.body).toEqual({
       companyId: "c1",
       cosAgentId: "a1",
       conversationId: "conv1",
-      firstMessage: expect.stringContaining("?"),
     });
     expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    // The route must NOT post any messages itself anymore.
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
   it("returns 401 for unauthenticated callers", async () => {

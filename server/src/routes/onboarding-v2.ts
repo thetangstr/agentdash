@@ -41,34 +41,15 @@ export function onboardingV2Routes(db: Db) {
   });
 
   // POST /api/onboarding/bootstrap
+  // The orchestrator owns the welcome sequence end-to-end (posted atomically
+  // inside the fresh-conversation branch of bootstrap()). The route just
+  // returns IDs; clients fetch the messages via /api/conversations/:id/messages.
   router.post("/bootstrap", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
     const result = await orch.bootstrap(req.actor.userId);
-    const firstMessage = `Hi, I'm your Chief of Staff. AgentDash lets you hire AI agents and run them like a team — I'll help you set up your first one.\n\nBefore we hire anyone, I need to understand your business so I can suggest the right roles for you.\n\nTell me — ${FIXED_QUESTIONS[0]}`;
-
-    // Idempotency on the welcome question. The SPA's `useEffect` in
-    // CoSConversation.tsx triggers this route on every mount; React's
-    // StrictMode double-mounts in dev (and remounts on react-query
-    // refetches) caused 3 duplicate welcome messages on a single
-    // sign-up. Check whether the welcome card is already present
-    // before re-posting.
-    const recent = await conversations.paginate(result.conversationId, { limit: 5 });
-    const alreadySeeded = recent.some(
-      (m: { cardKind?: string | null }) => m.cardKind === "interview_question_v1",
-    );
-    if (!alreadySeeded) {
-      await conversations.postMessage({
-        conversationId: result.conversationId,
-        authorKind: "agent",
-        authorId: result.cosAgentId,
-        body: firstMessage,
-        cardKind: "interview_question_v1",
-        cardPayload: { question: FIXED_QUESTIONS[0], fixedIndex: 0 },
-      });
-    }
-    res.json({ ...result, firstMessage });
+    res.json(result);
   });
 
   // POST /api/onboarding/interview/turn

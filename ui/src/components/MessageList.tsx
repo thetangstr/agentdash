@@ -38,17 +38,11 @@ export function MessageList({
               {m.cardKind ? (
                 <>
                   {m.cardKind === "interview_question_v1" ? (
-                    // Interview questions: pull question text out as bubble body;
-                    // show a small "Step N" chip above the bubble if fixedIndex is set.
-                    <div className="flex flex-col gap-1 items-start w-full">
-                      {typeof (m.cardPayload as any)?.fixedIndex === "number" && (
-                        <span className="text-[10px] font-semibold tracking-widest uppercase text-accent-500 px-1">
-                          Step {(m.cardPayload as any).fixedIndex + 1}
-                        </span>
-                      )}
-                      <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm">
-                        {(m.cardPayload as any)?.question ?? text}
-                      </div>
+                    // Interview questions render as a normal agent text bubble —
+                    // no "Step N" chip. The chip framed it as a survey, which
+                    // didn't match the conversational tone the CoS is meant to set.
+                    <div className="bg-surface-raised border border-border-soft text-text-primary px-4 py-3 rounded-2xl rounded-tl-sm leading-relaxed text-sm whitespace-pre-wrap">
+                      {(m.cardPayload as any)?.question ?? text}
                     </div>
                   ) : (
                     // All other card kinds — render through CardRenderer as before

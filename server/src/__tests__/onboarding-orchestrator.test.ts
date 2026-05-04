@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { onboardingOrchestrator } from "../services/onboarding-orchestrator.js";
+import { FIXED_QUESTIONS } from "@paperclipai/shared";
 
 const mockAccess = { ensureMembership: vi.fn(), setPrincipalPermission: vi.fn(), listUserCompanyAccess: vi.fn() };
 const mockCompanies = { create: vi.fn(), getById: vi.fn() };
 const mockAgents = { create: vi.fn(), createApiKey: vi.fn(), list: vi.fn(), listKeys: vi.fn() };
 const mockInstructions = { materializeManagedBundle: vi.fn() };
-const mockConversations = { findByCompany: vi.fn(), create: vi.fn(), addParticipant: vi.fn() };
+const mockConversations = { findByCompany: vi.fn(), create: vi.fn(), addParticipant: vi.fn(), postMessage: vi.fn() };
 const mockUsers = { getById: vi.fn() };
 
 const deps = { access: mockAccess, companies: mockCompanies, agents: mockAgents, instructions: mockInstructions, conversations: mockConversations, users: mockUsers };
@@ -24,6 +25,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     mockInstructions.materializeManagedBundle.mockResolvedValue({ adapterConfig: { instructionsFilePath: "/tmp/AGENTS.md" } });
     mockConversations.findByCompany.mockResolvedValue(null);
     mockConversations.create.mockResolvedValue({ id: "conv-1", companyId: "company-1" });
+    mockConversations.postMessage.mockResolvedValue({ id: "msg-1" });
     mockAccess.setPrincipalPermission.mockResolvedValue(undefined);
     mockAccess.ensureMembership.mockResolvedValue(undefined);
     mockConversations.addParticipant.mockResolvedValue(undefined);
@@ -38,7 +40,33 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.addParticipant).toHaveBeenCalledWith("conv-1", "user-1", "owner");
   });
 
-  it("is idempotent — second call returns existing artifacts (user-membership check, NOT domain lookup)", async () => {
+  it("posts a 4-message welcome sequence (3 plain + 1 interview card) when the conversation is fresh", async () => {
+    await onboardingOrchestrator(deps as any).bootstrap("user-1");
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(4);
+    const calls = mockConversations.postMessage.mock.calls.map((c) => c[0]);
+    // First three: plain agent bubbles authored by the CoS, no card.
+    for (let i = 0; i < 3; i++) {
+      expect(calls[i]).toMatchObject({
+        conversationId: "conv-1",
+        authorKind: "agent",
+        authorId: "agent-cos-1",
+      });
+      expect(calls[i].cardKind).toBeUndefined();
+      expect(typeof calls[i].body).toBe("string");
+      expect(calls[i].body.length).toBeGreaterThan(0);
+    }
+    // Fourth: the first fixed interview question, rendered as an interview card.
+    expect(calls[3]).toMatchObject({
+      conversationId: "conv-1",
+      authorKind: "agent",
+      authorId: "agent-cos-1",
+      body: FIXED_QUESTIONS[0],
+      cardKind: "interview_question_v1",
+      cardPayload: { question: FIXED_QUESTIONS[0], fixedIndex: 0 },
+    });
+  });
+
+  it("is idempotent — second call returns existing artifacts (user-membership check, NOT domain lookup) and posts NO welcome messages", async () => {
     await onboardingOrchestrator(deps as any).bootstrap("user-1");
     vi.clearAllMocks();
     mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com" });
@@ -59,6 +87,8 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockAgents.create).not.toHaveBeenCalled();
     expect(mockAgents.createApiKey).not.toHaveBeenCalled();
     expect(mockConversations.create).not.toHaveBeenCalled();
+    // And — critically — it must NOT post the welcome sequence again.
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
   it("creates a fresh isolated workspace even when another user with the same domain exists", async () => {

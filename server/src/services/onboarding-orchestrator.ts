@@ -1,4 +1,43 @@
 import { logger } from "../middleware/logger.js";
+import { FIXED_QUESTIONS } from "@paperclipai/shared";
+
+// Welcome sequence: three plain context-setting bubbles + the first interview card.
+// Posted atomically inside bootstrap() the FIRST time a conversation is created
+// for a workspace, so concurrent bootstrap calls (auth hook + UI useEffect under
+// React StrictMode) cannot duplicate it. The three plain bubbles use cardKind=null
+// and render as normal agent text bubbles; the final card keeps the existing
+// interview_question_v1 machinery so the rest of the interview flow still works.
+const WELCOME_INTRO_LINES = [
+  "Hi! I'm your Chief of Staff.",
+  "Welcome to AgentDash. I'm here to help you build a team of AI agents — they handle real work the way employees would, on demand.",
+  "Before we get started, I want to understand what you're working on so I can suggest the right team for you.",
+] as const;
+
+async function postWelcomeSequence(
+  conversations: any,
+  conversationId: string,
+  cosAgentId: string,
+): Promise<void> {
+  // await between each post so DB-insert ordering reflects logical ordering.
+  for (const line of WELCOME_INTRO_LINES) {
+    await conversations.postMessage({
+      conversationId,
+      authorKind: "agent",
+      authorId: cosAgentId,
+      body: line,
+    });
+  }
+  // Final message: the first interview question, rendered as an interview card.
+  const firstQuestion = FIXED_QUESTIONS[0];
+  await conversations.postMessage({
+    conversationId,
+    authorKind: "agent",
+    authorId: cosAgentId,
+    body: firstQuestion,
+    cardKind: "interview_question_v1",
+    cardPayload: { question: firstQuestion, fixedIndex: 0 },
+  });
+}
 
 interface Deps {
   access: any;          // accessService(db)
@@ -106,11 +145,18 @@ export function onboardingOrchestrator(deps: Deps) {
       }
 
       // Step 5: ensure a conversation exists for this company; add the user as participant.
+      // The fresh-conversation branch is the atomic point: conversations.create only
+      // succeeds once per workspace, so we post the welcome sequence here. This
+      // eliminates the read-then-write race that the old route-handler check had.
       let conversation = await deps.conversations.findByCompany(company.id);
+      const isFreshConversation = !conversation;
       if (!conversation) {
         conversation = await deps.conversations.create({ companyId: company.id, userId });
       }
       await deps.conversations.addParticipant(conversation.id, userId, "owner");
+      if (isFreshConversation) {
+        await postWelcomeSequence(deps.conversations, conversation.id, cos.id);
+      }
 
       logger.info({ userId, companyId: company.id, cosAgentId: cos.id, conversationId: conversation.id }, "onboarding bootstrap complete");
 
