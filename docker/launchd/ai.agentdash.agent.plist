@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.agentdash.agent</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>
+			# Load env vars
+			. %%ENV_FILE%%
+
+			# Ensure log directory exists
+			mkdir -p %%LOG_DIR%%
+
+			# Start the server
+			exec node %%SHARE_DIR%%/server/dist/index.js
+		</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>Crashed</key>
+		<true/>
+		<key>AfterInitialDemand</key>
+		<true/>
+	</dict>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PAPERCLIP_HOME</key>
+		<string>%%HOME%%/.agentdash</string>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>%%HOME%%/.agentdash/logs/agentdash.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>%%HOME%%/.agentdash/logs/agentdash.err</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+
+	<key>HardResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>1024</integer>
+	</dict>
+</dict>
+</plist>
