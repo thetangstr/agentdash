@@ -5,10 +5,28 @@ import { assessService } from "../services/assess.js";
 import { assessProjectService } from "../services/assess-project.js";
 import { buildProjectDocx } from "../services/assess-project-docx.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+// AgentDash (Phase D): deep-interview engine wiring (flag-gated, default OFF)
+import { deepInterviewEngine, type EngineLLMDispatch } from "../services/deep-interview-engine.js";
+import { dispatchLLM } from "../services/dispatch-llm.js";
+import type { AgentAdapterType } from "@paperclipai/shared";
+import type { DeepInterviewScope } from "@paperclipai/shared/deep-interview";
 
 function httpStatus(err: unknown): number {
   const e = err as { statusCode?: number; status?: number };
   return e.statusCode ?? e.status ?? 500;
+}
+
+/**
+ * AgentDash (Phase D): read the deep-interview flag at request-handling time
+ * (NOT module load) so a flag flip takes effect without a restart.
+ */
+function deepInterviewEnabled(): boolean {
+  return process.env.AGENTDASH_DEEP_INTERVIEW_ASSESS === "true";
+}
+
+function defaultAdapter(): AgentAdapterType {
+  return ((process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim() ||
+    "claude_api") as AgentAdapterType;
 }
 
 export function assessRoutes(db: Db) {
@@ -16,6 +34,12 @@ export function assessRoutes(db: Db) {
   const svc = assessService(db);
   // AgentDash: project-mode service
   const projectSvc = assessProjectService(db);
+  // AgentDash (Phase D): production wiring uses the dispatchLLM service. Tests
+  // can override by mocking the module at import time.
+  const engine = deepInterviewEngine({
+    db,
+    dispatchLLM: dispatchLLM as EngineLLMDispatch,
+  });
 
   // POST /companies/:companyId/assess/research — lightweight URL research
   router.post("/companies/:companyId/assess/research", async (req, res) => {
@@ -33,11 +57,50 @@ export function assessRoutes(db: Db) {
   });
 
   // POST /companies/:companyId/assess — run full assessment (streaming)
+  // AgentDash (Phase D): when AGENTDASH_DEEP_INTERVIEW_ASSESS=true, drive a
+  // deep-interview turn instead of the legacy MiniMax streaming markdown call.
+  // The engine emits a single question per turn; we stream that as plain text
+  // so the existing UI (which appends streamed chunks) renders the question.
   router.post("/companies/:companyId/assess", async (req, res) => {
     try {
       assertBoard(req);
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+
+      if (deepInterviewEnabled()) {
+        const initialIdea = typeof req.body?.description === "string"
+          ? req.body.description
+          : typeof req.body?.oneLineGoal === "string"
+            ? req.body.oneLineGoal
+            : "";
+        const userAnswer = typeof req.body?.userAnswer === "string"
+          ? req.body.userAnswer
+          : undefined;
+
+        const turn = await engine.nextTurn({
+          scope: "cos_onboarding" as DeepInterviewScope,
+          scopeRefId: companyId,
+          userId: req.actor.userId ?? "board",
+          companyId,
+          initialIdea,
+          adapter: defaultAdapter(),
+          userAnswer,
+        });
+
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        // Stream the engine output as plain text. Existing UI appends chunks.
+        if (turn.kind === "question") {
+          res.write(turn.question);
+        } else {
+          res.write(
+            `[deep-interview] Ready to crystallize at round ${turn.round} (ambiguity ${turn.ambiguityScore.toFixed(3)}).`,
+          );
+        }
+        res.end();
+        return;
+      }
 
       const { stream, onComplete } = await svc.runAssessment(companyId, req.body, req.body.companyWebContent);
 
@@ -114,6 +177,39 @@ export function assessRoutes(db: Db) {
         res.status(400).json({ error: "Missing intake object" });
         return;
       }
+
+      if (deepInterviewEnabled()) {
+        // AgentDash (Phase D): engine path — one engine turn produces one
+        // question, which we surface as the SOLE clarify question in the UI's
+        // existing { rephrased, questions } envelope. Subsequent turns flow
+        // through /followup so we don't need to re-emit the rephrase.
+        const projectId = typeof (intake as { projectId?: string }).projectId === "string"
+          ? (intake as { projectId: string }).projectId
+          : `${companyId}:${((intake as { projectName?: string }).projectName ?? "project").slice(0, 64)}`;
+        const initialIdea = [
+          (intake as { projectName?: string }).projectName ?? "",
+          (intake as { oneLineGoal?: string }).oneLineGoal ?? "",
+          (intake as { description?: string }).description ?? "",
+        ].filter(Boolean).join("\n\n");
+
+        const turn = await engine.nextTurn({
+          scope: "assess_project" as DeepInterviewScope,
+          scopeRefId: projectId,
+          userId: req.actor.userId ?? "board",
+          companyId,
+          initialIdea,
+          adapter: defaultAdapter(),
+        });
+
+        res.json({
+          rephrased: (intake as { oneLineGoal?: string }).oneLineGoal ?? initialIdea.slice(0, 160),
+          questions: turn.kind === "question"
+            ? [{ id: `r${turn.round}`, question: turn.question, hint: "", options: [] }]
+            : [],
+        });
+        return;
+      }
+
       const result = await projectSvc.generateClarifyQuestions(companyId, intake);
       res.json(result);
     } catch (err: unknown) {
@@ -133,6 +229,41 @@ export function assessRoutes(db: Db) {
         res.status(400).json({ error: "Missing intake or answers" });
         return;
       }
+
+      if (deepInterviewEnabled()) {
+        const projectId = typeof (intake as { projectId?: string }).projectId === "string"
+          ? (intake as { projectId: string }).projectId
+          : `${companyId}:${((intake as { projectName?: string }).projectName ?? "project").slice(0, 64)}`;
+        const initialIdea = [
+          (intake as { projectName?: string }).projectName ?? "",
+          (intake as { oneLineGoal?: string }).oneLineGoal ?? "",
+          (intake as { description?: string }).description ?? "",
+        ].filter(Boolean).join("\n\n");
+
+        // The most recent answer drives the next engine turn.
+        const lastAnswer = answers.length > 0
+          ? String((answers[answers.length - 1] as { text?: unknown })?.text ?? "")
+          : "";
+
+        const turn = await engine.nextTurn({
+          scope: "assess_project" as DeepInterviewScope,
+          scopeRefId: projectId,
+          userId: req.actor.userId ?? "board",
+          companyId,
+          initialIdea,
+          adapter: defaultAdapter(),
+          userAnswer: lastAnswer || undefined,
+        });
+
+        res.json({
+          rephrased: typeof rephrased === "string" ? rephrased : "",
+          questions: turn.kind === "question"
+            ? [{ id: `r${turn.round}`, question: turn.question, hint: "", options: [] }]
+            : [],
+        });
+        return;
+      }
+
       const result = await projectSvc.generateFollowUp(intake, answers, rephrased ?? "");
       res.json(result);
     } catch (err: unknown) {
@@ -150,6 +281,47 @@ export function assessRoutes(db: Db) {
       const { intake, answers, rephrased } = req.body ?? {};
       if (!intake || !Array.isArray(answers)) {
         res.status(400).json({ error: "Missing intake or answers" });
+        return;
+      }
+
+      if (deepInterviewEnabled()) {
+        // AgentDash (Phase D): engine path — drive one final turn, stream out
+        // the next question or the crystallization marker. Phase F will
+        // replace this with the crystallizeAndAdvanceCos handoff.
+        const projectId = typeof (intake as { projectId?: string }).projectId === "string"
+          ? (intake as { projectId: string }).projectId
+          : `${companyId}:${((intake as { projectName?: string }).projectName ?? "project").slice(0, 64)}`;
+        const initialIdea = [
+          (intake as { projectName?: string }).projectName ?? "",
+          (intake as { oneLineGoal?: string }).oneLineGoal ?? "",
+          (intake as { description?: string }).description ?? "",
+        ].filter(Boolean).join("\n\n");
+
+        const lastAnswer = answers.length > 0
+          ? String((answers[answers.length - 1] as { text?: unknown })?.text ?? "")
+          : "";
+
+        const turn = await engine.nextTurn({
+          scope: "assess_project" as DeepInterviewScope,
+          scopeRefId: projectId,
+          userId: req.actor.userId ?? "board",
+          companyId,
+          initialIdea,
+          adapter: defaultAdapter(),
+          userAnswer: lastAnswer || undefined,
+        });
+
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        if (turn.kind === "question") {
+          res.write(turn.question);
+        } else {
+          res.write(
+            `[deep-interview] Ready to crystallize at round ${turn.round} (ambiguity ${turn.ambiguityScore.toFixed(3)}).`,
+          );
+        }
+        res.end();
         return;
       }
 
@@ -256,6 +428,52 @@ export function assessRoutes(db: Db) {
       const result = await projectSvc.getProjectAssessment(companyId, slug);
       if (!result) { res.status(404).json({ error: "No project assessment found" }); return; }
       res.json(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Internal server error";
+      res.status(httpStatus(err)).json({ error: message });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // AgentDash (Phase D): GET /onboarding/in-progress
+  //
+  // Resume support (Pre-mortem #2 mitigation): the SPA calls this on
+  // /assess load to determine whether to offer "resume your interview".
+  // Returns the in-progress deep_interview_states row for (scope, scopeRefId);
+  // null when none. Mounted under /api at the app level so the final URL is
+  // GET /api/onboarding/in-progress?scope=...&scopeRefId=...
+  // ────────────────────────────────────────────────────────────────────
+  router.get("/onboarding/in-progress", async (req, res) => {
+    try {
+      const scope = String(req.query.scope ?? "");
+      const scopeRefId = String(req.query.scopeRefId ?? "");
+      if (scope !== "cos_onboarding" && scope !== "assess_project") {
+        res.status(400).json({ error: "scope must be 'cos_onboarding' or 'assess_project'" });
+        return;
+      }
+      if (!scopeRefId) {
+        res.status(400).json({ error: "scopeRefId required" });
+        return;
+      }
+      // Authorization: the caller must have access to the company associated
+      // with this state row. For cos_onboarding scope, scopeRefId is the
+      // companyId (per Phase D wiring). For assess_project, scopeRefId is a
+      // synthetic project key prefixed with "<companyId>:" — we extract the
+      // companyId for the access check.
+      let companyIdForAuthz = scopeRefId;
+      if (scope === "assess_project") {
+        const sep = scopeRefId.indexOf(":");
+        if (sep > 0) companyIdForAuthz = scopeRefId.slice(0, sep);
+      }
+      assertCompanyAccess(req, companyIdForAuthz);
+
+      const state = await engine.getInProgress(scope as DeepInterviewScope, scopeRefId);
+      const resumeUrl = state
+        ? scope === "cos_onboarding"
+          ? `/assess?onboarding=1`
+          : `/assess?mode=project`
+        : null;
+      res.json({ state, resumeUrl });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Internal server error";
       res.status(httpStatus(err)).json({ error: message });
