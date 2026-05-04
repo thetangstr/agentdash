@@ -50,7 +50,7 @@ export default function ChatPanel({
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
       <ChatHeader {...(headerProps ?? {})} />
-      <div className="flex-1 overflow-y-auto px-4 py-8">
+      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
         <div className="max-w-2xl mx-auto">
           <MessageList
             messages={messages}
@@ -58,7 +58,7 @@ export default function ChatPanel({
           />
         </div>
       </div>
-      <div className="border-t border-border-soft bg-surface-raised px-4 py-4">
+      <div className="border-t border-border-soft bg-surface-raised px-4 py-2">
         <div className="max-w-2xl mx-auto">
           <Composer onSend={send} agentDirectory={agentDirectory} />
         </div>
