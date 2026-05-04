@@ -1,10 +1,6 @@
 ---
 name: assess-agentic
-description: Assess an organization for agentic workflow readiness — intake, deep-interview, and structured output
-argument-hint: [--company|--project] [--url <company_url>]
-pipeline: [assess-agentic, deep-interview, omc-plan, autopilot]
-next-skill: deep-interview
-next-skill-args: --standard
+description: Assess an organization for agentic workflow readiness
 level: 3
 ---
 
@@ -55,24 +51,84 @@ Check if `~/skills/assess-agentic/SKILL.md` exists. If not:
 4. If CLAUDE.md doesn't have the import yet, append the import line to `~/.claude/CLAUDE.md` using `Bash: echo '\n@import ~/skills/assess-agentic/SKILL.md' >> ~/.claude/CLAUDE.md`
 5. Tell the user: "Skill installed. Please run `/assess-agentic` again."
 
-### 0b: OMC pre-flight check
+### 0b: Runtime detection and pre-flight check
 
-After confirming the skill is installed, verify OMC (oh-my-claudecode) is installed.
+**This is a hard gate. There is no limited mode. Either the deep-interview skill is available (via OMC or OMX), or the skill stops.**
 
-1. **Check if OMC is installed**: Try invoking `Skill("omc-reference")` or check if `/oh-my-claudecode` commands work in the current session.
-2. **If OMC is not installed**, tell the user:
+**Step 1 — Detect which runtime is available:**
 
-> "This skill requires OMC (oh-my-claudecode) to be installed first, because it relies on the `deep-interview` skill for adaptive interviewing. To install OMC, run:
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/oh-my-claude/oh-my-claude/main/install.sh | bash
-> ```
->
-> After installing OMC, restart your Claude Code session and try again."
+Check which CLI is running:
+```
+claude --version 2>/dev/null | head -1
+codex --version 2>/dev/null | head -1
+```
 
-3. **If OMC is installed but deep-interview is not available**, the skill will still work — but it will skip the deep-interview handoff and fall back to a manual intake-based assessment. Notify the user: "Deep-interview skill not found — running in limited mode."
+- If `claude` is found → OMC runtime (oh-my-claudecode)
+- If `codex` is found → OMX runtime (oh-my-codex)
+- If neither → neither OMC nor OMX is installed
 
-Proceed to Phase 1 only after both the skill is installed and the pre-flight check passes.
+**Step 2 — Check if deep-interview is available:**
+
+For **OMC (claude)**:
+```
+Skill("oh-my-claude:deep-interview", "--help")
+```
+
+For **OMX (codex)** — invoke via Bash:
+```bash
+$deep-interview --help
+```
+
+If either returns without error, deep-interview is available — skip to Phase 1.
+
+**Step 3 — If deep-interview is NOT available, offer install:**
+
+**For OMC:**
+```
+"This skill requires OMC (oh-my-claudecode) with the deep-interview skill. It is not currently installed on this machine. May I install it now?
+
+[Install OMC] [Cancel and exit]"
+```
+
+- **Cancel and exit**: Say "Understood. Run `/assess-agentic` after OMC is installed." then stop. Do not collect intake. Do not offer limited mode.
+- **Install OMC**: run:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/oh-my-claude/oh-my-claude/main/install.sh | bash
+  ```
+  Wait for it to finish. Then run:
+  ```bash
+  omc setup
+  ```
+  Wait for that to finish.
+
+**For OMX:**
+```
+"This skill requires OMX (oh-my-codex) with the deep-interview skill. It is not currently installed on this machine. May I install it now?
+
+[Install OMX] [Cancel and exit]"
+```
+
+- **Cancel and exit**: Say "Understood. Run `/assess-agentic` after OMX is installed." then stop.
+- **Install OMX**: run:
+  ```bash
+  npm install -g @openai/codex oh-my-codex
+  ```
+  Wait for it to finish. Then run:
+  ```bash
+  omx setup
+  ```
+  Wait for that to finish.
+
+**Step 4 — Verify again:**
+
+OMC: `Skill("oh-my-claude:deep-interview", "--help")`
+OMX: `$deep-interview --help` via Bash
+
+If deep-interview is still unavailable after install, report the error and stop. Do not offer limited mode.
+
+**There is no limited mode. There is no manual fallback. If deep-interview is unavailable, the skill stops.**
+
+Proceed to Phase 1 only after deep-interview is confirmed available.
 
 ## Phase 1: Intake
 
@@ -95,6 +151,40 @@ Fetch the company website at the provided URL:
 
 If the URL is unreachable or empty, note it and proceed with the company name only.
 
+## Phase 2b: Pre-Interview Pulse
+
+Before handing off to the deep Socratic interview, establish the business context that keeps the entire engagement grounded. These questions are NOT answered by the consultant — they are answered by the client. Present them as a compact intake form, not a raw Q&A.
+
+**Business goal questions:**
+
+1. **"What business problem are we solving?"**
+   *(What is the actual pain — not the IT symptom, but the business impact? Who is affected and how?)*
+
+2. **"What business outcome do you want?"**
+   *(Describe success in business terms — revenue gained, cost reduced, time saved, errors prevented. Not "we want AI agents". What does winning look like?)*
+
+3. **"What does doing nothing cost you?"**
+   *(What is the ongoing cost of the current problem? Hours lost per week? Revenue leaking? Customers churning? Being beaten by competitors?)*
+
+4. **"Who is the decision maker and DRI for this project?"**
+   *(Who will sign off? Who will run it day-to-day? Without named accountable people, the project will stall.)*
+
+5. **"What is the timeline pressure?"**
+   *(Is there a hard deadline? A trade show, board meeting, or product launch driving this? Or is this exploratory?)*
+
+6. **"What is the budget envelope for the pilot?"**
+   *(Rough range is fine — $5K, $50K, $500K? This shapes whether we recommend build vs. buy vs. hybridize.)*
+
+**Additional context questions:**
+
+7. **"What systems does this workflow touch today?"**
+   *(Name the actual systems — Salesforce, SAP, SharePoint, Slack, etc. Don't worry about correctness, just name what comes to mind.)*
+
+8. **"What is the approximate size of your organization?"**
+   *(Number of employees, revenue range, or industry — helps calibrate the scale of the solution.)*
+
+Collect all answers and inject them into the Phase 3 seed prompt. The deep-interview should never re-ask these — it builds on them.
+
 ## Phase 3: Seed deep-interview
 
 Invoke the `deep-interview` skill with a domain-specific seed. This phase is critical — you must frame the deep-interview with the consultant's forward-deployed engineer persona and the closed-loop agentic workflow assessment framework.
@@ -108,6 +198,41 @@ Your mission: Help businesses adopt AI agents into their workflows to close more
 Your worldview: AI is not a productivity tool layered onto existing workflows — it is an entirely new capability layer. An AI agent is a digital employee that requires goals, budgets, an org chart, and an audit trail.
 
 Tone: Authoritative, pragmatic, and highly analytical. Empathy for the difficulty of unwinding legacy systems balanced with absolute candor about the necessity of doing so. No corporate fluff.
+
+### IT Problems Are Never the Goal — Always Dig Deeper
+
+**This is the most important consulting discipline in the interview.**
+
+Clients will say "we need to clean up our SharePoint" or "our knowledge base is a mess." Do NOT accept this as the problem. It is a symptom. Your job is to dig until you find the actual business goal.
+
+**The interrogation ladder:**
+1. Client says: "Our SharePoint is disorganized."
+2. Ask: "What business outcome is that blocking? Who is harmed and how?"
+3. Client says: "Our team can't find answers so they guess."
+4. Ask: "What does a wrong guess cost you? How often does it happen?"
+5. Client says: "It causes delays in our sales cycle, maybe 2 days per deal."
+6. Ask: "How many deals per quarter? What's 2 days times that?"
+7. NOW you have a dollar figure. THAT is the problem worth solving.
+
+**The IT-layer trap:**
+- "Clean up SharePoint" → WRONG framing
+- "Build a knowledge agent" → still IT-framed
+- "Reduce sales cycle delays caused by knowledge loss, saving $X per quarter" → RIGHT framing
+
+**Interview rules:**
+- Never accept an IT problem as the stated goal. "What business outcome does that support?"
+- When a client describes a system problem, ask what decision or outcome it blocks
+- Convert every IT complaint into: "[Action] causes [dollar/time cost] because [downstream effect]"
+- The pilot scope should be defined by a business metric, not a system name
+
+**Examples of IT-layer vs. business-layer:**
+
+| IT-Layer framing (reject) | Business-Layer framing (correct) |
+|---|---|
+| "Organize our SharePoint" | "Sales team loses 3h/week searching for specs — costing $X in delayed deals" |
+| "Build a RAG chatbot" | "Engineers make design errors because they can't find past decisions — each error costs $X" |
+| "Automate our CRM data entry" | "CRM is 40% empty because reps skip it — costing us $X in upsell misses" |
+| "Fix our ticket routing" | "Tier-1 tickets take 48h to escalate because routing is wrong — NPS is X points below target" |
 
 ### The Five Assessment Dimensions (weighted)
 
@@ -144,241 +269,140 @@ Classify the target agentic workflow on this typology:
 
 **Tier-shortcut rejection rule:** If the customer is reaching for Tier 5 with zero agents in production, downgrade to Tier 2 or 3.
 
+### Invoke deep-interview NOW
+
+**This is a required step. Use the correct invocation syntax for the detected runtime.**
+
+**For OMC (claude CLI):**
+```
+Skill("oh-my-claudecode:deep-interview", "--standard <company_name> agentic workflow readiness assessment")
+```
+
+**For OMX (codex CLI):**
+```bash
+$deep-interview "--standard <company_name> agentic workflow readiness assessment"
+```
+
+**Will silently fail — do NOT use:**
+- `Skill("deep-interview", ...)` without the `oh-my-claudecode:` prefix
+- `/deep-interview --standard ...` — this is user-level chat syntax, not valid inside a skill body
+
+The deep-interview skill will take over the conversation, run its Socratic loop, and return when the spec crystallizes. After it returns, proceed immediately to Phase 5.
+
+**Scope:**
+- Project-level assessment: `scope: "assess_project"`
+- Company-level assessment: `scope: "cos_onboarding"`
+
+Pass these as part of the invocation arguments.
+
 ### Seed prompt for deep-interview
 
+The arguments passed to deep-interview become its `{{ARGUMENTS}}` — this IS the initial idea. Frame all Phase 2b context into the arguments:
+
 ```
-Skill("deep-interview", "--standard <company_name> agentic workflow readiness assessment")
-```
+--standard [company_name] agentic workflow readiness assessment
 
-The `initialIdea` passed to deep-interview should be framed as:
+Pre-interview context — do not re-ask, build on this:
+- Business problem: [from Phase 2b]
+- Business outcome desired: [from Phase 2b]
+- Cost of doing nothing: [from Phase 2b]
+- Decision maker / DRI: [from Phase 2b]
+- Timeline pressure: [from Phase 2b]
+- Budget envelope: [from Phase 2b]
+- Systems in use: [from Phase 2b]
+- Org size: [from Phase 2b]
+- Company research summary: [from Phase 2]
+- Assessment type: [company | project]
 
-> "Assess [company name] for readiness to design and sustain an agentic workflow. [company summary from research]. The goal is a closed-loop system: autonomous execution, monitoring, feedback, and adaptation. We need to understand the operational context, integration points, error tolerance, success metrics, and organizational capacity to sustain AI agents.
->
-> Framing: We are forward-deployed strategy consultants. The bias is hybridize first (buy commodity primitives, build only the differentiator). The pilot must be a 4–6 week fixed-scope deployment inside the customer's environment. We ship working software, not slides. Ask about specific systems, specific metrics, specific workflows — not generic intentions.
->
-> The five assessment dimensions are: specificity (30%), systems (25%), success (20%), risk (15%), fit (10%). Probe for closed-loop architecture components (outcome signal, judge, memory, update mechanism) on every workflow. Classify the target tier (1–5) and reject up-tier shortcuts."
+Consultant framing: We are forward-deployed strategy consultants. The bias is hybridize first. The pilot must be a 4-6 week fixed-scope deployment. We ship working software, not slides. Ask about specific systems, specific metrics, specific workflows — not generic intentions.
 
-Use `scope: "assess_project"` for project-level assessments, `scope: "cos_onboarding"` for company-level.
+The five assessment dimensions: specificity (30%), systems (25%), success (20%), risk (15%), fit (10%). Probe for closed-loop architecture (outcome signal, judge, memory, update mechanism). Classify the target tier (1-5) and reject up-tier shortcuts.
 
-## Phase 4: Interview Loop
-
-Monitor the deep-interview rounds. After each round, show the user:
-- Current ambiguity score
-- Which dimension is being targeted
-- The question being asked
-
-Continue until `ambiguity ≤ threshold` (0.2) or the user chooses to exit early.
-
-## Phase 5: Report
-
-When the spec crystallizes, format it as a markdown report saved to `.omc/specs/assess-{slug}.md`.
-
-### Report Structure (from strategy.md)
-
-The report must follow this structure exactly:
-
-**For company-level assessments (Section 2 from strategy.md):**
-
-```markdown
-# Agentic Workflow Readiness Assessment: {company_name}
-
-> Generated by AgentDash Consulting · {ISO date} · {company} · company portfolio
-
-## Metadata
-- Assessment Type: company
-- Date: {timestamp}
-- Assessor: Claude Code
-- URL: {company_url}
-- Industry: {detected_industry}
-- Final Ambiguity: {score}%
-- Status: READY | BELOW_THRESHOLD
-
-## Executive Summary
-3–4 sentences: who the customer is, primary opportunity, estimated total impact, recommended starting point.
-
-## AI Maturity Assessment
-Six dimensions: Use, Data & Infrastructure, Workflow Integration, Agent Deployment, Talent & Culture, Governance.
-[Flag "adoption mirage" if high individual AI usage but no governance/owner/agent experience]
-
-## Layer Inflection Exposure
-Map named systems onto the 7-layer stack. For each layer: status (CONFIRMED/DOWNGRADED/DEBUNKED), exposure, buy/wait/avoid call.
-
-## AI-Native Operating Diagnosis
-- Current Implementation Level (1/2/3) with justification
-- Recommended Target Level for next 12 months
-- Open Loops Identified (3–5 specific information flows where outcomes are not measured)
-- Closed-Loop Conversion Plan
-- Skunk-Works Pilot Pick
-
-## Revenue Opportunities (Top Line)
-For each of top 3–5: Function Cell, What the Agent Does, Revenue Impact, WACT 4.0 Assessment, Agent Tier, Buy/Hybridize/Build, Closed-Loop Maturity, Pilot Fit, Evidence, Time to Value.
-
-## Cost Reduction Opportunities (Bottom Line)
-Same format as Revenue Opportunities.
-
-## Priority Matrix
-- Quick Win: high impact, <30 days to POC
-- Strategic Bet: high impact, 3–6 months
-- Easy Add: moderate impact, fast
-- Deprioritize: lower impact or longer timeline
-
-## Implementation Roadmap
-- Phase 1 — Pilot (Weeks 1–4, fixed price, fixed scope)
-- Phase 2 — Expansion (Months 2–3, quarterly retainer)
-- Phase 3 — Production Scale + Handoff (Months 4–6)
-
-## Investment & ROI
-- Recommended pilot budget range
-- Token-maxing budget envelope
-- Expected ROI timeline
-
-## Risk Factors
-Top 3–5 risks with AgentDash native controls (budget hard-stop, kill switch, audit, HITL, governance policy).
-
-## Next Steps for Your Implementation Agent
-[See agent-readable output spec below]
+IMPORTANT — business-outcome discipline: When a client states an IT-layer problem (e.g., "fix SharePoint", "build a RAG chatbot"), do not accept it as the goal. Ask: "What business outcome does that support? What does a wrong [answer] cost?" The goal is never the tool — the goal is the dollar or time outcome the tool enables.
 ```
 
-**For project-level assessments (Section 3 from strategy.md):**
+Scope: `assess_project` for project-level, `cos_onboarding` for company-level.
 
-```markdown
-# Agentic Workflow Readiness Assessment: {company_name} — {project_name}
+**If the Skill() call returns an error or deep-interview is not available: hard stop. Report the error and exit. Do not proceed.**
 
-> Generated by AgentDash Consulting · {ISO date} · {company} · project: {project_name}
+## Phase 4: Wait for deep-interview to complete
 
-## Metadata
-- Assessment Type: project
-- Date: {timestamp}
-- Assessor: Claude Code
-- URL: {company_url}
-- Industry: {detected_industry}
-- Project: {project_name}
-- Final Ambiguity: {score}%
-- Status: READY | BELOW_THRESHOLD
+When `Skill("oh-my-claudecode:deep-interview", ...)` is invoked from Phase 3, deep-interview takes over the conversation and runs its own Socratic loop internally. This is a blocking call — you wait for it to return.
 
-## Project Brief
-[One sentence on what the agent does, on what input, with what output. Named success metric. Named DRI.]
+**What to expect:**
+- deep-interview asks the user questions directly
+- The business-outcome discipline is baked into the seed prompt passed in Phase 3
+- deep-interview runs until: ambiguity ≤ 0.2, all dimensions ≥ 0.7, round 20 cap, or user exits early
 
-## Should You Do This — Go / No-Go Reasoning
-[Direct paragraph anchoring cost of doing nothing, reachable upside, blocking risks, timing]
+**After deep-interview returns:**
+- Confirm the crystallized spec was produced (saved to `.omc/specs/deep-interview-{slug}.md`)
+- Read the final ambiguity score from the spec
+- Proceed to Phase 5
 
-## Why This Is a Good Idea — Business Case
-[3–5 bullets grounded in customer's stated systems, headcount, pain points]
+Do not answer questions yourself during this phase. deep-interview handles the interview loop.
 
-## Agent Architecture
-- Agent Tier classification (1–5, with justification)
-- Agent org chart (plain text, named agents, roles, hand-offs, tools, memory pattern)
-- Buy / Hybridize / Build decomposition (per layer, with named vendor or built piece)
-- Integrations Required (MCP-server status, native API maturity, ACL/permission preservation)
+## Phase 5: Export to DOCX and deliver
 
-## Closed-Loop Architecture
-[Plain-English sketch covering: outcome signal, judge, memory, update mechanism. For Tier 2: auto-verify content rules. For Tier 5: kill switch, budget hard-stops, episodic memory.]
+When deep-interview returns, the crystallized spec is at `.omc/specs/deep-interview-{slug}.md`. Read it, then export directly to DOCX for client review. Do not reformat — the spec is already structured. Stop after delivery.
 
-## Success Metrics
-[Table: Metric | Current baseline | Pilot target (week 4) | Production target (month 6) | How measured]
+**Step 1 — Read the crystallized spec:**
+```
+Read `.omc/specs/deep-interview-{slug}.md`
+```
+Confirm the file exists and has content.
 
-## Who Needs to Be Involved
-[RACI — named DRI, supporting humans tagged R/A/C/I. Stakeholders to align before kickoff.]
+**Step 2 — Save the raw spec as markdown:**
+```
+Write to `.omc/specs/assess-{slug}.md` with the content from Step 1
+```
+This preserves the raw spec alongside the DOCX.
 
-## What Agents Will Be Created
-[Named list: agent name, purpose, primary adapter, key tools, memory pattern, output format, reviewer]
+**Step 3 — Save the JSON artifact:**
+```
+Write to `.omc/specs/assess-{slug}.json`
+```
+(Extract the structured fields from the spec: company, type, dimensions, ambiguity, spec content, timestamp.)
 
-## What You Still Need to Find Out
-[Bulleted open questions customer must answer before pilot starts]
-
-## Phased Rollout — Week 1–6
-[Week-by-week milestones + success-metric checkpoints. Week 4: working agent in production.]
-
-## Token-Maxing Budget
-[Monthly inference dollars contrasted against headcount cost being replaced]
-
-## Decision
-[go / not yet / no — with triggering reason if not go]
-
-## Next Steps for Your Implementation Agent
-[See agent-readable output spec below]
+**Step 4 — Export to DOCX:**
+```bash
+pandoc --version 2>/dev/null || echo "not found"
 ```
 
-### Agent-Readable Tail Block (mandatory, from strategy.md Section 4)
-
-Both report types must end with this exact section:
-
-```markdown
-## Next Steps for Your Implementation Agent
-
-> Copy this entire section into your ChatGPT, Codex, or Claude Code session. The agent has enough context to start work without further prompting.
-
-**Pilot scope:** {one sentence — what ships in first 4 weeks}
-**Systems the agent will touch:** {comma-separated named systems}
-**Success metric:** {single metric with baseline and target}
-**Tier classification:** Tier {1-5} — {one-line architecture summary}
-**Buy / Build calls already made:**
-- L1 (foundation primitives): Buy — {vendor}
-- L2 (connectors): Buy — {vendor or native API}
-- L3 (orchestration): {AgentDash native or other}
-- L4 (domain logic): Build — {what gets built}
-- L5 (evaluation): Build on {eval substrate}
-
-### First three tasks
-- [ ] **TODO Week 1, Day 1:** {atomic, executable task}
-- [ ] **TODO Week 1, Day 2-3:** {next atomic task}
-- [ ] **TODO Week 1, Day 4-5:** {third atomic task}
-
-### Full pilot backlog
-- [ ] **Week 1:** {milestone + checkpoint}
-- [ ] **Week 2:** {milestone + checkpoint}
-- [ ] **Week 3:** {milestone + checkpoint}
-- [ ] **Week 4:** {working agent in production}
-- [ ] **Week 5:** {expansion / closed-loop wiring}
-- [ ] **Week 6:** {handoff prep, runbook, dashboards}
-
-### Pre-kickoff blockers
-- [ ] **TODO:** {open question or decision before kickoff}
-
-### Reference
-- Tier: {Tier N — name}
-- Layers touched: {L1, L2, ...}
-- Memory pattern: {description}
-- Judge: {what scores output}
-- Kill switch: {how to halt}
+If pandoc is installed:
+```bash
+pandoc .omc/specs/assess-{slug}.md \
+  -o .omc/specs/assess-{slug}.docx \
+  --from=markdown \
+  --toc \
+  --toc-depth=2 \
+  --reference-doc=default \
+  --metadata title="Agentic Workflow Readiness Assessment: {company_name}" \
+  --metadata author="AgentDash Consulting" \
+  --metadata date="{ISO_date}" \
+  2>&1 || echo "DOCX export failed"
 ```
 
-### JSON Artifact
-
-Also save the raw JSON spec:
-```json
-{
-  "company": "{company_name}",
-  "url": "{company_url}",
-  "type": "{company|project}",
-  "project": "{project_name}",
-  "industry": "{detected_industry}",
-  "summary": "{company_summary}",
-  "finalAmbiguity": {score},
-  "dimensions": {
-    "specificity": {score},
-    "systems": {score},
-    "success": {score},
-    "risk": {score},
-    "fit": {score}
-  },
-  "spec": {raw_crystallized_spec_json},
-  "assessedAt": "{ISO_timestamp}"
-}
+If pandoc is not installed:
+```bash
+# Try python-docx as fallback
+python3 -c "import docx" 2>/dev/null && echo "python-docx available" || echo "no docx tool"
 ```
-to `.omc/specs/assess-{slug}.json`.
 
-## Phase 6: Handoff
+If neither tool is available, save the markdown only and tell the user:
+> "DOCX export requires pandoc. Install with `brew install pandoc` and re-run `/assess-agentic` to generate the Word document."
 
-After the report is saved, present execution options:
+**Step 5 — Present the deliverable:**
+```
+"Assessment complete. Your readiness report is ready:
 
-> "Your agentic workflow readiness assessment is complete (ambiguity: {score}%). The crystallized spec is saved at `.omc/specs/assess-{slug}.md`. How would you like to proceed?"
+• Markdown spec: .omc/specs/assess-{slug}.md
+• Word document: .omc/specs/assess-{slug}.docx
+• JSON artifact: .omc/specs/assess-{slug}.json
 
-Options:
-1. **Plan the agentic workflow** — Invoke `omc-plan --consensus --direct` with the spec as input
-2. **Execute a pilot** — Invoke `autopilot` with the spec as context
-3. **Refine the assessment** — Continue the deep-interview to reduce ambiguity further
-4. **Save and exit** — Keep the spec for later
+Share the .docx with your stakeholders for review."
+```
+
+Stop here. Do not offer to plan, execute, or refine. The deliverable is the DOCX.
 
 </Steps>
 
@@ -386,8 +410,9 @@ Options:
 - Use `WebFetch` or `Bash` with `curl` for website research
 - Use `AskUserQuestion` for intake collection (structured form, not open Q&A)
 - Use `Skill()` to invoke deep-interview
-- Use `Write` to save the final report and JSON artifact
-- Use `Read` to load the crystallized spec for report formatting
+- Use `Read` to load the crystallized spec from deep-interview output
+- Use `Write` to save markdown and JSON artifacts
+- Use `Bash` with `pandoc` for DOCX export
 </Tool_Usage>
 
 <Examples>
@@ -439,24 +464,41 @@ Downgraded to Tier 3 (Workflow Runner) as the wedge that opens the path.
 ```
 Why good: Honest assessment of organizational readiness, not just what the customer wants to hear.
 </Good>
+
+<Good>
+IT-layer problem translated to business outcome:
+```
+Client: "We need to organize our SharePoint."
+Consultant: "What business outcome is SharePoint disorganization blocking?"
+Client: "Our sales team can't find technical specs, so they guess."
+Consultant: "What does a wrong guess cost you per deal, and how often does it happen?"
+Client: "Probably $50K missed per deal on average, maybe 20% of deals are affected."
+Consultant: "That's $X per quarter in at-risk revenue. Let's solve that."
+```
+Why good: Never accepted the IT problem as the goal. Converted SharePoint chaos into a dollar figure on the second probe. The agentic workflow recommendation will be framed around protecting that revenue, not cleaning up SharePoint.
+</Good>
 </Examples>
 
 <Escalation_And_Stop_Conditions>
 - If the user declines to provide a URL, proceed with company name only (skip research phase)
-- If deep-interview returns an error, report it and offer to continue with manual context entry
+- If `Skill("deep-interview", ...)` returns an error or deep-interview is unavailable: **hard stop.** Do not proceed with manual interviewing. Report the error and exit.
 - If the company has no clear industry signal from the website, note "Industry: Unknown" and proceed
 - Hard stop at deep-interview round 20 regardless of ambiguity
 - If customer asks for Tier 5 with zero agents in production, explicitly downgrade and explain why
+- If the interview captures an IT-layer problem (e.g., "fix SharePoint", "build a RAG chatbot") without a business-outcome translation, do NOT let it pass. Probe until the dollar/time cost is named
 </Escalation_And_Stop_Conditions>
 
 <Final_Checklist>
 - [ ] Intake collected (company, URL, type)
 - [ ] Website researched and summary generated
+- [ ] Pre-interview pulse collected (business problem, outcome, cost of inaction, DRI, timeline, budget, systems, org size)
 - [ ] Deep-interview seeded with consultant persona + domain-specific framing + closed-loop probes
-- [ ] Interview loop completed or user chose early exit
-- [ ] Report saved to `.omc/specs/assess-{slug}.md` (company or project structure)
+- [ ] Deep-interview completed (or user exited early)
+- [ ] Crystallized spec read from `.omc/specs/deep-interview-{slug}.md`
+- [ ] Markdown saved to `.omc/specs/assess-{slug}.md`
 - [ ] JSON artifact saved to `.omc/specs/assess-{slug}.json`
-- [ ] Handoff options presented
+- [ ] DOCX exported to `.omc/specs/assess-{slug}.docx`
+- [ ] Deliverable presented to user
 </Final_Checklist>
 
 Task: {{ARGUMENTS}}
