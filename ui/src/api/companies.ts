@@ -17,12 +17,18 @@ export const companiesApi = {
   list: () => api.get<Company[]>("/companies"),
   get: (companyId: string) => api.get<Company>(`/companies/${companyId}`),
   stats: () => api.get<CompanyStats>("/companies/stats"),
-  create: (data: {
-    name: string;
-    description?: string | null;
-    budgetMonthlyCents?: number;
-  }) =>
-    api.post<Company>("/companies", data),
+  create: (
+    data: {
+      name: string;
+      description?: string | null;
+      budgetMonthlyCents?: number;
+    },
+    options?: { fromSignup?: boolean },
+  ) =>
+    api.post<Company>(
+      options?.fromSignup ? "/companies?fromSignup=1" : "/companies",
+      data,
+    ),
   update: (
     companyId: string,
     data: Partial<

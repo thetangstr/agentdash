@@ -49,6 +49,7 @@ import BillingPage from "./pages/BillingPage";
 import { AssessPage } from "./pages/AssessPage";
 import { AssessHistoryPage } from "./pages/AssessHistoryPage";
 import { AuthPage } from "./pages/Auth";
+import { CompanyCreatePage } from "./pages/CompanyCreate";
 import { ForgotPasswordPage } from "./pages/ForgotPassword";
 import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
@@ -294,6 +295,10 @@ export function App() {
         <Route path="assess/history" element={<AssessHistoryPage />} />
 
         <Route element={<CloudAccessGate />}>
+          {/* AgentDash (Phase E): post-signup → /company-create.
+              The user has no company yet, so this lives outside the
+              :companyPrefix boardRoutes block. */}
+          <Route path="company-create" element={<CompanyCreatePage />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />

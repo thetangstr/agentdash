@@ -289,6 +289,27 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     // Free-mail rejection (AGE-60), domain uniqueness (AGE-55), and the
     // free single-seat cap (AGE-100) are the real safeguards.
 
+    // AgentDash (Phase E): post-signup /company-create flow guard. When the
+    // SPA's /company-create page submits, it sets ?fromSignup=1 to opt into
+    // a 409 if the user already has any company membership (invite-path
+    // mitigation: an invitee who navigates back must NOT double-create a
+    // workspace — the UI catches the 409 and routes them to /cos). Scoped
+    // to the query param so non-Better-Auth callers (CLI bootstrap, scripts,
+    // e2e helpers) that legitimately create multiple companies are not
+    // affected.
+    if (req.query.fromSignup === "1" || req.query.fromSignup === "true") {
+      const existingCompanyIds = req.actor.companyIds ?? [];
+      if (existingCompanyIds.length > 0) {
+        res.status(409).json({
+          code: "already_member",
+          existingCompanyId: existingCompanyIds[0] ?? null,
+          message:
+            "User is already a member of a workspace; redirect to it instead of creating another.",
+        });
+        return;
+      }
+    }
+
     // AgentDash (AGE-55): FRE Plan B — derive email_domain from the creator's
     // authenticated email. local_implicit actors (single-machine dev) have no
     // email, so we leave the domain NULL and grandfather them in.
