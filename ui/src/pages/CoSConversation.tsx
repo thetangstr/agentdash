@@ -62,24 +62,29 @@ export function CoSConversation() {
   }
 
   const cardContext: CardContext = {
-    onProposalConfirm: () => {
-      // Already confirmed server-side when proposal_card_v1 was emitted; no-op in v1.
-    },
-    onProposalReject: async (reason) => {
+    onProposalConfirm: async () => {
+      // Phase D: confirm the agent_plan_proposal_v1 card -> materialize agents.
+      // (The legacy proposal_card_v1 path is also fired via this callback; the
+      // server already created that agent at card-emit time, so confirm-plan
+      // is the only path that materializes here.)
       try {
-        await onboardingApi.rejectAgent({
+        await onboardingApi.confirmPlan({
           conversationId: bootstrapped.conversationId,
-          cosAgentId: bootstrapped.cosAgentId,
-          reason,
-        });
-        // Re-trigger confirm to get a new proposal.
-        await onboardingApi.confirmAgent({
-          conversationId: bootstrapped.conversationId,
-          reportsToAgentId: bootstrapped.cosAgentId,
-          companyId: bootstrapped.companyId,
         });
       } catch {
-        // Non-blocking — the chat transcript already reflects the rejection.
+        // Non-blocking — the closing message + agents land via WS regardless.
+      }
+    },
+    onProposalReject: async (reason) => {
+      // Phase F revision-loop is deferred — server stub returns 501 — but we
+      // still wire the button so the round-trip is observable.
+      try {
+        await onboardingApi.revisePlan({
+          conversationId: bootstrapped.conversationId,
+          revisionText: reason ?? "",
+        });
+      } catch {
+        // Expected until Phase F lands.
       }
     },
     onInviteSend: async (emails) => {

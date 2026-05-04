@@ -51,4 +51,14 @@ export const onboardingApi = {
     cosAgentId: string;
     reason?: string;
   }) => api.post<{ ok: true }>("/onboarding/agent/reject", input),
+  // Phase D: read the latest agent_plan_proposal_v1 card and materialize the
+  // agents server-side. Returns the new company-id + new agent ids.
+  confirmPlan: (input: { conversationId: string }) =>
+    api.post<{ companyId: string; createdAgentIds: string[] }>(
+      "/onboarding/confirm-plan",
+      input,
+    ),
+  // Phase F (revision loop) is not implemented yet — this returns 501.
+  revisePlan: (input: { conversationId: string; revisionText: string }) =>
+    api.post<{ error: string; message: string }>("/onboarding/revise-plan", input),
 };
