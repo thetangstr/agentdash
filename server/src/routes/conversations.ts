@@ -9,7 +9,7 @@ import {
   cosReplier,
   agentSummoner,
 } from "../services/index.js";
-import { anthropicLLM } from "../services/anthropic-llm.js";
+import { dispatchLLM } from "../services/dispatch-llm.js";
 
 export function conversationRoutes(db: Db) {
   const router = Router();
@@ -36,10 +36,10 @@ export function conversationRoutes(db: Db) {
         execute: async () => ({ output: "Stub agent reply" }),
       }),
     }),
-    // anthropicLLM auto-falls back to a stub when ANTHROPIC_API_KEY is unset
-    // (so dev without keys still works); when set, it calls Claude with prompt
-    // caching on the system prompt.
-    replier: cosReplier({ conversations: svc, llm: anthropicLLM } as any),
+    // dispatchLLM routes to whichever adapter the user picked via `agentdash setup`
+    // (AGENTDASH_DEFAULT_ADAPTER). Defaults to claude_api; also supports hermes_local
+    // and claude_local. Falls back to anthropicLLM stub when keys are unset.
+    replier: cosReplier({ conversations: svc, llm: dispatchLLM } as any),
     cosResolver,
   });
 

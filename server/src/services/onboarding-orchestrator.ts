@@ -65,7 +65,7 @@ export function onboardingOrchestrator(deps: Deps) {
         const created = await deps.agents.create(company.id, {
           name: "Chief of Staff",
           role: "chief_of_staff",
-          adapterType: "claude_api",
+          adapterType: (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim() || "claude_api",
           adapterConfig: {},
           status: "idle",
           spentMonthlyCents: 0,
