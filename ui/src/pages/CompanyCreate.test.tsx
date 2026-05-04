@@ -76,21 +76,31 @@ describe("CompanyCreatePage", () => {
     expect(input).not.toBeNull();
   });
 
+  function setNativeValue(el: HTMLInputElement, value: string) {
+    const desc = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    );
+    desc?.set?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   it("submits to companiesApi.create with fromSignup and navigates to /assess?onboarding=1", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
 
     render();
     const input = container.querySelector("input#company-name") as HTMLInputElement;
-    const form = container.querySelector("form") as HTMLFormElement;
+    const button = container.querySelector("button[type='submit']") as HTMLButtonElement;
 
     await act(async () => {
-      input.value = "Acme";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      setNativeValue(input, "Acme");
     });
+    await flushReact();
 
     await act(async () => {
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      button.click();
     });
+    await flushReact();
     await flushReact();
     await flushReact();
 
@@ -106,15 +116,16 @@ describe("CompanyCreatePage", () => {
 
     render();
     const input = container.querySelector("input#company-name") as HTMLInputElement;
-    const form = container.querySelector("form") as HTMLFormElement;
+    const button = container.querySelector("button[type='submit']") as HTMLButtonElement;
 
     await act(async () => {
-      input.value = "Acme";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      setNativeValue(input, "Acme");
     });
+    await flushReact();
     await act(async () => {
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      button.click();
     });
+    await flushReact();
     await flushReact();
     await flushReact();
 

@@ -74,30 +74,42 @@ describe("AuthPage post-signup redirect (Phase E)", () => {
     return root;
   }
 
+  function setNativeValue(el: HTMLInputElement, value: string) {
+    const desc = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    );
+    desc?.set?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   it("navigates to /company-create after a successful sign-up", async () => {
     mockSignUp.mockResolvedValue(undefined);
 
     render();
+    // Wait for the session-loading branch to finish so the form mounts.
+    await flushReact();
+    await flushReact();
     await flushReact();
 
-    const inputs = container.querySelectorAll("input");
-    const nameInput = inputs[0] as HTMLInputElement;
-    const emailInput = inputs[1] as HTMLInputElement;
-    const passwordInput = inputs[2] as HTMLInputElement;
-    const form = container.querySelector("form") as HTMLFormElement;
+    const nameInput = container.querySelector("input#name") as HTMLInputElement | null;
+    const emailInput = container.querySelector("input#email") as HTMLInputElement;
+    const passwordInput = container.querySelector("input#password") as HTMLInputElement;
+    const button = container.querySelector("button[type='submit']") as HTMLButtonElement;
+
+    expect(nameInput, "name input must be rendered in sign_up mode").not.toBeNull();
 
     await act(async () => {
-      nameInput.value = "Alice";
-      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
-      emailInput.value = "alice@acme.com";
-      emailInput.dispatchEvent(new Event("input", { bubbles: true }));
-      passwordInput.value = "supersecret";
-      passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setNativeValue(nameInput!, "Alice");
+      setNativeValue(emailInput, "alice@acme.com");
+      setNativeValue(passwordInput, "supersecret");
     });
+    await flushReact();
 
     await act(async () => {
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      button.click();
     });
+    await flushReact();
     await flushReact();
     await flushReact();
 
