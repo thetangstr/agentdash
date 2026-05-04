@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { onboardingOrchestrator } from "../services/onboarding-orchestrator.js";
-import { FIXED_QUESTIONS } from "@paperclipai/shared";
 
 const mockAccess = { ensureMembership: vi.fn(), setPrincipalPermission: vi.fn(), listUserCompanyAccess: vi.fn() };
 const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn() };
@@ -14,7 +13,7 @@ const deps = { access: mockAccess, companies: mockCompanies, agents: mockAgents,
 describe("onboardingOrchestrator.bootstrap", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com" });
+    mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
     mockCompanies.create.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
@@ -41,36 +40,45 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.addParticipant).toHaveBeenCalledWith("conv-1", "user-1", "owner");
   });
 
-  it("posts a 4-message welcome sequence (3 plain + 1 interview card) when the conversation is fresh", async () => {
+  it("posts ONE Phase 0 greeting (greeting + role + first goal question) when the conversation is fresh", async () => {
+    // Phase 0 of the spec at
+    // docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
+    // The opening turn collapses greeting + context + first question into one
+    // message — anything more reads like a robot survey, per the user's
+    // feedback after the previous 4-bubble version.
     await onboardingOrchestrator(deps as any).bootstrap("user-1");
-    expect(mockConversations.postMessage).toHaveBeenCalledTimes(4);
-    const calls = mockConversations.postMessage.mock.calls.map((c) => c[0]);
-    // First three: plain agent bubbles authored by the CoS, no card.
-    for (let i = 0; i < 3; i++) {
-      expect(calls[i]).toMatchObject({
-        conversationId: "conv-1",
-        authorKind: "agent",
-        authorId: "agent-cos-1",
-      });
-      expect(calls[i].cardKind).toBeUndefined();
-      expect(typeof calls[i].body).toBe("string");
-      expect(calls[i].body.length).toBeGreaterThan(0);
-    }
-    // Fourth: the first fixed interview question, rendered as an interview card.
-    expect(calls[3]).toMatchObject({
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+    const call = mockConversations.postMessage.mock.calls[0][0];
+    expect(call).toMatchObject({
       conversationId: "conv-1",
       authorKind: "agent",
       authorId: "agent-cos-1",
-      body: FIXED_QUESTIONS[0],
-      cardKind: "interview_question_v1",
-      cardPayload: { question: FIXED_QUESTIONS[0], fixedIndex: 0 },
     });
+    expect(call.cardKind).toBeUndefined();
+    // Personalized salutation uses the user's first name.
+    expect(call.body).toContain("Alice");
+    // Identifies the agent role.
+    expect(call.body).toMatch(/chief of staff/i);
+    // Sets context for what AgentDash is and why this conversation exists.
+    expect(call.body).toMatch(/agentdash/i);
+    // Asks the first goal question (short-term + long-term framing).
+    expect(call.body).toMatch(/short-term/i);
+    expect(call.body).toMatch(/6.?12 months|long-?term/i);
+  });
+
+  it("falls back to a generic salutation when the user has no name", async () => {
+    mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: null });
+    await onboardingOrchestrator(deps as any).bootstrap("user-1");
+    const call = mockConversations.postMessage.mock.calls[0][0];
+    // No name → "Hi there!" rather than "Hi {firstName}!".
+    expect(call.body).toMatch(/^Hi there!/);
+    expect(call.body).not.toMatch(/^Hi null/);
   });
 
   it("is idempotent — second call returns existing artifacts (user-membership check, NOT domain lookup) and posts NO welcome messages", async () => {
     await onboardingOrchestrator(deps as any).bootstrap("user-1");
     vi.clearAllMocks();
-    mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com" });
+    mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     // Second call: user already has an active membership — reuse that company.
     mockAccess.listUserCompanyAccess.mockResolvedValue([{ companyId: "company-1", status: "active", principalId: "user-1" }]);
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
