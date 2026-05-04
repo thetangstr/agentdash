@@ -36,10 +36,26 @@ export function onboardingOrchestrator(deps: Deps) {
       const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
 
-      // Step 1: ensure a company. Use email-domain lookup first (idempotency).
+      // Step 1: ensure a company.
+      // Idempotency is per-user, not per-domain: if this user already belongs to
+      // a company (e.g. bootstrap() fired twice from auth hook + CoSConversation
+      // useEffect), reuse their first active membership rather than creating a
+      // second workspace. We intentionally do NOT look up by email domain —
+      // domain matching caused all gmail.com users to land in the same workspace,
+      // which is a critical isolation bug.
       const emailDomain = deriveEmailDomain(user.email);
-      let company = emailDomain ? await deps.companies.findByEmailDomain(emailDomain) : null;
-      if (!company) {
+      const existingMemberships = await deps.access.listUserCompanyAccess(userId);
+      const activeMembership = existingMemberships.find(
+        (m: any) => m.status === "active",
+      );
+      let company: { id: string; name?: string; emailDomain?: string | null };
+      if (activeMembership) {
+        const found = await deps.companies.getById(activeMembership.companyId);
+        if (!found) throw new Error(`Company ${activeMembership.companyId} not found for existing membership`);
+        company = found;
+      } else {
+        // Every sign-up gets its own fresh, isolated workspace.
+        // Cross-team membership happens via invites, not domain matching.
         company = await deps.companies.create({
           name: companyNameFromEmail(user.email),
           emailDomain,
