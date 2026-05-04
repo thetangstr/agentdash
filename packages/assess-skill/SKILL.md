@@ -314,9 +314,12 @@ Pre-interview context — do not re-ask, build on this:
 - Company research summary: [from Phase 2]
 - Assessment type: [company | project]
 
-Consultant framing: We are forward-deployed strategy consultants. The bias is hybridize first. The pilot must be a 4-6 week fixed-scope deployment. We ship working software, not slides. Ask about specific systems, specific metrics, specific workflows — not generic intentions.
+Consultant framing: We are forward-deployed strategy consultants. The bias is hybridize first. The pilot must be a 4-6 week fixed-scope deployment. We ship working software, not slides.
 
-The five assessment dimensions: specificity (30%), systems (25%), success (20%), risk (15%), fit (10%). Probe for closed-loop architecture (outcome signal, judge, memory, update mechanism). Classify the target tier (1-5) and reject up-tier shortcuts.
+**Question format — prefer structured questions:** When a dimension has concrete answer options, ask as multiple-choice with 3-5 specific choices plus "Other /自由补充" rather than free-form. Structured questions get better answers faster. Use free-form only when genuinely exploring ambiguous territory. Examples:
+- "Which best describes your current data volume?" → Structured with volumes
+- "What is the primary bottleneck today?" → Structured with common pain points
+- "What does 'success' look like in 90 days?" → Can be free-form OR structured with metrics
 
 IMPORTANT — business-outcome discipline: When a client states an IT-layer problem (e.g., "fix SharePoint", "build a RAG chatbot"), do not accept it as the goal. Ask: "What business outcome does that support? What does a wrong [answer] cost?" The goal is never the tool — the goal is the dollar or time outcome the tool enables.
 ```
