@@ -15,7 +15,7 @@ export function ChatHeader({
   stepTotal,
 }: ChatHeaderProps) {
   return (
-    <div className="flex items-center justify-between px-6 py-4 border-b border-border-soft bg-surface-raised shrink-0">
+    <div className="flex items-center justify-between px-6 py-2.5 border-b border-border-soft bg-surface-raised shrink-0">
       {/* Left: avatar + identity */}
       <div className="flex items-center gap-3">
         <div className="relative">
