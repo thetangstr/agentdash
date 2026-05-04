@@ -14,6 +14,8 @@ import { clearIssueExecutionRun, removeLiveRunById } from "../lib/optimistic-iss
 import { queryKeys } from "../lib/queryKeys";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import { useLocation } from "../lib/router";
+import { publishConversationMessage } from "../realtime/conversationEventBus";
+import type { Message } from "../api/conversations";
 
 const TOAST_COOLDOWN_WINDOW_MS = 10_000;
 const TOAST_COOLDOWN_MAX = 3;
@@ -789,6 +791,16 @@ function handleLiveEvent(
   const nameOf = (id: string) => resolveAgentName(queryClient, expectedCompanyId, id);
   const payload = event.payload ?? {};
   if (event.type === "heartbeat.run.log") {
+    return;
+  }
+
+  if (event.type === "message.created") {
+    const rawMessage = readRecord(payload.message);
+    if (!rawMessage) return;
+    const conversationId = readString(rawMessage.conversationId);
+    const id = readString(rawMessage.id);
+    if (!conversationId || !id) return;
+    publishConversationMessage(rawMessage as unknown as Message);
     return;
   }
 

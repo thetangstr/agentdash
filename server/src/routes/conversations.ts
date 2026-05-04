@@ -7,6 +7,7 @@ import {
   conversationDispatch,
   agentService,
   cosReplier,
+  cosOnboardingStateService,
   agentSummoner,
 } from "../services/index.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
@@ -39,7 +40,11 @@ export function conversationRoutes(db: Db) {
     // dispatchLLM routes to whichever adapter the user picked via `agentdash setup`
     // (AGENTDASH_DEFAULT_ADAPTER). Defaults to claude_api; also supports hermes_local
     // and claude_local. Falls back to anthropicLLM stub when keys are unset.
-    replier: cosReplier({ conversations: svc, llm: dispatchLLM } as any),
+    replier: cosReplier({
+      conversations: svc,
+      llm: dispatchLLM,
+      cosState: cosOnboardingStateService(db),
+    } as any),
     cosResolver,
   });
 

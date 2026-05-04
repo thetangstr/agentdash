@@ -20,6 +20,13 @@ const mockAgents = {
 const mockInterview = { nextTurn: vi.fn() };
 const mockProposer = { propose: vi.fn() };
 const mockCreator = { create: vi.fn() };
+const mockInstructions = { materializeManagedBundle: vi.fn().mockResolvedValue({}) };
+const mockCosState = {
+  getOrCreate: vi.fn(),
+  recordTurn: vi.fn(),
+  setGoals: vi.fn(),
+  advancePhase: vi.fn().mockResolvedValue(undefined),
+};
 
 vi.mock("../services/index.js", () => ({
   onboardingOrchestrator: () => mockOrchestrator,
@@ -30,33 +37,52 @@ vi.mock("../services/index.js", () => ({
   agentService: () => mockAgents,
   accessService: () => ({}),
   companyService: () => ({}),
-  agentInstructionsService: () => ({}),
+  agentInstructionsService: () => mockInstructions,
+  cosOnboardingStateService: () => mockCosState,
 }));
 
 vi.mock("@paperclipai/db", () => ({
   authUsers: { id: "id" },
+  assistantConversations: { id: "id" },
+  assistantMessages: {
+    conversationId: "conversation_id",
+    cardKind: "card_kind",
+    createdAt: "created_at",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
 }));
 
 import { onboardingV2Routes } from "../routes/onboarding-v2.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
-function buildApp(actor: any) {
+function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
     req.actor = actor;
     next();
   });
-  // Provide a stub db that has a select chain for authUsers lookup
-  const stubDb: any = {
-    select: () => stubDb,
-    from: () => stubDb,
-    where: () => Promise.resolve([]),
+  // Stub db: each `select().from().where()...orderBy?...limit?` chain pops the
+  // next preset result. The chain's terminal state is awaitable as a Promise of an array.
+  const queue = [...dbResults];
+  const makeChain = (): any => {
+    const chain: any = {
+      select: () => chain,
+      from: () => chain,
+      where: () => chain,
+      orderBy: () => chain,
+      limit: () => chain,
+      then: (onF: any, onR: any) =>
+        Promise.resolve(queue.length > 0 ? queue.shift() : []).then(onF, onR),
+    };
+    return chain;
   };
+  const stubDb: any = makeChain();
   app.use("/api/onboarding", onboardingV2Routes(stubDb));
   app.use(errorHandler);
   return app;
@@ -123,6 +149,117 @@ describe("POST /api/onboarding/agent/confirm", () => {
       agent: { id: "agent-2", name: "Reese", title: "SDR" },
       apiKey: { token: "agk_x" },
     });
+  });
+});
+
+describe("POST /api/onboarding/confirm-plan", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates one agent per plan-card entry, posts a closing message, advances phase to ready", async () => {
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "CoS" },
+    ]);
+    let createdCount = 0;
+    mockAgents.create.mockImplementation(async (companyId: string, data: any) => ({
+      id: `agent-${++createdCount}`,
+      companyId,
+      name: data.name,
+      adapterConfig: {},
+    }));
+
+    const planPayload = {
+      rationale: "ship + seed",
+      agents: [
+        {
+          role: "engineering_lead",
+          name: "Ellie",
+          adapterType: "claude_local",
+          responsibilities: ["own dashboard"],
+          kpis: ["ship Q3"],
+        },
+        {
+          role: "qa",
+          name: "Quinn",
+          adapterType: "claude_local",
+          responsibilities: ["test nightly"],
+          kpis: ["zero P0 escapes"],
+        },
+      ],
+      alignmentToShortTerm: "ships v2",
+      alignmentToLongTerm: "lays groundwork",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session" },
+      [
+        // 1st db chain: lookup conversation
+        [{ id: "conv1", companyId: "c1" }],
+        // 2nd db chain: lookup latest agent_plan_proposal_v1 message
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      createdAgentIds: ["agent-1", "agent-2"],
+    });
+    expect(mockAgents.create).toHaveBeenCalledTimes(2);
+    expect(mockAgents.create).toHaveBeenNthCalledWith(
+      1,
+      "c1",
+      expect.objectContaining({ name: "Ellie", adapterType: "claude_local", reportsTo: "cos1" }),
+    );
+    expect(mockAgents.create).toHaveBeenNthCalledWith(
+      2,
+      "c1",
+      expect.objectContaining({ name: "Quinn", adapterType: "claude_local" }),
+    );
+    expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(2);
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "materializing");
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "ready");
+    // Closing message posted authored by the CoS.
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        body: expect.stringContaining("Done"),
+      }),
+    );
+  });
+
+  it("returns 404 when the conversation has no plan card", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session" },
+      [
+        [{ id: "conv1", companyId: "c1" }], // conversation lookup
+        [], // no plan card
+      ],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/onboarding/revise-plan", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 501 (Phase F deferred)", async () => {
+    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
+    expect(res.status).toBe(501);
   });
 });
 

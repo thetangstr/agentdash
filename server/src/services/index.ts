@@ -57,6 +57,7 @@ export { createStorageServiceFromConfig, getStorageService } from "../storage/in
 export { conversationService } from "./conversations.js";
 export { conversationDispatch } from "./conversation-dispatch.js";
 export { cosReplier } from "./cos-replier.js";
+export { cosOnboardingStateService } from "./cos-onboarding-state.js";
 export { agentSummoner } from "./agent-summoner.js";
 export { activityRouter } from "./activity-router.js";
 export { cosProactive } from "./cos-proactive.js";

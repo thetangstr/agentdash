@@ -3,6 +3,7 @@ import { ProposalCard } from "./ProposalCard";
 import { InvitePrompt } from "./InvitePrompt";
 import { AgentStatusCard } from "./AgentStatusCard";
 import { InterviewQuestion } from "./InterviewQuestion";
+import { AgentPlanProposal } from "./AgentPlanProposal";
 
 export interface CardContext {
   onProposalConfirm?: () => void;
@@ -42,9 +43,17 @@ export function CardRenderer({
       return <AgentStatusCard payload={payload as any} />;
     case "interview_question_v1":
       return <InterviewQuestion payload={payload as any} />;
+    case "agent_plan_proposal_v1":
+      return (
+        <AgentPlanProposal
+          payload={payload as any}
+          onConfirm={context.onProposalConfirm ?? (() => {})}
+          onRevise={() => context.onProposalReject?.()}
+        />
+      );
     default:
       return null;
   }
 }
 
-export { ProposalCard, InvitePrompt, AgentStatusCard, InterviewQuestion };
+export { ProposalCard, InvitePrompt, AgentStatusCard, InterviewQuestion, AgentPlanProposal };

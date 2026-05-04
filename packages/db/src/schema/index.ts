@@ -73,6 +73,12 @@ export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export * from "./assistant_conversations.js";
 export { assistantConversationParticipants } from "./assistant_conversation_participants.js";
+export {
+  cosOnboardingStates,
+  COS_ONBOARDING_PHASES,
+  type CosOnboardingPhase,
+  type CosOnboardingGoals,
+} from "./cos_onboarding_states.js";
 export { stripeWebhookEvents } from "./stripe_webhook_events.js";
 // AgentDash: Assess / onboarding context tables
 export { onboardingSessions } from "./onboarding_sessions.js";

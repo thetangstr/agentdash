@@ -1,6 +1,9 @@
-// AgentDash: chat substrate — messages hook with polling fallback (WS TODO)
+// AgentDash: chat substrate — messages hook with live append via the
+// conversation event bus. LiveUpdatesProvider runs the company WebSocket and
+// republishes `message.created` payloads to subscribeToConversationMessages.
 import { useEffect, useState } from "react";
 import { conversationsApi, type Message } from "../api/conversations";
+import { subscribeToConversationMessages } from "./conversationEventBus";
 
 export function useMessages(conversationId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -10,18 +13,29 @@ export function useMessages(conversationId: string | null) {
     let cancelled = false;
 
     conversationsApi.paginate(conversationId, { limit: 50 }).then((rows) => {
-      if (!cancelled) setMessages(rows.slice().reverse()); // server returns desc; UI shows asc
+      if (cancelled) return;
+      const initial = rows.slice().reverse(); // server returns desc; UI shows asc
+      setMessages((prev) => {
+        if (prev.length === 0) return initial;
+        // A live message may have arrived before the initial fetch resolved.
+        // Drop anything from prev that the initial page already covers, then
+        // append the rest so we don't lose realtime arrivals.
+        const initialIds = new Set(initial.map((m) => m.id));
+        const extras = prev.filter((m) => !initialIds.has(m.id));
+        return [...initial, ...extras];
+      });
     });
 
-    // TODO: subscribe to WS bus for this conversation; on message.created, append.
-    // Upstream WS event bus lives in ui/src/context/ — wire when upstream hook pattern is confirmed.
-    // const unsub = wsClient.subscribe(`conversation:${conversationId}`, (event: any) => {
-    //   if (event.type === "message.created") setMessages((prev) => [...prev, event.message]);
-    // });
+    const unsubscribe = subscribeToConversationMessages(conversationId, (incoming) => {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === incoming.id)) return prev;
+        return [...prev, incoming];
+      });
+    });
 
     return () => {
       cancelled = true;
-      // unsub?.();
+      unsubscribe();
     };
   }, [conversationId]);
 

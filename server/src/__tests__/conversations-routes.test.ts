@@ -65,6 +65,15 @@ function registerModuleMocks() {
     agentService: () => mockAgentService,
     cosReplier: vi.fn(() => ({ reply: vi.fn() })),
     agentSummoner: vi.fn(() => ({ summon: vi.fn() })),
+    // Phase B (#PR for cos-phases-bcd): cos-replier now reads/writes a
+    // cos_onboarding_state row to drive phase transitions. The route
+    // factory wires this in; tests stub it with no-op methods.
+    cosOnboardingStateService: () => ({
+      getOrCreate: vi.fn().mockResolvedValue({ phase: "goals", goals: {}, turnsInPhase: 0 }),
+      recordTurn: vi.fn().mockResolvedValue(undefined),
+      setGoals: vi.fn().mockResolvedValue(undefined),
+      advancePhase: vi.fn().mockResolvedValue(undefined),
+    }),
   }));
 }
 
