@@ -46,7 +46,7 @@ export function onboardingV2Routes(db: Db) {
       throw unauthorized("Sign-in required");
     }
     const result = await orch.bootstrap(req.actor.userId);
-    const firstMessage = `Welcome to AgentDash. Let's get you set up. ${FIXED_QUESTIONS[0]}`;
+    const firstMessage = `Hi, I'm your Chief of Staff. AgentDash lets you hire AI agents and run them like a team — I'll help you set up your first one.\n\nBefore we hire anyone, I need to understand your business so I can suggest the right roles for you.\n\nTell me — ${FIXED_QUESTIONS[0]}`;
 
     // Idempotency on the welcome question. The SPA's `useEffect` in
     // CoSConversation.tsx triggers this route on every mount; React's
