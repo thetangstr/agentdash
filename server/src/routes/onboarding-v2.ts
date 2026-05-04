@@ -15,6 +15,7 @@ import {
   cosOnboardingStateService,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
+import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import {
   FIXED_QUESTIONS,
   type AgentPlanProposalV1Payload,
@@ -266,6 +267,26 @@ ${kpis || "- (none captured)"}
     await cosState.advancePhase(conversationId, "ready");
 
     res.status(201).json({ companyId, createdAgentIds });
+  });
+
+  // POST /api/onboarding/finalize-assessment
+  // AgentDash (Phase F): called by the SPA when the deep-interview engine
+  // returns a "ready_to_crystallize" marker from /assess?onboarding=1. Runs
+  // the single-transaction crystallize-and-advance helper and returns the
+  // redirect URL the SPA should navigate to (always /cos for v1).
+  //
+  // Idempotent because crystallizeAndAdvanceCos is idempotent on stateId.
+  router.post("/finalize-assessment", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const { stateId } = req.body as { stateId?: string };
+    if (!stateId || typeof stateId !== "string") {
+      throw badRequest("stateId required");
+    }
+    const finalize = crystallizeAndAdvanceCos({ db });
+    const { specId, conversationId } = await finalize(stateId);
+    res.json({ specId, conversationId, redirectUrl: "/cos" });
   });
 
   // POST /api/onboarding/revise-plan

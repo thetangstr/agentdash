@@ -2,12 +2,14 @@
 // (Entire company / Specific project) wrapping the existing CompanyWizard
 // and the new ProjectWizard. Both wizards share the marketing surface chrome
 // and the wizard chrome extracted into ./assess/wizard-chrome.tsx.
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "../context/CompanyContext";
 import { assessApi, type ProjectAssessmentSummary } from "../api/assess";
 import { authApi } from "../api/auth";
 import { healthApi } from "../api/health";
+import { onboardingApi } from "../api/onboarding";
 import { queryKeys } from "../lib/queryKeys";
 import { MarketingShell } from "../marketing/MarketingShell";
 import { SectionContainer } from "../marketing/components/SectionContainer";
@@ -22,7 +24,43 @@ import { AssessLocalStyles } from "./assess/wizard-chrome";
 export function AssessPage() {
   const { selectedCompany } = useCompany();
   const companyId = selectedCompany?.id;
-  const [mode, setMode] = useState<AssessmentMode | null>(null);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // AgentDash (Phase F): `?onboarding=1` means the user just landed here
+  // from /company-create as part of the post-signup chain. Skip the mode
+  // chooser, jump straight into the company wizard, and on the deep-interview
+  // ready marker call /api/onboarding/finalize-assessment to crystallize the
+  // spec + flip the CoS phase, then redirect to /cos.
+  const onboardingFlow = useMemo(
+    () => searchParams.get("onboarding") === "1",
+    [searchParams],
+  );
+  const [mode, setMode] = useState<AssessmentMode | null>(
+    onboardingFlow ? "company" : null,
+  );
+  const [finalizing, setFinalizing] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
+
+  // If the URL flips from a non-onboarding visit to `?onboarding=1` (rare,
+  // but covers SPA history pushes from CompanyCreate), force company mode.
+  useEffect(() => {
+    if (onboardingFlow && mode !== "company") setMode("company");
+  }, [onboardingFlow, mode]);
+
+  const handleReadyToFinalize = async (info: { stateId: string; round: number; ambiguity: number }) => {
+    if (finalizing) return;
+    setFinalizing(true);
+    setFinalizeError(null);
+    try {
+      const result = await onboardingApi.finalizeAssessment(info.stateId);
+      navigate(result.redirectUrl, { replace: true });
+    } catch (err) {
+      setFinalizeError(
+        err instanceof Error ? err.message : "Could not finalize the interview.",
+      );
+      setFinalizing(false);
+    }
+  };
 
   // Auth-state detection — mirror the Landing page pattern so anonymous
   // visitors hitting /assess directly get a sensible CTA instead of a
@@ -150,11 +188,34 @@ export function AssessPage() {
         )}
 
         {mode === "company" && (
-          <CompanyWizard
-            companyId={companyId}
-            defaultCompanyName={selectedCompany?.name}
-            onSwitchMode={() => setMode(null)}
-          />
+          <>
+            {onboardingFlow && finalizing && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{ marginTop: 16, color: "var(--mkt-ink-soft)" }}
+              >
+                Finalizing your interview and handing off to your Chief of Staff…
+              </div>
+            )}
+            {finalizeError && (
+              <div
+                role="alert"
+                style={{ marginTop: 16, color: "var(--mkt-error, #b91c1c)" }}
+              >
+                {finalizeError}
+              </div>
+            )}
+            <CompanyWizard
+              companyId={companyId}
+              defaultCompanyName={selectedCompany?.name}
+              // In the onboarding chain, the chooser is the entry point —
+              // hide the "switch mode" affordance so users don't bail out
+              // before crystallization.
+              onSwitchMode={onboardingFlow ? undefined : () => setMode(null)}
+              onReadyToFinalize={onboardingFlow ? handleReadyToFinalize : undefined}
+            />
+          </>
         )}
 
         {mode === "project" && (

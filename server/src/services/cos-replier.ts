@@ -19,6 +19,10 @@ interface CosStateRow {
   goals: { shortTerm?: string; longTerm?: string; constraints?: Record<string, unknown> };
   proposalMessageId: string | null;
   turnsInPhase: number;
+  // AgentDash (Phase F): when set, the deep-interview engine has already
+  // crystallized a spec for this conversation; cos-replier reads the spec
+  // and skips Phase 1 (goals capture).
+  deepInterviewSpecId?: string | null;
 }
 
 interface CosStateService {
@@ -35,6 +39,18 @@ interface CosStateService {
   ): Promise<unknown>;
 }
 
+// AgentDash (Phase F): minimal spec view that the cos-replier reads from a
+// deep_interview_specs row. Mirrors the columns the prompt builder needs.
+export interface DeepInterviewSpecView {
+  goal: string;
+  constraints: unknown[];
+  criteria: unknown[];
+}
+
+export interface DeepInterviewSpecsService {
+  getById(specId: string): Promise<DeepInterviewSpecView | null>;
+}
+
 interface Deps {
   conversations: any; // conversationService
   llm: (input: {
@@ -42,6 +58,11 @@ interface Deps {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
   }) => Promise<string>;
   cosState?: CosStateService;
+  // AgentDash (Phase F): deep-interview spec loader. When provided AND the
+  // current conversation's cos_onboarding_state has a deepInterviewSpecId,
+  // cos-replier builds a "spec-aware" plan-phase prompt instead of running
+  // Phase 1 (goals capture).
+  deepInterviewSpecs?: DeepInterviewSpecsService;
 }
 
 const STEADY_STATE_PROMPT = `You are the Chief of Staff in an AgentDash workspace. Be warm, concise, and specific. When a human asks about an agent's progress, answer based on the conversation history. If you don't have the data, say so plainly. No greetings, no preamble, no markdown headings.`;
@@ -69,6 +90,45 @@ Your reply MUST end with a fenced JSON block like:
 The "captured" object is a delta — only include keys you newly heard this turn. Omit a key when nothing new was said about it.
 
 The visible chat body comes BEFORE the fenced block. Do not repeat the JSON in prose. No greetings. No markdown headings.`;
+}
+
+// AgentDash (Phase F): plan-phase prompt fed by a crystallized deep-interview
+// spec. The interview already captured goal/constraints/criteria via the
+// Socratic engine, so the LLM jumps directly to plan presentation. The
+// "ALREADY-CAPTURED" framing tells the model not to re-ask Phase 1 questions.
+function planPromptFromSpec(spec: DeepInterviewSpecView): string {
+  const constraintsJson = JSON.stringify(spec.constraints, null, 2);
+  const criteriaJson = JSON.stringify(spec.criteria, null, 2);
+  return `You are the Chief of Staff for AgentDash. The user already completed a deep-interview, so goals, constraints, and success criteria are ALREADY-CAPTURED. Do NOT re-ask Phase 1 (goals capture) questions; jump directly to Phase 2 (plan presentation).
+
+ALREADY-CAPTURED CONTEXT
+Goal: ${spec.goal}
+Constraints: ${constraintsJson}
+Success criteria: ${criteriaJson}
+
+Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: "claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local"), 2-4 responsibilities, and 1-3 KPIs.
+
+In the visible body (before the JSON), give the user a short paragraph of rationale that references at least one constraint and one success criterion verbatim from the captured context, then a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
+
+Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 payload:
+
+\`\`\`json
+{
+  "phase_decision": "stay_in_plan" | "advance_to_materializing",
+  "plan": {
+    "rationale": "...",
+    "agents": [
+      { "role": "engineering_lead", "name": "Ellie", "adapterType": "claude_local", "responsibilities": ["..."], "kpis": ["..."] }
+    ],
+    "alignmentToShortTerm": "...",
+    "alignmentToLongTerm": "..."
+  }
+}
+\`\`\`
+
+Set phase_decision to "stay_in_plan" the first time you propose — the user confirms or revises before we materialize.
+
+No greetings. No markdown headings outside the JSON block.`;
 }
 
 function planPrompt(state: CosStateRow): string {
@@ -145,6 +205,7 @@ function isGoalsPatch(
 
 export function cosReplier(deps: Deps) {
   const cosState = deps.cosState;
+  const deepInterviewSpecs = deps.deepInterviewSpecs;
 
   return {
     reply: async (input: { conversationId: string; cosAgentId: string }) => {
@@ -163,10 +224,46 @@ export function cosReplier(deps: Deps) {
       if (cosState) {
         try {
           state = await cosState.getOrCreate(input.conversationId);
-          if (state.phase === "goals") system = goalsPrompt(state);
-          else if (state.phase === "plan") system = planPrompt(state);
-          else if (state.phase === "materializing" || state.phase === "ready")
+          // AgentDash (Phase F): if a deep-interview spec is linked to this
+          // conversation, build the plan prompt from the spec and SKIP Phase 1
+          // (goals capture). When no spec is set, fall back to legacy
+          // phase-aware prompts so in-flight conversations and assess-flag-OFF
+          // users keep working.
+          let specView: DeepInterviewSpecView | null = null;
+          if (state.deepInterviewSpecId && deepInterviewSpecs) {
+            try {
+              specView = await deepInterviewSpecs.getById(
+                state.deepInterviewSpecId,
+              );
+            } catch (err) {
+              logger.warn(
+                {
+                  err,
+                  conversationId: input.conversationId,
+                  specId: state.deepInterviewSpecId,
+                },
+                "cos-replier: deep-interview spec lookup failed; falling back to phase-aware prompt",
+              );
+            }
+          }
+
+          if (specView) {
+            // Spec-driven path: always plan-presentation, regardless of the
+            // (possibly-stale) phase column.
+            system = planPromptFromSpec(specView);
+            // Force the in-memory state phase to "plan" so the trailer
+            // handler below takes the plan-card branch.
+            state = { ...state, phase: "plan" };
+          } else if (state.phase === "goals") {
+            system = goalsPrompt(state);
+          } else if (state.phase === "plan") {
+            system = planPrompt(state);
+          } else if (
+            state.phase === "materializing" ||
+            state.phase === "ready"
+          ) {
             system = STEADY_STATE_PROMPT;
+          }
         } catch (err) {
           logger.warn(
             { err, conversationId: input.conversationId },

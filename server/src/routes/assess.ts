@@ -94,9 +94,15 @@ export function assessRoutes(db: Db) {
         if (turn.kind === "question") {
           res.write(turn.question);
         } else {
-          res.write(
-            `[deep-interview] Ready to crystallize at round ${turn.round} (ambiguity ${turn.ambiguityScore.toFixed(3)}).`,
-          );
+          // AgentDash (Phase F): emit a parseable JSON envelope so the SPA
+          // can extract the stateId and call /api/onboarding/finalize-assessment.
+          // Format: `[deep-interview-ready] {"stateId":"…","round":N,"ambiguity":0.x}`
+          const env = JSON.stringify({
+            stateId: turn.stateId,
+            round: turn.round,
+            ambiguity: Number(turn.ambiguityScore.toFixed(3)),
+          });
+          res.write(`[deep-interview-ready] ${env}`);
         }
         res.end();
         return;
@@ -317,9 +323,13 @@ export function assessRoutes(db: Db) {
         if (turn.kind === "question") {
           res.write(turn.question);
         } else {
-          res.write(
-            `[deep-interview] Ready to crystallize at round ${turn.round} (ambiguity ${turn.ambiguityScore.toFixed(3)}).`,
-          );
+          // AgentDash (Phase F): structured marker — see company-mode emission above.
+          const env = JSON.stringify({
+            stateId: turn.stateId,
+            round: turn.round,
+            ambiguity: Number(turn.ambiguityScore.toFixed(3)),
+          });
+          res.write(`[deep-interview-ready] ${env}`);
         }
         res.end();
         return;

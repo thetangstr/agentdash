@@ -61,4 +61,13 @@ export const onboardingApi = {
   // Phase F (revision loop) is not implemented yet — this returns 501.
   revisePlan: (input: { conversationId: string; revisionText: string }) =>
     api.post<{ error: string; message: string }>("/onboarding/revise-plan", input),
+  // AgentDash (Phase F): the SPA calls this when the deep-interview engine
+  // emits its `[deep-interview-ready]` marker on `/assess?onboarding=1`. The
+  // server crystallizes the spec, advances the CoS phase, and returns the
+  // URL the SPA should redirect to. Idempotent on `stateId`.
+  finalizeAssessment: (stateId: string) =>
+    api.post<{ specId: string; conversationId: string; redirectUrl: string }>(
+      "/onboarding/finalize-assessment",
+      { stateId },
+    ),
 };
