@@ -76,6 +76,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify deep-interview SKILL.md is in sync with the upstream pin
+        # Runs `scripts/sync-skill-md.mjs` (which falls back to the
+        # checked-in fixture at `scripts/fixtures/skill-md-<version>.md`
+        # in environments without OMC installed) and asserts the
+        # generated `packages/shared/src/deep-interview-skill.ts` is
+        # byte-identical. Any drift must be regenerated locally and
+        # re-committed via `pnpm sync-skill-md`.
+        run: pnpm verify-skill-md
+
       - name: Typecheck
         run: pnpm -r typecheck
 
