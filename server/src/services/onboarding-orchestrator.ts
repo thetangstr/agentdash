@@ -1,5 +1,5 @@
 import { logger } from "../middleware/logger.js";
-import { FIXED_QUESTIONS } from "@paperclipai/shared";
+import { FIXED_QUESTIONS, deriveCompanyEmailDomain } from "@paperclipai/shared";
 
 // Welcome sequence: three plain context-setting bubbles + the first interview card.
 // Posted atomically inside bootstrap() the FIRST time a conversation is created
@@ -82,24 +82,66 @@ export function onboardingOrchestrator(deps: Deps) {
       // second workspace. We intentionally do NOT look up by email domain —
       // domain matching caused all gmail.com users to land in the same workspace,
       // which is a critical isolation bug.
-      const emailDomain = deriveEmailDomain(user.email);
+      //
+      // Use `deriveCompanyEmailDomain` from @paperclipai/shared rather than the
+      // local `deriveEmailDomain` helper. For free-mail providers (gmail/yahoo/
+      // outlook/...) the shared helper returns `local@domain` — a per-user
+      // workspace key — so the unique constraint on companies.emailDomain
+      // doesn't collide between unrelated personal accounts that happen to
+      // share a domain. The local helper returns just `gmail.com`, which makes
+      // any second gmail.com user's bootstrap throw "domain already claimed".
+      let emailDomain: string | null = null;
+      if (user.email) {
+        try {
+          emailDomain = deriveCompanyEmailDomain(user.email);
+        } catch {
+          // Falls through with emailDomain = null. The DB column allows null;
+          // workspace creation still succeeds for emails the helper can't
+          // parse (e.g. the synthetic local-board actor in local_trusted mode).
+        }
+      }
       const existingMemberships = await deps.access.listUserCompanyAccess(userId);
       const activeMembership = existingMemberships.find(
         (m: any) => m.status === "active",
       );
       let company: { id: string; name?: string; emailDomain?: string | null };
       if (activeMembership) {
+        // Returning user — reuse the workspace they already belong to.
         const found = await deps.companies.getById(activeMembership.companyId);
         if (!found) throw new Error(`Company ${activeMembership.companyId} not found for existing membership`);
         company = found;
       } else {
-        // Every sign-up gets its own fresh, isolated workspace.
-        // Cross-team membership happens via invites, not domain matching.
-        company = await deps.companies.create({
-          name: companyNameFromEmail(user.email),
-          emailDomain,
-          budgetMonthlyCents: 0,
-        });
+        // First sign-up for this user. Decide whether to attach to an
+        // existing same-domain company (corp pattern) or create a fresh
+        // workspace (free-mail pattern).
+        //
+        // The discriminator is the shape of `emailDomain` after
+        // `deriveCompanyEmailDomain`:
+        //   - free-mail (gmail/yahoo/outlook/…): "<local>@<domain>" —
+        //     unique per user, so even if a same-provider user already
+        //     exists their key won't collide. We always create fresh.
+        //   - corp (acme.com / yourstartup.io / …): "<domain>" —
+        //     shared across all users at that domain, so we attach to
+        //     the existing workspace if any. Coworkers join their team
+        //     by signing up with their work email.
+        //
+        // The free-mail key contains "@", corp keys don't — that's the
+        // detection. Falls back to fresh workspace if `emailDomain` is
+        // unset (synthetic local-board actor / unparseable email).
+        const isCorpDomain =
+          typeof emailDomain === "string" && emailDomain.length > 0 && !emailDomain.includes("@");
+        const corpExisting = isCorpDomain && deps.companies.findByEmailDomain
+          ? await deps.companies.findByEmailDomain(emailDomain)
+          : null;
+        if (corpExisting) {
+          company = corpExisting;
+        } else {
+          company = await deps.companies.create({
+            name: companyNameFromEmail(user.email),
+            emailDomain,
+            budgetMonthlyCents: 0,
+          });
+        }
       }
 
       // Step 2: grant agents:create FIRST (before owner promotion — see GH #72).

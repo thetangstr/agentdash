@@ -3,7 +3,7 @@ import { onboardingOrchestrator } from "../services/onboarding-orchestrator.js";
 import { FIXED_QUESTIONS } from "@paperclipai/shared";
 
 const mockAccess = { ensureMembership: vi.fn(), setPrincipalPermission: vi.fn(), listUserCompanyAccess: vi.fn() };
-const mockCompanies = { create: vi.fn(), getById: vi.fn() };
+const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn() };
 const mockAgents = { create: vi.fn(), createApiKey: vi.fn(), list: vi.fn(), listKeys: vi.fn() };
 const mockInstructions = { materializeManagedBundle: vi.fn() };
 const mockConversations = { findByCompany: vi.fn(), create: vi.fn(), addParticipant: vi.fn(), postMessage: vi.fn() };
@@ -18,6 +18,7 @@ describe("onboardingOrchestrator.bootstrap", () => {
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
     mockCompanies.create.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
+    mockCompanies.findByEmailDomain.mockResolvedValue(null);
     mockAgents.list.mockResolvedValue([]);
     mockAgents.listKeys.mockResolvedValue([]);
     mockAgents.create.mockResolvedValue({ id: "agent-cos-1", companyId: "company-1", role: "chief_of_staff", adapterType: "claude_api", adapterConfig: {} });
@@ -91,18 +92,40 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.postMessage).not.toHaveBeenCalled();
   });
 
-  it("creates a fresh isolated workspace even when another user with the same domain exists", async () => {
+  it("creates a fresh isolated workspace for a free-mail user even when another same-domain user exists", async () => {
     // gmail.com user-2 signs up; user-1 (also gmail.com) already has a company.
-    // The orchestrator must NOT attach user-2 to user-1's company.
+    // For free-mail providers, deriveCompanyEmailDomain returns "<local>@<domain>"
+    // so each personal account has its own workspace key — the unique constraint
+    // doesn't collide with another gmail user, and findByEmailDomain isn't even
+    // consulted for free-mail keys (they contain "@", which the orchestrator
+    // uses as the discriminator).
     mockUsers.getById.mockResolvedValue({ id: "user-2", email: "bob@gmail.com" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]); // user-2 has NO memberships yet
-    mockCompanies.create.mockResolvedValue({ id: "company-2", name: "Gmail", emailDomain: "gmail.com" });
+    mockCompanies.create.mockResolvedValue({ id: "company-2", name: "Gmail", emailDomain: "bob@gmail.com" });
     mockAgents.create.mockResolvedValue({ id: "agent-cos-2", companyId: "company-2", role: "chief_of_staff", adapterType: "claude_api", adapterConfig: {} });
     mockConversations.create.mockResolvedValue({ id: "conv-2", companyId: "company-2" });
 
     const result = await onboardingOrchestrator(deps as any).bootstrap("user-2");
     expect(result.companyId).toBe("company-2");
-    // A brand-new company was created — not looked up by domain.
-    expect(mockCompanies.create).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: "gmail.com" }));
+    // Free-mail keys are per-user; corp-domain lookup is skipped for them.
+    expect(mockCompanies.findByEmailDomain).not.toHaveBeenCalled();
+    expect(mockCompanies.create).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: "bob@gmail.com" }));
+  });
+
+  it("attaches a corp-domain user to an existing same-domain company (team pattern)", async () => {
+    // alice@acme.com signs up; an "acme.com" workspace already exists from
+    // another teammate. We expect the orchestrator to attach alice to it
+    // (no fresh workspace created), since deriveCompanyEmailDomain returns
+    // bare "acme.com" for non-free-mail domains and findByEmailDomain wins.
+    mockUsers.getById.mockResolvedValue({ id: "user-3", email: "alice@acme.com" });
+    mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    mockCompanies.findByEmailDomain.mockResolvedValue({ id: "company-acme", name: "Acme", emailDomain: "acme.com" });
+    mockAgents.list.mockResolvedValue([{ id: "agent-cos-acme", role: "chief_of_staff" }]);
+    mockConversations.findByCompany.mockResolvedValue({ id: "conv-acme", companyId: "company-acme" });
+
+    const result = await onboardingOrchestrator(deps as any).bootstrap("user-3");
+    expect(result.companyId).toBe("company-acme");
+    expect(mockCompanies.findByEmailDomain).toHaveBeenCalledWith("acme.com");
+    expect(mockCompanies.create).not.toHaveBeenCalled();
   });
 });
