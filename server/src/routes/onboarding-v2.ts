@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { authUsers } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { authUsers, assistantConversations, assistantMessages } from "@paperclipai/db";
+import { and, desc, eq } from "drizzle-orm";
 import {
   onboardingOrchestrator,
   cosInterview,
@@ -12,9 +12,15 @@ import {
   accessService,
   companyService,
   agentInstructionsService,
+  cosOnboardingStateService,
 } from "../services/index.js";
-import { unauthorized, badRequest } from "../errors.js";
-import { FIXED_QUESTIONS, type InterviewState, type InterviewTurn } from "@paperclipai/shared";
+import { unauthorized, badRequest, notFound } from "../errors.js";
+import {
+  FIXED_QUESTIONS,
+  type AgentPlanProposalV1Payload,
+  type InterviewState,
+  type InterviewTurn,
+} from "@paperclipai/shared";
 
 export function onboardingV2Routes(db: Db) {
   const router = Router();
@@ -155,6 +161,125 @@ export function onboardingV2Routes(db: Db) {
       body: "Got it — let me think differently. One sec.",
     });
     res.json({ ok: true });
+  });
+
+  // POST /api/onboarding/confirm-plan
+  // Reads the latest agent_plan_proposal_v1 message in the conversation,
+  // creates one agent per payload entry, materializes the chief_of_staff
+  // instructions bundle, posts a closing message, and flips cos_state to ready.
+  router.post("/confirm-plan", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const { conversationId } = req.body as { conversationId?: string };
+    if (!conversationId) throw badRequest("conversationId required");
+
+    const convoRows = await db
+      .select()
+      .from(assistantConversations)
+      .where(eq(assistantConversations.id, conversationId));
+    const convo = convoRows[0];
+    if (!convo) throw notFound("Conversation not found");
+    const companyId = convo.companyId;
+
+    const planRows = await db
+      .select()
+      .from(assistantMessages)
+      .where(
+        and(
+          eq(assistantMessages.conversationId, conversationId),
+          eq(assistantMessages.cardKind, "agent_plan_proposal_v1"),
+        ),
+      )
+      .orderBy(desc(assistantMessages.createdAt))
+      .limit(1);
+    const planMsg = planRows[0];
+    if (!planMsg) throw notFound("No plan card found in this conversation");
+    const payload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
+    if (!payload || !Array.isArray(payload.agents) || payload.agents.length === 0) {
+      throw badRequest("Plan card has no agents to materialize");
+    }
+
+    const cosState = cosOnboardingStateService(db);
+    await cosState.advancePhase(conversationId, "materializing");
+
+    // Find the CoS agent for this company so the new hires reportTo it.
+    const allAgents = await agents.list(companyId);
+    const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
+    const reportsToAgentId = cos?.id ?? null;
+
+    const instructions = agentInstructionsService();
+    const createdAgentIds: string[] = [];
+    for (const planAgent of payload.agents) {
+      const created = await agents.create(companyId, {
+        name: planAgent.name,
+        role: "general",
+        title: planAgent.role,
+        adapterType: planAgent.adapterType,
+        adapterConfig: {},
+        reportsTo: reportsToAgentId,
+        status: "idle",
+        spentMonthlyCents: 0,
+        lastHeartbeatAt: null,
+      });
+      const responsibilities = (planAgent.responsibilities ?? []).map((r) => `- ${r}`).join("\n");
+      const kpis = (planAgent.kpis ?? []).map((k) => `- ${k}`).join("\n");
+      const agentsMd = `# AGENTS.md — ${planAgent.name}
+
+## Role
+${planAgent.role}
+
+## Why you exist
+${payload.rationale}
+
+## Primary Responsibilities
+${responsibilities || "- (none captured)"}
+
+## KPIs
+${kpis || "- (none captured)"}
+
+## Alignment
+- Short-term: ${payload.alignmentToShortTerm}
+- Long-term: ${payload.alignmentToLongTerm}
+
+## Collaboration
+- Report status to your boss in the shared CoS thread.
+- Ask for clarification when requirements are ambiguous.
+`;
+      await instructions.materializeManagedBundle(
+        created,
+        { "AGENTS.md": agentsMd },
+        { entryFile: "AGENTS.md", replaceExisting: false },
+      );
+      createdAgentIds.push(created.id);
+    }
+
+    if (cos) {
+      await conversations.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: "Done — your team's ready. You can talk to any of them via @mention, or stay here and route through me.",
+      });
+    }
+
+    await cosState.advancePhase(conversationId, "ready");
+
+    res.status(201).json({ companyId, createdAgentIds });
+  });
+
+  // POST /api/onboarding/revise-plan
+  // Phase F (revision loop) is deferred — see
+  // docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
+  // Stub returns 501 so the UI's "Let me revise" button has a wired target.
+  router.post("/revise-plan", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    res.status(501).json({
+      error: "not_implemented",
+      message: "Plan revision loop is not implemented yet (Phase F).",
+    });
   });
 
   // POST /api/onboarding/invites

@@ -110,10 +110,10 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     const res = await request(app).post("/api/companies").send({ name: "Acme" });
 
     expect(res.status).toBe(201);
-    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
-      name: "Acme",
-      emailDomain: "acme.com",
-    }));
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Acme", emailDomain: "acme.com" }),
+      expect.anything(),
+    );
     expect(ensureMembershipMock).toHaveBeenCalledWith(
       "company-1",
       "user",
@@ -135,9 +135,10 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     const app = buildApp({ actorEmail: gmailUser.email });
     await request(app).post("/api/companies").send({ name: "Personal" }).expect(201);
 
-    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
-      emailDomain: "alice@gmail.com",
-    }));
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ emailDomain: "alice@gmail.com" }),
+      expect.anything(),
+    );
   });
 
   it("returns 409 domain_already_claimed when the domain is taken (pre-flight)", async () => {
@@ -210,7 +211,10 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
 
     expect(res.status).toBe(201);
     expect(findByEmailDomainMock).not.toHaveBeenCalled();
-    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: "acme.com" }));
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ emailDomain: "acme.com" }),
+      expect.anything(),
+    );
   });
 
   it("AGE-104: a non-admin signed-up user can create their first company and is promoted to owner", async () => {
@@ -299,9 +303,10 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     const res = await request(app).post("/api/companies").send({ name: "Personal" });
 
     expect(res.status).toBe(201);
-    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
-      emailDomain: "alice@gmail.com",
-    }));
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ emailDomain: "alice@gmail.com" }),
+      expect.anything(),
+    );
   });
 
   it("AGE-104 still gates additional workspaces: a free-mail user WITH an existing company cannot create a second under requireCorpEmail", async () => {
@@ -360,6 +365,9 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
 
     const res = await request(app).post("/api/companies").send({ name: "Local" });
     expect(res.status).toBe(201);
-    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ emailDomain: null }));
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ emailDomain: null }),
+      expect.anything(),
+    );
   });
 });

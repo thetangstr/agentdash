@@ -256,6 +256,10 @@ describe("startServer authenticated auth origin setup", () => {
         authPublicBaseUrl: "http://127.0.0.1:3211/",
       }),
       ["http://board.example.test:3211"],
+      // 4th arg added by #125: opts.onUserCreated runs the orchestrator
+      // when Better Auth writes a fresh user row. This test only cares
+      // about the trusted-origin derivation; accept any opts shape.
+      expect.anything(),
     );
     expect(createAppMock.mock.calls[0]?.[1]).toMatchObject({
       serverPort: 3211,
