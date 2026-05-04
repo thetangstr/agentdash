@@ -72,7 +72,6 @@ describe("CoSConversation", () => {
       companyId: "c1",
       cosAgentId: "a1",
       conversationId: "conv1",
-      firstMessage: "Welcome…",
     });
 
     await act(async () => {

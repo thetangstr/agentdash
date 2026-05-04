@@ -6,7 +6,6 @@ export interface BootstrapResponse {
   companyId: string;
   cosAgentId: string;
   conversationId: string;
-  firstMessage: string;
 }
 
 export interface InterviewTurnResponse {
