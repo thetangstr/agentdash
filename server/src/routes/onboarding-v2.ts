@@ -46,16 +46,28 @@ export function onboardingV2Routes(db: Db) {
       throw unauthorized("Sign-in required");
     }
     const result = await orch.bootstrap(req.actor.userId);
-    // Seed the first CoS message (post the first fixed question to the conversation).
     const firstMessage = `Welcome to AgentDash. Let's get you set up. ${FIXED_QUESTIONS[0]}`;
-    await conversations.postMessage({
-      conversationId: result.conversationId,
-      authorKind: "agent",
-      authorId: result.cosAgentId,
-      body: firstMessage,
-      cardKind: "interview_question_v1",
-      cardPayload: { question: FIXED_QUESTIONS[0], fixedIndex: 0 },
-    });
+
+    // Idempotency on the welcome question. The SPA's `useEffect` in
+    // CoSConversation.tsx triggers this route on every mount; React's
+    // StrictMode double-mounts in dev (and remounts on react-query
+    // refetches) caused 3 duplicate welcome messages on a single
+    // sign-up. Check whether the welcome card is already present
+    // before re-posting.
+    const recent = await conversations.paginate(result.conversationId, { limit: 5 });
+    const alreadySeeded = recent.some(
+      (m: { cardKind?: string | null }) => m.cardKind === "interview_question_v1",
+    );
+    if (!alreadySeeded) {
+      await conversations.postMessage({
+        conversationId: result.conversationId,
+        authorKind: "agent",
+        authorId: result.cosAgentId,
+        body: firstMessage,
+        cardKind: "interview_question_v1",
+        cardPayload: { question: FIXED_QUESTIONS[0], fixedIndex: 0 },
+      });
+    }
     res.json({ ...result, firstMessage });
   });
 
