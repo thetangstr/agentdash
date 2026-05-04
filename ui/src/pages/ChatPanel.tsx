@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
+import { ChatHeader, type ChatHeaderProps } from "../components/ChatHeader";
 import { conversationsApi } from "../api/conversations";
 import type { CardContext } from "../components/cards";
 
@@ -11,11 +12,13 @@ export default function ChatPanel({
   companyId,
   agentDirectory = [],
   cardContext,
+  headerProps,
 }: {
   conversationId: string;
   companyId: string;
   agentDirectory?: Array<{ id: string; name: string; role: string }>;
   cardContext?: CardContext;
+  headerProps?: ChatHeaderProps;
 }) {
   const messages = useMessages(conversationId);
 
@@ -46,6 +49,7 @@ export default function ChatPanel({
 
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
+      <ChatHeader {...(headerProps ?? {})} />
       <div className="flex-1 overflow-y-auto px-4 py-8">
         <div className="max-w-2xl mx-auto">
           <MessageList
