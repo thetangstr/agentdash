@@ -1,3 +1,4 @@
+import { grantsForHumanRole } from "./company-member-roles.js";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -60,6 +61,17 @@ export function accessService(db: Db) {
   ): Promise<boolean> {
     const membership = await getMembership(companyId, principalType, principalId);
     if (!membership || membership.status !== "active") return false;
+
+    // Check role-based permissions for human members (owner/admin/operator/viewer)
+    if (principalType === "user") {
+      const role = membership.membershipRole as "owner" | "admin" | "operator" | "viewer" | null;
+      if (role) {
+        const roleGrants = grantsForHumanRole(role);
+        if (roleGrants.some((g) => g.permissionKey === permissionKey)) return true;
+      }
+    }
+
+    // Fall back to explicit grants
     const grant = await db
       .select({ id: principalPermissionGrants.id })
       .from(principalPermissionGrants)
