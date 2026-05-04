@@ -1,41 +1,40 @@
 import { logger } from "../middleware/logger.js";
-import { FIXED_QUESTIONS, deriveCompanyEmailDomain } from "@paperclipai/shared";
+import { deriveCompanyEmailDomain } from "@paperclipai/shared";
 
-// Welcome sequence: three plain context-setting bubbles + the first interview card.
-// Posted atomically inside bootstrap() the FIRST time a conversation is created
-// for a workspace, so concurrent bootstrap calls (auth hook + UI useEffect under
-// React StrictMode) cannot duplicate it. The three plain bubbles use cardKind=null
-// and render as normal agent text bubbles; the final card keeps the existing
-// interview_question_v1 machinery so the rest of the interview flow still works.
-const WELCOME_INTRO_LINES = [
-  "Hi! I'm your Chief of Staff.",
-  "Welcome to AgentDash. I'm here to help you build a team of AI agents — they handle real work the way employees would, on demand.",
-  "Before we get started, I want to understand what you're working on so I can suggest the right team for you.",
-] as const;
+// Phase 0 of the CoS-led onboarding flow (see
+// docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md).
+// One rich opening message — greeting + role + first goal question, in that
+// order — posted atomically inside bootstrap() the FIRST time a conversation
+// is created for a workspace. The atomicity is crucial: concurrent bootstrap
+// calls (auth-hook + UI `useEffect` under React StrictMode) all converge on
+// the existing conversation and skip the welcome.
+//
+// Why ONE message instead of four: the user's feedback was the previous
+// 4-bubble sequence read like a robot survey, not a conversation. A real
+// Chief of Staff introduces themselves and asks one substantive question.
+// Subsequent turns are LLM-driven (Phase 1+).
+
+function buildPhase0Greeting(userName: string | null | undefined): string {
+  const firstName = (userName ?? "").trim().split(/\s+/)[0] || null;
+  const salutation = firstName ? `Hi ${firstName}!` : "Hi there!";
+  return [
+    `${salutation} I'm your Chief of Staff at AgentDash.`,
+    `You're about to build out an AI workforce — agents that take on roles you'd normally hire employees for. My job is to figure out what kind of team you need and get them set up.`,
+    `To start, tell me what you're trying to accomplish. What's your top short-term goal, and where do you want this to be in 6–12 months?`,
+  ].join("\n\n");
+}
 
 async function postWelcomeSequence(
   conversations: any,
   conversationId: string,
   cosAgentId: string,
+  userName: string | null | undefined,
 ): Promise<void> {
-  // await between each post so DB-insert ordering reflects logical ordering.
-  for (const line of WELCOME_INTRO_LINES) {
-    await conversations.postMessage({
-      conversationId,
-      authorKind: "agent",
-      authorId: cosAgentId,
-      body: line,
-    });
-  }
-  // Final message: the first interview question, rendered as an interview card.
-  const firstQuestion = FIXED_QUESTIONS[0];
   await conversations.postMessage({
     conversationId,
     authorKind: "agent",
     authorId: cosAgentId,
-    body: firstQuestion,
-    cardKind: "interview_question_v1",
-    cardPayload: { question: firstQuestion, fixedIndex: 0 },
+    body: buildPhase0Greeting(userName),
   });
 }
 
@@ -197,7 +196,7 @@ export function onboardingOrchestrator(deps: Deps) {
       }
       await deps.conversations.addParticipant(conversation.id, userId, "owner");
       if (isFreshConversation) {
-        await postWelcomeSequence(deps.conversations, conversation.id, cos.id);
+        await postWelcomeSequence(deps.conversations, conversation.id, cos.id, user.name);
       }
 
       logger.info({ userId, companyId: company.id, cosAgentId: cos.id, conversationId: conversation.id }, "onboarding bootstrap complete");
