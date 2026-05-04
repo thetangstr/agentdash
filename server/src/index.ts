@@ -512,39 +512,61 @@ export async function startServer(): Promise<StartedServer> {
       },
       "Authenticated mode auth origin configuration",
     );
-    // Lazy-imported so the auth bootstrap doesn't pull in service deps
-    // (and their plugin SDK pinholes) at module load. The callback runs
-    // once per fresh sign-up and provisions a company + CoS agent +
-    // conversation for the new user — without it the SPA's
-    // CloudAccessGate parks them at "No company access" because they
-    // have zero memberships.
-    const onUserCreated = async (user: { id: string; email: string; name: string | null }) => {
-      const services = await import("./services/index.js");
-      const { authUsers } = await import("@paperclipai/db");
-      const { eq } = await import("drizzle-orm");
-      const orch = services.onboardingOrchestrator({
-        access: services.accessService(db as any),
-        companies: services.companyService(db as any),
-        agents: services.agentService(db as any),
-        instructions: services.agentInstructionsService(),
-        conversations: services.conversationService(db as any),
-        users: {
-          getById: async (id: string) => {
-            const rows = await (db as any)
-              .select()
-              .from(authUsers)
-              .where(eq(authUsers.id, id));
-            return rows[0] ?? null;
-          },
-        },
-      });
-      const result = await orch.bootstrap(user.id);
+    // AgentDash (Phase E): the auto-bootstrap auth hook is dropped in v2.
+    // Fresh signups now flow through /company-create → /assess?onboarding=1
+    // → /cos in the SPA (see ui/src/pages/Auth.tsx onSuccess and
+    // ui/src/pages/CompanyCreate.tsx). The hook only runs in `authenticated`
+    // deployment mode — server/src/index.ts:486-488 short-circuits
+    // local_trusted before createBetterAuthInstance is ever called, so
+    // local_trusted bootstrap (ensureLocalTrustedBoardPrincipal) is OUT OF
+    // SCOPE for this change and follows a different code path.
+    //
+    // Behind a one-release-window rollback flag: setting
+    // AGENTDASH_LEGACY_AUTH_AUTOBOOTSTRAP=true re-arms the legacy hook so
+    // operators can fall back if the SPA-driven flow regresses. Default off.
+    // Removal calendar reminder: 2026-05-24 (two stable weeks after Phase E).
+    const legacyAutoBootstrap =
+      process.env.AGENTDASH_LEGACY_AUTH_AUTOBOOTSTRAP === "true";
+    const onUserCreated = legacyAutoBootstrap
+      ? async (user: { id: string; email: string; name: string | null }) => {
+          const services = await import("./services/index.js");
+          const { authUsers } = await import("@paperclipai/db");
+          const { eq } = await import("drizzle-orm");
+          const orch = services.onboardingOrchestrator({
+            access: services.accessService(db as any),
+            companies: services.companyService(db as any),
+            agents: services.agentService(db as any),
+            instructions: services.agentInstructionsService(),
+            conversations: services.conversationService(db as any),
+            users: {
+              getById: async (id: string) => {
+                const rows = await (db as any)
+                  .select()
+                  .from(authUsers)
+                  .where(eq(authUsers.id, id));
+                return rows[0] ?? null;
+              },
+            },
+          });
+          const result = await orch.bootstrap(user.id);
+          logger.info(
+            { userId: user.id, companyId: result.companyId, cosAgentId: result.cosAgentId },
+            "[auth] bootstrapped workspace for new sign-up (legacy autoboot flag enabled)",
+          );
+        }
+      : undefined;
+    if (!legacyAutoBootstrap) {
       logger.info(
-        { userId: user.id, companyId: result.companyId, cosAgentId: result.cosAgentId },
-        "[auth] bootstrapped workspace for new sign-up",
+        { deploymentMode: "authenticated" },
+        "[auth] auto-bootstrap on signup is disabled (v2 flow); set AGENTDASH_LEGACY_AUTH_AUTOBOOTSTRAP=true to re-enable",
       );
-    };
-    const auth = createBetterAuthInstance(db as any, config, effectiveTrustedOrigins, { onUserCreated });
+    }
+    const auth = createBetterAuthInstance(
+      db as any,
+      config,
+      effectiveTrustedOrigins,
+      onUserCreated ? { onUserCreated } : undefined,
+    );
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);

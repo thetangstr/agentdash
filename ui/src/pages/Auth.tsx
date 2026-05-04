@@ -62,8 +62,11 @@ export function AuthPage() {
       setError(null);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
-      // AgentDash: new sign-ups land on the CoS onboarding v2 conversation.
-      const destination = mode === "sign_up" ? "/cos" : nextPath;
+      // AgentDash (Phase E): fresh sign-ups land on /company-create so the
+      // user explicitly names their workspace before the assess + CoS flow.
+      // Sign-ins go to wherever they were already heading (preserves
+      // ?next=… deep links and the remembered invite path).
+      const destination = mode === "sign_up" ? "/company-create" : nextPath;
       navigate(destination, { replace: true });
     },
     onError: (err) => {
