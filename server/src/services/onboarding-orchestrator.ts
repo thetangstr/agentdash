@@ -1,5 +1,14 @@
 import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
+import { SingleCompanyInstallationError } from "./companies.js";
+
+// AgentDash (#102): true when the single-company-installation constraint should
+// be bypassed. Mirrors the same check in server/src/routes/companies.ts.
+function isSingleCompanyOverrideActive() {
+  if (process.env.AGENTDASH_ALLOW_MULTI_COMPANY === "true") return true;
+  if (process.env.AGENTDASH_DEV_MODE === "true") return true;
+  return false;
+}
 
 // Phase 0 of the CoS-led onboarding flow (see
 // docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md).
@@ -135,6 +144,17 @@ export function onboardingOrchestrator(deps: Deps) {
         if (corpExisting) {
           company = corpExisting;
         } else {
+          // AgentDash (#102): single-workspace-per-self-hosted-installation guard.
+          // Self-hosted operators should only have one workspace — the installation IS the
+          // company. Bypassed when: AGENTDASH_ALLOW_MULTI_COMPANY env var is set, or
+          // local_trusted + AGENTDASH_DEV_MODE.
+          if (!isSingleCompanyOverrideActive()) {
+            const hasExisting = await deps.companies.hasActiveCompany();
+            if (hasExisting) {
+              const first = await deps.companies.list().then((cs: any[]) => cs[0] ?? null);
+              throw new SingleCompanyInstallationError(first?.id ?? null);
+            }
+          }
           company = await deps.companies.create({
             name: companyNameFromEmail(user.email),
             emailDomain,
@@ -161,7 +181,7 @@ export function onboardingOrchestrator(deps: Deps) {
         const created = await deps.agents.create(company.id, {
           name: "Chief of Staff",
           role: "chief_of_staff",
-          adapterType: (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim() || "claude_api",
+          adapterType: (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_local").trim() || "claude_local",
           adapterConfig: {},
           status: "idle",
           spentMonthlyCents: 0,

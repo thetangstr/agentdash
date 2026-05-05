@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { onboardingOrchestrator } from "../services/onboarding-orchestrator.js";
 
 const mockAccess = { ensureMembership: vi.fn(), setPrincipalPermission: vi.fn(), listUserCompanyAccess: vi.fn() };
-const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn() };
+const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn(), hasActiveCompany: vi.fn(), list: vi.fn() };
 const mockAgents = { create: vi.fn(), createApiKey: vi.fn(), list: vi.fn(), listKeys: vi.fn() };
 const mockInstructions = { materializeManagedBundle: vi.fn() };
 const mockConversations = { findByCompany: vi.fn(), create: vi.fn(), addParticipant: vi.fn(), postMessage: vi.fn() };
@@ -15,6 +15,8 @@ describe("onboardingOrchestrator.bootstrap", () => {
     vi.clearAllMocks();
     mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    mockCompanies.hasActiveCompany.mockResolvedValue(false);
+    mockCompanies.list.mockResolvedValue([]);
     mockCompanies.create.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
     mockCompanies.findByEmailDomain.mockResolvedValue(null);
@@ -134,6 +136,20 @@ describe("onboardingOrchestrator.bootstrap", () => {
     const result = await onboardingOrchestrator(deps as any).bootstrap("user-3");
     expect(result.companyId).toBe("company-acme");
     expect(mockCompanies.findByEmailDomain).toHaveBeenCalledWith("acme.com");
+    expect(mockCompanies.create).not.toHaveBeenCalled();
+  });
+
+  it("throws SingleCompanyInstallationError when an active company exists and the override is not active", async () => {
+    // Simulate: an active company already exists, and the env-var override is NOT active.
+    // The orchestrator should reject the bootstrap attempt.
+    mockUsers.getById.mockResolvedValue({ id: "user-new", email: "new@other.com" });
+    mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    mockCompanies.hasActiveCompany.mockResolvedValue(true);
+    mockCompanies.list.mockResolvedValue([{ id: "existing-company", name: "Existing Workspace" }]);
+
+    await expect(onboardingOrchestrator(deps as any).bootstrap("user-new")).rejects.toThrow(
+      "Installation already has a workspace",
+    );
     expect(mockCompanies.create).not.toHaveBeenCalled();
   });
 });

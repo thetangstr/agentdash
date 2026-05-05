@@ -49,6 +49,23 @@ export class DomainAlreadyClaimedError extends Error {
   }
 }
 
+// AgentDash (#102): surfaced when a bootstrap attempt tries to create a new
+// company but the installation already has one (and multi-company is not allowed).
+export class SingleCompanyInstallationError extends Error {
+  readonly code = "single_company_installation" as const;
+  readonly existingCompanyId: string | null;
+
+  constructor(existingCompanyId: string | null) {
+    super(
+      existingCompanyId
+        ? `Installation already has a workspace (${existingCompanyId})`
+        : "Installation already has a workspace",
+    );
+    this.name = "SingleCompanyInstallationError";
+    this.existingCompanyId = existingCompanyId;
+  }
+}
+
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
   const environmentsSvc = environmentService(db);
@@ -217,6 +234,17 @@ export function companyService(db: Db) {
       const rows = await getCompanyQuery(db);
       const hydrated = await hydrateCompanySpend(rows);
       return hydrated.map((row) => enrichCompany(row));
+    },
+
+    // AgentDash (#102): returns true if any non-archived company exists in this installation.
+    // Used to enforce the single-workspace-per-self-hosted-installation constraint.
+    hasActiveCompany: async () => {
+      const row = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(companies)
+        .where(sql`${companies.status} <> 'archived'`)
+        .then((rows) => rows[0] ?? null);
+      return (row?.count ?? 0) > 0;
     },
 
     findByEmailDomain: async (emailDomain: string) => {

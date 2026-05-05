@@ -15,6 +15,7 @@ import {
   cosOnboardingStateService,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
+import { SingleCompanyInstallationError } from "../services/companies.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import {
   FIXED_QUESTIONS,
@@ -55,8 +56,23 @@ export function onboardingV2Routes(db: Db) {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const result = await orch.bootstrap(req.actor.userId);
-    res.json(result);
+    try {
+      const result = await orch.bootstrap(req.actor.userId);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof SingleCompanyInstallationError) {
+        res.status(409).json({
+          code: err.code,
+          existingCompanyId: err.existingCompanyId,
+          message:
+            "This installation already has a workspace ('" +
+            (err.existingCompanyId ?? "existing workspace") +
+            "'). AgentDash supports one workspace per self-hosted installation. To run multiple workspaces, use the cloud-hosted version (coming soon) or set AGENTDASH_ALLOW_MULTI_COMPANY=true if you're testing.",
+        });
+        return;
+      }
+      throw err;
+    }
   });
 
   // POST /api/onboarding/interview/turn
