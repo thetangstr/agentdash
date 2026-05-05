@@ -38,21 +38,21 @@ function findMonorepoRoot(start) {
 function patchFile(filePath) {
   let content = readFileSync(filePath, "utf8");
 
-  // Already patched
-  if (content.includes('has("DEEPSEEK_API_KEY")')) return false;
+  // Already patched (full patch includes MINIMAX_CN_API_KEY)
+  if (content.includes('hasMiniMaxCN')) return false;
 
-  // Patch 1: insert hasDeepSeek, hasVertex, hasGemini, hasAzureOpenAI BEFORE hasMiniMax
+  // Patch 1: insert hasDeepSeek, hasVertex, hasGemini, hasAzureOpenAI, hasMiniMaxCN BEFORE hasMiniMax
   // Original: const hasMiniMax = has("MINIMAX_API_KEY");\n    if (!hasAnthropic...
-  // After:    const hasDeepSeek = ...\n    const hasVertex = ...\n    const hasGemini = ...\n    const hasAzureOpenAI = ...\n    const hasMiniMax = ...\n    if (!hasAnthropic...
+  // After:    const hasDeepSeek = ...\n    const hasVertex = ...\n    const hasGemini = ...\n    const hasAzureOpenAI = ...\n    const hasMiniMax = has("MINIMAX_API_KEY");\n    const hasMiniMaxCN = has("MINIMAX_CN_API_KEY");\n    if (!hasAnthropic...
   content = content.replace(
     /\n    const hasMiniMax = has\("MINIMAX_API_KEY"\);\n    if \(\!hasAnthropic/,
-    `\n${INDENT}const hasDeepSeek = has("DEEPSEEK_API_KEY");\n${INDENT}const hasVertex = has("VERTEX_API_KEY");\n${INDENT}const hasGemini = has("GEMINI_API_KEY");\n${INDENT}const hasAzureOpenAI = has("AZURE_OPENAI_API_KEY");\n${INDENT}const hasMiniMax = has("MINIMAX_API_KEY");\n    if (!hasAnthropic`
+    `\n${INDENT}const hasDeepSeek = has("DEEPSEEK_API_KEY");\n${INDENT}const hasVertex = has("VERTEX_API_KEY");\n${INDENT}const hasGemini = has("GEMINI_API_KEY");\n${INDENT}const hasAzureOpenAI = has("AZURE_OPENAI_API_KEY");\n${INDENT}const hasMiniMax = has("MINIMAX_API_KEY");\n${INDENT}const hasMiniMaxCN = has("MINIMAX_CN_API_KEY");\n    if (!hasAnthropic`
   );
 
   // Patch 2: update the no-keys condition to include new providers
   content = content.replace(
     /if \(\!hasAnthropic && \!hasOpenRouter && \!hasOpenAI && \!hasZai && \!hasKimi && \!hasMiniMax\)/,
-    "if (!hasAnthropic && !hasOpenRouter && !hasOpenAI && !hasZai && !hasKimi && !hasMiniMax && !hasDeepSeek && !hasVertex && !hasGemini && !hasAzureOpenAI)"
+    "if (!hasAnthropic && !hasOpenRouter && !hasOpenAI && !hasZai && !hasKimi && !hasMiniMax && !hasMiniMaxCN && !hasDeepSeek && !hasVertex && !hasGemini && !hasAzureOpenAI)"
   );
 
   // Patch 3: add providers reporting (multi-line format)
@@ -62,13 +62,13 @@ function patchFile(filePath) {
   //   return {
   content = content.replace(
     /(\n    if \(hasMiniMax\)\n        providers\.push\("MiniMax"\);)(\n    return \{)/,
-    `$1\n    if (hasDeepSeek)\n${SP8}providers.push("DeepSeek");\n    if (hasVertex)\n${SP8}providers.push("Vertex AI");\n    if (hasGemini)\n${SP8}providers.push("Gemini");\n    if (hasAzureOpenAI)\n${SP8}providers.push("Azure OpenAI");$2`
+    `$1\n    if (hasMiniMaxCN)\n${SP8}providers.push("MiniMax (China)");\n    if (hasDeepSeek)\n${SP8}providers.push("DeepSeek");\n    if (hasVertex)\n${SP8}providers.push("Vertex AI");\n    if (hasGemini)\n${SP8}providers.push("Gemini");\n    if (hasAzureOpenAI)\n${SP8}providers.push("Azure OpenAI");$2`
   );
 
   // Patch 4: update the hint message to include new providers
   content = content.replace(
     /hint: "Set API keys in the agent's env secrets or ~\/.hermes\/\.env\. Hermes supports: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, ZAI_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY"/,
-    `hint: "Set API keys in the agent's env secrets or ~/.hermes/.env. Hermes supports: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, ZAI_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY, DEEPSEEK_API_KEY, VERTEX_API_KEY, GEMINI_API_KEY, AZURE_OPENAI_API_KEY"`
+    `hint: "Set API keys in the agent's env secrets or ~/.hermes/.env. Hermes supports: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, ZAI_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY, MINIMAX_CN_API_KEY, DEEPSEEK_API_KEY, VERTEX_API_KEY, GEMINI_API_KEY, AZURE_OPENAI_API_KEY"`
   );
 
   writeFileSync(filePath, content, "utf8");
