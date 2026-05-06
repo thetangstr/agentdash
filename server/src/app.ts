@@ -203,6 +203,8 @@ export async function createApp(
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,
+    deploymentMode: opts.deploymentMode,
+    allowMultiCompany: process.env.AGENTDASH_ALLOW_MULTI_COMPANY === "true",
   }));
   api.use(companySkillRoutes(db));
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
