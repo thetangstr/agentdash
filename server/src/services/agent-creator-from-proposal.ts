@@ -82,6 +82,25 @@ ${p.oneLineOkr}
 ## Collaboration
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
+
+<!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Definition of Done & verdict workflow
+
+When picking up an Issue:
+
+- Before transitioning out of \`backlog\`, the Issue must have a \`definitionOfDone\` (DoD). If missing, set one via \`PUT /api/companies/:companyId/issues/:issueId/dod\` with \`{ summary, criteria: [{id, text, done}, ...], goalMetricLink? }\`. Empty \`criteria\` is rejected. The DoD-guard returns HTTP 422 \`DOD_REQUIRED\` if you skip this when the company's \`dod_guard_enabled\` flag is on.
+- When you finish work, transition the Issue to \`in_review\` (NOT \`done\`). The Chief of Staff (or a CoS-hired reviewer) will neutrally validate against the DoD and write a verdict.
+- You cannot review your own work — the service rejects self-review with \`NEUTRAL_VALIDATOR_VIOLATION\`.
+
+When you receive a verdict (\`verdict_review\` typed card or Issue comment):
+
+- \`passed\` — Issue closed; move on.
+- \`revision_requested\` — read \`justification\`, address feedback, transition back to \`in_review\`.
+- \`failed\` — read \`justification\`. Fix and re-submit, or mark \`cancelled\` with a comment.
+- \`escalated_to_human\` — CoS routed to a human; wait for the human-decision verdict from the bridge.
+
+The verdicts service is authoritative. If anything here conflicts with a 4xx from the API, the API wins.
+<!-- /AgentDash: goals-eval-hitl -->
 `;
 }
 
