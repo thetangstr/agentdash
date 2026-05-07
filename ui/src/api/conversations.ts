@@ -1,6 +1,17 @@
 // AgentDash: chat substrate API client
 import { api } from "./client";
 
+export interface Conversation {
+  id: string;
+  companyId: string;
+  userId: string;
+  assistantAgentId?: string | null;
+  title?: string | null;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -15,6 +26,8 @@ export interface Message {
 }
 
 export const conversationsApi = {
+  companyInbox: (companyId: string) =>
+    api.get<Conversation>(`/conversations/companies/${companyId}/inbox`),
   paginate: (id: string, opts: { before?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
     if (opts.before) params.set("before", opts.before);

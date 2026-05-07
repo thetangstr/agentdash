@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest } from "../errors.js";
+import { assertCompanyAccess } from "./authz.js";
 import {
   conversationService,
   conversationDispatch,
@@ -49,6 +50,26 @@ export function conversationRoutes(db: Db) {
       deepInterviewSpecs: deepInterviewSpecsLoader(db),
     } as any),
     cosResolver,
+  });
+
+  // GET /api/conversations/companies/:companyId/inbox
+  router.get("/companies/:companyId/inbox", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    let conversation = await svc.findByCompany(companyId);
+    if (!conversation) {
+      conversation = await svc.create({
+        companyId,
+        userId: req.actor.userId,
+        title: "Company Inbox",
+      });
+    }
+    await svc.addParticipant(conversation.id, req.actor.userId, "owner");
+    res.json(conversation);
   });
 
   // POST /api/conversations/:id/messages

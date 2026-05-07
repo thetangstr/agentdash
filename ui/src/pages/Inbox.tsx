@@ -1903,9 +1903,13 @@ export function Inbox() {
           />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
+        <Tabs value={tab} onValueChange={(value) => navigate(value === "company" ? "/inbox/company" : `/inbox/${value}`)}>
           <PageTabBar
             items={[
+              {
+                value: "company",
+                label: "Company Chat",
+              },
               {
                 value: "mine",
                 label: "Mine",
