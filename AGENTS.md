@@ -216,3 +216,48 @@ PR #2218 (`feat/external-adapter-phase1`) adds external adapter support. See roo
 - `createServerAdapter()` must include ALL optional fields (especially `detectModel`)
 - Built-in UI adapters can shadow external plugin parsers — remove built-in when fully externalizing
 - Reference external adapters: Hermes (`@henkey/hermes-paperclip-adapter` or `file:`) and Droid (npm)
+
+<!-- AgentDash: agent-facing-feature-convention — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash Fork: Adding Agent-Facing Features
+
+This section is AgentDash-specific and lives in a named block so upstream cherry-picks (which never touch our agent prompts) can be reasoned about safely. It complements `doc/UPSTREAM-POLICY.md`, which governs the broader fork relationship with `paperclipai/paperclip`.
+
+### Why this convention exists
+
+When AgentDash adds a feature that requires agent behavior changes — a new endpoint workers must call, a new state transition, a new approval gate, a new failure mode they must recover from — every agent must learn about it regardless of which adapter (Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, Hermes, etc.) is dispatching that worker. Agent prompts are the harness, not the adapter; if a prompt surface is missed, that adapter's worker silently runs the old behavior and the regression is invisible until production. PR #191 made this concrete: workers without prompt updates were silently broken on the new DoD/verdict workflow.
+
+### The four prompt surfaces that MUST be updated
+
+When a change touches agent-facing behavior, update **every** surface below in the same PR:
+
+1. `server/src/onboarding-assets/default/AGENTS.md` — default worker prompt baseline.
+2. `server/src/onboarding-assets/ceo/AGENTS.md` — CEO agent prompt.
+3. `server/src/onboarding-assets/chief_of_staff/AGENTS.md` — Chief of Staff agent prompt.
+4. `server/src/services/agent-creator-from-proposal.ts` — `renderAgents` (agent-creator template that synthesizes per-hire prompts from proposals).
+
+If the new behavior genuinely doesn't apply to a surface, still touch the file with a short comment explaining why — that gives reviewers and CI an explicit signal rather than silent omission.
+
+### Adapter-agnostic content rules
+
+The four surfaces are read by every adapter, so write them in adapter-neutral terms:
+
+- **HTTP endpoints over adapter-specific tool calls.** Refer to `POST /api/companies/:companyId/...` rather than to a specific adapter's tool name. Workers reach the control plane the same way regardless of harness.
+- **JSON payload field names, not visual representations.** Say `{ "verdict": "pass" }` rather than "click the green Pass button" — adapters with no UI must still understand the contract.
+- **Mention "card OR comment" fallback patterns.** When a behavior can be expressed via a typed card *or* a plain comment, document both — adapters that can't render cards still need the comment fallback to participate.
+
+### Named-block convention for upstream cherry-pick safety
+
+AgentDash-specific additions to files we share with upstream should be wrapped in an HTML-comment block of the form:
+
+```
+<!-- AgentDash: <feature-slug> — DO NOT REMOVE OR REORDER THIS BLOCK -->
+... AgentDash-specific content ...
+<!-- /AgentDash: <feature-slug> -->
+```
+
+This makes the conflict surface explicit if an upstream cherry-pick later touches the same file. Pair the block with `// AgentDash:` inline comments for source code, per `CLAUDE.md` §"Key Rules". See `doc/UPSTREAM-POLICY.md` for the broader cherry-pick rubric.
+
+### CI enforcement
+
+`.github/workflows/agents-md-drift-check.yml` runs on every pull request against `main` and fails when a PR adds new files under `server/src/routes/`, `server/src/services/`, or `packages/db/src/schema/` without also touching at least one of the four prompt surfaces. Bypass when the change genuinely doesn't apply to agent prompts by including `[no-prompt-update]` (case-insensitive) in the PR title or body. Use the bypass sparingly — the default assumption is that agent-facing infrastructure changes need prompt updates.
+<!-- /AgentDash: agent-facing-feature-convention -->

@@ -196,6 +196,10 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 
 Deployment: XS/S auto-ship after local test. M+ requires human verification. XL may use `staging` branch. The detailed handoff/sizing rules live inline in each agent's `.claude/commands/*.md` file.
 
+## Agent-facing feature convention
+
+Project conventions for adding agent-facing features (new endpoints, state transitions, gates, failure modes — DoD/verdict-style additions) live in repo-root [`AGENTS.md`](AGENTS.md), the harness-agnostic file read by Codex, Cursor, Aider, Continue, and other tools. When extending Paperclip's worker prompts, follow the rule there: update all four prompt surfaces (`server/src/onboarding-assets/{default,ceo,chief_of_staff}/AGENTS.md` plus `server/src/services/agent-creator-from-proposal.ts`). CI enforces this via `.github/workflows/agents-md-drift-check.yml`.
+
 ## Upstream Policy
 
 **Reference, don't merge.** Paperclip tracked as `upstream` remote for read-only reference only. We do NOT run continuous or scheduled upstream syncs — as of 2026-04-17 we were 339 commits behind with 37% of migrations AgentDash-owned, and every conflict-prone core file has AgentDash modifications. Continuous merging is not worth the cost.
