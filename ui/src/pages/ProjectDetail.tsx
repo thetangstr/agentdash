@@ -17,6 +17,10 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
 import { InlineEditor } from "../components/InlineEditor";
+// AgentDash: goals-eval-hitl
+import { DefinitionOfDoneEditor } from "../components/DefinitionOfDoneEditor";
+import { goalsEvalHitlApi } from "../api/goals-eval-hitl";
+import type { DefinitionOfDone } from "@paperclipai/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { IssuesList } from "../components/IssuesList";
@@ -669,7 +673,7 @@ export function ProjectDetail() {
       ) : null}
 
       {activeTab === "configuration" && (
-        <div className="max-w-4xl">
+        <div className="max-w-4xl space-y-6">
           <ProjectProperties
             project={project}
             onUpdate={(data) => updateProject.mutate(data)}
@@ -678,6 +682,18 @@ export function ProjectDetail() {
             onArchive={(archived) => archiveProject.mutate(archived)}
             archivePending={archiveProject.isPending}
           />
+          {/* AgentDash: goals-eval-hitl */}
+          {resolvedCompanyId && project?.id && (
+            <ProjectDoDSection
+              companyId={resolvedCompanyId}
+              projectId={project.id}
+              initial={
+                (project as { definitionOfDone?: DefinitionOfDone | null }).definitionOfDone ??
+                null
+              }
+            />
+          )}
+          {/* /AgentDash: goals-eval-hitl */}
         </div>
       )}
 
@@ -709,3 +725,37 @@ export function ProjectDetail() {
     </div>
   );
 }
+
+// AgentDash: goals-eval-hitl
+interface ProjectDoDSectionProps {
+  companyId: string;
+  projectId: string;
+  initial: DefinitionOfDone | null;
+}
+
+function ProjectDoDSection({ companyId, projectId, initial }: ProjectDoDSectionProps) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (dod: DefinitionOfDone) =>
+      goalsEvalHitlApi.setProjectDoD(companyId, projectId, dod),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.list(companyId) });
+    },
+  });
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+        Definition of Done
+      </h3>
+      <DefinitionOfDoneEditor
+        value={initial}
+        onSave={(next) => mutation.mutate(next)}
+        isPending={mutation.isPending}
+        errorMessage={mutation.error ? (mutation.error as Error).message : null}
+        entityType="project"
+      />
+    </div>
+  );
+}
+// /AgentDash: goals-eval-hitl

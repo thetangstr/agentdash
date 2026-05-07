@@ -11,7 +11,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
-import { projects } from "./projects.js";
+import { projects, type DefinitionOfDone } from "./projects.js";
 import { goals } from "./goals.js";
 import { companies } from "./companies.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
@@ -47,6 +47,8 @@ export const issues = pgTable(
     originFingerprint: text("origin_fingerprint").notNull().default("default"),
     requestDepth: integer("request_depth").notNull().default(0),
     billingCode: text("billing_code"),
+    // AgentDash: goals-eval-hitl
+    definitionOfDone: jsonb("definition_of_done").$type<DefinitionOfDone>(),
     assigneeAdapterOverrides: jsonb("assignee_adapter_overrides").$type<Record<string, unknown>>(),
     executionPolicy: jsonb("execution_policy").$type<Record<string, unknown>>(),
     executionState: jsonb("execution_state").$type<Record<string, unknown>>(),

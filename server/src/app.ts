@@ -46,6 +46,9 @@ import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
+// AgentDash: goals-eval-hitl
+import { verdictRoutes } from "./routes/verdicts.js";
+import { featureFlagRoutes } from "./routes/feature-flags.js";
 import { HttpError } from "./errors.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -232,6 +235,9 @@ export async function createApp(
   api.use("/conversations", conversationRoutes(db));
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
+  // AgentDash: goals-eval-hitl
+  api.use(verdictRoutes(db));
+  api.use(featureFlagRoutes(db));
   // AgentDash: billing — always mount so /api/billing/status responds with
   // sensible defaults in dev. When Stripe is configured (STRIPE_SECRET_KEY set)
   // checkout/portal/webhook do real work; otherwise those endpoints return 503

@@ -1419,6 +1419,8 @@ const issueListSelect = {
   requestDepth: issues.requestDepth,
   billingCode: issues.billingCode,
   assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
+  // AgentDash: goals-eval-hitl
+  definitionOfDone: sql<null>`null`,
   executionPolicy: sql<null>`null`,
   executionState: sql<null>`null`,
   executionWorkspaceId: issues.executionWorkspaceId,

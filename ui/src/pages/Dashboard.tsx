@@ -23,6 +23,8 @@ import { cn, formatCents } from "../lib/utils";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+// AgentDash: goals-eval-hitl
+import { TraceabilityCoverageTile } from "../components/TraceabilityCoverageTile";
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent, Issue } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -290,6 +292,12 @@ export function Dashboard() {
               }
             />
           </div>
+
+          {/* AgentDash: goals-eval-hitl */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-1 sm:gap-2">
+            <TraceabilityCoverageTile companyId={selectedCompanyId!} />
+          </div>
+          {/* /AgentDash: goals-eval-hitl */}
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <ChartCard title="Run Activity" subtitle="Last 14 days">

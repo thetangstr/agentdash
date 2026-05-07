@@ -71,3 +71,23 @@ export { entitlementSync } from "./entitlement-sync.js";
 export { stripeWebhookLedger } from "./stripe-webhook-ledger.js";
 export { seatQuantitySyncer } from "./seat-quantity-syncer.js";
 export { billingReconcile } from "./billing-reconcile.js";
+
+// AgentDash: goals-eval-hitl
+export { verdictsService, type VerdictsService } from "./verdicts.js";
+export { featureFlagsService, type FeatureFlagsService, type FeatureFlagRow } from "./feature-flags.js";
+export { dodGuardService, type DodGuardService, type DodGuardEntityType } from "./dod-guard.js";
+export {
+  cosReviewerAutoHire,
+  type CosReviewerAutoHireService,
+  type AutoHireReason,
+  type HireResult,
+  type CosReviewerAssignmentRow,
+} from "./cos-reviewer-auto-hire.js";
+export {
+  cosVerdictOrchestrator,
+  type CosVerdictOrchestratorService,
+} from "./cos-verdict-orchestrator.js";
+export {
+  verdictApprovalBridge,
+  type VerdictApprovalBridgeService,
+} from "./verdict-approval-bridge.js";

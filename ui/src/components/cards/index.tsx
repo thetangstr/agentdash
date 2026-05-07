@@ -4,6 +4,9 @@ import { InvitePrompt } from "./InvitePrompt";
 import { AgentStatusCard } from "./AgentStatusCard";
 import { InterviewQuestion } from "./InterviewQuestion";
 import { AgentPlanProposal } from "./AgentPlanProposal";
+// AgentDash: goals-eval-hitl card stubs (full components ship in Phase F/H)
+import { VerdictReviewCard } from "./VerdictReviewCard";
+import { HumanTasteGateCard } from "./HumanTasteGateCard";
 
 export interface CardContext {
   onProposalConfirm?: () => void;
@@ -51,9 +54,23 @@ export function CardRenderer({
           onRevise={() => context.onProposalReject?.()}
         />
       );
+    // AgentDash: goals-eval-hitl
+    case "verdict_review":
+      return <VerdictReviewCard payload={payload as any} />;
+    case "human_taste_gate":
+      return <HumanTasteGateCard payload={payload as any} />;
     default:
       return null;
   }
 }
 
-export { ProposalCard, InvitePrompt, AgentStatusCard, InterviewQuestion, AgentPlanProposal };
+export {
+  ProposalCard,
+  InvitePrompt,
+  AgentStatusCard,
+  InterviewQuestion,
+  AgentPlanProposal,
+  // AgentDash: goals-eval-hitl
+  VerdictReviewCard,
+  HumanTasteGateCard,
+};

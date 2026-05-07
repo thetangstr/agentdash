@@ -999,3 +999,82 @@ export function deriveCompanyEmailDomain(creatorEmail: string): string {
   }
   return domain;
 }
+
+// AgentDash: goals-eval-hitl
+
+export const VERDICT_OUTCOMES = [
+  "passed",
+  "failed",
+  "revision_requested",
+  "escalated_to_human",
+  "pending",
+] as const;
+export type VerdictOutcome = (typeof VERDICT_OUTCOMES)[number];
+
+/**
+ * Outcomes covered by the partial index `verdicts_closing_idx` shipped in
+ * migration 0080. Do NOT change without also dropping/recreating the index in
+ * a new migration. This list is a SUPERSET of the runtime "covered" filter:
+ * the index includes `escalated_to_human` so we can quickly find open
+ * escalations, but `escalated_to_human` is NOT a closed loop at runtime.
+ */
+export const VERDICT_INDEXED_OUTCOMES = [
+  "passed",
+  "failed",
+  "escalated_to_human",
+] as const;
+export type VerdictIndexedOutcome = (typeof VERDICT_INDEXED_OUTCOMES)[number];
+
+/**
+ * Outcomes that count as a CLOSED review loop — i.e. the work has a final
+ * human-or-system verdict. `escalated_to_human` is intentionally EXCLUDED:
+ * it means the loop is still open until the human decides and the
+ * verdict-approval bridge writes the closing verdict.
+ */
+export const VERDICT_COVERED_OUTCOMES = ["passed", "failed"] as const;
+export type VerdictCoveredOutcome = (typeof VERDICT_COVERED_OUTCOMES)[number];
+
+/**
+ * @deprecated Use {@link VERDICT_INDEXED_OUTCOMES} for index-related code or
+ * {@link VERDICT_COVERED_OUTCOMES} for the runtime coverage filter. The two
+ * concepts intentionally differ — see the constants' doc-comments.
+ */
+export const VERDICT_CLOSING_OUTCOMES = VERDICT_INDEXED_OUTCOMES;
+/** @deprecated Use {@link VerdictIndexedOutcome} or {@link VerdictCoveredOutcome}. */
+export type VerdictClosingOutcome = VerdictIndexedOutcome;
+
+export const VERDICT_ENTITY_TYPES = ["goal", "project", "issue"] as const;
+export type VerdictEntityType = (typeof VERDICT_ENTITY_TYPES)[number];
+
+/** Known feature-flag keys for per-tenant feature gating. */
+export const FEATURE_FLAG_KEYS = {
+  DOD_GUARD: "dod_guard_enabled",
+} as const;
+
+/** Activity log action values written by the goals-eval-hitl services. */
+export const ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL = [
+  "verdict_recorded",
+  "escalated_to_human",
+  "human_decision_recorded",
+  "dod_set",
+  "metric_updated",
+  "reviewer_hired",
+] as const;
+export type ActivityLogActionGoalsEvalHitl =
+  (typeof ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL)[number];
+
+/** Central tuning knobs for CoS review queue management (env vars override at runtime). */
+export const COS_REVIEW_DEFAULTS = {
+  QUEUE_DEPTH_HIRE_THRESHOLD: 5,
+  MAX_CONCURRENT_HIRES: 3,
+  BRIDGE_POLL_INTERVAL_MS: 5000,
+  ESCALATE_AFTER_MS: 1000 * 60 * 60 * 24,
+} as const;
+
+/** Typed card kinds introduced by the goals-eval-hitl layer. */
+export const COS_CARD_KINDS_GOALS_EVAL_HITL = {
+  VERDICT_REVIEW: "verdict_review",
+  HUMAN_TASTE_GATE: "human_taste_gate",
+} as const;
+export type CosCardKindGoalsEvalHitl =
+  (typeof COS_CARD_KINDS_GOALS_EVAL_HITL)[keyof typeof COS_CARD_KINDS_GOALS_EVAL_HITL];
