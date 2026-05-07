@@ -19,11 +19,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(`${BASE}${path}`, {
-    headers,
-    credentials: "include",
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      headers,
+      credentials: "include",
+      ...init,
+    });
+  } catch (err) {
+    if (err instanceof TypeError && err.message === "Failed to fetch") {
+      throw new ApiError(
+        "Unable to reach the server — check your connection and try again.",
+        0,
+        null,
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     const errorBody = await res.json().catch(() => null);
     throw new ApiError(
