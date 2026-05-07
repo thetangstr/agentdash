@@ -462,7 +462,7 @@ describe("verdictsService.setProjectDoD", () => {
       svc.setProjectDoD(COMPANY_ID, PROJECT_ID, { summary: "" } as any),
     ).rejects.toMatchObject({
       status: 400,
-      code: "DOD_INVALID",
+      details: expect.objectContaining({ code: "DOD_INVALID" }),
     });
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
@@ -500,7 +500,10 @@ describe("verdictsService.setIssueDoD", () => {
         summary: "",
         criteria: [],
       } as any),
-    ).rejects.toMatchObject({ status: 400, code: "DOD_INVALID" });
+    ).rejects.toMatchObject({
+      status: 400,
+      details: expect.objectContaining({ code: "DOD_INVALID" }),
+    });
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });
@@ -538,7 +541,10 @@ describe("verdictsService.setGoalMetricDefinition", () => {
         // Missing required `unit` and `source`.
         target: 10,
       } as any),
-    ).rejects.toMatchObject({ status: 400, code: "METRIC_DEFINITION_INVALID" });
+    ).rejects.toMatchObject({
+      status: 400,
+      details: expect.objectContaining({ code: "METRIC_DEFINITION_INVALID" }),
+    });
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });
