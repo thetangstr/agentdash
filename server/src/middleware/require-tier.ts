@@ -19,7 +19,7 @@ const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
  * Production deployments set STRIPE_SECRET_KEY → caps are enforced as designed.
  * Local-trusted dev never sets the key → caps never block.
  */
-function isBillingDisabled(): boolean {
+export function isBillingDisabled(): boolean {
   if (process.env.AGENTDASH_BILLING_DISABLED === "true") return true;
   if (!process.env.STRIPE_SECRET_KEY) return true;
   return false;
