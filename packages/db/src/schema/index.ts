@@ -90,3 +90,8 @@ export { stripeWebhookEvents } from "./stripe_webhook_events.js";
 export { onboardingSessions } from "./onboarding_sessions.js";
 export { onboardingSources } from "./onboarding_sources.js";
 export { companyContext } from "./company_context.js";
+// AgentDash: goals-eval-hitl
+export { verdicts } from "./verdicts.js";
+export { cosReviewerAssignments } from "./cos_reviewer_assignments.js";
+export { issueReviewQueueState } from "./issue_review_queue_state.js";
+export { featureFlags } from "./feature_flags.js";

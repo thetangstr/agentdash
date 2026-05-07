@@ -12,9 +12,13 @@ import {
 } from "@paperclipai/shared";
 import type { WorkspaceRuntimeDesiredState, WorkspaceRuntimeServiceStateMap } from "@paperclipai/shared";
 import { trackProjectCreated } from "@paperclipai/shared/telemetry";
+// AgentDash: goals-eval-hitl
+import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { projectService, logActivity, workspaceOperationService } from "../services/index.js";
-import { conflict, forbidden } from "../errors.js";
+// AgentDash: goals-eval-hitl
+import { verdictsService } from "../services/verdicts.js";
+import { badRequest, conflict, forbidden } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
@@ -45,6 +49,8 @@ export function projectRoutes(db: Db) {
   const workspaceOperations = workspaceOperationService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
   const environmentsSvc = environmentService(db);
+  // AgentDash: goals-eval-hitl
+  const verdictsSvc = verdictsService(db);
 
   async function assertProjectEnvironmentSelection(companyId: string, environmentId: string | null | undefined) {
     if (environmentId === undefined || environmentId === null) return;
@@ -663,6 +669,33 @@ export function projectRoutes(db: Db) {
 
     res.json(project);
   });
+
+  // AgentDash: goals-eval-hitl
+  router.put(
+    "/companies/:companyId/projects/:projectId/dod",
+    async (req, res, next) => {
+      try {
+        const companyId = req.params.companyId as string;
+        const projectId = req.params.projectId as string;
+        assertCompanyAccess(req, companyId);
+        const parsed = definitionOfDoneSchema.safeParse(req.body);
+        if (!parsed.success) {
+          throw badRequest("Invalid definition of done", {
+            code: "DOD_INVALID",
+            issues: parsed.error.issues,
+          });
+        }
+        const updated = await verdictsSvc.setProjectDoD(
+          companyId,
+          projectId,
+          parsed.data,
+        );
+        res.json(updated);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   return router;
 }

@@ -32,10 +32,18 @@ import {
   isClosedIsolatedExecutionWorkspace,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
+// AgentDash: goals-eval-hitl
+import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
+// AgentDash: goals-eval-hitl
+import { verdictsService } from "../services/verdicts.js";
+import { featureFlagsService } from "../services/feature-flags.js";
+import { dodGuardService } from "../services/dod-guard.js";
+import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.js";
+import { cosVerdictOrchestrator } from "../services/cos-verdict-orchestrator.js";
 import * as serviceIndex from "../services/index.js";
 import {
   accessService,
@@ -416,6 +424,16 @@ export function issueRoutes(
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
+  // AgentDash: goals-eval-hitl
+  const verdictsSvc = verdictsService(db);
+  const featureFlagsSvc = featureFlagsService(db);
+  const dodGuardSvc = dodGuardService(db, featureFlagsSvc);
+  const reviewerAutoHireSvc = cosReviewerAutoHire(db);
+  const cosVerdictOrchestratorSvc = cosVerdictOrchestrator(db, {
+    verdicts: verdictsSvc,
+    featureFlags: featureFlagsSvc,
+    autoHire: reviewerAutoHireSvc,
+  });
   const routinesSvc = routineService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
@@ -2118,6 +2136,34 @@ export function issueRoutes(
       }
     }
 
+    // AgentDash: goals-eval-hitl
+    // DoD guard: when leaving `backlog`, require Issue.definitionOfDone
+    // (gated per-tenant by feature_flags.dod_guard_enabled).
+    if (
+      typeof updateFields.status === "string" &&
+      existing.status === "backlog" &&
+      updateFields.status !== "backlog"
+    ) {
+      try {
+        await dodGuardSvc.assertDoDOrThrow(
+          existing.companyId,
+          "issue",
+          existing.id,
+          updateFields.status,
+          existing.status,
+        );
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 422) {
+          res.status(422).json({
+            error: err.message,
+            ...(err.details && typeof err.details === "object" ? err.details : {}),
+          });
+          return;
+        }
+        throw err;
+      }
+    }
+
     let issue;
     try {
       if (transition.decision && decisionId) {
@@ -2216,6 +2262,19 @@ export function issueRoutes(
           details: { source: "issue_status_cancelled", issueId: existing.id },
         });
       }
+    }
+
+    // AgentDash: goals-eval-hitl
+    // Fire-and-forget orchestrator hook on status change (non-blocking).
+    if (existing.status !== issue.status) {
+      void cosVerdictOrchestratorSvc
+        .onIssueStatusChanged(issue.id, existing.status, issue.status)
+        .catch((err) => {
+          logger.error(
+            { err, issueId: issue.id, prev: existing.status, next: issue.status },
+            "verdict orchestrator onIssueStatusChanged failed",
+          );
+        });
     }
 
     if (titleOrDescriptionChanged) {
@@ -3934,6 +3993,35 @@ export function issueRoutes(
 
     res.json({ ok: true });
   });
+
+  // AgentDash: goals-eval-hitl
+  router.put(
+    "/companies/:companyId/issues/:issueId/dod",
+    async (req, res, next) => {
+      try {
+        const companyId = req.params.companyId as string;
+        const issueId = req.params.issueId as string;
+        assertCompanyAccess(req, companyId);
+        const parsed = definitionOfDoneSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({
+            error: "Invalid definition of done",
+            code: "DOD_INVALID",
+            issues: parsed.error.issues,
+          });
+          return;
+        }
+        const updated = await verdictsSvc.setIssueDoD(
+          companyId,
+          issueId,
+          parsed.data,
+        );
+        res.json(updated);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   return router;
 }

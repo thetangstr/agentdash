@@ -870,6 +870,15 @@ export async function startServer(): Promise<StartedServer> {
   const { waitForExternalAdapters } = await import("./adapters/registry.js");
   await waitForExternalAdapters();
 
+  // AgentDash: goals-eval-hitl
+  // Start the verdict ↔ approval bridge watcher (caller-only listener on the
+  // existing LiveEvents bus; never edits server/src/services/approvals.ts).
+  const { verdictsService, verdictApprovalBridge } = await import("./services/index.js");
+  const verdictApprovalBridgeSvc = verdictApprovalBridge(db as any, {
+    verdicts: verdictsService(db as any),
+  });
+  const stopVerdictApprovalBridge = verdictApprovalBridgeSvc.startWatcher();
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
@@ -933,6 +942,13 @@ export async function startServer(): Promise<StartedServer> {
   
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+      // AgentDash: goals-eval-hitl
+      try {
+        stopVerdictApprovalBridge();
+      } catch (err) {
+        logger.error({ err }, "failed to stop verdict approval bridge cleanly");
+      }
+
       const telemetryClient = getTelemetryClient();
       if (telemetryClient) {
         telemetryClient.stop();

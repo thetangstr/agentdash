@@ -561,6 +561,13 @@
       "when": 1777870902977,
       "tag": "0079_fair_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1778112000000,
+      "tag": "0080_goals_eval_hitl",
+      "breakpoints": true
     }
   ]
 }

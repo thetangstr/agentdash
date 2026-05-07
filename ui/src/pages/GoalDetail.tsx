@@ -11,6 +11,9 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { GoalProperties } from "../components/GoalProperties";
 import { GoalTree } from "../components/GoalTree";
+// AgentDash: goals-eval-hitl
+import { GoalMetricTile } from "../components/GoalMetricTile";
+import type { GoalMetricDefinition } from "@paperclipai/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { InlineEditor } from "../components/InlineEditor";
 import { EntityRow } from "../components/EntityRow";
@@ -175,6 +178,18 @@ export function GoalDetail() {
           }}
         />
       </div>
+
+      {/* AgentDash: goals-eval-hitl */}
+      {resolvedCompanyId && goalId && (
+        <GoalMetricTile
+          companyId={resolvedCompanyId}
+          goalId={goalId}
+          metricDefinition={
+            (goal as { metricDefinition?: GoalMetricDefinition | null }).metricDefinition ?? null
+          }
+        />
+      )}
+      {/* /AgentDash: goals-eval-hitl */}
 
       <Tabs defaultValue="children">
         <TabsList>

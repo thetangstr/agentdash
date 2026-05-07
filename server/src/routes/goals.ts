@@ -1,15 +1,22 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { createGoalSchema, updateGoalSchema } from "@paperclipai/shared";
+// AgentDash: goals-eval-hitl
+import { goalMetricDefinitionSchema } from "@paperclipai/shared";
 import { trackGoalCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { goalService, logActivity } from "../services/index.js";
+// AgentDash: goals-eval-hitl
+import { verdictsService } from "../services/verdicts.js";
+import { badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 
 export function goalRoutes(db: Db) {
   const router = Router();
   const svc = goalService(db);
+  // AgentDash: goals-eval-hitl
+  const verdictsSvc = verdictsService(db);
 
   router.get("/companies/:companyId/goals", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -107,6 +114,33 @@ export function goalRoutes(db: Db) {
 
     res.json(goal);
   });
+
+  // AgentDash: goals-eval-hitl
+  router.put(
+    "/companies/:companyId/goals/:goalId/metric-definition",
+    async (req, res, next) => {
+      try {
+        const companyId = req.params.companyId as string;
+        const goalId = req.params.goalId as string;
+        assertCompanyAccess(req, companyId);
+        const parsed = goalMetricDefinitionSchema.safeParse(req.body);
+        if (!parsed.success) {
+          throw badRequest("Invalid metric definition", {
+            code: "METRIC_DEFINITION_INVALID",
+            issues: parsed.error.issues,
+          });
+        }
+        const updated = await verdictsSvc.setGoalMetricDefinition(
+          companyId,
+          goalId,
+          parsed.data,
+        );
+        res.json(updated);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   return router;
 }

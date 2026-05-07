@@ -73,6 +73,12 @@ import { IssueRelatedWorkPanel } from "../components/IssueRelatedWorkPanel";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
+// AgentDash: goals-eval-hitl
+import { VerdictTimeline } from "../components/VerdictTimeline";
+import { DefinitionOfDoneEditor } from "../components/DefinitionOfDoneEditor";
+import { goalsEvalHitlApi } from "../api/goals-eval-hitl";
+import type { DefinitionOfDone } from "@paperclipai/shared";
+import { Gavel as GavelIcon } from "lucide-react";
 import type { MentionOption } from "../components/MarkdownEditor";
 import { ImageGalleryModal } from "../components/ImageGalleryModal";
 import { ScrollToBottom } from "../components/ScrollToBottom";
@@ -3613,6 +3619,12 @@ export function IssueDetail() {
             <ListTree className="h-3.5 w-3.5" />
             Related work
           </TabsTrigger>
+          {/* AgentDash: goals-eval-hitl */}
+          <TabsTrigger value="reviews" className="gap-1.5">
+            <GavelIcon className="h-3.5 w-3.5" />
+            Reviews
+          </TabsTrigger>
+          {/* /AgentDash: goals-eval-hitl */}
           {issuePluginTabItems.map((item) => (
             <TabsTrigger key={item.value} value={item.value}>
               {item.label}
@@ -3696,6 +3708,29 @@ export function IssueDetail() {
         <TabsContent value="related-work">
           <IssueRelatedWorkPanel relatedWork={issue.relatedWork} />
         </TabsContent>
+
+        {/* AgentDash: goals-eval-hitl */}
+        <TabsContent value="reviews" className="space-y-4">
+          {detailTab === "reviews" ? (
+            <>
+              <IssueDoDSection
+                companyId={issue.companyId}
+                issueId={issue.id}
+                initial={
+                  (issue as { definitionOfDone?: DefinitionOfDone | null }).definitionOfDone ??
+                  null
+                }
+              />
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                  Review timeline
+                </h3>
+                <VerdictTimeline companyId={issue.companyId} issueId={issue.id} />
+              </div>
+            </>
+          ) : null}
+        </TabsContent>
+        {/* /AgentDash: goals-eval-hitl */}
 
         {activePluginTab && (
           <TabsContent value={activePluginTab.value}>
@@ -3887,3 +3922,35 @@ export function IssueDetail() {
     </div>
   );
 }
+
+// AgentDash: goals-eval-hitl
+interface IssueDoDSectionProps {
+  companyId: string;
+  issueId: string;
+  initial: DefinitionOfDone | null;
+}
+
+function IssueDoDSection({ companyId, issueId, initial }: IssueDoDSectionProps) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (dod: DefinitionOfDone) => goalsEvalHitlApi.setIssueDoD(companyId, issueId, dod),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId) });
+    },
+  });
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+        Definition of Done
+      </h3>
+      <DefinitionOfDoneEditor
+        value={initial}
+        onSave={(next) => mutation.mutate(next)}
+        isPending={mutation.isPending}
+        errorMessage={mutation.error ? (mutation.error as Error).message : null}
+        entityType="issue"
+      />
+    </div>
+  );
+}
+// /AgentDash: goals-eval-hitl

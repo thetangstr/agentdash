@@ -211,6 +211,19 @@ export {
   type PluginApiRouteCheckoutPolicy,
   type PluginEventType,
   type PluginBridgeErrorCode,
+  // AgentDash: goals-eval-hitl
+  VERDICT_OUTCOMES,
+  VERDICT_CLOSING_OUTCOMES,
+  VERDICT_ENTITY_TYPES,
+  FEATURE_FLAG_KEYS,
+  ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL,
+  COS_REVIEW_DEFAULTS,
+  COS_CARD_KINDS_GOALS_EVAL_HITL,
+  type VerdictOutcome,
+  type VerdictClosingOutcome,
+  type VerdictEntityType,
+  type ActivityLogActionGoalsEvalHitl,
+  type CosCardKindGoalsEvalHitl,
 } from "./constants.js";
 
 export {
@@ -981,3 +994,24 @@ export * from "./types/interview.js";
 // (DI_SCOPES re-exported here so server-side code can import without crossing
 // the db-package boundary at the type level — see plan Phase B condition #5)
 export * from "./deep-interview.js";
+
+// AgentDash: goals-eval-hitl
+// Note: VerdictOutcome, VerdictEntityType already re-exported from ./constants.js above.
+export {
+  goalMetricDefinitionSchema,
+  type GoalMetricDefinition,
+  definitionOfDoneCriterionSchema,
+  type DefinitionOfDoneCriterion,
+  definitionOfDoneSchema,
+  type DefinitionOfDone,
+  verdictOutcomeSchema,
+  verdictEntityTypeSchema,
+  verdictRubricScoresSchema,
+  type VerdictRubricScores,
+  createVerdictInputSchema,
+  type CreateVerdictInput,
+  verdictReviewCardPayloadSchema,
+  type VerdictReviewCardPayload,
+  humanTasteGateCardPayloadSchema,
+  type HumanTasteGateCardPayload,
+} from "./validators/goals-eval-hitl.js";
