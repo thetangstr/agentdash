@@ -33,14 +33,6 @@ import { isBillingDisabled } from "../middleware/require-tier.js";
 
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
-const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
-
-function isBillingDisabled(): boolean {
-  if (process.env.AGENTDASH_BILLING_DISABLED === "true") return true;
-  if (!process.env.STRIPE_SECRET_KEY) return true;
-  return false;
-}
-
 // AgentDash (AGE-55): per-route options. Mirrors the env-var-driven flag
 // from server/src/config.ts so test/integration harnesses can override.
 export interface CompanyRoutesOptions {

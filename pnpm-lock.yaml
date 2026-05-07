@@ -529,6 +529,9 @@ importers:
       '@paperclipai/adapter-gemini-local':
         specifier: workspace:*
         version: link:../packages/adapters/gemini-local
+      '@paperclipai/adapter-openclaw-gateway':
+        specifier: workspace:*
+        version: link:../packages/adapters/openclaw-gateway
       '@paperclipai/adapter-opencode-local':
         specifier: workspace:*
         version: link:../packages/adapters/opencode-local
@@ -692,6 +695,9 @@ importers:
       '@paperclipai/adapter-gemini-local':
         specifier: workspace:*
         version: link:../packages/adapters/gemini-local
+      '@paperclipai/adapter-openclaw-gateway':
+        specifier: workspace:*
+        version: link:../packages/adapters/openclaw-gateway
       '@paperclipai/adapter-opencode-local':
         specifier: workspace:*
         version: link:../packages/adapters/opencode-local
