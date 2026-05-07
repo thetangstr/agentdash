@@ -29,6 +29,9 @@ import {
 import { DomainAlreadyClaimedError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { isBillingDisabled } from "../middleware/require-tier.js";
+
+const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
 // AgentDash (AGE-55): per-route options. Mirrors the env-var-driven flag
 // from server/src/config.ts so test/integration harnesses can override.
@@ -39,11 +42,18 @@ export interface CompanyRoutesOptions {
   // this on; self-hosted Free leaves it off so a single user with any
   // email can stand up a workspace.
   requireCorpEmail?: boolean;
+  // AgentDash (#102): passed through from server startup config so the
+  // POST /companies guard can check local_trusted + AGENTDASH_DEV_MODE.
+  deploymentMode?: string;
+  // AgentDash (#102): when true, bypass the single-company-installation guard.
+  // Set by the CLI onboard --allow-multi-company flag.
+  allowMultiCompany?: boolean;
 }
 
 export function companyRoutes(db: Db, storage?: StorageService, options: CompanyRoutesOptions = {}) {
   const allowMultiTenantPerDomain = options.allowMultiTenantPerDomain ?? false;
   const requireCorpEmail = options.requireCorpEmail ?? false;
+  const allowMultiCompany = options.allowMultiCompany ?? false;
   const router = Router();
   const svc = companyService(db);
   const agents = agentService(db);
@@ -51,6 +61,19 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   const access = accessService(db);
   const budgets = budgetService(db);
   const feedback = feedbackService(db);
+
+  // AgentDash (#102): true when the single-company-installation constraint should
+  // be bypassed. Covers: AGENTDASH_ALLOW_MULTI_COMPANY env var, and the dev-mode
+  // combination (local_trusted + AGENTDASH_DEV_MODE).
+  function isSingleCompanyOverrideActive() {
+    if (allowMultiCompany) return true;
+    if (process.env.AGENTDASH_ALLOW_MULTI_COMPANY === "true") return true;
+    if (
+      options.deploymentMode === "local_trusted" &&
+      process.env.AGENTDASH_DEV_MODE === "true"
+    ) return true;
+    return false;
+  }
 
   function parseBooleanQuery(value: unknown) {
     return value === true || value === "true" || value === "1";
@@ -304,9 +327,35 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
           code: "already_member",
           existingCompanyId: existingCompanyIds[0] ?? null,
           message:
-            "User is already a member of a workspace; redirect to it instead of creating another.",
+            "You're already a member of a workspace. Switch to it instead of creating a new one.",
         });
         return;
+      }
+    }
+
+    // AgentDash (#102): single-workspace-per-self-hosted-installation guard.
+    // Bypassed when: AGENTDASH_ALLOW_MULTI_COMPANY env var, local_trusted +
+    // AGENTDASH_DEV_MODE, --allow-multi-company CLI flag, OR the existing
+    // company is on a Pro plan (unlimited workspaces).
+    if (!isSingleCompanyOverrideActive()) {
+      const hasExisting = await svc.hasActiveCompany();
+      if (hasExisting) {
+        const firstCompany = await svc.list().then((cs) => cs[0] ?? null);
+        const existingPlanTier = firstCompany?.planTier ?? "free";
+        const isPro = isBillingDisabled() || PRO_LIVE.has(existingPlanTier);
+
+        if (isPro) {
+          // Pro installation — allow through (DB unique index handles races)
+        } else {
+          res.status(409).json({
+            code: "single_company_installation",
+            existingCompanyId: firstCompany?.id ?? null,
+            message:
+              "Free workspaces are limited to 1 workspace. Upgrade to Pro to create additional workspaces.",
+            upgradeUrl: "/settings/billing",
+          });
+          return;
+        }
       }
     }
 
@@ -360,6 +409,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
             res.status(409).json({
               code: "domain_already_claimed",
               existingCompanyId: existingCompany.id,
+              message: "A workspace for this email domain already exists. Contact your administrator to join it.",
               contactEmail: null,
             });
             return;
