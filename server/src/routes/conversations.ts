@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { type Db, deepInterviewSpecs as deepInterviewSpecsTable } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { unauthorized, badRequest } from "../errors.js";
+import { assertCompanyAccess } from "./authz.js";
 import {
   conversationService,
   conversationDispatch,
@@ -13,6 +14,8 @@ import {
 } from "../services/index.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
+
+const COMPANY_INBOX_TITLE = "Company Inbox";
 
 export function conversationRoutes(db: Db) {
   const router = Router();
@@ -49,6 +52,26 @@ export function conversationRoutes(db: Db) {
       deepInterviewSpecs: deepInterviewSpecsLoader(db),
     } as any),
     cosResolver,
+  });
+
+  // GET /api/conversations/companies/:companyId/inbox
+  router.get("/companies/:companyId/inbox", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    let conversation = await svc.findByCompany(companyId, { title: COMPANY_INBOX_TITLE });
+    if (!conversation) {
+      conversation = await svc.create({
+        companyId,
+        userId: req.actor.userId,
+        title: COMPANY_INBOX_TITLE,
+      });
+      await svc.addParticipant(conversation.id, req.actor.userId, "owner");
+    }
+    res.json(conversation);
   });
 
   // POST /api/conversations/:id/messages

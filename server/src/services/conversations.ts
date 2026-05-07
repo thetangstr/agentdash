@@ -9,11 +9,15 @@ import { emitMessageCreated, emitMessageRead } from "../realtime/conversation-ev
 
 export function conversationService(db: Db) {
   return {
-    findByCompany: async (companyId: string) => {
+    findByCompany: async (companyId: string, opts: { title?: string } = {}) => {
+      const conditions = [eq(assistantConversations.companyId, companyId)];
+      if (opts.title) {
+        conditions.push(eq(assistantConversations.title, opts.title));
+      }
       const rows = await db
         .select()
         .from(assistantConversations)
-        .where(eq(assistantConversations.companyId, companyId))
+        .where(and(...conditions))
         .limit(1);
       return rows[0] ?? null;
     },

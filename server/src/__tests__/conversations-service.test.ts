@@ -73,6 +73,18 @@ describeEmbeddedPostgres("conversationService", () => {
     expect(result?.companyId).toBe(companyId);
   });
 
+  it("findByCompany can filter by title", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Test Co" });
+    await service.create({ companyId, userId: TEST_USER_ID, title: "Welcome chat" });
+    const inbox = await service.create({ companyId, userId: TEST_USER_ID, title: "Company Inbox" });
+
+    const result = await service.findByCompany(companyId, { title: "Company Inbox" });
+
+    expect(result?.id).toBe(inbox.id);
+    expect(result?.title).toBe("Company Inbox");
+  });
+
   it("addParticipant is idempotent", async () => {
     await insertTestUser(db);
     const companyId = randomUUID();
