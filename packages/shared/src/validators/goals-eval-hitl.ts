@@ -30,7 +30,9 @@ export type DefinitionOfDoneCriterion = z.infer<typeof definitionOfDoneCriterion
 
 export const definitionOfDoneSchema = z.object({
   summary: z.string().min(1),
-  criteria: z.array(definitionOfDoneCriterionSchema).min(1),
+  criteria: z
+    .array(definitionOfDoneCriterionSchema)
+    .min(1, "DoD must have at least one criterion"),
   goalMetricLink: z.string().optional(),
 });
 

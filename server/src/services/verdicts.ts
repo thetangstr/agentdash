@@ -9,7 +9,8 @@ import {
   verdicts,
 } from "@paperclipai/db";
 import {
-  VERDICT_CLOSING_OUTCOMES,
+  VERDICT_COVERED_OUTCOMES,
+  VERDICT_INDEXED_OUTCOMES,
   createVerdictInputSchema,
   definitionOfDoneSchema,
   goalMetricDefinitionSchema,
@@ -20,11 +21,24 @@ import {
 } from "@paperclipai/shared";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
+import type { approvalService } from "./approvals.js";
+import type { issueApprovalService } from "./issue-approvals.js";
 
 export type VerdictRow = typeof verdicts.$inferSelect;
 
-const CLOSING_OUTCOMES: readonly string[] = VERDICT_CLOSING_OUTCOMES;
+/**
+ * Runtime "loop closed" outcomes (`passed` | `failed`). Used by the coverage
+ * filter and by `closingVerdictFor` for idempotency checks. Note: this is a
+ * STRICT SUBSET of {@link VERDICT_INDEXED_OUTCOMES}, which the partial index
+ * `verdicts_closing_idx` (migration 0080) covers. The index is intentionally
+ * a superset so we can also quickly find open `escalated_to_human` rows; do
+ * NOT relax the runtime filter to match it.
+ */
+const COVERED_OUTCOMES: readonly string[] = VERDICT_COVERED_OUTCOMES;
 const IN_FLIGHT_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"] as const;
+// Reference the indexed-outcome constant so the import is preserved as a
+// signpost — code reading this file should see both constants together.
+void VERDICT_INDEXED_OUTCOMES;
 
 interface CoverageBreakdownRow {
   projectId: string | null;
@@ -76,7 +90,12 @@ function entityIdFor(input: CreateVerdictInput): string {
  *  - Schema CHECK constraints (exactly-one entity FK / exactly-one reviewer)
  *    are trusted; on DB rejection the error is surfaced as VERDICT_SHAPE_INVALID.
  */
-export function verdictsService(db: Db) {
+export interface VerdictsServiceDeps {
+  approvalsService?: ReturnType<typeof approvalService>;
+  issueApprovalsService?: ReturnType<typeof issueApprovalService>;
+}
+
+export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
   async function loadIssue(companyId: string, issueId: string) {
     const row = await db
       .select({
@@ -245,6 +264,57 @@ export function verdictsService(db: Db) {
       },
     });
 
+    // Fix #179: Auto-create the verdict_escalation approval when the verdict
+    // outcome is escalated_to_human. Without this, the verdict-approval bridge
+    // has nothing to listen for — the escalation loop is silently dropped.
+    // Backward-compat: when deps are not provided (e.g. in unit tests that
+    // don't wire approvals), the auto-create is skipped.
+    if (
+      data.outcome === "escalated_to_human" &&
+      deps?.approvalsService &&
+      data.entityType === "issue" &&
+      data.issueId
+    ) {
+      const requestedBy: { requestedByAgentId?: string; requestedByUserId?: string } = {};
+      if (data.reviewerAgentId) requestedBy.requestedByAgentId = data.reviewerAgentId;
+      else if (data.reviewerUserId) requestedBy.requestedByUserId = data.reviewerUserId;
+
+      const approval = await deps.approvalsService.create(data.companyId, {
+        type: "verdict_escalation",
+        ...requestedBy,
+        status: "pending",
+        payload: {
+          type: "verdict_escalation",
+          verdictId: inserted!.id,
+          issueId: data.issueId,
+          justification: data.justification ?? null,
+        } as Record<string, unknown>,
+      });
+
+      if (deps.issueApprovalsService && approval) {
+        await deps.issueApprovalsService.link(data.issueId, approval.id, {
+          agentId: data.reviewerAgentId ?? null,
+          userId: data.reviewerUserId ?? null,
+        });
+      }
+
+      await logActivity(db, {
+        companyId: data.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        action: "escalated_to_human",
+        entityType: data.entityType,
+        entityId: entityIdFor(data),
+        agentId: data.reviewerAgentId ?? null,
+        details: {
+          verdictId: inserted!.id,
+          approvalId: approval?.id ?? null,
+          issueId: data.issueId,
+          reason: data.justification ?? null,
+        },
+      });
+    }
+
     return inserted!;
   }
 
@@ -287,7 +357,7 @@ export function verdictsService(db: Db) {
           eq(verdicts.companyId, companyId),
           eq(verdicts.entityType, entityType),
           eq(fk, entityId),
-          inArray(verdicts.outcome, CLOSING_OUTCOMES as string[]),
+          inArray(verdicts.outcome, COVERED_OUTCOMES as string[]),
         ),
       )
       .orderBy(desc(verdicts.createdAt))
@@ -339,7 +409,7 @@ export function verdictsService(db: Db) {
             eq(verdicts.companyId, companyId),
             eq(verdicts.entityType, "issue"),
             inArray(verdicts.issueId, eligibleIssueIds),
-            inArray(verdicts.outcome, CLOSING_OUTCOMES as string[]),
+            inArray(verdicts.outcome, COVERED_OUTCOMES as string[]),
           ),
         );
       coveredIssueIds = new Set(

@@ -1011,13 +1011,37 @@ export const VERDICT_OUTCOMES = [
 ] as const;
 export type VerdictOutcome = (typeof VERDICT_OUTCOMES)[number];
 
-/** Outcomes that constitute a closing verdict (used by coverage query + partial index). */
-export const VERDICT_CLOSING_OUTCOMES = [
+/**
+ * Outcomes covered by the partial index `verdicts_closing_idx` shipped in
+ * migration 0080. Do NOT change without also dropping/recreating the index in
+ * a new migration. This list is a SUPERSET of the runtime "covered" filter:
+ * the index includes `escalated_to_human` so we can quickly find open
+ * escalations, but `escalated_to_human` is NOT a closed loop at runtime.
+ */
+export const VERDICT_INDEXED_OUTCOMES = [
   "passed",
   "failed",
   "escalated_to_human",
 ] as const;
-export type VerdictClosingOutcome = (typeof VERDICT_CLOSING_OUTCOMES)[number];
+export type VerdictIndexedOutcome = (typeof VERDICT_INDEXED_OUTCOMES)[number];
+
+/**
+ * Outcomes that count as a CLOSED review loop — i.e. the work has a final
+ * human-or-system verdict. `escalated_to_human` is intentionally EXCLUDED:
+ * it means the loop is still open until the human decides and the
+ * verdict-approval bridge writes the closing verdict.
+ */
+export const VERDICT_COVERED_OUTCOMES = ["passed", "failed"] as const;
+export type VerdictCoveredOutcome = (typeof VERDICT_COVERED_OUTCOMES)[number];
+
+/**
+ * @deprecated Use {@link VERDICT_INDEXED_OUTCOMES} for index-related code or
+ * {@link VERDICT_COVERED_OUTCOMES} for the runtime coverage filter. The two
+ * concepts intentionally differ — see the constants' doc-comments.
+ */
+export const VERDICT_CLOSING_OUTCOMES = VERDICT_INDEXED_OUTCOMES;
+/** @deprecated Use {@link VerdictIndexedOutcome} or {@link VerdictCoveredOutcome}. */
+export type VerdictClosingOutcome = VerdictIndexedOutcome;
 
 export const VERDICT_ENTITY_TYPES = ["goal", "project", "issue"] as const;
 export type VerdictEntityType = (typeof VERDICT_ENTITY_TYPES)[number];

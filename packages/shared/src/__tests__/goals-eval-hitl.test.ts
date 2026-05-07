@@ -11,6 +11,7 @@
 // package's `__tests__/` convention.
 import { describe, expect, it } from "vitest";
 import {
+  definitionOfDoneSchema,
   verdictReviewCardPayloadSchema,
   humanTasteGateCardPayloadSchema,
 } from "../validators/goals-eval-hitl.js";
@@ -145,5 +146,27 @@ describe("humanTasteGateCardPayloadSchema", () => {
       entityType: "task" as any,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("definitionOfDoneSchema (Fix #177 — DoD must have at least one criterion)", () => {
+  it("rejects an empty criteria array", () => {
+    const result = definitionOfDoneSchema.safeParse({
+      summary: "x",
+      criteria: [],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join("|");
+      expect(messages).toContain("at least one criterion");
+    }
+  });
+
+  it("accepts a DoD with one or more criteria", () => {
+    const result = definitionOfDoneSchema.safeParse({
+      summary: "Ship the feature",
+      criteria: [{ id: "c1", text: "Tests pass", done: false }],
+    });
+    expect(result.success).toBe(true);
   });
 });

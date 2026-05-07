@@ -7,6 +7,8 @@ import {
   type VerdictEntityType,
 } from "@paperclipai/shared";
 import { HttpError, badRequest } from "../errors.js";
+import { approvalService } from "../services/approvals.js";
+import { issueApprovalService } from "../services/issue-approvals.js";
 import { verdictsService } from "../services/verdicts.js";
 import { assertCompanyAccess } from "./authz.js";
 
@@ -20,7 +22,14 @@ import { assertCompanyAccess } from "./authz.js";
  */
 export function verdictRoutes(db: Db) {
   const router = Router();
-  const svc = verdictsService(db);
+  // Fix #179: wire approvals + issue-approvals deps so that POST /verdicts
+  // with outcome=escalated_to_human auto-creates the matching
+  // verdict_escalation approval (and links it to the issue). Without these
+  // deps the verdict-approval bridge has nothing to react to.
+  const svc = verdictsService(db, {
+    approvalsService: approvalService(db),
+    issueApprovalsService: issueApprovalService(db),
+  });
 
   router.post("/companies/:companyId/verdicts", async (req, res, next) => {
     try {

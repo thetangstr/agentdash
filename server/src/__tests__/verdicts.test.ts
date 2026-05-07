@@ -273,6 +273,155 @@ describe("verdictsService.coverage — shape", () => {
     const result = await svc.coverage(COMPANY_ID);
     expect(result).toMatchObject({ totalInFlight: 0, coveredInFlight: 0, coverageRatio: 0 });
   });
+
+  // Fix #178: escalated_to_human verdicts mean the loop is OPEN (waiting on a
+  // human). They must NOT count as covered. The bridge writes a closing
+  // verdict (passed/failed) once the human resolves the approval — that
+  // closing verdict is what counts toward coverage.
+  it("does NOT count escalated_to_human verdicts as covered", async () => {
+    const issueEscalatedOnly = {
+      id: "ie",
+      projectId: "p1",
+      goalId: "g1",
+      definitionOfDone: { x: 1 },
+    };
+    const issuePassed = { id: "ip", projectId: "p1", goalId: "g1", definitionOfDone: { x: 1 } };
+
+    const { db, queueSelect } = makeDb();
+    queueSelect([issueEscalatedOnly, issuePassed]); // in-flight issues
+    // The runtime filter (COVERED_OUTCOMES = passed | failed) is applied in
+    // the WHERE clause, so the stub returns ONLY the passed issue's id —
+    // the escalated_to_human row would have been filtered out.
+    queueSelect([{ issueId: "ip" }]);
+
+    const svc = verdictsService(db as any);
+    const result = await svc.coverage(COMPANY_ID);
+    expect(result.totalInFlight).toBe(2);
+    expect(result.coveredInFlight).toBe(1);
+    expect(result.coverageRatio).toBeCloseTo(0.5, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix #179 — verdictsService.create with outcome=escalated_to_human auto-
+// creates a verdict_escalation approval and links it via issue_approvals.
+// ---------------------------------------------------------------------------
+
+describe("verdictsService.create — auto-creates verdict_escalation approval (Fix #179)", () => {
+  it("on outcome=escalated_to_human, calls approvalsService.create + issueApprovalsService.link", async () => {
+    const { db, queueSelect } = makeDb();
+    // loadIssue lookup: reviewer ≠ assignee so neutrality passes.
+    queueSelect([
+      { id: ISSUE_ID, companyId: COMPANY_ID, assigneeAgentId: ASSIGNEE_AGENT, assigneeUserId: null },
+    ]);
+
+    const APPROVAL_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const approvalsService = {
+      create: vi.fn().mockResolvedValue({ id: APPROVAL_ID, status: "pending" }),
+    };
+    const issueApprovalsService = {
+      link: vi.fn().mockResolvedValue({ issueId: ISSUE_ID, approvalId: APPROVAL_ID }),
+    };
+
+    const svc = verdictsService(db as any, {
+      approvalsService: approvalsService as any,
+      issueApprovalsService: issueApprovalsService as any,
+    });
+
+    const verdict = await svc.create({
+      companyId: COMPANY_ID,
+      entityType: "issue",
+      issueId: ISSUE_ID,
+      reviewerAgentId: REVIEWER_AGENT,
+      outcome: "escalated_to_human",
+      justification: "taste-critical, needs human eyes",
+    });
+
+    expect(verdict.id).toBeDefined();
+
+    // Approval was created with the right type + payload shape.
+    expect(approvalsService.create).toHaveBeenCalledTimes(1);
+    expect(approvalsService.create.mock.calls[0]![0]).toBe(COMPANY_ID);
+    expect(approvalsService.create.mock.calls[0]![1]).toMatchObject({
+      type: "verdict_escalation",
+      requestedByAgentId: REVIEWER_AGENT,
+      status: "pending",
+      payload: {
+        type: "verdict_escalation",
+        issueId: ISSUE_ID,
+        justification: "taste-critical, needs human eyes",
+      },
+    });
+
+    // Issue↔approval link was created.
+    expect(issueApprovalsService.link).toHaveBeenCalledTimes(1);
+    expect(issueApprovalsService.link).toHaveBeenCalledWith(
+      ISSUE_ID,
+      APPROVAL_ID,
+      expect.objectContaining({ agentId: REVIEWER_AGENT }),
+    );
+
+    // Activity log: verdict_recorded + escalated_to_human.
+    const escalations = mockLogActivity.mock.calls.filter(
+      (c) => c[1]?.action === "escalated_to_human",
+    );
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]![1]).toMatchObject({
+      details: { approvalId: APPROVAL_ID, issueId: ISSUE_ID },
+    });
+  });
+
+  it("does NOT auto-create approval when deps are not provided (back-compat)", async () => {
+    const { db, queueSelect } = makeDb();
+    queueSelect([
+      { id: ISSUE_ID, companyId: COMPANY_ID, assigneeAgentId: ASSIGNEE_AGENT, assigneeUserId: null },
+    ]);
+
+    // No deps passed.
+    const svc = verdictsService(db as any);
+
+    const verdict = await svc.create({
+      companyId: COMPANY_ID,
+      entityType: "issue",
+      issueId: ISSUE_ID,
+      reviewerAgentId: REVIEWER_AGENT,
+      outcome: "escalated_to_human",
+      justification: "no deps wired",
+    });
+    expect(verdict.id).toBeDefined();
+
+    // Only the verdict_recorded activity, no escalated_to_human.
+    const escalations = mockLogActivity.mock.calls.filter(
+      (c) => c[1]?.action === "escalated_to_human",
+    );
+    expect(escalations).toHaveLength(0);
+  });
+
+  it("does NOT auto-create approval for non-escalated outcomes (passed)", async () => {
+    const { db, queueSelect } = makeDb();
+    queueSelect([
+      { id: ISSUE_ID, companyId: COMPANY_ID, assigneeAgentId: ASSIGNEE_AGENT, assigneeUserId: null },
+    ]);
+
+    const approvalsService = { create: vi.fn() };
+    const issueApprovalsService = { link: vi.fn() };
+
+    const svc = verdictsService(db as any, {
+      approvalsService: approvalsService as any,
+      issueApprovalsService: issueApprovalsService as any,
+    });
+
+    await svc.create({
+      companyId: COMPANY_ID,
+      entityType: "issue",
+      issueId: ISSUE_ID,
+      reviewerAgentId: REVIEWER_AGENT,
+      outcome: "passed",
+    });
+
+    expect(approvalsService.create).not.toHaveBeenCalled();
+    expect(issueApprovalsService.link).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -213,6 +213,8 @@ export {
   type PluginBridgeErrorCode,
   // AgentDash: goals-eval-hitl
   VERDICT_OUTCOMES,
+  VERDICT_INDEXED_OUTCOMES,
+  VERDICT_COVERED_OUTCOMES,
   VERDICT_CLOSING_OUTCOMES,
   VERDICT_ENTITY_TYPES,
   FEATURE_FLAG_KEYS,
@@ -220,6 +222,8 @@ export {
   COS_REVIEW_DEFAULTS,
   COS_CARD_KINDS_GOALS_EVAL_HITL,
   type VerdictOutcome,
+  type VerdictIndexedOutcome,
+  type VerdictCoveredOutcome,
   type VerdictClosingOutcome,
   type VerdictEntityType,
   type ActivityLogActionGoalsEvalHitl,
