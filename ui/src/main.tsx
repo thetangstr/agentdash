@@ -28,7 +28,12 @@ initPluginBridge(React, ReactDOM);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js");
+    navigator.serviceWorker.register("/sw.js").catch((err) => {
+      // Closes #165: surface registration failures so they aren't silently
+      // swallowed (permissions, network, missing /sw.js). Offline capability
+      // is best-effort; the app still loads if registration fails.
+      console.error("ServiceWorker registration failed:", err);
+    });
   });
 }
 
