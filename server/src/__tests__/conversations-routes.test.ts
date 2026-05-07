@@ -173,10 +173,11 @@ describe.sequential("conversation routes", () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ id: conversationId, title: "Company Inbox" });
       expect(mockConversationService.create).not.toHaveBeenCalled();
-      expect(mockConversationService.addParticipant).toHaveBeenCalledWith(conversationId, userId, "owner");
+      expect(mockConversationService.addParticipant).not.toHaveBeenCalled();
+      expect(mockConversationService.findByCompany).toHaveBeenCalledWith(companyId, { title: "Company Inbox" });
     });
 
-    it("creates a company inbox conversation when missing", async () => {
+    it("creates a company inbox conversation when no titled inbox exists", async () => {
       mockConversationService.findByCompany.mockResolvedValue(null);
       mockConversationService.create.mockResolvedValue({
         id: conversationId,
@@ -197,6 +198,7 @@ describe.sequential("conversation routes", () => {
         userId,
         title: "Company Inbox",
       });
+      expect(mockConversationService.findByCompany).toHaveBeenCalledWith(companyId, { title: "Company Inbox" });
       expect(mockConversationService.addParticipant).toHaveBeenCalledWith(conversationId, userId, "owner");
     });
 

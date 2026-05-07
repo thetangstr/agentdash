@@ -15,6 +15,8 @@ import {
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 
+const COMPANY_INBOX_TITLE = "Company Inbox";
+
 export function conversationRoutes(db: Db) {
   const router = Router();
   const svc = conversationService(db);
@@ -60,15 +62,15 @@ export function conversationRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
-    let conversation = await svc.findByCompany(companyId);
+    let conversation = await svc.findByCompany(companyId, { title: COMPANY_INBOX_TITLE });
     if (!conversation) {
       conversation = await svc.create({
         companyId,
         userId: req.actor.userId,
-        title: "Company Inbox",
+        title: COMPANY_INBOX_TITLE,
       });
+      await svc.addParticipant(conversation.id, req.actor.userId, "owner");
     }
-    await svc.addParticipant(conversation.id, req.actor.userId, "owner");
     res.json(conversation);
   });
 
