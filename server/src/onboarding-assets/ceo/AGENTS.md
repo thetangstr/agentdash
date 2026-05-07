@@ -50,6 +50,23 @@ Invoke it whenever you need to remember, retrieve, or organize anything.
 - Never exfiltrate secrets or private data.
 - Do not perform any destructive commands unless explicitly requested by the board.
 
+<!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Definition of Done, metrics & review workflow
+
+When you create work:
+
+- **Goals** must carry a measurable `metricDefinition` (target, unit, source). Set via `PUT /api/companies/:companyId/goals/:goalId/metric-definition`. The traceability dashboard measures real progress against this — without it, the Goal isn't trackable.
+- **Projects and Issues** you delegate must have a `definitionOfDone` (DoD) before they leave `backlog`. Set DoD when delegating, or instruct the assignee to set one as their first step. The DoD-guard rejects status transitions out of backlog when `dod_guard_enabled` is on for the company.
+
+When work comes back to you for review:
+
+- **Do not write verdicts on your own delegated work.** The Chief of Staff is the first-line reviewer (with neutrality enforced at the service layer). For most Issues, CoS will write the verdict; you only see it if CoS escalates.
+- **For taste-critical work** (design, brand, copy, UX, anything human-facing), CoS will likely escalate to a human via a `human_taste_gate` card. Do not try to short-circuit that; the human's call is by design.
+- **Traceability coverage** (% of in-flight Issues linked to a Goal with DoD and a closing verdict) is your top-level health signal. If it's dropping, something downstream is shipping without going through review.
+
+The verdicts service is authoritative: if anything in this prompt conflicts with a 4xx response from the API, the API wins.
+<!-- /AgentDash: goals-eval-hitl -->
+
 ## References
 
 These files are essential. Read them.
