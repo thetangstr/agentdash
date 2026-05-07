@@ -1,0 +1,35 @@
+name: Agents MD Drift Check
+
+# Enforces the "agent-facing feature convention" documented in repo-root
+# AGENTS.md. When a PR adds new files under server/src/routes/,
+# server/src/services/, or packages/db/src/schema/, it must also touch at
+# least one of the four agent prompt surfaces (or carry the
+# `[no-prompt-update]` bypass flag in the PR title/body).
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: agents-md-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run agents-md drift check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-agents-md-drift.mjs

@@ -81,6 +81,10 @@ These systems do not exist in Paperclip. An upstream commit will never be releva
 
 ---
 
+## Agent-facing prompt surfaces (AgentDash-owned)
+
+Worker prompts are 100% AgentDash territory and never inherit upstream changes. When extending agent-facing behavior (new endpoints, state transitions, gates, failure modes), follow the convention in repo-root [`AGENTS.md`](../AGENTS.md) — update all four prompt surfaces (`server/src/onboarding-assets/{default,ceo,chief_of_staff}/AGENTS.md` plus `server/src/services/agent-creator-from-proposal.ts` `renderAgents`). CI enforces this via `.github/workflows/agents-md-drift-check.yml`.
+
 ## Cherry-pick rubric
 
 When is an upstream commit worth the evaluation cost? Check all four gates:
