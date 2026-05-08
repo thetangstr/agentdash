@@ -1059,6 +1059,10 @@ export const ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL = [
   "dod_set",
   "metric_updated",
   "reviewer_hired",
+  // AgentDash (issue #174): emitted by materializeOnboardingGoals when CoS
+  // turns the captured {shortTerm, longTerm} interview answers into rows
+  // in the goals table during the onboarding `materializing` phase.
+  "goal_created_from_onboarding",
 ] as const;
 export type ActivityLogActionGoalsEvalHitl =
   (typeof ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL)[number];

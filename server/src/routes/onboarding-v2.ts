@@ -17,6 +17,8 @@ import {
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
+import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
+import { logger } from "../middleware/logger.js";
 import {
   FIXED_QUESTIONS,
   type AgentPlanProposalV1Payload,
@@ -224,6 +226,27 @@ export function onboardingV2Routes(db: Db) {
     const allAgents = await agents.list(companyId);
     const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
     const reportsToAgentId = cos?.id ?? null;
+
+    // AgentDash (issue #174): materialize the captured onboarding goals
+    // ({shortTerm, longTerm}) into the goals table so the user sees them on
+    // /goals immediately. Idempotent on (conversationId, ownerAgentId), so
+    // a retry won't duplicate rows. Failures are logged but never block
+    // the materialization phase — the user's UX matters more than 100%
+    // goal materialization, and CoS can retry from the next turn.
+    if (cos) {
+      try {
+        await materializeOnboardingGoals({ db })({
+          conversationId,
+          companyId,
+          ownerAgentId: cos.id,
+        });
+      } catch (err) {
+        logger.error(
+          { err, conversationId, companyId, cosAgentId: cos.id },
+          "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
+        );
+      }
+    }
 
     const instructions = agentInstructionsService();
     const createdAgentIds: string[] = [];
