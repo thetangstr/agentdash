@@ -73,6 +73,7 @@ import {
   type RunLivenessClassificationInput,
 } from "./run-liveness.js";
 import { logActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
+import { agentInstructionRefreshService } from "./agent-instruction-refresh.js";
 import {
   buildWorkspaceReadyComment,
   cleanupExecutionWorkspaceArtifacts,
@@ -2170,6 +2171,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     environmentRuntime,
   });
   const workspaceOperationsSvc = workspaceOperationService(db);
+  const instructionRefreshSvc = agentInstructionRefreshService({ db });
   const activeRunExecutions = new Set<string>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
@@ -4918,6 +4920,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const failedRun = await getRun(runId);
       if (failedRun) await releaseIssueExecutionAndPromote(failedRun);
       return;
+    }
+
+    // AgentDash: agent-instruction-refresh — refresh stale named blocks in the
+    // agent's bundled AGENTS.md before this tick's adapter dispatch. Wrapped in
+    // try/catch so a refresh failure never blocks an execution: a stale-but-
+    // working bundle is strictly better than failing the run.
+    try {
+      await instructionRefreshSvc.refreshIfStale(agent.id);
+    } catch (err) {
+      logger.warn(
+        {
+          agentId: agent.id,
+          companyId: agent.companyId,
+          runId: run.id,
+          err,
+        },
+        "agent instruction refresh failed; proceeding with existing bundle",
+      );
     }
 
     const runtime = await ensureRuntimeState(agent);

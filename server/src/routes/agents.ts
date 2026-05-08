@@ -32,6 +32,7 @@ import {
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import {
+  agentInstructionRefreshService,
   agentService,
   agentInstructionsService,
   accessService,
@@ -165,6 +166,7 @@ export function agentRoutes(
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
   const instructions = agentInstructionsService();
+  const instructionRefresh = agentInstructionRefreshService({ db });
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
@@ -2368,6 +2370,35 @@ export function agentRoutes(
 
     res.json(result.bundle);
   });
+
+  // AgentDash: agent-instruction-refresh — manual refresh routes for cases
+  // where the next tick is too far away. The heartbeat hook already refreshes
+  // on every dispatch; these endpoints exist for board-driven force-refresh.
+  router.post(
+    "/companies/:companyId/agents/:agentId/refresh-instructions",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const agentId = req.params.agentId as string;
+      assertCompanyAccess(req, companyId);
+      const existing = await svc.getById(agentId);
+      if (!existing || existing.companyId !== companyId) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      const result = await instructionRefresh.refreshIfStale(agentId);
+      res.json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/agents/refresh-instructions",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const results = await instructionRefresh.refreshAllForCompany(companyId);
+      res.json({ companyId, results });
+    },
+  );
 
   router.patch("/agents/:id", validate(updateAgentSchema), async (req, res) => {
     const id = req.params.id as string;

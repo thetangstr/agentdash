@@ -1063,6 +1063,10 @@ export const ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL = [
   // turns the captured {shortTerm, longTerm} interview answers into rows
   // in the goals table during the onboarding `materializing` phase.
   "goal_created_from_onboarding",
+  // Emitted by agent-instruction-refresh-service when an agent's bundled
+  // AGENTS.md drifts from the AgentDash-owned named blocks in source and the
+  // service patches it back in place.
+  "instructions_refreshed",
 ] as const;
 export type ActivityLogActionGoalsEvalHitl =
   (typeof ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL)[number];
