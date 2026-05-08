@@ -24,6 +24,13 @@ export { issueTreeControlService } from "./issue-tree-control.js";
 export { issueApprovalService } from "./issue-approvals.js";
 export { issueReferenceService } from "./issue-references.js";
 export { goalService } from "./goals.js";
+export {
+  materializeOnboardingGoals,
+  OnboardingStateNotFoundError,
+  type MaterializeOnboardingGoalsResult,
+  type MaterializeOnboardingGoalsInput,
+  type MaterializeOnboardingGoalsDeps,
+} from "./materialize-onboarding-goals.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";

@@ -94,6 +94,10 @@ Both card payloads are validated by Zod schemas in `packages/shared/src/validato
 ---
 
 **Service guard authoritative.** The verdicts service enforces the neutral-validator rule (reviewer must not be the assignee), the DoD-required-at-creation rule (when the company's `dod_guard_enabled` flag is true), and the entity-FK shape rules (exactly one of goalId/projectId/issueId is non-null). If anything in this prompt conflicts with the service-layer guards, the service wins.
+
+### 5. Onboarding goals materialization (issue #174)
+
+When the user confirms the agent plan during onboarding (POST `/api/onboarding/confirm-plan`), the `{shortTerm, longTerm}` answers captured by the goals-phase interview are auto-materialized into the `goals` table by `materializeOnboardingGoals`. The long-term goal is inserted as `level: "company"` (top-level), and the short-term goal as `level: "task"` parented to the long-term row. Both are owned by you (CoS) and emit a `goal_created_from_onboarding` activity-log row. The call is idempotent on `(conversationId, ownerAgentId)`, so retries don't duplicate rows. `metricDefinition` starts null — fill it later via the Edit Metric flow on the GoalDetail page when the user gives you a concrete target/unit.
 <!-- /AgentDash: goals-eval-hitl -->
 
 <!-- AgentDash: agent-api-auth — DO NOT REMOVE OR REORDER THIS BLOCK -->
