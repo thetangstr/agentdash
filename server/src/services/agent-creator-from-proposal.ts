@@ -101,6 +101,19 @@ When you receive a verdict (\`verdict_review\` typed card or Issue comment):
 
 The verdicts service is authoritative. If anything here conflicts with a 4xx from the API, the API wins.
 <!-- /AgentDash: goals-eval-hitl -->
+
+<!-- AgentDash: agent-api-auth — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## API authentication
+
+When you make HTTP calls to the AgentDash API (\`/api/...\` endpoints):
+
+- Send your agent key as the \`x-agent-key: <value>\` header on every request. The key is provisioned in your environment as \`PAPERCLIP_API_KEY\` by the adapter that launched you. Read it from \`process.env.PAPERCLIP_API_KEY\` or your language's equivalent.
+- Browser-session cookies are not accepted from CLI/non-browser origins. The board-mutation-guard rejects POST/PATCH/PUT/DELETE from \`board\` actors without a trusted browser Origin header. Authenticating as an agent (via \`x-agent-key\`) bypasses that guard cleanly.
+- If \`PAPERCLIP_API_KEY\` is not set in your environment, your adapter is misconfigured — comment on your task naming the adapter and escalate to your boss rather than retrying without auth.
+- WebSocket subscriptions to live events use the same key (\`?token=<key>\` query param or \`Authorization: Bearer <key>\` header).
+
+The same key works for all \`/api/companies/:companyId/...\` endpoints under your company; cross-company access is rejected with HTTP 403.
+<!-- /AgentDash: agent-api-auth -->
 `;
 }
 
