@@ -17,6 +17,7 @@ import {
   deepInterviewEngine,
   type EngineLLMDispatch,
 } from "../services/deep-interview-engine.js";
+import { HttpError } from "../errors.js";
 import type {
   DimensionScores,
   OntologySnapshot,
@@ -589,6 +590,98 @@ describe("deepInterviewEngine.nextTurn — malformed trailer", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// LLM output validation
+// ---------------------------------------------------------------------------
+
+const FALLBACK_QUESTION_RE = /Sorry.*trouble.*formulating/i;
+
+function makeNextTurnInput(overrides?: Record<string, unknown>) {
+  return {
+    scope: "cos_onboarding" as const,
+    scopeRefId: "ref-1234",
+    userId: "user-1",
+    companyId: "company-1",
+    initialIdea: "X",
+    adapter: "claude_api" as const,
+    ...overrides,
+  };
+}
+
+describe("deepInterviewEngine.nextTurn — LLM output validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("empty visibleBody + null trailer → fallback question, nothing malformed stored", async () => {
+    const fake = makeFakeDb(makeStateRow());
+    // LLM returns only whitespace (visibleBody will be empty after trim).
+    const llm: EngineLLMDispatch = vi.fn().mockResolvedValue("   ");
+    const engine = deepInterviewEngine({ db: fake.db, dispatchLLM: llm });
+
+    const result = await engine.nextTurn(makeNextTurnInput());
+
+    expect(result.kind).toBe("question");
+    if (result.kind === "question") {
+      expect(result.question).toMatch(FALLBACK_QUESTION_RE);
+    }
+    // The persisted transcript should also hold the fallback, not the empty string.
+    const updates = fake.getUpdateCalls();
+    const lastUpdate = updates[updates.length - 1]!;
+    const stored = lastUpdate.transcript as TranscriptTurn[];
+    expect(stored[stored.length - 1]!.question).toMatch(FALLBACK_QUESTION_RE);
+  });
+
+  it("oversized visibleBody (3000 chars) → fallback question", async () => {
+    const fake = makeFakeDb(makeStateRow());
+    const hugeBody = "A".repeat(3000);
+    const llm: EngineLLMDispatch = vi.fn().mockResolvedValue(hugeBody);
+    const engine = deepInterviewEngine({ db: fake.db, dispatchLLM: llm });
+
+    const result = await engine.nextTurn(makeNextTurnInput());
+
+    expect(result.kind).toBe("question");
+    if (result.kind === "question") {
+      expect(result.question).toMatch(FALLBACK_QUESTION_RE);
+      expect(result.question.length).toBeLessThan(3000);
+    }
+  });
+
+  it("visibleBody containing <script> tag → fallback question", async () => {
+    const fake = makeFakeDb(makeStateRow());
+    const injected = 'What is your goal? <script>alert("xss")</script>';
+    const llm: EngineLLMDispatch = vi.fn().mockResolvedValue(injected);
+    const engine = deepInterviewEngine({ db: fake.db, dispatchLLM: llm });
+
+    const result = await engine.nextTurn(makeNextTurnInput());
+
+    expect(result.kind).toBe("question");
+    if (result.kind === "question") {
+      expect(result.question).toMatch(FALLBACK_QUESTION_RE);
+      expect(result.question).not.toContain("<script");
+    }
+  });
+
+  it("valid visibleBody flows through unchanged", async () => {
+    const fake = makeFakeDb(makeStateRow());
+    const goodQuestion = "What outcomes matter most to you?";
+    const llm: EngineLLMDispatch = vi.fn().mockResolvedValue(
+      trailerJson({
+        ambiguity_score: 0.7,
+        dimensions: { goal: 0.4, constraints: 0.2, criteria: 0.2, context: 0.1 },
+      }).replace("Here is my next question. What outcomes matter most?", goodQuestion),
+    );
+    const engine = deepInterviewEngine({ db: fake.db, dispatchLLM: llm });
+
+    const result = await engine.nextTurn(makeNextTurnInput());
+
+    expect(result.kind).toBe("question");
+    if (result.kind === "question") {
+      expect(result.question).toBe(goodQuestion);
+    }
+  });
+});
+
 describe("deepInterviewEngine.crystallize", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -656,10 +749,13 @@ describe("deepInterviewEngine.crystallize", () => {
     expect(updates[updates.length - 1]!.status).toBe("crystallized");
   });
 
-  it("throws when state row does not exist", async () => {
+  it("throws HttpError 404 when state row does not exist", async () => {
     const fake = makeFakeDb(null);
     const engine = deepInterviewEngine({ db: fake.db, dispatchLLM: vi.fn() });
-    await expect(engine.crystallize("nope")).rejects.toThrow(/not found/);
+    const err = await engine.crystallize("nope").catch((e) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(404);
+    expect((err as HttpError).message).toMatch(/not found/i);
   });
 });
 

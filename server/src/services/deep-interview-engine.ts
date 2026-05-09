@@ -38,6 +38,7 @@ import type {
   TranscriptTurn,
 } from "@paperclipai/shared/deep-interview";
 import { logger } from "../middleware/logger.js";
+import { notFound } from "../errors.js";
 import {
   composePrompt,
   type DeepInterviewStateRow as PromptStateRow,
@@ -322,6 +323,48 @@ function toPromptRow(row: DeepInterviewStateRow): PromptStateRow {
 }
 
 // ---------------------------------------------------------------------------
+// LLM output validation
+// ---------------------------------------------------------------------------
+
+const MAX_QUESTION_LENGTH = 2000;
+const INJECTION_PATTERNS = [
+  "<script",
+  "<iframe",
+  "javascript:",
+  "data:text/html",
+];
+
+/**
+ * Validate the visible body of an LLM response before it reaches the UI.
+ *
+ * Returns { valid: true, body } when the text is safe to display, or
+ * { valid: false, reason } when it fails a guard. The caller should substitute
+ * a safe fallback question and log the malformed response — do NOT throw.
+ */
+function validateVisibleBody(
+  raw: string,
+): { valid: true; body: string } | { valid: false; reason: string } {
+  const body = raw.trim();
+  if (body.length === 0) {
+    return { valid: false, reason: "empty" };
+  }
+  if (body.length > MAX_QUESTION_LENGTH) {
+    return { valid: false, reason: `too_long:${body.length}` };
+  }
+  for (const pattern of INJECTION_PATTERNS) {
+    if (body.toLowerCase().includes(pattern)) {
+      return { valid: false, reason: `injection_marker:${pattern}` };
+    }
+  }
+  // Reject anything that looks like raw HTML structure: 3+ '<' characters
+  // anywhere in the body (e.g. stacked tags like "<div><span><p>").
+  if ((body.match(/</g) ?? []).length >= 3) {
+    return { valid: false, reason: "html_structure" };
+  }
+  return { valid: true, body };
+}
+
+// ---------------------------------------------------------------------------
 // Service factory
 // ---------------------------------------------------------------------------
 
@@ -437,7 +480,26 @@ export function deepInterviewEngine(deps: EngineDeps): DeepInterviewEngine {
       messages: composed.messages,
     });
 
-    const { visibleBody, trailer } = parseJsonTrailer(raw);
+    const { visibleBody: rawVisibleBody, trailer } = parseJsonTrailer(raw);
+
+    // Validate visible body before it touches state or the UI.
+    const fallbackQuestion =
+      "Sorry — I had trouble formulating the next question. Could you tell me more about the previous topic?";
+    let visibleBody: string;
+    const validation = validateVisibleBody(rawVisibleBody);
+    if (!validation.valid) {
+      logger.warn(
+        {
+          stateId: row.id,
+          reason: validation.reason,
+          preview: rawVisibleBody.slice(0, 500),
+        },
+        "[deep-interview-engine] malformed LLM output rejected; using fallback question",
+      );
+      visibleBody = fallbackQuestion;
+    } else {
+      visibleBody = validation.body;
+    }
 
     // 3. Update state from trailer (or fall through with previous values).
     const dims: DimensionScores =
@@ -533,7 +595,7 @@ export function deepInterviewEngine(deps: EngineDeps): DeepInterviewEngine {
       .where(eq(deepInterviewStates.id, stateId))
       .limit(1);
     if (rows.length === 0) {
-      throw new Error(`[deep-interview-engine] state ${stateId} not found`);
+      throw notFound(`Deep interview state not found: ${stateId}`);
     }
     const row = rows[0]!;
 
