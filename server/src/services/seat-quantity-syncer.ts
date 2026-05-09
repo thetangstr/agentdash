@@ -4,6 +4,8 @@ interface Deps {
   counts: { humans: (companyId: string) => Promise<number> };
 }
 
+// AgentDash (#157): pro_past_due is intentionally excluded — seat syncing only
+// runs for companies actively on Pro (not past-due).
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
 export function seatQuantitySyncer(deps: Deps) {
