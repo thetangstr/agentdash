@@ -1051,6 +1051,16 @@ export const FEATURE_FLAG_KEYS = {
   DOD_GUARD: "dod_guard_enabled",
 } as const;
 
+// AgentDash (#157): billing-infra activity log action names.
+// Written by entitlement-sync.ts when Stripe sends payment failure or
+// trial-end warning events. Kept separate from goals-eval-hitl to avoid
+// coupling billing and eval audit trails.
+export const ACTIVITY_LOG_ACTIONS_BILLING = [
+  "stripe.payment_failed",
+  "stripe.trial_will_end",
+] as const;
+export type ActivityLogActionBilling = (typeof ACTIVITY_LOG_ACTIONS_BILLING)[number];
+
 /** Activity log action values written by the goals-eval-hitl services. */
 export const ACTIVITY_LOG_ACTIONS_GOALS_EVAL_HITL = [
   "verdict_recorded",

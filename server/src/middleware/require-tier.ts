@@ -8,6 +8,8 @@ interface Deps {
   };
 }
 
+// AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
+// do not get Pro features until they resolve the payment issue.
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
 /**

@@ -31,6 +31,8 @@ import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { isBillingDisabled } from "../middleware/require-tier.js";
 
+// AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
+// do not get Pro features until they resolve the payment issue.
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
 // AgentDash (AGE-55): per-route options. Mirrors the env-var-driven flag
