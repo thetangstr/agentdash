@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companyContext } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
+import { badRequest } from "../errors.js";
 import { retrieveContext, type AssessmentInput } from "./assess-retrieval.js";
 import {
   serializeContext,
@@ -51,6 +52,76 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
   Agriculture: ["agriculture", "farming", "crop", "livestock"],
 };
 
+/**
+ * AgentDash: SSRF guard — rejects internal/private URLs before any fetch().
+ * Checks protocol, localhost, RFC1918, link-local, and cloud metadata endpoints.
+ * Does NOT perform DNS resolution; static IP/hostname checks only.
+ *
+ * @returns the parsed URL if safe
+ * @throws HttpError 400 with code UNSAFE_FETCH_URL if the URL is dangerous
+ */
+export function isSafeFetchUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    // Try parsing as-is first; if that fails (bare domain with no scheme),
+    // retry with https:// prepended. This ensures non-http schemes like
+    // ftp://, file://, javascript: are caught by the protocol check below
+    // rather than silently being treated as hostnames.
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      parsed = new URL(`https://${rawUrl}`);
+    }
+  } catch {
+    throw badRequest("Invalid URL", { code: "UNSAFE_FETCH_URL", host: rawUrl });
+  }
+
+  // Only allow http and https
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host: parsed.hostname });
+  }
+
+  const host = parsed.hostname.toLowerCase();
+
+  // Reject localhost variants
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+  }
+
+  // Reject GCP metadata endpoint
+  if (host === "metadata.google.internal") {
+    throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+  }
+
+  // Parse IPv4 dotted-decimal addresses
+  const ipv4Parts = host.split(".");
+  if (ipv4Parts.length === 4 && ipv4Parts.every((p) => /^\d+$/.test(p))) {
+    const [a, b] = ipv4Parts.map(Number);
+    // 10.0.0.0/8
+    if (a === 10) throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+    // 172.16.0.0/12
+    if (a === 172 && b >= 16 && b <= 31) throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+    // 192.168.0.0/16
+    if (a === 192 && b === 168) throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+    // 169.254.0.0/16 — AWS/Azure link-local / IMDS
+    if (a === 169 && b === 254) throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+  }
+
+  // Reject IPv6 link-local (fe80::/10), ULA (fc00::/7), and loopback (::1)
+  // Browsers/Node normalise bracket notation: [fe80::1] → fe80::1 in hostname
+  const ipv6 = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    ipv6 === "::1" ||
+    ipv6.startsWith("fe80:") ||
+    ipv6.startsWith("fc") ||
+    ipv6.startsWith("fd")
+  ) {
+    throw badRequest("Unsafe URL", { code: "UNSAFE_FETCH_URL", host });
+  }
+
+  return parsed;
+}
+
 function detectIndustry(text: string): string {
   const lower = text.toLowerCase();
   const scores: { industry: string; count: number }[] = [];
@@ -68,6 +139,8 @@ function extractSummary(text: string): string {
 }
 
 async function fetchWebsite(url: string): Promise<string> {
+  // AgentDash: SSRF guard — throws 400 HttpError for unsafe URLs
+  isSafeFetchUrl(url);
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": "AgentDash-Assess/1.0" },

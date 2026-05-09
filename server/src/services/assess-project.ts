@@ -11,7 +11,7 @@
  * Reuses the existing MiniMax wiring (ASSESS_MINIMAX_API_KEY, etc.) — no new
  * env vars or LLM providers.
  */
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companyContext } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
@@ -325,25 +325,36 @@ export function assessProjectService(db: Db) {
           ),
         );
 
+      // AgentDash: batch-fetch all input rows in one query (fixes N+1 — was 1 query per assessment)
+      const slugs = rows.map((r) => r.key.slice(PROJECT_KEY_PREFIX.length)).filter(Boolean);
+      const inputKeys = slugs.map((s) => PROJECT_INPUT_KEY_PREFIX + s);
+      const inputRows = inputKeys.length > 0
+        ? await db
+            .select()
+            .from(companyContext)
+            .where(
+              and(
+                eq(companyContext.companyId, companyId),
+                eq(companyContext.contextType, "agent_research"),
+                inArray(companyContext.key, inputKeys),
+              ),
+            )
+        : [];
+
+      const inputByKey = new Map<string, string>();
+      for (const ir of inputRows) {
+        if (ir.value) inputByKey.set(ir.key, ir.value);
+      }
+
       const out: { slug: string; projectName: string; createdAt: string }[] = [];
       for (const row of rows) {
         const slug = row.key.slice(PROJECT_KEY_PREFIX.length);
         if (!slug) continue;
-        const inputRow = await db
-          .select()
-          .from(companyContext)
-          .where(
-            and(
-              eq(companyContext.companyId, companyId),
-              eq(companyContext.contextType, "agent_research"),
-              eq(companyContext.key, PROJECT_INPUT_KEY_PREFIX + slug),
-            ),
-          )
-          .limit(1);
         let projectName = slug;
-        if (inputRow[0]?.value) {
+        const rawInput = inputByKey.get(PROJECT_INPUT_KEY_PREFIX + slug);
+        if (rawInput) {
           try {
-            const parsed = JSON.parse(inputRow[0].value) as { projectName?: string; intake?: { projectName?: string } };
+            const parsed = JSON.parse(rawInput) as { projectName?: string; intake?: { projectName?: string } };
             projectName = parsed.projectName ?? parsed.intake?.projectName ?? slug;
           } catch {
             // ignore
