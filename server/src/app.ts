@@ -243,6 +243,22 @@ export async function createApp(
   // checkout/portal/webhook do real work; otherwise those endpoints return 503
   // "Billing not configured" and the requireTier middleware bypasses caps.
   const stripeKey = process.env.STRIPE_SECRET_KEY;
+  // AgentDash: security — when Stripe is enabled, STRIPE_WEBHOOK_SECRET must
+  // be set. An empty string causes constructEvent to accept all signatures,
+  // allowing forged webhook events. Fail fast at startup rather than silently
+  // accepting all webhooks. Obtain the value via:
+  //   stripe listen --print-secret
+  if (stripeKey) {
+    const webhookSecret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+    if (!webhookSecret) {
+      throw new Error(
+        "STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set. " +
+          "An empty or missing webhook secret allows forged Stripe webhook events. " +
+          "Set it to the signing secret for your webhook endpoint. " +
+          "To get your local secret, run: stripe listen --print-secret",
+      );
+    }
+  }
   let stripeSdk: any = stripeStubForDev();
   if (stripeKey) {
     const { default: Stripe } = await import("stripe");
