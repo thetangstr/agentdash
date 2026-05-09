@@ -57,6 +57,12 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   });
 
   router.post("/webhook", async (req, res) => {
+    // AgentDash: security — defensive guard so an accidentally empty webhook
+    // secret at runtime never silently accepts all signatures. The startup
+    // check in app.ts should prevent this, but belt-and-suspenders here.
+    if (!cfg.webhookSecret.trim()) {
+      return res.status(503).json({ error: "Webhook secret not configured" });
+    }
     const sig = req.header("stripe-signature") ?? "";
     let event;
     try {
