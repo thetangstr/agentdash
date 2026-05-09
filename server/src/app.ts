@@ -10,6 +10,12 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
+// AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
+import {
+  createAuthRateLimiter,
+  createBillingRateLimiter,
+  createDefaultApiRateLimiter,
+} from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
@@ -177,13 +183,16 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
-  app.use("/api/auth", authRoutes(db));
+  // AgentDash (#160): tighter rate limit on /api/auth/* (brute-force vector).
+  app.use("/api/auth", createAuthRateLimiter(), authRoutes(db));
   if (opts.betterAuthHandler) {
     // AgentDash (AGE-104 follow-up): block free-mail signups on Pro at the
     // signup endpoint itself, not at company-creation time.
     app.use(
       corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
     );
+    // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
+    app.use("/api/auth", createAuthRateLimiter());
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
   }
   app.use(llmRoutes(db));
@@ -193,6 +202,9 @@ export async function createApp(
 
   // Mount API routes
   const api = Router();
+  // AgentDash (#160): default-tier rate limit covering everything under /api
+  // (excluding /api/auth which has a tighter limiter mounted on `app` directly).
+  api.use(createDefaultApiRateLimiter());
   api.use(boardMutationGuard());
   api.use(
     "/health",
@@ -264,7 +276,17 @@ export async function createApp(
     const { default: Stripe } = await import("stripe");
     stripeSdk = new Stripe(stripeKey);
   }
-  api.use("/billing", billingRoutes(db, {
+  // AgentDash (#160): tighter rate limit on /billing/* (abuse vector). The
+  // /billing/webhook subpath is hit by Stripe's servers, not users, and must
+  // bypass — Stripe can send bursts during retries / high-traffic events.
+  const billingLimiter = createBillingRateLimiter();
+  api.use(
+    "/billing",
+    (req, res, next) => {
+      if (req.path === "/webhook") return next();
+      return billingLimiter(req, res, next);
+    },
+    billingRoutes(db, {
     stripe: stripeSdk,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
     proPriceId: process.env.STRIPE_PRO_PRICE_ID ?? "",
