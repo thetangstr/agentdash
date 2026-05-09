@@ -55,6 +55,11 @@ import {
 } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
+// AgentDash: billing-trio (#151, #153)
+import { requireTierFor } from "../middleware/require-tier.js";
+import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
+import { seatQuantitySyncer } from "../services/seat-quantity-syncer.js";
+import { companyService } from "../services/companies.js";
 import { collectReachableInterfaceHosts } from "../runtime-api.js";
 import {
   accessService,
@@ -2426,6 +2431,89 @@ async function probeInviteResolutionTarget(
   }
 }
 
+// AgentDash: billing-trio (#151) — Inline tier-cap check for the join-request
+// approve route. The route can approve either a human or an agent join, so the
+// requireTierFor middleware (which is fixed to "invite" or "hire" at mount
+// time) can't be used. This helper applies the same shape and codes as the
+// middleware. Sends a 402 to `res` when the cap is exceeded.
+async function assertJoinRequestTierAllowed(
+  deps: ReturnType<typeof buildRequireTierDeps>,
+  companyId: string,
+  requestType: string,
+  res: import("express").Response,
+): Promise<void> {
+  const billingDisabled =
+    process.env.AGENTDASH_BILLING_DISABLED === "true" || !process.env.STRIPE_SECRET_KEY;
+  if (billingDisabled) return;
+  const company = await deps.getCompany(companyId);
+  if (company.planTier === "pro_trial" || company.planTier === "pro_active") return;
+  if (requestType === "human") {
+    const humans = await deps.counts.humans(companyId);
+    if (humans >= 1) {
+      res.status(402).json({
+        code: "seat_cap_exceeded",
+        message: "Free workspaces are limited to 1 user. Upgrade to Pro to invite teammates.",
+      });
+      return;
+    }
+  } else if (requestType === "agent") {
+    const agents = await deps.counts.agents(companyId);
+    if (agents >= 1) {
+      res.status(402).json({
+        code: "agent_cap_exceeded",
+        message: "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents.",
+      });
+      return;
+    }
+  }
+}
+
+// AgentDash: billing-trio (#153) — Stripe seat-quantity syncer wired with the
+// real Stripe SDK when STRIPE_SECRET_KEY is set, otherwise a no-op shim that
+// preserves the service contract (idempotent, side-effect free in dev).
+function createSeatSyncerForAccessRoutes(db: Db) {
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    return {
+      onMembershipChanged: async (_companyId: string) => {
+        /* no-op: billing disabled */
+      },
+    };
+  }
+  const companies = companyService(db);
+  const counts = {
+    humans: async (companyId: string) => {
+      const row = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(companyMemberships)
+        .where(
+          and(
+            eq(companyMemberships.companyId, companyId),
+            eq(companyMemberships.principalType, "user"),
+            eq(companyMemberships.status, "active"),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      return row?.count ?? 0;
+    },
+  };
+  // Lazy-load Stripe to avoid pulling the SDK into dev/test bundles.
+  let stripeInstance: any = null;
+  const getStripe = async () => {
+    if (stripeInstance) return stripeInstance;
+    const { default: Stripe } = await import("stripe");
+    stripeInstance = new Stripe(stripeKey);
+    return stripeInstance;
+  };
+  return {
+    onMembershipChanged: async (companyId: string) => {
+      const stripe = await getStripe();
+      const syncer = seatQuantitySyncer({ stripe, companies, counts } as any);
+      await syncer.onMembershipChanged(companyId);
+    },
+  };
+}
+
 export function accessRoutes(
   db: Db,
   opts: {
@@ -2440,6 +2528,9 @@ export function accessRoutes(
   const access = accessService(db);
   const boardAuth = boardAuthService(db);
   const agents = agentService(db);
+  // AgentDash: billing-trio (#151, #153)
+  const tierDeps = buildRequireTierDeps(db);
+  const seatSyncer = createSeatSyncerForAccessRoutes(db);
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
@@ -2888,6 +2979,8 @@ export function accessRoutes(
 
   router.post(
     "/companies/:companyId/invites",
+    // AgentDash: billing-trio (#151) — Free workspaces capped at 1 human.
+    requireTierFor("invite", tierDeps),
     validate(createCompanyInviteSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
@@ -3733,6 +3826,12 @@ export function accessRoutes(
         .then((rows) => rows[0] ?? null);
       if (!invite) throw notFound("Invite not found");
 
+      // AgentDash: billing-trio (#151) — Free workspaces enforce 1 human + 1
+      // agent. The middleware can't run on this route because the cap to apply
+      // depends on the join-request type, so we apply it inline here.
+      await assertJoinRequestTierAllowed(tierDeps, companyId, existing.requestType, res);
+      if (res.headersSent) return;
+
       let createdAgentId: string | null = existing.createdAgentId ?? null;
       if (existing.requestType === "human") {
         if (!existing.requestingUserId)
@@ -3747,6 +3846,11 @@ export function accessRoutes(
           membershipRole,
           "active"
         );
+        // AgentDash: billing-trio (#153) — sync Stripe seat quantity after the
+        // membership lands. Failures must not block the membership write.
+        seatSyncer.onMembershipChanged(companyId).catch((err) => {
+          logger.error({ err, companyId }, "seat-quantity sync after join approval failed");
+        });
         const grants = humanJoinGrantsFromDefaults(
           invite.defaultsPayload as Record<string, unknown> | null,
           membershipRole
@@ -4242,6 +4346,12 @@ export function accessRoutes(
         reassignment: req.body.reassignment ?? null,
       });
       if (!result) throw notFound("Member not found");
+
+      // AgentDash: billing-trio (#153) — sync Stripe seat quantity after a
+      // member archive. Failures must not block the archive write.
+      seatSyncer.onMembershipChanged(companyId).catch((err) => {
+        logger.error({ err, companyId }, "seat-quantity sync after member archive failed");
+      });
 
       await logActivity(db, {
         companyId,

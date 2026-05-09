@@ -879,6 +879,54 @@ export async function startServer(): Promise<StartedServer> {
   });
   const stopVerdictApprovalBridge = verdictApprovalBridgeSvc.startWatcher();
 
+  // AgentDash: billing-trio (#152) — schedule periodic reconcile of expired
+  // pro_trial companies. Bypassed when billing is disabled or no Stripe key
+  // is configured (matches require-tier middleware semantics).
+  const billingReconcileDisabled =
+    process.env.AGENTDASH_BILLING_DISABLED === "true" || !process.env.STRIPE_SECRET_KEY;
+  let billingReconcileHandle: ReturnType<typeof setInterval> | null = null;
+  if (billingReconcileDisabled) {
+    logger.info(
+      { reason: process.env.STRIPE_SECRET_KEY ? "AGENTDASH_BILLING_DISABLED" : "no STRIPE_SECRET_KEY" },
+      "[billing] billingReconcile schedule skipped",
+    );
+  } else {
+    const reconcileIntervalMs = (() => {
+      const raw = process.env.AGENTDASH_BILLING_RECONCILE_INTERVAL_MS;
+      if (!raw) return 3_600_000;
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 3_600_000;
+    })();
+    const {
+      billingReconcile,
+      companyService,
+      entitlementSync,
+      stripeWebhookLedger,
+    } = await import("./services/index.js");
+    const { default: Stripe } = await import("stripe");
+    const stripeSdk = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+    const reconcileCompanies = companyService(db as any);
+    const reconcileSync = entitlementSync({
+      companies: {
+        findByStripeSubscriptionId: (id) => reconcileCompanies.findByStripeSubscriptionId(id),
+        findByStripeCustomerId: (id) => reconcileCompanies.findByStripeCustomerId(id),
+        update: (id, patch) => reconcileCompanies.update(id, patch),
+      },
+      ledger: stripeWebhookLedger(db as any),
+    });
+    const reconciler = billingReconcile({
+      companies: { listExpiredTrials: () => reconcileCompanies.listExpiredTrials() },
+      stripe: stripeSdk,
+      sync: { onSubscriptionUpdated: reconcileSync.onSubscriptionUpdated },
+    });
+    logger.info({ intervalMs: reconcileIntervalMs }, "[billing] billingReconcile schedule enabled");
+    billingReconcileHandle = setInterval(() => {
+      void reconciler.run().catch((err) => {
+        logger.error({ err }, "[billing] billingReconcile.run failed");
+      });
+    }, reconcileIntervalMs);
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
@@ -947,6 +995,15 @@ export async function startServer(): Promise<StartedServer> {
         stopVerdictApprovalBridge();
       } catch (err) {
         logger.error({ err }, "failed to stop verdict approval bridge cleanly");
+      }
+
+      // AgentDash: billing-trio (#152)
+      if (billingReconcileHandle) {
+        try {
+          clearInterval(billingReconcileHandle);
+        } catch (err) {
+          logger.error({ err }, "failed to clear billingReconcile interval");
+        }
       }
 
       const telemetryClient = getTelemetryClient();
