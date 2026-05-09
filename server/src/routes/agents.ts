@@ -31,6 +31,9 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
+// AgentDash: billing-trio (#151)
+import { requireTierFor } from "../middleware/require-tier.js";
+import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import {
   agentInstructionRefreshService,
   agentService,
@@ -156,6 +159,8 @@ export function agentRoutes(
   const router = Router();
   const svc = agentService(db);
   const access = accessService(db);
+  // AgentDash: billing-trio (#151)
+  const tierDeps = buildRequireTierDeps(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -1764,7 +1769,7 @@ export function agentRoutes(
     res.json(state);
   });
 
-  router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
+  router.post("/companies/:companyId/agent-hires", requireTierFor("hire", tierDeps), validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
     const sourceIssueIds = parseSourceIssueIds(req.body);
@@ -1937,7 +1942,7 @@ export function agentRoutes(
     res.status(201).json({ agent, approval });
   });
 
-  router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
+  router.post("/companies/:companyId/agents", requireTierFor("hire", tierDeps), validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
 
