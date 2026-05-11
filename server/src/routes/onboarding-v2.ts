@@ -18,6 +18,8 @@ import { unauthorized, badRequest, notFound } from "../errors.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
+import { dispatchLLM } from "../services/dispatch-llm.js";
+import { parseTrailer } from "../services/cos-replier.js";
 import { logger } from "../middleware/logger.js";
 import {
   FIXED_QUESTIONS,
@@ -329,16 +331,140 @@ ${kpis || "- (none captured)"}
   });
 
   // POST /api/onboarding/revise-plan
-  // Phase F (revision loop) is deferred — see
-  // docs/superpowers/specs/2026-05-04-cos-onboarding-conversation-design.md.
-  // Stub returns 501 so the UI's "Let me revise" button has a wired target.
+  // Phase 3 of the CoS-onboarding-conversation spec: the user pushes back
+  // on the latest plan; CoS rewrites the plan to incorporate the feedback
+  // and posts a new agent_plan_proposal_v1 card.
+  //
+  // Closes #210. The user's revision text can be free-form ("drop the QA,
+  // swap finance for marketing"); we frame it as a delta on the existing
+  // plan rather than starting from scratch so the LLM preserves the parts
+  // that weren't called out.
   router.post("/revise-plan", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    res.status(501).json({
-      error: "not_implemented",
-      message: "Plan revision loop is not implemented yet (Phase F).",
+    const { conversationId, revisionText } = req.body as {
+      conversationId?: string;
+      revisionText?: string;
+    };
+    if (!conversationId || typeof conversationId !== "string") {
+      throw badRequest("conversationId required");
+    }
+    if (!revisionText || typeof revisionText !== "string" || !revisionText.trim()) {
+      throw badRequest("revisionText required");
+    }
+
+    const convoRows = await db
+      .select()
+      .from(assistantConversations)
+      .where(eq(assistantConversations.id, conversationId));
+    const convo = convoRows[0];
+    if (!convo) throw notFound("Conversation not found");
+    const companyId = convo.companyId;
+
+    // Find the latest plan card. Anchoring on the most recent one lets the
+    // user iterate N times — each revision builds on the previous proposal.
+    const planRows = await db
+      .select()
+      .from(assistantMessages)
+      .where(
+        and(
+          eq(assistantMessages.conversationId, conversationId),
+          eq(assistantMessages.cardKind, "agent_plan_proposal_v1"),
+        ),
+      )
+      .orderBy(desc(assistantMessages.createdAt))
+      .limit(1);
+    const planMsg = planRows[0];
+    if (!planMsg) throw notFound("No plan card found to revise");
+    const priorPayload = planMsg.cardPayload as AgentPlanProposalV1Payload | null;
+    if (!priorPayload || !Array.isArray(priorPayload.agents)) {
+      throw badRequest("Latest plan card has no agents payload to revise");
+    }
+
+    // CoS authors all messages here (matches the rest of onboarding-v2).
+    const allAgents = await agents.list(companyId);
+    const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
+    if (!cos) throw notFound("No Chief of Staff agent found for this company");
+
+    // Compose the revision prompt. The model gets the prior plan as JSON
+    // plus the user's free-text delta, and is told to emit a new
+    // agent_plan_proposal_v1 payload that integrates the feedback.
+    const priorPlanJson = JSON.stringify(priorPayload, null, 2);
+    const userRevision = revisionText.trim();
+    const system = `You are the Chief of Staff for AgentDash. The user reviewed a plan you proposed and wants to revise it. Apply their feedback as a DELTA on the prior plan — preserve parts they did not call out, change only what they pushed back on.
+
+PRIOR PLAN (as JSON):
+${priorPlanJson}
+
+USER FEEDBACK:
+${userRevision}
+
+In the visible body (before the JSON), give a SHORT one-line preamble like "Updated based on your feedback:" followed by a 1-3 sentence summary of what you changed and why. Then list the revised team in one line per agent. End with "Want me to set them up, or revise again?"
+
+Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 payload:
+
+\`\`\`json
+{
+  "plan": {
+    "rationale": "...",
+    "agents": [
+      { "role": "engineering_lead", "name": "Ellie", "adapterType": "claude_local", "responsibilities": ["..."], "kpis": ["..."] }
+    ],
+    "alignmentToShortTerm": "...",
+    "alignmentToLongTerm": "..."
+  }
+}
+\`\`\`
+
+Keep the same JSON shape as the prior plan. Use 2-5 agents. Each agent's adapterType must be one of: "claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local".
+
+No greetings. No markdown headings outside the JSON block.`;
+
+    // We don't need conversation history here — the prior plan IS the
+    // context. Pass a single user message with the revision so the model
+    // doesn't have to scan back through chat for it.
+    const text = await dispatchLLM({
+      system,
+      messages: [{ role: "user", content: userRevision }],
+    });
+    const { body, trailer } = parseTrailer(text);
+    const visibleBody = body.length > 0 ? body : "Updated based on your feedback.";
+
+    const newPlan = (trailer as { plan?: unknown })?.plan;
+    if (!isAgentPlanPayload(newPlan)) {
+      logger.warn(
+        { conversationId, raw: text.slice(0, 300) },
+        "[revise-plan] LLM reply missing or malformed plan payload",
+      );
+      throw Object.assign(
+        new Error(
+          "Could not revise the plan; the model returned an unparseable response. Try rephrasing your feedback.",
+        ),
+        { statusCode: 502 },
+      );
+    }
+
+    // Post the visible preamble FIRST, then the new card. Mirrors the
+    // cos-replier plan-emit ordering so the timeline reads naturally.
+    await conversations.postMessage({
+      conversationId,
+      authorKind: "agent",
+      authorId: cos.id,
+      body: visibleBody,
+    });
+    const cardMsg = await conversations.postMessage({
+      conversationId,
+      authorKind: "agent",
+      authorId: cos.id,
+      body: "",
+      cardKind: "agent_plan_proposal_v1",
+      cardPayload: newPlan as unknown as Record<string, unknown>,
+    });
+
+    res.json({
+      cardMessageId: cardMsg?.id ?? null,
+      plan: newPlan,
     });
   });
 
@@ -422,4 +548,19 @@ async function defaultStubProposer(_transcript: InterviewTurn[]) {
     rationale:
       "Stub fallback proposal — wire real LLM when ANTHROPIC_API_KEY is configured.",
   };
+}
+
+// Local type guard for the revise-plan handler. Mirrors the unexported
+// isPlanPayload in cos-replier.ts; kept inline to avoid widening that
+// module's public surface for a single caller.
+function isAgentPlanPayload(value: unknown): value is AgentPlanProposalV1Payload {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rationale === "string" &&
+    Array.isArray(v.agents) &&
+    v.agents.length > 0 &&
+    typeof v.alignmentToShortTerm === "string" &&
+    typeof v.alignmentToLongTerm === "string"
+  );
 }

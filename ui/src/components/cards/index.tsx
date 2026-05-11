@@ -51,7 +51,7 @@ export function CardRenderer({
         <AgentPlanProposal
           payload={payload as any}
           onConfirm={context.onProposalConfirm ?? (() => {})}
-          onRevise={() => context.onProposalReject?.()}
+          onRevise={(text) => context.onProposalReject?.(text)}
         />
       );
     // AgentDash: goals-eval-hitl
