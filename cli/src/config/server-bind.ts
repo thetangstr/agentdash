@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { networkInterfaces } from "node:os";
 import {
   ALL_INTERFACES_BIND_HOST,
   LOOPBACK_BIND_HOST,
@@ -12,6 +13,30 @@ import {
 import type { AuthConfig, ServerConfig } from "./schema.js";
 
 const TAILSCALE_DETECT_TIMEOUT_MS = 3000;
+
+/**
+ * Detect a non-loopback, non-Tailscale LAN address on the host.
+ * Returns the first non-loopback IPv4 address found, or undefined if
+ * the machine only has loopback interfaces.
+ */
+export function detectLanBindHost(): string | undefined {
+  try {
+    const interfaces = networkInterfaces();
+    for (const [name, addrs] of Object.entries(interfaces)) {
+      // Skip Tailscale interfaces
+      if (name.startsWith("tailscale")) continue;
+      if (!addrs) continue;
+      for (const addr of addrs) {
+        if (addr.family === "IPv4" && !addr.internal) {
+          return addr.address;
+        }
+      }
+    }
+  } catch {
+    // Fallback: return undefined
+  }
+  return undefined;
+}
 
 type BaseServerInput = {
   port: number;
