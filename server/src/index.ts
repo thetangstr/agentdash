@@ -927,6 +927,52 @@ export async function startServer(): Promise<StartedServer> {
     }, reconcileIntervalMs);
   }
 
+  // AgentDash (#207): heartbeatDigest scheduler — daily re-engagement email
+  // per onboarding spec §5. Mirrors the billingReconcile pattern above:
+  // - Disabled by default in dev (opt-in via AGENTDASH_DIGEST_ENABLED=true)
+  // - Skipped if RESEND_API_KEY is unset (sendEmail no-ops anyway, but
+  //   skipping avoids the daily log spam from each user iteration)
+  // - Default cadence: 24h. Override with AGENTDASH_DIGEST_INTERVAL_MS for
+  //   tests / manual exercise.
+  // - Per-user timezone targeting is a follow-up; v1 ticks once per UTC day.
+  let heartbeatDigestHandle: ReturnType<typeof setInterval> | null = null;
+  const digestEnabled =
+    process.env.AGENTDASH_DIGEST_ENABLED === "true" && !!process.env.RESEND_API_KEY?.trim();
+  if (!digestEnabled) {
+    logger.info(
+      {
+        reason: !process.env.RESEND_API_KEY?.trim()
+          ? "no RESEND_API_KEY"
+          : "AGENTDASH_DIGEST_ENABLED not set",
+      },
+      "[digest] heartbeatDigest schedule skipped",
+    );
+  } else {
+    const digestIntervalMs = (() => {
+      const raw = process.env.AGENTDASH_DIGEST_INTERVAL_MS;
+      if (!raw) return 86_400_000; // 24h
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 86_400_000;
+    })();
+    const { heartbeatDigest } = await import("./services/index.js");
+    const {
+      digestUserAdapter,
+      digestActivityAdapter,
+      digestEmailAdapter,
+    } = await import("./services/heartbeat-digest-adapters.js");
+    const digester = heartbeatDigest({
+      email: digestEmailAdapter(),
+      activity: digestActivityAdapter(db as any),
+      users: digestUserAdapter(db as any),
+    });
+    logger.info({ intervalMs: digestIntervalMs }, "[digest] heartbeatDigest schedule enabled");
+    heartbeatDigestHandle = setInterval(() => {
+      void digester.run().catch((err) => {
+        logger.error({ err }, "[digest] heartbeatDigest.run failed");
+      });
+    }, digestIntervalMs);
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
@@ -1003,6 +1049,15 @@ export async function startServer(): Promise<StartedServer> {
           clearInterval(billingReconcileHandle);
         } catch (err) {
           logger.error({ err }, "failed to clear billingReconcile interval");
+        }
+      }
+
+      // AgentDash (#207): heartbeat digest scheduler
+      if (heartbeatDigestHandle) {
+        try {
+          clearInterval(heartbeatDigestHandle);
+        } catch (err) {
+          logger.error({ err }, "failed to clear heartbeatDigest interval");
         }
       }
 
