@@ -448,9 +448,17 @@ Analyze the gaps in the answers above and generate 2-4 targeted follow-up questi
       let parsed: ProjectClarifyResult;
       try {
         parsed = JSON.parse(extractJsonFromText(raw));
-      } catch {
-        logger.warn({ raw }, "Failed to parse follow-up JSON; returning empty");
-        parsed = { rephrased: "", questions: [] };
+      } catch (err) {
+        // Closes #162: fail loud instead of silently returning empty questions.
+        // Unlike the clarify path (~line 144) we have no usable fallback set
+        // for follow-ups — they're contextual to the user's prior answers, so
+        // a static template would be misleading. Bubble a 502 so the UI can
+        // tell the user generation failed and offer a retry.
+        logger.error({ err, raw }, "Failed to parse follow-up JSON");
+        throw Object.assign(
+          new Error("Could not generate follow-up questions; the model returned an unparseable response."),
+          { statusCode: 502 },
+        );
       }
 
       return {
