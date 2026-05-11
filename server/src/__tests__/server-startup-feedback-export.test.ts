@@ -165,6 +165,16 @@ vi.mock("../services/index.js", () => ({
   routineService: vi.fn(() => ({
     tickScheduledTriggers: vi.fn(async () => ({ triggered: 0 })),
   })),
+  verdictsService: vi.fn((_db: unknown) => ({
+    create: vi.fn(async () => ({ id: "verdict-1" })),
+    coverage: vi.fn(async () => ({ totalInFlight: 0, coveredInFlight: 0, coverageRatio: 0 })),
+    setGoalMetricDefinition: vi.fn(async () => ({})),
+    setProjectDoD: vi.fn(async () => ({})),
+    setIssueDoD: vi.fn(async () => ({})),
+  })),
+  verdictApprovalBridge: vi.fn(() => ({
+    startWatcher: vi.fn(() => vi.fn()),
+  })),
 }));
 
 vi.mock("../storage/index.js", () => ({

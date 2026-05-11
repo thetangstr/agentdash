@@ -35,7 +35,7 @@ import {
   type BindMode,
 } from "@paperclipai/shared";
 import { configExists, readConfig, resolveConfigPath, writeConfig } from "../config/store.js";
-import { buildPresetServerConfig, detectTailnetBindHost } from "../config/server-bind.js";
+import { buildPresetServerConfig, detectTailnetBindHost, detectLanBindHost } from "../config/server-bind.js";
 import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
 import { mergePaperclipEnvEntries, resolvePaperclipEnvFile, ensureAgentJwtSecret } from "../config/env.js";
 import { openUrlInBrowser } from "../utils/open-url.js";
@@ -95,7 +95,7 @@ interface SetupAllOpts extends CommonOpts {
  * what `agentdash onboard` produces in quickstart-loopback mode but skips
  * every prompt.
  */
-function buildDefaultConfig(): PaperclipConfig {
+function buildDefaultConfig(preferredBind?: "loopback" | "lan" | "tailnet"): PaperclipConfig {
   const instanceId = resolvePaperclipInstanceId();
   // Auto-detect Tailscale at config-write time. If Tailscale is running
   // we want the install to "just work" over the tailnet hostname out of
@@ -104,9 +104,27 @@ function buildDefaultConfig(): PaperclipConfig {
   // runtime fallback in server/src/config.ts (PR #116) safely degrades
   // tailnet → loopback if Tailscale stops running between sessions.
   const tailnetHost = detectTailnetBindHost();
-  const bind: "loopback" | "tailnet" = tailnetHost ? "tailnet" : "loopback";
+  const lanHost = detectLanBindHost();
+
+  // Determine bind mode: tailnet > lan > loopback (in priority order)
+  // unless user explicitly chose one via preferredBind.
+  let bind: "loopback" | "lan" | "tailnet";
+  if (preferredBind) {
+    bind = preferredBind;
+  } else if (tailnetHost) {
+    bind = "tailnet";
+  } else if (lanHost) {
+    // No Tailscale, but there is a LAN address — use loopback by default
+    // for safety (local_trusted mode). User can re-run `agentdash setup server`
+    // to switch to lan if they want network access.
+    bind = "loopback";
+  } else {
+    bind = "loopback";
+  }
+
   const allowedHostnames = ["localhost", "127.0.0.1"];
   if (tailnetHost) allowedHostnames.push(tailnetHost);
+  if (lanHost) allowedHostnames.push(lanHost);
   const { server, auth } = buildPresetServerConfig(bind, {
     port: 3100,
     allowedHostnames,
@@ -291,12 +309,48 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
 
   const configPath = resolveConfigPath(opts.config);
   const hadConfig = configExists(configPath);
+
+  // Detect available network interfaces for bind-mode decision
+  const tailnetHost = detectTailnetBindHost();
+  const lanHost = detectLanBindHost();
+  const hasLan = !!lanHost;
+
+  let preferredBind: "loopback" | "lan" | "tailnet" | undefined;
+  if (!hadConfig && !opts.yes && hasLan && !tailnetHost) {
+    // Non-Tailscale machine with a LAN interface — ask the user if they want
+    // network access (lan) or local-only (loopback).
+    const picked = await p.select({
+      message: "How should the server be accessible?",
+      options: [
+        {
+          value: "loopback",
+          label: "Local only",
+          hint: pc.dim("Only accessible from this machine (127.0.0.1)"),
+        },
+        {
+          value: "lan",
+          label: "Network",
+          hint: pc.dim(`Accessible from other machines on your LAN (${lanHost})`),
+        },
+      ],
+      initialValue: "loopback",
+    });
+    if (p.isCancel(picked)) {
+      p.cancel("Setup cancelled.");
+      return;
+    }
+    preferredBind = picked as "loopback" | "lan";
+  }
+
   if (!hadConfig) {
-    const fresh = buildDefaultConfig();
+    const fresh = buildDefaultConfig(preferredBind);
     writeConfig(fresh, configPath);
-    const bindLabel = fresh.server.bind === "tailnet"
-      ? `tailnet (${fresh.server.host})`
-      : "loopback (127.0.0.1)";
+    const bindLabel =
+      fresh.server.bind === "tailnet"
+        ? `tailnet (${fresh.server.host})`
+        : fresh.server.bind === "lan"
+          ? `lan (${fresh.server.host})`
+          : "loopback (127.0.0.1)";
     p.log.info(`Wrote a fresh config at ${pc.dim(configPath)} — bind=${pc.cyan(bindLabel)}, embedded Postgres, local storage.`);
   }
 
