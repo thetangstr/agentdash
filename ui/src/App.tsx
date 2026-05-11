@@ -59,6 +59,7 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSConversation } from "./pages/CoSConversation";
+import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
 import { Landing as MarketingLanding } from "./marketing/pages/Landing";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
@@ -351,6 +352,7 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
+      <ServerUnreachableOverlay />
     </>
   );
 }
