@@ -17,8 +17,9 @@ import {
 } from "@paperclipai/db";
 import { logger } from "../../middleware/logger.js";
 import { redactSensitiveText } from "../../redaction.js";
-import { buildHealDiagnosisPrompt, type HealDiagnosis, type DiagnosisCategory } from "./diagnosis.js";
+import { buildHealDiagnosisPrompt, parseHealDiagnosis, type HealDiagnosis, type DiagnosisCategory } from "./diagnosis.js";
 import { executeHealFix, type HealFixResult } from "./fixer.js";
+import { anthropicLLM } from "../anthropic-llm.js";
 
 // ---------- config ----------
 
@@ -85,6 +86,8 @@ type ScannedRun = {
 // ---------- service factory ----------
 
 export function runHealerService(db: Db) {
+  // In-flight healing promises — prevents concurrent scans from healing the same run.
+  const inFlightHeals = new Map<string, Promise<{ fixed: boolean; action: string }>>();
   // ---------- helpers ----------
 
   async function getDailyHealCount(): Promise<number> {
@@ -244,6 +247,7 @@ export function runHealerService(db: Db) {
    * Diagnose a single run using the LLM.
    */
   async function diagnose(run: ScannedRun): Promise<HealDiagnosis | null> {
+    const recentAttempts = await getRecentHealAttempts(run.id);
     const prompt = buildHealDiagnosisPrompt({
       runId: run.id,
       agentId: run.agentId,
@@ -253,14 +257,25 @@ export function runHealerService(db: Db) {
       errorMessage: run.error ? redactSensitiveText(run.error) : null,
       status: run.status,
       outputTail: run.outputTail ? redactSensitiveText(run.outputTail) : "",
-      recentHealAttempts: [], // TODO: pass actual recent attempts
+      recentHealAttempts: recentAttempts.map((a) => ({
+        category: (a.diagnosis as HealDiagnosis).category as DiagnosisCategory,
+        fixType: a.fixType,
+        succeeded: a.succeeded,
+      })),
     });
 
     try {
-      // TODO: Wire up actual LLM call via dispatch-llm.ts or similar
-      // For now, return a placeholder — implementation below will use the real LLM
-      logger.info({ runId: run.id, promptLength: prompt.length }, "run_healer: diagnosis placeholder");
-      return null; // Will be replaced with real LLM call
+      const response = await anthropicLLM({
+        system: "You are a run-healing assistant. Analyze the run context and respond with JSON only.",
+        messages: [{ role: "user" as const, content: prompt }],
+      });
+
+      const diagnosis = parseHealDiagnosis(response);
+      if (!diagnosis) {
+        logger.warn({ runId: run.id }, "run_healer: failed to parse LLM diagnosis response");
+        return null;
+      }
+      return diagnosis;
     } catch (err) {
       logger.error({ runId: run.id, error: err }, "run_healer: diagnosis failed");
       return null;
@@ -357,7 +372,17 @@ export function runHealerService(db: Db) {
     let skipped = 0;
 
     for (const run of eligible) {
-      const result = await healRun(run);
+      // Skip if already healing this run in a concurrent scan cycle
+      if (inFlightHeals.has(run.id)) {
+        await logEvent("skipped", run.id, { reason: "concurrent_heal_in_progress" });
+        skipped++;
+        continue;
+      }
+
+      const healPromise = healRun(run);
+      inFlightHeals.set(run.id, healPromise);
+      const result = await healPromise;
+      inFlightHeals.delete(run.id);
       if (result.fixed) fixed++;
       else skipped++;
     }
