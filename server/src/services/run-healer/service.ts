@@ -19,7 +19,7 @@ import { logger } from "../../middleware/logger.js";
 import { redactSensitiveText } from "../../redaction.js";
 import { buildHealDiagnosisPrompt, parseHealDiagnosis, type HealDiagnosis, type DiagnosisCategory } from "./diagnosis.js";
 import { executeHealFix, type HealFixResult } from "./fixer.js";
-import { anthropicLLM } from "../anthropic-llm.js";
+import { dispatchLLM } from "../dispatch-llm.js";
 
 // ---------- config ----------
 
@@ -265,14 +265,22 @@ export function runHealerService(db: Db) {
     });
 
     try {
-      const response = await anthropicLLM({
+      // Closes #217: route diagnosis through dispatchLLM so the run healer
+      // uses the user's configured adapter (AGENTDASH_DEFAULT_ADAPTER) rather
+      // than hard-coding Anthropic. dispatchLLM falls back to the API stub
+      // when no provider is configured, and the parser drops malformed JSON
+      // to UNKNOWN below — both safe for the healer's bounded surface.
+      const response = await dispatchLLM({
         system: "You are a run-healing assistant. Analyze the run context and respond with JSON only.",
         messages: [{ role: "user" as const, content: prompt }],
       });
 
       const diagnosis = parseHealDiagnosis(response);
       if (!diagnosis) {
-        logger.warn({ runId: run.id }, "run_healer: failed to parse LLM diagnosis response");
+        logger.warn(
+          { runId: run.id, rawHead: response.slice(0, 200) },
+          "run_healer: failed to parse LLM diagnosis response — skipping (no fix applied)",
+        );
         return null;
       }
       return diagnosis;
