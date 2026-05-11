@@ -1,0 +1,180 @@
+name: Upstream Paperclip Digest
+
+# Runs scripts/upstream-digest.sh against latest upstream/master and opens a PR
+# with the new digest file. Read-only — never cherry-picks; the PR is the
+# trigger for human triage per doc/UPSTREAM-POLICY.md.
+#
+# Cadence: daily at 09:00 UTC (~02:00 PT). Manual trigger also available.
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the script can compute upstream..HEAD correctly.
+          fetch-depth: 0
+          # Ensure we're on the default branch (main) regardless of how cron
+          # delivered the workflow ref.
+          ref: main
+
+      - name: Add upstream remote
+        run: |
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream https://github.com/paperclipai/paperclip.git
+          fi
+          git remote -v
+
+      - name: Run upstream digest script
+        id: digest
+        run: |
+          DATE_STAMP="$(date -u +%Y-%m-%d)"
+          OUT_FILE="doc/upstream-digests/${DATE_STAMP}.md"
+          echo "out_file=$OUT_FILE" >> "$GITHUB_OUTPUT"
+          echo "date_stamp=$DATE_STAMP" >> "$GITHUB_OUTPUT"
+
+          # The script is interactive only at the "Fetching upstream..." stderr
+          # line; everything else is silent or to the file. Capture stdout so we
+          # can pull the summary counts for the PR body.
+          bash scripts/upstream-digest.sh > /tmp/digest-stdout.log 2>&1 || {
+            echo "::error::upstream-digest.sh failed"
+            cat /tmp/digest-stdout.log
+            exit 1
+          }
+
+          # The script's last stdout line is the summary counts.
+          summary_line="$(tail -n 1 /tmp/digest-stdout.log)"
+          echo "summary=$summary_line" >> "$GITHUB_OUTPUT"
+
+          # Pull the worth-a-look count for label/PR-body decisions.
+          worth_count="$(echo "$summary_line" | sed -nE 's/.*Worth=([0-9]+).*/\1/p')"
+          worth_count="${worth_count:-0}"
+          echo "worth_count=$worth_count" >> "$GITHUB_OUTPUT"
+
+          if [ ! -f "$OUT_FILE" ]; then
+            echo "::warning::Expected digest file $OUT_FILE was not produced"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+      - name: Detect changes
+        id: changes
+        run: |
+          OUT_FILE="${{ steps.digest.outputs.out_file }}"
+
+          # Skip if today's digest existed already AND content is identical
+          # (e.g. workflow_dispatch re-run on the same UTC day with no new
+          # upstream commits).
+          if git diff --quiet -- "$OUT_FILE" && [ -z "$(git status --porcelain -- "$OUT_FILE")" ]; then
+            echo "No new digest content — nothing to PR."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update pull request
+        if: steps.changes.outputs.skip != 'true' && steps.digest.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          DATE_STAMP: ${{ steps.digest.outputs.date_stamp }}
+          WORTH_COUNT: ${{ steps.digest.outputs.worth_count }}
+          SUMMARY: ${{ steps.digest.outputs.summary }}
+          OUT_FILE: ${{ steps.digest.outputs.out_file }}
+        run: |
+          BRANCH="chore/upstream-digest-${DATE_STAMP}"
+
+          git config user.name "upstream-digest-bot"
+          git config user.email "upstream-digest-bot@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add "$OUT_FILE"
+          git commit -m "chore(upstream): daily digest for ${DATE_STAMP}"
+          git push --force origin "$BRANCH"
+
+          # Body labels react to the score so reviewers can triage at a glance.
+          if [ "$WORTH_COUNT" -gt 0 ]; then
+            TITLE="chore(upstream): digest ${DATE_STAMP} — ${WORTH_COUNT} commit(s) worth a look"
+            HEADER_NOTE="**${WORTH_COUNT} upstream commit(s) flagged as worth a look** per doc/UPSTREAM-POLICY.md."
+          else
+            TITLE="chore(upstream): digest ${DATE_STAMP} — receipt only (no action)"
+            HEADER_NOTE="No commits flagged as worth a look — this PR is the audit trail."
+          fi
+
+          BODY="$(cat <<EOF
+## Daily upstream digest — ${DATE_STAMP}
+
+${HEADER_NOTE}
+
+**Summary:** \`${SUMMARY}\`
+
+The digest file is at [\`${OUT_FILE}\`](../blob/${BRANCH}/${OUT_FILE}). It classifies every \`upstream/master\` commit ahead of \`main\` against the rubric in [\`doc/UPSTREAM-POLICY.md\`](../blob/main/doc/UPSTREAM-POLICY.md):
+
+- **Worth a look** — touches files we still inherit; review for cherry-pick
+- **Skip — agentdash-owned** — touches code we own; upstream has no fix here
+- **Skip — conflict-only wiring** — high-conflict files that are pure wiring
+- **Skip — other** — tests, docs, unrelated paths
+
+### How to act on this
+
+If a commit looks worth taking:
+\`\`\`sh
+git fetch upstream
+git cherry-pick <sha>
+pnpm -r typecheck && pnpm test:run && pnpm build
+# Then log the cherry-pick in doc/UPSTREAM-POLICY.md.
+\`\`\`
+
+If nothing looks worth taking, **merge or close this PR** as the receipt and move on.
+
+---
+🤖 Generated by \`.github/workflows/upstream-digest.yml\` (cron: 09:00 UTC daily)
+EOF
+)"
+
+          # Reuse an open PR for the same branch if one exists (e.g. manual
+          # re-run on the same day after the cron PR is already open).
+          existing_pr="$(
+            gh pr list --state open --head "$BRANCH" --json url,headRepositoryOwner \
+              --jq ".[] | select(.headRepositoryOwner.login == \"$REPO_OWNER\") | .url" |
+            head -n 1
+          )"
+
+          if [ -n "$existing_pr" ]; then
+            echo "Updating existing PR: $existing_pr"
+            gh pr edit "$existing_pr" --title "$TITLE" --body "$BODY"
+            pr_url="$existing_pr"
+          else
+            echo "Creating new PR..."
+            pr_url="$(gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "$TITLE" \
+              --body "$BODY")"
+            echo "Created: $pr_url"
+          fi
+
+          # Best-effort label tagging — repo may not have these labels yet, so
+          # don't fail the run if either is missing.
+          if [ "$WORTH_COUNT" -gt 0 ]; then
+            gh pr edit "$pr_url" --add-label "upstream-digest" 2>/dev/null || true
+            gh pr edit "$pr_url" --add-label "needs-review" 2>/dev/null || true
+          else
+            gh pr edit "$pr_url" --add-label "upstream-digest" 2>/dev/null || true
+            gh pr edit "$pr_url" --add-label "no-action-needed" 2>/dev/null || true
+          fi
