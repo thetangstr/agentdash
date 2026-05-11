@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { conversationsApi } from "../api/conversations";
+import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 
 export function CompanyInbox() {
@@ -12,6 +13,20 @@ export function CompanyInbox() {
     queryFn: () => conversationsApi.companyInbox(companyId!),
     enabled: !!companyId,
   });
+
+  // #209: feed the composer's @mention typeahead with the company's agents.
+  // Stale-while-revalidate (5min) is plenty — agents rarely change mid-chat.
+  const { data: agents } = useQuery({
+    queryKey: ["company-agents", companyId],
+    queryFn: () => agentsApi.list(companyId!),
+    enabled: !!companyId,
+    staleTime: 5 * 60 * 1000,
+  });
+  const agentDirectory = (agents ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    role: a.role,
+  }));
 
   if (!companyId || !selectedCompany) {
     return (
@@ -43,6 +58,7 @@ export function CompanyInbox() {
       <ChatPanel
         conversationId={conversation.id}
         companyId={companyId}
+        agentDirectory={agentDirectory}
         headerProps={{
           agentName: "Company Inbox",
           agentRole: `Chat with ${selectedCompany.name}'s CoS and route work into Paperclip objects.`,

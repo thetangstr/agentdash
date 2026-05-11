@@ -1,7 +1,9 @@
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
+import { agentsApi } from "../api/agents";
 import type { CardContext } from "../components/cards";
 
 interface BootstrapState {
@@ -104,12 +106,42 @@ export function CoSConversation() {
   };
 
   return (
+    <CoSConversationView
+      bootstrapped={bootstrapped}
+      cardContext={cardContext}
+    />
+  );
+}
+
+// Separate component so the agents-list useQuery hook is only mounted once we
+// have a real companyId; keeps hook order stable across the error/loading
+// branches above.
+function CoSConversationView({
+  bootstrapped,
+  cardContext,
+}: {
+  bootstrapped: BootstrapState;
+  cardContext: CardContext;
+}) {
+  // #209: feed the composer's @mention typeahead with the company's agents.
+  const { data: agents } = useQuery({
+    queryKey: ["company-agents", bootstrapped.companyId],
+    queryFn: () => agentsApi.list(bootstrapped.companyId),
+    staleTime: 5 * 60 * 1000,
+  });
+  const agentDirectory = (agents ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    role: a.role,
+  }));
+
+  return (
     <div className="fixed inset-0 flex flex-col">
       <ChatPanel
         conversationId={bootstrapped.conversationId}
         companyId={bootstrapped.companyId}
         cardContext={cardContext}
-        agentDirectory={[]}
+        agentDirectory={agentDirectory}
       />
     </div>
   );
