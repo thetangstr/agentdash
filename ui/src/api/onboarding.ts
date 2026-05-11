@@ -58,9 +58,14 @@ export const onboardingApi = {
       "/onboarding/confirm-plan",
       input,
     ),
-  // Phase F (revision loop) is not implemented yet — this returns 501.
+  // #210: Phase F revision loop — server posts the revised plan card via
+  // postMessage (clients receive it over WS) and returns the new card's
+  // payload + message ID for the caller's convenience.
   revisePlan: (input: { conversationId: string; revisionText: string }) =>
-    api.post<{ error: string; message: string }>("/onboarding/revise-plan", input),
+    api.post<{ cardMessageId: string | null; plan: unknown }>(
+      "/onboarding/revise-plan",
+      input,
+    ),
   // AgentDash (Phase F): the SPA calls this when the deep-interview engine
   // emits its `[deep-interview-ready]` marker on `/assess?onboarding=1`. The
   // server crystallizes the spec, advances the CoS phase, and returns the
