@@ -1,0 +1,93 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (e.g., v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: macos-latest
+            platform: darwin
+            arch: amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build CLI
+        run: |
+          cd cli
+          pnpm build
+
+      - name: Install pkg
+        run: npm install -g pkg@5
+
+      - name: Create binary
+        run: |
+          cd cli
+          # Get version from package.json
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+
+          # pkg doesn't support native ESM, so we need a workaround
+          # Create a simple wrapper that imports the CLI entry
+          cat > dist/wrapper.cjs << 'WRAPPER_EOF'
+          #!/usr/bin/env node
+          const { main } = require('./index.js');
+          main();
+          WRAPPER_EOF
+
+          pkg dist/wrapper.cjs \
+            --targets node20-${{ matrix.platform }}-${{ matrix.arch }} \
+            --output ../release/agentdash-${{ matrix.platform }}-${{ matrix.arch }} \
+            --no-bytecode \
+            --compress None
+
+          chmod +x ../release/agentdash-${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          file: release/agentdash-${{ matrix.platform }}-${{ matrix.arch }}
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

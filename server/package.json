@@ -1,14 +1,14 @@
 {
-  "name": "@paperclipai/server",
-  "version": "0.3.1",
+  "name": "@agentdash/server",
+  "version": "0.1.0",
   "license": "MIT",
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/thetangstr/agentdash",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/thetangstr/agentdash/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/thetangstr/agentdash",
     "directory": "server"
   },
   "type": "module",
