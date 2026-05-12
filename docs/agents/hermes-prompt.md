@@ -112,7 +112,7 @@ All 11 reviewed commits (2026-05-03 to 2026-05-05) were direct pushes to `main`.
 ### Git conventions
 
 - Branch from `origin/main`
-- Worktree path: `/Users/maxiaoer/workspace/agentdash_dev`
+- Worktree path: `${HERMES_WORKSPACE_ROOT}` (resolves to the local checkout; set this env var on the Hermes host once at provisioning time)
 - Commit message format: `<type>(<scope>): <short summary>`
 
   Body: issue link, what changed, why, tail of regression suite output
