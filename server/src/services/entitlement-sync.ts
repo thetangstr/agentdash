@@ -65,11 +65,21 @@ export function entitlementSync(deps: Deps) {
     return null;
   }
 
+  // AgentDash (#169): invoice.paid may fire without a subsequent
+  // subscription.updated due to Stripe's non-deterministic event ordering.
+  // Retrieve the subscription and refresh local billing state.
+  async function onInvoicePaid(inv: any) {
+    if (!deps.stripe) return;
+    if (!inv.subscription) return;
+    const sub = await deps.stripe.subscriptions.retrieve(inv.subscription);
+    await applyFromSubscription(sub);
+  }
+
   return {
     onSubscriptionCreated: applyFromSubscription,
     onSubscriptionUpdated: applyFromSubscription,
     onSubscriptionDeleted: applyFromSubscription,
-    onInvoicePaid: async (_inv: any) => { /* no-op; subscription.updated follows */ },
+    onInvoicePaid,
 
     dispatch: async (event: any) => {
       const recorded = await deps.ledger.record(event.id, event.type, event);
@@ -115,7 +125,12 @@ export function entitlementSync(deps: Deps) {
           return;
         }
 
+        // AgentDash (#169): delegate to onInvoicePaid to handle non-deterministic
+        // event ordering — invoice.paid may arrive before subscription.updated.
         case "invoice.paid":
+          if (obj) await onInvoicePaid(obj);
+          return;
+
         default:
           return;
       }
