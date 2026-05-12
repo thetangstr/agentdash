@@ -16,6 +16,7 @@ interface Deps {
   companies: CompaniesAdapter;
   ledger: LedgerAdapter;
   activityLog?: ActivityLogAdapter;
+  stripe?: any; // AgentDash (#169): used in onInvoicePaid to retrieve subscription
 }
 
 // AgentDash (#157): past_due maps to pro_past_due (NOT pro_active).
@@ -68,7 +69,15 @@ export function entitlementSync(deps: Deps) {
     onSubscriptionCreated: applyFromSubscription,
     onSubscriptionUpdated: applyFromSubscription,
     onSubscriptionDeleted: applyFromSubscription,
-    onInvoicePaid: async (_inv: any) => { /* no-op; subscription.updated follows */ },
+    onInvoicePaid: async (inv: any) => {
+      // AgentDash (#169): Stripe does not guarantee event ordering.
+      // invoice.paid may fire without a subsequent subscription.updated.
+      // Retrieve the subscription directly and refresh local billing state.
+      if (inv.subscription && deps.stripe) {
+        const sub = await deps.stripe.subscriptions.retrieve(inv.subscription);
+        await applyFromSubscription(sub);
+      }
+    },
 
     dispatch: async (event: any) => {
       const recorded = await deps.ledger.record(event.id, event.type, event);
