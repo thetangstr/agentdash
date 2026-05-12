@@ -1,0 +1,35 @@
+name: Hermes Prompt Drift Check
+
+# Asserts that when docs/agents/hermes-prompt.md is edited in a PR, the
+# corresponding runtime surface(s) are also edited (or the PR carries the
+# `[no-runtime-sync]` bypass flag). This closes the Directive-1 self-violation
+# called out in #257: the prompt claims to be synced to runtime surfaces, but
+# nothing enforced the claim.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: hermes-prompt-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Hermes prompt drift check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-hermes-prompt-drift.mjs

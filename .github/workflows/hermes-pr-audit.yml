@@ -1,0 +1,43 @@
+name: Hermes PR Audit
+
+# Enforces the directives in docs/agents/hermes-prompt.md on every PR.
+# The audit runs only when at least one commit in the PR is Hermes-authored
+# (commit author email matches Hermes identity, or commit body carries a
+# `Co-Authored-By: Hermes` trailer). Human/manual PRs are a no-op.
+#
+# Failure modes:
+#   D1 — scaffolding text in source / new route not wired into app.ts
+#   D2 — sensitive surface (auth, access, orchestrator, adapters, billing) touched
+#        without a test diff in the same PR
+#   D4 — patches/*.patch with absolute developer-local paths in headers
+#   D5 — PR body missing "## Regression suite" heading with non-empty content
+#
+# Bypass: include `[skip-hermes-audit]` (case-insensitive) in PR title or body.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: hermes-pr-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Hermes PR audit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-hermes-pr-audit.mjs
