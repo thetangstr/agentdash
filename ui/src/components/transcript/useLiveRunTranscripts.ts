@@ -100,7 +100,7 @@ export function useLiveRunTranscripts({
         .map((run) => {
           const logBytes = typeof run.logBytes === "number" ? run.logBytes : "";
           const lastOutputBytes = typeof run.lastOutputBytes === "number" ? run.lastOutputBytes : "";
-          return `${run.id}:${run.status}:${run.adapterType}:${run.hasStoredOutput === true ? "1" : "0"}:${logBytes}:${lastOutputBytes}`;
+          return `${run.id}:${run.status}:${run.adapterType}:${run.hasStoredOutput ? "1" : "0"}:${logBytes}:${lastOutputBytes}`;
         })
         .sort((a, b) => a.localeCompare(b))
         .join(","),
@@ -420,7 +420,7 @@ export function useLiveRunTranscripts({
     transcriptByRun,
     isInitialHydrating: normalizedRuns.some((run) => !hydratedRunIds.has(run.id)),
     hasOutputForRun(runId: string) {
-      return (chunksByRun.get(runId)?.length ?? 0) > 0 || runById.get(runId)?.hasStoredOutput === true;
+      return (chunksByRun.get(runId)?.length ?? 0) > 0 || runById.get(runId)?.hasStoredOutput;
     },
   };
 }

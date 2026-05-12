@@ -617,7 +617,7 @@ export function projectService(db: Db) {
         .orderBy(asc(projectWorkspaces.createdAt))
         .then((rows) => rows);
 
-      const shouldBePrimary = data.isPrimary === true || existing.length === 0;
+      const shouldBePrimary = data.isPrimary || existing.length === 0;
       const created = await db.transaction(async (tx) => {
         if (shouldBePrimary) {
           await tx
@@ -737,7 +737,7 @@ export function projectService(db: Db) {
       }
 
       const updated = await db.transaction(async (tx) => {
-        if (data.isPrimary === true) {
+        if (data.isPrimary) {
           await tx
             .update(projectWorkspaces)
             .set({ isPrimary: false, updatedAt: new Date() })
@@ -748,7 +748,7 @@ export function projectService(db: Db) {
               ),
             );
           patch.isPrimary = true;
-        } else if (data.isPrimary === false) {
+        } else if (!data.isPrimary) {
           patch.isPrimary = false;
         }
 

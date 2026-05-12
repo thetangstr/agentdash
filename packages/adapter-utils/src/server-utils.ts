@@ -597,7 +597,7 @@ export function renderPaperclipWakePrompt(
 ): string {
   const normalized = normalizePaperclipWakePayload(value);
   if (!normalized) return "";
-  const resumedSession = options.resumedSession === true;
+  const resumedSession = options.resumedSession;
   const executionStage = normalized.executionStage;
   const principalLabel = (principal: PaperclipWakeExecutionPrincipal | null) => {
     if (!principal || !principal.type) return "unknown";

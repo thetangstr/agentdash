@@ -137,7 +137,7 @@ export async function startServer(): Promise<StartedServer> {
     label: string,
     opts?: EnsureMigrationsOptions,
   ): Promise<MigrationSummary> {
-    const autoApply = opts?.autoApply === true;
+    const autoApply = opts?.autoApply;
     let state = await inspectMigrations(connectionString);
     if (state.status === "needsMigrations" && state.reason === "pending-migrations") {
       const repair = await reconcilePendingMigrationHistory(connectionString);

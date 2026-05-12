@@ -512,7 +512,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
 
-      if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
+      if (body.feedbackDataSharingEnabled && !existingCompany.feedbackDataSharingEnabled) {
         body = {
           ...body,
           feedbackDataSharingConsentAt: new Date(),

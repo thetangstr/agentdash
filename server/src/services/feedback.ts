@@ -1710,7 +1710,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
         .where(and(...filters))
         .orderBy(desc(feedbackExports.createdAt));
 
-      return rows.map((row) => mapTraceRow(row, input.includePayload === true));
+      return rows.map((row) => mapTraceRow(row, input.includePayload));
     },
 
     getFeedbackTraceById: async (traceId: string, includePayload = true) => {
@@ -1895,7 +1895,7 @@ export function feedbackService(db: Db, options: FeedbackServiceOptions = {}) {
 
         const now = new Date();
         const normalizedReason = normalizeReason(input.vote, input.reason);
-        const sharedWithLabs = input.allowSharing === true;
+        const sharedWithLabs = input.allowSharing;
         let consentEnabledNow = false;
         let consentVersion = existingCompany.feedbackDataSharingTermsVersion ?? null;
         let persistedSharingPreference: "allowed" | "not_allowed" | null = null;
