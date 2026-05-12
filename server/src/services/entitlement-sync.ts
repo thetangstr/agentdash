@@ -16,6 +16,7 @@ interface Deps {
   companies: CompaniesAdapter;
   ledger: LedgerAdapter;
   activityLog?: ActivityLogAdapter;
+  stripe?: any; // AgentDash (#169): needed to retrieve subscription in onInvoicePaid
 }
 
 // AgentDash (#157): past_due maps to pro_past_due (NOT pro_active).
