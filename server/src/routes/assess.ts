@@ -133,6 +133,7 @@ export function assessRoutes(db: Db) {
               const json = JSON.parse(data);
               if (json.type === "content_block_delta" && json.delta?.text) {
                 fullOutput += json.delta.text;
+                if (res.writableEnded) return;
                 res.write(json.delta.text);
               }
             } catch { /* skip non-JSON lines */ }
@@ -362,6 +363,7 @@ export function assessRoutes(db: Db) {
             const json = JSON.parse(data);
             if (json.type === "content_block_delta" && json.delta?.text) {
               fullOutput += json.delta.text;
+              if (res.writableEnded) return;
               res.write(json.delta.text);
             }
           } catch { /* skip non-JSON lines */ }
