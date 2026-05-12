@@ -244,7 +244,7 @@ export function issueTreeControlRoutes(db: Db) {
 
       const wakeAgents = typeof req.body.metadata === "object"
         && req.body.metadata !== null
-        && (req.body.metadata as Record<string, unknown>).wakeAgents === true;
+        && !!(req.body.metadata as Record<string, unknown>).wakeAgents;
       if (wakeAgents) {
         for (const restoredIssue of statusUpdate.updatedIssues) {
           if (!restoredIssue.assigneeAgentId) continue;

@@ -913,6 +913,7 @@ export async function startServer(): Promise<StartedServer> {
         update: (id, patch) => reconcileCompanies.update(id, patch),
       },
       ledger: stripeWebhookLedger(db as any),
+      stripe: stripeSdk, // AgentDash (#169): used in onInvoicePaid to retrieve subscription
     });
     const reconciler = billingReconcile({
       companies: { listExpiredTrials: () => reconcileCompanies.listExpiredTrials() },

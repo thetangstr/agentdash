@@ -86,7 +86,7 @@ export function workProductService(db: Db) {
           .then((rows) => rows[0] ?? null);
         if (!existing) return null;
 
-        if (patch.isPrimary === true) {
+        if (patch.isPrimary) {
           await tx
             .update(issueWorkProducts)
             .set({ isPrimary: false, updatedAt: new Date() })

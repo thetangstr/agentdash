@@ -29,6 +29,7 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
       update: (id, patch) => companies.update(id, patch),
     },
     ledger: stripeWebhookLedger(db),
+    stripe: cfg.stripe, // AgentDash (#169): used in onInvoicePaid to retrieve subscription
   });
 
   router.post("/checkout-session", async (req, res) => {

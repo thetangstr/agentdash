@@ -2658,7 +2658,7 @@ function buildManifestFromPackageFiles(
         ? extension.recurrence
         : null;
     const recurring =
-      asBoolean(frontmatter.recurring) === true
+      !!asBoolean(frontmatter.recurring)
       || routineExtension !== null
       || legacyRecurrence !== null;
     manifest.issues.push({

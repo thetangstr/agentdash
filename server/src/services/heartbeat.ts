@@ -4199,7 +4199,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     const wakeCommentId = deriveCommentId(context, null);
     const isInteractionWake = allowsIssueInteractionWake(context);
-    const resumeIntent = context.resumeIntent === true || context.followUpRequested === true;
+    const resumeIntent = !!(context.resumeIntent || context.followUpRequested);
 
     if (issue.assigneeAgentId !== run.agentId && !isInteractionWake) {
       return {
