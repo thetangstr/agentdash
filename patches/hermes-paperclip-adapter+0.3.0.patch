@@ -5,7 +5,7 @@
  export const DEFAULT_GRACE_SEC = 10;
  /** Default model to use if none specified. */
 -export const DEFAULT_MODEL = "anthropic/claude-sonnet-4";
-+export const DEFAULT_MODEL = "minimax-cn/MiniMax-M2.7-highspeed";
++export const DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
  /**
   * Valid --provider choices for the hermes CLI.
   * Must stay in sync with `hermes chat --help`.

@@ -4,6 +4,7 @@ import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
 import { ChatHeader, type ChatHeaderProps } from "../components/ChatHeader";
+import { TrialBanner } from "../components/TrialBanner";
 import { conversationsApi } from "../api/conversations";
 import type { CardContext } from "../components/cards";
 
@@ -63,6 +64,7 @@ export default function ChatPanel({
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
       <ChatHeader {...(headerProps ?? {})} />
+      <TrialBanner companyId={companyId} />
       <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
         {/* min-h-full + justify-end pins messages to the bottom of the scroll
             area so a short conversation sits next to the composer instead of

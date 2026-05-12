@@ -29,6 +29,7 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
       update: (id, patch) => companies.update(id, patch),
     },
     ledger: stripeWebhookLedger(db),
+    stripe: cfg.stripe,
   });
 
   router.post("/checkout-session", async (req, res) => {
