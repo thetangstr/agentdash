@@ -1,13 +1,3 @@
-/**
- * AgentDash Integration: Agent Research Routes
- *
- * Copy this file to: agentdash/server/src/routes/agent-research.ts
- *
- * Then register in app.ts:
- *   import { agentResearchRoutes } from "./routes/agent-research.js";
- *   api.use(agentResearchRoutes(db));
- */
-
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { companies, companyContext } from "@paperclipai/db";
