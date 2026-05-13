@@ -24,6 +24,7 @@
 //   setup adapter    — pick + verify a different adapter
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as p from "@clack/prompts";
@@ -34,6 +35,7 @@ import {
   type AgentAdapterType,
   type BindMode,
 } from "@paperclipai/shared";
+import { SKILL_MD_FULL } from "@paperclipai/shared/deep-interview-skill";
 import { configExists, readConfig, resolveConfigPath, writeConfig } from "../config/store.js";
 import { buildPresetServerConfig, detectTailnetBindHost, detectLanBindHost } from "../config/server-bind.js";
 import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
@@ -301,6 +303,51 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// Map each adapter type to the per-adapter skills directory where the
+// deep-interview SKILL.md should be installed.  Adapters with no skills
+// directory concept are omitted (pi_local, http, openclaw_gateway, process).
+const ADAPTER_SKILLS_DIRS: Record<string, string | undefined> = {
+  claude_local: `${os.homedir()}/.claude/skills/deep-interview`,
+  claude_api: `${os.homedir()}/.claude/skills/deep-interview`,
+  hermes_local: `${os.homedir()}/.hermes/skills/deep-interview`,
+  codex_local: `${process.env.CODEX_HOME ?? `${os.homedir()}/.codex`}/skills/deep-interview`,
+  gemini_local: `${os.homedir()}/.gemini/skills/deep-interview`,
+  opencode_local: `${os.homedir()}/.opencode/skills/deep-interview`,
+  acpx_local: `${os.homedir()}/.acpx/skills/deep-interview`,
+  cursor: `${os.homedir()}/.cursor/skills/deep-interview`,
+};
+
+/**
+ * Installs the deep-interview SKILL.md from the bundled source
+ * (`@paperclipai/shared/deep-interview-skill`) into the per-adapter skills
+ * directory.  Idempotent — skips write if the file already contains the same
+ * content.  Logs a clack-style success/warn message.
+ */
+async function installDeepInterviewSkill(adapterType: string): Promise<void> {
+  const skillsDir = ADAPTER_SKILLS_DIRS[adapterType];
+  if (!skillsDir) return; // adapter has no skills directory concept
+
+  const destPath = path.join(skillsDir, "SKILL.md");
+  const destDir = skillsDir;
+
+  // Idempotent: skip if file already exists with identical content
+  let existingContent: string | undefined;
+  try {
+    existingContent = await fs.promises.readFile(destPath, "utf-8");
+  } catch {
+    // File does not exist yet — we will create it
+  }
+
+  if (existingContent === SKILL_MD_FULL) {
+    p.log.message(pc.dim(`  deep-interview SKILL.md already installed in ${destDir}`));
+    return;
+  }
+
+  await fs.promises.mkdir(destDir, { recursive: true });
+  await fs.promises.writeFile(destPath, SKILL_MD_FULL, "utf-8");
+  p.log.success(`Installed deep-interview skill to ${pc.dim(destDir)}`);
+}
+
 // ---------- top-level orchestrator ----------
 
 export async function setup(opts: SetupAllOpts): Promise<void> {
@@ -366,6 +413,9 @@ export async function setup(opts: SetupAllOpts): Promise<void> {
   mergePaperclipEnvEntries(envEntries, envPath);
   ensureAgentJwtSecret(opts.config);
   p.log.success(`Saved adapter preference to ${pc.dim(envPath)}`);
+
+  // Install deep-interview SKILL.md into the per-adapter skills directory.
+  await installDeepInterviewSkill(adapter.type);
 
   // Surface adapter caveats inside the @clack box so they aren't drowned
   // out by a 30-line dev-server boot log if the user accepts the start
