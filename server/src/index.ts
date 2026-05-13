@@ -954,7 +954,7 @@ export async function startServer(): Promise<StartedServer> {
       const parsed = Number.parseInt(raw, 10);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : 86_400_000;
     })();
-    const { heartbeatDigest } = await import("./services/index.js");
+    const { heartbeatDigest, coldSignupReengagement } = await import("./services/index.js");
     const {
       digestUserAdapter,
       digestActivityAdapter,
@@ -971,6 +971,30 @@ export async function startServer(): Promise<StartedServer> {
         logger.error({ err }, "[digest] heartbeatDigest.run failed");
       });
     }, digestIntervalMs);
+  }
+
+  // Cold-signup re-engagement email: per onboarding spec §7, sends a
+  // one-time "your CoS is waiting" email to users who signed up ≥7 days
+  // ago and never opened the chat panel. Runs on the same daily tick as
+  // the heartbeat digest.
+  const coldSignupIntervalMs = 24 * 60 * 60 * 1000; // daily
+  if (process.env.AGENTDASH_DIGEST_ENABLED === "true") {
+    const {
+      reengagementUserAdapter,
+      reengagementSentAdapter,
+      reengagementEmailAdapter,
+    } = await import("./services/cold-signup-reengagement-adapters.js");
+    const reengagement = coldSignupReengagement({
+      users: reengagementUserAdapter(db as any),
+      sent: reengagementSentAdapter(db as any),
+      email: reengagementEmailAdapter(),
+    });
+    logger.info({ intervalMs: coldSignupIntervalMs }, "[reengagement] cold-signup schedule enabled");
+    setInterval(() => {
+      void reengagement.run().catch((err) => {
+        logger.error({ err }, "[reengagement] coldSignupReengagement.run failed");
+      });
+    }, coldSignupIntervalMs);
   }
 
   await new Promise<void>((resolveListen, rejectListen) => {

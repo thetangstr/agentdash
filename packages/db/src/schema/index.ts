@@ -98,3 +98,5 @@ export { featureFlags } from "./feature_flags.js";
 // AgentDash: self-healing run fixer
 export { healAttempts, healEvents } from "./heal_attempts.js";
 export type { HealAttempt, HealEvent } from "./heal_attempts.js";
+// AgentDash: cold-signup re-engagement (#228)
+export { reengagementEmails } from "./reengagement-emails.js";
