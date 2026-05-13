@@ -110,6 +110,19 @@ Until you verify your own sending domain in Resend, the shared `onboarding@resen
 
 ---
 
+## 4c. Agent Research (Agent Factory Research integration)
+
+The Agent Research service provides company-readiness assessments used to populate the initial Chief of Staff context. The endpoints are registered at `/api/companies/:companyId/agent-research` (POST to trigger, GET to retrieve stored result).
+
+Without `RESEARCH_APP_URL` + `RESEARCH_APP_API_KEY` the route returns HTTP 503 — the rest of the app functions normally.
+
+| Var | Value | Default |
+|---|---|---|
+| `RESEARCH_APP_URL` | Base URL of the Agent Research assessment service (e.g. `https://your-research-app.vercel.app`) | unset |
+| `RESEARCH_APP_API_KEY` | API key for the Agent Research service (`ark_…`) | unset |
+
+---
+
 ## 5. Deploy and smoke-test
 
 After the container boots:
