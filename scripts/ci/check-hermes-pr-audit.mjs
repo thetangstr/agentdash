@@ -125,6 +125,45 @@ function isNewPatchFile(status, filePath) {
   return /^patches\/.+\.patch$/.test(filePath ?? "");
 }
 
+// D1: scratch-pad / dev-artifact files that should never be committed.
+// Closes #264 — PR #261 committed `.pr_body.md` (the markdown Hermes drafted
+// the PR body in). Same defect class as the "Copy this file to:" scaffolding
+// strings, but lived in a dotfile so isAuditedSource() didn't pick it up.
+const SCRATCH_PAD_PATH_PATTERNS = [
+  // Repo-root scratch files: .pr_body.md, .pr-body.md, pr-body.md, pr_body.md,
+  // .scratch*, scratch*, .draft*, draft*.md
+  /^\.?pr[-_]body(?:\.[^/]+)?$/i,
+  /^\.?scratch[^/]*$/i,
+  /^\.?draft\.[^/]+$/i,
+  // /tmp/ contents accidentally committed (shouldn't happen but defense in depth)
+  /^tmp\/.+$/i,
+  // PR template stored in working tree under non-canonical paths
+  /^\.?PULL_REQUEST_TEMPLATE\.md\.bak$/i,
+];
+
+function isScratchPadArtifact(filePath) {
+  if (!filePath) return false;
+  // Only flag files at the repo root (no slash) or in /tmp/. Real PR-template
+  // files live under .github/ which we explicitly allow through.
+  const isRoot = !filePath.includes("/");
+  if (!isRoot && !filePath.startsWith("tmp/")) return false;
+  return SCRATCH_PAD_PATH_PATTERNS.some((re) => re.test(filePath));
+}
+
+// D5 gate: when the diff doesn't touch any code that pnpm typecheck /
+// test:run / build would actually exercise, skip the regression-suite check.
+// Closes #265 — without this, every CI/doc/workflow-only PR (e.g. PR #262's
+// 1-line pr.yml fix) fails audit just for not having a regression-suite
+// section, which is correct discipline for source PRs but theater for ops PRs.
+function diffTouchesBuildableCode(diff) {
+  return diff.some(({ status, path: p }) => {
+    if (!p) return false;
+    if (status === "D") return false;
+    if (isTestFile(p)) return true; // test-only PRs still need regression validation
+    return /^(server|ui|cli|packages)\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // CLI / env arg parsing
 // ---------------------------------------------------------------------------
@@ -316,6 +355,25 @@ function checkSensitiveSurfaceTests(diff) {
   ];
 }
 
+function checkScratchPadArtifacts(diff) {
+  const failures = [];
+  for (const { status, path: p } of diff) {
+    if (status === "D") continue;
+    if (!isScratchPadArtifact(p)) continue;
+    failures.push(
+      `  - ${p}: appears to be a scratch-pad / dev artifact (PR-body draft, /tmp file, .draft.*)`,
+    );
+  }
+  if (failures.length === 0) return [];
+  return [
+    ...failures,
+    `    These files should never be committed. Common causes:`,
+    `      • You drafted the PR body in .pr_body.md and forgot to delete it.`,
+    `      • A test or REPL session wrote to /tmp/ and the file got picked up by 'git add .'.`,
+    `    Delete the file(s) and amend the commit; add the pattern to .gitignore.`,
+  ];
+}
+
 function checkPatchAbsolutePaths(diff) {
   const failures = [];
   const newPatches = diff.filter(({ status, path: p }) => isNewPatchFile(status, p));
@@ -437,6 +495,14 @@ function main() {
     );
   }
 
+  const scratchpad = checkScratchPadArtifacts(diff);
+  if (scratchpad.length > 0) {
+    allFailures.push(
+      "D1: scratch-pad / dev-artifact file committed (forbidden by Hermes directive 1):",
+      ...scratchpad,
+    );
+  }
+
   const sensitive = checkSensitiveSurfaceTests(diff);
   if (sensitive.length > 0) {
     allFailures.push(
@@ -453,11 +519,20 @@ function main() {
     );
   }
 
-  const regression = checkRegressionSuiteSection(body);
-  if (regression.length > 0) {
-    allFailures.push(
-      "D5: PR body missing regression-suite output:",
-      ...regression,
+  // D5: regression-suite requirement only applies when the diff actually
+  // touches code the suite would exercise. CI / doc / workflow-only PRs
+  // (e.g. .github/workflows/*.yml, doc/*.md, .gitignore) skip this check.
+  if (diffTouchesBuildableCode(diff)) {
+    const regression = checkRegressionSuiteSection(body);
+    if (regression.length > 0) {
+      allFailures.push(
+        "D5: PR body missing regression-suite output:",
+        ...regression,
+      );
+    }
+  } else {
+    process.stdout.write(
+      "[hermes-audit] D5 skipped — diff does not touch buildable code (CI/doc/workflow only).\n",
     );
   }
 

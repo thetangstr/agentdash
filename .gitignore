@@ -65,3 +65,14 @@ tests/release-smoke/playwright-report/
 # Stale Next.js marketing tree from v1 — only the repo-root /marketing dir is dead.
 # (ui/src/marketing/ IS our active React marketing surface; keep tracking it.)
 /marketing/
+
+# Hermes / agent scratch-pad artifacts — drafted PR bodies, REPL output, etc.
+# Enforced by .github/workflows/hermes-pr-audit.yml as well.
+.pr_body.md
+.pr-body.md
+pr_body.md
+pr-body.md
+.scratch*
+scratch.md
+.draft.*
+tmp/
