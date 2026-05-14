@@ -2,17 +2,16 @@ import { describe, expect, it } from "vitest";
 import { isAgentPlanPayload } from "./agent-plan.js";
 
 describe("isAgentPlanPayload", () => {
+  const validAgent = {
+    role: "general assistant",
+    name: "Sam",
+    adapterType: "claude_local",
+    responsibilities: ["scheduling"],
+    kpis: ["meeting throughput"],
+  };
   const valid = {
     rationale: "We need a CoS to coordinate work.",
-    agents: [
-      {
-        role: "general assistant",
-        name: "Sam",
-        adapterType: "claude",
-        responsibilities: ["scheduling"],
-        kpis: ["meeting throughput"],
-      },
-    ],
+    agents: [validAgent],
     alignmentToShortTerm: "Frees up the founder's time week one.",
     alignmentToLongTerm: "Scales coordination as headcount grows.",
   };
@@ -51,5 +50,56 @@ describe("isAgentPlanPayload", () => {
   it("rejects missing or non-string alignmentToLongTerm", () => {
     expect(isAgentPlanPayload({ ...valid, alignmentToLongTerm: undefined })).toBe(false);
     expect(isAgentPlanPayload({ ...valid, alignmentToLongTerm: false })).toBe(false);
+  });
+
+  // Closes #231: per-agent + adapterType allowlist tests.
+  describe("per-agent validation (#231)", () => {
+    it("accepts each whitelisted adapterType", () => {
+      const allowed = ["claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local"];
+      for (const adapterType of allowed) {
+        expect(
+          isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, adapterType }] }),
+        ).toBe(true);
+      }
+    });
+
+    it("rejects unknown adapterType (prompt-injection guard)", () => {
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, adapterType: "evil_local" }] }),
+      ).toBe(false);
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, adapterType: "" }] }),
+      ).toBe(false);
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, adapterType: 42 }] }),
+      ).toBe(false);
+    });
+
+    it("rejects an agent with empty role or name", () => {
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, role: "" }] }),
+      ).toBe(false);
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, name: "" }] }),
+      ).toBe(false);
+    });
+
+    it("rejects an agent missing responsibilities or kpis", () => {
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, responsibilities: undefined }] }),
+      ).toBe(false);
+      expect(
+        isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, kpis: "throughput" }] }),
+      ).toBe(false);
+    });
+
+    it("rejects the WHOLE plan if a single agent is malformed", () => {
+      expect(
+        isAgentPlanPayload({
+          ...valid,
+          agents: [validAgent, { ...validAgent, adapterType: "evil_local" }],
+        }),
+      ).toBe(false);
+    });
   });
 });
