@@ -3,6 +3,13 @@ import fs from "node:fs/promises";
 const DEFAULT_AGENT_BUNDLE_FILES = {
   default: ["AGENTS.md"],
   ceo: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
+  // Closes #317 follow-up: the OnboardingWizard creates a
+  // chief_of_staff agent (per #318 which added the role to
+  // AGENT_ROLES). The default-bundle map didn't have a corresponding
+  // entry, so newly-hired CoS agents got only AGENTS.md instead of
+  // the full SOUL/AGENTS/HEARTBEAT/TOOLS kit that
+  // server/src/onboarding-assets/chief_of_staff/ ships.
+  chief_of_staff: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
 } as const;
 
 type DefaultAgentBundleRole = keyof typeof DEFAULT_AGENT_BUNDLE_FILES;
@@ -23,5 +30,7 @@ export async function loadDefaultAgentInstructionsBundle(role: DefaultAgentBundl
 }
 
 export function resolveDefaultAgentInstructionsBundleRole(role: string): DefaultAgentBundleRole {
-  return role === "ceo" ? "ceo" : "default";
+  if (role === "ceo") return "ceo";
+  if (role === "chief_of_staff") return "chief_of_staff";
+  return "default";
 }
