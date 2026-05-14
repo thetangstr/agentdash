@@ -15,6 +15,7 @@ import {
   cosOnboardingStateService,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
+import { assertCompanyAccess } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
@@ -130,6 +131,10 @@ export function onboardingV2Routes(db: Db) {
     if (!conversationId || !reportsToAgentId || !companyId) {
       throw badRequest("conversationId, reportsToAgentId, and companyId required");
     }
+    // Closes #230: previously this route accepted any board user → could
+    // materialize an agent in someone else's company. Verify the actor has
+    // active access to the target companyId before any side effect.
+    assertCompanyAccess(req, companyId);
     const transcript = await loadInterviewTranscript(db, conversationId);
     const proposal = await agentProposer({ llm: defaultStubProposer }).propose(
       transcript.length > 0 ? transcript : [{ role: "user", content: "stub", ts: new Date().toISOString() }],
@@ -167,6 +172,18 @@ export function onboardingV2Routes(db: Db) {
     if (!conversationId || !cosAgentId) {
       throw badRequest("conversationId and cosAgentId required");
     }
+    // Closes #230: assert the actor can write to the conversation's company
+    // before posting any messages. Without this, any board user could
+    // pollute another company's conversation thread.
+    {
+      const convoRows = await db
+        .select()
+        .from(assistantConversations)
+        .where(eq(assistantConversations.id, conversationId));
+      const convo = convoRows[0];
+      if (!convo) throw notFound("Conversation not found");
+      assertCompanyAccess(req, convo.companyId);
+    }
     // Append a user message capturing the rejection reason.
     await conversations.postMessage({
       conversationId,
@@ -202,6 +219,11 @@ export function onboardingV2Routes(db: Db) {
     const convo = convoRows[0];
     if (!convo) throw notFound("Conversation not found");
     const companyId = convo.companyId;
+    // Closes #230: cross-tenant agent materialization risk — assert the
+    // actor has access to the conversation's company BEFORE any side
+    // effect (LLM dispatch, agent.create, message post). Previously any
+    // board user could materialize agents in someone else's company.
+    assertCompanyAccess(req, companyId);
 
     const planRows = await db
       .select()
@@ -361,6 +383,11 @@ ${kpis || "- (none captured)"}
     const convo = convoRows[0];
     if (!convo) throw notFound("Conversation not found");
     const companyId = convo.companyId;
+    // Closes #230: assert before LLM dispatch (charged to platform) +
+    // before any plan-card write into the conversation. Without this, any
+    // board user could revise another company's plan and burn LLM cost
+    // on the wrong tenant.
+    assertCompanyAccess(req, companyId);
 
     // Find the latest plan card. Anchoring on the most recent one lets the
     // user iterate N times — each revision builds on the previous proposal.
