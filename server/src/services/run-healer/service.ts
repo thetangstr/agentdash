@@ -118,11 +118,18 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
 
   async function getDailyHealCost(): Promise<number> {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Closes #236: SUM over a numeric column returns a STRING from
+    // node-postgres (pg's defensive default — numeric overflows JS
+    // number). The `sql<number>` cast was a lie; downstream
+    // `dailyCost >= config.maxCostPerDay` was string-vs-number that
+    // worked by coincidence. Cast to float8 in SQL so pg returns a real
+    // number, and Number() it on the JS side as belt-and-suspenders in
+    // case a future Drizzle release ships nuance here.
     const [{ total }] = await db
-      .select({ total: sql<number>`COALESCE(SUM(${healAttempts.costUsd}), 0)` })
+      .select({ total: sql<number>`COALESCE(SUM(${healAttempts.costUsd}), 0)::float8` })
       .from(healAttempts)
       .where(and(gte(healAttempts.createdAt, since), isNotNull(healAttempts.costUsd)));
-    return total;
+    return Number(total) || 0;
   }
 
   async function getRecentHealAttempts(runId: string) {
@@ -203,6 +210,26 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
         ),
       );
 
+    // Closes #235: previously this loop ran one `SELECT count(*) FROM
+    // heal_attempts WHERE runId = ?` per candidate row — a textbook N+1.
+    // With even modest failure rates each scan spent most of its budget
+    // waiting on round-trips. Fold the per-run counts into ONE grouped
+    // query keyed on the rows we already pulled.
+    const candidateIds = rows.map((r) => r.id);
+    const countRows = candidateIds.length === 0
+      ? []
+      : await db
+          .select({
+            runId: healAttempts.runId,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(healAttempts)
+          .where(inArray(healAttempts.runId, candidateIds))
+          .groupBy(healAttempts.runId);
+    const healCountByRunId = new Map<string, number>(
+      countRows.map((r) => [r.runId, Number(r.count) || 0]),
+    );
+
     // Filter to runs with adapter-related failures and under heal limit
     const eligible: ScannedRun[] = [];
     for (const row of rows) {
@@ -221,12 +248,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
 
       if (!isAdapterRelated && row.status !== "running") continue;
 
-      // Count existing heal attempts
-      const attempts = await db
-        .select({ count: count() })
-        .from(healAttempts)
-        .where(eq(healAttempts.runId, row.id));
-      const healCount = attempts[0]?.count ?? 0;
+      const healCount = healCountByRunId.get(row.id) ?? 0;
 
       if (healCount >= config.maxHealsPerRun) continue;
 
