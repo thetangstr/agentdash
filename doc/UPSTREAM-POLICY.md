@@ -87,14 +87,15 @@ Worker prompts are 100% AgentDash territory and never inherit upstream changes. 
 
 ## Cherry-pick rubric
 
-When is an upstream commit worth the evaluation cost? Check all four gates:
+When is an upstream commit worth the evaluation cost? Check all five gates:
 
 1. **Target is in the "still inherited" list above.** If the commit touches CRM, pipelines, entitlements, model routing, etc., stop — upstream has no fix for our code.
 2. **Fix is specific and bounded.** "Fix streaming timeout in Gemini adapter" passes. "Refactor adapter registry" fails — too broad.
 3. **We have a concrete reason to care.** Either we've hit the bug in prod, we're about to touch that subsystem and want the fix in first, or it closes a CVE/security finding.
 4. **The commit does not touch AgentDash-modified files in a way that requires redesign.** Check against the conflict-prone list below.
+5. **No silent symbol dependencies on prior upstream evolution we don't have.** Even commits that pass gates 1–4 frequently fail at this one: they reference types, helpers, or schema columns added in earlier upstream commits we never cherry-picked. Symptoms: adds 2+ new files, references members on existing types that don't exist locally, or imports from new upstream-only modules. `scripts/upstream-digest.sh` now flags candidates as `drop-in` vs. `needs-followon` (per #280) based on a new-file-count + churn heuristic — treat `needs-followon` as "expect to chain peer cherry-picks or abort."
 
-If all four pass → `git cherry-pick <sha>`, run the full verification gauntlet (`pnpm -r typecheck && pnpm test:run && pnpm build` plus relevant E2E), commit as a single atomic change with the upstream SHA in the message.
+If all five pass → `git cherry-pick <sha>`, run the full verification gauntlet (`pnpm -r typecheck && pnpm test:run && pnpm build` plus relevant E2E), commit as a single atomic change with the upstream SHA in the message.
 
 If any gate fails → skip it; leave a note in this doc's "considered-and-rejected" section (future work) if it's non-obvious why.
 
