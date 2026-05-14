@@ -7,7 +7,7 @@
  * Design: docs/superpowers/specs/2026-05-11-self-healing-run-fixer-design.md
  */
 
-import { and, desc, eq, gte, isNull, isNotNull, lt, sql, count } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, isNotNull, lt, sql, count } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -173,7 +173,14 @@ export function runHealerService(db: Db) {
       .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
       .where(
         and(
-          sql`${heartbeatRuns.status} = ANY(${HEAL_ELIGIBLE_STATUSES})`,
+          // Closes #232: drizzle's typed `inArray` serializes to
+          // `status IN ($1, $2, ...)` with positional bindings. The
+          // previous `sql\`= ANY(\${tuple})\`` template-literal binding
+          // silently matched zero rows when the tuple wasn't coerced to a
+          // pg array correctly — turning the whole healer into a no-op
+          // while the scan log still read "scan_complete count=0" as if
+          // everything were fine.
+          inArray(heartbeatRuns.status, [...HEAL_ELIGIBLE_STATUSES]),
           gte(heartbeatRuns.createdAt, cutoff),
           lt(heartbeatRuns.createdAt, minAge),
         ),
