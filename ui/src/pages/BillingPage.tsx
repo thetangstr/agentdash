@@ -102,6 +102,7 @@ export default function BillingPage({ companyId }: { companyId: string }) {
   if (!status) return <div className="p-8">Loading…</div>;
 
   const isPro = PRO_TIERS.includes(status.tier);
+  const isPastDue = status.tier === "pro_past_due";
 
   async function upgrade() {
     const r = await billingApi.startCheckout(companyId);
@@ -115,6 +116,20 @@ export default function BillingPage({ companyId }: { companyId: string }) {
   return (
     <div className="billing-page p-8 max-w-2xl mx-auto">
       <h1 className="text-2xl font-semibold text-text-primary mb-6">Billing</h1>
+      {/* Closes #250: pro_past_due notice with explicit reactivation path. */}
+      {isPastDue ? (
+        <div
+          role="alert"
+          className="mb-4 border border-destructive/30 rounded-lg p-4 bg-destructive/10 text-destructive"
+        >
+          <div className="font-medium mb-1">Payment failed — subscription past due</div>
+          <div className="text-sm text-destructive/90">
+            Stripe couldn't charge your card. Inviting teammates and hiring agents
+            are paused until the card is updated. Click <strong>Manage subscription</strong> below
+            to fix it via the customer portal.
+          </div>
+        </div>
+      ) : null}
       <div className="border border-border-soft rounded-lg p-6 bg-surface-raised shadow-sm">
         <div className="mb-2 text-text-primary">
           Plan: <strong className="text-text-primary">{status.tier}</strong>
@@ -126,7 +141,7 @@ export default function BillingPage({ companyId }: { companyId: string }) {
           </div>
         )}
         <div className="mt-6">
-          {!isPro ? (
+          {!isPro && !isPastDue ? (
             <button
               className="bg-accent-500 text-text-inverse px-4 py-2 rounded-md font-medium hover:bg-accent-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
               onClick={upgrade}
@@ -135,10 +150,14 @@ export default function BillingPage({ companyId }: { companyId: string }) {
             </button>
           ) : (
             <button
-              className="border border-border-soft px-4 py-2 rounded-md font-medium text-text-primary hover:bg-surface-sunken transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
+              className={
+                isPastDue
+                  ? "bg-destructive text-white px-4 py-2 rounded-md font-medium hover:bg-destructive/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"
+                  : "border border-border-soft px-4 py-2 rounded-md font-medium text-text-primary hover:bg-surface-sunken transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-200"
+              }
               onClick={manage}
             >
-              Manage subscription
+              {isPastDue ? "Update payment method" : "Manage subscription"}
             </button>
           )}
         </div>
