@@ -105,3 +105,13 @@ export {
   verdictApprovalBridge,
   type VerdictApprovalBridgeService,
 } from "./verdict-approval-bridge.js";
+
+// AgentDash: attestation (see docs/superpowers/specs/2026-05-13-delegation-and-attestation-design.md)
+export {
+  attestationService,
+  createAttestationStore,
+  type AnchorRunSummary,
+  type AttestationService,
+  type AttestationServiceOptions,
+  type AttestationStore,
+} from "./attestation.js";
