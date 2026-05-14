@@ -155,7 +155,10 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     const res = await request(app).post("/api/companies").send({ name: "Acme Two" });
 
     expect(res.status).toBe(409);
-    expect(res.body).toEqual({
+    // Closes #330: route now includes a user-facing `message` field on
+    // the 409 response. Use toMatchObject so the test stays robust to
+    // future additive fields.
+    expect(res.body).toMatchObject({
       code: "domain_already_claimed",
       existingCompanyId: "company-existing",
       contactEmail: null,

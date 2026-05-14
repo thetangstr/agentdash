@@ -140,7 +140,10 @@ describe("POST /api/onboarding/agent/confirm", () => {
       agentId: "agent-2",
       apiKey: { id: "k", token: "agk_x" },
     });
-    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+    // Closes #330: route asserts companyAccess against body.companyId
+    // (per PR #282 / #230 security fix). Actor must include the
+    // company in its companyIds list or the route returns 403.
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
     const res = await request(app).post("/api/onboarding/agent/confirm").send({
       conversationId: "conv1",
       reportsToAgentId: "cos1",
@@ -193,7 +196,8 @@ describe("POST /api/onboarding/confirm-plan", () => {
       alignmentToLongTerm: "lays groundwork",
     };
     const app = buildApp(
-      { type: "board", userId: "u1", source: "session" },
+      // Closes #330: includes companyIds per PR #282/#230 assertCompanyAccess.
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
       [
         // 1st db chain: lookup conversation
         [{ id: "conv1", companyId: "c1" }],
@@ -238,7 +242,8 @@ describe("POST /api/onboarding/confirm-plan", () => {
 
   it("returns 404 when the conversation has no plan card", async () => {
     const app = buildApp(
-      { type: "board", userId: "u1", source: "session" },
+      // Closes #330: includes companyIds per PR #282/#230 assertCompanyAccess.
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
       [
         [{ id: "conv1", companyId: "c1" }], // conversation lookup
         [], // no plan card
@@ -256,12 +261,18 @@ describe("POST /api/onboarding/revise-plan", () => {
     vi.clearAllMocks();
   });
 
-  it("returns 501 (Phase F deferred)", async () => {
-    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+  // Closes #330: route is no longer Phase-F-deferred (#210 / #231
+  // implemented it). With an empty conversation lookup, the route
+  // returns 404 "Conversation not found" — assert that contract.
+  it("returns 404 when the conversation is missing", async () => {
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[]], // conversation lookup returns no rows
+    );
     const res = await request(app)
       .post("/api/onboarding/revise-plan")
       .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(404);
   });
 });
 
