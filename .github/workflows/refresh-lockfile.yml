@@ -3,11 +3,12 @@ name: Refresh Lockfile
 on:
   push:
     branches:
+      - main
       - master
   workflow_dispatch:
 
 concurrency:
-  group: refresh-lockfile-master
+  group: refresh-lockfile-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -81,7 +82,7 @@ jobs:
             pr_url="$(gh pr create \
               --head "$BRANCH" \
               --title "chore(lockfile): refresh pnpm-lock.yaml" \
-              --body "Auto-generated lockfile refresh after dependencies changed on master. This PR only updates pnpm-lock.yaml.")"
+              --body "Auto-generated lockfile refresh after dependencies changed on the default branch. This PR only updates pnpm-lock.yaml.")"
             echo "Created new PR: $pr_url"
           else
             echo "PR already exists: $pr_url"
