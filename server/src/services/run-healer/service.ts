@@ -23,13 +23,25 @@ import { dispatchLLM } from "../dispatch-llm.js";
 
 // ---------- config ----------
 
-const HEALER_ENABLED = process.env.RUN_HEALER_ENABLED !== "false";
-const HEALER_SCAN_INTERVAL_MS = Number(process.env.RUN_HEALER_SCAN_INTERVAL_MS ?? 5 * 60 * 1000);
-const HEALER_MAX_HEALS_PER_RUN = Number(process.env.RUN_HEALER_MAX_HEALS_PER_RUN ?? 3);
-const HEALER_MAX_HEALS_PER_DAY = Number(process.env.RUN_HEALER_MAX_HEALS_PER_DAY ?? 100);
-const HEALER_MAX_COST_PER_DAY = Number(process.env.RUN_HEALER_MAX_COST_PER_DAY ?? 5.0);
-const HEALER_MIN_AGE_MS = Number(process.env.RUN_HEALER_MIN_AGE_MS ?? 5 * 60 * 1000);
-const HEALER_LOOKBACK_MS = Number(process.env.RUN_HEALER_LOOKBACK_MS ?? 60 * 60 * 1000);
+// Closes #237: previously these were module-level constants snapshotted
+// from process.env at first import — meaning tests that set
+// `process.env.RUN_HEALER_*` AFTER importing the module saw the old
+// frozen value, and the exported `RunHealerConfig` type was dead code
+// (never accepted as a parameter). Now we read env via a fresh function
+// each time the service is constructed, and runHealerService accepts an
+// optional config override for callers (tests, scheduled tasks) that
+// want to inject directly.
+function readEnvConfig(): Required<RunHealerConfig> {
+  return {
+    enabled: process.env.RUN_HEALER_ENABLED !== "false",
+    scanIntervalMs: Number(process.env.RUN_HEALER_SCAN_INTERVAL_MS ?? 5 * 60 * 1000),
+    maxHealsPerRun: Number(process.env.RUN_HEALER_MAX_HEALS_PER_RUN ?? 3),
+    maxHealsPerDay: Number(process.env.RUN_HEALER_MAX_HEALS_PER_DAY ?? 100),
+    maxCostPerDay: Number(process.env.RUN_HEALER_MAX_COST_PER_DAY ?? 5.0),
+    minAgeMs: Number(process.env.RUN_HEALER_MIN_AGE_MS ?? 5 * 60 * 1000),
+    lookbackMs: Number(process.env.RUN_HEALER_LOOKBACK_MS ?? 60 * 60 * 1000),
+  };
+}
 
 // Runs in these statuses are eligible for healing
 const HEAL_ELIGIBLE_STATUSES = ["failed", "running"] as const;
@@ -85,7 +97,12 @@ type ScannedRun = {
 
 // ---------- service factory ----------
 
-export function runHealerService(db: Db) {
+export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
+  // Closes #237: config now resolves at service-construction time (not
+  // module-load), and partial overrides win over env defaults. Tests can
+  // call `runHealerService(db, { scanIntervalMs: 100, maxCostPerDay: 0.01 })`
+  // and get the values they asked for.
+  const config: Required<RunHealerConfig> = { ...readEnvConfig(), ...configOverride };
   // In-flight healing promises — prevents concurrent scans from healing the same run.
   const inFlightHeals = new Map<string, Promise<{ fixed: boolean; action: string }>>();
   // ---------- helpers ----------
@@ -148,8 +165,8 @@ export function runHealerService(db: Db) {
    * Scan for runs that need healing. Returns runs eligible for diagnosis/fix.
    */
   async function scanEligibleRuns(): Promise<ScannedRun[]> {
-    const cutoff = new Date(Date.now() - HEALER_LOOKBACK_MS);
-    const minAge = new Date(Date.now() - HEALER_MIN_AGE_MS);
+    const cutoff = new Date(Date.now() - config.lookbackMs);
+    const minAge = new Date(Date.now() - config.minAgeMs);
 
     // Find runs that:
     // 1. Are in failed or running status
@@ -211,7 +228,7 @@ export function runHealerService(db: Db) {
         .where(eq(healAttempts.runId, row.id));
       const healCount = attempts[0]?.count ?? 0;
 
-      if (healCount >= HEALER_MAX_HEALS_PER_RUN) continue;
+      if (healCount >= config.maxHealsPerRun) continue;
 
       eligible.push({
         id: row.id,
@@ -303,11 +320,11 @@ export function runHealerService(db: Db) {
   async function healRun(run: ScannedRun): Promise<{ fixed: boolean; action: string }> {
     // Check daily limits
     const [dailyCount, dailyCost] = await Promise.all([getDailyHealCount(), getDailyHealCost()]);
-    if (dailyCount >= HEALER_MAX_HEALS_PER_DAY) {
+    if (dailyCount >= config.maxHealsPerDay) {
       await logEvent("skipped", run.id, { reason: "daily_heal_limit_reached", count: dailyCount });
       return { fixed: false, action: "skipped_daily_limit" };
     }
-    if (dailyCost >= HEALER_MAX_COST_PER_DAY) {
+    if (dailyCost >= config.maxCostPerDay) {
       await logEvent("skipped", run.id, { reason: "daily_cost_limit_reached", cost: dailyCost });
       return { fixed: false, action: "skipped_cost_limit" };
     }
@@ -375,7 +392,7 @@ export function runHealerService(db: Db) {
    * Called by the routine scheduler on the configured interval.
    */
   async function scan(): Promise<{ scanned: number; fixed: number; skipped: number }> {
-    if (!HEALER_ENABLED) {
+    if (!config.enabled) {
       return { scanned: 0, fixed: 0, skipped: 0 };
     }
 
