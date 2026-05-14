@@ -179,6 +179,14 @@ jobs:
           # Disable rate limiting for the e2e run; the per-actor limit
           # is a production-traffic concern, not a test concern.
           AGENTDASH_RATE_LIMIT_DISABLED: "true"
+          # Successor of #311 (round 3) / closes #315: the
+          # onboarding.spec wizard test picks "Claude Code" (claude_local)
+          # and OnboardingWizard.handleStep2Next runs a real adapter
+          # binary probe before advancing. CI runners have no Claude
+          # binary → probe returns failed → step 2 never transitions
+          # to step 3. The bypass returns a synthetic "pass" so the
+          # test can exercise the rest of the wizard.
+          AGENTDASH_ADAPTER_ENV_BYPASS: "true"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report

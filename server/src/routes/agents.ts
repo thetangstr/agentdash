@@ -1238,6 +1238,33 @@ export function agentRoutes(
       const type = assertKnownAdapterType(req.params.type as string);
       await assertCanReadConfigurations(req, companyId);
 
+      // Closes #315: e2e bypass — when AGENTDASH_ADAPTER_ENV_BYPASS=true
+      // is set, short-circuit the adapter probe and return a synthetic
+      // "pass" result. Lets the OnboardingWizard flow advance past step 2
+      // on a CI runner that has no Claude/Codex/etc. binary installed.
+      // The bypass is OFF by default so production adapter-environment
+      // checks (the real customer-facing functionality) are unaffected.
+      // Same env-var pattern as AGENTDASH_DEEP_INTERVIEW_ASSESS,
+      // AGENTDASH_ALLOW_MULTI_COMPANY, AGENTDASH_RATE_LIMIT_DISABLED.
+      if (process.env.AGENTDASH_ADAPTER_ENV_BYPASS === "true") {
+        res.json({
+          adapterType: type,
+          status: "pass",
+          checks: [
+            {
+              code: "adapter_env_bypass",
+              level: "info",
+              message: "Adapter environment probe bypassed",
+              detail:
+                "AGENTDASH_ADAPTER_ENV_BYPASS=true is set; the real adapter binary check was skipped. Unset this env var to run the actual probe.",
+              hint: null,
+            },
+          ],
+          testedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       const adapter = requireServerAdapter(type);
 
       const inputAdapterConfig =
