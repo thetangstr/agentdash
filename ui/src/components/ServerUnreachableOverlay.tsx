@@ -3,9 +3,19 @@ import { useServerHealth } from "@/hooks/useServerHealth";
 export function ServerUnreachableOverlay() {
   const { reachability, isOnline } = useServerHealth();
 
-  if (reachability === "reachable") return null;
-
+  // Closes #233: previously this only short-circuited on "reachable", so
+  // on first mount react-query was "checking" → the full-screen overlay
+  // flashed for 50ms–2s before the first /api/health response landed,
+  // regressing cold-load UX vs. having no overlay at all. The hook now
+  // only flips to "unreachable" after UNREACHABLE_THRESHOLD consecutive
+  // failures (per #229), so "checking" no longer warrants the full-screen
+  // takeover — at most a quiet indicator (which ConnectionStatus handles).
+  //
+  // The browser-offline branch is independent: if navigator says we have
+  // no network, we still want to surface the overlay regardless of the
+  // health-check state.
   const isBrowserOffline = !isOnline;
+  if (!isBrowserOffline && reachability !== "unreachable") return null;
   const message = isBrowserOffline
     ? "You're offline — check your internet connection."
     : "Unable to reach the server — it may be temporarily unavailable.";
