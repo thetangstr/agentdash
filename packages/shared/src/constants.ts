@@ -61,6 +61,14 @@ export const AGENT_ROLES = [
   "devops",
   "researcher",
   "general",
+  // Closes #317: chief_of_staff is the role the onboarding-wizard
+  // creates for the founding-user CoS agent (per OnboardingWizard.tsx
+  // line 469) AND the role the deep-interview flow looks for (see
+  // server/src/routes/conversations.ts:28 and friends). Was missing
+  // from this allowlist → the wizard's POST /agent-hires payload
+  // failed the Zod enum check with a silent 400, blocking real users
+  // AND the e2e wizard spec from completing step 2.
+  "chief_of_staff",
 ] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
@@ -77,6 +85,8 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   devops: "DevOps",
   researcher: "Researcher",
   general: "General",
+  // Closes #317: see AGENT_ROLES note above.
+  chief_of_staff: "Chief of Staff",
 };
 
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
