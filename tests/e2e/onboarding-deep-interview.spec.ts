@@ -23,6 +23,33 @@ import { chrisCtoPersona } from "./personas/chris-cto";
 
 const SKIP_LLM = process.env.PAPERCLIP_E2E_SKIP_LLM !== "false";
 
+// Closes #295: in local_trusted mode the synthetic `local-board` actor is
+// provisioned at startup (ensureLocalTrustedBoardPrincipal) but NO default
+// company is created — `GET /api/companies` returns `[]` on cold boot, and
+// every test below assumes ≥1 company exists. Rather than wait for the
+// server-side eager-bootstrap (deferred — too invasive for a test-gate
+// unblocker), the spec POSTs a workspace itself if the list is empty.
+async function ensureCompanyExists(
+  request: import("@playwright/test").APIRequestContext,
+  baseUrl: string,
+): Promise<string> {
+  const existing = await request.get(`${baseUrl}/api/companies`);
+  if (existing.ok()) {
+    const list = (await existing.json()) as Array<{ id: string }>;
+    if (Array.isArray(list) && list.length > 0) return list[0]!.id;
+  }
+  const created = await request.post(`${baseUrl}/api/companies`, {
+    data: { name: `E2E Workspace ${Date.now()}` },
+  });
+  if (!created.ok()) {
+    throw new Error(
+      `Failed to bootstrap a company for the e2e test (status ${created.status()}): ${await created.text()}`,
+    );
+  }
+  const body = (await created.json()) as { id: string };
+  return body.id;
+}
+
 // Each test run gets unique email/company so parallel runs don't collide.
 const RUN_ID = Date.now();
 const persona = {
@@ -148,12 +175,11 @@ test.describe("Deep-interview onboarding — happy path", () => {
     // The spec uses /api/companies directly.
     const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
 
-    // In local_trusted mode there's already a company. Get it.
-    const companiesRes = await page.request.get(`${baseUrl}/api/companies`);
-    expect(companiesRes.ok()).toBe(true);
-    const companies = await companiesRes.json() as Array<{ id: string; name: string }>;
-    expect(companies.length, "expected at least one company in local_trusted mode").toBeGreaterThan(0);
-    const companyId = companies[0]!.id;
+    // Closes #295: ensureCompanyExists POSTs a workspace if none exists,
+    // since the local_trusted bootstrap does NOT auto-provision one. Was
+    // the second-order bug remaining after #278/PR #292 fixed the port
+    // ECONNREFUSED cascade.
+    const companyId = await ensureCompanyExists(page.request, baseUrl);
 
     // Drive the interview via API (deep-interview mode must be enabled).
     const finalBody = await driveInterviewViaApi(page, baseUrl, companyId);
@@ -209,12 +235,8 @@ test.describe("Deep-interview resume", () => {
 
     const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
 
-    // Get company
-    const companiesRes = await page.request.get(`${baseUrl}/api/companies`);
-    expect(companiesRes.ok()).toBe(true);
-    const companies = await companiesRes.json() as Array<{ id: string; name: string }>;
-    expect(companies.length).toBeGreaterThan(0);
-    const companyId = companies[0]!.id;
+    // Closes #295: see top-of-file helper.
+    const companyId = await ensureCompanyExists(page.request, baseUrl);
 
     // Drive one turn to create the in-progress state.
     const t0 = await page.request.post(`${baseUrl}/api/companies/${companyId}/assess`, {
@@ -248,11 +270,8 @@ test.describe("Deep-interview — confirm-plan flow", () => {
   test("POST /onboarding/confirm-plan creates ≥2 agents when plan card exists", async ({ page }) => {
     const baseUrl = `http://127.0.0.1:${process.env.PAPERCLIP_E2E_PORT ?? 3199}`;
 
-    const companiesRes = await page.request.get(`${baseUrl}/api/companies`);
-    expect(companiesRes.ok()).toBe(true);
-    const companies = await companiesRes.json() as Array<{ id: string; name: string }>;
-    expect(companies.length).toBeGreaterThan(0);
-    const companyId = companies[0]!.id;
+    // Closes #295: see top-of-file helper.
+    const companyId = await ensureCompanyExists(page.request, baseUrl);
 
     // Bootstrap a conversation for this company so confirm-plan has a target.
     const bootstrapRes = await page.request.post(`${baseUrl}/api/onboarding/bootstrap`);
