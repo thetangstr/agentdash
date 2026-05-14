@@ -78,6 +78,15 @@ vi.mock("../telemetry.js", () => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  // Closes #322: routes/agents.ts also imports agentInstructionRefreshService
+  // and ISSUE_LIST_DEFAULT_LIMIT from this barrel. Without them in the mock,
+  // the route factory throws at construction (TypeError on undefined) before
+  // any test even runs.
+  agentInstructionRefreshService: () => ({
+    refreshForAgent: vi.fn(),
+    refreshForRole: vi.fn(),
+  }),
+  ISSUE_LIST_DEFAULT_LIMIT: 50,
   agentService: () => mockAgentService,
   agentInstructionsService: () => mockAgentInstructionsService,
   accessService: () => mockAccessService,
@@ -97,6 +106,12 @@ vi.mock("../services/index.js", () => ({
 vi.mock("../adapters/index.js", () => ({
   findServerAdapter: vi.fn(() => mockAdapter),
   findActiveServerAdapter: vi.fn(() => mockAdapter),
+  // Closes #322: routes/agents.ts also imports these from the adapters
+  // barrel. Returning empty/no-op is sufficient for the skills routes;
+  // the test never exercises them.
+  listAdapterModelProfiles: vi.fn().mockResolvedValue([]),
+  refreshAdapterModels: vi.fn().mockResolvedValue([]),
+  requireServerAdapter: vi.fn(() => mockAdapter),
   listAdapterModels: vi.fn(),
   detectAdapterModel: vi.fn(),
 }));
@@ -112,6 +127,13 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+    // Closes #322: mirror the top-level vi.mock — both must include
+    // every export routes/agents.ts pulls in.
+    agentInstructionRefreshService: () => ({
+      refreshForAgent: vi.fn(),
+      refreshForRole: vi.fn(),
+    }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
@@ -132,6 +154,9 @@ function registerModuleMocks() {
     findActiveServerAdapter: vi.fn(() => mockAdapter),
     listAdapterModels: vi.fn(),
     detectAdapterModel: vi.fn(),
+    listAdapterModelProfiles: vi.fn().mockResolvedValue([]),
+    refreshAdapterModels: vi.fn().mockResolvedValue([]),
+    requireServerAdapter: vi.fn(() => mockAdapter),
   }));
 }
 
