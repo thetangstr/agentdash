@@ -68,6 +68,13 @@ export default defineConfig({
       // 429 from POST /companies/:id/issues. Disable for e2e runs.
       AGENTDASH_RATE_LIMIT_DISABLED:
         process.env.AGENTDASH_RATE_LIMIT_DISABLED ?? "true",
+      // Closes #315: onboarding.spec.ts picks "Claude Code" and the
+      // wizard runs a real binary probe before advancing. CI runners
+      // (and most dev machines) won't have a Claude binary. The bypass
+      // returns a synthetic "pass" so the test exercises the wizard
+      // shape, not the adapter-environment probe.
+      AGENTDASH_ADAPTER_ENV_BYPASS:
+        process.env.AGENTDASH_ADAPTER_ENV_BYPASS ?? "true",
     },
   },
   outputDir: "./test-results",
