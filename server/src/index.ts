@@ -979,6 +979,7 @@ export async function startServer(): Promise<StartedServer> {
   // the heartbeat digest.
   const coldSignupIntervalMs = 24 * 60 * 60 * 1000; // daily
   if (process.env.AGENTDASH_DIGEST_ENABLED === "true") {
+    const { coldSignupReengagement } = await import("./services/cold-signup-reengagement.js");
     const {
       reengagementUserAdapter,
       reengagementSentAdapter,
@@ -991,7 +992,7 @@ export async function startServer(): Promise<StartedServer> {
     });
     logger.info({ intervalMs: coldSignupIntervalMs }, "[reengagement] cold-signup schedule enabled");
     setInterval(() => {
-      void reengagement.run().catch((err) => {
+      void reengagement.run().catch((err: unknown) => {
         logger.error({ err }, "[reengagement] coldSignupReengagement.run failed");
       });
     }, coldSignupIntervalMs);
