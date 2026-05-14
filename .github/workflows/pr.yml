@@ -151,6 +151,14 @@ jobs:
       - name: Run e2e tests
         env:
           PAPERCLIP_E2E_SKIP_LLM: "true"
+          # Successor of #295: the onboarding-deep-interview spec
+          # requires the /assess endpoint to route through the
+          # deep-interview engine (not the legacy assess path). Without
+          # this flag the engine returns 503 on every turn and the spec
+          # parade fails. The webServer subprocess in
+          # tests/e2e/playwright.config.ts forwards process.env, so
+          # setting it here makes it visible to the booted server.
+          AGENTDASH_DEEP_INTERVIEW_ASSESS: "true"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report

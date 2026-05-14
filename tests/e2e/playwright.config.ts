@@ -48,6 +48,13 @@ export default defineConfig({
       PAPERCLIP_BIND: "loopback",
       PAPERCLIP_DEPLOYMENT_MODE: "local_trusted",
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private",
+      // Successor of #295: the onboarding-deep-interview spec requires
+      // /assess to route through the deep-interview engine; without
+      // this flag the route returns 503 on every turn. Default to true
+      // so local `pnpm test:e2e` runs match CI behavior; callers that
+      // need the legacy path can set it to "false" in their shell.
+      AGENTDASH_DEEP_INTERVIEW_ASSESS:
+        process.env.AGENTDASH_DEEP_INTERVIEW_ASSESS ?? "true",
     },
   },
   outputDir: "./test-results",
