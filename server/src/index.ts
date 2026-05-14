@@ -964,6 +964,11 @@ export async function startServer(): Promise<StartedServer> {
       email: digestEmailAdapter(),
       activity: digestActivityAdapter(db as any),
       users: digestUserAdapter(db as any),
+      // Closes #225: publicBaseUrl threads into the "Open in AgentDash"
+      // CTA. Falls back to "" when unset (CTA renders /cos as a
+      // relative path; mail clients typically resolve against the
+      // sender domain, but absolute is preferred).
+      publicBaseUrl: config.authPublicBaseUrl,
     });
     logger.info({ intervalMs: digestIntervalMs }, "[digest] heartbeatDigest schedule enabled");
     heartbeatDigestHandle = setInterval(() => {
