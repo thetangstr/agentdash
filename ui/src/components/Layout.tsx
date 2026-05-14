@@ -19,6 +19,7 @@ import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { TrialBanner } from "./TrialBanner";
 import { useDialogActions } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -395,6 +396,10 @@ export function Layout() {
         )}
 
         <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>
+          {/* Closes #208: Pro-trial countdown banner. Self-suppresses when
+              tier !== "pro_trial" or session-dismissed, so unconditional
+              mount here is safe and avoids prop drilling. */}
+          {selectedCompany?.id ? <TrialBanner companyId={selectedCompany.id} /> : null}
           <div
             className={cn(
               isMobile && "sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
