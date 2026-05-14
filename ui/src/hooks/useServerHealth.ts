@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 const HEALTH_POLL_INTERVAL_MS = 30_000;
+// Number of consecutive failed polls before reachability flips to
+// "unreachable" (and the overlay shows). One failure = "checking" only —
+// avoids spurious overlays on transient blips.
+const UNREACHABLE_THRESHOLD = 2;
 
 export type ServerReachability = "reachable" | "unreachable" | "checking";
 
@@ -27,11 +31,29 @@ async function checkHealth(): Promise<boolean> {
   }
 }
 
+// Closes #229: PR #220 had three compounding bugs in this hook:
+//
+//   1. Refs were being mutated inside the render body, which double-fires
+//      under StrictMode/concurrent rendering and corrupts the consecutive
+//      counter. Replaced with useEffect + useState.
+//   2. `reachability` flickered to "checking" on every 30s background
+//      refetch because the check was keyed off `isFetching`. Switched to
+//      `isPending` (initial load only) so steady-state polls don't flash
+//      the yellow indicator.
+//   3. `lastCheck` was `new Date()` recomputed every render → always "now".
+//      Now sourced from react-query's `dataUpdatedAt` (the timestamp of
+//      the most recently completed fetch).
 export function useServerHealth(): ServerHealth {
-  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
-  const unreachableConsecutiveRef = useRef(0);
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true,
+  );
+  const [unreachableConsecutive, setUnreachableConsecutive] = useState(0);
 
-  const { data: isReachable, isFetching } = useQuery({
+  const {
+    data: isReachable,
+    isPending,
+    dataUpdatedAt,
+  } = useQuery({
     queryKey: ["serverHealth"],
     queryFn: checkHealth,
     refetchInterval: HEALTH_POLL_INTERVAL_MS,
@@ -39,24 +61,34 @@ export function useServerHealth(): ServerHealth {
     staleTime: HEALTH_POLL_INTERVAL_MS - 1_000,
   });
 
-  // Track consecutive unreachable results to avoid flapping on transient failures
-  const reachability: ServerReachability =
-    isFetching || unreachableConsecutiveRef.current > 0
-      ? "checking"
-      : isReachable
-        ? "reachable"
-        : "unreachable";
-
-  // Update consecutive counter
-  const wasChecking = useRef(false);
-  if (wasChecking.current && !isFetching) {
+  // Track consecutive unreachable results — drives the "checking" badge
+  // during the recovery window after a failure. Runs in an effect so we
+  // never mutate state during render (StrictMode-safe).
+  useEffect(() => {
+    if (isReachable === undefined) return; // initial load, no result yet
     if (isReachable) {
-      unreachableConsecutiveRef.current = 0;
+      setUnreachableConsecutive((n) => (n === 0 ? n : 0));
     } else {
-      unreachableConsecutiveRef.current++;
+      setUnreachableConsecutive((n) => n + 1);
     }
+    // dataUpdatedAt changes on every completed fetch, so this effect fires
+    // exactly once per health-check result rather than per render.
+  }, [isReachable, dataUpdatedAt]);
+
+  // Sustained-failure detection: only flip to "unreachable" after
+  // UNREACHABLE_THRESHOLD consecutive failed polls. One transient blip
+  // shows as "checking" (yellow) but does NOT trigger the full-screen
+  // overlay — that requires sustained failure.
+  let reachability: ServerReachability;
+  if (isPending) {
+    reachability = "checking";
+  } else if (isReachable && unreachableConsecutive === 0) {
+    reachability = "reachable";
+  } else if (unreachableConsecutive >= UNREACHABLE_THRESHOLD) {
+    reachability = "unreachable";
+  } else {
+    reachability = "checking";
   }
-  wasChecking.current = isFetching;
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -71,7 +103,7 @@ export function useServerHealth(): ServerHealth {
 
   return {
     reachability,
-    lastCheck: isReachable !== undefined ? new Date() : null,
+    lastCheck: dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null,
     isOnline,
   };
 }
