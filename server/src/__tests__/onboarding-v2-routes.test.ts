@@ -29,6 +29,8 @@ const mockCosState = {
 };
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   onboardingOrchestrator: () => mockOrchestrator,
   cosInterview: () => mockInterview,
   agentProposer: () => mockProposer,
