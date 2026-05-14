@@ -62,6 +62,12 @@ export default defineConfig({
       // can stand up their own isolated company state.
       AGENTDASH_ALLOW_MULTI_COMPANY:
         process.env.AGENTDASH_ALLOW_MULTI_COMPANY ?? "true",
+      // Successor of #311 (round 2): the default tiered rate limiter
+      // (200 req / 15 min per actor) trips inside the signoff-policy
+      // suite (7+ rapid issue creates on one board actor) and returns
+      // 429 from POST /companies/:id/issues. Disable for e2e runs.
+      AGENTDASH_RATE_LIMIT_DISABLED:
+        process.env.AGENTDASH_RATE_LIMIT_DISABLED ?? "true",
     },
   },
   outputDir: "./test-results",
