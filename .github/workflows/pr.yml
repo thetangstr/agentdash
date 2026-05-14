@@ -169,6 +169,16 @@ jobs:
           # set explicitly so the bypass intent is obvious from the CI
           # config alone.
           AGENTDASH_ALLOW_MULTI_COMPANY: "true"
+          # Successor of #311 (round 2): the signoff-policy suite alone
+          # creates ~7 issues in one company in rapid succession, plus
+          # the prior specs eat ~50 requests against the same actor key.
+          # The default 200-req / 15-min ceiling (server/src/middleware/
+          # rate-limit.ts) trips inside the suite and returns 429 on
+          # POST /companies/:id/issues — manifests as
+          # \`expect(res.ok()).toBe(true)\` failures in createIssueWithPolicy.
+          # Disable rate limiting for the e2e run; the per-actor limit
+          # is a production-traffic concern, not a test concern.
+          AGENTDASH_RATE_LIMIT_DISABLED: "true"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report
