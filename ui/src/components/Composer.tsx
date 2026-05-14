@@ -12,7 +12,7 @@
 //
 // Trade-off: still an <input>, not a <textarea>. Multi-line composition is a
 // separate ask (chat substrate spec §11) and not in #209's scope.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { SendHorizontal } from "lucide-react";
 
 interface AgentDirEntry {
@@ -30,11 +30,24 @@ export function Composer({
 }) {
   const [value, setValue] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  // Closes #239 (part B): track caret position so the mention menu can
+  // open from mid-input "@" insertions, not just trailing-edit. The ref
+  // is updated by every onChange/onSelect/onClick/onKeyUp — anywhere the
+  // selection might move. Default to value.length (end of input) so a
+  // brand-new mount with no interactions still behaves like the legacy
+  // trailing-edit path.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [caret, setCaret] = useState(0);
 
-  // The mention query is everything after the last `@` (until whitespace).
-  // Null means no active mention being typed.
-  const mentionQuery = extractMentionQuery(value);
+  // The mention query is everything after the last `@` BEFORE the caret
+  // (until whitespace). Null means no active mention being typed.
+  const mentionQuery = extractMentionQuery(value.slice(0, caret));
   const showMentionMenu = mentionQuery !== null && agentDirectory.length > 0;
+
+  function syncCaret() {
+    const pos = inputRef.current?.selectionStart;
+    setCaret(typeof pos === "number" ? pos : value.length);
+  }
 
   // Filter the directory against the query. Empty query (bare `@`) shows all.
   const filtered = useMemo(() => {
@@ -62,10 +75,30 @@ export function Composer({
   }
 
   function completeWith(agent: AgentDirEntry) {
-    // Replace the in-progress "@<query>" with "@<canonical-name> " so the
-    // server-side parseMentions can resolve unambiguously.
-    setValue((prev) => prev.replace(/@[A-Za-z0-9_-]*$/, `@${agent.name} `));
+    // Closes #239 (part B): replace the "@<query>" that sits immediately
+    // BEFORE the caret — not at end-of-string. Preserves any text after
+    // the caret intact (mid-input mention completion).
+    const before = value.slice(0, caret);
+    const after = value.slice(caret);
+    const replacement = `@${agent.name} `;
+    const nextBefore = before.replace(/@[A-Za-z0-9_-]*$/, replacement);
+    const nextValue = nextBefore + after;
+    setValue(nextValue);
     setActiveIndex(0);
+    // Move the caret to the end of the inserted mention (just before
+    // `after`) so the user keeps typing where they were, only past the
+    // newly-inserted name.
+    const nextCaret = nextBefore.length;
+    setCaret(nextCaret);
+    // Restore the DOM-level selection on the next tick so the input UI
+    // matches our state.
+    requestAnimationFrame(() => {
+      const node = inputRef.current;
+      if (node) {
+        node.setSelectionRange(nextCaret, nextCaret);
+        node.focus();
+      }
+    });
   }
 
   const isEmpty = !value.trim();
@@ -74,13 +107,20 @@ export function Composer({
     <div className="composer relative flex items-center gap-2">
       <div className="relative flex-1">
         <input
+          ref={inputRef}
           type="text"
           className="w-full border border-border-soft rounded-xl px-4 py-2 bg-surface-raised text-text-primary placeholder:text-text-tertiary focus-visible:outline-none focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200 transition-[color,box-shadow] text-sm"
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
+            // Closes #239 (part B): keep caret in sync on every input.
+            const pos = e.target.selectionStart;
+            setCaret(typeof pos === "number" ? pos : e.target.value.length);
             setActiveIndex(0);
           }}
+          onSelect={syncCaret}
+          onClick={syncCaret}
+          onKeyUp={syncCaret}
           onKeyDown={(e) => {
             // Menu-navigation keys take priority when the menu is open.
             if (showMentionMenu && filtered.length > 0) {
@@ -101,9 +141,21 @@ export function Composer({
               }
               if (e.key === "Escape") {
                 e.preventDefault();
-                // Strip the in-progress "@..." so the menu closes without
-                // completing.
-                setValue((prev) => prev.replace(/@[A-Za-z0-9_-]*$/, ""));
+                // Closes #239 (part B): strip only the "@<query>" that
+                // sits immediately before the caret; keep the rest of
+                // the input intact (was: always strip the last @-token
+                // in the whole string).
+                const before = value.slice(0, caret);
+                const after = value.slice(caret);
+                const nextBefore = before.replace(/@[A-Za-z0-9_-]*$/, "");
+                const nextValue = nextBefore + after;
+                setValue(nextValue);
+                const nextCaret = nextBefore.length;
+                setCaret(nextCaret);
+                requestAnimationFrame(() => {
+                  const node = inputRef.current;
+                  if (node) node.setSelectionRange(nextCaret, nextCaret);
+                });
                 setActiveIndex(0);
                 return;
               }
@@ -178,18 +230,21 @@ export function Composer({
 }
 
 /**
- * Returns the in-progress mention query (the chars after the last @ up to the
- * caret), or null when the user isn't currently typing a mention.
+ * Returns the in-progress mention query (the chars after the last @ up to
+ * the END OF THE PASSED-IN STRING), or null when the user isn't currently
+ * typing a mention.
+ *
+ * Closes #239 (part B): the caller now passes `value.slice(0, caret)`, so
+ * the "end of string" here means "the caret position" — which lets the
+ * mention menu open from a mid-input @ insertion, not just trailing edits.
  *
  * Valid: "@" → "", "@re" → "re", "hi @rees" → "rees"
  * Invalid (returns null): "hi @reese ", "no mention here", "@@", "user@host"
  *
- * The "no leading word character" rule (`(?:^|\s)@…`) is what differentiates
- * an email-like "user@host" from a true mention.
+ * The "no leading word character" rule (`(?:^|\s)@…`) is what
+ * differentiates an email-like "user@host" from a true mention.
  */
 function extractMentionQuery(text: string): string | null {
-  // The caret is always at the end of `text` (controlled <input> with no
-  // explicit selectionStart wiring). So we only need to look at the tail.
   const match = text.match(/(?:^|\s)@([A-Za-z0-9_-]*)$/);
   if (!match) return null;
   return match[1];
