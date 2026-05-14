@@ -988,6 +988,14 @@ export type {
 
 export * from "./mention-parser.js";
 
+// AgentDash (#234, #231): canonical agent-plan validator. Re-exported
+// here so server-side code can `import { isAgentPlanPayload } from
+// "@paperclipai/shared"` without reaching into the validators subpath.
+// CI's TS build (which doesn't see local symlinks the same way as local
+// `pnpm typecheck`) failed when this was only registered in
+// validators/index.ts — added here to keep both surfaces in sync.
+export { isAgentPlanPayload } from "./validators/agent-plan.js";
+
 // AgentDash: chat substrate card payload types
 export * from "./cards.js";
 
