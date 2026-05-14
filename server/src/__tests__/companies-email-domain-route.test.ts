@@ -37,7 +37,10 @@ let ensureMembershipMock: ReturnType<typeof vi.fn>;
 let setPrincipalPermissionMock: ReturnType<typeof vi.fn>;
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   companyService: () => ({
+    hasActiveCompany: vi.fn().mockResolvedValue(false),
     list: vi.fn().mockResolvedValue([]),
     stats: vi.fn().mockResolvedValue({}),
     getById: vi.fn(),

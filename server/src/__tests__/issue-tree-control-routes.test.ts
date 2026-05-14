@@ -23,6 +23,8 @@ const mockHeartbeatService = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   heartbeatService: () => mockHeartbeatService,
   issueService: () => mockIssueService,
   issueTreeControlService: () => mockTreeControlService,

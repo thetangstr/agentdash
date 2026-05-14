@@ -28,6 +28,8 @@ vi.mock("../services/activity.js", () => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   issueService: () => mockIssueService,
   heartbeatService: () => mockHeartbeatService,
 }));

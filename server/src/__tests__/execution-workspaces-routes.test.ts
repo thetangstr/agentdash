@@ -20,6 +20,8 @@ const mockWorkspaceOperationService = vi.hoisted(() => ({
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   executionWorkspaceService: () => mockExecutionWorkspaceService,
   logActivity: mockLogActivity,
   workspaceOperationService: () => mockWorkspaceOperationService,

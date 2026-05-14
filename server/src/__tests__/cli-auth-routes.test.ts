@@ -26,6 +26,8 @@ const mockBoardAuthService = vi.hoisted(() => ({
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
   boardAuthService: () => mockBoardAuthService,
@@ -38,6 +40,8 @@ function registerModuleMocks() {
   vi.doMock("../routes/authz.js", async () => vi.importActual("../routes/authz.js"));
 
   vi.doMock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     accessService: () => mockAccessService,
     agentService: () => mockAgentService,
     boardAuthService: () => mockBoardAuthService,
