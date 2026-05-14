@@ -13,6 +13,7 @@ import {
   companyService,
   agentInstructionsService,
   cosOnboardingStateService,
+  inviteService,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -503,25 +504,62 @@ No greetings. No markdown headings outside the JSON block.`;
   });
 
   // POST /api/onboarding/invites
+  //
+  // Customer-facing endpoint hit by the CoS onboarding wizard's
+  // InvitePrompt card (`ui/src/pages/CoSConversation.tsx::onInviteSend`).
+  // Previously a stub that returned `invite-service-not-wired-yet` for
+  // every email — silently — so a brand-new customer who typed three
+  // teammate emails saw no errors but also no real invites. Now creates
+  // real `invites` rows via `inviteService` so the tokens persist and
+  // the rest of the join flow (`/invites/:token` resolution, etc.) can
+  // pick them up.
+  //
+  // Note: AgentDash does not yet send invitation emails (no SMTP
+  // service). The plaintext token URL still has to be surfaced to the
+  // inviter — surfacing it from this endpoint is a follow-up.
   router.post("/invites", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { emails } = req.body as {
+    const { companyId, emails } = req.body as {
       conversationId: string;
       companyId: string;
       emails: string[];
     };
+    if (!companyId || typeof companyId !== "string") {
+      throw badRequest("companyId is required");
+    }
     if (!Array.isArray(emails)) {
       throw badRequest("emails must be an array");
     }
+    assertCompanyAccess(req, companyId);
+
+    const invites = inviteService(db);
     const inviteIds: string[] = [];
     const errors: Array<{ email: string; reason: string }> = [];
-    // TODO: wire upstream invite service when available.
-    // grep -rn "invitation\|invite" server/src/services/ shows no standalone invite service yet.
+
     for (const email of emails) {
-      errors.push({ email, reason: "invite-service-not-wired-yet" });
+      const trimmed = typeof email === "string" ? email.trim() : "";
+      if (!trimmed) {
+        errors.push({ email: String(email), reason: "empty-email" });
+        continue;
+      }
+      try {
+        const created = await invites.createCompanyInvite({
+          companyId,
+          invitedByUserId: req.actor.userId ?? null,
+          email: trimmed,
+        });
+        inviteIds.push(created.id);
+      } catch (err) {
+        logger.warn(
+          { err, companyId, email: trimmed },
+          "onboarding_invite_create_failed",
+        );
+        errors.push({ email: trimmed, reason: "invite-create-failed" });
+      }
     }
+
     res.json({ inviteIds, errors });
   });
 

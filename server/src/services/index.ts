@@ -1,4 +1,5 @@
 export { companyService } from "./companies.js";
+export { inviteService } from "./invites.js";
 export { feedbackService } from "./feedback.js";
 export { companySkillService } from "./company-skills.js";
 export { agentService, deduplicateAgentName } from "./agents.js";
