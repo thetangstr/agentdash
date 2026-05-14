@@ -35,6 +35,18 @@ vi.mock("../api/conversations", () => ({
   },
 }));
 
+// CompanyInbox added a second useQuery in PR #218 for agentsApi.list (mention
+// typeahead directory). The test's existing useQuery mock blindly invokes the
+// queryFn, so without mocking agentsApi the second call would either throw or
+// return a Promise (fails downstream as `agents.map is not a function`).
+// Stub agentsApi.list to a synchronous empty array so the mention dropdown
+// renders empty without breaking the test.
+vi.mock("../api/agents", () => ({
+  agentsApi: {
+    list: vi.fn().mockReturnValue([]),
+  },
+}));
+
 vi.mock("../context/CompanyContext", () => ({
   useCompany: mockUseCompany,
 }));

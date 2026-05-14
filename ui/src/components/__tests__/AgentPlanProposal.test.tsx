@@ -74,10 +74,38 @@ describe("AgentPlanProposal", () => {
     });
     expect(onConfirm).toHaveBeenCalledOnce();
 
+    // PR #210: "Let me revise" no longer fires onRevise immediately — it opens
+    // an inline textarea + Send / Cancel form. Exercise the full flow:
+    //   1. click "Let me revise" → form opens (textarea + Send button)
+    //   2. type a revision into the textarea
+    //   3. click "Send revision" → onRevise(text) fires
     await act(async () => {
       revise.click();
     });
+    expect(onRevise).not.toHaveBeenCalled();
+    const reviseForm = container.querySelector('[data-testid="plan-revise-form"]');
+    expect(reviseForm).toBeTruthy();
+
+    const textarea = reviseForm!.querySelector("textarea")!;
+    expect(textarea).toBeTruthy();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(textarea, "drop the QA");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const sendBtn = Array.from(reviseForm!.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Send revision"),
+    )!;
+    expect(sendBtn).toBeDefined();
+    await act(async () => {
+      sendBtn.click();
+    });
     expect(onRevise).toHaveBeenCalledOnce();
+    expect(onRevise).toHaveBeenCalledWith("drop the QA");
 
     await act(async () => {
       root.unmount();
