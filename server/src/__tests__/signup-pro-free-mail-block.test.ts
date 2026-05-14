@@ -58,6 +58,13 @@ vi.mock("../services/index.js", () => ({
     update: vi.fn(),
     archive: vi.fn(),
     remove: vi.fn(),
+    // Closes #327: the route's #102 single-company guard calls
+    // svc.hasActiveCompany() before the create path. Missing this mock
+    // surfaced as 500 → tests expecting 400/201 failed. Default to
+    // false (no existing company) so the guard waves the create through,
+    // which is the right precondition for these tests anyway — they're
+    // asserting the FREE-MAIL block, not the single-company block.
+    hasActiveCompany: vi.fn().mockResolvedValue(false),
   }),
   companyPortabilityService: () => ({
     exportBundle: vi.fn(),
