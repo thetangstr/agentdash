@@ -1,6 +1,11 @@
 interface CompaniesAdapter {
-  findByStripeSubscriptionId: (id: string) => Promise<{ id: string } | null>;
-  findByStripeCustomerId: (id: string) => Promise<{ id: string } | null>;
+  findByStripeSubscriptionId: (id: string) => Promise<{ id: string; planTier?: string } | null>;
+  findByStripeCustomerId: (id: string) => Promise<{ id: string; planTier?: string } | null>;
+  // AgentDash (#249): optional read used to detect tier transitions before
+  // the update lands, so the notifier below can fire the CoS chat notice
+  // only on actual Pro → non-Pro downgrades. When omitted, transition
+  // detection is skipped (notifier is never called).
+  getById?: (id: string) => Promise<{ id: string; planTier: string } | null>;
   update: (id: string, patch: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -16,6 +21,22 @@ interface Deps {
   companies: CompaniesAdapter;
   ledger: LedgerAdapter;
   activityLog?: ActivityLogAdapter;
+  // AgentDash (#249): fired AFTER update when the tier transitions from
+  // pro_active/pro_trial → pro_canceled/pro_past_due. Best-effort: failures
+  // are logged but do not block the entitlement update.
+  onTierDowngrade?: (input: {
+    companyId: string;
+    from: string;
+    to: string;
+  }) => Promise<void>;
+}
+
+const PRO_LIVE_TIERS = new Set(["pro_trial", "pro_active"]);
+const PRO_DOWNGRADED_TIERS = new Set(["pro_canceled", "pro_past_due"]);
+
+function isProDowngrade(from: string | null | undefined, to: string): boolean {
+  if (!from) return false;
+  return PRO_LIVE_TIERS.has(from) && PRO_DOWNGRADED_TIERS.has(to);
 }
 
 // AgentDash (#157): past_due maps to pro_past_due (NOT pro_active).
@@ -42,6 +63,23 @@ export function entitlementSync(deps: Deps) {
     const planTier = STATUS_TO_TIER[sub.status] ?? "free";
     const planSeatsPaid = sub.items?.data?.[0]?.quantity ?? 0;
     const planPeriodEnd = new Date((sub.current_period_end ?? 0) * 1000);
+
+    // AgentDash (#249): read prior tier so we can fire the downgrade
+    // notifier if this transition crosses pro-live → downgraded. Only if
+    // the caller wired both getById AND onTierDowngrade — otherwise skip
+    // transition detection entirely (zero behavior change).
+    let priorTier: string | null = null;
+    if (deps.companies.getById && deps.onTierDowngrade) {
+      try {
+        const prior = await deps.companies.getById(company.id);
+        priorTier = prior?.planTier ?? null;
+      } catch {
+        // Best-effort. If the read fails, treat as no prior — which means
+        // the notifier will skip-fire (no false downgrade notices).
+        priorTier = null;
+      }
+    }
+
     await deps.companies.update(company.id, {
       planTier,
       planSeatsPaid,
@@ -49,6 +87,15 @@ export function entitlementSync(deps: Deps) {
       stripeSubscriptionId: sub.id,
       stripeCustomerId: sub.customer,
     });
+
+    if (deps.onTierDowngrade && isProDowngrade(priorTier, planTier)) {
+      try {
+        await deps.onTierDowngrade({ companyId: company.id, from: priorTier!, to: planTier });
+      } catch {
+        // Notifier failures must not interfere with the entitlement update
+        // itself. Caller logs as appropriate.
+      }
+    }
   }
 
   // AgentDash (#157): look up company by invoice customer/subscription.
