@@ -16,8 +16,15 @@ import { test, expect } from "@playwright/test";
 
 const SKIP_LLM = process.env.PAPERCLIP_E2E_SKIP_LLM !== "false";
 
+// Closes #311: the OnboardingWizard's default agent renamed from "CEO"
+// (role=ceo) to "CoS" (role=chief_of_staff) at the CoS-onboarding refit.
+// Test updated to match the current product shape — see
+// ui/src/components/OnboardingWizard.tsx for the canonical defaults
+// (placeholder="CoS", role="chief_of_staff", DEFAULT_TASK_DESCRIPTION
+// starts with "You are the Chief of Staff (CoS).").
 const COMPANY_NAME = `E2E-Test-${Date.now()}`;
-const AGENT_NAME = "CEO";
+const AGENT_NAME = "CoS";
+const AGENT_ROLE = "chief_of_staff";
 const TASK_TITLE = "E2E test task";
 
 test.describe("Onboarding wizard", () => {
@@ -38,7 +45,7 @@ test.describe("Onboarding wizard", () => {
       page.locator("h3", { hasText: "Create your first agent" })
     ).toBeVisible({ timeout: 30_000 });
 
-    const agentNameInput = page.locator('input[placeholder="CEO"]');
+    const agentNameInput = page.locator('input[placeholder="CoS"]');
     await expect(agentNameInput).toHaveValue(AGENT_NAME);
 
     await expect(
@@ -130,7 +137,7 @@ test.describe("Onboarding wizard", () => {
       (a: { name: string }) => a.name === AGENT_NAME
     );
     expect(ceoAgent).toBeTruthy();
-    expect(ceoAgent.role).toBe("ceo");
+    expect(ceoAgent.role).toBe(AGENT_ROLE);
     expect(ceoAgent.adapterType).not.toBe("process");
 
     const instructionsBundleRes = await page.request.get(
@@ -153,7 +160,7 @@ test.describe("Onboarding wizard", () => {
     expect(task).toBeTruthy();
     expect(task.assigneeAgentId).toBe(ceoAgent.id);
     expect(task.description).toContain(
-      "You are the CEO. You set the direction for the company."
+      "You are the Chief of Staff (CoS)."
     );
     expect(task.description).not.toContain("github.com/paperclipai/companies");
 
