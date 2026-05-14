@@ -23,6 +23,9 @@ interface Activity {
 interface DigestUser {
   id: string;
   email: string;
+  // Closes #225: thread display name through to the renderer for the
+  // "Hi {firstName}" greeting. Pulled from authUsers.name below.
+  name?: string | null;
   timezone?: string;
 }
 
@@ -42,6 +45,10 @@ export function digestUserAdapter(db: Db) {
         .selectDistinct({
           id: authUsers.id,
           email: authUsers.email,
+          // Closes #225: pull authUsers.name so renderBody can greet
+          // the user by first name instead of falling back to the
+          // email local-part.
+          name: authUsers.name,
         })
         .from(authUsers)
         .innerJoin(
@@ -53,7 +60,7 @@ export function digestUserAdapter(db: Db) {
           ),
         )
         .where(eq(authUsers.emailVerified, true));
-      return rows.map((row) => ({ id: row.id, email: row.email }));
+      return rows.map((row) => ({ id: row.id, email: row.email, name: row.name }));
     },
   };
 }
