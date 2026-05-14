@@ -55,6 +55,13 @@ export default defineConfig({
       // need the legacy path can set it to "false" in their shell.
       AGENTDASH_DEEP_INTERVIEW_ASSESS:
         process.env.AGENTDASH_DEEP_INTERVIEW_ASSESS ?? "true",
+      // Successor of #311: onboarding-deep-interview's ensure-company
+      // helper creates the first workspace, then signoff-policy tries
+      // to POST a second one and hits the #102 single-company guard.
+      // Bypass the guard for the duration of the e2e run so all specs
+      // can stand up their own isolated company state.
+      AGENTDASH_ALLOW_MULTI_COMPANY:
+        process.env.AGENTDASH_ALLOW_MULTI_COMPANY ?? "true",
     },
   },
   outputDir: "./test-results",

@@ -159,6 +159,16 @@ jobs:
           # tests/e2e/playwright.config.ts forwards process.env, so
           # setting it here makes it visible to the booted server.
           AGENTDASH_DEEP_INTERVIEW_ASSESS: "true"
+          # Successor of #311: specs run alphabetically in one
+          # webServer process, so onboarding-deep-interview's
+          # ensureCompanyExists helper creates a company first, then
+          # signoff-policy's beforeAll tries to POST a SECOND company
+          # and hits the #102 single-company-installation guard (409).
+          # The override here matches what the dev docs already promise
+          # for local_trusted dev (`AGENTDASH_DEV_MODE=true`), but is
+          # set explicitly so the bypass intent is obvious from the CI
+          # config alone.
+          AGENTDASH_ALLOW_MULTI_COMPANY: "true"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report
