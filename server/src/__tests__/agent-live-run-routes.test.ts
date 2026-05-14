@@ -46,6 +46,9 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+    // Closes #327: routes/agents.ts also imports these from the barrel.
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     agentService: () => mockAgentService,
     agentInstructionsService: () => ({}),
     accessService: () => ({}),
@@ -67,6 +70,9 @@ function registerModuleMocks() {
     detectAdapterModel: vi.fn(),
     findActiveServerAdapter: vi.fn(),
     requireServerAdapter: vi.fn(),
+    // Closes #327: routes/agents.ts also imports these from the barrel.
+    listAdapterModelProfiles: vi.fn().mockResolvedValue([]),
+    refreshAdapterModels: vi.fn().mockResolvedValue([]),
   }));
 }
 
