@@ -37,6 +37,9 @@ const mockSyncInstructionsBundleConfigFromFilePath = vi.hoisted(() => vi.fn());
 const mockFindServerAdapter = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
+  // Closes #327: routes/agents.ts also imports these from the barrel.
+  agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+  ISSUE_LIST_DEFAULT_LIMIT: 50,
   agentService: () => mockAgentService,
   agentInstructionsService: () => mockAgentInstructionsService,
   accessService: () => mockAccessService,
@@ -56,10 +59,18 @@ vi.mock("../services/index.js", () => ({
 vi.mock("../adapters/index.js", () => ({
   findServerAdapter: mockFindServerAdapter,
   listAdapterModels: vi.fn(),
+  // Closes #327: routes/agents.ts also imports these from the barrel.
+  listAdapterModelProfiles: vi.fn().mockResolvedValue([]),
+  refreshAdapterModels: vi.fn().mockResolvedValue([]),
+  requireServerAdapter: vi.fn(() => mockFindServerAdapter()),
+  findActiveServerAdapter: vi.fn(() => mockFindServerAdapter()),
+  detectAdapterModel: vi.fn(),
 }));
 
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
@@ -78,6 +89,11 @@ function registerModuleMocks() {
   vi.doMock("../adapters/index.js", () => ({
     findServerAdapter: mockFindServerAdapter,
     listAdapterModels: vi.fn(),
+    listAdapterModelProfiles: vi.fn().mockResolvedValue([]),
+    refreshAdapterModels: vi.fn().mockResolvedValue([]),
+    requireServerAdapter: vi.fn(() => mockFindServerAdapter()),
+    findActiveServerAdapter: vi.fn(() => mockFindServerAdapter()),
+    detectAdapterModel: vi.fn(),
   }));
 }
 

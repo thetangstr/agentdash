@@ -56,6 +56,9 @@ const mockLogActivity = vi.hoisted(() => vi.fn());
 
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
+    // Closes #327: routes/agents.ts also imports these from the barrel.
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     agentService: () => ({}),
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
