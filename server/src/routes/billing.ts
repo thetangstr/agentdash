@@ -4,6 +4,9 @@ import { billingService } from "../services/billing.js";
 import { entitlementSync } from "../services/entitlement-sync.js";
 import { stripeWebhookLedger } from "../services/stripe-webhook-ledger.js";
 import { companyService } from "../services/companies.js";
+import { conversationService } from "../services/conversations.js";
+import { agentService } from "../services/agents.js";
+import { logger } from "../middleware/logger.js";
 import { unauthorized, forbidden } from "../errors.js";
 
 interface RoutesConfig {
@@ -22,13 +25,61 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     companies,
     config: { proPriceId: cfg.proPriceId, trialDays: cfg.trialDays, publicBaseUrl: cfg.publicBaseUrl },
   });
+  // AgentDash (#249): downgrade notifier — when a company drops from
+  // pro_active/pro_trial to pro_canceled/pro_past_due, post a CoS chat
+  // message into the company's primary conversation explaining what
+  // happened + how to fix. Best-effort; entitlement-sync swallows errors
+  // so a notifier failure can never block the entitlement update.
+  const conversations = conversationService(db);
+  const agents = agentService(db);
+  async function notifyDowngrade(input: { companyId: string; from: string; to: string }) {
+    const convo = await conversations.findByCompany(input.companyId);
+    if (!convo) {
+      logger.info(
+        { companyId: input.companyId, from: input.from, to: input.to },
+        "[billing] no conversation found for downgrade notice; skipping",
+      );
+      return;
+    }
+    const allAgents = await agents.list(input.companyId);
+    const cos = allAgents.find((a: { role?: string }) => a.role === "chief_of_staff") ?? null;
+    if (!cos) {
+      logger.info(
+        { companyId: input.companyId },
+        "[billing] no CoS agent found for downgrade notice; skipping",
+      );
+      return;
+    }
+    const message = input.to === "pro_past_due"
+      ? "Heads up: Stripe couldn't charge your card, so the subscription is past due. Inviting teammates and hiring agents are paused until the card is updated. [Update payment method](/billing)"
+      : "Your Pro subscription ended. Everyone keeps their existing access, but inviting new teammates and hiring new agents now require an active subscription. [Reactivate Pro](/billing)";
+    try {
+      await conversations.postMessage({
+        conversationId: convo.id,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: message,
+      });
+    } catch (err) {
+      logger.error(
+        { err, companyId: input.companyId, conversationId: convo.id },
+        "[billing] failed to post downgrade chat message",
+      );
+    }
+  }
+
   const sync = entitlementSync({
     companies: {
       findByStripeSubscriptionId: (id) => companies.findByStripeSubscriptionId(id),
       findByStripeCustomerId: (id) => companies.findByStripeCustomerId(id),
+      getById: (id) =>
+        companies.getById(id).then((c) =>
+          c ? { id: c.id, planTier: c.planTier ?? "free" } : null,
+        ),
       update: (id, patch) => companies.update(id, patch),
     },
     ledger: stripeWebhookLedger(db),
+    onTierDowngrade: notifyDowngrade,
   });
 
   router.post("/checkout-session", async (req, res) => {
