@@ -58,6 +58,41 @@ OTHER_COUNT=0
 SKIP_AGENTDASH=0
 SKIP_CONFLICT=0
 
+# Closes #280: per-commit dependency feasibility check. A commit can touch
+# inherited files (path classification → score 3) but still fail to cherry-
+# pick cleanly because it depends on symbols/files introduced in earlier
+# upstream commits we never took. Cheapest signal: count the NEW files the
+# commit adds and the total churn. Above thresholds → "needs-followon".
+# Reviewers still see the commit in the worth-a-look section, but with a
+# clear "expect peer cherry-picks" warning.
+#
+# Thresholds picked from the 2026-05-14 cherry-pick attempt named in the
+# issue: eb452fba30 added 4 files + 125 lines of helpers; c445e59256 added
+# a new authorType field path; d1a8c873b2 added 3 new files. A threshold
+# of NEW_FILES ≥ 2 OR CHURN > 300 catches all three.
+DEPCHECK_NEW_FILES_THRESHOLD=2
+DEPCHECK_CHURN_THRESHOLD=300
+
+# Run the feasibility probe for a commit SHA. Echoes one of:
+#   "drop-in"        — small, no new files
+#   "needs-followon" — over threshold; cherry-pick will probably bring deps
+# Cheap: two `git show` calls per commit, ~0.1s each.
+depcheck_classify() {
+  local sha="$1"
+  local new_files churn
+  new_files=$(git show --diff-filter=A --name-only --format='' "$sha" 2>/dev/null | grep -c . || true)
+  churn=$(git show --shortstat --format='' "$sha" 2>/dev/null \
+    | tr ',' '\n' \
+    | grep -oE '[0-9]+ (insertion|deletion)' \
+    | awk '{ s += $1 } END { print s+0 }')
+  if [ "${new_files:-0}" -ge "$DEPCHECK_NEW_FILES_THRESHOLD" ] \
+     || [ "${churn:-0}" -gt "$DEPCHECK_CHURN_THRESHOLD" ]; then
+    echo "needs-followon"
+  else
+    echo "drop-in"
+  fi
+}
+
 # Stream-parse the log.
 sha=""; author=""; date=""; subject=""; files=()
 inherited=0; agentdash=0; conflict=0; other=0
@@ -101,7 +136,13 @@ flush_commit() {
   if [ "$file_count" -gt 3 ]; then
     extra=" (+$((file_count - 3)) more)"
   fi
-  local entry="${score}|${sha}|${date%% *}|${author}|${reason}|${subject}|${file_summary}${extra}"
+  # Closes #280: only probe feasibility for candidates we'd otherwise
+  # flag as worth-a-look. Cheaper than running it on every commit.
+  local feasibility=""
+  if [ "$score" -ge 2 ]; then
+    feasibility=$(depcheck_classify "$sha")
+  fi
+  local entry="${score}|${sha}|${date%% *}|${author}|${reason}|${feasibility}|${subject}|${file_summary}${extra}"
   if [ "$score" -ge 2 ]; then
     WORTH_LIST+=("$entry")
   fi
@@ -161,13 +202,19 @@ WORTH_SORTED="$(printf '%s\n' "${WORTH_LIST[@]:-}" | sort -t'|' -k1,1nr -k3,3r)"
     echo
     echo "Sorted by score (security boost = +2), then date desc."
     echo
-    echo "| Score | SHA | Date | Author | Reason | Subject | Files |"
-    echo "|---|---|---|---|---|---|---|"
-    while IFS='|' read -r score sha date author reason subject files; do
+    echo "**Feasibility** (per #280): \`drop-in\` = small diff, no new files →"
+    echo "expect a clean cherry-pick. \`needs-followon\` = adds ≥2 new files"
+    echo "or churns >300 lines → cherry-pick will probably reference symbols"
+    echo "introduced in earlier upstream commits; expect to chain follow-on"
+    echo "cherry-picks. The flag is a heuristic, not a guarantee."
+    echo
+    echo "| Score | SHA | Date | Author | Reason | Feasibility | Subject | Files |"
+    echo "|---|---|---|---|---|---|---|---|"
+    while IFS='|' read -r score sha date author reason feasibility subject files; do
       [ -z "$score" ] && continue
       short="${sha:0:10}"
-      printf '| %s | \`%s\` | %s | %s | %s | %s | %s |\n' \
-        "$score" "$short" "$date" "$author" "$reason" "$subject" "$files"
+      printf '| %s | \`%s\` | %s | %s | %s | %s | %s | %s |\n' \
+        "$score" "$short" "$date" "$author" "$reason" "$feasibility" "$subject" "$files"
     done <<< "$WORTH_SORTED"
     echo
   fi
