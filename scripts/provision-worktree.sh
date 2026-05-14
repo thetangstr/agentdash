@@ -335,7 +335,14 @@ EOF
 if [[ -e "$worktree_config_path" && -e "$worktree_env_path" ]]; then
   echo "Reusing existing isolated Paperclip worktree config at $worktree_config_path" >&2
 else
-  if paperclipai_command_available; then
+  # Closes #325: PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT=true skips the
+  # paperclipai-CLI path entirely. Used by integration tests that don't
+  # want a system-installed paperclipai (Homebrew, pnpm-global) to
+  # shadow the fallback path the test is asserting against.
+  if [[ "${PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT:-}" = "true" ]]; then
+    echo "PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT=true; writing isolated fallback config." >&2
+    write_fallback_worktree_config
+  elif paperclipai_command_available; then
     run_isolated_worktree_init
   else
     echo "paperclipai CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
