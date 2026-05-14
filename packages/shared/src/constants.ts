@@ -1058,6 +1058,7 @@ export const FEATURE_FLAG_KEYS = {
 export const ACTIVITY_LOG_ACTIONS_BILLING = [
   "stripe.payment_failed",
   "stripe.trial_will_end",
+  "stripe.invoice_paid",
 ] as const;
 export type ActivityLogActionBilling = (typeof ACTIVITY_LOG_ACTIONS_BILLING)[number];
 

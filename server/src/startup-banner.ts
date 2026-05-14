@@ -3,6 +3,7 @@ import { resolvePaperclipConfigPath, resolvePaperclipEnvPath } from "./paths.js"
 import type { BindMode, DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 
 import { parse as parseEnvFileContents } from "dotenv";
+import { logger } from "./middleware/logger.js";
 
 type UiMode = "none" | "static" | "vite-dev";
 
@@ -173,5 +174,5 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
     "",
   ];
 
-  console.log(lines.filter((line): line is string => line !== null).join("\n"));
+  logger.info(lines.filter((line): line is string => line !== null).join("\n"));
 }

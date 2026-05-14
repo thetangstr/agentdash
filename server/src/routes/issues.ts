@@ -3476,13 +3476,13 @@ export function issueRoutes(
     const reopenRequested = req.body.reopen === true;
     const resumeRequested = req.body.resume === true;
     const interruptRequested = req.body.interrupt === true;
-    if (resumeRequested === true && !(await assertExplicitResumeIntentAllowed(req, res, issue))) return;
-    if (resumeRequested !== true && reopenRequested === true && req.actor.type === "agent") {
+    if (resumeRequested && !(await assertExplicitResumeIntentAllowed(req, res, issue))) return;
+    if (!resumeRequested && reopenRequested && req.actor.type === "agent") {
       if (!(await assertExplicitResumeIntentAllowed(req, res, issue))) return;
     }
     const isClosed = isClosedIssueStatus(issue.status);
     const isBlocked = issue.status === "blocked";
-    const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
+    const explicitMoveToTodoRequested = reopenRequested || resumeRequested;
     const effectiveMoveToTodoRequested =
       explicitMoveToTodoRequested ||
       shouldImplicitlyMoveCommentedIssueToTodo({
@@ -3495,7 +3495,7 @@ export function issueRoutes(
       isBlocked && effectiveMoveToTodoRequested
         ? (await svc.getDependencyReadiness(issue.id)).unresolvedBlockerCount > 0
         : false;
-    if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
+    if (resumeRequested && isBlocked && hasUnresolvedFirstClassBlockers) {
       res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
       return;
     }
@@ -3529,7 +3529,7 @@ export function issueRoutes(
           reopened: true,
           reopenedFrom: reopenFromStatus,
           source: "comment",
-          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
           identifier: currentIssue.identifier,
         },
       });
@@ -3592,7 +3592,7 @@ export function issueRoutes(
         bodySnippet: comment.body.slice(0, 120),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,
-        ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+        ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
         ...summarizeIssueReferenceActivityDetails({
@@ -3636,7 +3636,7 @@ export function issueRoutes(
               commentId: comment.id,
               reopenedFrom: reopenFromStatus,
               mutation: "comment",
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
             requestedByActorType: actor.actorType,
@@ -3649,7 +3649,7 @@ export function issueRoutes(
               source: "issue.comment.reopen",
               wakeReason: "issue_reopened_via_comment",
               reopenedFrom: reopenFromStatus,
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
           });
@@ -3662,7 +3662,7 @@ export function issueRoutes(
               issueId: currentIssue.id,
               commentId: comment.id,
               mutation: "comment",
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
             requestedByActorType: actor.actorType,
@@ -3674,7 +3674,7 @@ export function issueRoutes(
               wakeCommentId: comment.id,
               source: "issue.comment",
               wakeReason: "issue_commented",
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
           });
