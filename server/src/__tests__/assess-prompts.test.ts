@@ -1,6 +1,18 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { buildSystemPrompt, buildUserPrompt, buildJumpstartPrompt, serializeContext } from "../services/assess-prompts.js";
 import { retrieveContext, type AssessmentInput } from "../services/assess-retrieval.js";
+
+// Closes #286 (assess-prompts portion): the "serializeContext includes
+// matrix cells" assertion relies on the matrix data files at
+// server/src/data/matrix/ (uncommitted asset bundle — see
+// assess-retrieval.test.ts for the broader context). Skip when missing.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const hasMatrixData = fs.existsSync(
+  path.resolve(here, "../data/matrix/index.json"),
+);
 
 function makeInput(overrides?: Partial<AssessmentInput>): AssessmentInput {
   return {
@@ -27,7 +39,7 @@ function makeInput(overrides?: Partial<AssessmentInput>): AssessmentInput {
 }
 
 describe("assess-prompts", () => {
-  it("serializeContext includes matrix cells", () => {
+  it.skipIf(!hasMatrixData)("serializeContext includes matrix cells", () => {
     const input = makeInput();
     const ctx = retrieveContext(input);
     const text = serializeContext(ctx, input);
