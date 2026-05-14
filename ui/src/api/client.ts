@@ -38,6 +38,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const errorBody = await res.json().catch(() => null);
+    // Closes #224: surface 402 cap-exceeded errors via a global event so
+    // <UpgradePromptModal> (mounted in Layout) renders the upgrade card
+    // inline regardless of which call site triggered the error. Avoids
+    // requiring every invite/hire callsite to manually catch + render.
+    if (res.status === 402 && errorBody && typeof errorBody === "object") {
+      const code = (errorBody as { code?: string }).code;
+      if (code === "seat_cap_exceeded" || code === "agent_cap_exceeded") {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("agentdash:cap-exceeded", {
+              detail: { reason: code, companyId: (errorBody as { companyId?: string }).companyId ?? null },
+            }),
+          );
+        } catch {
+          // SSR / non-browser context — swallow; the throw below still surfaces
+        }
+      }
+    }
     throw new ApiError(
       (errorBody as { error?: string } | null)?.error ?? `Request failed: ${res.status}`,
       res.status,
