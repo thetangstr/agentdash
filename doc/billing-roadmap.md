@@ -9,7 +9,7 @@
 
 ## TL;DR
 
-The Stripe plumbing — webhooks, tier model, seat sync, trial reconcile cron, requireTier middleware, BillingPage component — has all shipped (PRs #150, #197–#203, #244). **The frontend is missing every connecting piece** between the user and that plumbing: the billing page is orphaned (no sidebar link), three pre-built UI components are never mounted, and downgrade / payment-failure events fire on the server but produce no in-product notification. Net effect: **a paying customer cannot find the billing page to start a trial, and an existing customer cannot tell when their card has failed.**
+The Stripe plumbing — webhooks, tier model, seat sync, trial reconcile cron, requireTier middleware, BillingPage component — has all shipped (PRs #150, #197–#203). **The frontend is missing every connecting piece** between the user and that plumbing: the billing page is orphaned (no sidebar link), three pre-built UI components are never mounted, and downgrade / payment-failure events fire on the server but produce no in-product notification. Net effect: **a paying customer cannot find the billing page to start a trial, and an existing customer cannot tell when their card has failed.**
 
 This doc sequences the 8 open billing FRs into a path to "billing is shippable to first paying customer."
 
