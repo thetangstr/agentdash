@@ -74,7 +74,10 @@ function registerServiceMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
     companyService: () => ({
+    hasActiveCompany: vi.fn().mockResolvedValue(false),
       getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
     }),
     accessService: () => mockAccessService,

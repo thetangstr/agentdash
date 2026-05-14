@@ -43,6 +43,8 @@ const mockListReadyPluginEnvironmentDrivers = vi.hoisted(() => vi.fn());
 const mockExecutionWorkspaceService = vi.hoisted(() => ({}));
 
 vi.mock("../services/index.js", () => ({
+    agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
+    ISSUE_LIST_DEFAULT_LIMIT: 50,
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
   issueService: () => mockIssueService,
