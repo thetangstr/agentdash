@@ -1,5 +1,10 @@
 import { Router } from "express";
-import type { Db } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
+import {
+  type Db,
+  authUsers,
+  companyMemberships,
+} from "@paperclipai/db";
 import { billingService } from "../services/billing.js";
 import { entitlementSync } from "../services/entitlement-sync.js";
 import { stripeWebhookLedger } from "../services/stripe-webhook-ledger.js";
@@ -7,6 +12,7 @@ import { companyService } from "../services/companies.js";
 import { conversationService } from "../services/conversations.js";
 import { agentService } from "../services/agents.js";
 import { logger } from "../middleware/logger.js";
+import { sendEmail } from "../auth/email.js";
 import { unauthorized, forbidden } from "../errors.js";
 
 interface RoutesConfig {
@@ -68,6 +74,69 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     }
   }
 
+  // AgentDash (#211): trial-will-end fan-out — when Stripe notifies us 3
+  // days before trial expiry, post a CoS chat reminder + email each human
+  // member with verified email asking them to add a card. Best-effort;
+  // entitlement-sync swallows errors so a notifier failure can never block
+  // the webhook handler.
+  async function notifyTrialWillEnd(input: { companyId: string; trialEndAt: Date | null }) {
+    const daysLeft =
+      input.trialEndAt
+        ? Math.max(0, Math.round((input.trialEndAt.getTime() - Date.now()) / 86_400_000))
+        : 3;
+    const chatBody = `Heads up: your Pro trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}. Add a payment method to keep Pro features (multi-human invites, agent hires) active. [Update payment method](/billing)`;
+
+    // 1. CoS chat reminder
+    try {
+      const convo = await conversations.findByCompany(input.companyId);
+      if (convo) {
+        const allAgents = await agents.list(input.companyId);
+        const cos = allAgents.find((a: { role?: string }) => a.role === "chief_of_staff") ?? null;
+        if (cos) {
+          await conversations.postMessage({
+            conversationId: convo.id,
+            authorKind: "agent",
+            authorId: cos.id,
+            body: chatBody,
+          });
+        }
+      }
+    } catch (err) {
+      logger.error(
+        { err, companyId: input.companyId },
+        "[billing] trial_will_end CoS chat post failed",
+      );
+    }
+
+    // 2. Email each verified-email human member
+    try {
+      const memberRows = await db
+        .select({ email: authUsers.email, name: authUsers.name })
+        .from(companyMemberships)
+        .innerJoin(authUsers, eq(authUsers.id, companyMemberships.principalId))
+        .where(
+          and(
+            eq(companyMemberships.companyId, input.companyId),
+            eq(companyMemberships.principalType, "user"),
+            eq(companyMemberships.status, "active"),
+            eq(authUsers.emailVerified, true),
+          ),
+        );
+      const subject = `Your AgentDash Pro trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+      const text = `${chatBody}\n\nManage subscription: ${process.env.BILLING_PUBLIC_BASE_URL ?? ""}/billing`;
+      const html = `<p>${chatBody.replace(/\n/g, "<br/>")}</p><p><a href="${process.env.BILLING_PUBLIC_BASE_URL ?? ""}/billing">Manage subscription</a></p>`;
+      for (const member of memberRows) {
+        if (!member.email) continue;
+        await sendEmail({ to: member.email, subject, text, html });
+      }
+    } catch (err) {
+      logger.error(
+        { err, companyId: input.companyId },
+        "[billing] trial_will_end email fan-out failed",
+      );
+    }
+  }
+
   const sync = entitlementSync({
     companies: {
       findByStripeSubscriptionId: (id) => companies.findByStripeSubscriptionId(id),
@@ -80,6 +149,7 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     },
     ledger: stripeWebhookLedger(db),
     onTierDowngrade: notifyDowngrade,
+    onTrialWillEnd: notifyTrialWillEnd,
   });
 
   router.post("/checkout-session", async (req, res) => {

@@ -29,6 +29,13 @@ interface Deps {
     from: string;
     to: string;
   }) => Promise<void>;
+  // AgentDash (#211): fired when Stripe sends customer.subscription.trial_will_end
+  // (3 days before trial expiry). Caller fans out in-app notice + email.
+  // Best-effort: failures swallowed; the activity-log audit still happens.
+  onTrialWillEnd?: (input: {
+    companyId: string;
+    trialEndAt: Date | null;
+  }) => Promise<void>;
 }
 
 const PRO_LIVE_TIERS = new Set(["pro_trial", "pro_active"]);
@@ -175,19 +182,32 @@ export function entitlementSync(deps: Deps) {
           return;
         }
 
-        // AgentDash (#157): customer.subscription.trial_will_end — Stripe sends
-        // this 3 days before the trial ends. Write an audit trail so the event
-        // is observable; notification delivery is a follow-up (see #157).
+        // AgentDash (#157, #211): customer.subscription.trial_will_end —
+        // Stripe sends 3 days before the trial ends. Audit-log the event,
+        // then fan out in-app + email notice via the optional onTrialWillEnd
+        // notifier. Best-effort: notifier failures swallowed.
         case "customer.subscription.trial_will_end": {
           const company = obj
             ? ((await deps.companies.findByStripeSubscriptionId(obj.id)) ??
                (await deps.companies.findByStripeCustomerId(obj.customer)))
             : null;
-          if (company && deps.activityLog) {
+          if (!company) return;
+          if (deps.activityLog) {
             await deps.activityLog.record(company.id, "stripe.trial_will_end", {
               subscriptionId: obj?.id ?? null,
               trialEnd: obj?.trial_end ?? null,
             });
+          }
+          if (deps.onTrialWillEnd) {
+            const trialEndAt =
+              typeof obj?.trial_end === "number" && obj.trial_end > 0
+                ? new Date(obj.trial_end * 1000)
+                : null;
+            try {
+              await deps.onTrialWillEnd({ companyId: company.id, trialEndAt });
+            } catch {
+              // Notifier failures must not 500 the webhook.
+            }
           }
           return;
         }
