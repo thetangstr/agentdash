@@ -71,6 +71,19 @@ vi.mock("./NewAgentDialog", () => ({
   NewAgentDialog: () => null,
 }));
 
+// Closes #286 unhandled-errors: TrialBanner + UpgradePromptModal call
+// billingApi.status / register cap-exceeded listeners at mount. In jsdom
+// `fetch` with a relative path throws "Failed to parse URL", surfacing as
+// an unhandled error after the test finishes. Mock both out — Layout
+// tests only care about Layout structure, not these notification surfaces.
+vi.mock("./TrialBanner", () => ({
+  TrialBanner: () => null,
+}));
+
+vi.mock("./UpgradePromptModal", () => ({
+  UpgradePromptModal: () => null,
+}));
+
 vi.mock("./KeyboardShortcutsCheatsheet", () => ({
   KeyboardShortcutsCheatsheet: () => null,
 }));
