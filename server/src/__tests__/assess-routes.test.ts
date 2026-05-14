@@ -261,8 +261,15 @@ describe("Assess routes", () => {
         .post("/api/companies/company-1/assess")
         .send({ description: "Build a CRM" })
         .expect(200);
-      expect(res.text).toContain("[deep-interview] Ready to crystallize");
-      expect(res.text).toContain("0.180");
+      // Closes #330: marker shape changed from
+      // "[deep-interview] Ready to crystallize" to
+      // "[deep-interview-ready] {stateId, round, ambiguity}" — the
+      // route now emits a parseable JSON envelope (per assess.ts:97
+      // comment "AgentDash (Phase F)"). Test follows the new shape.
+      expect(res.text).toContain("[deep-interview-ready]");
+      expect(res.text).toContain('"stateId":"state-test"');
+      expect(res.text).toContain('"round":12');
+      expect(res.text).toContain('"ambiguity":0.18');
     });
   });
 
