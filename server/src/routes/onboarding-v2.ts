@@ -24,6 +24,7 @@ import { parseTrailer } from "../services/cos-replier.js";
 import { logger } from "../middleware/logger.js";
 import {
   FIXED_QUESTIONS,
+  isAgentPlanPayload,
   type AgentPlanProposalV1Payload,
   type InterviewState,
   type InterviewTurn,
@@ -577,17 +578,6 @@ async function defaultStubProposer(_transcript: InterviewTurn[]) {
   };
 }
 
-// Local type guard for the revise-plan handler. Mirrors the unexported
-// isPlanPayload in cos-replier.ts; kept inline to avoid widening that
-// module's public surface for a single caller.
-function isAgentPlanPayload(value: unknown): value is AgentPlanProposalV1Payload {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.rationale === "string" &&
-    Array.isArray(v.agents) &&
-    v.agents.length > 0 &&
-    typeof v.alignmentToShortTerm === "string" &&
-    typeof v.alignmentToLongTerm === "string"
-  );
-}
+// AgentDash (#234): isAgentPlanPayload now lives in @paperclipai/shared
+// so the cos-replier service and this route never drift on the validator
+// shape. See packages/shared/src/validators/agent-plan.ts.
