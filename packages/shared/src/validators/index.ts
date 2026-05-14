@@ -385,3 +385,7 @@ export {
   type SetPluginState,
   type ListPluginState,
 } from "./plugin.js";
+
+// AgentDash (#234): canonical type guard for AgentPlanProposalV1Payload;
+// replaces the previously-duplicated isPlanPayload + isAgentPlanPayload.
+export { isAgentPlanPayload } from "./agent-plan.js";

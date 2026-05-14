@@ -11,7 +11,7 @@
 // transition; the next user turn re-runs the prompt.
 
 import { logger } from "../middleware/logger.js";
-import type { AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
 
 interface CosStateRow {
   conversationId: string;
@@ -179,17 +179,6 @@ export function parseTrailer(raw: string): ParsedTrailer {
   }
 }
 
-function isPlanPayload(value: unknown): value is AgentPlanProposalV1Payload {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.rationale === "string" &&
-    Array.isArray(v.agents) &&
-    typeof v.alignmentToShortTerm === "string" &&
-    typeof v.alignmentToLongTerm === "string"
-  );
-}
-
 function isGoalsPatch(
   value: unknown,
 ): value is { shortTerm?: string; longTerm?: string; constraints?: Record<string, unknown> } {
@@ -290,7 +279,7 @@ export function cosReplier(deps: Deps) {
             }
           } else if (state.phase === "plan" && trailer) {
             // Plan phase: post visible body + a second message carrying the card.
-            if (isPlanPayload(trailer.plan)) {
+            if (isAgentPlanPayload(trailer.plan)) {
               const cardMsg = await deps.conversations.postMessage({
                 conversationId: input.conversationId,
                 authorKind: "agent",
