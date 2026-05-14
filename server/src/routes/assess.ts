@@ -90,6 +90,12 @@ export function assessRoutes(db: Db) {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("X-Content-Type-Options", "nosniff");
+        // Closes #256: guard the deep-interview short-write path too —
+        // not just the pump below. If the client aborts during the
+        // `engine.nextTurn(...)` await above, res.writableEnded flips to
+        // true and these `res.write`s would throw the exact "write after
+        // end" #167/#244 were meant to fix.
+        if (res.writableEnded) return;
         // Stream the engine output as plain text. Existing UI appends chunks.
         if (turn.kind === "question") {
           res.write(turn.question);
@@ -117,6 +123,13 @@ export function assessRoutes(db: Db) {
       const reader = (stream as ReadableStream<Uint8Array>).getReader();
       const decoder = new TextDecoder();
       let fullOutput = "";
+      // Closes #256: track whether the client aborted mid-stream. PR
+      // #244 added an early-return on writableEnded but (a) never
+      // cancelled the reader — upstream LLM bytes kept flowing into the
+      // buffer until GC — and (b) still fired onComplete with truncated
+      // fullOutput, persisting an aborted assessment as if it had
+      // completed. Flag the abort, cancel the reader, skip onComplete.
+      let aborted = false;
 
       const pump = async () => {
         while (true) {
@@ -133,7 +146,11 @@ export function assessRoutes(db: Db) {
               const json = JSON.parse(data);
               if (json.type === "content_block_delta" && json.delta?.text) {
                 fullOutput += json.delta.text;
-                if (res.writableEnded) return;
+                if (res.writableEnded) {
+                  aborted = true;
+                  await reader.cancel().catch(() => {});
+                  return;
+                }
                 res.write(json.delta.text);
               }
             } catch { /* skip non-JSON lines */ }
@@ -142,8 +159,13 @@ export function assessRoutes(db: Db) {
       };
 
       await pump();
-      res.end();
+      if (!aborted) res.end();
 
+      if (aborted) {
+        // Skip onComplete — fullOutput is truncated; persisting it as a
+        // completed assessment would be wrong.
+        return;
+      }
       // Fire-and-forget: store results + generate jumpstart
       onComplete(fullOutput).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "unknown";
@@ -321,6 +343,8 @@ export function assessRoutes(db: Db) {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("X-Content-Type-Options", "nosniff");
+        // Closes #256: see matching company-assess path above.
+        if (res.writableEnded) return;
         if (turn.kind === "question") {
           res.write(turn.question);
         } else {
@@ -349,6 +373,9 @@ export function assessRoutes(db: Db) {
       const reader = (stream as ReadableStream<Uint8Array>).getReader();
       const decoder = new TextDecoder();
       let fullOutput = "";
+      // Closes #256: see matching pump comment in the company-assess
+      // handler above. Same abort/cancel/skip-onComplete contract.
+      let aborted = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -363,14 +390,20 @@ export function assessRoutes(db: Db) {
             const json = JSON.parse(data);
             if (json.type === "content_block_delta" && json.delta?.text) {
               fullOutput += json.delta.text;
-              if (res.writableEnded) return;
+              if (res.writableEnded) {
+                aborted = true;
+                await reader.cancel().catch(() => {});
+                break;
+              }
               res.write(json.delta.text);
             }
           } catch { /* skip non-JSON lines */ }
         }
+        if (aborted) break;
       }
-      res.end();
+      if (!aborted) res.end();
 
+      if (aborted) return;
       onComplete(fullOutput).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "unknown";
         console.error("project assess onComplete error:", msg);
