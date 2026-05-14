@@ -93,7 +93,13 @@ export function digestActivityAdapter(db: Db) {
           agentId: activityLog.agentId,
           agentName: agents.name,
           count: sql<number>`count(*)::int`,
-          latestAction: sql<string>`(array_agg(${activityLog.action} ORDER BY ${activityLog.createdAt} DESC))[1]`,
+          // Closes #238: coalesce in SQL so the most-recent action is never
+          // null on the wire. activity_log.action is nullable, and the
+          // downstream renderer used to interpolate the literal string
+          // "null" into the digest body when the latest row's action was
+          // missing. The TS-side fallback below is a belt-and-suspenders
+          // guard in case the coalesce is ever bypassed.
+          latestAction: sql<string>`coalesce((array_agg(${activityLog.action} ORDER BY ${activityLog.createdAt} DESC))[1], 'activity')`,
           latestAt: sql<Date>`max(${activityLog.createdAt})`,
         })
         .from(activityLog)
@@ -110,13 +116,20 @@ export function digestActivityAdapter(db: Db) {
 
       return rows
         .filter((row) => !!row.agentName)
-        .map((row) => ({
-          agentName: row.agentName,
-          summary:
-            row.count > 1
-              ? `${row.count} updates (latest: ${row.latestAction})`
-              : row.latestAction,
-        }));
+        .map((row) => {
+          // Closes #238: defense-in-depth fallback. The SQL coalesce above
+          // already substitutes "activity" when the aggregated action is
+          // null, but if a future refactor removes that, we still never
+          // ship a literal "null" into the rendered digest body.
+          const action = row.latestAction ?? "activity";
+          return {
+            agentName: row.agentName,
+            summary:
+              row.count > 1
+                ? `${row.count} updates (latest: ${action})`
+                : action,
+          };
+        });
     },
   };
 }
