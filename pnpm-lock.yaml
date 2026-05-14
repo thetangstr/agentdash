@@ -14,7 +14,7 @@ patchedDependencies:
     hash: 55uhvnotpqyiy37rn3pqpukhei
     path: patches/embedded-postgres@18.1.0-beta.16.patch
   hermes-paperclip-adapter@0.3.0:
-    hash: eeadiv2f2lmlq26tn7zw25ixt4
+    hash: maasrsq2uwlwrv24ir7p7pknpe
     path: patches/hermes-paperclip-adapter+0.3.0.patch
 
 importers:
@@ -596,7 +596,7 @@ importers:
         version: 7.5.1(express@5.2.1)
       hermes-paperclip-adapter:
         specifier: ^0.3.0
-        version: 0.3.0(patch_hash=eeadiv2f2lmlq26tn7zw25ixt4)
+        version: 0.3.0(patch_hash=maasrsq2uwlwrv24ir7p7pknpe)
       jsdom:
         specifier: ^28.1.0
         version: 28.1.0(@noble/hashes@2.0.1)
@@ -741,7 +741,7 @@ importers:
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       hermes-paperclip-adapter:
         specifier: ^0.3.0
-        version: 0.3.0(patch_hash=eeadiv2f2lmlq26tn7zw25ixt4)
+        version: 0.3.0(patch_hash=maasrsq2uwlwrv24ir7p7pknpe)
       lexical:
         specifier: 0.35.0
         version: 0.35.0
@@ -11905,7 +11905,7 @@ snapshots:
 
   help-me@5.0.0: {}
 
-  hermes-paperclip-adapter@0.3.0(patch_hash=eeadiv2f2lmlq26tn7zw25ixt4):
+  hermes-paperclip-adapter@0.3.0(patch_hash=maasrsq2uwlwrv24ir7p7pknpe):
     dependencies:
       '@paperclipai/adapter-utils': 2026.325.0
       picocolors: 1.1.1

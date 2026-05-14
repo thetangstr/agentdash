@@ -1,5 +1,6 @@
---- package/dist/shared/constants.js	1985-10-26 01:15:00
-+++ /Users/maxiaoer/agentdash/node_modules/.pnpm/hermes-paperclip-adapter@0.3.0/node_modules/hermes-paperclip-adapter/dist/shared/constants.js	2026-05-11 10:46:55
+diff --git a/dist/shared/constants.js b/dist/shared/constants.js
+--- a/dist/shared/constants.js
++++ b/dist/shared/constants.js
 @@ -12,7 +12,7 @@
  /** Grace period after SIGTERM before SIGKILL (seconds). */
  export const DEFAULT_GRACE_SEC = 10;
