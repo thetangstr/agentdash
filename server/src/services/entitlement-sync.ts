@@ -68,7 +68,38 @@ export function entitlementSync(deps: Deps) {
     onSubscriptionCreated: applyFromSubscription,
     onSubscriptionUpdated: applyFromSubscription,
     onSubscriptionDeleted: applyFromSubscription,
-    onInvoicePaid: async (_inv: any) => { /* no-op; subscription.updated follows */ },
+    // AgentDash (#169): no longer a no-op. Stripe doesn't guarantee event
+    // ordering — for manual invoicing flows, invoice.paid may fire without a
+    // follow-up subscription.updated. Refresh local state from the invoice's
+    // line-item period info + audit the event. The next subscription.updated
+    // (if it arrives) will overwrite — that's the source of truth.
+    onInvoicePaid: async (inv: any) => {
+      const company = await findCompanyForInvoice(inv ?? {});
+      if (!company) return;
+      if (deps.activityLog) {
+        await deps.activityLog.record(company.id, "stripe.invoice_paid", {
+          invoiceId: inv?.id ?? null,
+          subscriptionId: inv?.subscription ?? null,
+          amountPaid: inv?.amount_paid ?? null,
+          periodEnd: inv?.period_end ?? null,
+        });
+      }
+      // Best-effort patch from invoice line-item period (covers the
+      // "subscription.updated never fires" failure mode).
+      const line = inv?.lines?.data?.[0];
+      const periodEndTs = line?.period?.end ?? inv?.period_end ?? null;
+      const quantity = line?.quantity ?? null;
+      const patch: Record<string, unknown> = {};
+      if (typeof periodEndTs === "number" && periodEndTs > 0) {
+        patch.planPeriodEnd = new Date(periodEndTs * 1000);
+      }
+      if (typeof quantity === "number" && quantity >= 0) {
+        patch.planSeatsPaid = quantity;
+      }
+      if (Object.keys(patch).length > 0) {
+        await deps.companies.update(company.id, patch);
+      }
+    },
 
     dispatch: async (event: any) => {
       const recorded = await deps.ledger.record(event.id, event.type, event);
