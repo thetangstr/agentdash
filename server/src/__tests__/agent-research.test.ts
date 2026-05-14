@@ -1,6 +1,23 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Closes #286 (agent-research portion): pin the upstream config env so the
+// happy-path / 502 tests don't accidentally read "" → trip the 503
+// "not configured" branch. The 503 test still works because it explicitly
+// deletes both env vars inside a try/finally.
+const ORIGINAL_RESEARCH_APP_URL = process.env.RESEARCH_APP_URL;
+const ORIGINAL_RESEARCH_APP_API_KEY = process.env.RESEARCH_APP_API_KEY;
+beforeAll(() => {
+  process.env.RESEARCH_APP_URL = "https://research.example.com";
+  process.env.RESEARCH_APP_API_KEY = "test-key";
+});
+afterAll(() => {
+  if (ORIGINAL_RESEARCH_APP_URL === undefined) delete process.env.RESEARCH_APP_URL;
+  else process.env.RESEARCH_APP_URL = ORIGINAL_RESEARCH_APP_URL;
+  if (ORIGINAL_RESEARCH_APP_API_KEY === undefined) delete process.env.RESEARCH_APP_API_KEY;
+  else process.env.RESEARCH_APP_API_KEY = ORIGINAL_RESEARCH_APP_API_KEY;
+});
 
 // ── Mock fetch (used by agent-research service) ────────────────────────────
 const mockFetch = vi.fn();
@@ -8,22 +25,41 @@ vi.stubGlobal("fetch", mockFetch);
 
 // ── Mock DB ─────────────────────────────────────────────────────────────────
 const mockDb = {
-  select: vi.fn().mockReturnThis(),
-  from: vi.fn().mockReturnThis(),
-  where: vi.fn().mockReturnThis(),
-  insert: vi.fn().mockReturnThis(),
-  values: vi.fn().mockReturnThis(),
-  onConflictDoUpdate: vi.fn().mockReturnThis(),
-  limit: vi.fn(),
+  select: vi.fn(),
+  insert: vi.fn(),
 };
 
-const mockCompanies = [
-  { id: "company-1", name: "Acme Corp", description: "A test company" },
-];
+// Closes #286 (agent-research portion): Drizzle's fluent query builder is
+// awaitable at any step that has no terminal method. The previous test
+// setup used `mockReturnThis()` on `.where()` — which returns the mock
+// FUNCTION rather than a thenable — so `await db.select().from().where()`
+// resolved to the mock function itself, and the route's subsequent
+// `rows.find(...)` threw "find is not a function" → 500.
+//
+// Two small builder factories match the two call shapes the route uses:
+//   1. .select().from(table).where(cond).limit(n) — company lookup
+//   2. .select().from(table).where(cond)           — companyContext lookup
+function builderWithLimit(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  };
+}
+function builderNoLimit(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(rows),
+    }),
+  };
+}
 
+const mockCompany = { id: "company-1", name: "Acme Corp", description: "A test company" };
 const mockContextRows = [
-  { key: "domain", value: "Technology" },
-  { key: "tech_stack", value: "React, Node.js" },
+  { companyId: "company-1", contextType: "general", key: "domain", value: "Technology" },
+  { companyId: "company-1", contextType: "general", key: "tech_stack", value: "React, Node.js" },
 ];
 
 beforeEach(() => {
@@ -60,22 +96,17 @@ async function createApp(actorOverrides: Record<string, unknown> = {}) {
 
 describe("POST /api/companies/:companyId/agent-research", () => {
   beforeEach(() => {
-    // Mock companies select
-    (mockDb.select as any).mockReturnThis();
-    (mockDb.from as any).mockReturnThis();
-    (mockDb.where as any).mockReturnThis();
-    (mockDb.limit as any).mockResolvedValue(mockCompanies);
-
-    // Mock companyContext select (for context rows)
-    const contextSelect = vi.fn().mockReturnThis();
-    const contextWhere = vi.fn().mockReturnThis();
-    const contextFrom = vi.fn().mockResolvedValue(mockContextRows);
-    mockDb.select.mockImplementation(() => ({
-      from: (table: any) => {
-        if (table.__kind === "company") return { where: contextWhere, limit: vi.fn().mockResolvedValue(mockCompanies) };
-        return { where: contextWhere, limit: vi.fn().mockResolvedValue(mockContextRows) };
-      },
-    }));
+    // Route does TWO selects in order: company-with-limit, then
+    // companyContext-without-limit. Sequence them through mockReturnValueOnce
+    // so each call gets its own builder.
+    (mockDb.select as any)
+      .mockReturnValueOnce(builderWithLimit([mockCompany]))
+      .mockReturnValueOnce(builderNoLimit(mockContextRows));
+    (mockDb.insert as any).mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
   });
 
   it("returns 200 with valid upstream response", async () => {
@@ -91,8 +122,6 @@ describe("POST /api/companies/:companyId/agent-research", () => {
         createdAt: "2026-01-01T00:00:00Z",
       }),
     });
-
-    mockDb.insert.mockReturnValue({ values: vi.fn().mockReturnThis(), onConflictDoUpdate: vi.fn().mockReturnThis() });
 
     const app = await createApp();
     const res = await request(app)
@@ -161,11 +190,13 @@ describe("POST /api/companies/:companyId/agent-research", () => {
 
 describe("GET /api/companies/:companyId/agent-research", () => {
   it("returns 200 with stored assessment", async () => {
-    mockDb.select.mockReturnValueOnce({ from: vi.fn().mockReturnValueOnce({ where: vi.fn().mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([mockCompanies[0]]) }) }) });
-    mockDb.select.mockReturnValueOnce({ from: vi.fn().mockReturnValueOnce({ where: vi.fn().mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([
-      { companyId: "company-1", contextType: "agent_research", key: "readiness-assessment", value: "# Report\n\nReady." },
-      { companyId: "company-1", contextType: "agent_research", key: "assessment-id", value: "assess-456" },
-    ]) }) }) });
+    // GET route does ONE select (companyContext, no .limit).
+    (mockDb.select as any).mockReturnValueOnce(
+      builderNoLimit([
+        { companyId: "company-1", contextType: "agent_research", key: "readiness-assessment", value: "# Report\n\nReady." },
+        { companyId: "company-1", contextType: "agent_research", key: "assessment-id", value: "assess-456" },
+      ]),
+    );
 
     const app = await createApp();
     const res = await request(app).get("/api/companies/company-1/agent-research");
@@ -176,8 +207,7 @@ describe("GET /api/companies/:companyId/agent-research", () => {
   });
 
   it("returns 404 when no assessment exists", async () => {
-    mockDb.select.mockReturnValueOnce({ from: vi.fn().mockReturnValueOnce({ where: vi.fn().mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([mockCompanies[0]]) }) }) });
-    mockDb.select.mockReturnValueOnce({ from: vi.fn().mockReturnValueOnce({ where: vi.fn().mockReturnValueOnce({ limit: vi.fn().mockResolvedValue([]) }) }) });
+    (mockDb.select as any).mockReturnValueOnce(builderNoLimit([]));
 
     const app = await createApp();
     const res = await request(app).get("/api/companies/company-1/agent-research");
