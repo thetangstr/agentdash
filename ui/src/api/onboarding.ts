@@ -23,8 +23,17 @@ export interface ConfirmResponse {
   proposal: ProposalPayload;
 }
 
+export interface CreatedInvite {
+  id: string;
+  email: string;
+  invitePath: string;
+  inviteUrl: string;
+  expiresAt: string;
+}
+
 export interface InvitesResponse {
   inviteIds: string[];
+  invites: CreatedInvite[];
   errors: Array<{ email: string; reason: string }>;
 }
 

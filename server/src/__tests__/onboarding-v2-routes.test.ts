@@ -28,6 +28,10 @@ const mockCosState = {
   advancePhase: vi.fn().mockResolvedValue(undefined),
 };
 
+const mockInvites = {
+  createCompanyInvite: vi.fn(),
+};
+
 vi.mock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
@@ -41,6 +45,7 @@ vi.mock("../services/index.js", () => ({
   companyService: () => ({}),
   agentInstructionsService: () => mockInstructions,
   cosOnboardingStateService: () => mockCosState,
+  inviteService: () => mockInvites,
 }));
 
 vi.mock("@paperclipai/db", () => ({
@@ -279,19 +284,127 @@ describe("POST /api/onboarding/revise-plan", () => {
 describe("POST /api/onboarding/invites", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockInvites.createCompanyInvite.mockReset();
   });
 
-  it("processes the invite list (returns errors[] when invite service is stubbed)", async () => {
-    const app = buildApp({ type: "board", userId: "u1", source: "session" });
+  it("creates one invite per email and returns ids + URLs", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return {
+        id: `invite-${n}`,
+        token: `pcp_invite_tok${n}`,
+        expiresAt: expires,
+      };
+    });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app)
+      .post("/api/onboarding/invites")
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "app.example.com")
+      .send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com", "carol@acme.com"],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1", "invite-2"]);
+    expect(res.body.errors).toEqual([]);
+    expect(res.body.invites).toEqual([
+      {
+        id: "invite-1",
+        email: "bob@acme.com",
+        invitePath: "/invite/pcp_invite_tok1",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok1",
+        expiresAt: expires.toISOString(),
+      },
+      {
+        id: "invite-2",
+        email: "carol@acme.com",
+        invitePath: "/invite/pcp_invite_tok2",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok2",
+        expiresAt: expires.toISOString(),
+      },
+    ]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(2);
+    expect(mockInvites.createCompanyInvite).toHaveBeenNthCalledWith(1, {
+      companyId: "c1",
+      invitedByUserId: "u1",
+      email: "bob@acme.com",
+    });
+  });
+
+  it("returns 403 for callers without access to companyId", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["other-company"],
+    });
     const res = await request(app).post("/api/onboarding/invites").send({
       conversationId: "conv1",
       companyId: "c1",
       emails: ["bob@acme.com"],
     });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      inviteIds: expect.any(Array),
-      errors: expect.any(Array),
+    expect(res.status).toBe(403);
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+  });
+
+  it("records per-email failures without aborting the batch", async () => {
+    mockInvites.createCompanyInvite
+      .mockResolvedValueOnce({
+        id: "invite-1",
+        token: "tok1",
+        expiresAt: new Date(),
+      })
+      .mockRejectedValueOnce(new Error("db down"));
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
     });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["ok@acme.com", "broken@acme.com"],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(res.body.errors).toEqual([
+      { email: "broken@acme.com", reason: "invite-create-failed" },
+    ]);
+    expect(res.body.invites).toHaveLength(1);
+    expect(res.body.invites[0]).toMatchObject({ id: "invite-1", email: "ok@acme.com" });
+  });
+
+  it("rejects empty emails inline without calling the service", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["   ", ""],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      inviteIds: [],
+      invites: [],
+      errors: [
+        { email: "   ", reason: "empty-email" },
+        { email: "", reason: "empty-email" },
+      ],
+    });
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
   });
 });
