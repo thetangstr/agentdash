@@ -10,6 +10,7 @@ const mockRejectAgent = vi.hoisted(() => vi.fn());
 const mockConfirmAgent = vi.hoisted(() => vi.fn());
 const mockSendInvites = vi.hoisted(() => vi.fn());
 const mockUseMessages = vi.hoisted(() => vi.fn());
+const mockChatPanelProps = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/onboarding", () => ({
   onboardingApi: {
@@ -63,9 +64,12 @@ vi.mock("../api/agents", () => ({
 }));
 
 // Mock ChatPanel to a stub so we don't drag in its useQuery / WS / scroll deps.
-// The test only asserts ".chat-panel" is in the DOM after bootstrap resolves.
+// The tests only need to assert the page passes the expected card callbacks.
 vi.mock("./ChatPanel", () => ({
-  default: () => <div className="chat-panel" />,
+  default: (props: unknown) => {
+    mockChatPanelProps(props);
+    return <div className="chat-panel" />;
+  },
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -80,6 +84,9 @@ describe("CoSConversation", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockUseMessages.mockReturnValue([]);
+    mockBootstrap.mockReset();
+    mockSendInvites.mockReset();
+    mockChatPanelProps.mockClear();
   });
 
   afterEach(() => {
@@ -131,5 +138,58 @@ describe("CoSConversation", () => {
 
     expect(container.textContent).toContain("Couldn't set up your workspace");
     expect(container.textContent).toContain("Network error");
+  });
+
+  it("returns generated invite links from the send callback", async () => {
+    mockBootstrap.mockResolvedValue({
+      companyId: "company-1",
+      cosAgentId: "agent-1",
+      conversationId: "conversation-1",
+    });
+    mockSendInvites.mockResolvedValue({
+      inviteIds: ["invite-1"],
+      invites: [
+        {
+          id: "invite-1",
+          email: "jane@example.com",
+          invitePath: "/invite/pcp_invite_test",
+          inviteUrl: "https://agentdash.local/invite/pcp_invite_test",
+          expiresAt: "2026-05-16T00:00:00.000Z",
+          emailStatus: "skipped",
+        },
+      ],
+      errors: [],
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<CoSConversation />);
+    });
+    await act(async () => {});
+
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as {
+      cardContext: {
+        onInviteSend: (emails: string[]) => Promise<unknown>;
+      };
+    };
+    let result: unknown;
+    await act(async () => {
+      result = await props.cardContext.onInviteSend(["jane@example.com"]);
+    });
+
+    expect(mockSendInvites).toHaveBeenCalledWith({
+      conversationId: "conversation-1",
+      companyId: "company-1",
+      emails: ["jane@example.com"],
+    });
+    expect(result).toMatchObject({
+      invites: [
+        {
+          email: "jane@example.com",
+          inviteUrl: "https://agentdash.local/invite/pcp_invite_test",
+          emailStatus: "skipped",
+        },
+      ],
+    });
   });
 });

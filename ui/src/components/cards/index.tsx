@@ -1,6 +1,6 @@
 // AgentDash: chat substrate card renderer + re-exports
 import { ProposalCard } from "./ProposalCard";
-import { InvitePrompt } from "./InvitePrompt";
+import { InvitePrompt, type InviteSendResult } from "./InvitePrompt";
 import { AgentStatusCard } from "./AgentStatusCard";
 import { InterviewQuestion } from "./InterviewQuestion";
 import { AgentPlanProposal } from "./AgentPlanProposal";
@@ -11,7 +11,7 @@ import { HumanTasteGateCard } from "./HumanTasteGateCard";
 export interface CardContext {
   onProposalConfirm?: () => void;
   onProposalReject?: (reason?: string) => void;
-  onInviteSend?: (emails: string[]) => Promise<void>;
+  onInviteSend?: (emails: string[]) => Promise<InviteSendResult | void>;
   onInviteSkip?: () => void;
 }
 
