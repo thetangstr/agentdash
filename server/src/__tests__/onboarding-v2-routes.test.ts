@@ -287,29 +287,51 @@ describe("POST /api/onboarding/invites", () => {
     mockInvites.createCompanyInvite.mockReset();
   });
 
-  it("creates one invite per email and returns the inviteIds", async () => {
+  it("creates one invite per email and returns ids + URLs", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
     let n = 0;
-    mockInvites.createCompanyInvite.mockImplementation(async () => ({
-      id: `invite-${++n}`,
-      token: `pcp_invite_token${n}`,
-      expiresAt: new Date(),
-    }));
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return {
+        id: `invite-${n}`,
+        token: `pcp_invite_tok${n}`,
+        expiresAt: expires,
+      };
+    });
     const app = buildApp({
       type: "board",
       userId: "u1",
       source: "session",
       companyIds: ["c1"],
     });
-    const res = await request(app).post("/api/onboarding/invites").send({
-      conversationId: "conv1",
-      companyId: "c1",
-      emails: ["bob@acme.com", "carol@acme.com"],
-    });
+    const res = await request(app)
+      .post("/api/onboarding/invites")
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "app.example.com")
+      .send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com", "carol@acme.com"],
+      });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      inviteIds: ["invite-1", "invite-2"],
-      errors: [],
-    });
+    expect(res.body.inviteIds).toEqual(["invite-1", "invite-2"]);
+    expect(res.body.errors).toEqual([]);
+    expect(res.body.invites).toEqual([
+      {
+        id: "invite-1",
+        email: "bob@acme.com",
+        invitePath: "/invite/pcp_invite_tok1",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok1",
+        expiresAt: expires.toISOString(),
+      },
+      {
+        id: "invite-2",
+        email: "carol@acme.com",
+        invitePath: "/invite/pcp_invite_tok2",
+        inviteUrl: "https://app.example.com/invite/pcp_invite_tok2",
+        expiresAt: expires.toISOString(),
+      },
+    ]);
     expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(2);
     expect(mockInvites.createCompanyInvite).toHaveBeenNthCalledWith(1, {
       companyId: "c1",
@@ -354,10 +376,12 @@ describe("POST /api/onboarding/invites", () => {
       emails: ["ok@acme.com", "broken@acme.com"],
     });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      inviteIds: ["invite-1"],
-      errors: [{ email: "broken@acme.com", reason: "invite-create-failed" }],
-    });
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(res.body.errors).toEqual([
+      { email: "broken@acme.com", reason: "invite-create-failed" },
+    ]);
+    expect(res.body.invites).toHaveLength(1);
+    expect(res.body.invites[0]).toMatchObject({ id: "invite-1", email: "ok@acme.com" });
   });
 
   it("rejects empty emails inline without calling the service", async () => {
@@ -375,6 +399,7 @@ describe("POST /api/onboarding/invites", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       inviteIds: [],
+      invites: [],
       errors: [
         { email: "   ", reason: "empty-email" },
         { email: "", reason: "empty-email" },

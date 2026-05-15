@@ -510,13 +510,14 @@ No greetings. No markdown headings outside the JSON block.`;
   // Previously a stub that returned `invite-service-not-wired-yet` for
   // every email — silently — so a brand-new customer who typed three
   // teammate emails saw no errors but also no real invites. Now creates
-  // real `invites` rows via `inviteService` so the tokens persist and
-  // the rest of the join flow (`/invites/:token` resolution, etc.) can
-  // pick them up.
+  // real `invites` rows via `inviteService` and returns the per-email
+  // invite URLs so the wizard can surface them to the inviter.
   //
-  // Note: AgentDash does not yet send invitation emails (no SMTP
-  // service). The plaintext token URL still has to be surfaced to the
-  // inviter — surfacing it from this endpoint is a follow-up.
+  // Email delivery: AgentDash uses Resend (`server/src/auth/email.ts`).
+  // When `RESEND_API_KEY` is unset the helper logs and no-ops, so the
+  // invite URL in the response is the only delivery channel in dev.
+  // Surfacing emailing here is a separate followup; this endpoint
+  // already returns enough for the inviter to share the URL by hand.
   router.post("/invites", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
@@ -534,8 +535,25 @@ No greetings. No markdown headings outside the JSON block.`;
     }
     assertCompanyAccess(req, companyId);
 
+    // Resolve the public base URL from forwarded headers, with a
+    // fallback to the request's own protocol+host. Mirrors
+    // `requestBaseUrl` in access.ts so /invite/<token> URLs stay in
+    // the same shape across endpoints.
+    const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+    const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
+    const proto = forwardedProto || req.protocol || "http";
+    const host = forwardedHost || req.header("host") || "";
+    const baseUrl = host ? `${proto}://${host}` : "";
+
     const invites = inviteService(db);
     const inviteIds: string[] = [];
+    const created: Array<{
+      id: string;
+      email: string;
+      invitePath: string;
+      inviteUrl: string;
+      expiresAt: string;
+    }> = [];
     const errors: Array<{ email: string; reason: string }> = [];
 
     for (const email of emails) {
@@ -545,12 +563,20 @@ No greetings. No markdown headings outside the JSON block.`;
         continue;
       }
       try {
-        const created = await invites.createCompanyInvite({
+        const row = await invites.createCompanyInvite({
           companyId,
           invitedByUserId: req.actor.userId ?? null,
           email: trimmed,
         });
-        inviteIds.push(created.id);
+        const invitePath = `/invite/${row.token}`;
+        inviteIds.push(row.id);
+        created.push({
+          id: row.id,
+          email: trimmed,
+          invitePath,
+          inviteUrl: baseUrl ? `${baseUrl}${invitePath}` : invitePath,
+          expiresAt: row.expiresAt.toISOString(),
+        });
       } catch (err) {
         logger.warn(
           { err, companyId, email: trimmed },
@@ -560,7 +586,7 @@ No greetings. No markdown headings outside the JSON block.`;
       }
     }
 
-    res.json({ inviteIds, errors });
+    res.json({ inviteIds, invites: created, errors });
   });
 
   return router;
