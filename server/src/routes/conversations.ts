@@ -42,9 +42,9 @@ export function conversationRoutes(db: Db) {
         execute: async () => ({ output: "Stub agent reply" }),
       }),
     }),
-    // dispatchLLM routes to whichever adapter the user picked via `agentdash setup`
-    // (AGENTDASH_DEFAULT_ADAPTER). Defaults to claude_api; also supports hermes_local
-    // and claude_local. Falls back to anthropicLLM stub when keys are unset.
+    // dispatchLLM routes to the CoS chat adapter selected via `agentdash setup`
+    // (AGENTDASH_DEFAULT_ADAPTER). Defaults to claude_api; also supports
+    // hermes_local and claude_local. Unsupported adapters fail explicitly.
     replier: cosReplier({
       conversations: svc,
       llm: dispatchLLM,
