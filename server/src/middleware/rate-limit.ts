@@ -1,14 +1,16 @@
 /**
  * AgentDash: tiered API rate limiting (#160)
  *
- * Three tiers:
- *  - Auth  (/api/auth/*): 10 req / 15 min  — brute-force / credential-stuffing vector
- *  - Billing mutations:   20 req / 15 min  — abuse / billing-fraud vector
- *  - Default (/api/*):  200 req / 15 min  — generous ceiling for legit usage
+ * Four tiers:
+ *  - Auth  (/api/auth/*):           10 req / 15 min  — brute-force / credential-stuffing
+ *  - Billing mutations:             20 req / 15 min  — abuse / billing-fraud
+ *  - Onboarding invites:            20 req / 15 min  — Resend cost amplification
+ *  - Default (/api/*):             200 req / 15 min  — generous ceiling for legit usage
  *
  * Env-var overrides:
  *  AGENTDASH_RATE_LIMIT_AUTH_MAX    (default 10)
  *  AGENTDASH_RATE_LIMIT_BILLING_MAX (default 20)
+ *  AGENTDASH_RATE_LIMIT_INVITE_MAX  (default 20)
  *  AGENTDASH_RATE_LIMIT_API_MAX     (default 200)
  *  AGENTDASH_RATE_LIMIT_DISABLED=true  — no-op middleware (tests / dev)
  */
@@ -80,4 +82,16 @@ export function createBillingRateLimiter(): RequestHandler {
 export function createDefaultApiRateLimiter(): RequestHandler {
   if (isDisabled()) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_API_MAX", 200));
+}
+
+/**
+ * Tighter limit for the onboarding invite endpoint. Each request can
+ * batch up to MAX_INVITE_BATCH (25) emails, each of which fans out to
+ * a Resend API call — so 20 req / 15 min × 25 = 500 emails per actor
+ * per quarter-hour. That's well above any legit "invite my team" flow
+ * but caps the cost-amplification window if a token is abused.
+ */
+export function createInviteRateLimiter(): RequestHandler {
+  if (isDisabled()) return noopMiddleware;
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_INVITE_MAX", 20));
 }

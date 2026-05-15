@@ -23,6 +23,7 @@ import { materializeOnboardingGoals } from "../services/materialize-onboarding-g
 import { dispatchLLM } from "../services/dispatch-llm.js";
 import { parseTrailer } from "../services/cos-replier.js";
 import { logger } from "../middleware/logger.js";
+import { sendEmail, inviteEmailTemplate } from "../auth/email.js";
 import {
   FIXED_QUESTIONS,
   isAgentPlanPayload,
@@ -31,10 +32,33 @@ import {
   type InterviewTurn,
 } from "@paperclipai/shared";
 
+// Cap the per-request invite batch size. Closes the abuse vector flagged
+// in security review (H1) — without this an authenticated board user
+// could submit thousands of emails in one POST and trigger thousands of
+// Resend sends per call.
+const MAX_INVITE_BATCH = 25;
+
+// Cheap email shape check — not RFC-compliant, just enough to reject
+// obviously-malformed entries (no `@`, no domain, embedded whitespace,
+// length > 254). Resend rejects bad addresses anyway, but pre-filtering
+// avoids per-row Resend round-trips for typo'd input.
+function isLikelyEmail(value: string): boolean {
+  if (value.length === 0 || value.length > 254) return false;
+  if (/\s/.test(value)) return false;
+  // Require exactly one `@`, both sides non-empty, domain has a dot.
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  const domain = value.slice(at + 1);
+  return domain.length > 0 && domain.includes(".") && !domain.endsWith(".");
+}
+
 export function onboardingV2Routes(db: Db) {
   const router = Router();
   const conversations = conversationService(db);
   const agents = agentService(db);
+  // Hoisted out of the request handler so we don't re-instantiate the
+  // service per call (fixes review feedback re: per-request churn).
+  const companies = companyService(db);
 
   const users = {
     getById: async (id: string) => {
@@ -533,6 +557,14 @@ No greetings. No markdown headings outside the JSON block.`;
     if (!Array.isArray(emails)) {
       throw badRequest("emails must be an array");
     }
+    // Cap batch size — closes the abuse vector flagged in security
+    // review (H1): without this an authenticated board user can submit
+    // 10k entries and burn 10k Resend sends per request. 25 is enough
+    // for the wizard's "invite your team" workflow without enabling
+    // bulk-spam amplification.
+    if (emails.length > MAX_INVITE_BATCH) {
+      throw badRequest(`Too many invites (max ${MAX_INVITE_BATCH} per request)`);
+    }
     assertCompanyAccess(req, companyId);
 
     // Resolve the public base URL from forwarded headers, with a
@@ -545,7 +577,26 @@ No greetings. No markdown headings outside the JSON block.`;
     const host = forwardedHost || req.header("host") || "";
     const baseUrl = host ? `${proto}://${host}` : "";
 
-    const invites = inviteService(db);
+    // Best-effort lookups for the email body. Failures here don't
+    // block the create — we just fall back to neutral copy.
+    let companyName: string | null = null;
+    let inviterName: string | null = null;
+    try {
+      const company = await companies.getById(companyId);
+      companyName = company?.name ?? null;
+    } catch {
+      /* fall back to default company copy */
+    }
+    try {
+      const user = await users.getById(req.actor.userId);
+      // authUsers schema: both `name` and `email` are text().notNull(),
+      // so the inferred row type covers the fallback chain without `any`.
+      inviterName = user?.name ?? user?.email ?? null;
+    } catch {
+      /* fall back to "your teammate" */
+    }
+
+    const inviteSvc = inviteService(db);
     const inviteIds: string[] = [];
     const created: Array<{
       id: string;
@@ -553,8 +604,10 @@ No greetings. No markdown headings outside the JSON block.`;
       invitePath: string;
       inviteUrl: string;
       expiresAt: string;
+      emailStatus: "sent" | "skipped" | "failed";
     }> = [];
     const errors: Array<{ email: string; reason: string }> = [];
+    const seen = new Set<string>(); // dedupe within the same batch
 
     for (const email of emails) {
       const trimmed = typeof email === "string" ? email.trim() : "";
@@ -562,20 +615,50 @@ No greetings. No markdown headings outside the JSON block.`;
         errors.push({ email: String(email), reason: "empty-email" });
         continue;
       }
+      if (!isLikelyEmail(trimmed)) {
+        errors.push({ email: trimmed, reason: "invalid-email" });
+        continue;
+      }
+      const lower = trimmed.toLowerCase();
+      if (seen.has(lower)) {
+        errors.push({ email: trimmed, reason: "duplicate-email" });
+        continue;
+      }
+      seen.add(lower);
+
       try {
-        const row = await invites.createCompanyInvite({
+        const row = await inviteSvc.createCompanyInvite({
           companyId,
           invitedByUserId: req.actor.userId ?? null,
           email: trimmed,
         });
         const invitePath = `/invite/${row.token}`;
+        const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;
+
+        // Fire the invite email. sendEmail returns {status} rather than
+        // throwing, so a missing RESEND_API_KEY (status:"skipped") or a
+        // Resend 4xx (status:"failed") never aborts the create — the
+        // inviter still has the URL to share by hand.
+        const { subject, html, text } = inviteEmailTemplate({
+          inviteUrl,
+          companyName,
+          inviterName,
+        });
+        const emailResult = await sendEmail({
+          to: trimmed,
+          subject,
+          html,
+          text,
+        });
+
         inviteIds.push(row.id);
         created.push({
           id: row.id,
           email: trimmed,
           invitePath,
-          inviteUrl: baseUrl ? `${baseUrl}${invitePath}` : invitePath,
+          inviteUrl,
           expiresAt: row.expiresAt.toISOString(),
+          emailStatus: emailResult.status,
         });
       } catch (err) {
         logger.warn(

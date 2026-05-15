@@ -29,6 +29,8 @@ export interface CreatedInvite {
   invitePath: string;
   inviteUrl: string;
   expiresAt: string;
+  /** Result of the optional Resend send. "skipped" when RESEND_API_KEY is unset. */
+  emailStatus: "sent" | "skipped" | "failed";
 }
 
 export interface InvitesResponse {

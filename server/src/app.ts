@@ -15,6 +15,7 @@ import {
   createAuthRateLimiter,
   createBillingRateLimiter,
   createDefaultApiRateLimiter,
+  createInviteRateLimiter,
 } from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -246,6 +247,10 @@ export async function createApp(
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
   api.use("/conversations", conversationRoutes(db));
+  // AgentDash: tighter cap on the invite endpoint specifically — fans
+  // out to Resend (cost amplification + sender-domain reputation risk).
+  // Default API limiter still covers the rest of /onboarding.
+  api.use("/onboarding/invites", createInviteRateLimiter());
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));

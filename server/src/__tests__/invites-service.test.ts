@@ -59,7 +59,7 @@ describeEmbeddedPostgres("inviteService.createCompanyInvite", () => {
     });
 
     expect(result.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(result.token).toMatch(/^pcp_invite_[a-z0-9]{8}$/);
+    expect(result.token).toMatch(/^pcp_invite_[a-z0-9]{16}$/);
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now() + 60 * 60 * 1000);
 
     const [row] = await db.select().from(invites).where(eq(invites.id, result.id));
