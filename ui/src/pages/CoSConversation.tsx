@@ -91,13 +91,19 @@ export function CoSConversation() {
     },
     onInviteSend: async (emails) => {
       try {
-        await onboardingApi.sendInvites({
+        return await onboardingApi.sendInvites({
           conversationId: bootstrapped.conversationId,
           companyId: bootstrapped.companyId,
           emails,
         });
-      } catch {
+      } catch (err) {
         // Non-blocking — onboarding completes even on partial invite failure.
+        const reason = err instanceof Error ? err.message : "Invite request failed";
+        return {
+          inviteIds: [],
+          invites: [],
+          errors: emails.map((email) => ({ email, reason })),
+        };
       }
     },
     onInviteSkip: () => {
