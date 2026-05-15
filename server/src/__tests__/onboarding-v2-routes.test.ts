@@ -31,6 +31,25 @@ const mockCosState = {
 const mockInvites = {
   createCompanyInvite: vi.fn(),
 };
+const mockSendEmail = vi.fn().mockResolvedValue({ status: "skipped" });
+
+vi.mock("../auth/email.js", () => ({
+  sendEmail: (...args: unknown[]) => mockSendEmail(...args),
+  inviteEmailTemplate: ({
+    inviteUrl,
+    companyName,
+    inviterName,
+  }: {
+    inviteUrl: string;
+    companyName: string | null;
+    inviterName: string | null;
+  }) => ({
+    subject: `${inviterName ?? "x"}→${companyName ?? "y"}: ${inviteUrl}`,
+    html: `<a>${inviteUrl}</a>`,
+    text: `Invite ${inviteUrl}`,
+  }),
+  sanitizeDisplayName: (s: string | null) => s,
+}));
 
 vi.mock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
@@ -287,7 +306,7 @@ describe("POST /api/onboarding/invites", () => {
     mockInvites.createCompanyInvite.mockReset();
   });
 
-  it("creates one invite per email and returns ids + URLs", async () => {
+  it("creates one invite per email, sends an email per invite, and returns URLs + emailStatus", async () => {
     const expires = new Date("2099-01-01T00:00:00.000Z");
     let n = 0;
     mockInvites.createCompanyInvite.mockImplementation(async () => {
@@ -298,6 +317,7 @@ describe("POST /api/onboarding/invites", () => {
         expiresAt: expires,
       };
     });
+    mockSendEmail.mockResolvedValue({ status: "skipped" });
     const app = buildApp({
       type: "board",
       userId: "u1",
@@ -323,6 +343,7 @@ describe("POST /api/onboarding/invites", () => {
         invitePath: "/invite/pcp_invite_tok1",
         inviteUrl: "https://app.example.com/invite/pcp_invite_tok1",
         expiresAt: expires.toISOString(),
+        emailStatus: "skipped",
       },
       {
         id: "invite-2",
@@ -330,6 +351,7 @@ describe("POST /api/onboarding/invites", () => {
         invitePath: "/invite/pcp_invite_tok2",
         inviteUrl: "https://app.example.com/invite/pcp_invite_tok2",
         expiresAt: expires.toISOString(),
+        emailStatus: "skipped",
       },
     ]);
     expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(2);
@@ -338,6 +360,100 @@ describe("POST /api/onboarding/invites", () => {
       invitedByUserId: "u1",
       email: "bob@acme.com",
     });
+    // sendEmail invoked per invite, with the URL we just minted.
+    expect(mockSendEmail).toHaveBeenCalledTimes(2);
+    expect(mockSendEmail).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        to: "bob@acme.com",
+        subject: expect.stringContaining("https://app.example.com/invite/pcp_invite_tok1"),
+      }),
+    );
+  });
+
+  it("propagates sendEmail status into the response (sent / failed both flow through)", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return { id: `invite-${n}`, token: `tok${n}`, expiresAt: expires };
+    });
+    mockSendEmail
+      .mockResolvedValueOnce({ status: "sent", messageId: "msg-1" })
+      .mockResolvedValueOnce({ status: "failed", error: "rate limited" });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["a@x.com", "b@x.com"],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.invites.map((i: { emailStatus: string }) => i.emailStatus)).toEqual([
+      "sent",
+      "failed",
+    ]);
+    expect(res.body.errors).toEqual([]); // failed email is NOT a create failure
+  });
+
+  it("rejects batches over MAX_INVITE_BATCH (25) without touching the invite service", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const big = Array.from({ length: 26 }, (_, i) => `u${i}@x.com`);
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: big,
+    });
+    expect(res.status).toBe(400);
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed emails inline (no @, no domain dot) and dedupes within the batch", async () => {
+    let n = 0;
+    mockInvites.createCompanyInvite.mockImplementation(async () => {
+      n += 1;
+      return {
+        id: `invite-${n}`,
+        token: `tok${n}`,
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      };
+    });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: [
+        "not-an-email",   // no @
+        "missing@domain", // no dot in domain
+        "ok@example.com",
+        "OK@example.com", // case-insensitive duplicate
+        "spaces in@email.com",
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(res.body.errors).toEqual([
+      { email: "not-an-email", reason: "invalid-email" },
+      { email: "missing@domain", reason: "invalid-email" },
+      { email: "OK@example.com", reason: "duplicate-email" },
+      { email: "spaces in@email.com", reason: "invalid-email" },
+    ]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
   });
 
   it("returns 403 for callers without access to companyId", async () => {

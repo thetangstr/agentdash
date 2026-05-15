@@ -183,6 +183,76 @@ export function resetPasswordEmailTemplate(input: { resetUrl: string }): {
   return { subject, html, text };
 }
 
+/**
+ * Sanitizer for user-controlled strings that flow into mail subject /
+ * plaintext body. HTML escaping protects the HTML part, but the
+ * plaintext part is rendered as-is and the subject lands in real mail
+ * headers; both are vulnerable to social-engineering payloads like
+ * `"Microsoft Security <security@example.com>"` set as the user's
+ * display name. Strip control chars (CR/LF), quotes, angle brackets,
+ * and `@` (which lets attackers impersonate "Big Co security team
+ * <security@bigco.com>"), collapse whitespace, and cap at 60 chars.
+ *
+ * Returns null on input that's empty after sanitization, so the caller
+ * can fall back to a neutral default ("your teammate" / "AgentDash").
+ */
+export function sanitizeDisplayName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value
+    .replace(/[\r\n<>"'@]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/**
+ * Onboarding-wizard invite email. Plain HTML, no external assets, copy
+ * of the URL in plain text for clients that mangle the link. The
+ * inviter's display name is optional — when null we fall back to "your
+ * teammate" so the body still reads naturally.
+ *
+ * Both `companyName` and `inviterName` flow through `sanitizeDisplayName`
+ * before any rendering so an attacker-controlled `authUsers.name` can't
+ * craft a phishing-friendly subject like "Microsoft Security
+ * <security@microsoft.com> invited you to ...".
+ */
+export function inviteEmailTemplate(input: {
+  inviteUrl: string;
+  companyName: string | null;
+  inviterName: string | null;
+}): { subject: string; html: string; text: string } {
+  const company = sanitizeDisplayName(input.companyName) ?? "AgentDash";
+  const inviter = sanitizeDisplayName(input.inviterName) ?? "your teammate";
+  const subject = `${inviter} invited you to ${company} on AgentDash`;
+  const text = [
+    `${inviter} invited you to join ${company} on AgentDash.`,
+    "",
+    `Accept the invite: ${input.inviteUrl}`,
+    "",
+    "AgentDash gives your team a Chief of Staff agent that coordinates AI",
+    "agents alongside humans. Once you join you'll share the same workspace",
+    "and CoS thread.",
+    "",
+    "If you weren't expecting this email, you can ignore it — the invite",
+    "expires in 72 hours.",
+  ].join("\n");
+
+  const html = `
+    <!doctype html>
+    <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; max-width: 560px; margin: 24px auto; line-height: 1.6;">
+      <h1 style="font-size: 22px; margin: 0 0 16px;">You're invited to ${escapeHtml(company)}</h1>
+      <p>${escapeHtml(inviter)} invited you to join <strong>${escapeHtml(company)}</strong> on AgentDash.</p>
+      <p><a href="${escapeHtml(input.inviteUrl)}" style="display: inline-block; padding: 10px 16px; background: #1f1e1d; color: #fff; text-decoration: none; border-radius: 6px;">Accept invite</a></p>
+      <p style="font-size: 13px; color: #666;">Or copy this URL: ${escapeHtml(input.inviteUrl)}</p>
+      <p>AgentDash gives your team a Chief of Staff agent that coordinates AI agents alongside humans. Once you join you'll share the same workspace and CoS thread.</p>
+      <p style="font-size: 13px; color: #666;">If you weren't expecting this email, you can ignore it — the invite expires in 72 hours.</p>
+    </body></html>
+  `.trim();
+
+  return { subject, html, text };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
