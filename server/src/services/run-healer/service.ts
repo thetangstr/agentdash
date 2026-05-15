@@ -452,5 +452,13 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
     return { scanned: eligible.length, fixed, skipped };
   }
 
-  return { scan };
+  return {
+    scan,
+    // Closes #297: exposed for integration tests so the scan eligibility
+    // can be exercised against a real heartbeat_runs row without standing
+    // up the full diagnose+fix pipeline (which needs a live LLM and would
+    // make the test environment-dependent). Production callers don't use
+    // this — only the scheduler calls scan() directly.
+    _scanEligibleRunsForTests: scanEligibleRuns,
+  };
 }
