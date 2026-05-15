@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { anthropicLLM } from "./anthropic-llm.js";
 import { logger } from "../middleware/logger.js";
+import { HttpError } from "../errors.js";
 
 // Default hermes binary path — matches the mini's installation.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
@@ -22,6 +23,7 @@ const DEFAULT_HERMES_COMMAND = "/Users/maxiaoer/.local/bin/hermes";
 
 const TOKEN_BUDGET_LOG_ENABLED = Boolean(process.env.AGENTDASH_TOKEN_BUDGET_LOG);
 const TOKEN_BUDGET_FILE = process.env.AGENTDASH_TOKEN_BUDGET_FILE ?? "/tmp/agentdash-token-budget.json";
+const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "hermes_local", "claude_local"] as const;
 
 function emitTokenBudget(adapterName: string, input: LLMInput): void {
   if (!TOKEN_BUDGET_LOG_ENABLED) return;
@@ -217,7 +219,7 @@ function e2eStubResponse(callIndex: number): string {
  *  - "claude_api" (default): calls Anthropic API via anthropicLLM
  *  - "hermes_local": spawns `hermes chat -q "<prompt>" -Q`
  *  - "claude_local": spawns `claude --print -` with prompt on stdin
- *  - everything else: falls back to claude_api with a TODO log
+ *  - everything else: throws 501 so unsupported adapters do not silently misroute
  */
 export async function dispatchLLM(input: LLMInput): Promise<string> {
   const adapter = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim();
@@ -273,10 +275,14 @@ export async function dispatchLLM(input: LLMInput): Promise<string> {
     }
   }
 
-  // TODO: add dispatch for gemini_local, codex_local, etc.
   logger.warn(
     { adapter },
-    "[dispatch-llm] adapter not yet supported for CoS chat — falling back to claude_api",
+    "[dispatch-llm] adapter not yet supported for CoS chat",
   );
-  return anthropicLLM(input);
+  throw new HttpError(
+    501,
+    `Adapter "${adapter}" is not supported for CoS chat dispatch. Configure AGENTDASH_DEFAULT_ADAPTER to one of: ${SUPPORTED_COS_CHAT_ADAPTERS.join(", ")}.`,
+    { adapter, supportedAdapters: SUPPORTED_COS_CHAT_ADAPTERS },
+    "unsupported_cos_chat_adapter",
+  );
 }
