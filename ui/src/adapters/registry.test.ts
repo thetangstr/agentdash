@@ -1,10 +1,21 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { UIAdapterModule } from "./types";
+
+const dynamicLoaderMocks = vi.hoisted(() => ({
+  loadDynamicParser: vi.fn(),
+  invalidateDynamicParser: vi.fn(),
+  setDynamicParserResultNotifier: vi.fn(),
+}));
+
+vi.mock("./dynamic-loader", () => dynamicLoaderMocks);
+
 import {
   findUIAdapter,
   getUIAdapter,
+  invalidateUIAdapterParser,
   listUIAdapters,
   registerUIAdapter,
+  syncExternalAdapters,
   unregisterUIAdapter,
 } from "./registry";
 import { processUIAdapter } from "./process";
@@ -20,6 +31,8 @@ const externalUIAdapter: UIAdapterModule = {
 
 describe("ui adapter registry", () => {
   beforeEach(() => {
+    dynamicLoaderMocks.loadDynamicParser.mockReset();
+    dynamicLoaderMocks.invalidateDynamicParser.mockReset();
     unregisterUIAdapter("external_test");
   });
 
@@ -47,5 +60,53 @@ describe("ui adapter registry", () => {
     expect(fallback.type).toBe("external_test");
     // But it uses the schema-based config fields for external adapter forms.
     expect(fallback.ConfigFields).toBe(SchemaConfigFields);
+  });
+
+  it("removes stale non-builtin external adapters when the server no longer lists them", () => {
+    syncExternalAdapters([{ type: "external_test", label: "External Test" }]);
+
+    expect(findUIAdapter("external_test")).not.toBeNull();
+
+    syncExternalAdapters([]);
+
+    expect(findUIAdapter("external_test")).toBeNull();
+  });
+
+  it("rebuilds a non-builtin bridge after explicit parser invalidation", () => {
+    syncExternalAdapters([{ type: "external_test", label: "External Test" }]);
+    const first = findUIAdapter("external_test");
+
+    invalidateUIAdapterParser("external_test");
+    expect(findUIAdapter("external_test")).toBeNull();
+
+    syncExternalAdapters([{ type: "external_test", label: "External Test" }]);
+    const second = findUIAdapter("external_test");
+
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(dynamicLoaderMocks.invalidateDynamicParser).toHaveBeenCalledWith("external_test");
+  });
+
+  it("does not re-register a removed adapter when a dynamic parser load resolves late", async () => {
+    let resolveParser!: (parser: { parseStdoutLine: UIAdapterModule["parseStdoutLine"] } | null) => void;
+    dynamicLoaderMocks.loadDynamicParser.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveParser = resolve;
+      }),
+    );
+
+    syncExternalAdapters([{ type: "external_test", label: "External Test" }]);
+    getUIAdapter("external_test").parseStdoutLine("ready", new Date(0).toISOString());
+
+    syncExternalAdapters([]);
+    expect(findUIAdapter("external_test")).toBeNull();
+
+    resolveParser({
+      parseStdoutLine: () => [],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(findUIAdapter("external_test")).toBeNull();
   });
 });

@@ -308,4 +308,47 @@ describe("adapter routes", () => {
 
     unregisterServerAdapter(HOT_INSTALL_TYPE);
   });
+
+  it("allows external adapters to override and remove a built-in adapter type", async () => {
+    const overrideModule: ServerAdapterModule = {
+      type: "claude_local",
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({
+        adapterType: "claude_local",
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      models: [{ id: "external-claude", label: "External Claude" }],
+    };
+    mockPluginLoader.loadExternalAdapterPackage.mockResolvedValue(overrideModule);
+
+    const app = createApp({ isInstanceAdmin: true });
+    const install = await request(app)
+      .post("/api/adapters/install")
+      .send({ packageName: "/tmp/fake-claude-override", isLocalPath: true });
+
+    expect(install.status, JSON.stringify(install.body)).toBe(201);
+    expect(install.body).toMatchObject({
+      type: "claude_local",
+      overriddenBuiltin: true,
+    });
+    expect(findServerAdapter("claude_local")?.models).toEqual([
+      { id: "external-claude", label: "External Claude" },
+    ]);
+
+    mockAdapterPluginStore.getAdapterPluginByType.mockReturnValue({
+      packageName: "/tmp/fake-claude-override",
+      localPath: "/tmp/fake-claude-override",
+      type: "claude_local",
+      installedAt: new Date(0).toISOString(),
+    });
+
+    const remove = await request(app).delete("/api/adapters/claude_local");
+
+    expect(remove.status, JSON.stringify(remove.body)).toBe(200);
+    expect(findServerAdapter("claude_local")?.models).not.toEqual([
+      { id: "external-claude", label: "External Claude" },
+    ]);
+  });
 });

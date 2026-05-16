@@ -36,7 +36,9 @@ export interface AdapterInstallResult {
   type: string;
   packageName: string;
   version?: string;
+  overriddenBuiltin?: boolean;
   installedAt: string;
+  requiresRestart?: boolean;
 }
 
 export const adaptersApi = {

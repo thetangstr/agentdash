@@ -41,7 +41,7 @@ import {
 } from "../services/adapter-plugin-store.js";
 import type { AdapterPluginRecord } from "../services/adapter-plugin-store.js";
 import type { ServerAdapterModule, AdapterConfigSchema } from "../adapters/types.js";
-import { loadExternalAdapterPackage, getUiParserSource, getOrExtractUiParserSource, reloadExternalAdapter } from "../adapters/plugin-loader.js";
+import { loadExternalAdapterPackage, getOrExtractUiParserSource, reloadExternalAdapter } from "../adapters/plugin-loader.js";
 import { logger } from "../middleware/logger.js";
 import { assertBoardOrgAccess, assertInstanceAdmin } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
@@ -296,14 +296,6 @@ export function adapterRoutes() {
       // Load and register the adapter (use canonicalName for path resolution)
       const adapterModule = await loadExternalAdapterPackage(canonicalName, moduleLocalPath);
 
-      // Check if this type conflicts with a built-in adapter
-      if (BUILTIN_ADAPTER_TYPES.has(adapterModule.type)) {
-        res.status(409).json({
-          error: `Adapter type "${adapterModule.type}" is a built-in adapter and cannot be overwritten.`,
-        });
-        return;
-      }
-
       // Check if already registered (indicates a reinstall/update)
       const existing = findServerAdapter(adapterModule.type);
       const isReinstall = existing !== null;
@@ -334,6 +326,7 @@ export function adapterRoutes() {
         type: adapterModule.type,
         packageName: canonicalName,
         version: installedVersion ?? explicitVersion,
+        overriddenBuiltin: BUILTIN_ADAPTER_TYPES.has(adapterModule.type),
         installedAt: record.installedAt,
         requiresRestart: isReinstall,
       });
@@ -419,7 +412,8 @@ export function adapterRoutes() {
   /**
    * DELETE /api/adapters/:type
    *
-   * Unregister an external adapter. Built-in adapters cannot be removed.
+   * Unregister an external adapter. Built-in adapters cannot be removed unless
+   * an external plugin currently overrides that built-in type.
    */
   router.delete("/adapters/:type", async (req, res) => {
     assertInstanceAdmin(req);
@@ -431,8 +425,11 @@ export function adapterRoutes() {
       return;
     }
 
-    // Prevent removal of built-in adapters
-    if (BUILTIN_ADAPTER_TYPES.has(adapterType)) {
+    const externalRecord = getAdapterPluginByType(adapterType);
+
+    // Prevent removal of built-in adapters unless an external plugin currently
+    // overrides that built-in type. Removing an override restores the builtin.
+    if (BUILTIN_ADAPTER_TYPES.has(adapterType) && !externalRecord) {
       res.status(403).json({
         error: `Cannot remove built-in adapter "${adapterType}".`,
       });
@@ -448,8 +445,6 @@ export function adapterRoutes() {
       return;
     }
 
-    // Check that it's an external adapter
-    const externalRecord = getAdapterPluginByType(adapterType);
     if (!externalRecord) {
       res.status(404).json({
         error: `Adapter "${adapterType}" is not an externally installed adapter.`,

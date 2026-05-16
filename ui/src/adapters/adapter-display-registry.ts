@@ -107,15 +107,13 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
   },
   process: {
     label: "Process",
-    description: "Internal process adapter",
+    description: "Run a configured command",
     icon: Cpu,
-    comingSoon: true,
   },
   http: {
     label: "HTTP",
-    description: "Internal HTTP adapter",
+    description: "Invoke a configured webhook",
     icon: Cpu,
-    comingSoon: true,
   },
 };
 

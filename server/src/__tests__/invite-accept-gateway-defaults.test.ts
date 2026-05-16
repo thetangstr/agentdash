@@ -104,6 +104,7 @@ describe("normalizeAgentDefaultsForJoin (openclaw_gateway)", () => {
         headers: {
           "x-openclaw-token": "gateway-token-1234567890",
         },
+        claimedApiKeyPath: "/var/lib/openclaw/claimed-key.json",
         disableDeviceAuth: true,
       },
       deploymentMode: "authenticated",
@@ -114,6 +115,7 @@ describe("normalizeAgentDefaultsForJoin (openclaw_gateway)", () => {
 
     expect(normalized.fatalErrors).toEqual([]);
     expect(normalized.normalized?.disableDeviceAuth).toBe(true);
+    expect(normalized.normalized?.claimedApiKeyPath).toBe("/var/lib/openclaw/claimed-key.json");
     expect(normalized.normalized?.devicePrivateKeyPem).toBeUndefined();
   });
 });

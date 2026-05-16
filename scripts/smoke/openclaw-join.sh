@@ -14,12 +14,9 @@ PAPERCLIP_API_URL="${PAPERCLIP_API_URL:-http://localhost:3100}"
 API_BASE="${PAPERCLIP_API_URL%/}/api"
 COMPANY_ID="${COMPANY_ID:-${PAPERCLIP_COMPANY_ID:-}}"
 OPENCLAW_AGENT_NAME="${OPENCLAW_AGENT_NAME:-OpenClaw Smoke Agent}"
-OPENCLAW_WEBHOOK_URL="${OPENCLAW_WEBHOOK_URL:-}"
-OPENCLAW_WEBHOOK_AUTH="${OPENCLAW_WEBHOOK_AUTH:-Bearer openclaw-smoke-secret}"
-USE_DOCKER_RECEIVER="${USE_DOCKER_RECEIVER:-1}"
-SMOKE_IMAGE="${SMOKE_IMAGE:-paperclip-openclaw-smoke:local}"
-SMOKE_CONTAINER_NAME="${SMOKE_CONTAINER_NAME:-paperclip-openclaw-smoke}"
-SMOKE_PORT="${SMOKE_PORT:-19091}"
+OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
+OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-${OPENCLAW_AUTH_TOKEN:-}}"
+OPENCLAW_LEGACY_AUTH="${OPENCLAW_WEBHOOK_AUTH:-}"
 SMOKE_TIMEOUT_SEC="${SMOKE_TIMEOUT_SEC:-45}"
 
 AUTH_HEADERS=()
@@ -30,7 +27,6 @@ if [[ -n "${PAPERCLIP_COOKIE:-}" ]]; then
   AUTH_HEADERS+=(-H "Cookie: ${PAPERCLIP_COOKIE}")
 fi
 
-STARTED_CONTAINER=0
 RESPONSE_CODE=""
 RESPONSE_BODY=""
 
@@ -57,13 +53,6 @@ Current auth context appears insufficient (HTTP ${RESPONSE_CODE}).
 EOF
   exit 1
 }
-
-cleanup() {
-  if [[ "$STARTED_CONTAINER" == "1" ]]; then
-    docker rm -f "$SMOKE_CONTAINER_NAME" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup EXIT
 
 api_request() {
   local method="$1"
@@ -108,39 +97,37 @@ assert_json_has_string() {
   echo "$value"
 }
 
-if [[ "$USE_DOCKER_RECEIVER" == "1" && -z "$OPENCLAW_WEBHOOK_URL" ]]; then
-  if ! command -v docker >/dev/null 2>&1; then
-    fail "docker is required when USE_DOCKER_RECEIVER=1"
+get_run_status() {
+  local run_id="$1"
+  api_request "GET" "/companies/${COMPANY_ID}/heartbeat-runs?agentId=${CREATED_AGENT_ID}&limit=100"
+  if [[ "$RESPONSE_CODE" != "200" ]]; then
+    echo ""
+    return 0
   fi
-  log "building dockerized OpenClaw webhook receiver image"
-  docker build -t "$SMOKE_IMAGE" -f docker/openclaw-smoke/Dockerfile docker/openclaw-smoke >/dev/null
-  docker rm -f "$SMOKE_CONTAINER_NAME" >/dev/null 2>&1 || true
+  jq -r --arg runId "$run_id" '.[] | select(.id == $runId) | .status' <<<"$RESPONSE_BODY" | head -n1
+}
 
-  log "starting dockerized OpenClaw webhook receiver"
-  docker run -d \
-    --name "$SMOKE_CONTAINER_NAME" \
-    -p "${SMOKE_PORT}:8787" \
-    -e "OPENCLAW_SMOKE_AUTH=${OPENCLAW_WEBHOOK_AUTH}" \
-    "$SMOKE_IMAGE" >/dev/null
-  STARTED_CONTAINER=1
-  OPENCLAW_WEBHOOK_URL="http://127.0.0.1:${SMOKE_PORT}/webhook"
+wait_for_run_terminal() {
+  local run_id="$1"
+  local timeout_sec="$2"
+  local started now status
+  started="$(date +%s)"
 
-  for _ in $(seq 1 30); do
-    code="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${SMOKE_PORT}/health" || true)"
-    if [[ "$code" == "200" ]]; then
-      break
+  while true; do
+    status="$(get_run_status "$run_id")"
+    if [[ "$status" == "succeeded" || "$status" == "failed" || "$status" == "timed_out" || "$status" == "cancelled" ]]; then
+      echo "$status"
+      return 0
     fi
-    sleep 1
-  done
-  code="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${SMOKE_PORT}/health" || true)"
-  if [[ "$code" != "200" ]]; then
-    fail "webhook receiver failed health check on port ${SMOKE_PORT}"
-  fi
-fi
 
-if [[ -z "$OPENCLAW_WEBHOOK_URL" ]]; then
-  fail "OPENCLAW_WEBHOOK_URL must be set when USE_DOCKER_RECEIVER=0"
-fi
+    now="$(date +%s)"
+    if (( now - started >= timeout_sec )); then
+      echo "timeout"
+      return 0
+    fi
+    sleep 2
+  done
+}
 
 log "checking Paperclip health"
 api_request "GET" "/health"
@@ -183,10 +170,11 @@ if ! grep -q "Paperclip OpenClaw Gateway Onboarding" <<<"$RESPONSE_BODY"; then
   fail "onboarding.txt response missing expected header"
 fi
 
-OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-ws://127.0.0.1:18789}"
-OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-${OPENCLAW_WEBHOOK_AUTH#Bearer }}"
 if [[ -z "$OPENCLAW_GATEWAY_TOKEN" ]]; then
-  fail "OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_WEBHOOK_AUTH) is required for gateway join"
+  OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_LEGACY_AUTH#Bearer }"
+fi
+if [[ -z "$OPENCLAW_GATEWAY_TOKEN" ]]; then
+  fail "OPENCLAW_GATEWAY_TOKEN is required for gateway join"
 fi
 
 log "submitting OpenClaw gateway agent join request"
@@ -243,10 +231,6 @@ if [[ "$RESPONSE_CODE" == "201" ]]; then
   fail "claim secret replay unexpectedly succeeded"
 fi
 
-if [[ "$USE_DOCKER_RECEIVER" == "1" && "$STARTED_CONTAINER" == "1" ]]; then
-  curl -sS -X POST "http://127.0.0.1:${SMOKE_PORT}/reset" >/dev/null
-fi
-
 log "triggering wakeup for newly created OpenClaw agent"
 WAKE_PAYLOAD='{"source":"on_demand","triggerDetail":"manual","reason":"openclaw_smoke"}'
 api_request "POST" "/agents/${CREATED_AGENT_ID}/wakeup" "$WAKE_PAYLOAD"
@@ -259,26 +243,12 @@ if [[ -z "$RUN_ID" ]]; then
   log "wakeup response: ${RESPONSE_BODY}"
 fi
 
-log "waiting for webhook callback"
-FOUND_EVENT="0"
-LAST_EVENTS='{"count":0,"events":[]}'
-for _ in $(seq 1 "$SMOKE_TIMEOUT_SEC"); do
-  if [[ "$USE_DOCKER_RECEIVER" == "1" && "$STARTED_CONTAINER" == "1" ]]; then
-    LAST_EVENTS="$(curl -sS "http://127.0.0.1:${SMOKE_PORT}/events")"
-  else
-    break
+if [[ -n "$RUN_ID" ]]; then
+  log "waiting for gateway run to finish"
+  RUN_STATUS="$(wait_for_run_terminal "$RUN_ID" "$SMOKE_TIMEOUT_SEC")"
+  if [[ "$RUN_STATUS" != "succeeded" ]]; then
+    fail "OpenClaw gateway run did not succeed within ${SMOKE_TIMEOUT_SEC}s (status=${RUN_STATUS})"
   fi
-  MATCH_COUNT="$(jq -r --arg agentId "$CREATED_AGENT_ID" '[.events[] | select(((.body.paperclip.agentId // "") == $agentId))] | length' <<<"$LAST_EVENTS")"
-  if [[ "$MATCH_COUNT" -gt 0 ]]; then
-    FOUND_EVENT="1"
-    break
-  fi
-  sleep 1
-done
-
-if [[ "$USE_DOCKER_RECEIVER" == "1" && "$STARTED_CONTAINER" == "1" && "$FOUND_EVENT" != "1" ]]; then
-  echo "$LAST_EVENTS" | jq '.' >&2
-  fail "did not observe OpenClaw webhook callback within ${SMOKE_TIMEOUT_SEC}s"
 fi
 
 log "success"

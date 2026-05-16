@@ -621,6 +621,9 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
       defaults && typeof defaults.waitTimeoutMs === "number"
         ? defaults.waitTimeoutMs
         : null,
+    claimedApiKeyPath: defaults
+      ? nonEmptyTrimmedString(defaults.claimedApiKeyPath)
+      : null,
     devicePrivateKeyPem: defaults
       ? summarizeSecretForLog(defaults.devicePrivateKeyPem)
       : null,
@@ -876,6 +879,16 @@ export function normalizeAgentDefaultsForJoin(input: {
         message: `Invalid paperclipApiUrl: ${rawPaperclipApiUrl}`
       });
     }
+  }
+
+  const claimedApiKeyPath = nonEmptyTrimmedString(defaults.claimedApiKeyPath);
+  if (claimedApiKeyPath) {
+    normalized.claimedApiKeyPath = claimedApiKeyPath;
+    diagnostics.push({
+      code: "openclaw_gateway_claimed_api_key_path_configured",
+      level: "info",
+      message: `Claimed API key path set to ${claimedApiKeyPath}`
+    });
   }
 
   return { normalized, diagnostics, fatalErrors };
@@ -1556,7 +1569,7 @@ function buildInviteOnboardingManifest(
         adapterType: "Use 'openclaw_gateway' for OpenClaw Gateway agents",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
-          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
+          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, claimedApiKeyPath, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
       },
       registrationEndpoint: {
         method: "POST",

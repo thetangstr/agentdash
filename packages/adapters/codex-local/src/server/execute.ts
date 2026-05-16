@@ -285,7 +285,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
-  const command = asString(config.command, "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp");
+  const command = asString(config.command, "codex");
   const model = asString(config.model, "");
 
   const workspaceContext = parseObject(context.paperclipWorkspace);

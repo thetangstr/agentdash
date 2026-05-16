@@ -536,7 +536,7 @@ Agent-oriented invite onboarding now exposes machine-readable API docs:
 
 ## OpenClaw Join Smoke Test
 
-Run the end-to-end OpenClaw join smoke harness:
+Run the lightweight OpenClaw gateway join smoke harness:
 
 ```sh
 pnpm smoke:openclaw-join
@@ -545,9 +545,20 @@ pnpm smoke:openclaw-join
 What it validates:
 
 - invite creation for agent-only join
-- agent join request using `adapterType=openclaw`
+- agent join request using `adapterType=openclaw_gateway`
 - board approval + one-time API key claim semantics
-- callback delivery on wakeup to a dockerized OpenClaw-style webhook receiver
+- gateway wakeup delivery using the configured `ws://` or `wss://` OpenClaw gateway endpoint
+
+Required OpenClaw gateway settings:
+
+- `OPENCLAW_GATEWAY_URL` (defaults to `ws://127.0.0.1:18789`)
+- `OPENCLAW_GATEWAY_TOKEN` (or `OPENCLAW_AUTH_TOKEN`)
+
+For the full Docker-backed gateway flow, including OpenClaw startup, pairing, claimed API key persistence, and wakeup cases, run:
+
+```sh
+pnpm smoke:openclaw-gateway-e2e
+```
 
 Required permissions:
 

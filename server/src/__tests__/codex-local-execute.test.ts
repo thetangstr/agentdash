@@ -247,7 +247,7 @@ describe("codex execute", () => {
     }
   });
 
-  it("logs HOME and the resolved executable path in invocation metadata", async () => {
+  it("defaults to the codex command and logs the resolved executable path", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-meta-"));
     const workspace = path.join(root, "workspace");
     const binDir = path.join(root, "bin");
@@ -281,7 +281,6 @@ describe("codex execute", () => {
           taskKey: null,
         },
         config: {
-          command: "codex",
           cwd: workspace,
           env: {
             PAPERCLIP_TEST_CAPTURE_PATH: capturePath,

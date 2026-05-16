@@ -41,6 +41,26 @@ console.log(JSON.stringify({
   await fs.chmod(commandPath, 0o755);
 }
 
+async function writeCursorUnknownSessionThenNoSessionCommand(commandPath: string): Promise<void> {
+  const script = `#!/usr/bin/env node
+if (process.argv.includes("--resume")) {
+  console.error("unknown session id");
+  process.exit(1);
+}
+console.log(JSON.stringify({
+  type: "assistant",
+  message: { content: [{ type: "output_text", text: "fresh run completed" }] },
+}));
+console.log(JSON.stringify({
+  type: "result",
+  subtype: "success",
+  result: "ok",
+}));
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
 async function writeFakeSandboxCursorAgent(commandPath: string, capturePath: string): Promise<void> {
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -182,6 +202,64 @@ describe("cursor execute", () => {
       expect(capture.prompt).toContain("PAPERCLIP_API_KEY");
       expect(invocationPrompt).toContain("Paperclip runtime note:");
       expect(invocationPrompt).toContain("PAPERCLIP_API_URL");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a stale session when retrying without a reported replacement session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-cursor-stale-session-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "agent");
+    await fs.mkdir(workspace, { recursive: true });
+    await writeCursorUnknownSessionThenNoSessionCommand(commandPath);
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const logs: string[] = [];
+      const result = await execute({
+        runId: "run-stale-session",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Cursor Coder",
+          adapterType: "cursor",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: "stale-session",
+          sessionParams: {
+            sessionId: "stale-session",
+            cwd: workspace,
+          },
+          sessionDisplayId: "stale-session",
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          model: "auto",
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async (_stream, chunk) => {
+          logs.push(chunk);
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+      expect(result.sessionId).toBeNull();
+      expect(result.clearSession).toBe(true);
+      expect(logs.join("")).toContain("retrying with a fresh session");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
