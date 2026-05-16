@@ -155,19 +155,15 @@ export const healEvents = pgTable("heal_events", {
 });
 ```
 
-## Routine Integration
+## Startup Integration
 
-**Schedule:** `HEALER_SCAN_INTERVAL_MS = 5 * 60 * 1000` (every 5 minutes)
+**Schedule:** `RUN_HEALER_SCAN_INTERVAL_MS = 5 * 60 * 1000` (every 5 minutes)
 
 **Registration:**
 ```typescript
-// In server startup, register with routineService
-routineService.register({
-  id: "run-healer",
-  schedule: "interval",
-  intervalMs: HEALER_SCAN_INTERVAL_MS,
-  handler: () => runHealerService.scan(),
-});
+// In server startup, schedule the run healer directly.
+const healer = runHealerService(db, { enabled: true, scanIntervalMs });
+setInterval(() => void healer.scan(), scanIntervalMs);
 ```
 
 ## Configuration

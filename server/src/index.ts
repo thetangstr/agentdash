@@ -35,6 +35,7 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
+import { runHealerService } from "./services/run-healer/service.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -845,6 +846,29 @@ export async function startServer(): Promise<StartedServer> {
         });
     }, config.heartbeatSchedulerIntervalMs);
   }
+
+  const runHealerEnabled = process.env.RUN_HEALER_ENABLED !== "false";
+  const runHealerScanIntervalMs = (() => {
+    const raw = process.env.RUN_HEALER_SCAN_INTERVAL_MS;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60 * 1000;
+  })();
+  let runHealerHandle: ReturnType<typeof setInterval> | null = null;
+  if (!runHealerEnabled) {
+    logger.info({ reason: "RUN_HEALER_ENABLED=false" }, "run_healer: schedule skipped");
+  } else {
+    const healer = runHealerService(db as any, {
+      enabled: true,
+      scanIntervalMs: runHealerScanIntervalMs,
+    });
+    logger.info({ intervalMs: runHealerScanIntervalMs }, "run_healer: schedule enabled");
+    runHealerHandle = setInterval(() => {
+      void healer.scan().catch((err) => {
+        logger.error({ err }, "run_healer: scheduled scan failed");
+      });
+    }, runHealerScanIntervalMs);
+    runHealerHandle.unref?.();
+  }
   
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
@@ -1094,6 +1118,14 @@ export async function startServer(): Promise<StartedServer> {
           clearInterval(heartbeatDigestHandle);
         } catch (err) {
           logger.error({ err }, "failed to clear heartbeatDigest interval");
+        }
+      }
+
+      if (runHealerHandle) {
+        try {
+          clearInterval(runHealerHandle);
+        } catch (err) {
+          logger.error({ err }, "failed to clear runHealer interval");
         }
       }
 
