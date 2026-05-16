@@ -1,5 +1,4 @@
 import {
-  createHash,
   generateKeyPairSync,
   randomBytes,
   timingSafeEqual
@@ -79,6 +78,13 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
+import {
+  COMPANY_INVITE_TTL_MS,
+  INVITE_TOKEN_MAX_RETRIES,
+  createInviteToken,
+  hashToken,
+  isInviteTokenHashCollisionError,
+} from "../lib/invite-tokens.js";
 import { assertAuthenticated, assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
@@ -86,30 +92,12 @@ import {
 } from "../board-claim.js";
 import { getStorageService } from "../storage/index.js";
 
-function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-const INVITE_TOKEN_PREFIX = "pcp_invite_";
-const INVITE_TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-const INVITE_TOKEN_SUFFIX_LENGTH = 8;
-const INVITE_TOKEN_MAX_RETRIES = 5;
-const COMPANY_INVITE_TTL_MS = 72 * 60 * 60 * 1000;
 const INVITE_RESOLUTION_DNS_TIMEOUT_MS = 3_000;
 
 type MemberGrantPayload = {
   permissionKey: PermissionKey;
   scope?: Record<string, unknown> | null;
 };
-
-function createInviteToken() {
-  const bytes = randomBytes(INVITE_TOKEN_SUFFIX_LENGTH);
-  let suffix = "";
-  for (let idx = 0; idx < INVITE_TOKEN_SUFFIX_LENGTH; idx += 1) {
-    suffix += INVITE_TOKEN_ALPHABET[bytes[idx]! % INVITE_TOKEN_ALPHABET.length];
-  }
-  return `${INVITE_TOKEN_PREFIX}${suffix}`;
-}
 
 function createClaimSecret() {
   return `pcp_claim_${randomBytes(24).toString("hex")}`;
@@ -2079,32 +2067,6 @@ export function resolveJoinRequestAgentManagerId(
     (candidate) => candidate.reportsTo === null
   );
   return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
-}
-
-function isInviteTokenHashCollisionError(error: unknown) {
-  const candidates = [
-    error,
-    (error as { cause?: unknown } | null)?.cause ?? null
-  ];
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const code =
-      "code" in candidate && typeof candidate.code === "string"
-        ? candidate.code
-        : null;
-    const message =
-      "message" in candidate && typeof candidate.message === "string"
-        ? candidate.message
-        : "";
-    const constraint =
-      "constraint" in candidate && typeof candidate.constraint === "string"
-        ? candidate.constraint
-        : null;
-    if (code !== "23505") continue;
-    if (constraint === "invites_token_hash_unique_idx") return true;
-    if (message.includes("invites_token_hash_unique_idx")) return true;
-  }
-  return false;
 }
 
 function isAbortError(error: unknown) {
