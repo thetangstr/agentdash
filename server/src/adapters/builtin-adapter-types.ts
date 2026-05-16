@@ -1,5 +1,6 @@
 /**
- * Adapter types shipped with Paperclip. External plugins must not replace these.
+ * Adapter types shipped with Paperclip. External plugins may override these
+ * types, but the original built-ins are preserved for pause/remove fallback.
  */
 export const BUILTIN_ADAPTER_TYPES = new Set([
   "acpx_local",

@@ -46,6 +46,31 @@ process.exit(0);
   await fs.chmod(commandPath, 0o755);
 }
 
+async function writePiUnknownSessionThenSuccessCommand(commandPath: string, capturePath: string): Promise<void> {
+  const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+if (process.argv.includes("--list-models")) {
+  console.log("provider  model");
+  console.log("google    gemini-3-flash-preview");
+  process.exit(0);
+}
+const sessionIndex = process.argv.indexOf("--session");
+const sessionPath = sessionIndex >= 0 ? process.argv[sessionIndex + 1] : "";
+fs.appendFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ sessionPath }) + "\\n");
+if (sessionPath.includes("stale-session.jsonl")) {
+  console.error("unknown session id");
+  process.exit(1);
+}
+console.log(JSON.stringify({ type: "agent_start" }));
+console.log(JSON.stringify({ type: "turn_start" }));
+console.log(JSON.stringify({ type: "turn_end", message: { role: "assistant", content: "fresh session" }, toolResults: [] }));
+console.log(JSON.stringify({ type: "agent_end", messages: [] }));
+process.exit(0);
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
 describe("pi_local execute", () => {
   it("fails the run when Pi exhausts automatic retries despite exiting 0", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-execute-"));
@@ -89,6 +114,82 @@ describe("pi_local execute", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the fresh session path after an unknown-session retry", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-stale-session-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "pi");
+    const capturePath = path.join(root, "sessions.jsonl");
+    const staleSessionPath = path.join(root, "stale-session.jsonl");
+    await fs.mkdir(workspace, { recursive: true });
+    await writePiUnknownSessionThenSuccessCommand(commandPath, capturePath);
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    let resultSessionPath: string | null = null;
+    try {
+      const logs: string[] = [];
+      const result = await execute({
+        runId: "run-pi-stale-session",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Pi Agent",
+          adapterType: "pi_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: staleSessionPath,
+          sessionParams: {
+            sessionId: staleSessionPath,
+            cwd: workspace,
+          },
+          sessionDisplayId: staleSessionPath,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          model: "google/gemini-3-flash-preview",
+          promptTemplate: "Keep working.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async (_stream, chunk) => {
+          logs.push(chunk);
+        },
+      });
+
+      resultSessionPath = result.sessionId ?? null;
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+      expect(result.sessionId).toBeTruthy();
+      expect(result.sessionId).not.toBe(staleSessionPath);
+      expect(result.sessionParams).toMatchObject({
+        sessionId: result.sessionId,
+        cwd: workspace,
+      });
+      expect(result.clearSession).toBe(false);
+      expect(logs.join("")).toContain("retrying with a fresh session");
+
+      const attempts = (await fs.readFile(capturePath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { sessionPath: string });
+      expect(attempts.map((attempt) => attempt.sessionPath)).toEqual([
+        staleSessionPath,
+        result.sessionId,
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (resultSessionPath && resultSessionPath.startsWith(path.join(os.homedir(), ".pi", "paperclips"))) {
+        await fs.rm(resultSessionPath, { force: true }).catch(() => undefined);
+      }
       await fs.rm(root, { recursive: true, force: true });
     }
   });

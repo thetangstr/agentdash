@@ -2,6 +2,11 @@ name: PR
 
 on:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
     branches:
       - master
       - main
@@ -56,6 +61,7 @@ jobs:
 
   verify:
     needs: [policy]
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -95,6 +101,9 @@ jobs:
       - name: Verify release registry test coverage
         run: pnpm run test:release-registry
 
+      - name: Verify target-machine issue filing script
+        run: pnpm run test:target-issue-filing
+
       - name: Build
         run: pnpm build
 
@@ -106,6 +115,7 @@ jobs:
 
   e2e:
     needs: [policy]
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -198,3 +208,17 @@ jobs:
             tests/e2e/playwright-report/
             tests/e2e/test-results/
           retention-days: 14
+
+  target-test:
+    needs: [policy]
+    if: contains(github.event.pull_request.labels.*.name, 'target-test')
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/target-machine-test.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+      profile: browser
+      open_issue: true
+      runner_labels: '["ubuntu-latest"]'

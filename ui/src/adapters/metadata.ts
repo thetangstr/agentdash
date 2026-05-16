@@ -27,8 +27,8 @@ export function listKnownAdapterTypes(): string[] {
  * Unknown types (external adapters) are always considered enabled.
  */
 export function isEnabledAdapterType(type: string): boolean {
-  // Check display registry first — built-in adapters like process/http are
-  // intentionally withheld even though they're registered as UI adapters.
+  // Check display registry first so intentionally withheld built-ins stay disabled
+  // even when they are registered as UI adapters.
   if (getAdapterDisplay(type).comingSoon) return false;
   // All other types (registered or external) are enabled.
   return true;

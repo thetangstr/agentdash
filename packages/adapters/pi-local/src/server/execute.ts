@@ -577,6 +577,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       rawStderr: string;
       parsed: ReturnType<typeof parsePiJsonl>;
     },
+    resultSessionPath: string,
     clearSessionOnMissingSession = false,
   ): AdapterExecutionResult => {
     if (attempt.proc.timedOut) {
@@ -589,7 +590,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     }
 
-    const resolvedSessionId = clearSessionOnMissingSession ? null : sessionPath;
+    const resolvedSessionId = clearSessionOnMissingSession ? null : resultSessionPath;
     const resolvedSessionParams = resolvedSessionId
       ? {
           sessionId: resolvedSessionId,
@@ -673,10 +674,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
       }
       const retry = await runAttempt(newSessionPath);
-      return toResult(retry, true);
+      return toResult(retry, newSessionPath);
     }
 
-    return toResult(initial);
+    return toResult(initial, sessionPath);
   } finally {
     await Promise.all([
       paperclipBridge?.stop(),

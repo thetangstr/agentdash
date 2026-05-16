@@ -16,6 +16,7 @@ Core fields:
 - method (string, optional): HTTP method, default POST
 - headers (object, optional): request headers
 - payloadTemplate (object, optional): JSON payload template
-- timeoutSec (number, optional): request timeout in seconds
+- timeoutMs (number, optional): request timeout in milliseconds
+- timeoutSec (number, optional): request timeout in seconds, used when timeoutMs is not set
 `,
 };

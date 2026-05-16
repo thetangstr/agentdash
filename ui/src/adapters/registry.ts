@@ -32,9 +32,19 @@ const activeExternalOverrides = new Set<string>();
 // stale result is discarded in its .then() handler.
 const overrideGeneration = new Map<string, number>();
 
+// Generation counter for non-builtin external adapters. This prevents an
+// in-flight dynamic parser load from re-registering an adapter after removal.
+const externalAdapterGeneration = new Map<string, number>();
+
 // Subscriber list — components can register to be notified when adapters change
 // (e.g., when a dynamic parser replaces a placeholder).
 const adapterChangeListeners = new Set<() => void>();
+
+function bumpGeneration(generations: Map<string, number>, type: string): number {
+  const next = (generations.get(type) ?? 0) + 1;
+  generations.set(type, next);
+  return next;
+}
 
 /** Subscribe to adapter registry changes. Returns unsubscribe function. */
 export function onAdapterChange(fn: () => void): () => void {
@@ -82,10 +92,17 @@ export function registerUIAdapter(adapter: UIAdapterModule): void {
 export function unregisterUIAdapter(type: string): void {
   if (type === processUIAdapter.type || type === httpUIAdapter.type) return;
   const existingIndex = uiAdapters.findIndex((entry) => entry.type === type);
+  let changed = false;
   if (existingIndex >= 0) {
     uiAdapters.splice(existingIndex, 1);
+    changed = true;
   }
-  adaptersByType.delete(type);
+  if (adaptersByType.delete(type)) {
+    changed = true;
+  }
+  if (changed) {
+    notifyAdapterChange();
+  }
 }
 
 export function findUIAdapter(type: string): UIAdapterModule | null {
@@ -93,6 +110,24 @@ export function findUIAdapter(type: string): UIAdapterModule | null {
 }
 
 registerBuiltInUIAdapters();
+
+export function invalidateUIAdapterParser(type: string): void {
+  invalidateDynamicParser(type);
+
+  if (builtinTypes.has(type)) {
+    if (!activeExternalOverrides.has(type)) return;
+    const originalBuiltin = builtinAdaptersByType.get(type);
+    if (!originalBuiltin) return;
+
+    activeExternalOverrides.delete(type);
+    bumpGeneration(overrideGeneration, type);
+    registerUIAdapter(originalBuiltin);
+    return;
+  }
+
+  bumpGeneration(externalAdapterGeneration, type);
+  unregisterUIAdapter(type);
+}
 
 export function getUIAdapter(type: string): UIAdapterModule {
   const builtIn = adaptersByType.get(type);
@@ -159,6 +194,14 @@ export function syncExternalAdapters(
     serverAdapters.map((a) => a.type),
   );
 
+  for (const [type] of adaptersByType) {
+    if (builtinTypes.has(type)) continue;
+    if (allExternalTypes.has(type)) continue;
+    bumpGeneration(externalAdapterGeneration, type);
+    invalidateDynamicParser(type);
+    unregisterUIAdapter(type);
+  }
+
   // ── Builtin override lifecycle ──────────────────────────────────────────
 
   for (const builtinType of builtinTypes) {
@@ -173,15 +216,14 @@ export function syncExternalAdapters(
       // Activate: external just became active → replace builtin with bridge.
       activeExternalOverrides.add(builtinType);
 
-      const gen = (overrideGeneration.get(builtinType) ?? 0) + 1;
-      overrideGeneration.set(builtinType, gen);
+      const gen = bumpGeneration(overrideGeneration, builtinType);
 
       let loadStarted = false;
       const fallbackParser = originalBuiltin.parseStdoutLine;
       const externalEntry = serverAdapters.find((a) => a.type === builtinType);
       const label = externalEntry?.label ?? builtinType;
 
-      registerUIAdapter({
+      const bridgeAdapter: UIAdapterModule = {
         type: builtinType,
         label,
         parseStdoutLine: (line: string, ts: string) => {
@@ -189,7 +231,11 @@ export function syncExternalAdapters(
             loadStarted = true;
             loadDynamicParser(builtinType).then((parserModule) => {
               // Discard if the override was torn down while the load was in-flight.
-              if (parserModule && overrideGeneration.get(builtinType) === gen) {
+              if (
+                parserModule
+                && overrideGeneration.get(builtinType) === gen
+                && adaptersByType.get(builtinType) === bridgeAdapter
+              ) {
                 registerUIAdapter({
                   type: builtinType,
                   label,
@@ -205,11 +251,13 @@ export function syncExternalAdapters(
         },
         ConfigFields: originalBuiltin.ConfigFields,
         buildAdapterConfig: originalBuiltin.buildAdapterConfig,
-      });
+      };
+
+      registerUIAdapter(bridgeAdapter);
     } else if ((!hasExternal || !externalEnabled) && wasOverridden) {
       // Deactivate: external disabled or removed → restore builtin.
       activeExternalOverrides.delete(builtinType);
-      overrideGeneration.delete(builtinType);
+      bumpGeneration(overrideGeneration, builtinType);
       invalidateDynamicParser(builtinType);
       registerUIAdapter(originalBuiltin);
     }
@@ -231,15 +279,20 @@ export function syncExternalAdapters(
     // Use the existing built-in parser as fallback (if any) so we don't
     // regress to the generic process parser while the dynamic one loads.
     const fallbackParser = existing?.parseStdoutLine ?? processUIAdapter.parseStdoutLine;
+    const gen = bumpGeneration(externalAdapterGeneration, type);
 
-    registerUIAdapter({
+    const bridgeAdapter: UIAdapterModule = {
       type,
       label,
       parseStdoutLine: (line: string, ts: string) => {
         if (!loadStarted) {
           loadStarted = true;
           loadDynamicParser(type).then((parserModule) => {
-            if (parserModule) {
+            if (
+              parserModule
+              && externalAdapterGeneration.get(type) === gen
+              && adaptersByType.get(type) === bridgeAdapter
+            ) {
               registerUIAdapter({
                 type,
                 label,
@@ -255,7 +308,9 @@ export function syncExternalAdapters(
       },
       ConfigFields: existing?.ConfigFields ?? SchemaConfigFields,
       buildAdapterConfig: existing?.buildAdapterConfig ?? buildSchemaAdapterConfig,
-    });
+    };
+
+    registerUIAdapter(bridgeAdapter);
   }
 }
 

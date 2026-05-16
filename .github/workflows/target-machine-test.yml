@@ -1,0 +1,150 @@
+name: Target Machine Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to test
+        required: false
+        default: main
+        type: string
+      profile:
+        description: Verification profile
+        required: true
+        default: core
+        type: choice
+        options:
+          - core
+          - browser
+          - release-smoke
+          - full
+      open_issue:
+        description: Create or update a GitHub issue when the target test fails
+        required: false
+        default: true
+        type: boolean
+      runner_labels:
+        description: JSON array for runs-on, for example ["self-hosted","agentdash-target"] or ["ubuntu-latest"]
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
+      paperclip_version:
+        description: Published Paperclip dist-tag/version for release-smoke
+        required: false
+        default: canary
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        default: main
+        type: string
+      profile:
+        required: false
+        default: core
+        type: string
+      open_issue:
+        required: false
+        default: true
+        type: boolean
+      runner_labels:
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
+      paperclip_version:
+        required: false
+        default: canary
+        type: string
+
+run-name: target-${{ inputs.profile || 'core' }} @ ${{ inputs.ref || github.ref_name }}
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: target-machine-test-${{ inputs.profile || 'core' }}-${{ inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  target-test:
+    runs-on: ${{ fromJSON(inputs.runner_labels || '["ubuntu-latest"]') }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run target test profile
+        id: run-profile
+        env:
+          TARGET_PROFILE: ${{ inputs.profile || 'core' }}
+          TARGET_REF: ${{ inputs.ref || github.ref_name }}
+          TARGET_ARTIFACT_NAME: target-machine-test-${{ inputs.profile || 'core' }}-${{ github.run_id }}
+          PAPERCLIP_VERSION: ${{ inputs.paperclip_version || 'canary' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/target-machine-test"
+          node scripts/ci/run-target-test-profile.mjs \
+            --profile "$TARGET_PROFILE" \
+            --requested-ref "$TARGET_REF" \
+            --summary "$RUNNER_TEMP/target-machine-test/summary.json" \
+            --logs-dir "$RUNNER_TEMP/target-machine-test/logs" \
+            --artifact-name "$TARGET_ARTIFACT_NAME" \
+            --paperclip-version "$PAPERCLIP_VERSION"
+
+      - name: Read target test summary
+        id: summary
+        if: always()
+        run: |
+          summary="$RUNNER_TEMP/target-machine-test/summary.json"
+          if [ ! -f "$summary" ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "summary_path=$summary" >> "$GITHUB_OUTPUT"
+            echo "::error::target test summary was not produced"
+            exit 0
+          fi
+          failed="$(node -e "const fs=require('fs'); const s=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(s.conclusion === 'failure' ? 'true' : 'false');" "$summary")"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "summary_path=$summary" >> "$GITHUB_OUTPUT"
+
+      - name: Upload target test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-machine-test-${{ inputs.profile || 'core' }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/target-machine-test/
+          retention-days: 14
+
+      - name: File or update failure issue
+        if: ${{ always() && steps.summary.outputs.failed == 'true' && inputs.open_issue }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/file-target-test-issue.mjs \
+            --summary "$RUNNER_TEMP/target-machine-test/summary.json" \
+            --output "$RUNNER_TEMP/target-machine-test/issue-result.json"
+
+      - name: Fail workflow on target test failure
+        if: ${{ always() && steps.summary.outputs.failed == 'true' }}
+        run: |
+          echo "::error::target machine test profile failed"
+          exit 1
