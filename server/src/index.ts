@@ -1027,6 +1027,70 @@ export async function startServer(): Promise<StartedServer> {
     }, coldSignupIntervalMs);
   }
 
+  // AgentDash: attestation v1 — periodic anchoring of activity_log batches.
+  // Disabled by default; opt in with AGENTDASH_ATTESTATION_ENABLED=true. Default
+  // adapter is "noop" (synthetic ids only, suitable for dev/CI). Production
+  // anchoring requires AGENTDASH_ATTESTATION_ADAPTER=clockchain plus
+  // CLOCKCHAIN_API_KEY. See docs/superpowers/specs/2026-05-13-delegation-and-attestation-design.md.
+  let attestationHandle: ReturnType<typeof setInterval> | null = null;
+  if (process.env.AGENTDASH_ATTESTATION_ENABLED === "true") {
+    const adapterName = (process.env.AGENTDASH_ATTESTATION_ADAPTER ?? "noop").toLowerCase();
+    const intervalMs = (() => {
+      const raw = process.env.AGENTDASH_ATTESTATION_INTERVAL_MS;
+      if (!raw) return 300_000; // 5 min
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 300_000;
+    })();
+    const batchLimit = (() => {
+      const raw = process.env.AGENTDASH_ATTESTATION_BATCH_LIMIT;
+      if (!raw) return 500;
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
+    })();
+    try {
+      const { attestationService, createAttestationStore } = await import("./services/index.js");
+      const { createNoopAdapter, createClockchainAdapter } = await import("@agentdash/attestation");
+      const adapter =
+        adapterName === "clockchain"
+          ? createClockchainAdapter({
+              apiKey: process.env.CLOCKCHAIN_API_KEY ?? "",
+              apiBase: process.env.CLOCKCHAIN_API_BASE,
+            })
+          : createNoopAdapter();
+      const store = createAttestationStore(db as any);
+      const svc = attestationService(store, adapter, { batchLimit });
+      logger.info(
+        { intervalMs, adapter: adapter.name, batchLimit },
+        "[attestation] schedule enabled",
+      );
+      const tick = async () => {
+        try {
+          const summaries = await svc.run();
+          const totals = summaries.reduce(
+            (acc, s) => ({
+              anchored: acc.anchored + s.anchored,
+              failed: acc.failed + s.failed,
+              companies: acc.companies + 1,
+            }),
+            { anchored: 0, failed: 0, companies: 0 },
+          );
+          if (totals.anchored > 0 || totals.failed > 0) {
+            logger.info(totals, "[attestation] tick complete");
+          }
+        } catch (err) {
+          logger.error({ err }, "[attestation] tick failed");
+        }
+      };
+      attestationHandle = setInterval(() => void tick(), intervalMs);
+      // First tick is best-effort; run on a small delay so startup isn't blocked.
+      setTimeout(() => void tick(), 5_000).unref?.();
+    } catch (err) {
+      logger.error({ err }, "[attestation] failed to initialize");
+    }
+  } else {
+    logger.info("[attestation] schedule skipped (AGENTDASH_ATTESTATION_ENABLED not set)");
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
