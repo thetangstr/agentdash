@@ -5,6 +5,8 @@ const ORIGINAL_PAPERCLIP_RUNTIME_API_URL = process.env.PAPERCLIP_RUNTIME_API_URL
 const ORIGINAL_PAPERCLIP_RUNTIME_API_CANDIDATES_JSON = process.env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON;
 const ORIGINAL_PAPERCLIP_LISTEN_HOST = process.env.PAPERCLIP_LISTEN_HOST;
 const ORIGINAL_PAPERCLIP_LISTEN_PORT = process.env.PAPERCLIP_LISTEN_PORT;
+const ORIGINAL_RUN_HEALER_ENABLED = process.env.RUN_HEALER_ENABLED;
+const ORIGINAL_RUN_HEALER_SCAN_INTERVAL_MS = process.env.RUN_HEALER_SCAN_INTERVAL_MS;
 
 const {
   createAppMock,
@@ -16,6 +18,8 @@ const {
   feedbackServiceFactoryMock,
   fakeServer,
   loadConfigMock,
+  runHealerScanMock,
+  runHealerServiceMock,
 } = vi.hoisted(() => {
   const createAppMock = vi.fn(async () => ((_: unknown, __: unknown) => {}) as never);
   const createBetterAuthInstanceMock = vi.fn(() => ({}));
@@ -26,6 +30,10 @@ const {
     flushPendingFeedbackTraces: vi.fn(async () => ({ attempted: 0, sent: 0, failed: 0 })),
   };
   const feedbackServiceFactoryMock = vi.fn(() => feedbackExportServiceMock);
+  const runHealerScanMock = vi.fn(async () => ({ scanned: 0, fixed: 0, skipped: 0 }));
+  const runHealerServiceMock = vi.fn(() => ({
+    scan: runHealerScanMock,
+  }));
   const fakeServer = {
     once: vi.fn().mockReturnThis(),
     off: vi.fn().mockReturnThis(),
@@ -47,6 +55,8 @@ const {
     feedbackServiceFactoryMock,
     fakeServer,
     loadConfigMock,
+    runHealerScanMock,
+    runHealerServiceMock,
   };
 });
 
@@ -179,6 +189,10 @@ vi.mock("../services/index.js", () => ({
   })),
 }));
 
+vi.mock("../services/run-healer/service.js", () => ({
+  runHealerService: runHealerServiceMock,
+}));
+
 vi.mock("../storage/index.js", () => ({
   createStorageServiceFromConfig: vi.fn(() => ({ id: "storage-service" })),
 }));
@@ -205,6 +219,17 @@ vi.mock("../auth/better-auth.js", () => ({
 }));
 
 import { startServer } from "../index.ts";
+
+function restoreRunHealerEnv() {
+  if (ORIGINAL_RUN_HEALER_ENABLED === undefined) delete process.env.RUN_HEALER_ENABLED;
+  else process.env.RUN_HEALER_ENABLED = ORIGINAL_RUN_HEALER_ENABLED;
+
+  if (ORIGINAL_RUN_HEALER_SCAN_INTERVAL_MS === undefined) {
+    delete process.env.RUN_HEALER_SCAN_INTERVAL_MS;
+  } else {
+    process.env.RUN_HEALER_SCAN_INTERVAL_MS = ORIGINAL_RUN_HEALER_SCAN_INTERVAL_MS;
+  }
+}
 
 describe("startServer feedback export wiring", () => {
   beforeEach(() => {
@@ -356,5 +381,53 @@ describe("startServer PAPERCLIP_API_URL handling", () => {
     expect(started.listenPort).toBe(3110);
     expect(started.apiUrl).toBe("https://paperclip.example");
     expect(process.env.PAPERCLIP_RUNTIME_API_URL).toBe("https://paperclip.example");
+  });
+});
+
+describe("startServer run-healer scheduler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    restoreRunHealerEnv();
+    loadConfigMock.mockReturnValue(buildTestConfig());
+    process.env.BETTER_AUTH_SECRET = "test-secret";
+  });
+
+  afterEach(() => {
+    restoreRunHealerEnv();
+    vi.restoreAllMocks();
+  });
+
+  it("starts a periodic run-healer scan by default", async () => {
+    process.env.RUN_HEALER_SCAN_INTERVAL_MS = "12345";
+    const timer = { unref: vi.fn() };
+    const setIntervalSpy = vi
+      .spyOn(globalThis, "setInterval")
+      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+        return Object.assign(timer, { handler, timeout }) as unknown as ReturnType<typeof setInterval>;
+      });
+
+    await startServer();
+
+    expect(runHealerServiceMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ enabled: true, scanIntervalMs: 12345 }),
+    );
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 12345);
+    expect(timer.unref).toHaveBeenCalled();
+
+    const scheduledScan = setIntervalSpy.mock.calls.at(-1)?.[0] as (() => void) | undefined;
+    scheduledScan?.();
+    await Promise.resolve();
+    expect(runHealerScanMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not construct or schedule the run-healer when disabled", async () => {
+    process.env.RUN_HEALER_ENABLED = "false";
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+
+    await startServer();
+
+    expect(runHealerServiceMock).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
   });
 });
