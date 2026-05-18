@@ -5,13 +5,6 @@ on:
     branches:
       - master
       - main
-    paths:
-      - .github/workflows/production-readiness.yml
-      - scripts/ci/audit-production-readiness-config.mjs
-      - scripts/ci/audit-production-readiness-config.test.mjs
-      - tests/launch-smoke/**
-      - doc/LAUNCH.md
-      - package.json
   push:
     branches:
       - main

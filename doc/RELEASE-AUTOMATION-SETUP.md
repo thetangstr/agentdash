@@ -287,7 +287,14 @@ the default branch:
 - `PR / policy`
 - `PR / verify`
 - `PR / e2e`
-- `Docker / build-and-push`
+- `Hermes PR Audit / audit`
+- `Hermes Prompt Drift / drift`
+- `Agents MD Drift Check / check`
+
+Do not require `Docker / build-and-push` while that workflow remains path
+filtered. A required check that does not run on every PR can leave unrelated PRs
+permanently blocked. Keep Docker as a path-scoped PR check unless the workflow
+is changed to run on every PR.
 
 If target-machine coverage is mandatory for every merge, also require:
 
@@ -308,7 +315,10 @@ Current file:
 
 - `.github/CODEOWNERS`
 
-If `@cryppadotta` is not the right reviewer identity in the public repo, change it before enabling enforcement.
+Current owner entries use `@thetangstr`, because that is the only repository
+collaborator returned by the GitHub collaborators API during the production
+readiness audit. Add additional maintainer or team owners before enabling
+CODEOWNERS enforcement if the public repo should not depend on a single owner.
 
 ## 10. Protect Release Infrastructure Specifically
 

@@ -6,10 +6,10 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Last previously observed pushed PR head before this readiness-hardening pass:
+Latest pushed PR head observed during this readiness-hardening pass:
 
 ```text
-29c5231db1a63faea5433f3a8e0bce025a6e5aa5 Keep pnpm setup on the Node 24 action runtime
+9fda643f5b67072baa15467a6f91b3ff0d66dae3 Require reviewer gate for stable releases
 ```
 
 This document may live on a later documentation-only commit. Resolve the current
@@ -23,21 +23,27 @@ Run `git rev-parse HEAD` before handing off to a remote runner, target machine,
 canary release, or stable release.
 
 The branch is pushed to PR #344. The code and CI readiness checks are green on
-the latest observed PR heads: PR policy, PR verify, PR e2e, target-test,
+head `9fda643f`: PR policy, PR verify, PR e2e, target-test,
 target-test-comment, Docker, Agents MD drift, Hermes PR audit, and Hermes prompt
 drift. `Production Readiness / config-audit` is failing as an external
-configuration gate because the repository has no configured Actions variables
-and no self-hosted target runners. It cannot verify target-machine runner
-coverage or a deployed launch-smoke URL until those external launch settings are
-provided. The audit also requires deployed smoke to prove Stripe Checkout
-session creation and a real CoS/LLM reply through durable repository variables,
-not just one-off workflow inputs, and it requires `npm-stable` environment
-reviewer protection before stable publishing can be considered launch-ready.
-GitHub issue #350 tracks those remaining external gates.
+configuration gate because the repository has no self-hosted target runners, no
+configured target-runner label variable, and no deployed launch-smoke URL. The
+strict launch-smoke flags are now configured as durable repository variables:
+`AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
+`AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`. The `npm-stable` environment is also
+protected with required reviewer `thetangstr`, so stable publishing now has the
+expected human approval gate. GitHub issue #350 tracks the remaining target
+runner and deployed launch-smoke URL gates.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
 release cleanup or handoff automation.
+
+The live `main` branch protection currently enforces admin protection, linear
+history, force-push/deletion blocks, and required status checks:
+`audit`, `drift`, `check`, `policy`, `e2e`, `verify`, and `config-audit`.
+CODEOWNERS enforcement is not enabled yet because the valid CODEOWNERS owner
+update in this PR must land on `main` first.
 
 ## Local Evidence Collected
 
@@ -133,7 +139,8 @@ Observed narrow results from the latest continuation:
   `thetangstr/agentdash`, it currently exits 1 because
   `AGENTDASH_TARGET_RUNNER_LABELS` and `AGENTDASH_LAUNCH_SMOKE_BASE_URL` are
   missing and there are no self-hosted runners. It confirms both release
-  environments exist: `npm-canary` and `npm-stable`.
+  environments exist: `npm-canary` and `npm-stable`; `npm-stable` has
+  required-reviewer protection.
 - The audit helper now reads required repository variables through the GitHub
   Actions `vars` context and treats unreadable release environments or runner
   inventory as structured failed requirements while still writing the JSON
@@ -145,24 +152,28 @@ Observed narrow results from the latest continuation:
 - The audit now treats `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
   `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` as automated config requirements,
   so a future green production-readiness audit cannot skip Stripe Checkout
-  session creation or real CoS/LLM reply coverage.
+  session creation or real CoS/LLM reply coverage. Both variables are now set
+  in the repository and pass the live config audit.
 - The audit now treats missing `npm-stable` required-reviewer protection as a
-  failed automated config requirement. The live repository currently has
-  `npm-canary` and `npm-stable` environments, but both report
-  `protection_rules: []`.
-- `.github/workflows/production-readiness.yml` now runs the audit on PR changes
-  to the audit helper, on `main` pushes, on a daily schedule, and on manual
-  dispatch. It uses repository `vars` for the target runner labels and deployed
-  launch-smoke URL, plus `PRODUCTION_READINESS_AUDIT_TOKEN` when present and
-  `GITHUB_TOKEN` otherwise for GitHub API reads. If runner inventory cannot be
-  read, the audit reports that as a structured failed requirement instead of
-  crashing. `pr.yml` also runs the audit helper unit test in the normal verify
-  job.
+  failed automated config requirement. The live repository has
+  `npm-stable` protected by a `required_reviewers` rule for `@thetangstr`.
+- `.github/workflows/production-readiness.yml` now runs the audit on every PR,
+  on `main` pushes, on a daily schedule, and on manual dispatch. The launch
+  smoke job is still skipped on PRs. The audit uses repository `vars` for the
+  target runner labels and deployed launch-smoke URL, plus
+  `PRODUCTION_READINESS_AUDIT_TOKEN` when present and `GITHUB_TOKEN` otherwise
+  for GitHub API reads. If runner inventory cannot be read, the audit reports
+  that as a structured failed requirement instead of crashing. `pr.yml` also
+  runs the audit helper unit test in the normal verify job.
+- `.github/CODEOWNERS` now uses the current repository collaborator
+  `@thetangstr` for release infrastructure and package ownership. Add more
+  maintainer/team owners before enabling branch protection's CODEOWNERS
+  enforcement if a single-owner review gate is not acceptable.
 - `doc/RELEASE-AUTOMATION-SETUP.md` now includes the operator runbook for the
   production-readiness audit gate: target-machine runner registration,
   `AGENTDASH_TARGET_RUNNER_LABELS`, optional
-  `PRODUCTION_READINESS_AUDIT_TOKEN`, required branch checks, and release
-  infrastructure protection.
+  `PRODUCTION_READINESS_AUDIT_TOKEN`, required branch checks, release
+  infrastructure protection, and valid CODEOWNERS ownership.
 - `tests/launch-smoke/` now contains a deployed-url launch smoke suite. It
   signs up a unique user, verifies `/cos` CoS welcome/composer, checks billing
   status, and can require Stripe Checkout session creation and a real LLM reply
@@ -226,33 +237,33 @@ These steps are required before calling the app production ready:
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
    PR policy, PR verify, PR e2e, target-test, target-test-comment, and Docker
-   workflow. At `29c5231d`, all of those checks are green. The
+   workflow. At `9fda643f`, all of those checks are green. The
    production-readiness config audit may remain red only for the documented
    external repository configuration gaps below.
 3. Register the self-hosted target runner and set repository variable
-   `AGENTDASH_TARGET_RUNNER_LABELS` if real target-machine coverage is required.
-   The current repo has zero self-hosted runners and no repository variables
-   visible through `gh`, so the target workflow will fall back to GitHub-hosted
-   Ubuntu runners until this is configured.
+   `AGENTDASH_TARGET_RUNNER_LABELS` after the matching runner exists. The
+   current repo has zero self-hosted runners, so the target workflow will fall
+   back to GitHub-hosted Ubuntu runners until this is configured.
 4. Deploy a staging or production launch target and set repository variable
-   `AGENTDASH_LAUNCH_SMOKE_BASE_URL` to its HTTPS origin. Set
-   `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
-   `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` before public launch so the smoke
-   proves Stripe Checkout session creation and real CoS replies, not only the
-   authenticated shell. These two flags are enforced by the
-   production-readiness config audit.
-5. Configure the GitHub `npm-stable` environment with required reviewers so the
-   stable publish job requires human approval. The current environment exists
-   but has no protection rules.
+   `AGENTDASH_LAUNCH_SMOKE_BASE_URL` to its HTTPS origin. The strict smoke
+   flags are already set:
+   - `AGENTDASH_LAUNCH_SMOKE_BILLING=true`
+   - `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`
+5. Re-run `Production Readiness / config-audit` and confirm only these three
+   previously failing gates have turned green:
+   - `target-runner-variable`
+   - `target-runner-available`
+   - `launch-smoke-url-variable`
 6. Merge the PR to `main`.
 7. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.
 8. Confirm npm trusted publishing for every public package, then run the stable
    release workflow for `2026-05-22` with `dry_run=true`, then with
    `dry_run=false` after approval. The GitHub release environments
-   `npm-canary` and `npm-stable` exist. Absence of repository Actions secrets is
-   expected for this workflow because npm publish uses GitHub Actions trusted
-   publishing and Docker/GitHub release publishing uses `GITHUB_TOKEN`; the npm
+   `npm-canary` and `npm-stable` exist, and `npm-stable` has required reviewer
+   protection. Absence of repository Actions secrets is expected for this
+   workflow because npm publish uses GitHub Actions trusted publishing and
+   Docker/GitHub release publishing uses `GITHUB_TOKEN`; the npm
    trusted-publishing configuration itself must still be confirmed in npm.
 9. Confirm published package and image surfaces:
    - `npm view agentdash@latest version`

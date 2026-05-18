@@ -26,7 +26,10 @@ GitHub branch protection on `main` with:
     - `Hermes PR Audit / audit`
     - `Hermes Prompt Drift Check / drift`
     - `Agents MD Drift Check / check`
-    - The existing `pr` / `e2e` lanes you care about
+    - `PR / policy`
+    - `PR / verify`
+    - `PR / e2e`
+    - `Production Readiness / config-audit` once production-readiness work is in the merge path
 - ✅ Require branches to be up to date before merging (catches `main` advancing during review)
 - ✅ Do not allow bypassing the above settings
 - ✅ Restrict who can push to matching branches → empty list (PR-only)
@@ -55,7 +58,11 @@ gh api \
     "contexts": [
       "audit",
       "drift",
-      "check"
+      "check",
+      "policy",
+      "verify",
+      "e2e",
+      "config-audit"
     ]
   },
   "enforce_admins": true,
@@ -100,7 +107,7 @@ Expected:
 
 ```json
 {
-  "required_status_checks": ["audit", "drift", "check"],
+  "required_status_checks": ["audit", "drift", "check", "policy", "verify", "e2e", "config-audit"],
   "enforce_admins": true,
   "require_pr": true,
   "linear_history": true
