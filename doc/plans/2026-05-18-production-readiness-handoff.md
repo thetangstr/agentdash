@@ -104,6 +104,16 @@ Observed narrow results from the latest continuation:
   - `pnpm -r typecheck`
   - `pnpm test:run`
   - `pnpm build`
+- A read-only GitHub configuration check found no repository Actions
+  variables, no repository Actions secrets, and zero self-hosted Actions
+  runners:
+  - `gh variable list --repo thetangstr/agentdash --json name,value,updatedAt`
+    returned `[]`.
+  - `gh secret list --repo thetangstr/agentdash --json name,updatedAt`
+    returned `[]`.
+  - `gh api repos/thetangstr/agentdash/actions/runners --jq '{total_count,
+    runners: [.runners[] | {name: .name, status: .status, busy: .busy, labels:
+    [.labels[].name]}]}'` returned `{"runners":[],"total_count":0}`.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -137,16 +147,18 @@ These steps are required before calling the app production ready:
    - target-test
    - target-test-comment
    - Docker workflow
-3. Register or confirm the self-hosted target runner and repository variable
+3. Register the self-hosted target runner and set repository variable
    `AGENTDASH_TARGET_RUNNER_LABELS` if real target-machine coverage is required.
-   Without that variable, the target workflow falls back to GitHub-hosted
-   Ubuntu runners.
+   The current repo has zero self-hosted runners and no repository variables
+   visible through `gh`, so the target workflow will fall back to GitHub-hosted
+   Ubuntu runners until this is configured.
 4. Merge the PR to `main`.
 5. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.
-6. Run the stable release workflow for `2026-05-22` with `dry_run=true`, then
-   with `dry_run=false` after approval and npm/GitHub release credentials are
-   available.
+6. Configure release credentials, then run the stable release workflow for
+   `2026-05-22` with `dry_run=true`, then with `dry_run=false` after approval.
+   The current repo has no Actions secrets visible through `gh`, so real npm,
+   GitHub release, and GHCR publish paths are not credentialed yet.
 7. Confirm published package and image surfaces:
    - `npm view agentdash@latest version`
    - `npx agentdash@latest setup --help`
