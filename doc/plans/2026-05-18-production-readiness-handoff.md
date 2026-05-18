@@ -34,7 +34,7 @@ release cleanup or handoff automation.
 
 ## Local Evidence Collected
 
-The following checks have passed on local head `20d0a461`:
+The broad local verification set passed on baseline head `20d0a461`:
 
 ```sh
 pnpm -r typecheck
@@ -42,6 +42,12 @@ pnpm test:run
 pnpm build
 ./scripts/docker-build-test.sh
 ./scripts/release.sh stable --date 2026-05-22 --dry-run --skip-verify
+```
+
+The following focused readiness checks have passed on later local heads through
+`cc536979`:
+
+```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
 node --test scripts/ci/file-target-test-issue.test.mjs
 node --check scripts/ci/run-target-test-profile.mjs
@@ -57,6 +63,17 @@ step = workflow.fetch('jobs').fetch('digest').fetch('steps').find { |s| s['name'
 puts step.fetch('run')
 RUBY
 bash -n /tmp/upstream-digest-create-pr.sh
+rm -rf /tmp/agentdash-pr-canary-dry-run
+git clone --shared --no-checkout /Users/Kailor/Documents/Projects/agentdash /tmp/agentdash-pr-canary-dry-run
+cd /tmp/agentdash-pr-canary-dry-run
+git checkout cc536979f5662109a42eec2e04cc2bf441c5373f
+git checkout -B main HEAD
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
+pnpm install --frozen-lockfile
+git checkout -- pnpm-lock.yaml
+./scripts/release.sh canary --skip-verify --dry-run
+cd /Users/Kailor/Documents/Projects/agentdash
 git push --dry-run origin HEAD:codex/invite-token-primitives
 ```
 
@@ -73,6 +90,11 @@ Observed narrow results from the latest continuation:
 - The upstream digest workflow parses under `actionlint`; its PR-body heredoc
   is indented as part of the YAML block and its extracted shell step passes
   `bash -n`.
+- The isolated PR canary dry-run passed on disposable `main` at
+  `cc536979f5662109a42eec2e04cc2bf441c5373f`; it resolved
+  `2026.518.0-canary.2`, built workspace artifacts, built the CLI bundle, and
+  previewed npm publish payloads for the public packages under the `canary`
+  dist-tag.
 - Dry-run push shows the PR branch can fast-forward cleanly.
 
 ## Fixed Locally, Not Yet Proven Remotely
