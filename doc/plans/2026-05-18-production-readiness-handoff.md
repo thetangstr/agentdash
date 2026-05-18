@@ -6,27 +6,29 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Local evidence baseline:
+Current pushed evidence baseline before this handoff refresh:
 
 ```text
-20d0a4611761f512b4acde6dfd8ef95cd31c6b5f Make the Docker image a runnable distribution
+776e545c549fe1eabe6ddc71075ae22305639f09 Keep CLI dependencies aligned with the frozen lockfile
 ```
 
 Remote PR head:
 
 ```text
-3858878d27cad5aa52a7d1ec5ec38b7833ee5035 Make target-test PR comments use issue comments
+776e545c549fe1eabe6ddc71075ae22305639f09 Keep CLI dependencies aligned with the frozen lockfile
 ```
 
 The current branch head may be newer than this baseline as readiness fixes are
-added. Run `git rev-parse HEAD` before handing off to a remote runner or target
-machine.
+added. Run `git rev-parse HEAD` before handing off to a remote runner, target
+machine, canary release, or stable release.
 
-The local branch is ahead of `origin/codex/invite-token-primitives`.
-GitHub PR checks are green for the older remote head only. The current local
-production-readiness commits still need to be pushed before GitHub CI, target
-machine tests, canary release, stable release, or production deployment can
-prove this head.
+The branch is pushed to PR #344. As of the `776e545c` run, the PR policy,
+Agents MD drift, Hermes PR audit, Hermes prompt drift, and PR e2e jobs are
+green. `verify`, `target-test`, and Docker were still in progress when this
+handoff was refreshed. `Production Readiness / config-audit` is failing as an
+external configuration gate because GitHub Actions cannot inspect repository
+Actions variables with the default token and cannot verify target runner /
+launch-smoke variables.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
@@ -45,7 +47,7 @@ pnpm build
 ```
 
 The following focused readiness checks have passed on later local heads through
-`21694e7c`:
+`776e545c`:
 
 ```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
@@ -84,6 +86,13 @@ go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/prod
 pnpm exec playwright test --config tests/launch-smoke/playwright.config.ts --list
 pnpm run test:launch-smoke
 git diff --check
+pnpm install --frozen-lockfile
+pnpm --filter agentdash typecheck
+pnpm --filter agentdash build
+pnpm -r typecheck
+pnpm test:run
+ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/*.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/*.yml
 ```
 
 Observed narrow results from the latest continuation:
@@ -146,6 +155,15 @@ Observed narrow results from the latest continuation:
   exits 0 with the test skipped when no deployed base URL is configured, which
   keeps local/PR verification safe while the production-readiness workflow uses
   `AGENTDASH_LAUNCH_SMOKE_REQUIRED=true` to fail missing deployment config.
+- `pnpm install --frozen-lockfile` passes with `pnpm-lock.yaml` kept out of the
+  PR diff. The accidental direct CLI dependency additions on `postgres`, `ws`,
+  and `zod` were removed because `cli/src` does not import them directly; the
+  workspace packages that need those packages declare their own dependencies.
+- `pnpm -r typecheck` passes on `776e545c`.
+- `pnpm test:run` passes on the app code at `776e545c`.
+- Workflow YAML parsing and `actionlint` pass after moving first-party GitHub
+  actions off Node 20 majors (`checkout` / `setup-node` to v6,
+  `upload-artifact` to v7).
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -162,24 +180,23 @@ Observed narrow results from the latest continuation:
 - #215: Docker image and npm release packaging have local smoke evidence. The
   actual published `agentdash@latest` and `ghcr.io/thetangstr/agentdash:latest`
   paths remain unproven until the release pipeline publishes this head.
+- PR install gate: fixed by keeping `pnpm-lock.yaml` out of the diff and
+  removing unnecessary direct CLI dependency specifiers so CI
+  `pnpm install --frozen-lockfile` can succeed.
+- GitHub Actions runtime warning: workflows now use Node 24-capable first-party
+  action majors for checkout, setup-node, and artifact upload.
 
 ## Remaining External Gates
 
 These steps are required before calling the app production ready:
 
-1. Push `codex/invite-token-primitives` so PR #344 points at the current local
-   `git rev-parse HEAD`.
-2. Wait for PR #344 checks on the pushed head:
-   - Agents MD Drift Check
-   - Hermes PR Audit
-   - Hermes Prompt Drift Check
-   - PR policy
-   - PR verify
-   - PR e2e
-   - Production Readiness / config-audit
-   - target-test
-   - target-test-comment
-   - Docker workflow
+1. Push any handoff/workflow-readiness commits after this document refresh and
+   confirm PR #344 points at `git rev-parse HEAD`.
+2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
+   green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
+   PR policy, PR verify, PR e2e, target-test, target-test-comment, and Docker
+   workflow. The production-readiness config audit may remain red only for the
+   documented external repository configuration gaps below.
 3. Register the self-hosted target runner and set repository variable
    `AGENTDASH_TARGET_RUNNER_LABELS` if real target-machine coverage is required.
    The current repo has zero self-hosted runners and no repository variables
