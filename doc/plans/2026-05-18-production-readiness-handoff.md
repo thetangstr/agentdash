@@ -9,26 +9,27 @@ Active branch: `codex/invite-token-primitives`
 Current pushed evidence baseline before this handoff refresh:
 
 ```text
-776e545c549fe1eabe6ddc71075ae22305639f09 Keep CLI dependencies aligned with the frozen lockfile
+73f8eb477ccf4321bed1f6d4672851b1cdd5f991 Keep PR Docker validation within CI time limits
 ```
 
 Remote PR head:
 
 ```text
-776e545c549fe1eabe6ddc71075ae22305639f09 Keep CLI dependencies aligned with the frozen lockfile
+73f8eb477ccf4321bed1f6d4672851b1cdd5f991 Keep PR Docker validation within CI time limits
 ```
 
 The current branch head may be newer than this baseline as readiness fixes are
 added. Run `git rev-parse HEAD` before handing off to a remote runner, target
 machine, canary release, or stable release.
 
-The branch is pushed to PR #344. As of the `776e545c` run, the PR policy,
-Agents MD drift, Hermes PR audit, Hermes prompt drift, and PR e2e jobs are
-green. `verify`, `target-test`, and Docker were still in progress when this
-handoff was refreshed. `Production Readiness / config-audit` is failing as an
-external configuration gate because GitHub Actions cannot inspect repository
-Actions variables with the default token and cannot verify target runner /
-launch-smoke variables.
+The branch is pushed to PR #344. As of the `73f8eb47` run, the code and CI
+readiness checks are green: PR policy, PR verify, PR e2e, target-test,
+target-test-comment, Docker, Agents MD drift, Hermes PR audit, and Hermes
+prompt drift. `Production Readiness / config-audit` is failing as an external
+configuration gate because the repository has no configured Actions variables
+and no self-hosted target runners. It cannot verify target-machine runner
+coverage or a deployed launch-smoke URL until those external launch settings are
+provided. GitHub issue #350 tracks those remaining external gates.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
@@ -47,7 +48,7 @@ pnpm build
 ```
 
 The following focused readiness checks have passed on later local heads through
-`776e545c`:
+`73f8eb47`:
 
 ```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
@@ -91,6 +92,7 @@ pnpm --filter agentdash typecheck
 pnpm --filter agentdash build
 pnpm -r typecheck
 pnpm test:run
+pnpm build
 ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/*.yml
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/*.yml
 ```
@@ -159,13 +161,18 @@ Observed narrow results from the latest continuation:
   PR diff. The accidental direct CLI dependency additions on `postgres`, `ws`,
   and `zod` were removed because `cli/src` does not import them directly; the
   workspace packages that need those packages declare their own dependencies.
-- `pnpm -r typecheck` passes on `776e545c`.
-- `pnpm test:run` passes on the app code at `776e545c`.
+- `pnpm -r typecheck` passes on `73f8eb47`.
+- `pnpm test:run` passes on the app code at `73f8eb47`.
+- `pnpm build` passes on `73f8eb47`.
 - Workflow YAML parsing and `actionlint` pass after moving first-party GitHub
   actions off Node 20 majors (`checkout` / `setup-node` to v6,
   `upload-artifact` to v7).
+- Docker PR validation now passes remotely on `73f8eb47`. The previous PR
+  Docker run reached the production image stage but timed out exporting the
+  GitHub Actions cache. PR builds now validate a single `linux/amd64` image
+  without cache export; non-PR builds still use multi-arch push/cache export.
 
-## Fixed Locally, Not Yet Proven Remotely
+## Fixed and Proven on PR Head
 
 - #349: release workflow/docs now target `main`; stable dry-run passes locally.
 - #348: release cadence has the weekly Friday stable train and canary-on-main
@@ -182,9 +189,12 @@ Observed narrow results from the latest continuation:
   paths remain unproven until the release pipeline publishes this head.
 - PR install gate: fixed by keeping `pnpm-lock.yaml` out of the diff and
   removing unnecessary direct CLI dependency specifiers so CI
-  `pnpm install --frozen-lockfile` can succeed.
+  `pnpm install --frozen-lockfile` can succeed. This is now proven by the green
+  PR verify job.
 - GitHub Actions runtime warning: workflows now use Node 24-capable first-party
   action majors for checkout, setup-node, and artifact upload.
+- PR Docker timeout: PR Docker builds now stay inside CI time limits and pass
+  remotely at `73f8eb47`.
 
 ## Remaining External Gates
 
@@ -195,8 +205,9 @@ These steps are required before calling the app production ready:
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
    PR policy, PR verify, PR e2e, target-test, target-test-comment, and Docker
-   workflow. The production-readiness config audit may remain red only for the
-   documented external repository configuration gaps below.
+   workflow. At `73f8eb47`, all of those checks are green. The
+   production-readiness config audit may remain red only for the documented
+   external repository configuration gaps below.
 3. Register the self-hosted target runner and set repository variable
    `AGENTDASH_TARGET_RUNNER_LABELS` if real target-machine coverage is required.
    The current repo has zero self-hosted runners and no repository variables
@@ -238,6 +249,8 @@ These steps are required before calling the app production ready:
     automated suite covers sign-up, CoS welcome/composer, billing status, and
     optional Stripe Checkout session creation/LLM reply. Stripe webhook and
     plan-tier transition still need an explicit Stripe test/live checkout run.
+
+Tracking issue: https://github.com/thetangstr/agentdash/issues/350
 
 ## Target Machine Agent Prompt
 
