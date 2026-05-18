@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Info,
   LogOut,
   type LucideIcon,
   Moon,
@@ -180,7 +181,7 @@ export function SidebarAccountMenu({
                 </div>
                 <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
                 {version ? (
-                  <p className="mt-1 text-xs text-muted-foreground">Paperclip v{version}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">AgentDash v{version}</p>
                 ) : null}
               </div>
             </div>
@@ -205,6 +206,13 @@ export function SidebarAccountMenu({
                 description="Jump back to the last settings page you opened."
                 icon={Settings}
                 href={instanceSettingsTarget}
+                onClick={closeNavigationChrome}
+              />
+              <MenuAction
+                label="About AgentDash"
+                description="View version, deployment, and changelog."
+                icon={Info}
+                href="/instance/settings/about"
                 onClick={closeNavigationChrome}
               />
               <MenuAction
