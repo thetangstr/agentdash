@@ -45,7 +45,7 @@ pnpm build
 ```
 
 The following focused readiness checks have passed on later local heads through
-`317fe636`:
+`21694e7c`:
 
 ```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
@@ -75,7 +75,7 @@ git checkout -- pnpm-lock.yaml
 ./scripts/release.sh canary --skip-verify --dry-run
 cd /Users/Kailor/Documents/Projects/agentdash
 git push --dry-run origin HEAD:codex/invite-token-primitives
-node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local-317fe636 --summary target-test/local-core-summary.json --logs-dir target-test/local-core-logs --artifact-name target-machine-test-core-local-317fe636 --paperclip-version latest
+node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local-21694e7c --summary target-test/local-core-summary.json --logs-dir target-test/local-core-logs --artifact-name target-machine-test-core-local-21694e7c --paperclip-version latest
 ```
 
 Observed narrow results from the latest continuation:
@@ -98,8 +98,9 @@ Observed narrow results from the latest continuation:
   dist-tag.
 - Dry-run push shows the PR branch can fast-forward cleanly.
 - The local target-test core profile passed on
-  `317fe6367a15a8c77de222de7a10967953b2e2c4` with Node `v23.11.0` on Darwin
-  arm64:
+  `21694e7c29528e1a5a371a28e643b6301b4dfae6` with Node `v23.11.0` on Darwin
+  arm64. The summary was generated at `2026-05-18T07:22:35.479Z`, with these
+  commands exiting 0:
   - `pnpm -r typecheck`
   - `pnpm test:run`
   - `pnpm build`
