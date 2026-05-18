@@ -31,6 +31,7 @@ import {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
   type ExecutionWorkspace,
+  type UpsertIssueFeedbackVote,
 } from "@paperclipai/shared";
 // AgentDash: goals-eval-hitl
 import { definitionOfDoneSchema } from "@paperclipai/shared";
@@ -1973,18 +1974,18 @@ export function issueRoutes(
     } = req.body;
     const shouldCancelActiveRunForCancelledStatus =
       existing.status !== "cancelled" && updateFields.status === "cancelled";
-    if (resumeRequested === true && !commentBody) {
+    if (resumeRequested && !commentBody) {
       res.status(400).json({ error: "Follow-up intent requires a comment" });
       return;
     }
-    if (resumeRequested === true && !(await assertExplicitResumeIntentAllowed(req, res, existing))) return;
-    if (resumeRequested !== true && reopenRequested === true && req.actor.type === "agent") {
+    if (resumeRequested && !(await assertExplicitResumeIntentAllowed(req, res, existing))) return;
+    if (!resumeRequested && reopenRequested && req.actor.type === "agent") {
       if (!(await assertExplicitResumeIntentAllowed(req, res, existing))) return;
     }
     await assertIssueEnvironmentSelection(existing.companyId, updateFields.executionWorkspaceSettings?.environmentId);
     const requestedAssigneeAgentId =
       normalizedAssigneeAgentId === undefined ? existing.assigneeAgentId : normalizedAssigneeAgentId;
-    const explicitMoveToTodoRequested = reopenRequested || resumeRequested === true;
+    const explicitMoveToTodoRequested = reopenRequested || resumeRequested;
     const effectiveMoveToTodoRequested =
       explicitMoveToTodoRequested ||
       (!!commentBody &&
@@ -2001,7 +2002,7 @@ export function issueRoutes(
       isBlocked && effectiveMoveToTodoRequested
         ? (await svc.getDependencyReadiness(existing.id)).unresolvedBlockerCount > 0
         : false;
-    if (resumeRequested === true && isBlocked && hasUnresolvedFirstClassBlockers) {
+    if (resumeRequested && isBlocked && hasUnresolvedFirstClassBlockers) {
       res.status(409).json({ error: "Issue follow-up blocked by unresolved blockers" });
       return;
     }
@@ -2340,7 +2341,7 @@ export function issueRoutes(
         ...updateFields,
         identifier: issue.identifier,
         ...(commentBody ? { source: "comment" } : {}),
-        ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+        ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
         ...(cancelledStatusRunId ? { cancelledStatusRunId } : {}),
@@ -2484,7 +2485,7 @@ export function issueRoutes(
           bodySnippet: comment.body.slice(0, 120),
           identifier: issue.identifier,
           issueTitle: issue.title,
-          ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+          ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
           ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
           ...(interruptedRunId ? { interruptedRunId } : {}),
           ...(hasFieldChanges ? { updated: true } : {}),
@@ -2569,7 +2570,7 @@ export function issueRoutes(
             issueId: issue.id,
             ...(comment ? { commentId: comment.id } : {}),
             mutation: "update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
           requestedByActorType: actor.actorType,
@@ -2584,7 +2585,7 @@ export function issueRoutes(
                 }
               : {}),
             source: "issue.update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
         });
@@ -2602,7 +2603,7 @@ export function issueRoutes(
           payload: {
             issueId: issue.id,
             mutation: "update",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
           requestedByActorType: actor.actorType,
@@ -2610,7 +2611,7 @@ export function issueRoutes(
           contextSnapshot: {
             issueId: issue.id,
             source: "issue.status_change",
-            ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+            ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
         });
@@ -2632,7 +2633,7 @@ export function issueRoutes(
               commentId: comment.id,
               mutation: "comment",
               ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
             requestedByActorType: actor.actorType,
@@ -2645,7 +2646,7 @@ export function issueRoutes(
               source: reopened ? "issue.comment.reopen" : "issue.comment",
               wakeReason: reopened ? "issue_reopened_via_comment" : "issue_commented",
               ...(reopened ? { reopenedFrom: reopenFromStatus } : {}),
-              ...(resumeRequested === true ? { resumeIntent: true, followUpRequested: true } : {}),
+              ...(resumeRequested ? { resumeIntent: true, followUpRequested: true } : {}),
               ...(interruptedRunId ? { interruptedRunId } : {}),
             },
           });
@@ -3733,14 +3734,15 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    const feedbackVoteBody = req.body as UpsertIssueFeedbackVote;
     const result = await feedback.saveIssueVote({
       issueId: id,
-      targetType: req.body.targetType,
-      targetId: req.body.targetId,
-      vote: req.body.vote,
-      reason: req.body.reason,
+      targetType: feedbackVoteBody.targetType,
+      targetId: feedbackVoteBody.targetId,
+      vote: feedbackVoteBody.vote,
+      reason: feedbackVoteBody.reason,
       authorUserId: req.actor.userId ?? "local-board",
-      allowSharing: req.body.allowSharing === true,
+      allowSharing: feedbackVoteBody.allowSharing ?? false,
     });
 
     await logActivity(db, {

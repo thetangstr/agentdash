@@ -510,16 +510,17 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       body = updateCompanyBrandingSchema.parse(req.body);
     } else {
       assertBoard(req);
-      body = updateCompanySchema.parse(req.body);
+      const boardPatch = updateCompanySchema.parse(req.body);
+      body = boardPatch;
 
-      if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
+      if (boardPatch.feedbackDataSharingEnabled && !existingCompany.feedbackDataSharingEnabled) {
         body = {
-          ...body,
+          ...boardPatch,
           feedbackDataSharingConsentAt: new Date(),
           feedbackDataSharingConsentByUserId: req.actor.userId ?? "local-board",
           feedbackDataSharingTermsVersion:
-            typeof body.feedbackDataSharingTermsVersion === "string" && body.feedbackDataSharingTermsVersion.length > 0
-              ? body.feedbackDataSharingTermsVersion
+            typeof boardPatch.feedbackDataSharingTermsVersion === "string" && boardPatch.feedbackDataSharingTermsVersion.length > 0
+              ? boardPatch.feedbackDataSharingTermsVersion
               : DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
         };
       }
