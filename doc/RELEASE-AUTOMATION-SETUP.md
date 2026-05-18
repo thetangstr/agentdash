@@ -151,6 +151,9 @@ Success means:
 - GitHub environments `npm-canary` and `npm-stable` exist
 - `npm-stable` has required-reviewer environment protection, so stable
   publishing waits for human approval
+- `main` branch protection is enabled and requires the always-running release
+  safety checks: `audit`, `drift`, `check`, `policy`, `e2e`, `verify`, and
+  `config-audit`
 - `AGENTDASH_LAUNCH_SMOKE_BASE_URL` points at a deployed HTTPS launch target
 - `AGENTDASH_LAUNCH_SMOKE_BILLING=true`, so launch smoke proves Stripe
   Checkout session creation
@@ -196,6 +199,7 @@ Only add this secret if the audit reports one of:
 ```text
 Could not inspect GitHub release environments.
 Could not inspect self-hosted target runner inventory.
+Could not inspect main branch protection.
 ```
 
 ### 6.3. Configure deployed launch smoke

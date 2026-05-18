@@ -162,7 +162,9 @@ Observed narrow results from the latest continuation:
   smoke job is still skipped on PRs. The audit uses repository `vars` for the
   target runner labels and deployed launch-smoke URL, plus
   `PRODUCTION_READINESS_AUDIT_TOKEN` when present and `GITHUB_TOKEN` otherwise
-  for GitHub API reads. If runner inventory cannot be read, the audit reports
+  for GitHub API reads. It also checks the public branch summary for `main`
+  branch protection and required always-running checks. If runner inventory,
+  branch protection, or release environments cannot be read, the audit reports
   that as a structured failed requirement instead of crashing. `pr.yml` also
   runs the audit helper unit test in the normal verify job.
 - `.github/CODEOWNERS` now uses the current repository collaborator

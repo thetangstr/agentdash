@@ -6,6 +6,20 @@ import {
   renderProductionReadinessSummary,
 } from "./audit-production-readiness-config.mjs";
 
+function protectedMain(overrides = {}) {
+  return {
+    required_status_checks: {
+      strict: true,
+      contexts: ["audit", "drift", "check", "policy", "e2e", "verify", "config-audit"],
+    },
+    enforce_admins: true,
+    required_linear_history: true,
+    allow_force_pushes: false,
+    allow_deletions: false,
+    ...overrides,
+  };
+}
+
 test("fails when target runner config is absent", () => {
   const result = auditProductionReadinessConfig({
     repository: "thetangstr/agentdash",
@@ -33,6 +47,8 @@ test("fails when target runner config is absent", () => {
     selfHostedRunnerCount: 0,
     runnerInventoryError: null,
     environmentInventoryError: null,
+    branchProtectionError: null,
+    branchProtectionRequiredChecks: [],
     launchSmokeUrlConfigured: false,
     launchSmokeBillingRequired: false,
     launchSmokeLlmRequired: false,
@@ -404,6 +420,157 @@ test("fails when the stable release environment has no required reviewers", () =
     result.requirements.find((item) => item.id === "stable-release-environment-protected").message,
     /does not require reviewer approval/,
   );
+});
+
+test("passes when main branch protection has required launch checks", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+    branchProtection: protectedMain(),
+  });
+
+  assert.equal(result.conclusion, "success");
+  assert.equal(
+    result.requirements.find((item) => item.id === "branch-protection-required-checks").status,
+    "pass",
+  );
+  assert.equal(result.observations.branchProtectionRequiredChecks.includes("config-audit"), true);
+});
+
+test("passes branch check validation from public branch summary shape", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+    branchProtection: {
+      protected: true,
+      protection: {
+        enabled: true,
+        required_status_checks: {
+          enforcement_level: "everyone",
+          contexts: ["audit", "drift", "check", "policy", "e2e", "verify", "config-audit"],
+        },
+      },
+    },
+  });
+
+  assert.equal(result.conclusion, "success");
+  assert.equal(
+    result.requirements.find((item) => item.id === "branch-protection-required-checks").status,
+    "pass",
+  );
+  assert.equal(
+    result.requirements.some((item) => item.id === "branch-protection-admins"),
+    false,
+  );
+});
+
+test("fails when main branch protection is missing production readiness checks", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+    branchProtection: protectedMain({
+      required_status_checks: {
+        strict: false,
+        contexts: ["audit", "drift", "check"],
+      },
+      enforce_admins: false,
+      required_linear_history: false,
+      allow_force_pushes: true,
+      allow_deletions: true,
+    }),
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.equal(
+    result.requirements.find((item) => item.id === "branch-protection-required-checks").status,
+    "fail",
+  );
+  assert.deepEqual(
+    result.requirements.find((item) => item.id === "branch-protection-required-checks").evidence.missingChecks,
+    ["policy", "e2e", "verify", "config-audit"],
+  );
+  assert.equal(result.requirements.find((item) => item.id === "branch-protection-admins").status, "fail");
+  assert.equal(result.requirements.find((item) => item.id === "branch-protection-linear-history").status, "fail");
+  assert.equal(result.requirements.find((item) => item.id === "branch-protection-no-history-rewrite").status, "fail");
+});
+
+test("reports branch protection permission failures as structured audit failures", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+    branchProtectionError: "HTTP 404: Branch not protected",
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.match(
+    result.requirements.find((item) => item.id === "branch-protection-readable").message,
+    /Could not inspect main branch protection/,
+  );
+  assert.equal(result.observations.branchProtectionError?.includes("HTTP 404"), true);
 });
 
 test("renders an actionable GitHub job summary for missing external gates", () => {

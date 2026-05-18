@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 
 const DEFAULT_REQUIRED_ENVIRONMENTS = ["npm-canary", "npm-stable"];
+const DEFAULT_PROTECTED_BRANCH = "main";
+const DEFAULT_REQUIRED_BRANCH_CHECKS = ["audit", "drift", "check", "policy", "e2e", "verify", "config-audit"];
 const DEFAULT_TARGET_RUNNER_VARIABLE = "AGENTDASH_TARGET_RUNNER_LABELS";
 const DEFAULT_LAUNCH_SMOKE_URL_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BASE_URL";
 const DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BILLING";
@@ -18,6 +20,7 @@ function parseArgs(argv) {
     launchSmokeUrlVariable: DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
     launchSmokeBillingVariable: DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE,
     launchSmokeExpectLlmVariable: DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE,
+    protectedBranch: DEFAULT_PROTECTED_BRANCH,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -41,6 +44,7 @@ function parseArgs(argv) {
     index += 1;
     if (key === "repo") args.repo = value;
     else if (key === "output") args.output = value;
+    else if (key === "protected-branch") args.protectedBranch = value;
     else if (key === "target-runner-variable") args.targetRunnerVariable = value;
     else if (key === "launch-smoke-url-variable") args.launchSmokeUrlVariable = value;
     else if (key === "launch-smoke-billing-variable") args.launchSmokeBillingVariable = value;
@@ -124,6 +128,107 @@ function hasRequiredReviewerProtection(environment) {
   return (environment?.protection_rules || []).some((rule) => rule?.type === "required_reviewers");
 }
 
+function getRequiredStatusChecks(branchProtection) {
+  const requiredStatusChecks = branchProtection?.required_status_checks || branchProtection?.protection?.required_status_checks;
+  if (!requiredStatusChecks) return [];
+  const contexts = Array.isArray(requiredStatusChecks.contexts) ? requiredStatusChecks.contexts : [];
+  const checks = Array.isArray(requiredStatusChecks.checks) ? requiredStatusChecks.checks.map((check) => check.context) : [];
+  return Array.from(new Set([...contexts, ...checks].filter(Boolean)));
+}
+
+function booleanProtectionValue(value) {
+  if (typeof value === "boolean") return value;
+  if (value && typeof value === "object" && "enabled" in value) return Boolean(value.enabled);
+  return false;
+}
+
+function auditBranchProtectionRequirements({ requirements, branchProtection, branchProtectionError, protectedBranch, requiredBranchChecks }) {
+  if (branchProtectionError) {
+    requirements.push(
+      requirement("branch-protection-readable", "fail", `Could not inspect ${protectedBranch} branch protection.`, {
+        branch: protectedBranch,
+        branchProtectionError,
+      }),
+    );
+    return;
+  }
+
+  if (!branchProtection) {
+    return;
+  }
+
+  if (branchProtection.protected === false || branchProtection.protection?.enabled === false) {
+    requirements.push(
+      requirement("branch-protection-readable", "fail", `${protectedBranch} branch protection is not enabled.`, {
+        branch: protectedBranch,
+      }),
+    );
+    return;
+  }
+
+  requirements.push(
+    requirement("branch-protection-readable", "pass", `${protectedBranch} branch protection is readable.`, {
+      branch: protectedBranch,
+    }),
+  );
+
+  const statusChecks = branchProtection.required_status_checks || branchProtection.protection?.required_status_checks;
+  const configuredChecks = getRequiredStatusChecks(branchProtection);
+  const missingChecks = requiredBranchChecks.filter((check) => !configuredChecks.includes(check));
+  if (statusChecks?.strict === false || missingChecks.length > 0) {
+    requirements.push(
+      requirement("branch-protection-required-checks", "fail", `${protectedBranch} branch protection is missing required checks.`, {
+        branch: protectedBranch,
+        strict: statusChecks?.strict,
+        requiredChecks: requiredBranchChecks,
+        configuredChecks,
+        missingChecks,
+      }),
+    );
+  } else {
+    requirements.push(
+      requirement("branch-protection-required-checks", "pass", `${protectedBranch} requires production readiness status checks.`, {
+        branch: protectedBranch,
+        strict: statusChecks?.strict,
+        enforcementLevel: statusChecks?.enforcement_level,
+        requiredChecks: configuredChecks,
+      }),
+    );
+  }
+
+  if (branchProtection.enforce_admins !== undefined && booleanProtectionValue(branchProtection.enforce_admins)) {
+    requirements.push(requirement("branch-protection-admins", "pass", `${protectedBranch} branch protection applies to admins.`, { branch: protectedBranch }));
+  } else if (branchProtection.enforce_admins !== undefined) {
+    requirements.push(requirement("branch-protection-admins", "fail", `${protectedBranch} branch protection does not apply to admins.`, { branch: protectedBranch }));
+  }
+
+  if (branchProtection.required_linear_history !== undefined && booleanProtectionValue(branchProtection.required_linear_history)) {
+    requirements.push(requirement("branch-protection-linear-history", "pass", `${protectedBranch} requires linear history.`, { branch: protectedBranch }));
+  } else if (branchProtection.required_linear_history !== undefined) {
+    requirements.push(requirement("branch-protection-linear-history", "fail", `${protectedBranch} does not require linear history.`, { branch: protectedBranch }));
+  }
+
+  if (
+    branchProtection.allow_force_pushes !== undefined &&
+    branchProtection.allow_deletions !== undefined &&
+    (booleanProtectionValue(branchProtection.allow_force_pushes) || booleanProtectionValue(branchProtection.allow_deletions))
+  ) {
+    requirements.push(
+      requirement("branch-protection-no-history-rewrite", "fail", `${protectedBranch} allows force pushes or deletion.`, {
+        branch: protectedBranch,
+        allowForcePushes: booleanProtectionValue(branchProtection.allow_force_pushes),
+        allowDeletions: booleanProtectionValue(branchProtection.allow_deletions),
+      }),
+    );
+  } else if (branchProtection.allow_force_pushes !== undefined && branchProtection.allow_deletions !== undefined) {
+    requirements.push(
+      requirement("branch-protection-no-history-rewrite", "pass", `${protectedBranch} blocks force pushes and deletion.`, {
+        branch: protectedBranch,
+      }),
+    );
+  }
+}
+
 function requireTrueVariable({ requirements, variables, variableInventoryError, variableContextProvided, name, id, failureMessage }) {
   if (variableInventoryError && !variableContextProvided) {
     requirements.push(
@@ -161,6 +266,10 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const variableContextProvided = Boolean(input.variableContextProvided);
   const runnerInventoryError = input.runnerInventoryError || "";
   const environmentInventoryError = input.environmentInventoryError || "";
+  const branchProtection = input.branchProtection || null;
+  const branchProtectionError = input.branchProtectionError || "";
+  const protectedBranch = options.protectedBranch || DEFAULT_PROTECTED_BRANCH;
+  const requiredBranchChecks = options.requiredBranchChecks || DEFAULT_REQUIRED_BRANCH_CHECKS;
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
   const launchSmokeUrlVariable = options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE;
   const launchSmokeBillingVariable = options.launchSmokeBillingVariable || DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE;
@@ -335,6 +444,14 @@ export function auditProductionReadinessConfig(input, options = {}) {
     }
   }
 
+  auditBranchProtectionRequirements({
+    requirements,
+    branchProtection,
+    branchProtectionError,
+    protectedBranch,
+    requiredBranchChecks,
+  });
+
   const launchSmokeVariable = variables.find((variable) => variable.name === launchSmokeUrlVariable);
   if (variableInventoryError && !variableContextProvided) {
     requirements.push(
@@ -417,6 +534,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
     "Confirm production deployment secrets and service credentials are configured in the cloud host, not only in GitHub Actions.",
     "Confirm the launch-smoke artifacts show Stripe Checkout session creation and a non-stub CoS/LLM reply before public launch.",
     "Confirm Stripe webhook delivery and plan-tier transition separately with Stripe dashboard or database evidence.",
+    "After this PR lands, enable CODEOWNERS review if the team wants release-infrastructure changes to require owner review.",
     "If GitHub Actions cannot inspect release environments or self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to those repository settings.",
   ];
 
@@ -434,6 +552,8 @@ export function auditProductionReadinessConfig(input, options = {}) {
       selfHostedRunnerCount: runnerInventoryError ? null : runners.length,
       runnerInventoryError: runnerInventoryError || null,
       environmentInventoryError: environmentInventoryError || null,
+      branchProtectionError: branchProtectionError || null,
+      branchProtectionRequiredChecks: branchProtection ? getRequiredStatusChecks(branchProtection) : [],
       launchSmokeUrlConfigured: Boolean(launchSmokeVariable),
       launchSmokeBillingRequired: variables.some(
         (variable) => variable.name === launchSmokeBillingVariable && String(variable.value || "").trim().toLowerCase() === "true",
@@ -500,9 +620,25 @@ function buildNextActions(result) {
       "Configure `npm-stable` in GitHub Settings -> Environments with required reviewers before stable publishes.",
     );
   }
+  if (failedIds.has("branch-protection-readable")) {
+    actions.push("Enable or repair `main` branch protection so production readiness can inspect required checks and history controls.");
+  }
+  if (failedIds.has("branch-protection-required-checks")) {
+    actions.push("Require the always-running production readiness checks on `main`: `audit`, `drift`, `check`, `policy`, `e2e`, `verify`, and `config-audit`.");
+  }
+  if (failedIds.has("branch-protection-admins")) {
+    actions.push("Enable branch protection enforcement for admins on `main`.");
+  }
+  if (failedIds.has("branch-protection-linear-history")) {
+    actions.push("Require linear history on `main`.");
+  }
+  if (failedIds.has("branch-protection-no-history-rewrite")) {
+    actions.push("Disable force pushes and branch deletion on `main`.");
+  }
   if (
     result.observations?.runnerInventoryError ||
     result.observations?.environmentInventoryError ||
+    result.observations?.branchProtectionError ||
     (result.observations?.variableInventoryError && !result.observations?.variableContextProvided)
   ) {
     actions.push(
@@ -587,13 +723,18 @@ function variablesFromActionsContext(options = {}) {
 async function collectGitHubConfig(repo, options = {}) {
   const runnersJq = "{runners: [.runners[] | {name: .name, status: .status, busy: .busy, labels: [.labels[].name]}]}";
   const environmentsJq = "{environments: [.environments[] | {name: .name, protection_rules: .protection_rules}]}";
-  const [variablesResult, environmentsResult] = await Promise.all([
+  const branchProtectionJq = "{protected: .protected, protection: .protection}";
+  const protectedBranch = options.protectedBranch || DEFAULT_PROTECTED_BRANCH;
+  const [variablesResult, environmentsResult, branchProtectionResult] = await Promise.all([
     runGhJson(`gh variable list --repo ${shellQuote(repo)} --json name,value,updatedAt`)
       .then((variables) => ({ variables: variables || [], error: "" }))
       .catch((error) => ({ variables: [], error: error.message })),
     runGhJson(`gh api ${shellQuote(`repos/${repo}/environments`)} --jq ${shellQuote(environmentsJq)}`)
       .then((result) => ({ environments: result?.environments || [], error: "" }))
       .catch((error) => ({ environments: [], error: error.message })),
+    runGhJson(`gh api ${shellQuote(`repos/${repo}/branches/${protectedBranch}`)} --jq ${shellQuote(branchProtectionJq)}`)
+      .then((branchProtection) => ({ branchProtection, error: "" }))
+      .catch((error) => ({ branchProtection: null, error: error.message })),
   ]);
   const contextVariables = variablesFromActionsContext(options);
   const variables = mergeVariables(variablesResult.variables || [], contextVariables);
@@ -619,8 +760,10 @@ async function collectGitHubConfig(repo, options = {}) {
     variableContextProvided: Boolean(options.useActionsVarsContext),
     runners: runnersResult?.runners || [],
     environments: environmentsResult.environments || [],
+    branchProtection: branchProtectionResult.branchProtection || null,
     runnerInventoryError,
     environmentInventoryError: environmentsResult.error,
+    branchProtectionError: branchProtectionResult.error,
   };
 }
 
@@ -632,9 +775,11 @@ async function main() {
     launchSmokeBillingVariable: args.launchSmokeBillingVariable,
     launchSmokeExpectLlmVariable: args.launchSmokeExpectLlmVariable,
     useActionsVarsContext: args.useActionsVarsContext,
+    protectedBranch: args.protectedBranch,
   });
   const result = auditProductionReadinessConfig(config, {
     allowGitHubHostedTarget: args.allowGitHubHostedTarget,
+    protectedBranch: args.protectedBranch,
     targetRunnerVariable: args.targetRunnerVariable,
     launchSmokeUrlVariable: args.launchSmokeUrlVariable,
     launchSmokeBillingVariable: args.launchSmokeBillingVariable,
