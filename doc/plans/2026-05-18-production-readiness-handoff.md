@@ -130,17 +130,20 @@ Observed narrow results from the latest continuation:
   `AGENTDASH_TARGET_RUNNER_LABELS` and `AGENTDASH_LAUNCH_SMOKE_BASE_URL` are
   missing and there are no self-hosted runners. It confirms both release
   environments exist: `npm-canary` and `npm-stable`.
-- The audit helper now treats unreadable repository Actions variables,
-  environments, or runner inventory as structured failed requirements and still
-  writes the JSON artifact. If GitHub Actions' default `GITHUB_TOKEN` cannot
-  read those settings, configure `PRODUCTION_READINESS_AUDIT_TOKEN` with the
-  narrow read access described in `doc/RELEASE-AUTOMATION-SETUP.md`.
+- The audit helper now reads required repository variables through the GitHub
+  Actions `vars` context and treats unreadable release environments or runner
+  inventory as structured failed requirements while still writing the JSON
+  artifact. If GitHub Actions' default `GITHUB_TOKEN` cannot read release
+  environments or runner inventory, configure `PRODUCTION_READINESS_AUDIT_TOKEN`
+  with the narrow read access described in `doc/RELEASE-AUTOMATION-SETUP.md`.
 - `.github/workflows/production-readiness.yml` now runs the audit on PR changes
   to the audit helper, on `main` pushes, on a daily schedule, and on manual
-  dispatch. It uses `PRODUCTION_READINESS_AUDIT_TOKEN` when present, otherwise
-  `GITHUB_TOKEN`; if runner inventory cannot be read, the audit reports that as
-  a structured failed requirement instead of crashing. `pr.yml` also runs the
-  audit helper unit test in the normal verify job.
+  dispatch. It uses repository `vars` for the target runner labels and deployed
+  launch-smoke URL, plus `PRODUCTION_READINESS_AUDIT_TOKEN` when present and
+  `GITHUB_TOKEN` otherwise for GitHub API reads. If runner inventory cannot be
+  read, the audit reports that as a structured failed requirement instead of
+  crashing. `pr.yml` also runs the audit helper unit test in the normal verify
+  job.
 - `doc/RELEASE-AUTOMATION-SETUP.md` now includes the operator runbook for the
   production-readiness audit gate: target-machine runner registration,
   `AGENTDASH_TARGET_RUNNER_LABELS`, optional

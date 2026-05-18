@@ -53,9 +53,15 @@ jobs:
       - name: Audit production gate configuration
         env:
           GH_TOKEN: ${{ secrets.PRODUCTION_READINESS_AUDIT_TOKEN || github.token }}
+          AGENTDASH_TARGET_RUNNER_LABELS: ${{ vars.AGENTDASH_TARGET_RUNNER_LABELS }}
+          AGENTDASH_LAUNCH_SMOKE_BASE_URL: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BASE_URL }}
           ALLOW_GITHUB_HOSTED_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_github_hosted_target || false }}
         run: |
-          args=(--repo "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/production-readiness-config.json")
+          args=(
+            --repo "$GITHUB_REPOSITORY"
+            --output "$RUNNER_TEMP/production-readiness-config.json"
+            --use-actions-vars-context
+          )
           if [ "$ALLOW_GITHUB_HOSTED_TARGET" = "true" ]; then
             args+=(--allow-github-hosted-target)
           fi

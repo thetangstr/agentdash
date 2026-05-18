@@ -26,6 +26,7 @@ test("fails when target runner config is absent", () => {
   assert.deepEqual(result.observations, {
     repositoryVariableCount: 0,
     variableInventoryError: null,
+    variableContextProvided: false,
     selfHostedRunnerCount: 0,
     runnerInventoryError: null,
     environmentInventoryError: null,
@@ -216,6 +217,45 @@ test("reports repository variable permission failures as structured audit failur
     result.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
     /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BASE_URL/,
   );
+  assert.equal(result.observations.variableInventoryError?.includes("HTTP 403"), true);
+});
+
+test("uses Actions vars context when repository variable inventory is unreadable", () => {
+  const result = auditProductionReadinessConfig({
+    variableInventoryError: "failed to get variables: HTTP 403: Resource not accessible by integration",
+    variableContextProvided: true,
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "macOS", "ARM64", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.equal(result.conclusion, "success");
+  assert.equal(
+    result.requirements.some((item) => item.id === "repository-variables-readable"),
+    false,
+  );
+  assert.equal(
+    result.requirements.find((item) => item.id === "target-runner-variable").status,
+    "pass",
+  );
+  assert.equal(
+    result.requirements.find((item) => item.id === "launch-smoke-url-variable").status,
+    "pass",
+  );
+  assert.equal(result.observations.variableContextProvided, true);
   assert.equal(result.observations.variableInventoryError?.includes("HTTP 403"), true);
 });
 

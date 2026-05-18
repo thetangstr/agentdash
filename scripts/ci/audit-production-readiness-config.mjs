@@ -11,6 +11,7 @@ function parseArgs(argv) {
     repo: process.env.GITHUB_REPOSITORY || "",
     output: "",
     allowGitHubHostedTarget: false,
+    useActionsVarsContext: false,
     targetRunnerVariable: DEFAULT_TARGET_RUNNER_VARIABLE,
     launchSmokeUrlVariable: DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
   };
@@ -19,6 +20,10 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--allow-github-hosted-target") {
       args.allowGitHubHostedTarget = true;
+      continue;
+    }
+    if (arg === "--use-actions-vars-context") {
+      args.useActionsVarsContext = true;
       continue;
     }
     if (!arg.startsWith("--")) {
@@ -114,6 +119,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const runners = Array.isArray(input.runners) ? input.runners : [];
   const environments = Array.isArray(input.environments) ? input.environments : [];
   const variableInventoryError = input.variableInventoryError || "";
+  const variableContextProvided = Boolean(input.variableContextProvided);
   const runnerInventoryError = input.runnerInventoryError || "";
   const environmentInventoryError = input.environmentInventoryError || "";
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
@@ -122,12 +128,10 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const requiredEnvironments = options.requiredEnvironments || DEFAULT_REQUIRED_ENVIRONMENTS;
 
   const requirements = [];
-  const targetVariable = variableInventoryError
-    ? null
-    : variables.find((variable) => variable.name === targetRunnerVariable);
+  const targetVariable = variables.find((variable) => variable.name === targetRunnerVariable);
   const targetLabels = parseRunnerLabels(targetVariable?.value || "");
 
-  if (variableInventoryError) {
+  if (variableInventoryError && !variableContextProvided) {
     requirements.push(
       requirement("repository-variables-readable", "fail", "Could not inspect repository Actions variables.", {
         variableInventoryError,
@@ -179,7 +183,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
     );
   }
 
-  if (variableInventoryError) {
+  if (variableInventoryError && !variableContextProvided) {
     requirements.push(
       requirement(
         "target-runner-available",
@@ -265,10 +269,8 @@ export function auditProductionReadinessConfig(input, options = {}) {
     }
   }
 
-  const launchSmokeVariable = variableInventoryError
-    ? null
-    : variables.find((variable) => variable.name === launchSmokeUrlVariable);
-  if (variableInventoryError) {
+  const launchSmokeVariable = variables.find((variable) => variable.name === launchSmokeUrlVariable);
+  if (variableInventoryError && !variableContextProvided) {
     requirements.push(
       requirement(
         "launch-smoke-url-variable",
@@ -328,7 +330,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
     "Confirm the stable release workflow is manually approved before running dry_run=false.",
     "Confirm production deployment secrets and service credentials are configured in the cloud host, not only in GitHub Actions.",
     "Confirm AGENTDASH_LAUNCH_SMOKE_BILLING=true and AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true have passed against the deployed launch target before public launch.",
-    "If GitHub Actions cannot inspect repository variables, environments, or self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to those repository settings.",
+    "If GitHub Actions cannot inspect release environments or self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to those repository settings.",
   ];
 
   const failed = requirements.filter((item) => item.status === "fail");
@@ -341,12 +343,36 @@ export function auditProductionReadinessConfig(input, options = {}) {
     observations: {
       repositoryVariableCount: variables.length,
       variableInventoryError: variableInventoryError || null,
+      variableContextProvided,
       selfHostedRunnerCount: runnerInventoryError ? null : runners.length,
       runnerInventoryError: runnerInventoryError || null,
       environmentInventoryError: environmentInventoryError || null,
       launchSmokeUrlConfigured: Boolean(launchSmokeVariable),
     },
   };
+}
+
+function mergeVariables(apiVariables, contextVariables) {
+  const byName = new Map();
+  for (const variable of apiVariables || []) {
+    byName.set(variable.name, variable);
+  }
+  for (const variable of contextVariables || []) {
+    byName.set(variable.name, variable);
+  }
+  return Array.from(byName.values());
+}
+
+function variablesFromActionsContext(options = {}) {
+  if (!options.useActionsVarsContext) return [];
+  const variableNames = [
+    options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE,
+    options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
+  ];
+  return variableNames.flatMap((name) => {
+    const value = process.env[name];
+    return value && value.trim() ? [{ name, value }] : [];
+  });
 }
 
 async function collectGitHubConfig(repo, options = {}) {
@@ -360,7 +386,9 @@ async function collectGitHubConfig(repo, options = {}) {
       .then((result) => ({ environments: result?.environments || [], error: "" }))
       .catch((error) => ({ environments: [], error: error.message })),
   ]);
-  const targetVariable = (variablesResult.variables || []).find(
+  const contextVariables = variablesFromActionsContext(options);
+  const variables = mergeVariables(variablesResult.variables || [], contextVariables);
+  const targetVariable = variables.find(
     (variable) => variable.name === (options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE),
   );
   const targetLabels = parseRunnerLabels(targetVariable?.value || "");
@@ -377,8 +405,9 @@ async function collectGitHubConfig(repo, options = {}) {
 
   return {
     repository: repo,
-    variables: variablesResult.variables || [],
+    variables,
     variableInventoryError: variablesResult.error,
+    variableContextProvided: Boolean(options.useActionsVarsContext),
     runners: runnersResult?.runners || [],
     environments: environmentsResult.environments || [],
     runnerInventoryError,
@@ -390,6 +419,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const config = await collectGitHubConfig(args.repo, {
     targetRunnerVariable: args.targetRunnerVariable,
+    launchSmokeUrlVariable: args.launchSmokeUrlVariable,
+    useActionsVarsContext: args.useActionsVarsContext,
   });
   const result = auditProductionReadinessConfig(config, {
     allowGitHubHostedTarget: args.allowGitHubHostedTarget,
