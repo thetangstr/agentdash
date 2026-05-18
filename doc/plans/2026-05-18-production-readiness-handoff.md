@@ -6,7 +6,7 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Local head:
+Local evidence baseline:
 
 ```text
 20d0a4611761f512b4acde6dfd8ef95cd31c6b5f Make the Docker image a runnable distribution
@@ -18,7 +18,11 @@ Remote PR head:
 3858878d27cad5aa52a7d1ec5ec38b7833ee5035 Make target-test PR comments use issue comments
 ```
 
-The local branch is seven commits ahead of `origin/codex/invite-token-primitives`.
+The current branch head may be newer than this baseline as readiness fixes are
+added. Run `git rev-parse HEAD` before handing off to a remote runner or target
+machine.
+
+The local branch is ahead of `origin/codex/invite-token-primitives`.
 GitHub PR checks are green for the older remote head only. The current local
 production-readiness commits still need to be pushed before GitHub CI, target
 machine tests, canary release, stable release, or production deployment can
@@ -44,6 +48,8 @@ node --check scripts/ci/run-target-test-profile.mjs
 node --check scripts/ci/file-target-test-issue.mjs
 node cli/dist/index.js --version
 node cli/dist/index.js setup --help
+ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/pr.yml .github/workflows/target-machine-test.yml .github/workflows/release.yml .github/workflows/release-smoke.yml .github/workflows/docker.yml
+git push --dry-run origin HEAD:codex/invite-token-primitives
 ```
 
 Observed narrow results from the latest continuation:
@@ -53,6 +59,10 @@ Observed narrow results from the latest continuation:
 - `node cli/dist/index.js --version`: `0.3.1`.
 - `agentdash setup --help` exposes `adapter`, `server`, and `bootstrap`
   subcommands.
+- The PR canary dry-run step checks out a temporary `main` branch before
+  running `./scripts/release.sh canary --skip-verify --dry-run`, matching the
+  release script's `main` guard.
+- Dry-run push shows the PR branch can fast-forward cleanly.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -74,8 +84,8 @@ Observed narrow results from the latest continuation:
 
 These steps are required before calling the app production ready:
 
-1. Push `codex/invite-token-primitives` so PR #344 points at
-   `20d0a4611761f512b4acde6dfd8ef95cd31c6b5f`.
+1. Push `codex/invite-token-primitives` so PR #344 points at the current local
+   `git rev-parse HEAD`.
 2. Wait for PR #344 checks on the pushed head:
    - Agents MD Drift Check
    - Hermes PR Audit
@@ -125,7 +135,7 @@ You are validating AgentDash production readiness on a target machine.
 
 Repository: https://github.com/thetangstr/agentdash.git
 Target ref: codex/invite-token-primitives
-Expected commit: 20d0a4611761f512b4acde6dfd8ef95cd31c6b5f
+Expected commit: <paste current git rev-parse HEAD after pushing>
 
 1. Fetch the target ref and verify HEAD is the expected commit.
 2. Install Node 24 and pnpm 9.15.4.
