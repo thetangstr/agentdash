@@ -232,6 +232,11 @@ Observed narrow results from the latest continuation:
   plist case.
 - #345: target-machine automation now records richer diagnostics and PR target
   test comments; the original mainline Vitest failure had no stack trace.
+- #346: Hermes task-context delivery no longer depends on the downstream package
+  patch. The server adapter registry maps `ctx.context.paperclipIssue`,
+  `ctx.context.paperclipTaskMarkdown`, wake reason, and comment ID into the
+  `ctx.config.task*` fields that `hermes-paperclip-adapter@0.3.0` actually
+  reads.
 - #297: run-healer eligibility scanner now has embedded Postgres integration
   coverage.
 - #215: Docker image and npm release packaging have local smoke evidence. The

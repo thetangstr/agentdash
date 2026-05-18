@@ -356,6 +356,50 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
   });
 
+  it("maps Paperclip issue context into Hermes task config fields", async () => {
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {
+        issueId: "paperclip-issue-123",
+        taskId: "paperclip-issue-123",
+        wakeReason: "issue_assigned",
+        commentId: "comment-123",
+        paperclipIssue: {
+          id: "paperclip-issue-123",
+          title: "Wire target smoke",
+          description: "Use the production-readiness workflow evidence.",
+        },
+        paperclipTaskMarkdown: "## Assigned Issue\n\nRun the target smoke profile.",
+      },
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+      authToken: "agent-run-jwt",
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.config).toMatchObject({
+      taskId: "paperclip-issue-123",
+      taskTitle: "Wire target smoke",
+      taskBody: "## Assigned Issue\n\nRun the target smoke profile.",
+      wakeReason: "issue_assigned",
+      commentId: "comment-123",
+    });
+  });
+
   it("passes the original Hermes context through when authToken is absent", async () => {
     const adapter = requireServerAdapter("hermes_local");
     const ctx = {

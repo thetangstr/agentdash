@@ -113,11 +113,29 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 
-function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
+function readConfigString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readConfigRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function applyIfMissing(config: Record<string, unknown> | null, key: string, value: string | undefined) {
+  if (!config || readConfigString(config[key])) return;
+  if (value) config[key] = value;
+}
+
+function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown; context?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
       ? (ctx.config as Record<string, unknown>)
       : null;
+  const context =
+    ctx && typeof ctx === "object" && "context" in ctx ? readConfigRecord(ctx.context) : null;
+  const paperclipIssue = readConfigRecord(context?.paperclipIssue);
   const agent =
     ctx && typeof ctx === "object" && "agent" in ctx && ctx.agent && typeof ctx.agent === "object"
       ? (ctx.agent as Record<string, unknown>)
@@ -159,6 +177,25 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   if (agentAdapterConfig && !agentAdapterConfig.command) {
     agentAdapterConfig.command = "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp";
   }
+
+  applyIfMissing(
+    config,
+    "taskId",
+    readConfigString(context?.taskId) ??
+      readConfigString(context?.issueId) ??
+      readConfigString(paperclipIssue?.id),
+  );
+  applyIfMissing(config, "taskTitle", readConfigString(paperclipIssue?.title));
+  applyIfMissing(
+    config,
+    "taskBody",
+    readConfigString(context?.paperclipTaskMarkdown) ??
+      readConfigString(paperclipIssue?.description),
+  );
+  applyIfMissing(config, "commentId", readConfigString(context?.commentId));
+  applyIfMissing(config, "wakeReason", readConfigString(context?.wakeReason));
+  applyIfMissing(config, "companyName", readConfigString(context?.companyName));
+  applyIfMissing(config, "projectName", readConfigString(context?.projectName));
 
   return ctx;
 }
