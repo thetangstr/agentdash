@@ -5,6 +5,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
 const DEFAULT_REQUIRED_ENVIRONMENTS = ["npm-canary", "npm-stable"];
 const DEFAULT_TARGET_RUNNER_VARIABLE = "AGENTDASH_TARGET_RUNNER_LABELS";
 const DEFAULT_LAUNCH_SMOKE_URL_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BASE_URL";
+const DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BILLING";
+const DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM";
 
 function parseArgs(argv) {
   const args = {
@@ -14,6 +16,8 @@ function parseArgs(argv) {
     useActionsVarsContext: false,
     targetRunnerVariable: DEFAULT_TARGET_RUNNER_VARIABLE,
     launchSmokeUrlVariable: DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
+    launchSmokeBillingVariable: DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE,
+    launchSmokeExpectLlmVariable: DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -39,6 +43,8 @@ function parseArgs(argv) {
     else if (key === "output") args.output = value;
     else if (key === "target-runner-variable") args.targetRunnerVariable = value;
     else if (key === "launch-smoke-url-variable") args.launchSmokeUrlVariable = value;
+    else if (key === "launch-smoke-billing-variable") args.launchSmokeBillingVariable = value;
+    else if (key === "launch-smoke-expect-llm-variable") args.launchSmokeExpectLlmVariable = value;
     else throw new Error(`unknown argument: --${key}`);
   }
 
@@ -114,6 +120,35 @@ function requirement(id, status, message, evidence = {}) {
   return { id, status, message, evidence };
 }
 
+function requireTrueVariable({ requirements, variables, variableInventoryError, variableContextProvided, name, id, failureMessage }) {
+  if (variableInventoryError && !variableContextProvided) {
+    requirements.push(
+      requirement(id, "fail", `Could not verify repository variable ${name} because repository Actions variables are not readable.`, {
+        variable: name,
+      }),
+    );
+    return;
+  }
+
+  const variable = variables.find((item) => item.name === name);
+  if (!variable) {
+    requirements.push(requirement(id, "fail", failureMessage, { variable: name }));
+    return;
+  }
+
+  if (String(variable.value || "").trim().toLowerCase() !== "true") {
+    requirements.push(
+      requirement(id, "fail", `Repository variable ${name} must be set to "true" for production launch smoke.`, {
+        variable: name,
+        value: variable.value,
+      }),
+    );
+    return;
+  }
+
+  requirements.push(requirement(id, "pass", `Repository variable ${name} is enabled.`, { variable: name }));
+}
+
 export function auditProductionReadinessConfig(input, options = {}) {
   const variables = Array.isArray(input.variables) ? input.variables : [];
   const runners = Array.isArray(input.runners) ? input.runners : [];
@@ -124,6 +159,8 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const environmentInventoryError = input.environmentInventoryError || "";
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
   const launchSmokeUrlVariable = options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE;
+  const launchSmokeBillingVariable = options.launchSmokeBillingVariable || DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE;
+  const launchSmokeExpectLlmVariable = options.launchSmokeExpectLlmVariable || DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE;
   const allowGitHubHostedTarget = Boolean(options.allowGitHubHostedTarget);
   const requiredEnvironments = options.requiredEnvironments || DEFAULT_REQUIRED_ENVIRONMENTS;
 
@@ -325,11 +362,32 @@ export function auditProductionReadinessConfig(input, options = {}) {
     }
   }
 
+  requireTrueVariable({
+    requirements,
+    variables,
+    variableInventoryError,
+    variableContextProvided,
+    name: launchSmokeBillingVariable,
+    id: "launch-smoke-billing-required",
+    failureMessage: `Repository variable ${launchSmokeBillingVariable} is missing; deployed launch smoke will not require Stripe Checkout session creation.`,
+  });
+
+  requireTrueVariable({
+    requirements,
+    variables,
+    variableInventoryError,
+    variableContextProvided,
+    name: launchSmokeExpectLlmVariable,
+    id: "launch-smoke-llm-required",
+    failureMessage: `Repository variable ${launchSmokeExpectLlmVariable} is missing; deployed launch smoke will not require a real CoS/LLM reply.`,
+  });
+
   const manualChecks = [
     "Confirm npm trusted publishing is configured for every public package published by scripts/release.sh.",
     "Confirm the stable release workflow is manually approved before running dry_run=false.",
     "Confirm production deployment secrets and service credentials are configured in the cloud host, not only in GitHub Actions.",
-    "Confirm AGENTDASH_LAUNCH_SMOKE_BILLING=true and AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true have passed against the deployed launch target before public launch.",
+    "Confirm the launch-smoke artifacts show Stripe Checkout session creation and a non-stub CoS/LLM reply before public launch.",
+    "Confirm Stripe webhook delivery and plan-tier transition separately with Stripe dashboard or database evidence.",
     "If GitHub Actions cannot inspect release environments or self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to those repository settings.",
   ];
 
@@ -348,6 +406,12 @@ export function auditProductionReadinessConfig(input, options = {}) {
       runnerInventoryError: runnerInventoryError || null,
       environmentInventoryError: environmentInventoryError || null,
       launchSmokeUrlConfigured: Boolean(launchSmokeVariable),
+      launchSmokeBillingRequired: variables.some(
+        (variable) => variable.name === launchSmokeBillingVariable && String(variable.value || "").trim().toLowerCase() === "true",
+      ),
+      launchSmokeLlmRequired: variables.some(
+        (variable) => variable.name === launchSmokeExpectLlmVariable && String(variable.value || "").trim().toLowerCase() === "true",
+      ),
     },
   };
 }
@@ -387,6 +451,16 @@ function buildNextActions(result) {
     );
     actions.push(
       "For one-off deployed smoke before variables are finalized, rerun this workflow manually with `launch_smoke_base_url`.",
+    );
+  }
+  if (failedIds.has("launch-smoke-billing-required")) {
+    actions.push(
+      `Require Stripe Checkout session creation in deployed smoke: \`gh variable set ${DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE} --repo ${repo} --body 'true'\`.`,
+    );
+  }
+  if (failedIds.has("launch-smoke-llm-required")) {
+    actions.push(
+      `Require a real CoS/LLM reply in deployed smoke: \`gh variable set ${DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE} --repo ${repo} --body 'true'\`.`,
     );
   }
   if (failedIds.has("release-environment")) {
@@ -467,6 +541,8 @@ function variablesFromActionsContext(options = {}) {
   const variableNames = [
     options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE,
     options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
+    options.launchSmokeBillingVariable || DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE,
+    options.launchSmokeExpectLlmVariable || DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE,
   ];
   return variableNames.flatMap((name) => {
     const value = process.env[name];
@@ -519,12 +595,16 @@ async function main() {
   const config = await collectGitHubConfig(args.repo, {
     targetRunnerVariable: args.targetRunnerVariable,
     launchSmokeUrlVariable: args.launchSmokeUrlVariable,
+    launchSmokeBillingVariable: args.launchSmokeBillingVariable,
+    launchSmokeExpectLlmVariable: args.launchSmokeExpectLlmVariable,
     useActionsVarsContext: args.useActionsVarsContext,
   });
   const result = auditProductionReadinessConfig(config, {
     allowGitHubHostedTarget: args.allowGitHubHostedTarget,
     targetRunnerVariable: args.targetRunnerVariable,
     launchSmokeUrlVariable: args.launchSmokeUrlVariable,
+    launchSmokeBillingVariable: args.launchSmokeBillingVariable,
+    launchSmokeExpectLlmVariable: args.launchSmokeExpectLlmVariable,
   });
 
   const json = `${JSON.stringify(result, null, 2)}\n`;

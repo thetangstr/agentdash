@@ -6,10 +6,10 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Last code-change evidence baseline:
+Last previously observed pushed PR head before this readiness-hardening pass:
 
 ```text
-73f8eb477ccf4321bed1f6d4672851b1cdd5f991 Keep PR Docker validation within CI time limits
+29c5231db1a63faea5433f3a8e0bce025a6e5aa5 Keep pnpm setup on the Node 24 action runtime
 ```
 
 This document may live on a later documentation-only commit. Resolve the current
@@ -29,7 +29,10 @@ drift. `Production Readiness / config-audit` is failing as an external
 configuration gate because the repository has no configured Actions variables
 and no self-hosted target runners. It cannot verify target-machine runner
 coverage or a deployed launch-smoke URL until those external launch settings are
-provided. GitHub issue #350 tracks those remaining external gates.
+provided. The audit also requires deployed smoke to prove Stripe Checkout
+session creation and a real CoS/LLM reply through durable repository variables,
+not just one-off workflow inputs. GitHub issue #350 tracks those remaining
+external gates.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
@@ -138,6 +141,10 @@ Observed narrow results from the latest continuation:
   with the narrow read access described in `doc/RELEASE-AUTOMATION-SETUP.md`.
   The audit also writes a GitHub job summary with failed requirement IDs and the
   exact next `gh variable set ...` commands for the external operator.
+- The audit now treats `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
+  `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` as automated config requirements,
+  so a future green production-readiness audit cannot skip Stripe Checkout
+  session creation or real CoS/LLM reply coverage.
 - `.github/workflows/production-readiness.yml` now runs the audit on PR changes
   to the audit helper, on `main` pushes, on a daily schedule, and on manual
   dispatch. It uses repository `vars` for the target runner labels and deployed
@@ -173,9 +180,9 @@ Observed narrow results from the latest continuation:
 - `pnpm -r typecheck` passes on `73f8eb47`.
 - `pnpm test:run` passes on the app code at `73f8eb47`.
 - `pnpm build` passes on `73f8eb47`.
-- Workflow YAML parsing and `actionlint` pass after moving first-party GitHub
-  actions off Node 20 majors (`checkout` / `setup-node` to v6,
-  `upload-artifact` to v7).
+- Workflow YAML parsing and `actionlint` pass after moving GitHub Actions
+  dependencies off Node 20 majors (`checkout` / `setup-node` to v6,
+  `upload-artifact` to v7, `pnpm/action-setup` to v6).
 - Docker PR validation now passes remotely on `73f8eb47`. The previous PR
   Docker run reached the production image stage but timed out exporting the
   GitHub Actions cache. PR builds now validate a single `linux/amd64` image
@@ -214,7 +221,7 @@ These steps are required before calling the app production ready:
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
    PR policy, PR verify, PR e2e, target-test, target-test-comment, and Docker
-   workflow. At `73f8eb47`, all of those checks are green. The
+   workflow. At `29c5231d`, all of those checks are green. The
    production-readiness config audit may remain red only for the documented
    external repository configuration gaps below.
 3. Register the self-hosted target runner and set repository variable
@@ -227,7 +234,8 @@ These steps are required before calling the app production ready:
    `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
    `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` before public launch so the smoke
    proves Stripe Checkout session creation and real CoS replies, not only the
-   authenticated shell.
+   authenticated shell. These two flags are enforced by the
+   production-readiness config audit.
 5. Merge the PR to `main`.
 6. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.

@@ -150,6 +150,10 @@ Success means:
 - at least one matching self-hosted runner is online and idle
 - GitHub environments `npm-canary` and `npm-stable` exist
 - `AGENTDASH_LAUNCH_SMOKE_BASE_URL` points at a deployed HTTPS launch target
+- `AGENTDASH_LAUNCH_SMOKE_BILLING=true`, so launch smoke proves Stripe
+  Checkout session creation
+- `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`, so launch smoke proves a real
+  CoS/LLM reply instead of accepting the local stub path
 
 Failure is expected before the target machine and deployed launch target exist.
 Do not mark the app production ready while this audit fails, unless the release
@@ -203,13 +207,9 @@ gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL \
   --body 'https://your-domain.com'
 ```
 
-Optional repository variables:
+Required for public production launch:
 
 ```sh
-gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE \
-  --repo thetangstr/agentdash \
-  --body 'launch-smoke+{run}@your-domain.com'
-
 gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING \
   --repo thetangstr/agentdash \
   --body 'true'
@@ -217,6 +217,14 @@ gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING \
 gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM \
   --repo thetangstr/agentdash \
   --body 'true'
+```
+
+Optional repository variable:
+
+```sh
+gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE \
+  --repo thetangstr/agentdash \
+  --body 'launch-smoke+{run}@your-domain.com'
 ```
 
 If the deployment needs a fixed password policy, set
@@ -233,6 +241,8 @@ the `Production Readiness` workflow manually and fill in
 `launch_smoke_expect_llm` override the matching repository variables for that
 single run. This proves the deployed URL for the run, but it does not replace
 the durable repository variables required for the scheduled production gate.
+The config audit intentionally remains red until the billing and LLM smoke
+requirements are enabled as repository variables.
 
 ## 7. Configure `npm-stable`
 

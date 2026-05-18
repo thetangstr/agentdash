@@ -34,6 +34,8 @@ test("fails when target runner config is absent", () => {
     runnerInventoryError: null,
     environmentInventoryError: null,
     launchSmokeUrlConfigured: false,
+    launchSmokeBillingRequired: false,
+    launchSmokeLlmRequired: false,
   });
 });
 
@@ -83,6 +85,8 @@ test("passes when a matching self-hosted target runner is online and idle", () =
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {
@@ -110,6 +114,8 @@ test("fails structurally when runner inventory cannot be inspected", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [],
     runnerInventoryError: "Resource not accessible by integration",
@@ -132,6 +138,8 @@ test("fails when release environments are missing", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {
@@ -176,6 +184,8 @@ test("fails when launch smoke URL is missing or local", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "http://127.0.0.1:3100" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {
@@ -194,6 +204,69 @@ test("fails when launch smoke URL is missing or local", () => {
     local.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
     /https URL/,
   );
+});
+
+test("requires production launch smoke to prove billing and real LLM paths", () => {
+  const missing = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.equal(missing.conclusion, "failure");
+  assert.equal(
+    missing.requirements.find((item) => item.id === "launch-smoke-billing-required").status,
+    "fail",
+  );
+  assert.equal(
+    missing.requirements.find((item) => item.id === "launch-smoke-llm-required").status,
+    "fail",
+  );
+
+  const disabled = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "false" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "FALSE" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.match(
+    disabled.requirements.find((item) => item.id === "launch-smoke-billing-required").message,
+    /must be set to "true"/,
+  );
+  assert.match(
+    disabled.requirements.find((item) => item.id === "launch-smoke-llm-required").message,
+    /must be set to "true"/,
+  );
+  assert.equal(disabled.observations.launchSmokeBillingRequired, false);
+  assert.equal(disabled.observations.launchSmokeLlmRequired, false);
 });
 
 test("reports repository variable permission failures as structured audit failures", () => {
@@ -220,6 +293,14 @@ test("reports repository variable permission failures as structured audit failur
     result.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
     /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BASE_URL/,
   );
+  assert.match(
+    result.requirements.find((item) => item.id === "launch-smoke-billing-required").message,
+    /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BILLING/,
+  );
+  assert.match(
+    result.requirements.find((item) => item.id === "launch-smoke-llm-required").message,
+    /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM/,
+  );
   assert.equal(result.observations.variableInventoryError?.includes("HTTP 403"), true);
 });
 
@@ -230,6 +311,8 @@ test("uses Actions vars context when repository variable inventory is unreadable
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {
@@ -267,6 +350,8 @@ test("reports release environment permission failures as structured audit failur
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {
@@ -305,8 +390,12 @@ test("renders an actionable GitHub job summary for missing external gates", () =
   assert.match(summary, /Production Readiness Config Audit/);
   assert.match(summary, /gh variable set AGENTDASH_TARGET_RUNNER_LABELS --repo thetangstr\/agentdash/);
   assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL --repo thetangstr\/agentdash/);
+  assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING --repo thetangstr\/agentdash/);
+  assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM --repo thetangstr\/agentdash/);
   assert.match(summary, /launch_smoke_base_url/);
   assert.match(summary, /target-runner-variable/);
+  assert.match(summary, /launch-smoke-billing-required/);
+  assert.match(summary, /launch-smoke-llm-required/);
 });
 
 test("renders success guidance when automated config gates pass", () => {
@@ -316,6 +405,8 @@ test("renders success guidance when automated config gates pass", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
     runners: [
       {

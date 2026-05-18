@@ -81,6 +81,8 @@ jobs:
           GH_TOKEN: ${{ secrets.PRODUCTION_READINESS_AUDIT_TOKEN || github.token }}
           AGENTDASH_TARGET_RUNNER_LABELS: ${{ vars.AGENTDASH_TARGET_RUNNER_LABELS }}
           AGENTDASH_LAUNCH_SMOKE_BASE_URL: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BASE_URL }}
+          AGENTDASH_LAUNCH_SMOKE_BILLING: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BILLING }}
+          AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM }}
           ALLOW_GITHUB_HOSTED_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_github_hosted_target || false }}
         run: |
           args=(

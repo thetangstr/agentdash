@@ -158,7 +158,11 @@ For local dry runs only, add `AGENTDASH_LAUNCH_SMOKE_ALLOW_LOCAL=true`.
 The GitHub `Production Readiness` workflow can also run the deployed smoke from
 `workflow_dispatch`. Provide `launch_smoke_base_url` for a one-off manual run;
 set `launch_smoke_billing=true` and `launch_smoke_expect_llm=true` when public
-launch readiness requires Stripe Checkout creation and a real CoS reply.
+launch readiness requires Stripe Checkout creation and a real CoS reply. The
+durable production gate requires repository variables
+`AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
+`AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`; manual inputs prove a single run but
+do not replace those variables for scheduled readiness checks.
 
 ---
 
