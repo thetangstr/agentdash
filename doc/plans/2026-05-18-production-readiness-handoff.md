@@ -81,6 +81,9 @@ node --test scripts/ci/audit-production-readiness-config.test.mjs
 node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --output /tmp/agentdash-production-readiness-config.json
 ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/production-readiness.yml
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/production-readiness.yml .github/workflows/pr.yml
+pnpm exec playwright test --config tests/launch-smoke/playwright.config.ts --list
+pnpm run test:launch-smoke
+git diff --check
 ```
 
 Observed narrow results from the latest continuation:
@@ -110,11 +113,12 @@ Observed narrow results from the latest continuation:
   - `pnpm test:run`
   - `pnpm build`
 - `scripts/ci/audit-production-readiness-config.mjs` is a repeatable read-only
-  GitHub configuration audit for the target-machine and release-environment
-  gates. Its unit tests pass. Against `thetangstr/agentdash`, it currently
-  exits 1 because `AGENTDASH_TARGET_RUNNER_LABELS` is missing and there are no
-  self-hosted runners. It confirms both release environments exist:
-  `npm-canary` and `npm-stable`.
+  GitHub configuration audit for the target-machine, release-environment, and
+  deployed launch-smoke gates. Its unit tests pass. Against
+  `thetangstr/agentdash`, it currently exits 1 because
+  `AGENTDASH_TARGET_RUNNER_LABELS` and `AGENTDASH_LAUNCH_SMOKE_BASE_URL` are
+  missing and there are no self-hosted runners. It confirms both release
+  environments exist: `npm-canary` and `npm-stable`.
 - `.github/workflows/production-readiness.yml` now runs the audit on PR changes
   to the audit helper, on `main` pushes, on a daily schedule, and on manual
   dispatch. It uses `PRODUCTION_READINESS_AUDIT_TOKEN` when present, otherwise
@@ -126,6 +130,17 @@ Observed narrow results from the latest continuation:
   `AGENTDASH_TARGET_RUNNER_LABELS`, optional
   `PRODUCTION_READINESS_AUDIT_TOKEN`, required branch checks, and release
   infrastructure protection.
+- `tests/launch-smoke/` now contains a deployed-url launch smoke suite. It
+  signs up a unique user, verifies `/cos` CoS welcome/composer, checks billing
+  status, and can require Stripe Checkout session creation and a real LLM reply
+  through env flags. `Production Readiness / launch-smoke` runs it on non-PR
+  production-readiness workflow events once `AGENTDASH_LAUNCH_SMOKE_BASE_URL`
+  is configured.
+- `pnpm exec playwright test --config tests/launch-smoke/playwright.config.ts
+  --list` lists the deployed launch-smoke test. `pnpm run test:launch-smoke`
+  exits 0 with the test skipped when no deployed base URL is configured, which
+  keeps local/PR verification safe while the production-readiness workflow uses
+  `AGENTDASH_LAUNCH_SMOKE_REQUIRED=true` to fail missing deployment config.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -165,22 +180,28 @@ These steps are required before calling the app production ready:
    The current repo has zero self-hosted runners and no repository variables
    visible through `gh`, so the target workflow will fall back to GitHub-hosted
    Ubuntu runners until this is configured.
-4. Merge the PR to `main`.
-5. Let the canary workflow publish from `main` and pass release smoke against
+4. Deploy a staging or production launch target and set repository variable
+   `AGENTDASH_LAUNCH_SMOKE_BASE_URL` to its HTTPS origin. Set
+   `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
+   `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` before public launch so the smoke
+   proves Stripe Checkout session creation and real CoS replies, not only the
+   authenticated shell.
+5. Merge the PR to `main`.
+6. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.
-6. Confirm npm trusted publishing for every public package, then run the stable
+7. Confirm npm trusted publishing for every public package, then run the stable
    release workflow for `2026-05-22` with `dry_run=true`, then with
    `dry_run=false` after approval. The GitHub release environments
    `npm-canary` and `npm-stable` exist. Absence of repository Actions secrets is
    expected for this workflow because npm publish uses GitHub Actions trusted
    publishing and Docker/GitHub release publishing uses `GITHUB_TOKEN`; the npm
    trusted-publishing configuration itself must still be confirmed in npm.
-7. Confirm published package and image surfaces:
+8. Confirm published package and image surfaces:
    - `npm view agentdash@latest version`
    - `npx agentdash@latest setup --help`
    - `docker run ghcr.io/thetangstr/agentdash:latest`
    - `gh workflow run release-smoke.yml -f paperclip_version=latest`
-8. Deploy the cloud container with the production env vars from `doc/LAUNCH.md`:
+9. Deploy the cloud container with the production env vars from `doc/LAUNCH.md`:
    - `PAPERCLIP_DEPLOYMENT_MODE=authenticated`
    - `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`
    - `PAPERCLIP_AUTH_PUBLIC_BASE_URL`
@@ -191,9 +212,10 @@ These steps are required before calling the app production ready:
    - LLM dispatch vars
    - Resend vars
    - Agent Research vars, if launch scope includes assessments
-9. Run the launch smoke from `doc/LAUNCH.md` against the deployed URL:
-   sign-up, CoS welcome/interview, billing checkout, Stripe webhook, and plan
-   tier transition.
+10. Run the launch smoke from `doc/LAUNCH.md` against the deployed URL. The
+    automated suite covers sign-up, CoS welcome/composer, billing status, and
+    optional Stripe Checkout session creation/LLM reply. Stripe webhook and
+    plan-tier transition still need an explicit Stripe test/live checkout run.
 
 ## Target Machine Agent Prompt
 

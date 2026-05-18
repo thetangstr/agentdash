@@ -128,13 +128,32 @@ Without `RESEARCH_APP_URL` + `RESEARCH_APP_API_KEY` the route returns HTTP 503 �
 After the container boots:
 
 1. Visit `https://your-domain.com/` — should render the AgentDash marketing landing on cream surface.
-2. Visit `/?mode=sign_up` — sign up with any email. Free-mail addresses (gmail / yahoo / outlook / hotmail / icloud) are accepted by default; if you want the legacy "corp email required" gate back, set `AGENTDASH_REQUIRE_CORP_EMAIL=true` (the middleware at [server/src/middleware/corp-email-signup-guard.ts](../server/src/middleware/corp-email-signup-guard.ts) is still wired — just disabled by default).
+2. Visit `/auth?mode=sign_up` — sign up with any email. Free-mail addresses (gmail / yahoo / outlook / hotmail / icloud) are accepted by default; if you want the legacy "corp email required" gate back, set `AGENTDASH_REQUIRE_CORP_EMAIL=true` (the middleware at [server/src/middleware/corp-email-signup-guard.ts](../server/src/middleware/corp-email-signup-guard.ts) is still wired — just disabled by default).
 3. After sign-up, the orchestrator's `databaseHooks.user.create.after` hook auto-creates a fresh per-user workspace (no domain auto-merging — every user gets their own; cross-team membership happens via invite). You land at `/cos` with a CoS-led welcome conversation: 3 plain-text intro bubbles + 1 interview-question card.
 4. Reply to the question — you should get a real reply within ~2s via whichever adapter `AGENTDASH_DEFAULT_ADAPTER` selects (Anthropic API, Claude Code CLI, Hermes CLI, …).
 5. Try `/{prefix}/billing` and click upgrade — Stripe Checkout should open with the 14-day trial. Use a real card (Stripe handles fraud protection).
 6. Watch the container logs while the webhook fires after card-on-file — you should see `customer.subscription.created` processed and the company's `planTier` flip to `pro_trial` in the DB.
 
 If any of those steps fail, check the container logs and the [server/src/services/companies.ts](../server/src/services/companies.ts) projection for the row state.
+
+Automated deployed smoke:
+
+```sh
+AGENTDASH_LAUNCH_SMOKE_BASE_URL=https://your-domain.com \
+AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE='launch-smoke+{run}@your-domain.com' \
+AGENTDASH_LAUNCH_SMOKE_BILLING=true \
+AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true \
+pnpm run test:launch-smoke
+```
+
+The smoke suite creates a unique signed-up user, verifies the CoS welcome
+conversation and composer, checks billing status, and when
+`AGENTDASH_LAUNCH_SMOKE_BILLING=true` verifies that Stripe Checkout session
+creation returns a `checkout.stripe.com` URL. It does not enter card details;
+verify the webhook and plan-tier transition separately with the Stripe dashboard
+or a deliberately configured staging Stripe test run.
+
+For local dry runs only, add `AGENTDASH_LAUNCH_SMOKE_ALLOW_LOCAL=true`.
 
 ---
 

@@ -27,6 +27,7 @@ test("fails when target runner config is absent", () => {
     repositoryVariableCount: 0,
     selfHostedRunnerCount: 0,
     runnerInventoryError: null,
+    launchSmokeUrlConfigured: false,
   });
 });
 
@@ -60,16 +61,23 @@ test("can explicitly allow GitHub-hosted target validation", () => {
     { allowGitHubHostedTarget: true },
   );
 
-  assert.equal(result.conclusion, "success");
+  assert.equal(result.conclusion, "failure");
   assert.equal(
     result.requirements.find((item) => item.id === "target-runner-available").status,
     "pass",
+  );
+  assert.equal(
+    result.requirements.find((item) => item.id === "launch-smoke-url-variable").status,
+    "fail",
   );
 });
 
 test("passes when a matching self-hosted target runner is online and idle", () => {
   const result = auditProductionReadinessConfig({
-    variables: [{ name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' }],
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
     runners: [
       {
         name: "target-mac",
@@ -93,7 +101,10 @@ test("passes when a matching self-hosted target runner is online and idle", () =
 
 test("fails structurally when runner inventory cannot be inspected", () => {
   const result = auditProductionReadinessConfig({
-    variables: [{ name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' }],
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
     runners: [],
     runnerInventoryError: "Resource not accessible by integration",
     environments: [
@@ -112,7 +123,10 @@ test("fails structurally when runner inventory cannot be inspected", () => {
 
 test("fails when release environments are missing", () => {
   const result = auditProductionReadinessConfig({
-    variables: [{ name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' }],
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
     runners: [
       {
         name: "target-mac",
@@ -128,5 +142,50 @@ test("fails when release environments are missing", () => {
   assert.deepEqual(
     result.requirements.filter((item) => item.id === "release-environment").map((item) => item.status),
     ["fail", "fail"],
+  );
+});
+
+test("fails when launch smoke URL is missing or local", () => {
+  const missing = auditProductionReadinessConfig({
+    variables: [{ name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' }],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+  assert.equal(
+    missing.requirements.find((item) => item.id === "launch-smoke-url-variable").status,
+    "fail",
+  );
+
+  const local = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "http://127.0.0.1:3100" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+  assert.match(
+    local.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
+    /https URL/,
   );
 });

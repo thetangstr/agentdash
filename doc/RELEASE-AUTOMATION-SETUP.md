@@ -128,7 +128,8 @@ Reasoning:
 
 The `Production Readiness` workflow runs
 `scripts/ci/audit-production-readiness-config.mjs` and intentionally fails until
-the target-machine and release-environment gates are configured.
+the target-machine, deployed launch-smoke, and release-environment gates are
+configured.
 
 Run it locally at any time:
 
@@ -142,10 +143,11 @@ Success means:
   array
 - at least one matching self-hosted runner is online and idle
 - GitHub environments `npm-canary` and `npm-stable` exist
+- `AGENTDASH_LAUNCH_SMOKE_BASE_URL` points at a deployed HTTPS launch target
 
-Failure is expected before the target machine exists. Do not mark the app
-production ready while this audit fails, unless the release owner has explicitly
-accepted GitHub-hosted target validation for that run.
+Failure is expected before the target machine and deployed launch target exist.
+Do not mark the app production ready while this audit fails, unless the release
+owner has explicitly accepted GitHub-hosted target validation for that run.
 
 ### 6.1. Register a target-machine runner
 
@@ -181,6 +183,40 @@ Only add this secret if the audit reports:
 ```text
 Could not inspect self-hosted target runner inventory.
 ```
+
+### 6.3. Configure deployed launch smoke
+
+Set the repository variable used by the `Production Readiness / launch-smoke`
+job:
+
+```sh
+gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL \
+  --repo thetangstr/agentdash \
+  --body 'https://your-domain.com'
+```
+
+Optional repository variables:
+
+```sh
+gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE \
+  --repo thetangstr/agentdash \
+  --body 'launch-smoke+{run}@your-domain.com'
+
+gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING \
+  --repo thetangstr/agentdash \
+  --body 'true'
+
+gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM \
+  --repo thetangstr/agentdash \
+  --body 'true'
+```
+
+If the deployment needs a fixed password policy, set
+`AGENTDASH_LAUNCH_SMOKE_PASSWORD` as a repository secret. Otherwise the smoke
+test generates a unique strong password per run.
+
+The launch smoke intentionally refuses localhost and non-HTTPS URLs unless
+`AGENTDASH_LAUNCH_SMOKE_ALLOW_LOCAL=true` is set for a local-only dry run.
 
 ## 7. Configure `npm-stable`
 

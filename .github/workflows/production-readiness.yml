@@ -9,6 +9,8 @@ on:
       - .github/workflows/production-readiness.yml
       - scripts/ci/audit-production-readiness-config.mjs
       - scripts/ci/audit-production-readiness-config.test.mjs
+      - tests/launch-smoke/**
+      - doc/LAUNCH.md
       - package.json
   push:
     branches:
@@ -65,5 +67,52 @@ jobs:
         with:
           name: production-readiness-config
           path: ${{ runner.temp }}/production-readiness-config.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  launch-smoke:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run deployed launch smoke
+        env:
+          AGENTDASH_LAUNCH_SMOKE_BASE_URL: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BASE_URL }}
+          AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE }}
+          AGENTDASH_LAUNCH_SMOKE_PASSWORD: ${{ secrets.AGENTDASH_LAUNCH_SMOKE_PASSWORD }}
+          AGENTDASH_LAUNCH_SMOKE_REQUIRED: "true"
+          AGENTDASH_LAUNCH_SMOKE_BILLING: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BILLING || 'false' }}
+          AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM || 'false' }}
+        run: pnpm run test:launch-smoke
+
+      - name: Upload launch smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-launch-smoke
+          path: |
+            tests/launch-smoke/playwright-report/
+            tests/launch-smoke/test-results/
           if-no-files-found: ignore
           retention-days: 14

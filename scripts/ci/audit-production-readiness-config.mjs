@@ -4,6 +4,7 @@ import { writeFileSync } from "node:fs";
 
 const DEFAULT_REQUIRED_ENVIRONMENTS = ["npm-canary", "npm-stable"];
 const DEFAULT_TARGET_RUNNER_VARIABLE = "AGENTDASH_TARGET_RUNNER_LABELS";
+const DEFAULT_LAUNCH_SMOKE_URL_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BASE_URL";
 
 function parseArgs(argv) {
   const args = {
@@ -11,6 +12,7 @@ function parseArgs(argv) {
     output: "",
     allowGitHubHostedTarget: false,
     targetRunnerVariable: DEFAULT_TARGET_RUNNER_VARIABLE,
+    launchSmokeUrlVariable: DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -31,6 +33,7 @@ function parseArgs(argv) {
     if (key === "repo") args.repo = value;
     else if (key === "output") args.output = value;
     else if (key === "target-runner-variable") args.targetRunnerVariable = value;
+    else if (key === "launch-smoke-url-variable") args.launchSmokeUrlVariable = value;
     else throw new Error(`unknown argument: --${key}`);
   }
 
@@ -88,6 +91,15 @@ function isGitHubHostedLabelSet(labels) {
   return labels.length === 1 && /^(ubuntu|macos|windows)-/.test(labels[0]);
 }
 
+function isLocalLaunchSmokeUrl(url) {
+  return (
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "::1" ||
+    url.hostname.endsWith(".localhost")
+  );
+}
+
 function runnerHasLabels(runner, labels) {
   const runnerLabels = new Set((runner.labels || []).map((label) => String(label).toLowerCase()));
   return labels.every((label) => runnerLabels.has(String(label).toLowerCase()));
@@ -103,6 +115,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const environments = Array.isArray(input.environments) ? input.environments : [];
   const runnerInventoryError = input.runnerInventoryError || "";
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
+  const launchSmokeUrlVariable = options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE;
   const allowGitHubHostedTarget = Boolean(options.allowGitHubHostedTarget);
   const requiredEnvironments = options.requiredEnvironments || DEFAULT_REQUIRED_ENVIRONMENTS;
 
@@ -216,10 +229,58 @@ export function auditProductionReadinessConfig(input, options = {}) {
     }
   }
 
+  const launchSmokeVariable = variables.find((variable) => variable.name === launchSmokeUrlVariable);
+  if (!launchSmokeVariable) {
+    requirements.push(
+      requirement(
+        "launch-smoke-url-variable",
+        "fail",
+        `Repository variable ${launchSmokeUrlVariable} is missing; deployed launch smoke cannot run on the production-readiness workflow.`,
+        { variable: launchSmokeUrlVariable },
+      ),
+    );
+  } else {
+    try {
+      const launchSmokeUrl = new URL(String(launchSmokeVariable.value || "").trim());
+      if (launchSmokeUrl.protocol !== "https:") {
+        requirements.push(
+          requirement("launch-smoke-url-variable", "fail", `Repository variable ${launchSmokeUrlVariable} must be an https URL.`, {
+            variable: launchSmokeUrlVariable,
+            value: launchSmokeVariable.value,
+          }),
+        );
+      } else if (isLocalLaunchSmokeUrl(launchSmokeUrl)) {
+        requirements.push(
+          requirement(
+            "launch-smoke-url-variable",
+            "fail",
+            `Repository variable ${launchSmokeUrlVariable} points at a local URL, not a deployed launch target.`,
+            { variable: launchSmokeUrlVariable, value: launchSmokeVariable.value },
+          ),
+        );
+      } else {
+        requirements.push(
+          requirement("launch-smoke-url-variable", "pass", `Repository variable ${launchSmokeUrlVariable} is configured.`, {
+            variable: launchSmokeUrlVariable,
+            origin: launchSmokeUrl.origin,
+          }),
+        );
+      }
+    } catch {
+      requirements.push(
+        requirement("launch-smoke-url-variable", "fail", `Repository variable ${launchSmokeUrlVariable} is not a valid URL.`, {
+          variable: launchSmokeUrlVariable,
+          value: launchSmokeVariable.value,
+        }),
+      );
+    }
+  }
+
   const manualChecks = [
     "Confirm npm trusted publishing is configured for every public package published by scripts/release.sh.",
     "Confirm the stable release workflow is manually approved before running dry_run=false.",
     "Confirm production deployment secrets and service credentials are configured in the cloud host, not only in GitHub Actions.",
+    "Confirm AGENTDASH_LAUNCH_SMOKE_BILLING=true and AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true have passed against the deployed launch target before public launch.",
     "If GitHub Actions cannot inspect self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to repository runner inventory.",
   ];
 
@@ -234,6 +295,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
       repositoryVariableCount: variables.length,
       selfHostedRunnerCount: runnerInventoryError ? null : runners.length,
       runnerInventoryError: runnerInventoryError || null,
+      launchSmokeUrlConfigured: Boolean(launchSmokeVariable),
     },
   };
 }
@@ -277,6 +339,7 @@ async function main() {
   const result = auditProductionReadinessConfig(config, {
     allowGitHubHostedTarget: args.allowGitHubHostedTarget,
     targetRunnerVariable: args.targetRunnerVariable,
+    launchSmokeUrlVariable: args.launchSmokeUrlVariable,
   });
 
   const json = `${JSON.stringify(result, null, 2)}\n`;
