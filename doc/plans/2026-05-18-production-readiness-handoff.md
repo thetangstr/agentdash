@@ -49,6 +49,14 @@ node --check scripts/ci/file-target-test-issue.mjs
 node cli/dist/index.js --version
 node cli/dist/index.js setup --help
 ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/pr.yml .github/workflows/target-machine-test.yml .github/workflows/release.yml .github/workflows/release-smoke.yml .github/workflows/docker.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/pr.yml .github/workflows/target-machine-test.yml .github/workflows/release.yml .github/workflows/release-smoke.yml .github/workflows/docker.yml .github/workflows/refresh-lockfile.yml .github/workflows/agents-md-drift-check.yml .github/workflows/hermes-pr-audit.yml .github/workflows/hermes-prompt-drift.yml .github/workflows/upstream-digest.yml
+ruby - <<'RUBY' > /tmp/upstream-digest-create-pr.sh
+require 'yaml'
+workflow = YAML.load_file('.github/workflows/upstream-digest.yml')
+step = workflow.fetch('jobs').fetch('digest').fetch('steps').find { |s| s['name'] == 'Create or update pull request' }
+puts step.fetch('run')
+RUBY
+bash -n /tmp/upstream-digest-create-pr.sh
 git push --dry-run origin HEAD:codex/invite-token-primitives
 ```
 
@@ -62,6 +70,9 @@ Observed narrow results from the latest continuation:
 - The PR canary dry-run step checks out a temporary `main` branch before
   running `./scripts/release.sh canary --skip-verify --dry-run`, matching the
   release script's `main` guard.
+- The upstream digest workflow parses under `actionlint`; its PR-body heredoc
+  is indented as part of the YAML block and its extracted shell step passes
+  `bash -n`.
 - Dry-run push shows the PR branch can fast-forward cleanly.
 
 ## Fixed Locally, Not Yet Proven Remotely
