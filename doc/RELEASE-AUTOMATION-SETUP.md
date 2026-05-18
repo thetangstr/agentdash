@@ -174,13 +174,16 @@ launch evidence.
 ### 6.2. Optional audit token
 
 The production-readiness workflow uses `GITHUB_TOKEN` by default. If that token
-cannot read repository self-hosted runner inventory, create a repository secret
-named `PRODUCTION_READINESS_AUDIT_TOKEN` containing a narrowly scoped token that
-can read the repository's Actions runner inventory.
+cannot read repository Actions variables, release environments, or self-hosted
+runner inventory, create a repository secret named
+`PRODUCTION_READINESS_AUDIT_TOKEN` containing a narrowly scoped token that can
+read those repository settings.
 
-Only add this secret if the audit reports:
+Only add this secret if the audit reports one of:
 
 ```text
+Could not inspect repository Actions variables.
+Could not inspect GitHub release environments.
 Could not inspect self-hosted target runner inventory.
 ```
 

@@ -25,8 +25,10 @@ test("fails when target runner config is absent", () => {
   );
   assert.deepEqual(result.observations, {
     repositoryVariableCount: 0,
+    variableInventoryError: null,
     selfHostedRunnerCount: 0,
     runnerInventoryError: null,
+    environmentInventoryError: null,
     launchSmokeUrlConfigured: false,
   });
 });
@@ -188,4 +190,57 @@ test("fails when launch smoke URL is missing or local", () => {
     local.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
     /https URL/,
   );
+});
+
+test("reports repository variable permission failures as structured audit failures", () => {
+  const result = auditProductionReadinessConfig({
+    variableInventoryError: "failed to get variables: HTTP 403: Resource not accessible by integration",
+    variables: [],
+    runners: [],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.match(
+    result.requirements.find((item) => item.id === "repository-variables-readable").message,
+    /Could not inspect repository Actions variables/,
+  );
+  assert.match(
+    result.requirements.find((item) => item.id === "target-runner-variable").message,
+    /Could not verify repository variable AGENTDASH_TARGET_RUNNER_LABELS/,
+  );
+  assert.match(
+    result.requirements.find((item) => item.id === "launch-smoke-url-variable").message,
+    /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BASE_URL/,
+  );
+  assert.equal(result.observations.variableInventoryError?.includes("HTTP 403"), true);
+});
+
+test("reports release environment permission failures as structured audit failures", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [],
+    environmentInventoryError: "failed to get environments: HTTP 403",
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.match(
+    result.requirements.find((item) => item.id === "release-environment").message,
+    /Could not inspect GitHub release environments/,
+  );
+  assert.equal(result.observations.environmentInventoryError?.includes("HTTP 403"), true);
 });
