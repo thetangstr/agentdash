@@ -6,26 +6,26 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Current pushed evidence baseline before this handoff refresh:
+Last code-change evidence baseline:
 
 ```text
 73f8eb477ccf4321bed1f6d4672851b1cdd5f991 Keep PR Docker validation within CI time limits
 ```
 
-Remote PR head:
+This document may live on a later documentation-only commit. Resolve the current
+PR head before handoff with:
 
-```text
-73f8eb477ccf4321bed1f6d4672851b1cdd5f991 Keep PR Docker validation within CI time limits
+```sh
+gh pr view 344 --repo thetangstr/agentdash --json headRefOid,statusCheckRollup
 ```
 
-The current branch head may be newer than this baseline as readiness fixes are
-added. Run `git rev-parse HEAD` before handing off to a remote runner, target
-machine, canary release, or stable release.
+Run `git rev-parse HEAD` before handing off to a remote runner, target machine,
+canary release, or stable release.
 
-The branch is pushed to PR #344. As of the `73f8eb47` run, the code and CI
-readiness checks are green: PR policy, PR verify, PR e2e, target-test,
-target-test-comment, Docker, Agents MD drift, Hermes PR audit, and Hermes
-prompt drift. `Production Readiness / config-audit` is failing as an external
+The branch is pushed to PR #344. The code and CI readiness checks are green on
+the latest observed PR heads: PR policy, PR verify, PR e2e, target-test,
+target-test-comment, Docker, Agents MD drift, Hermes PR audit, and Hermes prompt
+drift. `Production Readiness / config-audit` is failing as an external
 configuration gate because the repository has no configured Actions variables
 and no self-hosted target runners. It cannot verify target-machine runner
 coverage or a deployed launch-smoke URL until those external launch settings are
