@@ -66,6 +66,7 @@ It:
 - verifies that `canary` resolves to the just-published version and that published internal dependencies exist on npm
 - fails by default if npm leaves `latest` pointing at a canary; use `--allow-canary-latest` only when that state is intentional
 - creates a git tag `canary/vYYYY.MDD.P-canary.N`
+- runs the Docker/browser release smoke workflow against `agentdash@canary`
 
 Users install canaries with:
 
@@ -110,7 +111,8 @@ The workflow:
 - computes the next stable patch slot for the chosen UTC date
 - publishes `YYYY.MDD.P` under npm dist-tag `latest`
 - creates git tag `vYYYY.MDD.P`
-- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
+- runs the Docker/browser release smoke workflow against `agentdash@latest`
+- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md` only after the published-package smoke passes
 
 ## Local Commands
 
@@ -232,6 +234,19 @@ Do this immediately:
 3. verify the GitHub Release notes point at `releases/vYYYY.MDD.P.md`
 
 Do not republish the same version.
+
+### If stable npm publish and tag push succeed but release smoke fails
+
+This is also a partial release. npm `latest` and the git tag are already live, but the GitHub Release is intentionally not created yet.
+
+Do this immediately:
+
+1. inspect the `release-smoke-stable-*` artifact and container logs
+2. if the package is unsafe for new users, roll back `latest` with `./scripts/rollback-latest.sh YYYY.MDD.PREV`
+3. fix forward from `main` with a new stable patch slot
+4. rerun the stable workflow after the fix
+
+Do not create the GitHub Release until the published-package smoke passes.
 
 ### If `latest` is broken after stable publish
 

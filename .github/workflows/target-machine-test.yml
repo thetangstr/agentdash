@@ -118,6 +118,10 @@ jobs:
           profile="${{ inputs.profile || 'core' }}"
           ref="${{ inputs.ref || github.ref_name }}"
           paperclip_version="${{ inputs.paperclip_version || 'latest' }}"
+          open_issue="${{ inputs.open_issue }}"
+          if [ -z "$open_issue" ]; then
+            open_issue="true"
+          fi
 
           if [ "${{ github.event_name }}" = "schedule" ]; then
             ref="${{ github.event.repository.default_branch }}"
@@ -136,6 +140,7 @@ jobs:
             echo "profile=$profile"
             echo "ref=$ref"
             echo "paperclip_version=$paperclip_version"
+            echo "open_issue=$open_issue"
             echo "artifact_name=$artifact_name"
             echo "workflow_run_url=$workflow_run_url"
           } >> "$GITHUB_OUTPUT"
@@ -220,7 +225,7 @@ jobs:
           retention-days: 14
 
       - name: File or update failure issue
-        if: ${{ always() && steps.summary.outputs.failed == 'true' && inputs.open_issue }}
+        if: ${{ always() && steps.summary.outputs.failed == 'true' && steps.settings.outputs.open_issue == 'true' }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}

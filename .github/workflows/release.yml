@@ -114,6 +114,15 @@ jobs:
           fi
           git push origin "refs/tags/${tag}"
 
+  smoke_canary:
+    if: github.event_name == 'push'
+    needs: publish_canary
+    uses: ./.github/workflows/release-smoke.yml
+    with:
+      paperclip_version: canary
+      checkout_ref: ${{ github.sha }}
+      artifact_name: release-smoke-canary-${{ github.run_id }}
+
   verify_stable:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -199,6 +208,9 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    outputs:
+      version: ${{ steps.stable.outputs.version }}
+      tag: ${{ steps.stable.outputs.tag }}
 
     steps:
       - name: Checkout repository
@@ -239,23 +251,49 @@ jobs:
           fi
           ./scripts/release.sh "${args[@]}"
 
-      - name: Push stable tag
+      - name: Resolve stable release outputs
+        id: stable
         run: |
           tag="$(git tag --points-at HEAD | grep '^v' | head -1)"
           if [ -z "$tag" ]; then
             echo "Error: no stable tag points at HEAD after release." >&2
             exit 1
           fi
-          git push origin "refs/tags/${tag}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Push stable tag
+        run: git push origin "refs/tags/${{ steps.stable.outputs.tag }}"
+
+  smoke_stable:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: publish_stable
+    uses: ./.github/workflows/release-smoke.yml
+    with:
+      paperclip_version: latest
+      checkout_ref: ${{ inputs.source_ref }}
+      artifact_name: release-smoke-stable-${{ needs.publish_stable.outputs.version }}
+
+  create_github_release:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    needs: [publish_stable, smoke_stable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - name: Fetch release tags
+        run: git fetch origin --tags --force
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_REMOTE: origin
-        run: |
-          version="$(git tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
-          if [ -z "$version" ]; then
-            echo "Error: no v* tag points at HEAD after stable release." >&2
-            exit 1
-          fi
-          ./scripts/create-github-release.sh "$version"
+        run: ./scripts/create-github-release.sh "${{ needs.publish_stable.outputs.version }}"

@@ -205,8 +205,9 @@ After setup:
 2. open the `Release` workflow run triggered by that push
 3. confirm it passes verification
 4. confirm publish succeeds under the `npm-canary` environment
-5. confirm npm now shows a new `canary` release
-6. confirm a git tag named `canary/vYYYY.MDD.P-canary.N` was pushed
+5. confirm the `release-smoke-canary-*` job passes against `agentdash@canary`
+6. confirm npm now shows a new `canary` release
+7. confirm a git tag named `canary/vYYYY.MDD.P-canary.N` was pushed
 
 Install-path check:
 
@@ -231,7 +232,8 @@ After at least one good canary exists:
 7. approve the `npm-stable` environment when prompted
 8. confirm npm `latest` points to the new stable version
 9. confirm git tag `vYYYY.MDD.P` exists
-10. confirm the GitHub Release was created
+10. confirm the `release-smoke-stable-*` job passes against `agentdash@latest`
+11. confirm the GitHub Release was created after smoke passed
 
 Implementation note:
 
