@@ -136,6 +136,8 @@ Observed narrow results from the latest continuation:
   artifact. If GitHub Actions' default `GITHUB_TOKEN` cannot read release
   environments or runner inventory, configure `PRODUCTION_READINESS_AUDIT_TOKEN`
   with the narrow read access described in `doc/RELEASE-AUTOMATION-SETUP.md`.
+  The audit also writes a GitHub job summary with failed requirement IDs and the
+  exact next `gh variable set ...` commands for the external operator.
 - `.github/workflows/production-readiness.yml` now runs the audit on PR changes
   to the audit helper, on `main` pushes, on a daily schedule, and on manual
   dispatch. It uses repository `vars` for the target runner labels and deployed

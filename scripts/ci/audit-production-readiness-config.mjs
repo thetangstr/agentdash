@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
 const DEFAULT_REQUIRED_ENVIRONMENTS = ["npm-canary", "npm-stable"];
 const DEFAULT_TARGET_RUNNER_VARIABLE = "AGENTDASH_TARGET_RUNNER_LABELS";
@@ -352,6 +352,105 @@ export function auditProductionReadinessConfig(input, options = {}) {
   };
 }
 
+function markdownCell(value) {
+  return String(value ?? "")
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, "<br>");
+}
+
+function summarizeEvidence(evidence) {
+  const entries = Object.entries(evidence || {}).filter(([, value]) => value !== undefined && value !== null);
+  if (entries.length === 0) return "";
+  return entries
+    .map(([key, value]) => `${key}: ${Array.isArray(value) || typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+    .join("; ");
+}
+
+function buildNextActions(result) {
+  const failedIds = new Set(result.requirements.filter((item) => item.status === "fail").map((item) => item.id));
+  const actions = [];
+  const repo = result.repository || "OWNER/REPO";
+
+  if (failedIds.has("target-runner-variable")) {
+    actions.push(
+      `Set \`${DEFAULT_TARGET_RUNNER_VARIABLE}\` to the real target runner labels: \`gh variable set ${DEFAULT_TARGET_RUNNER_VARIABLE} --repo ${repo} --body '["self-hosted","agentdash-target"]'\`.`,
+    );
+  }
+  if (failedIds.has("target-runner-available")) {
+    actions.push(
+      "Register and start a self-hosted target runner with the configured labels, then rerun this workflow.",
+    );
+  }
+  if (failedIds.has("launch-smoke-url-variable")) {
+    actions.push(
+      `Set \`${DEFAULT_LAUNCH_SMOKE_URL_VARIABLE}\` to the deployed HTTPS origin: \`gh variable set ${DEFAULT_LAUNCH_SMOKE_URL_VARIABLE} --repo ${repo} --body 'https://your-domain.com'\`.`,
+    );
+    actions.push(
+      "For one-off deployed smoke before variables are finalized, rerun this workflow manually with `launch_smoke_base_url`.",
+    );
+  }
+  if (failedIds.has("release-environment")) {
+    actions.push("Create or repair the `npm-canary` and `npm-stable` GitHub release environments.");
+  }
+  if (
+    result.observations?.runnerInventoryError ||
+    result.observations?.environmentInventoryError ||
+    (result.observations?.variableInventoryError && !result.observations?.variableContextProvided)
+  ) {
+    actions.push(
+      "If `GITHUB_TOKEN` cannot read required repository settings, configure `PRODUCTION_READINESS_AUDIT_TOKEN` with narrow read access and rerun the workflow.",
+    );
+  }
+  if (actions.length === 0 && result.conclusion === "success") {
+    actions.push("All automated config requirements passed. Continue with deployed launch smoke, canary smoke, and stable release smoke.");
+  }
+  return actions;
+}
+
+export function renderProductionReadinessSummary(result) {
+  const failed = result.requirements.filter((item) => item.status === "fail");
+  const conclusionLabel = result.conclusion === "success" ? "PASS" : "FAIL";
+  const lines = [
+    "# Production Readiness Config Audit",
+    "",
+    `**Conclusion:** ${conclusionLabel}`,
+    "",
+    `- Repository: \`${result.repository || "unknown"}\``,
+    `- Checked at: \`${result.checkedAt}\``,
+    "",
+    "## Requirements",
+    "",
+    "| Status | Requirement | Evidence |",
+    "| --- | --- | --- |",
+  ];
+
+  for (const item of result.requirements) {
+    const status = item.status === "pass" ? "PASS" : "FAIL";
+    lines.push(`| ${status} | ${markdownCell(item.message)} | ${markdownCell(summarizeEvidence(item.evidence))} |`);
+  }
+
+  lines.push("", "## Next Actions", "");
+  for (const action of buildNextActions(result)) {
+    lines.push(`- ${action}`);
+  }
+
+  if (failed.length > 0) {
+    lines.push("", "## Failed Requirement IDs", "");
+    for (const item of failed) {
+      lines.push(`- \`${item.id}\``);
+    }
+  }
+
+  if (result.manualChecks.length > 0) {
+    lines.push("", "## Manual Checks Still Required", "");
+    for (const check of result.manualChecks) {
+      lines.push(`- ${check}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 function mergeVariables(apiVariables, contextVariables) {
   const byName = new Map();
   for (const variable of apiVariables || []) {
@@ -431,6 +530,9 @@ async function main() {
   const json = `${JSON.stringify(result, null, 2)}\n`;
   if (args.output) {
     writeFileSync(args.output, json);
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderProductionReadinessSummary(result));
   }
   process.stdout.write(json);
   if (result.conclusion !== "success") {

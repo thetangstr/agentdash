@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { auditProductionReadinessConfig } from "./audit-production-readiness-config.mjs";
+import {
+  auditProductionReadinessConfig,
+  renderProductionReadinessSummary,
+} from "./audit-production-readiness-config.mjs";
 
 test("fails when target runner config is absent", () => {
   const result = auditProductionReadinessConfig({
@@ -283,4 +286,54 @@ test("reports release environment permission failures as structured audit failur
     /Could not inspect GitHub release environments/,
   );
   assert.equal(result.observations.environmentInventoryError?.includes("HTTP 403"), true);
+});
+
+test("renders an actionable GitHub job summary for missing external gates", () => {
+  const result = auditProductionReadinessConfig({
+    repository: "thetangstr/agentdash",
+    checkedAt: "2026-05-18T10:00:00.000Z",
+    variables: [],
+    runners: [],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  const summary = renderProductionReadinessSummary(result);
+
+  assert.match(summary, /Production Readiness Config Audit/);
+  assert.match(summary, /gh variable set AGENTDASH_TARGET_RUNNER_LABELS --repo thetangstr\/agentdash/);
+  assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL --repo thetangstr\/agentdash/);
+  assert.match(summary, /launch_smoke_base_url/);
+  assert.match(summary, /target-runner-variable/);
+});
+
+test("renders success guidance when automated config gates pass", () => {
+  const result = auditProductionReadinessConfig({
+    repository: "thetangstr/agentdash",
+    checkedAt: "2026-05-18T10:00:00.000Z",
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  const summary = renderProductionReadinessSummary(result);
+
+  assert.equal(result.conclusion, "success");
+  assert.match(summary, /All automated config requirements passed/);
+  assert.doesNotMatch(summary, /Failed Requirement IDs/);
 });

@@ -140,6 +140,8 @@ node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdas
 The GitHub workflow passes the required repository variables through the
 Actions `vars` context, so the audit can validate those values even when
 `GITHUB_TOKEN` cannot list repository variables through the REST API.
+The workflow also writes a Markdown job summary with failed requirement IDs and
+the next `gh variable set ...` commands to run.
 
 Success means:
 
