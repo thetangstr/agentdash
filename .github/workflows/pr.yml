@@ -230,7 +230,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
 
     steps:
       - name: Comment target-machine result
@@ -266,4 +266,16 @@ jobs:
           Issue: $issue_line
           COMMENT
 
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/target-test-comment.md"
+          existing_comment_id="$(
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- agentdash-target-test-result -->"))) | .id' \
+              | tail -n 1
+          )"
+
+          if [ -n "$existing_comment_id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing_comment_id" \
+              --raw-field "body=$(cat "$RUNNER_TEMP/target-test-comment.md")"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --raw-field "body=$(cat "$RUNNER_TEMP/target-test-comment.md")"
+          fi
