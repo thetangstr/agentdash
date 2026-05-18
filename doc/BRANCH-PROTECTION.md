@@ -1,6 +1,6 @@
 # Branch protection — operator setup
 
-**Status:** Required for full Hermes guardrails (issue #257)
+**Status:** Required for Hermes guardrails and production-readiness gates
 **Owner:** repo admin
 **Audience:** human operator of `thetangstr/agentdash`
 
@@ -8,13 +8,16 @@
 
 ## Why
 
-The CI lanes added in this PR (`hermes-pr-audit`, `hermes-prompt-drift`) enforce
-Hermes's directives on PRs, but PR checks **only fire when a PR is opened**.
-Without server-side branch protection, anyone (including Hermes itself) can
-bypass the whole system by pushing directly to `main`. That is exactly the
-pattern #254 / #257 were filed to stop.
+The CI lanes added in this repo enforce Hermes directives, agent prompt drift,
+normal PR verification, target-machine coverage, and production-readiness
+configuration. PR checks **only fire when a PR is opened**. Without server-side
+branch protection, anyone with write access can bypass the whole system by
+pushing directly to `main`.
 
-This doc is the one-time admin step that turns the policy into a wall.
+This doc is the one-time admin step that turns the policy into a wall. It also
+keeps `Production Readiness / config-audit` present as a required check, even
+when that check is red because external launch gates have not been configured
+yet.
 
 ## What to enable
 
@@ -29,7 +32,7 @@ GitHub branch protection on `main` with:
     - `PR / policy`
     - `PR / verify`
     - `PR / e2e`
-    - `Production Readiness / config-audit` once production-readiness work is in the merge path
+    - `Production Readiness / config-audit`
 - ✅ Require branches to be up to date before merging (catches `main` advancing during review)
 - ✅ Do not allow bypassing the above settings
 - ✅ Restrict who can push to matching branches → empty list (PR-only)
@@ -90,6 +93,11 @@ Hermes audit workflow's job is named `audit` (see `.github/workflows/hermes-pr-a
 the drift workflow's job is named `drift`, and the existing agents-md drift
 job is named `check`. If you add more required workflows, append their job
 names here.
+
+`config-audit` is intentionally required. A red config-audit means the app is
+not production ready yet; it should be fixed by configuring the external gates
+listed in [doc/RELEASE-AUTOMATION-SETUP.md](RELEASE-AUTOMATION-SETUP.md) rather
+than by removing the required check.
 
 ### 2. Verify
 
@@ -157,7 +165,10 @@ with the audit lane configuration — file an issue.
 - [`docs/agents/hermes-prompt.md`](../docs/agents/hermes-prompt.md) — the directives this enforces
 - [`.github/workflows/hermes-pr-audit.yml`](../.github/workflows/hermes-pr-audit.yml) — the audit lane
 - [`.github/workflows/hermes-prompt-drift.yml`](../.github/workflows/hermes-prompt-drift.yml) — the drift check
+- [`.github/workflows/production-readiness.yml`](../.github/workflows/production-readiness.yml) — the production readiness gate
 - [`scripts/ci/check-hermes-pr-audit.mjs`](../scripts/ci/check-hermes-pr-audit.mjs) — the audit logic
 - [`scripts/ci/check-hermes-prompt-drift.mjs`](../scripts/ci/check-hermes-prompt-drift.mjs) — the drift logic
+- [`scripts/ci/audit-production-readiness-config.mjs`](../scripts/ci/audit-production-readiness-config.mjs) — the production readiness audit logic
+- [doc/RELEASE-AUTOMATION-SETUP.md](RELEASE-AUTOMATION-SETUP.md) — external release and readiness gate setup
 - Issue [#254](https://github.com/thetangstr/agentdash/issues/254) — original Hermes self-tune brief
 - Issue [#257](https://github.com/thetangstr/agentdash/issues/257) — the meta gap this closes
