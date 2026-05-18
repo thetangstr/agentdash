@@ -9,7 +9,7 @@ Active branch: `codex/invite-token-primitives`
 Latest pushed PR head observed during this readiness-hardening pass:
 
 ```text
-9fda643f5b67072baa15467a6f91b3ff0d66dae3 Require reviewer gate for stable releases
+2be4d290cc05058540717038bafc9c681b07a7bc Fail fast on unavailable target runners
 ```
 
 This document may live on a later documentation-only commit. Resolve the current
@@ -23,9 +23,9 @@ Run `git rev-parse HEAD` before handing off to a remote runner, target machine,
 canary release, or stable release.
 
 The branch is pushed to PR #344. The code and CI readiness checks are green on
-head `9fda643f`: PR policy, PR verify, PR e2e, target-test,
-target-test-comment, Docker, Agents MD drift, Hermes PR audit, and Hermes prompt
-drift. `Production Readiness / config-audit` is failing as an external
+head `2be4d290`: PR policy, PR verify, PR e2e, target-test preflight,
+target-test, target-test-comment, Docker, Agents MD drift, Hermes PR audit, and
+Hermes prompt drift. `Production Readiness / config-audit` is failing as an external
 configuration gate because the repository has no self-hosted target runners, no
 configured target-runner label variable, and no deployed launch-smoke URL. The
 strict launch-smoke flags are now configured as durable repository variables:
@@ -58,7 +58,7 @@ pnpm build
 ```
 
 The following focused readiness checks have passed on later local heads through
-`73f8eb47`:
+`2be4d290`:
 
 ```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
@@ -92,6 +92,9 @@ node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local
 node --check scripts/ci/audit-production-readiness-config.mjs
 node --test scripts/ci/audit-production-readiness-config.test.mjs
 node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --output /tmp/agentdash-production-readiness-config.json
+node --check scripts/ci/target-runner-preflight.mjs
+node --test scripts/ci/target-runner-preflight.test.mjs
+pnpm run test:target-runner-preflight
 ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/production-readiness.yml
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/production-readiness.yml .github/workflows/pr.yml
 pnpm exec playwright test --config tests/launch-smoke/playwright.config.ts --list
@@ -173,6 +176,10 @@ Observed narrow results from the latest continuation:
   is online, the workflow emits a normal failing target-test summary, artifact,
   PR comment, and issue-filing signal instead of sitting queued on unavailable
   labels.
+- The live PR now has a passing `PR / target-test / resolve-target-runner`
+  preflight check on head `2be4d290`. A live local preflight against
+  `thetangstr/agentdash` correctly reports zero matching self-hosted runners and
+  chooses the `ubuntu-latest` fail-fast path.
 - `.github/CODEOWNERS` now uses the current repository collaborator
   `@thetangstr` for release infrastructure and package ownership. Add more
   maintainer/team owners before enabling branch protection's CODEOWNERS
@@ -201,13 +208,16 @@ Observed narrow results from the latest continuation:
   PR diff. The accidental direct CLI dependency additions on `postgres`, `ws`,
   and `zod` were removed because `cli/src` does not import them directly; the
   workspace packages that need those packages declare their own dependencies.
-- `pnpm -r typecheck` passes on `73f8eb47`.
-- `pnpm test:run` passes on the app code at `73f8eb47`.
-- `pnpm build` passes on `73f8eb47`.
+- `pnpm -r typecheck` passes on the broad local verification baseline, and the
+  current PR verify job is green on `2be4d290`.
+- `pnpm test:run` passes on the broad local verification baseline, and the
+  current PR verify job is green on `2be4d290`.
+- `pnpm build` passes on the broad local verification baseline, and the current
+  PR verify and Docker jobs are green on `2be4d290`.
 - Workflow YAML parsing and `actionlint` pass after moving GitHub Actions
   dependencies off Node 20 majors (`checkout` / `setup-node` to v6,
   `upload-artifact` to v7, `pnpm/action-setup` to v6).
-- Docker PR validation now passes remotely on `73f8eb47`. The previous PR
+- Docker PR validation now passes remotely on `2be4d290`. The previous PR
   Docker run reached the production image stage but timed out exporting the
   GitHub Actions cache. PR builds now validate a single `linux/amd64` image
   without cache export; non-PR builds still use multi-arch push/cache export.
@@ -234,7 +244,7 @@ Observed narrow results from the latest continuation:
 - GitHub Actions runtime warning: workflows now use Node 24-capable first-party
   action majors for checkout, setup-node, and artifact upload.
 - PR Docker timeout: PR Docker builds now stay inside CI time limits and pass
-  remotely at `73f8eb47`.
+  remotely at `2be4d290`.
 
 ## Remaining External Gates
 
@@ -244,8 +254,9 @@ These steps are required before calling the app production ready:
    confirm PR #344 points at `git rev-parse HEAD`.
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
-   PR policy, PR verify, PR e2e, target-test, target-test-comment, and Docker
-   workflow. At `9fda643f`, all of those checks are green. The
+   PR policy, PR verify, PR e2e, target-test preflight, target-test,
+   target-test-comment, and Docker workflow. At `2be4d290`, all of those checks
+   are green. The
    production-readiness config audit may remain red only for the documented
    external repository configuration gaps below.
 3. Register the self-hosted target runner and set repository variable
