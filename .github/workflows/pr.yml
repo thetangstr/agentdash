@@ -104,6 +104,9 @@ jobs:
       - name: Verify target-machine issue filing script
         run: pnpm run test:target-issue-filing
 
+      - name: Verify production-readiness config audit
+        run: pnpm run test:production-readiness-config
+
       - name: Build
         run: pnpm build
 

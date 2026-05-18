@@ -99,9 +99,9 @@ function requirement(id, status, message, evidence = {}) {
 
 export function auditProductionReadinessConfig(input, options = {}) {
   const variables = Array.isArray(input.variables) ? input.variables : [];
-  const secrets = Array.isArray(input.secrets) ? input.secrets : [];
   const runners = Array.isArray(input.runners) ? input.runners : [];
   const environments = Array.isArray(input.environments) ? input.environments : [];
+  const runnerInventoryError = input.runnerInventoryError || "";
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
   const allowGitHubHostedTarget = Boolean(options.allowGitHubHostedTarget);
   const requiredEnvironments = options.requiredEnvironments || DEFAULT_REQUIRED_ENVIRONMENTS;
@@ -149,8 +149,15 @@ export function auditProductionReadinessConfig(input, options = {}) {
   }
 
   if (targetLabels.length > 0 && !isGitHubHostedLabelSet(targetLabels)) {
-    const matchingRunners = runners.filter((runner) => runnerHasLabels(runner, targetLabels));
-    if (matchingRunners.length === 0) {
+    const matchingRunners = runnerInventoryError ? [] : runners.filter((runner) => runnerHasLabels(runner, targetLabels));
+    if (runnerInventoryError) {
+      requirements.push(
+        requirement("target-runner-available", "fail", "Could not inspect self-hosted target runner inventory.", {
+          labels: targetLabels,
+          runnerInventoryError,
+        }),
+      );
+    } else if (matchingRunners.length === 0) {
       requirements.push(
         requirement("target-runner-available", "fail", "No self-hosted runner currently advertises the configured target labels.", {
           labels: targetLabels,
@@ -213,6 +220,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
     "Confirm npm trusted publishing is configured for every public package published by scripts/release.sh.",
     "Confirm the stable release workflow is manually approved before running dry_run=false.",
     "Confirm production deployment secrets and service credentials are configured in the cloud host, not only in GitHub Actions.",
+    "If GitHub Actions cannot inspect self-hosted runners with GITHUB_TOKEN, configure PRODUCTION_READINESS_AUDIT_TOKEN with read access to repository runner inventory.",
   ];
 
   const failed = requirements.filter((item) => item.status === "fail");
@@ -223,35 +231,49 @@ export function auditProductionReadinessConfig(input, options = {}) {
     requirements,
     manualChecks,
     observations: {
-      repositorySecretCount: secrets.length,
       repositoryVariableCount: variables.length,
-      selfHostedRunnerCount: runners.length,
+      selfHostedRunnerCount: runnerInventoryError ? null : runners.length,
+      runnerInventoryError: runnerInventoryError || null,
     },
   };
 }
 
-async function collectGitHubConfig(repo) {
+async function collectGitHubConfig(repo, options = {}) {
   const runnersJq = "{runners: [.runners[] | {name: .name, status: .status, busy: .busy, labels: [.labels[].name]}]}";
   const environmentsJq = "{environments: [.environments[] | {name: .name, protection_rules: .protection_rules}]}";
-  const [variables, secrets, runnersResult, environmentsResult] = await Promise.all([
+  const [variables, environmentsResult] = await Promise.all([
     runGhJson(`gh variable list --repo ${shellQuote(repo)} --json name,value,updatedAt`),
-    runGhJson(`gh secret list --repo ${shellQuote(repo)} --json name,updatedAt`),
-    runGhJson(`gh api ${shellQuote(`repos/${repo}/actions/runners`)} --jq ${shellQuote(runnersJq)}`),
     runGhJson(`gh api ${shellQuote(`repos/${repo}/environments`)} --jq ${shellQuote(environmentsJq)}`),
   ]);
+  const targetVariable = (variables || []).find(
+    (variable) => variable.name === (options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE),
+  );
+  const targetLabels = parseRunnerLabels(targetVariable?.value || "");
+  let runnersResult = { runners: [] };
+  let runnerInventoryError = "";
+
+  if (targetLabels.length > 0 && !isGitHubHostedLabelSet(targetLabels)) {
+    try {
+      runnersResult = await runGhJson(`gh api ${shellQuote(`repos/${repo}/actions/runners`)} --jq ${shellQuote(runnersJq)}`);
+    } catch (error) {
+      runnerInventoryError = error.message;
+    }
+  }
 
   return {
     repository: repo,
     variables: variables || [],
-    secrets: secrets || [],
     runners: runnersResult?.runners || [],
     environments: environmentsResult?.environments || [],
+    runnerInventoryError,
   };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const config = await collectGitHubConfig(args.repo);
+  const config = await collectGitHubConfig(args.repo, {
+    targetRunnerVariable: args.targetRunnerVariable,
+  });
   const result = auditProductionReadinessConfig(config, {
     allowGitHubHostedTarget: args.allowGitHubHostedTarget,
     targetRunnerVariable: args.targetRunnerVariable,

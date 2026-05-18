@@ -24,9 +24,9 @@ test("fails when target runner config is absent", () => {
     "fail",
   );
   assert.deepEqual(result.observations, {
-    repositorySecretCount: 0,
     repositoryVariableCount: 0,
     selfHostedRunnerCount: 0,
+    runnerInventoryError: null,
   });
 });
 
@@ -89,6 +89,25 @@ test("passes when a matching self-hosted target runner is online and idle", () =
     result.requirements.find((item) => item.id === "target-runner-available").message,
     "A matching self-hosted target runner is online and idle.",
   );
+});
+
+test("fails structurally when runner inventory cannot be inspected", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [{ name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' }],
+    runners: [],
+    runnerInventoryError: "Resource not accessible by integration",
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.match(
+    result.requirements.find((item) => item.id === "target-runner-available").message,
+    /Could not inspect self-hosted target runner inventory/,
+  );
+  assert.equal(result.observations.selfHostedRunnerCount, null);
 });
 
 test("fails when release environments are missing", () => {

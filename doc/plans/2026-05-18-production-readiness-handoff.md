@@ -79,6 +79,8 @@ node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local
 node --check scripts/ci/audit-production-readiness-config.mjs
 node --test scripts/ci/audit-production-readiness-config.test.mjs
 node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --output /tmp/agentdash-production-readiness-config.json
+ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/production-readiness.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 .github/workflows/production-readiness.yml .github/workflows/pr.yml
 ```
 
 Observed narrow results from the latest continuation:
@@ -113,6 +115,12 @@ Observed narrow results from the latest continuation:
   exits 1 because `AGENTDASH_TARGET_RUNNER_LABELS` is missing and there are no
   self-hosted runners. It confirms both release environments exist:
   `npm-canary` and `npm-stable`.
+- `.github/workflows/production-readiness.yml` now runs the audit on PR changes
+  to the audit helper, on `main` pushes, on a daily schedule, and on manual
+  dispatch. It uses `PRODUCTION_READINESS_AUDIT_TOKEN` when present, otherwise
+  `GITHUB_TOKEN`; if runner inventory cannot be read, the audit reports that as
+  a structured failed requirement instead of crashing. `pr.yml` also runs the
+  audit helper unit test in the normal verify job.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -143,6 +151,7 @@ These steps are required before calling the app production ready:
    - PR policy
    - PR verify
    - PR e2e
+   - Production Readiness / config-audit
    - target-test
    - target-test-comment
    - Docker workflow
