@@ -20,7 +20,7 @@ Hard safety rules:
 Repository:
 - GitHub repo: `thetangstr/agentdash`
 - Ref under test: use the ref supplied by the operator. If none is supplied, use `main`.
-- Package under test for published install smoke: `paperclipai@latest` unless the operator explicitly asks for a different dist-tag/version.
+- Package under test for published install smoke: `agentdash@latest` unless the operator explicitly asks for a different dist-tag/version.
 
 Prerequisites to verify on the target machine:
 - Node.js 20 or newer.
@@ -88,14 +88,14 @@ git fetch origin --tags --prune
 git checkout "$TARGET_REF"
 git reset --hard "origin/$TARGET_REF" 2>/dev/null || git reset --hard "$TARGET_REF"
 
-LATEST_PAPERCLIP_VERSION="$(npm view paperclipai@latest version)"
+LATEST_PAPERCLIP_VERSION="$(npm view agentdash@latest version)"
 echo "Latest paperclipai version: $LATEST_PAPERCLIP_VERSION"
 
 NPM_PREFIX="$ARTIFACT_ROOT/npm-global"
 mkdir -p "$NPM_PREFIX"
 export NPM_CONFIG_PREFIX="$NPM_PREFIX"
 export PATH="$NPM_PREFIX/bin:$PATH"
-npm install -g paperclipai@latest
+npm install -g agentdash@latest
 paperclipai --help >/dev/null
 
 pnpm install --frozen-lockfile
@@ -123,7 +123,7 @@ node scripts/ci/run-target-test-profile.mjs \
   --paperclip-version latest
 ```
 
-2. Run the published-install release smoke profile against `paperclipai@latest`. This validates the latest package can build/run in Docker, bootstrap an authenticated private development instance, and pass the release smoke browser suite.
+2. Run the published-install release smoke profile against `agentdash@latest`. This validates the latest package can build/run in Docker, bootstrap an authenticated private development instance, and pass the release smoke browser suite.
 
 ```sh
 node scripts/ci/run-target-test-profile.mjs \
@@ -164,7 +164,7 @@ For release-smoke failures, use `release-smoke-summary.json` instead.
 Final report:
 - Say whether the target machine was confirmed to be isolated in `agentdash_dev`.
 - Report the exact repo ref and commit tested.
-- Report the latest `paperclipai` version installed.
+- Report the latest `agentdash` version installed.
 - Report pass/fail for `full`.
 - Report pass/fail for `release-smoke`.
 - Link any GitHub issues created or updated.

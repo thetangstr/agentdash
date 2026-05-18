@@ -5,35 +5,35 @@ summary: Onboard, run, doctor, and configure
 
 Instance setup and diagnostics commands.
 
-## `paperclipai run`
+## `agentdash run`
 
 One-command bootstrap and start:
 
 ```sh
-pnpm paperclipai run
+pnpm agentdash run
 ```
 
 Does:
 
 1. Auto-onboards if config is missing
-2. Runs `paperclipai doctor` with repair enabled
+2. Runs `agentdash doctor` with repair enabled
 3. Starts the server when checks pass
 
 Choose a specific instance:
 
 ```sh
-pnpm paperclipai run --instance dev
+pnpm agentdash run --instance dev
 ```
 
-## `paperclipai onboard`
+## `agentdash onboard`
 
 Interactive first-time setup:
 
 ```sh
-pnpm paperclipai onboard
+pnpm agentdash onboard
 ```
 
-If Paperclip is already configured, rerunning `onboard` keeps the existing config in place. Use `paperclipai configure` to change settings on an existing install.
+If AgentDash is already configured, rerunning `onboard` keeps the existing config in place. Use `agentdash configure` to change settings on an existing install.
 
 First prompt:
 
@@ -43,24 +43,24 @@ First prompt:
 Start immediately after onboarding:
 
 ```sh
-pnpm paperclipai onboard --run
+pnpm agentdash onboard --run
 ```
 
 Non-interactive defaults + immediate start (opens browser on server listen):
 
 ```sh
-pnpm paperclipai onboard --yes
+pnpm agentdash onboard --yes
 ```
 
-On an existing install, `--yes` now preserves the current config and just starts Paperclip with that setup.
+On an existing install, `--yes` now preserves the current config and just starts AgentDash with that setup.
 
-## `paperclipai doctor`
+## `agentdash doctor`
 
 Health checks with optional auto-repair:
 
 ```sh
-pnpm paperclipai doctor
-pnpm paperclipai doctor --repair
+pnpm agentdash doctor
+pnpm agentdash doctor --repair
 ```
 
 Validates:
@@ -71,32 +71,32 @@ Validates:
 - Storage configuration
 - Missing key files
 
-## `paperclipai configure`
+## `agentdash configure`
 
 Update configuration sections:
 
 ```sh
-pnpm paperclipai configure --section server
-pnpm paperclipai configure --section secrets
-pnpm paperclipai configure --section storage
+pnpm agentdash configure --section server
+pnpm agentdash configure --section secrets
+pnpm agentdash configure --section storage
 ```
 
-## `paperclipai env`
+## `agentdash env`
 
 Show resolved environment configuration:
 
 ```sh
-pnpm paperclipai env
+pnpm agentdash env
 ```
 
 This now includes bind-oriented deployment settings such as `PAPERCLIP_BIND` and `PAPERCLIP_BIND_HOST` when configured.
 
-## `paperclipai allowed-hostname`
+## `agentdash allowed-hostname`
 
 Allow a private hostname for authenticated/private mode:
 
 ```sh
-pnpm paperclipai allowed-hostname my-tailscale-host
+pnpm agentdash allowed-hostname my-tailscale-host
 ```
 
 ## Local Storage Paths
@@ -112,12 +112,12 @@ pnpm paperclipai allowed-hostname my-tailscale-host
 Override with:
 
 ```sh
-PAPERCLIP_HOME=/custom/home PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
+PAPERCLIP_HOME=/custom/home PAPERCLIP_INSTANCE_ID=dev pnpm agentdash run
 ```
 
 Or pass `--data-dir` directly on any command:
 
 ```sh
-pnpm paperclipai run --data-dir ./tmp/paperclip-dev
-pnpm paperclipai doctor --data-dir ./tmp/paperclip-dev
+pnpm agentdash run --data-dir ./tmp/agentdash-dev
+pnpm agentdash doctor --data-dir ./tmp/agentdash-dev
 ```

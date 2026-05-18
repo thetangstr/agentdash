@@ -302,6 +302,6 @@ Current branch implementation covers steps 1-6 and includes early support for st
 - `scripts/ci/file-target-test-issue.test.mjs` verifies failure normalization, signature stability, body generation, and area-label inference.
 - `.github/workflows/pr.yml` runs the issue-filing helper tests in normal PR verification, invokes the target workflow when a PR has the `target-test` label, and posts a PR comment with the target run result.
 - Scheduled mainline validation is wired into `.github/workflows/target-machine-test.yml`: nightly `core` and weekly `full`.
-- `pnpm test:launch` runs the launch-oriented local target sequence: `full` followed by `release-smoke` against `paperclipai@latest`.
+- `pnpm test:launch` runs the launch-oriented local target sequence: `full` followed by `release-smoke` against `agentdash@latest`.
 
 Real target-machine execution still depends on registering a self-hosted GitHub Actions runner and setting the repository variable `AGENTDASH_TARGET_RUNNER_LABELS` to its labels, for example `["self-hosted","agentdash-target"]`. Until that variable is set, PR label and scheduled target runs fall back to `["ubuntu-latest"]`.

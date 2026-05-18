@@ -88,7 +88,7 @@ test("verifyPackageRegistryState fails when canary latest is left in place by de
 test("verifyPackageRegistryState allows intentional canary latest but still checks dependencies", () => {
   const packageDocsByName = new Map([
     [
-      "paperclipai",
+      "agentdash",
       {
         "dist-tags": {
           latest: "2026.427.0-canary.3",
@@ -115,8 +115,8 @@ test("verifyPackageRegistryState allows intentional canary latest but still chec
 
   assert.deepEqual(
     verifyPackageRegistryState({
-      packageName: "paperclipai",
-      packageDoc: packageDocsByName.get("paperclipai"),
+      packageName: "agentdash",
+      packageDoc: packageDocsByName.get("agentdash"),
       packageDocsByName,
       channel: "canary",
       distTag: "canary",

@@ -140,7 +140,7 @@ export async function bootstrapCeoInvite(opts: {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     p.log.error(`Could not create bootstrap invite: ${reason}`);
-    p.log.info("If using embedded-postgres, start the Paperclip server and run this command again.");
+    p.log.info("If using embedded-postgres, start the AgentDash server and run this command again.");
     return { status: "error", reason };
   } finally {
     await closableDb.$client?.end?.({ timeout: 5 }).catch(() => undefined);

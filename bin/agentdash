@@ -32,4 +32,4 @@ fi
 # Exec via tsx so dev mode works without a build step. tsx is already a
 # dev dep of the cli package, so pnpm install is enough to make this work.
 cd "$REPO_ROOT"
-exec pnpm --silent --filter paperclipai exec tsx src/index.ts "$@"
+exec pnpm --silent --filter agentdash exec tsx src/index.ts "$@"

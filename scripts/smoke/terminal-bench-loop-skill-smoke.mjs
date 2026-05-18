@@ -67,7 +67,7 @@ Options:
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`${name} is required. Run against a local Paperclip server with an agent or board API token.`);
+    throw new Error(`${name} is required. Run against a local AgentDash server with an agent or board API token.`);
   }
   return value;
 }

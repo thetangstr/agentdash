@@ -152,7 +152,7 @@ The plugin runtime tracks plugin-owned database namespaces and migrations in `pl
 Paperclip supports automatic and manual logical database backups. These dumps include
 non-system database schemas such as `public`, the Drizzle migration journal, and
 plugin-owned database schemas. See `doc/DEVELOPING.md` for the current
-`paperclipai db:backup` / `pnpm db:backup` commands and backup retention
+`agentdash db:backup` / `pnpm db:backup` commands and backup retention
 configuration.
 
 Database backups do not include non-database instance files such as local-disk
@@ -186,7 +186,7 @@ PAPERCLIP_SECRETS_STRICT_MODE=true
 You can set strict mode and provider defaults via:
 
 ```sh
-pnpm paperclipai configure --section secrets
+pnpm agentdash configure --section secrets
 ```
 
 Inline secret migration command:

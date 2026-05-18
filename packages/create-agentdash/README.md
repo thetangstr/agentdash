@@ -18,7 +18,7 @@ npx create-agentdash /path/to/your/workspace
 2. `git clone` the public AgentDash repo
 3. `pnpm install` (workspace deps)
 4. `pnpm install-cli` (symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin`)
-5. Tells you to run `agentdash setup` — a 2-prompt wizard (pick adapter + your email)
+5. Runs `agentdash setup` when attached to an interactive terminal; otherwise prints the command to finish manually
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ npx create-agentdash /path/to/your/workspace
 ## After it runs
 
 ```sh
-agentdash setup       # configure adapter + founding user email
+agentdash setup       # pick adapter + safe local defaults
 cd ~/agentdash
 pnpm dev              # start the server
 # open http://localhost:3100/cos

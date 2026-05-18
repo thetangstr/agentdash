@@ -6,7 +6,7 @@
 //   2. git clone the public AgentDash repo to a target dir
 //   3. pnpm install (workspace deps)
 //   4. pnpm install-cli (symlinks `agentdash` onto PATH)
-//   5. Tells you to run `agentdash setup`
+//   5. Chains into `agentdash setup` when running in an interactive terminal
 //
 // This file ships in the published `create-agentdash` npm package and
 // is invoked by `npx create-agentdash [target-dir]`.
@@ -30,6 +30,25 @@ function err(msg) {
 function bail(msg, exitCode = 1) {
   err(msg);
   process.exit(exitCode);
+}
+
+function printHelp() {
+  process.stdout.write(`Usage: create-agentdash [target-dir] [options]
+
+Bootstrap AgentDash on this machine.
+
+Arguments:
+  target-dir          Checkout directory (default: ~/agentdash)
+
+Options:
+  --no-setup          Clone, install, and link the CLI, but do not run agentdash setup
+  -h, --help          Display help
+
+The bootstrapper checks Node 20+, git, and pnpm; clones AgentDash; runs
+pnpm install and pnpm install-cli; then runs agentdash setup in an
+interactive terminal. In non-interactive shells it prints the exact command
+to finish setup manually.
+`);
 }
 
 function requireCmd(cmd, hint) {
@@ -61,8 +80,14 @@ function runStep(label, cmd, args, opts = {}) {
 async function main() {
   // Argv: [node, cli.mjs, ...userArgs]
   const userArgs = process.argv.slice(2);
+  if (userArgs.includes("--help") || userArgs.includes("-h")) {
+    printHelp();
+    return;
+  }
+
   const targetArg = userArgs.find((arg) => !arg.startsWith("-"));
   const targetDir = resolve(targetArg ?? DEFAULT_TARGET);
+  const runSetup = !userArgs.includes("--no-setup") && process.stdin.isTTY && process.stdout.isTTY;
 
   checkNodeVersion();
   requireCmd("git", "Install with your OS package manager (e.g. `brew install git`).");
@@ -84,13 +109,18 @@ async function main() {
   // 3. pnpm install-cli — puts `agentdash` on PATH
   await runStep("linking the CLI onto your PATH…", "pnpm", ["install-cli"], { cwd: targetDir });
 
+  if (runSetup) {
+    await runStep("starting the AgentDash setup wizard…", `${targetDir}/bin/agentdash`, ["setup"], { cwd: targetDir });
+    return;
+  }
+
   // 4. Done
   process.stdout.write(`
 ──────────────────────────────────────────────────
 ✓ AgentDash installed at ${targetDir}
 
 Next:
-  agentdash setup       (2 prompts: pick adapter + your email)
+  agentdash setup       (pick adapter + safe local defaults)
 
 Then:
   cd ${targetDir} && pnpm dev

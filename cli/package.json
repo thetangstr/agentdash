@@ -1,12 +1,14 @@
 {
-  "name": "paperclipai",
+  "name": "agentdash",
   "version": "0.3.1",
-  "description": "Paperclip CLI — orchestrate AI agent teams to run a business",
+  "description": "AgentDash CLI — orchestrate AI agent teams to run a business",
   "type": "module",
   "bin": {
+    "agentdash": "./dist/index.js",
     "paperclipai": "./dist/index.js"
   },
   "keywords": [
+    "agentdash",
     "paperclip",
     "ai",
     "agents",
@@ -16,12 +18,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/thetangstr/agentdash",
     "directory": "cli"
   },
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/thetangstr/agentdash",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/thetangstr/agentdash/issues"
   },
   "files": [
     "dist"
@@ -49,11 +51,14 @@
     "@paperclipai/db": "workspace:*",
     "@paperclipai/server": "workspace:*",
     "@paperclipai/shared": "workspace:*",
-    "drizzle-orm": "0.38.4",
-    "dotenv": "^17.0.1",
     "commander": "^13.1.0",
+    "dotenv": "^17.0.1",
+    "drizzle-orm": "0.38.4",
     "embedded-postgres": "^18.1.0-beta.16",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "postgres": "^3.4.5",
+    "ws": "^8.19.0",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.12.0",

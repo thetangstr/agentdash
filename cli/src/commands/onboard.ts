@@ -328,12 +328,12 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
   }
 
   printPaperclipCliBanner();
-  p.intro(pc.bgCyan(pc.black(" paperclipai onboard ")));
+  p.intro(pc.bgCyan(pc.black(" agentdash onboard ")));
   // AgentDash: most first-time users want the lighter `agentdash setup`
   // wizard. `onboard` is the advanced path with full database / LLM /
   // storage / secrets prompts. Surface the nudge once so it's discoverable.
   p.log.info(
-    `${pc.dim("Most users only need")} ${pc.cyan("agentdash setup")} ${pc.dim("— pick adapter + email, safe defaults for everything else.")}`,
+    `${pc.dim("Most users only need")} ${pc.cyan("agentdash setup")} ${pc.dim("— pick adapter, safe defaults for everything else.")}`,
   );
   const configPath = resolveConfigPath(opts.config);
   const instance = describeLocalInstancePaths(resolvePaperclipInstanceId());
@@ -360,9 +360,9 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   if (existingConfig) {
     p.log.message(
-      pc.dim("Existing Paperclip install detected; keeping the current configuration unchanged."),
+      pc.dim("Existing AgentDash install detected; keeping the current configuration unchanged."),
     );
-    p.log.message(pc.dim(`Use ${pc.cyan("paperclipai configure")} if you want to change settings.`));
+    p.log.message(pc.dim(`Use ${pc.cyan("agentdash configure")} if you want to change settings.`));
 
     const jwtSecret = ensureAgentJwtSecret(configPath);
     const envFilePath = resolveAgentJwtEnvFile(configPath);
@@ -399,9 +399,9 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
     p.note(
       [
-        `Run: ${pc.cyan("paperclipai run")}`,
-        `Reconfigure later: ${pc.cyan("paperclipai configure")}`,
-        `Diagnose setup: ${pc.cyan("paperclipai doctor")}`,
+        `Run: ${pc.cyan("agentdash run")}`,
+        `Reconfigure later: ${pc.cyan("agentdash configure")}`,
+        `Diagnose setup: ${pc.cyan("agentdash doctor")}`,
       ].join("\n"),
       "Next commands",
     );
@@ -409,7 +409,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     let shouldRunNow = opts.run === true || opts.yes === true;
     if (!shouldRunNow && !opts.invokedByRun && process.stdin.isTTY && process.stdout.isTTY) {
       const answer = await p.confirm({
-        message: "Start Paperclip now?",
+        message: "Start AgentDash now?",
         initialValue: true,
       });
       if (!p.isCancel(answer)) {
@@ -424,7 +424,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
       return;
     }
 
-    p.outro("Existing Paperclip setup is ready.");
+    p.outro("Existing AgentDash setup is ready.");
     return;
   }
 
@@ -503,7 +503,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
         await db.execute("SELECT 1");
         s.stop("Database connection successful");
       } catch {
-        s.stop(pc.yellow("Could not connect to database — you can fix this later with `paperclipai doctor`"));
+        s.stop(pc.yellow("Could not connect to database — you can fix this later with `agentdash doctor`"));
       }
     }
 
@@ -654,9 +654,9 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   p.note(
     [
-      `Run: ${pc.cyan("paperclipai run")}`,
-      `Reconfigure later: ${pc.cyan("paperclipai configure")}`,
-      `Diagnose setup: ${pc.cyan("paperclipai doctor")}`,
+      `Run: ${pc.cyan("agentdash run")}`,
+      `Reconfigure later: ${pc.cyan("agentdash configure")}`,
+      `Diagnose setup: ${pc.cyan("agentdash doctor")}`,
     ].join("\n"),
     "Next commands",
   );
@@ -669,7 +669,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
   let shouldRunNow = opts.run === true || opts.yes === true;
   if (!shouldRunNow && !opts.invokedByRun && process.stdin.isTTY && process.stdout.isTTY) {
     const answer = await p.confirm({
-      message: "Start Paperclip now?",
+      message: "Start AgentDash now?",
       initialValue: true,
     });
     if (!p.isCancel(answer)) {
@@ -688,8 +688,8 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     p.log.info(
       [
         "Bootstrap CEO invite will be created after the server starts.",
-        `Next: ${pc.cyan("paperclipai run")}`,
-        `Then: ${pc.cyan("paperclipai auth bootstrap-ceo")}`,
+        `Next: ${pc.cyan("agentdash run")}`,
+        `Then: ${pc.cyan("agentdash auth bootstrap-ceo")}`,
       ].join("\n"),
     );
   }

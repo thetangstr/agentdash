@@ -43,18 +43,18 @@ run_isolated_worktree_init() {
     return 0
   fi
 
-  if command -v pnpm >/dev/null 2>&1 && pnpm paperclipai --help >/dev/null 2>&1; then
+  if command -v pnpm >/dev/null 2>&1 && pnpm agentdash --help >/dev/null 2>&1; then
     (
       cd "$worktree_cwd"
-      pnpm paperclipai worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
+      pnpm agentdash worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
     )
     return 0
   fi
 
-  if command -v paperclipai >/dev/null 2>&1; then
+  if command -v agentdash >/dev/null 2>&1; then
     (
       cd "$worktree_cwd"
-      paperclipai worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
+      agentdash worktree init --force --seed-mode minimal --name "$worktree_name" --from-config "$source_config_path"
     )
     return 0
   fi
@@ -62,8 +62,8 @@ run_isolated_worktree_init() {
   return 127
 }
 
-paperclipai_command_available() {
-  if command -v pnpm >/dev/null 2>&1 && pnpm paperclipai --help >/dev/null 2>&1; then
+agentdash_command_available() {
+  if command -v pnpm >/dev/null 2>&1 && pnpm agentdash --help >/dev/null 2>&1; then
     return 0
   fi
 
@@ -73,7 +73,7 @@ paperclipai_command_available() {
     return 0
   fi
 
-  if command -v paperclipai >/dev/null 2>&1; then
+  if command -v agentdash >/dev/null 2>&1; then
     return 0
   fi
 
@@ -333,19 +333,19 @@ EOF
 }
 
 if [[ -e "$worktree_config_path" && -e "$worktree_env_path" ]]; then
-  echo "Reusing existing isolated Paperclip worktree config at $worktree_config_path" >&2
+  echo "Reusing existing isolated AgentDash worktree config at $worktree_config_path" >&2
 else
   # Closes #325: PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT=true skips the
-  # paperclipai-CLI path entirely. Used by integration tests that don't
-  # want a system-installed paperclipai (Homebrew, pnpm-global) to
+  # AgentDash-CLI path entirely. Used by integration tests that don't
+  # want a system-installed agentdash (Homebrew, pnpm-global) to
   # shadow the fallback path the test is asserting against.
   if [[ "${PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT:-}" = "true" ]]; then
     echo "PAPERCLIP_FORCE_FALLBACK_WORKTREE_INIT=true; writing isolated fallback config." >&2
     write_fallback_worktree_config
-  elif paperclipai_command_available; then
+  elif agentdash_command_available; then
     run_isolated_worktree_init
   else
-    echo "paperclipai CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
+    echo "AgentDash CLI not available in this workspace; writing isolated fallback config without DB seeding." >&2
     write_fallback_worktree_config
   fi
 fi

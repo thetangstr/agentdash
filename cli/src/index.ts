@@ -29,11 +29,11 @@ import { cliVersion } from "./version.js";
 
 const program = new Command();
 const DATA_DIR_OPTION_HELP =
-  "Paperclip data directory root (isolates state from ~/.paperclip)";
+  "AgentDash data directory root (isolates state from ~/.paperclip)";
 
 program
-  .name("paperclipai")
-  .description("Paperclip CLI — setup, diagnose, and configure your instance")
+  .name("agentdash")
+  .description("AgentDash CLI — setup, diagnose, and configure your instance")
   .version(cliVersion);
 
 program.hook("preAction", (_thisCommand, actionCommand) => {
@@ -54,7 +54,7 @@ program
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--bind <mode>", "Quickstart reachability preset (loopback, lan, tailnet)")
   .option("-y, --yes", "Accept quickstart defaults (trusted local loopback unless --bind is set) and start immediately", false)
-  .option("--run", "Start Paperclip immediately after saving config", false)
+  .option("--run", "Start AgentDash immediately after saving config", false)
   .action(onboard);
 
 // AgentDash: frictionless first-run wizard. Two prompts (adapter + email)
@@ -62,12 +62,12 @@ program
 // available as escape hatches for re-running a single step.
 const setupCmd = program
   .command("setup")
-  .description("AgentDash first-run wizard — pick adapter + founding user email")
+  .description("AgentDash first-run wizard — pick adapter + safe local defaults")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
-  .option("--email <address>", "Founding user email (skips the prompt)")
+  .option("--email <address>", "Deprecated local bootstrap email hint")
   .option("--adapter <type>", "Adapter type to use for the first agent (skips the prompt)")
-  .option("-y, --yes", "Non-interactive — requires --email; defaults adapter to claude_local", false)
+  .option("-y, --yes", "Non-interactive — defaults adapter to claude_local", false)
   .action(setup);
 
 setupCmd
@@ -103,7 +103,7 @@ setupCmd
 
 program
   .command("doctor")
-  .description("Run diagnostic checks on your Paperclip setup")
+  .description("Run diagnostic checks on your AgentDash setup")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--repair", "Attempt to repair issues automatically")
@@ -151,7 +151,7 @@ program
 
 program
   .command("run")
-  .description("Bootstrap local setup (onboard + doctor) and run Paperclip")
+  .description("Bootstrap local setup (setup + doctor) and run AgentDash")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("-i, --instance <id>", "Local instance id (default: default)")
@@ -170,7 +170,7 @@ heartbeat
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
   .option("--context <path>", "Path to CLI context file")
   .option("--profile <name>", "CLI context profile name")
-  .option("--api-base <url>", "Base URL for the Paperclip server API")
+  .option("--api-base <url>", "Base URL for the AgentDash server API")
   .option("--api-key <token>", "Bearer token for agent-authenticated calls")
   .option(
     "--source <source>",

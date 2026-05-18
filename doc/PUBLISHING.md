@@ -17,7 +17,7 @@ Paperclip no longer uses release branches or Changesets for publishing.
 
 ## Why the CLI needs special packaging
 
-The CLI package, `paperclipai`, imports code from workspace packages such as:
+The CLI package, `agentdash`, imports code from workspace packages such as:
 
 - `@paperclipai/server`
 - `@paperclipai/db`
@@ -111,7 +111,7 @@ Notes:
 If the first real publish returns npm `E404`, check npm-side prerequisites before retrying:
 
 - `npm whoami` must succeed first. An expired or missing npm login will block the publish.
-- For an organization-scoped package like `@paperclipai/ui`, the `paperclipai` npm organization must exist and the publisher must be a member with permission to publish to that scope.
+- For an organization-scoped package like `@paperclipai/ui`, the `agentdash` npm organization must exist and the publisher must be a member with permission to publish to that scope.
 - The initial publish must include `--access public` for a public scoped package.
 - npm also requires either account 2FA for publishing or a granular token that is allowed to bypass 2FA.
 
@@ -135,12 +135,12 @@ Canaries publish under the npm dist-tag `canary`.
 
 Example:
 
-- `paperclipai@2026.318.1-canary.2`
+- `agentdash@2026.318.1-canary.2`
 
 This keeps the default install path unchanged while allowing explicit installs with:
 
 ```bash
-npx paperclipai@canary onboard
+npx agentdash@canary onboard
 ```
 
 The release script now verifies two things after a canary publish:
@@ -156,7 +156,7 @@ Stable publishes use the npm dist-tag `latest`.
 
 Example:
 
-- `paperclipai@2026.318.0`
+- `agentdash@2026.318.0`
 
 Stable publishes do not create a release commit. Instead:
 

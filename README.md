@@ -8,7 +8,7 @@ Built on [paperclipai/paperclip](https://github.com/paperclipai/paperclip).
 
 ## Get started
 
-One command, three prompts.
+One command. Safe local defaults.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap.sh | bash
@@ -17,14 +17,28 @@ curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/b
 That clones AgentDash to `~/agentdash`, installs deps, links the `agentdash` CLI onto your PATH, and runs the setup wizard. The wizard asks:
 
 1. **Pick an adapter** — Claude Code / Codex / Hermes / Cursor / … Runs `<adapter> --version` to verify it's installed; prints the install command if not.
-2. **Your email** — founding user / workspace owner.
+2. **Server access** — only when a LAN address is detected; local-only is the default.
 3. **Start setting up the agents now?** — press Enter to boot the dev server. You land in your Chief of Staff at <http://localhost:3100/cos>.
 
-Requires Node 20+, pnpm, and git. Set `ANTHROPIC_API_KEY` in the shell beforehand for real Claude replies (otherwise you get a stub). Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
+Requires Node 20+, pnpm, and git. Set `ANTHROPIC_API_KEY` in the shell beforehand for real Claude replies. Everything else (embedded Postgres, local storage, local-encrypted secrets, loopback bind, `local_trusted` mode) uses safe defaults.
 
 To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server` / `setup bootstrap` for one section).
 
 ---
+
+### AgentDash CLI
+
+Use `agentdash` for setup, diagnostics, server startup, and agent control-plane work:
+
+```sh
+agentdash --help
+agentdash setup
+agentdash doctor --repair
+agentdash run
+agentdash agent local-cli <agent> --company-id <company-id>
+```
+
+The legacy `paperclipai` command is still installed as a compatibility alias, but new scripts, docs, and agent instructions should use `agentdash`.
 
 ### Already cloned the repo?
 
@@ -32,7 +46,7 @@ To re-run later: `agentdash setup` (or `agentdash setup adapter` / `setup server
 pnpm install && pnpm install-cli && agentdash setup
 ```
 
-`pnpm install-cli` symlinks `agentdash` into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable). The wizard's last step offers to start the server; if you skip it, run `pnpm dev` from the repo root.
+`pnpm install-cli` symlinks `agentdash` and the legacy `paperclipai` alias into `/usr/local/bin`, `/opt/homebrew/bin`, or `~/.local/bin` (whichever is writable). The wizard's last step offers to start the server; if you skip it, run `pnpm dev` from the repo root.
 
 ### Going to production
 

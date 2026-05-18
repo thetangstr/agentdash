@@ -58,23 +58,23 @@ if (!embeddedPostgresSupport.supported) {
 }
 const provisionWorktreeScriptPath = new URL("../../../scripts/provision-worktree.sh", import.meta.url);
 
-// Closes #325: provide a synthetic `paperclipai` shim in fakeBin so the
+// Closes #325: provide a synthetic `agentdash` shim in fakeBin so the
 // test's PATH-shadow path is deterministic across dev machines.
 //
 // Without this shim:
-//   - On a dev machine with `paperclipai` installed via Homebrew or
-//     pnpm-global, provision-worktree.sh's `paperclipai_command_available`
-//     check returns true (step 3 finds /opt/homebrew/bin/paperclipai),
+//   - On a dev machine with `agentdash` installed via Homebrew or
+//     pnpm-global, provision-worktree.sh's `agentdash_command_available`
+//     check returns true (step 3 finds /opt/homebrew/bin/agentdash),
 //     then `run_isolated_worktree_init` invokes the REAL binary against
 //     the test's fake worktree dir. The real binary fails (no source
 //     config in the test fixture), and with `set -e` the whole script
 //     aborts — but only AFTER the install retry has run. Net effect:
 //     the install-retry stderr assertion passes while .paperclip/
 //     config.json never gets written.
-//   - On CI (no paperclipai), the fallback path runs and writes config.
+//   - On CI (no agentdash), the fallback path runs and writes config.
 //
 // With this shim:
-//   - fakeBin is first on PATH, so `command -v paperclipai` resolves to
+//   - fakeBin is first on PATH, so `command -v agentdash` resolves to
 //     OUR shim, not the system binary. The shim writes the minimal
 //     config.json the test asserts on, then exits 0. Same code path
 //     locally and in CI.
@@ -1147,7 +1147,7 @@ describe("realizeExecutionWorkspace", () => {
   it("provisions successfully when install is needed but there are no symlinked node_modules to move", async () => {
     // Closes #325: realizeExecutionWorkspace's executeProcess inherits
     // process.env when no override is passed. On a dev machine that has
-    // `paperclipai` installed via Homebrew, the spawned provision script
+    // `agentdash` installed via Homebrew, the spawned provision script
     // finds it on PATH and tries to use the real binary against the test
     // fixture — which fails (no source config). Force the fallback path
     // for the duration of this test.
@@ -1251,10 +1251,10 @@ describe("realizeExecutionWorkspace", () => {
         fakePnpmPath,
         [
           "#!/bin/sh",
-          "if [ \"$1\" = \"paperclipai\" ] && [ \"$2\" = \"--help\" ]; then",
+          "if [ \"$1\" = \"agentdash\" ] && [ \"$2\" = \"--help\" ]; then",
           "  exit 0",
           "fi",
-          "if [ \"$1\" = \"paperclipai\" ] && [ \"$2\" = \"worktree\" ] && [ \"$3\" = \"init\" ]; then",
+          "if [ \"$1\" = \"agentdash\" ] && [ \"$2\" = \"worktree\" ] && [ \"$3\" = \"init\" ]; then",
           "  echo \"simulated init failure\" >&2",
           "  exit 42",
           "fi",
@@ -1265,13 +1265,13 @@ describe("realizeExecutionWorkspace", () => {
       );
       await fs.chmod(fakePnpmPath, 0o755);
 
-      // Closes #325: write a paperclipai shim into fakeBin so that
-      // `command -v paperclipai` (called by provision-worktree.sh's
-      // paperclipai_command_available) resolves to OUR shim instead of
+      // Closes #325: write an agentdash shim into fakeBin so that
+      // `command -v agentdash` (called by provision-worktree.sh's
+      // agentdash_command_available) resolves to OUR shim instead of
       // whatever the dev machine has globally installed. The shim
       // handles `worktree init` by writing the minimal config.json the
       // test asserts on.
-      const fakePaperclipaiPath = path.join(fakeBin, "paperclipai");
+      const fakePaperclipaiPath = path.join(fakeBin, "agentdash");
       await fs.writeFile(fakePaperclipaiPath, PAPERCLIPAI_SHIM, "utf8");
       await fs.chmod(fakePaperclipaiPath, 0o755);
 
@@ -1335,7 +1335,7 @@ describe("realizeExecutionWorkspace", () => {
         fakePnpmPath,
         [
           "#!/bin/sh",
-          "if [ \"$1\" = \"paperclipai\" ] && [ \"$2\" = \"--help\" ]; then",
+          "if [ \"$1\" = \"agentdash\" ] && [ \"$2\" = \"--help\" ]; then",
           "  exit 1",
           "fi",
           "if [ \"$1\" = \"install\" ] && [ \"$2\" = \"--frozen-lockfile\" ]; then",
@@ -1354,13 +1354,13 @@ describe("realizeExecutionWorkspace", () => {
       );
       await fs.chmod(fakePnpmPath, 0o755);
 
-      // Closes #325: write a paperclipai shim into fakeBin so that
-      // `command -v paperclipai` (called by provision-worktree.sh's
-      // paperclipai_command_available) resolves to OUR shim instead of
+      // Closes #325: write an agentdash shim into fakeBin so that
+      // `command -v agentdash` (called by provision-worktree.sh's
+      // agentdash_command_available) resolves to OUR shim instead of
       // whatever the dev machine has globally installed. The shim
       // handles `worktree init` by writing the minimal config.json the
       // test asserts on.
-      const fakePaperclipaiPath = path.join(fakeBin, "paperclipai");
+      const fakePaperclipaiPath = path.join(fakeBin, "agentdash");
       await fs.writeFile(fakePaperclipaiPath, PAPERCLIPAI_SHIM, "utf8");
       await fs.chmod(fakePaperclipaiPath, 0o755);
 

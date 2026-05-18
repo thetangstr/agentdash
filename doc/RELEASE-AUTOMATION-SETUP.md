@@ -33,7 +33,7 @@ Do this for every public package that Paperclip publishes.
 
 At minimum that includes:
 
-- `paperclipai`
+- `agentdash`
 - `@paperclipai/server`
 - `@paperclipai/ui`
 - public packages under `packages/`
@@ -211,7 +211,7 @@ After setup:
 Install-path check:
 
 ```bash
-npx paperclipai@canary onboard
+npx agentdash@canary onboard
 ```
 
 ## 12. Verify the Stable Workflow

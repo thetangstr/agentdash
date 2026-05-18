@@ -884,7 +884,7 @@ main() {
   mkdir -p "$OPENCLAW_DIAG_DIR"
   log "diagnostics dir: ${OPENCLAW_DIAG_DIR}"
 
-  wait_http_ready "${PAPERCLIP_API_URL%/}/api/health" 15 || fail "Paperclip API health endpoint not reachable"
+  wait_http_ready "${PAPERCLIP_API_URL%/}/api/health" 15 || fail "AgentDash API health endpoint not reachable"
   api_request "GET" "/health"
   assert_status "200"
   log "paperclip health deploymentMode=$(jq -r '.deploymentMode // "unknown"' <<<"$RESPONSE_BODY") exposure=$(jq -r '.deploymentExposure // "unknown"' <<<"$RESPONSE_BODY")"

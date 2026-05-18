@@ -1,7 +1,7 @@
 {
   "name": "create-agentdash",
   "version": "0.1.0",
-  "description": "Bootstrap AgentDash on your machine: clone the repo, install deps, link the CLI to PATH, and chain into `agentdash setup`.",
+  "description": "Bootstrap AgentDash on your machine: clone the repo, install deps, link the CLI to PATH, and run `agentdash setup` in interactive terminals.",
   "type": "module",
   "bin": {
     "create-agentdash": "./bin/cli.mjs"

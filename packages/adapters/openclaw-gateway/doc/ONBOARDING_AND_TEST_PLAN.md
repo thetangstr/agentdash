@@ -105,5 +105,5 @@ If full suite is too heavy locally, run at least:
 pnpm --filter @paperclipai/server test:run -- openclaw-gateway
 pnpm --filter @paperclipai/server typecheck
 pnpm --filter @paperclipai/ui typecheck
-pnpm --filter paperclipai typecheck
+pnpm --filter agentdash typecheck
 ```

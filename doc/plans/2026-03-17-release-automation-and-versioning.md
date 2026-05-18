@@ -109,8 +109,8 @@ This is the most important mechanical constraint.
 
 npm can move dist-tags, but it does not let you rename an already-published version. That means:
 
-- you can move `latest` to `paperclipai@1.2.3`
-- you cannot turn `paperclipai@2026.317.0-canary.8` into `paperclipai@2026.317.0`
+- you can move `latest` to `agentdash@1.2.3`
+- you cannot turn `agentdash@2026.317.0-canary.8` into `agentdash@2026.317.0`
 
 So "promote canary to stable" really means:
 

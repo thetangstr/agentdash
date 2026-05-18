@@ -77,11 +77,11 @@ export async function configure(opts: {
   section?: string;
 }): Promise<void> {
   printPaperclipCliBanner();
-  p.intro(pc.bgCyan(pc.black(" paperclip configure ")));
+  p.intro(pc.bgCyan(pc.black(" agentdash configure ")));
   const configPath = resolveConfigPath(opts.config);
 
   if (!configExists(opts.config)) {
-    p.log.error("No config file found. Run `paperclipai onboard` first.");
+    p.log.error("No config file found. Run `agentdash onboard` first.");
     p.outro("");
     return;
   }
