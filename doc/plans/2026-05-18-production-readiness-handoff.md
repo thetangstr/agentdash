@@ -6,10 +6,10 @@ Date: 2026-05-18
 
 Active branch: `codex/invite-token-primitives`
 
-Latest pushed PR head observed during this readiness-hardening pass:
+Latest checked PR head observed during this readiness-hardening pass:
 
 ```text
-f9fa4d554666daafc2f45e092005c27911eaf1a9 Deliver Hermes tasks from Paperclip context
+03a55d32ee11e04a5f61f27662d8cd50b5fdcc31 Require controlled launch-smoke accounts before production readiness
 ```
 
 This document may live on a later documentation-only commit. Resolve the current
@@ -22,8 +22,8 @@ gh pr view 344 --repo thetangstr/agentdash --json headRefOid,statusCheckRollup
 Run `git rev-parse HEAD` before handing off to a remote runner, target machine,
 canary release, or stable release.
 
-The branch is pushed to PR #344. The code and CI readiness checks were green on
-head `f9fa4d55`: PR policy, PR verify, PR e2e, target-test preflight,
+The branch is pushed to PR #344. The code and CI readiness checks are green on
+latest checked head `03a55d32`: PR policy, PR verify, PR e2e, target-test preflight,
 target-test, target-test-comment, Docker, Agents MD drift, Hermes PR audit, and
 Hermes prompt drift. `Production Readiness / config-audit` is failing as an external
 configuration gate because the repository has no self-hosted target runners, no
@@ -59,7 +59,7 @@ pnpm build
 ```
 
 The following focused readiness checks have passed on later local heads through
-`2be4d290`:
+`03a55d32`:
 
 ```sh
 pnpm exec vitest run server/src/__tests__/run-healer.test.ts
@@ -92,7 +92,9 @@ git push --dry-run origin HEAD:codex/invite-token-primitives
 node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local-21694e7c --summary target-test/local-core-summary.json --logs-dir target-test/local-core-logs --artifact-name target-machine-test-core-local-21694e7c --paperclip-version latest
 node --check scripts/ci/audit-production-readiness-config.mjs
 node --test scripts/ci/audit-production-readiness-config.test.mjs
+pnpm run test:production-readiness-config
 node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --output /tmp/agentdash-production-readiness-config.json
+node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --use-actions-vars-context
 node --check scripts/ci/target-runner-preflight.mjs
 node --test scripts/ci/target-runner-preflight.test.mjs
 pnpm run test:target-runner-preflight
@@ -165,6 +167,11 @@ Observed narrow results from the latest continuation:
 - The audit now treats missing `npm-stable` required-reviewer protection as a
   failed automated config requirement. The live repository has
   `npm-stable` protected by a `required_reviewers` rule for `@thetangstr`.
+- Latest `Production Readiness / config-audit` job `76553741097` on
+  `03a55d32` passes release environment, stable reviewer protection, branch
+  protection, billing-required, and LLM-required gates. It fails only the
+  external gates `target-runner-variable`, `target-runner-available`,
+  `launch-smoke-url-variable`, and `launch-smoke-email-template-variable`.
 - `.github/workflows/production-readiness.yml` now runs the audit on every PR,
   on `main` pushes, on a daily schedule, and on manual dispatch. The launch
   smoke job is still skipped on PRs. The audit uses repository `vars` for the
@@ -183,7 +190,7 @@ Observed narrow results from the latest continuation:
   PR comment, and issue-filing signal instead of sitting queued on unavailable
   labels.
 - The live PR now has a passing `PR / target-test / resolve-target-runner`
-  preflight check on head `2be4d290`. A live local preflight against
+  preflight check on head `03a55d32`. A live local preflight against
   `thetangstr/agentdash` correctly reports zero matching self-hosted runners and
   chooses the `ubuntu-latest` fail-fast path.
 - `.github/CODEOWNERS` now uses the current repository collaborator
@@ -216,15 +223,15 @@ Observed narrow results from the latest continuation:
   and `zod` were removed because `cli/src` does not import them directly; the
   workspace packages that need those packages declare their own dependencies.
 - `pnpm -r typecheck` passes on the broad local verification baseline, and the
-  current PR verify job is green on `2be4d290`.
+  current PR verify job is green on `03a55d32`.
 - `pnpm test:run` passes on the broad local verification baseline, and the
-  current PR verify job is green on `2be4d290`.
+  current PR verify job is green on `03a55d32`.
 - `pnpm build` passes on the broad local verification baseline, and the current
-  PR verify and Docker jobs are green on `2be4d290`.
+  PR verify and Docker jobs are green on `03a55d32`.
 - Workflow YAML parsing and `actionlint` pass after moving GitHub Actions
   dependencies off Node 20 majors (`checkout` / `setup-node` to v6,
   `upload-artifact` to v7, `pnpm/action-setup` to v6).
-- Docker PR validation now passes remotely on `2be4d290`. The previous PR
+- Docker PR validation now passes remotely on `03a55d32`. The previous PR
   Docker run reached the production image stage but timed out exporting the
   GitHub Actions cache. PR builds now validate a single `linux/amd64` image
   without cache export; non-PR builds still use multi-arch push/cache export.
@@ -256,7 +263,7 @@ Observed narrow results from the latest continuation:
 - GitHub Actions runtime warning: workflows now use Node 24-capable first-party
   action majors for checkout, setup-node, and artifact upload.
 - PR Docker timeout: PR Docker builds now stay inside CI time limits and pass
-  remotely at `2be4d290`.
+  remotely at `03a55d32`.
 
 ## Remaining External Gates
 
@@ -267,7 +274,7 @@ These steps are required before calling the app production ready:
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
    PR policy, PR verify, PR e2e, target-test preflight, target-test,
-   target-test-comment, and Docker workflow. At `f9fa4d55`, all of those checks
+   target-test-comment, and Docker workflow. At `03a55d32`, all of those checks
    are green. The
    production-readiness config audit may remain red only for the documented
    external repository configuration gaps below.
