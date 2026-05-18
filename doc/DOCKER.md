@@ -1,13 +1,38 @@
 # Docker Quickstart
 
-Run Paperclip in Docker without installing Node or pnpm locally.
+Run AgentDash in Docker without installing Node or pnpm locally.
 
 All commands below assume you are in the **project root** (the directory containing `package.json`), not inside `docker/`.
+
+## Published Image
+
+After the Docker workflow has published an image, the GHCR image is the simplest path:
+
+```sh
+docker run --name agentdash \
+  -p 3100:3100 \
+  -v agentdash-data:/paperclip \
+  ghcr.io/thetangstr/agentdash:latest
+```
+
+Open: `http://localhost:3100`
+
+The image contains built server/UI artifacts plus production dependencies, not the source checkout. On first boot it generates local `BETTER_AUTH_SECRET` and `PAPERCLIP_AGENT_JWT_SECRET` values in `/paperclip/agentdash.env` when they are not provided, so the default single-container path can start without manual secret generation. Persist `/paperclip` with a volume to keep those secrets, embedded PostgreSQL data, uploaded assets, local secret keys, and workspace data across restarts.
+
+For a non-local URL or a different host port, set the public URL explicitly:
+
+```sh
+docker run --name agentdash \
+  -p 3232:3100 \
+  -e PAPERCLIP_PUBLIC_URL=http://localhost:3232 \
+  -v agentdash-data:/paperclip \
+  ghcr.io/thetangstr/agentdash:latest
+```
 
 ## Building the image
 
 ```sh
-docker build -t paperclip-local .
+docker build -t agentdash-local .
 ```
 
 The Dockerfile installs common agent tools (`git`, `gh`, `curl`, `wget`, `ripgrep`, `python3`) and the Claude, Codex, and OpenCode CLIs.
@@ -20,21 +45,18 @@ Build arguments:
 | `USER_GID` | `1000` | GID for the container `node` group |
 
 ```sh
-docker build -t paperclip-local \
+docker build -t agentdash-local \
   --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) .
 ```
 
 ## One-liner (build + run)
 
 ```sh
-docker build -t paperclip-local . && \
-docker run --name paperclip \
+docker build -t agentdash-local . && \
+docker run --name agentdash \
   -p 3100:3100 \
-  -e HOST=0.0.0.0 \
-  -e PAPERCLIP_HOME=/paperclip \
-  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
-  -v "$(pwd)/data/docker-paperclip:/paperclip" \
-  paperclip-local
+  -v "$(pwd)/data/docker-agentdash:/paperclip" \
+  agentdash-local
 ```
 
 Open: `http://localhost:3100`
@@ -46,11 +68,11 @@ Data persistence:
 - local secrets key
 - local agent workspace data
 
-All persisted under your bind mount (`./data/docker-paperclip` in the example above).
+All persisted under your bind mount (`./data/docker-agentdash` in the example above).
 
 ## Docker Compose
 
-### Quickstart (embedded SQLite)
+### Quickstart (embedded PostgreSQL)
 
 Single container, no external database. Data persists via a bind mount.
 

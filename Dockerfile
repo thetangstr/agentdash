@@ -42,16 +42,22 @@ FROM base AS build
 WORKDIR /app
 COPY --from=deps /app /app
 COPY . .
-RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
+RUN bash scripts/prepare-server-ui-dist.sh
+RUN rm -rf server/skills && cp -R skills server/skills
+RUN pnpm --filter @paperclipai/server deploy --prod /app-deploy/server
+RUN node scripts/apply-publish-config-manifest.mjs /app-deploy/server
+RUN test -f /app-deploy/server/dist/index.js || (echo "ERROR: deployed server entrypoint missing" && exit 1)
+RUN test -f /app-deploy/server/ui-dist/index.html || (echo "ERROR: deployed UI dist missing" && exit 1)
+RUN test ! -e /app-deploy/server/src || (echo "ERROR: source files leaked into deploy artifact" && exit 1)
 
 FROM base AS production
 ARG USER_UID=1000
 ARG USER_GID=1000
 WORKDIR /app
-COPY --chown=node:node --from=build /app /app
+COPY --chown=node:node --from=build /app-deploy/server /app
 RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq \
@@ -69,6 +75,8 @@ ENV NODE_ENV=production \
   SERVE_UI=true \
   PAPERCLIP_HOME=/paperclip \
   PAPERCLIP_INSTANCE_ID=default \
+  PAPERCLIP_PUBLIC_URL=http://localhost:3100 \
+  PAPERCLIP_MIGRATION_AUTO_APPLY=true \
   USER_UID=${USER_UID} \
   USER_GID=${USER_GID} \
   PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
@@ -80,4 +88,4 @@ VOLUME ["/paperclip"]
 EXPOSE 3100
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
+CMD ["node", "dist/index.js"]
