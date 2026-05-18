@@ -10,6 +10,8 @@ This document covers the GitHub and npm setup required for the current AgentDash
 Repo-side files that depend on this setup:
 
 - `.github/workflows/release.yml`
+- `.github/workflows/production-readiness.yml`
+- `.github/workflows/target-machine-test.yml`
 - `.github/CODEOWNERS`
 
 Note:
@@ -25,6 +27,8 @@ Before touching GitHub or npm settings, merge the release automation code so the
 Required files:
 
 - `.github/workflows/release.yml`
+- `.github/workflows/production-readiness.yml`
+- `.github/workflows/target-machine-test.yml`
 - `.github/CODEOWNERS`
 
 ## 2. Configure npm Trusted Publishing
@@ -120,7 +124,65 @@ Reasoning:
 - every push to `main` should be able to publish a canary automatically
 - no human approval should be required for canaries
 
-## 6. Configure `npm-stable`
+## 6. Configure Production Readiness Audit Access
+
+The `Production Readiness` workflow runs
+`scripts/ci/audit-production-readiness-config.mjs` and intentionally fails until
+the target-machine and release-environment gates are configured.
+
+Run it locally at any time:
+
+```sh
+node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash
+```
+
+Success means:
+
+- `AGENTDASH_TARGET_RUNNER_LABELS` is set to a non-GitHub-hosted runner label
+  array
+- at least one matching self-hosted runner is online and idle
+- GitHub environments `npm-canary` and `npm-stable` exist
+
+Failure is expected before the target machine exists. Do not mark the app
+production ready while this audit fails, unless the release owner has explicitly
+accepted GitHub-hosted target validation for that run.
+
+### 6.1. Register a target-machine runner
+
+In GitHub:
+
+1. open `Settings` -> `Actions` -> `Runners`
+2. choose `New self-hosted runner`
+3. install it on the target machine that should validate real installs
+4. add a stable custom label such as `agentdash-target`
+
+Then set the repository variable:
+
+```sh
+gh variable set AGENTDASH_TARGET_RUNNER_LABELS \
+  --repo thetangstr/agentdash \
+  --body '["self-hosted","agentdash-target"]'
+```
+
+The target workflow will use those labels for scheduled runs and PR runs with
+the `target-test` label. Without this variable, target-machine tests fall back
+to `["ubuntu-latest"]`, which is useful parity coverage but not target-machine
+launch evidence.
+
+### 6.2. Optional audit token
+
+The production-readiness workflow uses `GITHUB_TOKEN` by default. If that token
+cannot read repository self-hosted runner inventory, create a repository secret
+named `PRODUCTION_READINESS_AUDIT_TOKEN` containing a narrowly scoped token that
+can read the repository's Actions runner inventory.
+
+Only add this secret if the audit reports:
+
+```text
+Could not inspect self-hosted target runner inventory.
+```
+
+## 7. Configure `npm-stable`
 
 Recommended settings for `npm-stable`:
 
@@ -138,7 +200,7 @@ Reasoning:
 - stable publishes should require an explicit human approval gate
 - the workflow is manual, but the environment should still be the real control point
 
-## 7. Protect `main`
+## 8. Protect `main`
 
 Open the branch protection settings for `main`.
 
@@ -152,7 +214,21 @@ Recommended rules:
 
 At minimum, make sure workflow and release script changes cannot land without review.
 
-## 8. Enforce CODEOWNERS Review
+Add these required status checks once the workflows have run at least once on
+the default branch:
+
+- `Production Readiness / config-audit`
+- `PR / policy`
+- `PR / verify`
+- `PR / e2e`
+- `Docker / build-and-push`
+
+If target-machine coverage is mandatory for every merge, also require:
+
+- `PR / target-test`
+- `PR / target-test-comment`
+
+## 9. Enforce CODEOWNERS Review
 
 This repo now includes `.github/CODEOWNERS`, but GitHub only enforces it if branch protection requires code owner reviews.
 
@@ -168,14 +244,17 @@ Current file:
 
 If `@cryppadotta` is not the right reviewer identity in the public repo, change it before enabling enforcement.
 
-## 9. Protect Release Infrastructure Specifically
+## 10. Protect Release Infrastructure Specifically
 
 These files should always trigger code owner review:
 
 - `.github/workflows/release.yml`
+- `.github/workflows/production-readiness.yml`
+- `.github/workflows/target-machine-test.yml`
 - `scripts/release.sh`
 - `scripts/release-lib.sh`
 - `scripts/release-package-map.mjs`
+- `scripts/ci/audit-production-readiness-config.mjs`
 - `scripts/create-github-release.sh`
 - `scripts/rollback-latest.sh`
 - `doc/RELEASING.md`
@@ -186,7 +265,7 @@ If you want stronger controls, add a repository ruleset that explicitly blocks d
 - `.github/workflows/**`
 - `scripts/release*`
 
-## 10. Do Not Store a Claude Token in GitHub Actions
+## 11. Do Not Store a Claude Token in GitHub Actions
 
 Do not add a personal Claude or Anthropic token for automatic changelog generation.
 
@@ -197,7 +276,7 @@ Recommended policy:
 
 This keeps LLM spending intentional and avoids a high-value token sitting in Actions.
 
-## 11. Verify the Canary Workflow
+## 12. Verify the Canary Workflow
 
 After setup:
 
@@ -215,7 +294,7 @@ Install-path check:
 npx agentdash@canary onboard
 ```
 
-## 12. Verify the Stable Workflow
+## 13. Verify the Stable Workflow
 
 After at least one good canary exists:
 
@@ -240,7 +319,7 @@ Implementation note:
 - the GitHub Actions stable workflow calls `create-github-release.sh` with `PUBLISH_REMOTE=origin`
 - local maintainer usage can still pass `PUBLISH_REMOTE=public-gh` explicitly when needed
 
-## 13. Suggested Maintainer Policy
+## 14. Suggested Maintainer Policy
 
 Use this policy going forward:
 
@@ -250,7 +329,7 @@ Use this policy going forward:
 - release notes are committed before stable publish
 - rollback uses `npm dist-tag`, not unpublish
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### Trusted publishing fails with an auth error
 

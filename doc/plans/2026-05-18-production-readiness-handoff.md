@@ -121,6 +121,11 @@ Observed narrow results from the latest continuation:
   `GITHUB_TOKEN`; if runner inventory cannot be read, the audit reports that as
   a structured failed requirement instead of crashing. `pr.yml` also runs the
   audit helper unit test in the normal verify job.
+- `doc/RELEASE-AUTOMATION-SETUP.md` now includes the operator runbook for the
+  production-readiness audit gate: target-machine runner registration,
+  `AGENTDASH_TARGET_RUNNER_LABELS`, optional
+  `PRODUCTION_READINESS_AUDIT_TOKEN`, required branch checks, and release
+  infrastructure protection.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
