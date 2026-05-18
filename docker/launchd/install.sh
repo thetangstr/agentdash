@@ -24,7 +24,11 @@ SHARE_DIR="/usr/local/share/agentdash"
 PLIST_SRC="${SCRIPT_DIR}/ai.agentdash.agent.plist"
 PLIST_DST="${HOME}/Library/LaunchAgents/ai.agentdash.agent.plist"
 ENV_FILE="${CONFIG_DIR}/agentdash.env"
+LAUNCH_WRAPPER="${AGENTDASH_HOME}/agentdash-launchd.sh"
 LABEL="ai.agentdash.agent"
+LEGACY_PLIST_DST="${HOME}/Library/LaunchAgents/com.paperclip.server.plist"
+LEGACY_WRAPPER="${HOME}/.paperclip/paperclip-launchd.sh"
+LEGACY_LABEL="com.paperclip.server"
 
 # -------------------------------------------------------------------
 # Helpers
@@ -37,6 +41,108 @@ error() { echo "[ERROR] $*" >&2; exit 1; }
 need() {
     if ! command -v "$1" &>/dev/null; then
         error "Required: $1 (not found in PATH)"
+    fi
+}
+
+generate_secret() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -base64 32
+        return
+    fi
+
+    node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64") + "\n")'
+}
+
+launchd_label_loaded() {
+    launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "$1"
+}
+
+replace_or_append_env_var() {
+    local key="$1"
+    local value="$2"
+    local current=""
+
+    if [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE"; then
+        current="$(grep "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+        if [[ -n "$current" ]]; then
+            return
+        fi
+
+        local tmp_file
+        tmp_file="$(mktemp)"
+        awk -v key="$key" -v value="$value" '
+            BEGIN { replaced = 0 }
+            $0 ~ "^" key "=" && replaced == 0 {
+                print key "=" value
+                replaced = 1
+                next
+            }
+            { print }
+        ' "$ENV_FILE" > "$tmp_file"
+        mv "$tmp_file" "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        info "Filled missing ${key} in ${ENV_FILE}"
+        return
+    fi
+
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    info "Added missing ${key} to ${ENV_FILE}"
+}
+
+disable_broken_legacy_service() {
+    if [[ ! -f "$LEGACY_PLIST_DST" ]]; then
+        return
+    fi
+
+    if ! grep -Fq "$LEGACY_WRAPPER" "$LEGACY_PLIST_DST"; then
+        warn "Legacy launchd plist exists at ${LEGACY_PLIST_DST}; leaving it in place because it does not reference the known stale wrapper path."
+        return
+    fi
+
+    if [[ -x "$LEGACY_WRAPPER" ]]; then
+        warn "Legacy Paperclip launchd plist exists and its wrapper is executable; leaving it in place."
+        return
+    fi
+
+    warn "Disabling broken legacy Paperclip launchd plist that points to missing ${LEGACY_WRAPPER}."
+    if launchd_label_loaded "$LEGACY_LABEL"; then
+        launchctl unload "$LEGACY_PLIST_DST" 2>/dev/null || true
+    fi
+    mv "$LEGACY_PLIST_DST" "${LEGACY_PLIST_DST}.disabled-$(date +%Y%m%d%H%M%S)"
+}
+
+write_launch_wrapper() {
+    local node_bin
+    node_bin="$(command -v node)"
+
+    cat > "$LAUNCH_WRAPPER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+export HOME="${HOME}"
+export PAPERCLIP_HOME="${AGENTDASH_HOME}"
+export PATH="$(dirname "$node_bin"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "AgentDash launchd env file missing: ${ENV_FILE}" >&2
+  exit 1
+fi
+
+set -a
+. "${ENV_FILE}"
+set +a
+
+mkdir -p "${LOG_DIR}"
+exec "${node_bin}" "${SHARE_DIR}/server/dist/index.js"
+EOF
+
+    chmod 700 "$LAUNCH_WRAPPER"
+}
+
+validate_launch_wrapper() {
+    if [[ ! -x "$LAUNCH_WRAPPER" ]]; then
+        error "Launch wrapper missing or not executable: ${LAUNCH_WRAPPER}"
     fi
 }
 
@@ -63,7 +169,7 @@ done
 uninstall_service() {
     info "Stopping and removing AgentDash launchd service..."
 
-    if launchctl list | grep -q "^${LABEL}"; then
+    if launchd_label_loaded "$LABEL"; then
         launchctl unload "$PLIST_DST" 2>/dev/null || true
         info "Service unloaded."
     else
@@ -143,8 +249,8 @@ info "Building AgentDash..."
 cd "$SCRIPT_DIR/../.."
 
 # Build server + CLI packages
-pnpm build --filter agentdash-server || error "Server build failed"
-pnpm build --filter agentdash-cli    || error "CLI build failed"
+pnpm --filter @paperclipai/server build || error "Server build failed"
+pnpm --filter agentdash build           || error "CLI build failed"
 
 if [[ ! -d "server/dist" ]]; then
     error "Build failed: server/dist not found."
@@ -219,7 +325,9 @@ info "Installed to $SHARE_DIR"
 if [[ ! -f "$ENV_FILE" ]]; then
     info "Creating $ENV_FILE..."
     mkdir -p "$CONFIG_DIR"
-    cat > "$ENV_FILE" << 'ENVVARS'
+    better_auth_secret="$(generate_secret)"
+    agent_jwt_secret="$(generate_secret)"
+    cat > "$ENV_FILE" << ENVVARS
 # AgentDash environment — loaded by the launchd service
 # Edit this file to configure your deployment.
 
@@ -234,23 +342,26 @@ SERVE_UI=true
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 PAPERCLIP_DEPLOYMENT_EXPOSURE=private
 
-# Auth — REQUIRED: generate with: openssl rand -base64 32
-BETTER_AUTH_SECRET=
+# Auth
+BETTER_AUTH_SECRET=${better_auth_secret}
+PAPERCLIP_AGENT_JWT_SECRET=${agent_jwt_secret}
 
-# Tailscale bind — set to your Mac Mini's Tailscale IP
-PAPERCLIP_TAILNET_BIND_HOST=100.83.171.56
+# Optional private-network bind override. Leave commented unless this
+# machine needs to bind to a specific Tailscale/private address.
+# PAPERCLIP_TAILNET_BIND_HOST=
 
 # Auto-apply DB migrations on startup
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
-# Optional: generate secrets with: openssl rand -base64 32
-# PAPERCLIP_AGENT_JWT_SECRET=
 ENVVARS
     chmod 600 "$ENV_FILE"
-    info "$ENV_FILE created — set BETTER_AUTH_SECRET before starting."
+    info "$ENV_FILE created with generated local auth secrets."
 else
     info "Using existing $ENV_FILE"
 fi
+
+replace_or_append_env_var "BETTER_AUTH_SECRET" "$(generate_secret)"
+replace_or_append_env_var "PAPERCLIP_AGENT_JWT_SECRET" "$(generate_secret)"
 
 # -------------------------------------------------------------------
 # Install launchd plist
@@ -258,8 +369,12 @@ fi
 
 info "Installing launchd service..."
 
-# Generate plist from template, substituting HOME
-sed "s|%%HOME%%|${HOME}|g; s|%%SHARE_DIR%%|${SHARE_DIR}|g; s|%%ENV_FILE%%|${ENV_FILE}|g; s|%%LOG_DIR%%|${LOG_DIR}|g" \
+disable_broken_legacy_service
+write_launch_wrapper
+validate_launch_wrapper
+
+# Generate plist from template, substituting local paths.
+sed "s|%%HOME%%|${HOME}|g; s|%%SHARE_DIR%%|${SHARE_DIR}|g; s|%%ENV_FILE%%|${ENV_FILE}|g; s|%%LOG_DIR%%|${LOG_DIR}|g; s|%%LAUNCH_WRAPPER%%|${LAUNCH_WRAPPER}|g" \
     "$PLIST_SRC" > "$PLIST_DST"
 chmod 644 "$PLIST_DST"
 
@@ -276,15 +391,13 @@ launchctl load "$PLIST_DST"
 # Wait a moment and verify
 sleep 2
 
-if launchctl list | grep -q "^${LABEL}"; then
+if launchd_label_loaded "$LABEL"; then
     info ""
     info "AgentDash is installed and running."
     info "  Logs:    tail -f ${LOG_DIR}/agentdash.log"
     info "  Stop:    launchctl unload ${PLIST_DST}"
     info "  Restart: launchctl kickstart -k gui/\$(id -u)/${LABEL}"
     info "  Uninstall: ${SCRIPT_DIR}/install.sh --uninstall"
-    info ""
-    info "IMPORTANT: Edit ${ENV_FILE} and set BETTER_AUTH_SECRET, then restart the service."
 else
     error "Service failed to load. Check: tail -50 ${LOG_DIR}/agentdash.err"
 fi

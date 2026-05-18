@@ -7,18 +7,7 @@
 
 	<key>ProgramArguments</key>
 	<array>
-		<string>/bin/sh</string>
-		<string>-c</string>
-		<string>
-			# Load env vars
-			. %%ENV_FILE%%
-
-			# Ensure log directory exists
-			mkdir -p %%LOG_DIR%%
-
-			# Start the server
-			exec node %%SHARE_DIR%%/server/dist/index.js
-		</string>
+		<string>%%LAUNCH_WRAPPER%%</string>
 	</array>
 
 	<key>RunAtLoad</key>

@@ -19,8 +19,13 @@ const workspacePaths = [
   "packages/db",
   "packages/shared",
   "packages/adapter-utils",
+  "packages/adapters/acpx-local",
   "packages/adapters/claude-local",
   "packages/adapters/codex-local",
+  "packages/adapters/cursor-local",
+  "packages/adapters/gemini-local",
+  "packages/adapters/opencode-local",
+  "packages/adapters/pi-local",
   "packages/adapters/openclaw-gateway",
 ];
 

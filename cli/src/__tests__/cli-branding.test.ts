@@ -49,6 +49,69 @@ describe("AgentDash CLI command surface", () => {
     expect(packageJson.bin?.agentdash).toBe("./dist/index.js");
     expect(packageJson.bin?.paperclipai).toBe("./dist/index.js");
   });
+
+  it("keeps CLI publish bundling aligned with built-in adapter formatters", () => {
+    const registrySource = fs.readFileSync(path.join(repoRoot, "cli/src/adapters/registry.ts"), "utf8");
+    const importedAdapterDirs = Array.from(
+      registrySource.matchAll(/@paperclipai\/adapter-([^/"]+)\/cli/g),
+      (match) => `packages/adapters/${match[1]}`,
+    ).sort();
+
+    expect(importedAdapterDirs).toEqual([
+      "packages/adapters/acpx-local",
+      "packages/adapters/claude-local",
+      "packages/adapters/codex-local",
+      "packages/adapters/cursor-local",
+      "packages/adapters/gemini-local",
+      "packages/adapters/openclaw-gateway",
+      "packages/adapters/opencode-local",
+      "packages/adapters/pi-local",
+    ]);
+
+    const esbuildConfig = fs.readFileSync(path.join(repoRoot, "cli/esbuild.config.mjs"), "utf8");
+    const packageGenerator = fs.readFileSync(
+      path.join(repoRoot, "scripts/generate-npm-package-json.mjs"),
+      "utf8",
+    );
+
+    for (const adapterDir of importedAdapterDirs) {
+      expect(esbuildConfig).toContain(`"${adapterDir}"`);
+      expect(packageGenerator).toContain(`"${adapterDir}"`);
+    }
+  });
+
+  it("points public package metadata at the AgentDash repository", () => {
+    const packageRows = execFileSync(process.execPath, ["scripts/release-package-map.mjs", "list"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim().split("\n");
+
+    for (const row of packageRows) {
+      const [packageDir] = row.split("\t");
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, packageDir, "package.json"), "utf8"),
+      ) as {
+        name?: string;
+        homepage?: string;
+        bugs?: { url?: string };
+        repository?: string | { url?: string };
+      };
+
+      const repositoryUrl = typeof packageJson.repository === "string"
+        ? packageJson.repository
+        : packageJson.repository?.url;
+
+      expect.soft(packageJson.homepage, `${packageJson.name} homepage`).toBe(
+        "https://github.com/thetangstr/agentdash",
+      );
+      expect.soft(packageJson.bugs?.url, `${packageJson.name} bugs`).toBe(
+        "https://github.com/thetangstr/agentdash/issues",
+      );
+      expect.soft(repositoryUrl, `${packageJson.name} repository`).toContain(
+        "https://github.com/thetangstr/agentdash",
+      );
+    }
+  });
 });
 
 describe("create-agentdash bootstrapper", () => {
