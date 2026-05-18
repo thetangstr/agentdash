@@ -1,7 +1,126 @@
+diff --git a/dist/server/execute.js b/dist/server/execute.js
+index e96d5c9c0d175a06c668406ba57ac8f5ba750901..ffd90b49c2b5940223ac4dc07a2ec1ac8e132bfe 100644
+--- a/dist/server/execute.js
++++ b/dist/server/execute.js
+@@ -18,7 +18,7 @@
+  *   --source           session source tag for filtering
+  */
+ import { runChildProcess, buildPaperclipEnv, renderTemplate, ensureAbsoluteDirectory, } from "@paperclipai/adapter-utils/server-utils";
+-import { HERMES_CLI, DEFAULT_TIMEOUT_SEC, DEFAULT_GRACE_SEC, DEFAULT_MODEL, } from "../shared/constants.js";
++import { HERMES_CLI, DEFAULT_TIMEOUT_SEC, DEFAULT_GRACE_SEC, } from "../shared/constants.js";
+ import { detectModel, resolveProvider, } from "./detect-model.js";
+ // ---------------------------------------------------------------------------
+ // Config helpers
+@@ -247,7 +247,7 @@ export async function execute(ctx) {
+     const config = (ctx.agent?.adapterConfig ?? {});
+     // ── Resolve configuration ──────────────────────────────────────────────
+     const hermesCmd = cfgString(config.hermesCommand) || HERMES_CLI;
+-    const model = cfgString(config.model) || DEFAULT_MODEL;
++    const model = cfgString(config.model);
+     const timeoutSec = cfgNumber(config.timeoutSec) || DEFAULT_TIMEOUT_SEC;
+     const graceSec = cfgNumber(config.graceSec) || DEFAULT_GRACE_SEC;
+     const maxTurns = cfgNumber(config.maxTurnsPerRun);
+@@ -350,7 +350,8 @@ export async function execute(ctx) {
+         // Non-fatal
+     }
+     // ── Log start ──────────────────────────────────────────────────────────
+-    await ctx.onLog("stdout", `[hermes] Starting Hermes Agent (model=${model}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""})\n`);
++    const modelLabel = model || detectedConfig?.model || "Hermes configured default";
++    await ctx.onLog("stdout", `[hermes] Starting Hermes Agent (model=${modelLabel}, provider=${resolvedProvider} [${resolvedFrom}], timeout=${timeoutSec}s${maxTurns ? `, max_turns=${maxTurns}` : ""})\n`);
+     if (prevSessionId) {
+         await ctx.onLog("stdout", `[hermes] Resuming session: ${prevSessionId}\n`);
+     }
+@@ -396,7 +397,7 @@ export async function execute(ctx) {
+         signal: result.signal,
+         timedOut: result.timedOut,
+         provider: resolvedProvider,
+-        model,
++        model: modelLabel,
+     };
+     if (parsed.errorMessage) {
+         executionResult.errorMessage = parsed.errorMessage;
+diff --git a/dist/server/test.js b/dist/server/test.js
+index d440427d7df7703dfd469675a2cadfca413e2df1..09929514ff65a55ab5588314092f8a185a02e2b6 100644
+--- a/dist/server/test.js
++++ b/dist/server/test.js
+@@ -12,6 +12,18 @@ const execFileAsync = promisify(execFile);
+ function asString(v) {
+     return typeof v === "string" ? v : undefined;
+ }
++function parsePythonVersion(value) {
++    const match = value.match(/\bPython(?::\s*|\s+)(\d+)\.(\d+)/i);
++    if (!match)
++        return null;
++    return {
++        major: parseInt(match[1], 10),
++        minor: parseInt(match[2], 10),
++    };
++}
++function pythonTooOld(version) {
++    return version.major < 3 || (version.major === 3 && version.minor < 10);
++}
+ // ---------------------------------------------------------------------------
+ // Checks
+ // ---------------------------------------------------------------------------
+@@ -64,17 +76,27 @@ async function checkCliVersion(command) {
+         };
+     }
+ }
+-async function checkPython() {
++async function checkPython(hermesVersionMessage) {
++    const hermesPython = hermesVersionMessage ? parsePythonVersion(hermesVersionMessage) : null;
++    if (hermesPython) {
++        if (pythonTooOld(hermesPython)) {
++            return {
++                level: "error",
++                message: `Hermes reports Python ${hermesPython.major}.${hermesPython.minor} — Hermes requires Python 3.10+`,
++                hint: "Upgrade the Python used by the hermes CLI to 3.10 or later",
++                code: "hermes_python_old",
++            };
++        }
++        return null;
++    }
+     try {
+         const { stdout } = await execFileAsync("python3", ["--version"], {
+             timeout: 5_000,
+         });
+         const version = stdout.trim();
+-        const match = version.match(/(\d+)\.(\d+)/);
+-        if (match) {
+-            const major = parseInt(match[1], 10);
+-            const minor = parseInt(match[2], 10);
+-            if (major < 3 || (major === 3 && minor < 10)) {
++        const parsed = parsePythonVersion(version);
++        if (parsed) {
++            if (pythonTooOld(parsed)) {
+                 return {
+                     level: "error",
+                     message: `Python ${version} found — Hermes requires Python 3.10+`,
+@@ -130,8 +152,8 @@ function checkApiKeys(config) {
+     if (!hasAnthropic && !hasOpenRouter && !hasOpenAI && !hasZai && !hasKimi && !hasMiniMax) {
+         return {
+             level: "warn",
+-            message: "No LLM API keys found in environment",
+-            hint: "Set API keys in the agent's env secrets or ~/.hermes/.env. Hermes supports: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, ZAI_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY",
++            message: "No LLM API keys found in AgentDash environment",
++            hint: "Hermes may still use credentials from ~/.hermes/.env or its local provider config. Add AgentDash env secrets only if you want AgentDash to supply them.",
+             code: "hermes_no_api_keys",
+         };
+     }
+@@ -231,7 +253,7 @@ export async function testEnvironment(ctx) {
+     if (versionCheck)
+         checks.push(versionCheck);
+     // 3. Python available?
+-    const pythonCheck = await checkPython();
++    const pythonCheck = await checkPython(versionCheck?.message);
+     if (pythonCheck)
+         checks.push(pythonCheck);
+     // 4. Model config
 diff --git a/dist/shared/constants.js b/dist/shared/constants.js
+index c8be1d158bee16f0f383d8300ae806f2d5d00e53..4f4deaecc670044e852fe4f60bef84ad348b7c3d 100644
 --- a/dist/shared/constants.js
 +++ b/dist/shared/constants.js
-@@ -12,7 +12,7 @@
+@@ -12,7 +12,7 @@ export const DEFAULT_TIMEOUT_SEC = 1800;
  /** Grace period after SIGTERM before SIGKILL (seconds). */
  export const DEFAULT_GRACE_SEC = 10;
  /** Default model to use if none specified. */
@@ -10,7 +129,7 @@ diff --git a/dist/shared/constants.js b/dist/shared/constants.js
  /**
   * Valid --provider choices for the hermes CLI.
   * Must stay in sync with `hermes chat --help`.
-@@ -59,6 +59,7 @@
+@@ -59,6 +59,7 @@ export const MODEL_PREFIX_PROVIDER_HINTS = [
      ["moonshot", "kimi-coding"],
      ["kimi", "kimi-coding"],
      // MiniMax
