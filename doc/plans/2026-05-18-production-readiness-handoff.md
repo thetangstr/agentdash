@@ -31,8 +31,9 @@ and no self-hosted target runners. It cannot verify target-machine runner
 coverage or a deployed launch-smoke URL until those external launch settings are
 provided. The audit also requires deployed smoke to prove Stripe Checkout
 session creation and a real CoS/LLM reply through durable repository variables,
-not just one-off workflow inputs. GitHub issue #350 tracks those remaining
-external gates.
+not just one-off workflow inputs, and it requires `npm-stable` environment
+reviewer protection before stable publishing can be considered launch-ready.
+GitHub issue #350 tracks those remaining external gates.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
@@ -145,6 +146,10 @@ Observed narrow results from the latest continuation:
   `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true` as automated config requirements,
   so a future green production-readiness audit cannot skip Stripe Checkout
   session creation or real CoS/LLM reply coverage.
+- The audit now treats missing `npm-stable` required-reviewer protection as a
+  failed automated config requirement. The live repository currently has
+  `npm-canary` and `npm-stable` environments, but both report
+  `protection_rules: []`.
 - `.github/workflows/production-readiness.yml` now runs the audit on PR changes
   to the audit helper, on `main` pushes, on a daily schedule, and on manual
   dispatch. It uses repository `vars` for the target runner labels and deployed
@@ -236,22 +241,25 @@ These steps are required before calling the app production ready:
    proves Stripe Checkout session creation and real CoS replies, not only the
    authenticated shell. These two flags are enforced by the
    production-readiness config audit.
-5. Merge the PR to `main`.
-6. Let the canary workflow publish from `main` and pass release smoke against
+5. Configure the GitHub `npm-stable` environment with required reviewers so the
+   stable publish job requires human approval. The current environment exists
+   but has no protection rules.
+6. Merge the PR to `main`.
+7. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.
-7. Confirm npm trusted publishing for every public package, then run the stable
+8. Confirm npm trusted publishing for every public package, then run the stable
    release workflow for `2026-05-22` with `dry_run=true`, then with
    `dry_run=false` after approval. The GitHub release environments
    `npm-canary` and `npm-stable` exist. Absence of repository Actions secrets is
    expected for this workflow because npm publish uses GitHub Actions trusted
    publishing and Docker/GitHub release publishing uses `GITHUB_TOKEN`; the npm
    trusted-publishing configuration itself must still be confirmed in npm.
-8. Confirm published package and image surfaces:
+9. Confirm published package and image surfaces:
    - `npm view agentdash@latest version`
    - `npx agentdash@latest setup --help`
    - `docker run ghcr.io/thetangstr/agentdash:latest`
    - `gh workflow run release-smoke.yml -f paperclip_version=latest`
-9. Deploy the cloud container with the production env vars from `doc/LAUNCH.md`:
+10. Deploy the cloud container with the production env vars from `doc/LAUNCH.md`:
    - `PAPERCLIP_DEPLOYMENT_MODE=authenticated`
    - `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`
    - `PAPERCLIP_AUTH_PUBLIC_BASE_URL`
@@ -262,7 +270,7 @@ These steps are required before calling the app production ready:
    - LLM dispatch vars
    - Resend vars
    - Agent Research vars, if launch scope includes assessments
-10. Run the launch smoke from `doc/LAUNCH.md` against the deployed URL. The
+11. Run the launch smoke from `doc/LAUNCH.md` against the deployed URL. The
     automated suite covers sign-up, CoS welcome/composer, billing status, and
     optional Stripe Checkout session creation/LLM reply. Stripe webhook and
     plan-tier transition still need an explicit Stripe test/live checkout run.

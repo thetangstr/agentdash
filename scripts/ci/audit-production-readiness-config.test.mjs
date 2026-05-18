@@ -13,7 +13,7 @@ test("fails when target runner config is absent", () => {
     runners: [],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -45,7 +45,7 @@ test("fails when target runner labels point at GitHub-hosted runners", () => {
     runners: [],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -121,7 +121,7 @@ test("fails structurally when runner inventory cannot be inspected", () => {
     runnerInventoryError: "Resource not accessible by integration",
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -172,7 +172,7 @@ test("fails when launch smoke URL is missing or local", () => {
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
   assert.equal(
@@ -197,7 +197,7 @@ test("fails when launch smoke URL is missing or local", () => {
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
   assert.match(
@@ -222,7 +222,7 @@ test("requires production launch smoke to prove billing and real LLM paths", () 
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -253,7 +253,7 @@ test("requires production launch smoke to prove billing and real LLM paths", () 
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -276,7 +276,7 @@ test("reports repository variable permission failures as structured audit failur
     runners: [],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -324,7 +324,7 @@ test("uses Actions vars context when repository variable inventory is unreadable
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 
@@ -373,6 +373,39 @@ test("reports release environment permission failures as structured audit failur
   assert.equal(result.observations.environmentInventoryError?.includes("HTTP 403"), true);
 });
 
+test("fails when the stable release environment has no required reviewers", () => {
+  const result = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [] },
+    ],
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.equal(
+    result.requirements.find((item) => item.id === "stable-release-environment-protected").status,
+    "fail",
+  );
+  assert.match(
+    result.requirements.find((item) => item.id === "stable-release-environment-protected").message,
+    /does not require reviewer approval/,
+  );
+});
+
 test("renders an actionable GitHub job summary for missing external gates", () => {
   const result = auditProductionReadinessConfig({
     repository: "thetangstr/agentdash",
@@ -394,6 +427,8 @@ test("renders an actionable GitHub job summary for missing external gates", () =
   assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM --repo thetangstr\/agentdash/);
   assert.match(summary, /launch_smoke_base_url/);
   assert.match(summary, /target-runner-variable/);
+  assert.match(summary, /stable-release-environment-protected/);
+  assert.match(summary, /npm-stable/);
   assert.match(summary, /launch-smoke-billing-required/);
   assert.match(summary, /launch-smoke-llm-required/);
 });
@@ -418,7 +453,7 @@ test("renders success guidance when automated config gates pass", () => {
     ],
     environments: [
       { name: "npm-canary", protection_rules: [] },
-      { name: "npm-stable", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
     ],
   });
 

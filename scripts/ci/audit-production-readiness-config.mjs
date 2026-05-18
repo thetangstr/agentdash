@@ -120,6 +120,10 @@ function requirement(id, status, message, evidence = {}) {
   return { id, status, message, evidence };
 }
 
+function hasRequiredReviewerProtection(environment) {
+  return (environment?.protection_rules || []).some((rule) => rule?.type === "required_reviewers");
+}
+
 function requireTrueVariable({ requirements, variables, variableInventoryError, variableContextProvided, name, id, failureMessage }) {
   if (variableInventoryError && !variableContextProvided) {
     requirements.push(
@@ -304,6 +308,31 @@ export function auditProductionReadinessConfig(input, options = {}) {
         );
       }
     }
+
+    const stableEnvironment = environments.find((item) => item.name === "npm-stable");
+    if (stableEnvironment) {
+      if (hasRequiredReviewerProtection(stableEnvironment)) {
+        requirements.push(
+          requirement("stable-release-environment-protected", "pass", "Stable npm release environment requires reviewer approval.", {
+            environment: "npm-stable",
+            protectionRuleTypes: (stableEnvironment.protection_rules || []).map((rule) => rule.type),
+          }),
+        );
+      } else {
+        requirements.push(
+          requirement(
+            "stable-release-environment-protected",
+            "fail",
+            "Release environment npm-stable exists but does not require reviewer approval for stable publishes.",
+            {
+              environment: "npm-stable",
+              protectionRuleCount: stableEnvironment.protection_rules?.length || 0,
+              protectionRuleTypes: (stableEnvironment.protection_rules || []).map((rule) => rule.type),
+            },
+          ),
+        );
+      }
+    }
   }
 
   const launchSmokeVariable = variables.find((variable) => variable.name === launchSmokeUrlVariable);
@@ -465,6 +494,11 @@ function buildNextActions(result) {
   }
   if (failedIds.has("release-environment")) {
     actions.push("Create or repair the `npm-canary` and `npm-stable` GitHub release environments.");
+  }
+  if (failedIds.has("stable-release-environment-protected")) {
+    actions.push(
+      "Configure `npm-stable` in GitHub Settings -> Environments with required reviewers before stable publishes.",
+    );
   }
   if (
     result.observations?.runnerInventoryError ||

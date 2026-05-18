@@ -149,6 +149,8 @@ Success means:
   array
 - at least one matching self-hosted runner is online and idle
 - GitHub environments `npm-canary` and `npm-stable` exist
+- `npm-stable` has required-reviewer environment protection, so stable
+  publishing waits for human approval
 - `AGENTDASH_LAUNCH_SMOKE_BASE_URL` points at a deployed HTTPS launch target
 - `AGENTDASH_LAUNCH_SMOKE_BILLING=true`, so launch smoke proves Stripe
   Checkout session creation
@@ -261,6 +263,8 @@ Reasoning:
 
 - stable publishes should require an explicit human approval gate
 - the workflow is manual, but the environment should still be the real control point
+- the production-readiness audit fails until `npm-stable` has a
+  `required_reviewers` protection rule
 
 ## 8. Protect `main`
 
