@@ -24,6 +24,32 @@ on:
         required: false
         type: boolean
         default: false
+      launch_smoke_base_url:
+        description: Optional deployed HTTPS URL override for this manual launch-smoke run
+        required: false
+        type: string
+      launch_smoke_email_template:
+        description: Optional email template override, for example launch-smoke+{run}@example.com
+        required: false
+        type: string
+      launch_smoke_billing:
+        description: Require Stripe Checkout session creation for this manual launch-smoke run
+        required: false
+        type: choice
+        default: from-vars
+        options:
+          - from-vars
+          - "true"
+          - "false"
+      launch_smoke_expect_llm:
+        description: Require a real CoS/LLM reply for this manual launch-smoke run
+        required: false
+        type: choice
+        default: from-vars
+        options:
+          - from-vars
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -104,13 +130,34 @@ jobs:
 
       - name: Run deployed launch smoke
         env:
-          AGENTDASH_LAUNCH_SMOKE_BASE_URL: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BASE_URL }}
-          AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE }}
+          VAR_LAUNCH_SMOKE_BASE_URL: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BASE_URL }}
+          VAR_LAUNCH_SMOKE_EMAIL_TEMPLATE: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE }}
+          VAR_LAUNCH_SMOKE_BILLING: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BILLING || 'false' }}
+          VAR_LAUNCH_SMOKE_EXPECT_LLM: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM || 'false' }}
+          WORKFLOW_INPUT_LAUNCH_SMOKE_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.launch_smoke_base_url || '' }}
+          WORKFLOW_INPUT_LAUNCH_SMOKE_EMAIL_TEMPLATE: ${{ github.event_name == 'workflow_dispatch' && inputs.launch_smoke_email_template || '' }}
+          WORKFLOW_INPUT_LAUNCH_SMOKE_BILLING: ${{ github.event_name == 'workflow_dispatch' && inputs.launch_smoke_billing || 'from-vars' }}
+          WORKFLOW_INPUT_LAUNCH_SMOKE_EXPECT_LLM: ${{ github.event_name == 'workflow_dispatch' && inputs.launch_smoke_expect_llm || 'from-vars' }}
           AGENTDASH_LAUNCH_SMOKE_PASSWORD: ${{ secrets.AGENTDASH_LAUNCH_SMOKE_PASSWORD }}
           AGENTDASH_LAUNCH_SMOKE_REQUIRED: "true"
-          AGENTDASH_LAUNCH_SMOKE_BILLING: ${{ vars.AGENTDASH_LAUNCH_SMOKE_BILLING || 'false' }}
-          AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM: ${{ vars.AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM || 'false' }}
-        run: pnpm run test:launch-smoke
+        run: |
+          base_url="${WORKFLOW_INPUT_LAUNCH_SMOKE_BASE_URL:-$VAR_LAUNCH_SMOKE_BASE_URL}"
+          email_template="${WORKFLOW_INPUT_LAUNCH_SMOKE_EMAIL_TEMPLATE:-$VAR_LAUNCH_SMOKE_EMAIL_TEMPLATE}"
+          billing="$VAR_LAUNCH_SMOKE_BILLING"
+          expect_llm="$VAR_LAUNCH_SMOKE_EXPECT_LLM"
+
+          if [ "$WORKFLOW_INPUT_LAUNCH_SMOKE_BILLING" != "from-vars" ]; then
+            billing="$WORKFLOW_INPUT_LAUNCH_SMOKE_BILLING"
+          fi
+          if [ "$WORKFLOW_INPUT_LAUNCH_SMOKE_EXPECT_LLM" != "from-vars" ]; then
+            expect_llm="$WORKFLOW_INPUT_LAUNCH_SMOKE_EXPECT_LLM"
+          fi
+
+          AGENTDASH_LAUNCH_SMOKE_BASE_URL="$base_url" \
+          AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE="$email_template" \
+          AGENTDASH_LAUNCH_SMOKE_BILLING="${billing:-false}" \
+          AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM="${expect_llm:-false}" \
+          pnpm run test:launch-smoke
 
       - name: Upload launch smoke diagnostics
         if: always()

@@ -154,7 +154,11 @@ Observed narrow results from the latest continuation:
   status, and can require Stripe Checkout session creation and a real LLM reply
   through env flags. `Production Readiness / launch-smoke` runs it on non-PR
   production-readiness workflow events once `AGENTDASH_LAUNCH_SMOKE_BASE_URL`
-  is configured.
+  is configured. Manual `workflow_dispatch` runs can also provide
+  `launch_smoke_base_url`, `launch_smoke_billing`, and
+  `launch_smoke_expect_llm` as one-off overrides for deployed smoke validation;
+  those overrides do not replace the durable repository variables required by
+  the scheduled production gate.
 - `pnpm exec playwright test --config tests/launch-smoke/playwright.config.ts
   --list` lists the deployed launch-smoke test. `pnpm run test:launch-smoke`
   exits 0 with the test skipped when no deployed base URL is configured, which
@@ -252,6 +256,8 @@ These steps are required before calling the app production ready:
     automated suite covers sign-up, CoS welcome/composer, billing status, and
     optional Stripe Checkout session creation/LLM reply. Stripe webhook and
     plan-tier transition still need an explicit Stripe test/live checkout run.
+    For one-off GitHub validation before repository variables are finalized,
+    run `Production Readiness` manually with `launch_smoke_base_url`.
 
 Tracking issue: https://github.com/thetangstr/agentdash/issues/350
 

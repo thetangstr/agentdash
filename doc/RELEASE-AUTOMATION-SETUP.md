@@ -224,6 +224,14 @@ test generates a unique strong password per run.
 The launch smoke intentionally refuses localhost and non-HTTPS URLs unless
 `AGENTDASH_LAUNCH_SMOKE_ALLOW_LOCAL=true` is set for a local-only dry run.
 
+For a one-off deployed smoke before the repository variables are finalized, run
+the `Production Readiness` workflow manually and fill in
+`launch_smoke_base_url`. Optional manual inputs
+`launch_smoke_email_template`, `launch_smoke_billing`, and
+`launch_smoke_expect_llm` override the matching repository variables for that
+single run. This proves the deployed URL for the run, but it does not replace
+the durable repository variables required for the scheduled production gate.
+
 ## 7. Configure `npm-stable`
 
 Recommended settings for `npm-stable`:

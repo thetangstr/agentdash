@@ -155,6 +155,11 @@ or a deliberately configured staging Stripe test run.
 
 For local dry runs only, add `AGENTDASH_LAUNCH_SMOKE_ALLOW_LOCAL=true`.
 
+The GitHub `Production Readiness` workflow can also run the deployed smoke from
+`workflow_dispatch`. Provide `launch_smoke_base_url` for a one-off manual run;
+set `launch_smoke_billing=true` and `launch_smoke_expect_llm=true` when public
+launch readiness requires Stripe Checkout creation and a real CoS reply.
+
 ---
 
 ## 6. Things deliberately out of scope for v2 launch
