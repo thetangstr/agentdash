@@ -7,6 +7,7 @@ const DEFAULT_PROTECTED_BRANCH = "main";
 const DEFAULT_REQUIRED_BRANCH_CHECKS = ["audit", "drift", "check", "policy", "e2e", "verify", "config-audit"];
 const DEFAULT_TARGET_RUNNER_VARIABLE = "AGENTDASH_TARGET_RUNNER_LABELS";
 const DEFAULT_LAUNCH_SMOKE_URL_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BASE_URL";
+const DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE";
 const DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_BILLING";
 const DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE = "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM";
 
@@ -18,6 +19,7 @@ function parseArgs(argv) {
     useActionsVarsContext: false,
     targetRunnerVariable: DEFAULT_TARGET_RUNNER_VARIABLE,
     launchSmokeUrlVariable: DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
+    launchSmokeEmailTemplateVariable: DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE,
     launchSmokeBillingVariable: DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE,
     launchSmokeExpectLlmVariable: DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE,
     protectedBranch: DEFAULT_PROTECTED_BRANCH,
@@ -47,6 +49,7 @@ function parseArgs(argv) {
     else if (key === "protected-branch") args.protectedBranch = value;
     else if (key === "target-runner-variable") args.targetRunnerVariable = value;
     else if (key === "launch-smoke-url-variable") args.launchSmokeUrlVariable = value;
+    else if (key === "launch-smoke-email-template-variable") args.launchSmokeEmailTemplateVariable = value;
     else if (key === "launch-smoke-billing-variable") args.launchSmokeBillingVariable = value;
     else if (key === "launch-smoke-expect-llm-variable") args.launchSmokeExpectLlmVariable = value;
     else throw new Error(`unknown argument: --${key}`);
@@ -113,6 +116,27 @@ function isLocalLaunchSmokeUrl(url) {
     url.hostname === "::1" ||
     url.hostname.endsWith(".localhost")
   );
+}
+
+function validateLaunchSmokeEmailTemplate(value) {
+  const template = String(value || "").trim();
+  if (!template) {
+    return { valid: false, reason: "empty" };
+  }
+  if (!template.includes("{run}")) {
+    return { valid: false, reason: "missing-run-token" };
+  }
+  if (template.toLowerCase() === "agentdash.launch.smoke+{run}@gmail.com") {
+    return { valid: false, reason: "default-template" };
+  }
+  if (/\s/.test(template)) {
+    return { valid: false, reason: "contains-whitespace" };
+  }
+  const atIndex = template.indexOf("@");
+  if (atIndex <= 0 || atIndex !== template.lastIndexOf("@") || atIndex === template.length - 1) {
+    return { valid: false, reason: "not-email-shaped" };
+  }
+  return { valid: true, domain: template.slice(atIndex + 1).toLowerCase() };
 }
 
 function runnerHasLabels(runner, labels) {
@@ -272,6 +296,8 @@ export function auditProductionReadinessConfig(input, options = {}) {
   const requiredBranchChecks = options.requiredBranchChecks || DEFAULT_REQUIRED_BRANCH_CHECKS;
   const targetRunnerVariable = options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE;
   const launchSmokeUrlVariable = options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE;
+  const launchSmokeEmailTemplateVariable =
+    options.launchSmokeEmailTemplateVariable || DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE;
   const launchSmokeBillingVariable = options.launchSmokeBillingVariable || DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE;
   const launchSmokeExpectLlmVariable = options.launchSmokeExpectLlmVariable || DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE;
   const allowGitHubHostedTarget = Boolean(options.allowGitHubHostedTarget);
@@ -508,6 +534,66 @@ export function auditProductionReadinessConfig(input, options = {}) {
     }
   }
 
+  const launchSmokeEmailTemplate = variables.find((variable) => variable.name === launchSmokeEmailTemplateVariable);
+  if (variableInventoryError && !variableContextProvided) {
+    requirements.push(
+      requirement(
+        "launch-smoke-email-template-variable",
+        "fail",
+        `Could not verify repository variable ${launchSmokeEmailTemplateVariable} because repository Actions variables are not readable.`,
+        { variable: launchSmokeEmailTemplateVariable },
+      ),
+    );
+  } else if (!launchSmokeEmailTemplate) {
+    requirements.push(
+      requirement(
+        "launch-smoke-email-template-variable",
+        "fail",
+        `Repository variable ${launchSmokeEmailTemplateVariable} is missing; deployed launch smoke must use a controlled unique email template.`,
+        { variable: launchSmokeEmailTemplateVariable },
+      ),
+    );
+  } else {
+    const validation = validateLaunchSmokeEmailTemplate(launchSmokeEmailTemplate.value);
+    if (!validation.valid && validation.reason === "missing-run-token") {
+      requirements.push(
+        requirement(
+          "launch-smoke-email-template-variable",
+          "fail",
+          `Repository variable ${launchSmokeEmailTemplateVariable} must include {run} so every deployed launch smoke uses a unique account.`,
+          { variable: launchSmokeEmailTemplateVariable, value: launchSmokeEmailTemplate.value },
+        ),
+      );
+    } else if (!validation.valid && validation.reason === "default-template") {
+      requirements.push(
+        requirement(
+          "launch-smoke-email-template-variable",
+          "fail",
+          `Repository variable ${launchSmokeEmailTemplateVariable} must not use the built-in fallback email template.`,
+          { variable: launchSmokeEmailTemplateVariable, value: launchSmokeEmailTemplate.value },
+        ),
+      );
+    } else if (!validation.valid) {
+      requirements.push(
+        requirement(
+          "launch-smoke-email-template-variable",
+          "fail",
+          `Repository variable ${launchSmokeEmailTemplateVariable} must be an email-shaped template without whitespace.`,
+          { variable: launchSmokeEmailTemplateVariable, value: launchSmokeEmailTemplate.value, reason: validation.reason },
+        ),
+      );
+    } else {
+      requirements.push(
+        requirement(
+          "launch-smoke-email-template-variable",
+          "pass",
+          `Repository variable ${launchSmokeEmailTemplateVariable} is configured.`,
+          { variable: launchSmokeEmailTemplateVariable, domain: validation.domain },
+        ),
+      );
+    }
+  }
+
   requireTrueVariable({
     requirements,
     variables,
@@ -555,6 +641,7 @@ export function auditProductionReadinessConfig(input, options = {}) {
       branchProtectionError: branchProtectionError || null,
       branchProtectionRequiredChecks: branchProtection ? getRequiredStatusChecks(branchProtection) : [],
       launchSmokeUrlConfigured: Boolean(launchSmokeVariable),
+      launchSmokeEmailTemplateConfigured: Boolean(launchSmokeEmailTemplate),
       launchSmokeBillingRequired: variables.some(
         (variable) => variable.name === launchSmokeBillingVariable && String(variable.value || "").trim().toLowerCase() === "true",
       ),
@@ -600,6 +687,11 @@ function buildNextActions(result) {
     );
     actions.push(
       "For one-off deployed smoke before variables are finalized, rerun this workflow manually with `launch_smoke_base_url`.",
+    );
+  }
+  if (failedIds.has("launch-smoke-email-template-variable")) {
+    actions.push(
+      `Set \`${DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE}\` to a controlled unique test-address template: \`gh variable set ${DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE} --repo ${repo} --body 'launch-smoke+{run}@your-domain.com'\`.`,
     );
   }
   if (failedIds.has("launch-smoke-billing-required")) {
@@ -711,6 +803,7 @@ function variablesFromActionsContext(options = {}) {
   const variableNames = [
     options.targetRunnerVariable || DEFAULT_TARGET_RUNNER_VARIABLE,
     options.launchSmokeUrlVariable || DEFAULT_LAUNCH_SMOKE_URL_VARIABLE,
+    options.launchSmokeEmailTemplateVariable || DEFAULT_LAUNCH_SMOKE_EMAIL_TEMPLATE_VARIABLE,
     options.launchSmokeBillingVariable || DEFAULT_LAUNCH_SMOKE_BILLING_VARIABLE,
     options.launchSmokeExpectLlmVariable || DEFAULT_LAUNCH_SMOKE_EXPECT_LLM_VARIABLE,
   ];
@@ -772,6 +865,7 @@ async function main() {
   const config = await collectGitHubConfig(args.repo, {
     targetRunnerVariable: args.targetRunnerVariable,
     launchSmokeUrlVariable: args.launchSmokeUrlVariable,
+    launchSmokeEmailTemplateVariable: args.launchSmokeEmailTemplateVariable,
     launchSmokeBillingVariable: args.launchSmokeBillingVariable,
     launchSmokeExpectLlmVariable: args.launchSmokeExpectLlmVariable,
     useActionsVarsContext: args.useActionsVarsContext,
@@ -782,6 +876,7 @@ async function main() {
     protectedBranch: args.protectedBranch,
     targetRunnerVariable: args.targetRunnerVariable,
     launchSmokeUrlVariable: args.launchSmokeUrlVariable,
+    launchSmokeEmailTemplateVariable: args.launchSmokeEmailTemplateVariable,
     launchSmokeBillingVariable: args.launchSmokeBillingVariable,
     launchSmokeExpectLlmVariable: args.launchSmokeExpectLlmVariable,
   });

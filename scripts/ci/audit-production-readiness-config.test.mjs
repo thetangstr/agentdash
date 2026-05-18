@@ -50,6 +50,7 @@ test("fails when target runner config is absent", () => {
     branchProtectionError: null,
     branchProtectionRequiredChecks: [],
     launchSmokeUrlConfigured: false,
+    launchSmokeEmailTemplateConfigured: false,
     launchSmokeBillingRequired: false,
     launchSmokeLlmRequired: false,
   });
@@ -101,6 +102,7 @@ test("passes when a matching self-hosted target runner is online and idle", () =
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -130,6 +132,7 @@ test("fails structurally when runner inventory cannot be inspected", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -154,6 +157,7 @@ test("fails when release environments are missing", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -285,6 +289,88 @@ test("requires production launch smoke to prove billing and real LLM paths", () 
   assert.equal(disabled.observations.launchSmokeLlmRequired, false);
 });
 
+test("requires production launch smoke to use a unique configured email template", () => {
+  const missing = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+  });
+
+  assert.equal(
+    missing.requirements.find((item) => item.id === "launch-smoke-email-template-variable")?.status,
+    "fail",
+  );
+
+  const invalid = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke@example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+  });
+
+  assert.match(
+    invalid.requirements.find((item) => item.id === "launch-smoke-email-template-variable")?.message || "",
+    /must include \{run\}/,
+  );
+
+  const fallback = auditProductionReadinessConfig({
+    variables: [
+      { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "agentdash.launch.smoke+{run}@gmail.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
+    ],
+    runners: [
+      {
+        name: "target-mac",
+        status: "online",
+        busy: false,
+        labels: ["self-hosted", "agentdash-target"],
+      },
+    ],
+    environments: [
+      { name: "npm-canary", protection_rules: [] },
+      { name: "npm-stable", protection_rules: [{ type: "required_reviewers" }] },
+    ],
+  });
+
+  assert.match(
+    fallback.requirements.find((item) => item.id === "launch-smoke-email-template-variable")?.message || "",
+    /must not use the built-in fallback email template/,
+  );
+});
+
 test("reports repository variable permission failures as structured audit failures", () => {
   const result = auditProductionReadinessConfig({
     variableInventoryError: "failed to get variables: HTTP 403: Resource not accessible by integration",
@@ -310,6 +396,10 @@ test("reports repository variable permission failures as structured audit failur
     /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BASE_URL/,
   );
   assert.match(
+    result.requirements.find((item) => item.id === "launch-smoke-email-template-variable").message,
+    /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE/,
+  );
+  assert.match(
     result.requirements.find((item) => item.id === "launch-smoke-billing-required").message,
     /Could not verify repository variable AGENTDASH_LAUNCH_SMOKE_BILLING/,
   );
@@ -327,6 +417,7 @@ test("uses Actions vars context when repository variable inventory is unreadable
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -427,6 +518,7 @@ test("passes when main branch protection has required launch checks", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -458,6 +550,7 @@ test("passes branch check validation from public branch summary shape", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],
@@ -590,12 +683,14 @@ test("renders an actionable GitHub job summary for missing external gates", () =
   assert.match(summary, /Production Readiness Config Audit/);
   assert.match(summary, /gh variable set AGENTDASH_TARGET_RUNNER_LABELS --repo thetangstr\/agentdash/);
   assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL --repo thetangstr\/agentdash/);
+  assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE --repo thetangstr\/agentdash/);
   assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING --repo thetangstr\/agentdash/);
   assert.match(summary, /gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM --repo thetangstr\/agentdash/);
   assert.match(summary, /launch_smoke_base_url/);
   assert.match(summary, /target-runner-variable/);
   assert.match(summary, /stable-release-environment-protected/);
   assert.match(summary, /npm-stable/);
+  assert.match(summary, /launch-smoke-email-template-variable/);
   assert.match(summary, /launch-smoke-billing-required/);
   assert.match(summary, /launch-smoke-llm-required/);
 });
@@ -607,6 +702,7 @@ test("renders success guidance when automated config gates pass", () => {
     variables: [
       { name: "AGENTDASH_TARGET_RUNNER_LABELS", value: '["self-hosted","agentdash-target"]' },
       { name: "AGENTDASH_LAUNCH_SMOKE_BASE_URL", value: "https://agentdash.example.com" },
+      { name: "AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE", value: "launch-smoke+{run}@agentdash.example.com" },
       { name: "AGENTDASH_LAUNCH_SMOKE_BILLING", value: "true" },
       { name: "AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM", value: "true" },
     ],

@@ -9,7 +9,7 @@ Active branch: `codex/invite-token-primitives`
 Latest pushed PR head observed during this readiness-hardening pass:
 
 ```text
-2be4d290cc05058540717038bafc9c681b07a7bc Fail fast on unavailable target runners
+f9fa4d554666daafc2f45e092005c27911eaf1a9 Deliver Hermes tasks from Paperclip context
 ```
 
 This document may live on a later documentation-only commit. Resolve the current
@@ -22,18 +22,19 @@ gh pr view 344 --repo thetangstr/agentdash --json headRefOid,statusCheckRollup
 Run `git rev-parse HEAD` before handing off to a remote runner, target machine,
 canary release, or stable release.
 
-The branch is pushed to PR #344. The code and CI readiness checks are green on
-head `2be4d290`: PR policy, PR verify, PR e2e, target-test preflight,
+The branch is pushed to PR #344. The code and CI readiness checks were green on
+head `f9fa4d55`: PR policy, PR verify, PR e2e, target-test preflight,
 target-test, target-test-comment, Docker, Agents MD drift, Hermes PR audit, and
 Hermes prompt drift. `Production Readiness / config-audit` is failing as an external
 configuration gate because the repository has no self-hosted target runners, no
-configured target-runner label variable, and no deployed launch-smoke URL. The
-strict launch-smoke flags are now configured as durable repository variables:
+configured target-runner label variable, no deployed launch-smoke URL, and no
+controlled launch-smoke email template variable. The strict launch-smoke flags
+are now configured as durable repository variables:
 `AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
 `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`. The `npm-stable` environment is also
 protected with required reviewer `thetangstr`, so stable publishing now has the
 expected human approval gate. GitHub issue #350 tracks the remaining target
-runner and deployed launch-smoke URL gates.
+runner and deployed launch-smoke gates.
 
 The local worktree is clean except for the existing untracked `.claire/`
 directory, which belongs to a separate workspace and should not be deleted by
@@ -140,10 +141,10 @@ Observed narrow results from the latest continuation:
   GitHub configuration audit for the target-machine, release-environment, and
   deployed launch-smoke gates. Its unit tests pass. Against
   `thetangstr/agentdash`, it currently exits 1 because
-  `AGENTDASH_TARGET_RUNNER_LABELS` and `AGENTDASH_LAUNCH_SMOKE_BASE_URL` are
-  missing and there are no self-hosted runners. It confirms both release
-  environments exist: `npm-canary` and `npm-stable`; `npm-stable` has
-  required-reviewer protection.
+  `AGENTDASH_TARGET_RUNNER_LABELS`, `AGENTDASH_LAUNCH_SMOKE_BASE_URL`, and
+  `AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE` are missing and there are no
+  self-hosted runners. It confirms both release environments exist:
+  `npm-canary` and `npm-stable`; `npm-stable` has required-reviewer protection.
 - The audit helper now reads required repository variables through the GitHub
   Actions `vars` context and treats unreadable release environments or runner
   inventory as structured failed requirements while still writing the JSON
@@ -157,19 +158,24 @@ Observed narrow results from the latest continuation:
   so a future green production-readiness audit cannot skip Stripe Checkout
   session creation or real CoS/LLM reply coverage. Both variables are now set
   in the repository and pass the live config audit.
+- The audit now requires `AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE` to be an
+  email-shaped template containing `{run}` and rejects the built-in fallback
+  address. This keeps the durable production gate on a controlled unique test
+  address instead of the launch-smoke default.
 - The audit now treats missing `npm-stable` required-reviewer protection as a
   failed automated config requirement. The live repository has
   `npm-stable` protected by a `required_reviewers` rule for `@thetangstr`.
 - `.github/workflows/production-readiness.yml` now runs the audit on every PR,
   on `main` pushes, on a daily schedule, and on manual dispatch. The launch
   smoke job is still skipped on PRs. The audit uses repository `vars` for the
-  target runner labels and deployed launch-smoke URL, plus
-  `PRODUCTION_READINESS_AUDIT_TOKEN` when present and `GITHUB_TOKEN` otherwise
-  for GitHub API reads. It also checks the public branch summary for `main`
-  branch protection and required always-running checks. If runner inventory,
-  branch protection, or release environments cannot be read, the audit reports
-  that as a structured failed requirement instead of crashing. `pr.yml` also
-  runs the audit helper unit test in the normal verify job.
+  target runner labels, deployed launch-smoke URL, and launch-smoke email
+  template. It uses `PRODUCTION_READINESS_AUDIT_TOKEN` when present and
+  `GITHUB_TOKEN` otherwise for GitHub API reads. It also checks the public
+  branch summary for `main` branch protection and required always-running
+  checks. If runner inventory, branch protection, or release environments cannot
+  be read, the audit reports that as a structured failed requirement instead of
+  crashing. `pr.yml` also runs the audit helper unit test in the normal verify
+  job.
 - `.github/workflows/target-machine-test.yml` now preflights configured
   self-hosted runner labels on `ubuntu-latest` before dispatching the target
   profile. If `AGENTDASH_TARGET_RUNNER_LABELS` is set before a matching runner
@@ -194,7 +200,8 @@ Observed narrow results from the latest continuation:
   status, and can require Stripe Checkout session creation and a real LLM reply
   through env flags. `Production Readiness / launch-smoke` runs it on non-PR
   production-readiness workflow events once `AGENTDASH_LAUNCH_SMOKE_BASE_URL`
-  is configured. Manual `workflow_dispatch` runs can also provide
+  and `AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE` are configured. Manual
+  `workflow_dispatch` runs can also provide
   `launch_smoke_base_url`, `launch_smoke_billing`, and
   `launch_smoke_expect_llm` as one-off overrides for deployed smoke validation;
   those overrides do not replace the durable repository variables required by
@@ -260,7 +267,7 @@ These steps are required before calling the app production ready:
 2. Wait for PR #344 checks on the pushed head. Code/CI-readiness gates must be
    green: Agents MD Drift Check, Hermes PR Audit, Hermes Prompt Drift Check,
    PR policy, PR verify, PR e2e, target-test preflight, target-test,
-   target-test-comment, and Docker workflow. At `2be4d290`, all of those checks
+   target-test-comment, and Docker workflow. At `f9fa4d55`, all of those checks
    are green. The
    production-readiness config audit may remain red only for the documented
    external repository configuration gaps below.
@@ -268,16 +275,19 @@ These steps are required before calling the app production ready:
    `AGENTDASH_TARGET_RUNNER_LABELS` after the matching runner exists. The
    current repo has zero self-hosted runners, so the target workflow will fall
    back to GitHub-hosted Ubuntu runners until this is configured.
-4. Deploy a staging or production launch target and set repository variable
-   `AGENTDASH_LAUNCH_SMOKE_BASE_URL` to its HTTPS origin. The strict smoke
-   flags are already set:
+4. Deploy a staging or production launch target and set repository variables
+   `AGENTDASH_LAUNCH_SMOKE_BASE_URL` to its HTTPS origin and
+   `AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE` to a controlled unique template such
+   as `launch-smoke+{run}@your-domain.com`. The strict smoke flags are already
+   set:
    - `AGENTDASH_LAUNCH_SMOKE_BILLING=true`
    - `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`
-5. Re-run `Production Readiness / config-audit` and confirm only these three
+5. Re-run `Production Readiness / config-audit` and confirm only these four
    previously failing gates have turned green:
    - `target-runner-variable`
    - `target-runner-available`
    - `launch-smoke-url-variable`
+   - `launch-smoke-email-template-variable`
 6. Merge the PR to `main`.
 7. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.

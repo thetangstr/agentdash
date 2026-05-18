@@ -160,8 +160,9 @@ The GitHub `Production Readiness` workflow can also run the deployed smoke from
 set `launch_smoke_billing=true` and `launch_smoke_expect_llm=true` when public
 launch readiness requires Stripe Checkout creation and a real CoS reply. The
 durable production gate requires repository variables
-`AGENTDASH_LAUNCH_SMOKE_BILLING=true` and
-`AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`; manual inputs prove a single run but
+`AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE=launch-smoke+{run}@your-domain.com`,
+`AGENTDASH_LAUNCH_SMOKE_BILLING=true`, and
+`AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`; manual inputs prove a single run, but
 do not replace those variables for scheduled readiness checks.
 
 ---

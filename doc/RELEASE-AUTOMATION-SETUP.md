@@ -155,14 +155,17 @@ Success means:
   safety checks: `audit`, `drift`, `check`, `policy`, `e2e`, `verify`, and
   `config-audit`
 - `AGENTDASH_LAUNCH_SMOKE_BASE_URL` points at a deployed HTTPS launch target
+- `AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE` is a controlled email template with
+  `{run}` in the address, so every deployed smoke signs up a unique test user
 - `AGENTDASH_LAUNCH_SMOKE_BILLING=true`, so launch smoke proves Stripe
   Checkout session creation
 - `AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM=true`, so launch smoke proves a real
   CoS/LLM reply instead of accepting the local stub path
 
-Failure is expected before the target machine and deployed launch target exist.
-Do not mark the app production ready while this audit fails, unless the release
-owner has explicitly accepted GitHub-hosted target validation for that run.
+Failure is expected before the target machine, deployed launch target, and
+controlled launch-smoke email template exist. Do not mark the app production
+ready while this audit fails, unless the release owner has explicitly accepted
+GitHub-hosted target validation for that run.
 
 ### 6.1. Register a target-machine runner
 
@@ -220,6 +223,10 @@ gh variable set AGENTDASH_LAUNCH_SMOKE_BASE_URL \
 Required for public production launch:
 
 ```sh
+gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE \
+  --repo thetangstr/agentdash \
+  --body 'launch-smoke+{run}@your-domain.com'
+
 gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING \
   --repo thetangstr/agentdash \
   --body 'true'
@@ -227,14 +234,6 @@ gh variable set AGENTDASH_LAUNCH_SMOKE_BILLING \
 gh variable set AGENTDASH_LAUNCH_SMOKE_EXPECT_LLM \
   --repo thetangstr/agentdash \
   --body 'true'
-```
-
-Optional repository variable:
-
-```sh
-gh variable set AGENTDASH_LAUNCH_SMOKE_EMAIL_TEMPLATE \
-  --repo thetangstr/agentdash \
-  --body 'launch-smoke+{run}@your-domain.com'
 ```
 
 If the deployment needs a fixed password policy, set
