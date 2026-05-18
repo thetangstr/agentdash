@@ -1,17 +1,17 @@
-# Releasing Paperclip
+# Releasing AgentDash
 
-Maintainer runbook for shipping Paperclip across npm, GitHub, and the website-facing changelog surface.
+Maintainer runbook for shipping AgentDash across npm, GitHub, and the website-facing changelog surface.
 
 The release model is now commit-driven:
 
-1. Every push to `master` publishes a canary automatically.
+1. Every push to `main` publishes a canary automatically.
 2. Stable releases are manually promoted from a chosen tested commit or canary tag.
 3. Stable release notes live in `releases/vYYYY.MDD.P.md`.
 4. Only stable releases get GitHub Releases.
 
 ## Versioning Model
 
-Paperclip uses calendar versions that still fit semver syntax:
+AgentDash uses calendar versions that still fit semver syntax:
 
 - stable: `YYYY.MDD.P`
 - canary: `YYYY.MDD.P-canary.N`
@@ -45,7 +45,7 @@ Canaries only cover the first two surfaces plus an internal traceability tag.
 
 ## Core Invariants
 
-- canaries publish from `master`
+- canaries publish from `main`
 - stables publish from an explicitly chosen source ref
 - tags point at the original source commit, not a generated release commit
 - stable notes are always `releases/vYYYY.MDD.P.md`
@@ -56,7 +56,7 @@ Canaries only cover the first two surfaces plus an internal traceability tag.
 
 ### Canary
 
-Every push to `master` runs the canary path inside [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+Every push to `main` runs the canary path inside [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 It:
 
@@ -79,7 +79,7 @@ npx agentdash@canary onboard --data-dir "$(mktemp -d /tmp/paperclip-canary.XXXXX
 
 Use [`.github/workflows/release.yml`](../.github/workflows/release.yml) from the Actions tab with the manual `workflow_dispatch` inputs.
 
-[Run the action here](https://github.com/paperclipai/paperclip/actions/workflows/release.yml)
+[Run the action here](https://github.com/thetangstr/agentdash/actions/workflows/release.yml)
 
 Inputs:
 
@@ -100,7 +100,7 @@ Before running stable:
 
 Example:
 
-- `source_ref`: `master`
+- `source_ref`: `main`
 - `stable_date`: `2026-03-18`
 - resulting stable version: `2026.318.0`
 
@@ -148,7 +148,7 @@ Recommended local generation flow:
 
 ```bash
 VERSION="$(./scripts/release.sh stable --date 2026-03-18 --print-version)"
-claude --print --output-format stream-json --verbose --dangerously-skip-permissions --model claude-opus-4-6 "Use the release-changelog skill to draft or update releases/v${VERSION}.md for Paperclip. Read doc/RELEASING.md and .agents/skills/release-changelog/SKILL.md, then generate the stable changelog for v${VERSION} from commits since the last stable tag. Do not create a canary changelog."
+claude --print --output-format stream-json --verbose --dangerously-skip-permissions --model claude-opus-4-6 "Use the release-changelog skill to draft or update releases/v${VERSION}.md for AgentDash. Read doc/RELEASING.md and .agents/skills/release-changelog/SKILL.md, then generate the stable changelog for v${VERSION} from commits since the last stable tag. Do not create a canary changelog."
 ```
 
 The repo intentionally does not run this through GitHub Actions because:
@@ -216,7 +216,7 @@ Do not run stable.
 
 Instead:
 
-1. fix the issue on `master`
+1. fix the issue on `main`
 2. merge the fix
 3. wait for the next automatic canary
 4. rerun smoke testing
