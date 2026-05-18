@@ -1,6 +1,11 @@
 name: Target Machine Test
 
 on:
+  schedule:
+    # Nightly mainline core validation.
+    - cron: "17 10 * * *"
+    # Weekly mainline full validation.
+    - cron: "31 11 * * 1"
   workflow_dispatch:
     inputs:
       ref:
@@ -31,7 +36,7 @@ on:
       paperclip_version:
         description: Published Paperclip dist-tag/version for release-smoke
         required: false
-        default: canary
+        default: latest
         type: string
   workflow_call:
     inputs:
@@ -53,10 +58,35 @@ on:
         type: string
       paperclip_version:
         required: false
-        default: canary
+        default: latest
         type: string
+    outputs:
+      failed:
+        description: Whether the selected target profile failed
+        value: ${{ jobs.target-test.outputs.failed }}
+      profile:
+        description: Resolved target test profile
+        value: ${{ jobs.target-test.outputs.profile }}
+      requested_ref:
+        description: Resolved ref under test
+        value: ${{ jobs.target-test.outputs.requested_ref }}
+      artifact_name:
+        description: Uploaded diagnostics artifact name
+        value: ${{ jobs.target-test.outputs.artifact_name }}
+      issue_url:
+        description: Created or updated GitHub issue URL, when available
+        value: ${{ jobs.target-test.outputs.issue_url }}
+      comment_url:
+        description: Created GitHub issue comment URL, when available
+        value: ${{ jobs.target-test.outputs.comment_url }}
+      issue_action:
+        description: Issue helper action, when available
+        value: ${{ jobs.target-test.outputs.issue_action }}
+      workflow_run_url:
+        description: URL for this target-machine workflow run
+        value: ${{ jobs.target-test.outputs.workflow_run_url }}
 
-run-name: target-${{ inputs.profile || 'core' }} @ ${{ inputs.ref || github.ref_name }}
+run-name: target-${{ inputs.profile || (github.event_name == 'schedule' && 'scheduled' || 'core') }} @ ${{ inputs.ref || github.ref_name }}
 
 permissions:
   contents: read
@@ -69,14 +99,51 @@ concurrency:
 
 jobs:
   target-test:
-    runs-on: ${{ fromJSON(inputs.runner_labels || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(github.event_name == 'schedule' && (vars.AGENTDASH_TARGET_RUNNER_LABELS || '["ubuntu-latest"]') || (inputs.runner_labels || '["ubuntu-latest"]')) }}
     timeout-minutes: 90
+    outputs:
+      failed: ${{ steps.summary.outputs.failed }}
+      profile: ${{ steps.settings.outputs.profile }}
+      requested_ref: ${{ steps.settings.outputs.ref }}
+      artifact_name: ${{ steps.settings.outputs.artifact_name }}
+      issue_url: ${{ steps.issue.outputs.issue_url }}
+      comment_url: ${{ steps.issue.outputs.comment_url }}
+      issue_action: ${{ steps.issue.outputs.issue_action }}
+      workflow_run_url: ${{ steps.settings.outputs.workflow_run_url }}
 
     steps:
+      - name: Resolve target test settings
+        id: settings
+        run: |
+          profile="${{ inputs.profile || 'core' }}"
+          ref="${{ inputs.ref || github.ref_name }}"
+          paperclip_version="${{ inputs.paperclip_version || 'latest' }}"
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ref="${{ github.event.repository.default_branch }}"
+            paperclip_version="latest"
+            if [ "${{ github.event.schedule }}" = "31 11 * * 1" ]; then
+              profile="full"
+            else
+              profile="core"
+            fi
+          fi
+
+          artifact_name="target-machine-test-${profile}-${GITHUB_RUN_ID}"
+          workflow_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          {
+            echo "profile=$profile"
+            echo "ref=$ref"
+            echo "paperclip_version=$paperclip_version"
+            echo "artifact_name=$artifact_name"
+            echo "workflow_run_url=$workflow_run_url"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref_name }}
+          ref: ${{ steps.settings.outputs.ref }}
           fetch-depth: 0
 
       - name: Setup pnpm
@@ -96,10 +163,10 @@ jobs:
       - name: Run target test profile
         id: run-profile
         env:
-          TARGET_PROFILE: ${{ inputs.profile || 'core' }}
-          TARGET_REF: ${{ inputs.ref || github.ref_name }}
-          TARGET_ARTIFACT_NAME: target-machine-test-${{ inputs.profile || 'core' }}-${{ github.run_id }}
-          PAPERCLIP_VERSION: ${{ inputs.paperclip_version || 'canary' }}
+          TARGET_PROFILE: ${{ steps.settings.outputs.profile }}
+          TARGET_REF: ${{ steps.settings.outputs.ref }}
+          TARGET_ARTIFACT_NAME: ${{ steps.settings.outputs.artifact_name }}
+          PAPERCLIP_VERSION: ${{ steps.settings.outputs.paperclip_version }}
         run: |
           mkdir -p "$RUNNER_TEMP/target-machine-test"
           node scripts/ci/run-target-test-profile.mjs \
@@ -125,11 +192,30 @@ jobs:
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
           echo "summary_path=$summary" >> "$GITHUB_OUTPUT"
 
+      - name: Collect target diagnostics
+        if: always()
+        run: |
+          diagnostics="$RUNNER_TEMP/target-machine-test/diagnostics"
+          mkdir -p "$diagnostics"
+
+          for path in \
+            tests/e2e/playwright-report \
+            tests/e2e/test-results \
+            tests/release-smoke/playwright-report \
+            tests/release-smoke/test-results \
+            data/docker-onboard-smoke
+          do
+            if [ -e "$path" ]; then
+              dest="$(printf '%s' "$path" | tr '/ ' '--')"
+              cp -R "$path" "$diagnostics/$dest"
+            fi
+          done
+
       - name: Upload target test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: target-machine-test-${{ inputs.profile || 'core' }}-${{ github.run_id }}
+          name: ${{ steps.settings.outputs.artifact_name }}
           path: ${{ runner.temp }}/target-machine-test/
           retention-days: 14
 
@@ -142,6 +228,36 @@ jobs:
           node scripts/ci/file-target-test-issue.mjs \
             --summary "$RUNNER_TEMP/target-machine-test/summary.json" \
             --output "$RUNNER_TEMP/target-machine-test/issue-result.json"
+
+      - name: Read issue result
+        id: issue
+        if: always()
+        run: |
+          result="$RUNNER_TEMP/target-machine-test/issue-result.json"
+          if [ ! -f "$result" ]; then
+            exit 0
+          fi
+
+          node - "$result" "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require("node:fs");
+          const [resultPath, outputPath] = process.argv.slice(2);
+          const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+          const outputs = {
+            action: "issue_action",
+            issueUrl: "issue_url",
+            commentUrl: "comment_url",
+            issueNumber: "issue_number",
+            signature: "failure_signature",
+          };
+          const lines = [];
+          for (const [jsonKey, outputKey] of Object.entries(outputs)) {
+            const value = result[jsonKey];
+            if (value !== undefined && value !== null && String(value).length > 0) {
+              lines.push(`${outputKey}=${String(value).replace(/\r?\n/g, " ")}`);
+            }
+          }
+          fs.appendFileSync(outputPath, `${lines.join("\n")}${lines.length ? "\n" : ""}`);
+          NODE
 
       - name: Fail workflow on target test failure
         if: ${{ always() && steps.summary.outputs.failed == 'true' }}

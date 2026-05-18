@@ -221,4 +221,49 @@ jobs:
       ref: ${{ github.event.pull_request.head.sha }}
       profile: browser
       open_issue: true
-      runner_labels: '["ubuntu-latest"]'
+      runner_labels: ${{ vars.AGENTDASH_TARGET_RUNNER_LABELS || '["ubuntu-latest"]' }}
+
+  target-test-comment:
+    needs: [target-test]
+    if: always() && contains(github.event.pull_request.labels.*.name, 'target-test')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+
+    steps:
+      - name: Comment target-machine result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TARGET_RESULT: ${{ needs.target-test.result }}
+          TARGET_PROFILE: ${{ needs.target-test.outputs.profile || 'browser' }}
+          TARGET_REF: ${{ needs.target-test.outputs.requested_ref || github.event.pull_request.head.sha }}
+          TARGET_ARTIFACT: ${{ needs.target-test.outputs.artifact_name }}
+          TARGET_RUN_URL: ${{ needs.target-test.outputs.workflow_run_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          TARGET_ISSUE_URL: ${{ needs.target-test.outputs.issue_url }}
+          TARGET_COMMENT_URL: ${{ needs.target-test.outputs.comment_url }}
+          TARGET_ISSUE_ACTION: ${{ needs.target-test.outputs.issue_action }}
+        run: |
+          issue_line="No failure issue filed."
+          if [ -n "$TARGET_ISSUE_URL" ]; then
+            issue_line="${TARGET_ISSUE_ACTION:-issue}: $TARGET_ISSUE_URL"
+            if [ -n "$TARGET_COMMENT_URL" ]; then
+              issue_line="$issue_line (comment: $TARGET_COMMENT_URL)"
+            fi
+          fi
+
+          cat > "$RUNNER_TEMP/target-test-comment.md" <<COMMENT
+          <!-- agentdash-target-test-result -->
+          ## Target-machine test result
+
+          Result: \`$TARGET_RESULT\`
+          Profile: \`$TARGET_PROFILE\`
+          Ref: \`$TARGET_REF\`
+          Workflow: $TARGET_RUN_URL
+          Artifact: \`${TARGET_ARTIFACT:-not recorded}\`
+          Issue: $issue_line
+          COMMENT
+
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/target-test-comment.md"
