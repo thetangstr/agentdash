@@ -56,7 +56,7 @@ jobs:
           ref: ${{ inputs.checkout_ref || github.ref }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9.15.4
 
