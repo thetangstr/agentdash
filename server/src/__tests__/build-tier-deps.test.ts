@@ -146,4 +146,15 @@ describe("requireTierFor wiring (integration via express)", () => {
     const r = await request(app).post("/companies/co-1/invites").send({});
     expect(r.status).toBe(201);
   });
+
+  it("allows pro_active invite creation past Free caps while Free remains capped", async () => {
+    const proApp = makeApp("pro_active", 5, 5);
+    const pro = await request(proApp).post("/companies/co-1/invites").send({});
+    expect(pro.status).toBe(201);
+
+    const freeApp = makeApp("free", 1, 1);
+    const free = await request(freeApp).post("/companies/co-1/invites").send({});
+    expect(free.status).toBe(402);
+    expect(free.body.code).toBe("seat_cap_exceeded");
+  });
 });
