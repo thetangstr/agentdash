@@ -76,6 +76,9 @@ git checkout -- pnpm-lock.yaml
 cd /Users/Kailor/Documents/Projects/agentdash
 git push --dry-run origin HEAD:codex/invite-token-primitives
 node scripts/ci/run-target-test-profile.mjs --profile core --requested-ref local-21694e7c --summary target-test/local-core-summary.json --logs-dir target-test/local-core-logs --artifact-name target-machine-test-core-local-21694e7c --paperclip-version latest
+node --check scripts/ci/audit-production-readiness-config.mjs
+node --test scripts/ci/audit-production-readiness-config.test.mjs
+node scripts/ci/audit-production-readiness-config.mjs --repo thetangstr/agentdash --output /tmp/agentdash-production-readiness-config.json
 ```
 
 Observed narrow results from the latest continuation:
@@ -104,16 +107,12 @@ Observed narrow results from the latest continuation:
   - `pnpm -r typecheck`
   - `pnpm test:run`
   - `pnpm build`
-- A read-only GitHub configuration check found no repository Actions
-  variables, no repository Actions secrets, and zero self-hosted Actions
-  runners:
-  - `gh variable list --repo thetangstr/agentdash --json name,value,updatedAt`
-    returned `[]`.
-  - `gh secret list --repo thetangstr/agentdash --json name,updatedAt`
-    returned `[]`.
-  - `gh api repos/thetangstr/agentdash/actions/runners --jq '{total_count,
-    runners: [.runners[] | {name: .name, status: .status, busy: .busy, labels:
-    [.labels[].name]}]}'` returned `{"runners":[],"total_count":0}`.
+- `scripts/ci/audit-production-readiness-config.mjs` is a repeatable read-only
+  GitHub configuration audit for the target-machine and release-environment
+  gates. Its unit tests pass. Against `thetangstr/agentdash`, it currently
+  exits 1 because `AGENTDASH_TARGET_RUNNER_LABELS` is missing and there are no
+  self-hosted runners. It confirms both release environments exist:
+  `npm-canary` and `npm-stable`.
 
 ## Fixed Locally, Not Yet Proven Remotely
 
@@ -155,10 +154,13 @@ These steps are required before calling the app production ready:
 4. Merge the PR to `main`.
 5. Let the canary workflow publish from `main` and pass release smoke against
    `agentdash@canary`.
-6. Configure release credentials, then run the stable release workflow for
-   `2026-05-22` with `dry_run=true`, then with `dry_run=false` after approval.
-   The current repo has no Actions secrets visible through `gh`, so real npm,
-   GitHub release, and GHCR publish paths are not credentialed yet.
+6. Confirm npm trusted publishing for every public package, then run the stable
+   release workflow for `2026-05-22` with `dry_run=true`, then with
+   `dry_run=false` after approval. The GitHub release environments
+   `npm-canary` and `npm-stable` exist. Absence of repository Actions secrets is
+   expected for this workflow because npm publish uses GitHub Actions trusted
+   publishing and Docker/GitHub release publishing uses `GITHUB_TOKEN`; the npm
+   trusted-publishing configuration itself must still be confirmed in npm.
 7. Confirm published package and image surfaces:
    - `npm view agentdash@latest version`
    - `npx agentdash@latest setup --help`
