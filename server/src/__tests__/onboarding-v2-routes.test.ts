@@ -31,7 +31,16 @@ const mockCosState = {
 const mockInvites = {
   createCompanyInvite: vi.fn(),
 };
+const mockProjects = {
+  list: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({ id: "project-1" }),
+};
+const mockIssues = {
+  list: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({ id: "issue-1", identifier: "AGD-1" }),
+};
 const mockSendEmail = vi.fn().mockResolvedValue({ status: "skipped" });
+const mockDispatchLLM = vi.fn();
 
 vi.mock("../auth/email.js", () => ({
   sendEmail: (...args: unknown[]) => mockSendEmail(...args),
@@ -65,6 +74,12 @@ vi.mock("../services/index.js", () => ({
   agentInstructionsService: () => mockInstructions,
   cosOnboardingStateService: () => mockCosState,
   inviteService: () => mockInvites,
+  projectService: () => mockProjects,
+  issueService: () => mockIssues,
+}));
+
+vi.mock("../services/dispatch-llm.js", () => ({
+  dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
 }));
 
 vi.mock("@paperclipai/db", () => ({
@@ -184,6 +199,10 @@ describe("POST /api/onboarding/agent/confirm", () => {
 describe("POST /api/onboarding/confirm-plan", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProjects.list.mockResolvedValue([]);
+    mockProjects.create.mockResolvedValue({ id: "project-1" });
+    mockIssues.list.mockResolvedValue([]);
+    mockIssues.create.mockResolvedValue({ id: "issue-1", identifier: "AGD-1" });
   });
 
   it("creates one agent per plan-card entry, posts a closing message, advances phase to ready", async () => {
@@ -251,15 +270,47 @@ describe("POST /api/onboarding/confirm-plan", () => {
       expect.objectContaining({ name: "Quinn", adapterType: "claude_local" }),
     );
     expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(2);
+    expect(mockProjects.create).toHaveBeenCalledWith(
+      "c1",
+      expect.objectContaining({
+        name: expect.stringContaining("launch"),
+        leadAgentId: "agent-1",
+      }),
+    );
+    expect(mockIssues.create).toHaveBeenCalledWith(
+      "c1",
+      expect.objectContaining({
+        projectId: "project-1",
+        assigneeAgentId: "agent-1",
+        createdByAgentId: "cos1",
+        originId: "cos_onboarding:conv1",
+      }),
+    );
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "materializing");
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "ready");
-    // Closing message posted authored by the CoS.
-    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+    // Closing message and invite prompt card are posted by the CoS.
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         conversationId: "conv1",
         authorKind: "agent",
         authorId: "cos1",
+        companyId: "c1",
         body: expect.stringContaining("Done"),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        companyId: "c1",
+        cardKind: "invite_prompt_v1",
+        cardPayload: {
+          companyId: "c1",
+          conversationId: "conv1",
+        },
       }),
     );
   });
@@ -283,6 +334,30 @@ describe("POST /api/onboarding/confirm-plan", () => {
 describe("POST /api/onboarding/revise-plan", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatchLLM.mockResolvedValue(
+      [
+        "Updated based on your feedback: swapped in a pilot coordinator.",
+        "",
+        "```json",
+        JSON.stringify({
+          plan: {
+            rationale: "Revised around pilot onboarding.",
+            agents: [
+              {
+                role: "pilot_onboarding_coordinator",
+                name: "Piper",
+                adapterType: "codex_local",
+                responsibilities: ["Coordinate 3 pilot customers"],
+                kpis: ["Pilot customers onboarded"],
+              },
+            ],
+            alignmentToShortTerm: "Onboard 3 pilot customers first.",
+            alignmentToLongTerm: "Build repeatable customer onboarding.",
+          },
+        }),
+        "```",
+      ].join("\n"),
+    );
   });
 
   // Closes #330: route is no longer Phase-F-deferred (#210 / #231
@@ -297,6 +372,62 @@ describe("POST /api/onboarding/revise-plan", () => {
       .post("/api/onboarding/revise-plan")
       .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
     expect(res.status).toBe(404);
+  });
+
+  it("posts revised plan messages with company scope for live updates", async () => {
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff" }]);
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [
+          {
+            id: "plan-msg-1",
+            cardPayload: {
+              rationale: "Initial plan.",
+              agents: [
+                {
+                  role: "implementation_coordinator",
+                  name: "Iris",
+                  adapterType: "codex_local",
+                  responsibilities: ["Coordinate onboarding"],
+                  kpis: ["Pilots onboarded"],
+                },
+              ],
+              alignmentToShortTerm: "Launch.",
+              alignmentToLongTerm: "Scale onboarding.",
+            },
+          },
+        ],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({
+        conversationId: "conv1",
+        revisionText: "Replace support with a pilot coordinator.",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        companyId: "c1",
+        body: expect.stringContaining("Updated based on your feedback"),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        companyId: "c1",
+        cardKind: "agent_plan_proposal_v1",
+      }),
+    );
   });
 });
 
@@ -367,6 +498,57 @@ describe("POST /api/onboarding/invites", () => {
       expect.objectContaining({
         to: "bob@acme.com",
         subject: expect.stringContaining("https://app.example.com/invite/pcp_invite_tok1"),
+      }),
+    );
+  });
+
+  it("posts generated invite links back into the conversation so they survive reload", async () => {
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    mockInvites.createCompanyInvite.mockResolvedValue({
+      id: "invite-1",
+      token: "pcp_invite_tok1",
+      expiresAt: expires,
+    });
+    mockSendEmail.mockResolvedValue({ status: "skipped" });
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "Chief of Staff" },
+    ]);
+    const app = buildApp(
+      {
+        type: "board",
+        userId: "u1",
+        source: "session",
+        companyIds: ["c1"],
+      },
+      [
+        [], // best-effort inviter lookup
+        [{ id: "conv1", companyId: "c1" }], // durable result message target
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/invites")
+      .set("x-forwarded-proto", "https")
+      .set("x-forwarded-host", "app.example.com")
+      .send({
+        conversationId: "conv1",
+        companyId: "c1",
+        emails: ["bob@acme.com"],
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        companyId: "c1",
+        body: expect.stringContaining("Generated invite links:"),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("bob@acme.com — Email not sent — https://app.example.com/invite/pcp_invite_tok1"),
       }),
     );
   });

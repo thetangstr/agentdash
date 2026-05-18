@@ -248,6 +248,38 @@ describe("Assess routes", () => {
       expect(callArg.userAnswer).toBe("Latest answer");
     });
 
+    it("POST /assess/project/run streams the report service even when deep interview is enabled", async () => {
+      const onComplete = vi.fn(async () => {});
+      mockProjectAssess.runProjectAssessment.mockResolvedValueOnce({
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(
+              'data: {"type":"content_block_delta","delta":{"text":"# Project Report"}}\n\n',
+            ));
+            c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            c.close();
+          },
+        }),
+        slug: "robotics",
+        onComplete,
+      });
+
+      const app = createApp();
+      const res = await request(app)
+        .post("/api/companies/company-1/assess/project/run")
+        .send({
+          intake: { projectName: "Robotics", description: "Stuff", oneLineGoal: "Build", sponsor: "Chris" },
+          answers: [{ questionId: "q1", text: "Latest answer" }],
+          rephrased: "rephrased text",
+        })
+        .expect(200);
+
+      expect(res.text).toBe("# Project Report");
+      expect(mockProjectAssess.runProjectAssessment).toHaveBeenCalledTimes(1);
+      expect(mockEngine.nextTurn).not.toHaveBeenCalled();
+      expect(onComplete).toHaveBeenCalledWith("# Project Report");
+    });
+
     it("ready_to_crystallize result is streamed as a marker (graceful)", async () => {
       mockEngine.nextTurn.mockResolvedValueOnce({
         kind: "ready_to_crystallize",

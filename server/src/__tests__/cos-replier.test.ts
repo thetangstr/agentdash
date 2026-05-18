@@ -57,6 +57,7 @@ describe("cosReplier.reply (legacy single-arg path)", () => {
     await cosReplier({ conversations, llm } as any).reply({
       conversationId: "conv1",
       cosAgentId: "cos1",
+      companyId: "company1",
     });
 
     expect(conversations.paginate).toHaveBeenCalledWith("conv1", { limit: 20 });
@@ -71,6 +72,7 @@ describe("cosReplier.reply (legacy single-arg path)", () => {
         authorKind: "agent",
         authorId: "cos1",
         body: "Outbound volume sits around 80/week today.",
+        companyId: "company1",
       }),
     );
   });
@@ -116,6 +118,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
     await cosReplier({ conversations, llm, cosState } as any).reply({
       conversationId: "conv1",
       cosAgentId: "cos1",
+      companyId: "company1",
     });
 
     expect(cosState.setGoals).toHaveBeenCalledWith("conv1", {
@@ -126,7 +129,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
     expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
     // Body posted is just the visible part — fenced JSON stripped.
     expect(conversations.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Got it.", authorKind: "agent" }),
+      expect.objectContaining({ body: "Got it.", authorKind: "agent", companyId: "company1" }),
     );
   });
 
@@ -173,6 +176,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
     await cosReplier({ conversations, llm, cosState } as any).reply({
       conversationId: "conv1",
       cosAgentId: "cos1",
+      companyId: "company1",
     });
 
     // First postMessage should be the card (empty body, agent_plan_proposal_v1).
@@ -181,6 +185,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
       expect.objectContaining({
         cardKind: "agent_plan_proposal_v1",
         cardPayload: planPayload,
+        companyId: "company1",
       }),
     );
     // Second postMessage should be the visible body.
@@ -188,6 +193,7 @@ describe("cosReplier.reply (phase-aware path)", () => {
       2,
       expect.objectContaining({
         body: "Here's the team I'd build out — want me to set them up, or revise?",
+        companyId: "company1",
       }),
     );
     expect(cosState.advancePhase).toHaveBeenCalledWith("conv1", "plan", {
@@ -213,12 +219,13 @@ describe("cosReplier.reply (phase-aware path)", () => {
     await cosReplier({ conversations, llm, cosState } as any).reply({
       conversationId: "conv1",
       cosAgentId: "cos1",
+      companyId: "company1",
     });
 
     expect(cosState.setGoals).not.toHaveBeenCalled();
     expect(cosState.advancePhase).not.toHaveBeenCalled();
     expect(conversations.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "Tell me more about your team." }),
+      expect.objectContaining({ body: "Tell me more about your team.", companyId: "company1" }),
     );
   });
 });

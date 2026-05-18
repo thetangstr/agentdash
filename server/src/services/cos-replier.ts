@@ -197,7 +197,7 @@ export function cosReplier(deps: Deps) {
   const deepInterviewSpecs = deps.deepInterviewSpecs;
 
   return {
-    reply: async (input: { conversationId: string; cosAgentId: string }) => {
+    reply: async (input: { conversationId: string; cosAgentId: string; companyId?: string }) => {
       const recent = await deps.conversations.paginate(input.conversationId, { limit: 20 });
       const messages = recent
         .slice()
@@ -287,6 +287,7 @@ export function cosReplier(deps: Deps) {
                 body: "",
                 cardKind: "agent_plan_proposal_v1",
                 cardPayload: trailer.plan as unknown as Record<string, unknown>,
+                companyId: input.companyId,
               });
               await cosState.advancePhase(input.conversationId, "plan", {
                 proposalMessageId: cardMsg?.id ?? null,
@@ -296,6 +297,7 @@ export function cosReplier(deps: Deps) {
                 authorKind: "agent",
                 authorId: input.cosAgentId,
                 body: visibleBody,
+                companyId: input.companyId,
               });
             }
             if (!trailer.plan) {
@@ -323,6 +325,7 @@ export function cosReplier(deps: Deps) {
         authorKind: "agent",
         authorId: input.cosAgentId,
         body: visibleBody,
+        companyId: input.companyId,
       });
     },
   };

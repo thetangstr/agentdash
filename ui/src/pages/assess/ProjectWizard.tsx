@@ -135,6 +135,9 @@ export function ProjectWizard({ companyId, companyName, onSwitchMode, onComplete
   const totalQ = allQuestions.length;
   const currentQ = allQuestions[currentIndex];
   const clarity = computeClarity(answers, totalQ);
+  const requiredAnswersToGenerate = totalQ === 0
+    ? MIN_ANSWERS_TO_GENERATE
+    : Math.min(MIN_ANSWERS_TO_GENERATE, totalQ);
 
   const goToReview = () => {
     setPhase("review");
@@ -518,12 +521,12 @@ export function ProjectWizard({ companyId, companyName, onSwitchMode, onComplete
                   <ArrowLeft size={14} strokeWidth={1.75} aria-hidden /> Edit answers
                 </Button>
                 {!followUp && (
-                  <Button variant="ghost" onClick={startFollowUp} disabled={followUpLoading || answeredCount < MIN_ANSWERS_TO_GENERATE}>
+                  <Button variant="ghost" onClick={startFollowUp} disabled={followUpLoading || answeredCount < requiredAnswersToGenerate}>
                     <MessageSquarePlus size={14} strokeWidth={1.75} aria-hidden /> Get follow-up questions
                   </Button>
                 )}
               </div>
-              <Button onClick={generate} disabled={answeredCount < MIN_ANSWERS_TO_GENERATE}>
+              <Button onClick={generate} disabled={answeredCount < requiredAnswersToGenerate}>
                 <Sparkles size={14} strokeWidth={1.75} aria-hidden /> Generate project assessment
               </Button>
             </div>

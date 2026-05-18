@@ -14,12 +14,15 @@ import {
   agentInstructionsService,
   cosOnboardingStateService,
   inviteService,
+  issueService,
+  projectService,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
+import { materializeOnboardingStarterWork } from "../services/materialize-onboarding-starter-work.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 import { parseTrailer } from "../services/cos-replier.js";
 import { logger } from "../middleware/logger.js";
@@ -50,6 +53,35 @@ function isLikelyEmail(value: string): boolean {
   if (at <= 0 || at !== value.lastIndexOf("@")) return false;
   const domain = value.slice(at + 1);
   return domain.length > 0 && domain.includes(".") && !domain.endsWith(".");
+}
+
+type OnboardingInviteResult = {
+  email: string;
+  inviteUrl: string;
+  emailStatus: "sent" | "skipped" | "failed";
+};
+
+function inviteEmailStatusLabel(status: OnboardingInviteResult["emailStatus"]): string {
+  if (status === "sent") return "Email sent";
+  if (status === "failed") return "Email failed";
+  return "Email not sent";
+}
+
+function formatInviteResultMessage(
+  invites: OnboardingInviteResult[],
+  errors: Array<{ email: string; reason: string }>,
+): string {
+  const lines = ["Generated invite links:"];
+  for (const invite of invites) {
+    lines.push(`- ${invite.email} — ${inviteEmailStatusLabel(invite.emailStatus)} — ${invite.inviteUrl}`);
+  }
+  if (errors.length > 0) {
+    lines.push("", "Invites that need attention:");
+    for (const error of errors) {
+      lines.push(`- ${error.email}: ${error.reason}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function onboardingV2Routes(db: Db) {
@@ -283,9 +315,13 @@ export function onboardingV2Routes(db: Db) {
     // a retry won't duplicate rows. Failures are logged but never block
     // the materialization phase — the user's UX matters more than 100%
     // goal materialization, and CoS can retry from the next turn.
+    let materializedGoalIds = {
+      longTermGoalId: null as string | null,
+      shortTermGoalId: null as string | null,
+    };
     if (cos) {
       try {
-        await materializeOnboardingGoals({ db })({
+        materializedGoalIds = await materializeOnboardingGoals({ db })({
           conversationId,
           companyId,
           ownerAgentId: cos.id,
@@ -345,11 +381,43 @@ ${kpis || "- (none captured)"}
     }
 
     if (cos) {
+      try {
+        await materializeOnboardingStarterWork({
+          db,
+          projects: projectService(db),
+          issues: issueService(db),
+        })({
+          conversationId,
+          companyId,
+          cosAgentId: cos.id,
+          createdAgentIds,
+          goalIds: materializedGoalIds,
+          plan: payload,
+        });
+      } catch (err) {
+        logger.error(
+          { err, conversationId, companyId, cosAgentId: cos.id },
+          "[onboarding-v2] materializeOnboardingStarterWork failed; continuing with onboarding completion",
+        );
+      }
+    }
+
+    if (cos) {
       await conversations.postMessage({
         conversationId,
         authorKind: "agent",
         authorId: cos.id,
         body: "Done — your team's ready. You can talk to any of them via @mention, or stay here and route through me.",
+        companyId,
+      });
+      await conversations.postMessage({
+        conversationId,
+        authorKind: "agent",
+        authorId: cos.id,
+        body: "",
+        cardKind: "invite_prompt_v1",
+        cardPayload: { companyId, conversationId },
+        companyId,
       });
     }
 
@@ -511,6 +579,7 @@ No greetings. No markdown headings outside the JSON block.`;
       authorKind: "agent",
       authorId: cos.id,
       body: visibleBody,
+      companyId,
     });
     const cardMsg = await conversations.postMessage({
       conversationId,
@@ -519,6 +588,7 @@ No greetings. No markdown headings outside the JSON block.`;
       body: "",
       cardKind: "agent_plan_proposal_v1",
       cardPayload: newPlan as unknown as Record<string, unknown>,
+      companyId,
     });
 
     res.json({
@@ -546,7 +616,7 @@ No greetings. No markdown headings outside the JSON block.`;
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { companyId, emails } = req.body as {
+    const { conversationId, companyId, emails } = req.body as {
       conversationId: string;
       companyId: string;
       emails: string[];
@@ -666,6 +736,35 @@ No greetings. No markdown headings outside the JSON block.`;
           "onboarding_invite_create_failed",
         );
         errors.push({ email: trimmed, reason: "invite-create-failed" });
+      }
+    }
+
+    if (typeof conversationId === "string" && conversationId.length > 0 && (created.length > 0 || errors.length > 0)) {
+      try {
+        const convoRows = await db
+          .select()
+          .from(assistantConversations)
+          .where(eq(assistantConversations.id, conversationId))
+          .limit(1);
+        const convo = convoRows[0];
+        if (convo?.companyId === companyId) {
+          const allAgents = await agents.list(companyId);
+          const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
+          if (cos) {
+            await conversations.postMessage({
+              conversationId,
+              authorKind: "agent",
+              authorId: cos.id,
+              body: formatInviteResultMessage(created, errors),
+              companyId,
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, companyId, conversationId },
+          "onboarding_invite_result_message_failed",
+        );
       }
     }
 

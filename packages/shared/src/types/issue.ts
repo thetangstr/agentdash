@@ -16,6 +16,7 @@ import type { Goal } from "./goal.js";
 import type { Project, ProjectWorkspace } from "./project.js";
 import type { ExecutionWorkspace, IssueExecutionWorkspaceSettings } from "./workspace-runtime.js";
 import type { IssueWorkProduct } from "./work-product.js";
+import type { DefinitionOfDone } from "../validators/goals-eval-hitl.js";
 
 export interface IssueAncestorProject {
   id: string;
@@ -267,6 +268,7 @@ export interface Issue {
   originFingerprint?: string | null;
   requestDepth: number;
   billingCode: string | null;
+  definitionOfDone?: DefinitionOfDone | null;
   assigneeAdapterOverrides: IssueAssigneeAdapterOverrides | null;
   executionPolicy?: IssueExecutionPolicy | null;
   executionState?: IssueExecutionState | null;

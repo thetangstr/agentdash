@@ -135,7 +135,166 @@ function buildFlatPrompt(input: LLMInput): string {
 
 let _e2eCallCount = 0;
 
-function e2eStubResponse(callIndex: number): string {
+function e2eCosGoalsResponse(): string {
+  return `Got it. Short-term you want to launch the onboarding product quickly, long-term you want an AI operations team, and the main constraint is limited founder time. I have enough to draft the first team.
+
+\`\`\`json
+{
+  "captured": {
+    "shortTerm": "Launch an AI-assisted onboarding product in 90 days",
+    "longTerm": "Build an AI operations team that can run customer onboarding without adding headcount",
+    "constraints": {
+      "teamSize": "tiny team",
+      "founderTime": "under two hours per customer"
+    }
+  },
+  "phase_decision": "advance_to_plan",
+  "next_question": "Want me to propose the first agent team?"
+}
+\`\`\``;
+}
+
+function e2eCosPlanResponse(): string {
+  return `I recommend a small launch pod: an implementation coordinator to run pilot onboarding, a compliance operator to maintain SOC 2 evidence workflows, and a customer support analyst to turn repeated questions into reusable answers. This keeps founder time low while creating the operating base for the long-term AI team. Want me to set them up, or revise?
+
+\`\`\`json
+{
+  "phase_decision": "stay_in_plan",
+  "plan": {
+    "rationale": "A three-agent launch pod fits the 90-day onboarding goal while respecting the limited-founder-time constraint.",
+    "agents": [
+      {
+        "name": "Iris",
+        "role": "implementation_coordinator",
+        "adapterType": "codex_local",
+        "responsibilities": ["Turn pilot needs into onboarding checklists", "Coordinate document requests", "Track founder time per customer"],
+        "kpis": ["Pilot customers onboarded", "Founder hours per customer"]
+      },
+      {
+        "name": "Morgan",
+        "role": "compliance_operator",
+        "adapterType": "codex_local",
+        "responsibilities": ["Maintain SOC 2 evidence workflows", "Identify missing customer documents", "Draft reusable compliance responses"],
+        "kpis": ["Evidence requests completed", "Checklist reuse rate"]
+      },
+      {
+        "name": "Nia",
+        "role": "customer_support_analyst",
+        "adapterType": "codex_local",
+        "responsibilities": ["Summarize repeated customer questions", "Draft answer templates", "Escalate blockers to the founder"],
+        "kpis": ["Repeated questions converted to templates", "Escalation response time"]
+      }
+    ],
+    "alignmentToShortTerm": "Launch the SOC 2 onboarding pilot with repeatable checklists and document workflows.",
+    "alignmentToLongTerm": "Create the first reusable operating loops for an AI customer-onboarding team."
+  }
+}
+\`\`\``;
+}
+
+function e2eCosRevisionResponse(): string {
+  return `Updated based on your feedback: I replaced the support analyst with a pilot onboarding coordinator and made the first milestone onboarding 3 pilot customers. Want me to set them up, or revise again?
+
+\`\`\`json
+{
+  "plan": {
+    "rationale": "The revised team focuses the first milestone on onboarding 3 pilot customers while preserving compliance and implementation coverage.",
+    "agents": [
+      {
+        "name": "Iris",
+        "role": "implementation_coordinator",
+        "adapterType": "codex_local",
+        "responsibilities": ["Turn pilot needs into onboarding checklists", "Coordinate document requests", "Track founder time per customer"],
+        "kpis": ["Pilot customers onboarded", "Founder hours per customer"]
+      },
+      {
+        "name": "Morgan",
+        "role": "compliance_operator",
+        "adapterType": "codex_local",
+        "responsibilities": ["Maintain SOC 2 evidence workflows", "Identify missing customer documents", "Draft reusable compliance responses"],
+        "kpis": ["Evidence requests completed", "Checklist reuse rate"]
+      },
+      {
+        "name": "Piper",
+        "role": "pilot_onboarding_coordinator",
+        "adapterType": "codex_local",
+        "responsibilities": ["Coordinate the first 3 pilot customers", "Track onboarding blockers", "Prepare weekly pilot status notes"],
+        "kpis": ["3 pilot customers onboarded", "Blocked pilot requests resolved"]
+      }
+    ],
+    "alignmentToShortTerm": "Focus the first milestone on onboarding 3 pilot customers with repeatable workflows.",
+    "alignmentToLongTerm": "Build the operating loop for a broader AI customer-onboarding team."
+  }
+}
+\`\`\``;
+}
+
+function e2eDeepInterviewRound(system: string): number | null {
+  if (!system.includes("ask one question") || !system.includes("ambiguity_score")) {
+    return null;
+  }
+  const match = system.match(/\[round\]\s*(\d+)/i);
+  if (!match) return null;
+  const round = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(round) ? round : null;
+}
+
+function e2eDeepInterviewResponse(round: number): string {
+  if (round <= 0) {
+    return `What's your primary goal for this rollout?
+
+\`\`\`json
+{
+  "ambiguity_score": 0.75,
+  "dimensions": { "goal": 0.3, "constraints": 0.2, "criteria": 0.15, "context": 0.2 },
+  "ontology_delta": [],
+  "next_phase": "continue",
+  "action": "ask_next"
+}
+\`\`\``;
+  }
+  if (round === 1) {
+    return `What constraints matter most to you?
+
+\`\`\`json
+{
+  "ambiguity_score": 0.45,
+  "dimensions": { "goal": 0.7, "constraints": 0.5, "criteria": 0.3, "context": 0.4 },
+  "ontology_delta": [],
+  "next_phase": "continue",
+  "action": "ask_next"
+}
+\`\`\``;
+  }
+  return `How will you know this succeeded?
+
+\`\`\`json
+{
+  "ambiguity_score": 0.12,
+  "dimensions": { "goal": 0.92, "constraints": 0.88, "criteria": 0.91, "context": 0.85 },
+  "ontology_delta": [],
+  "next_phase": "crystallize",
+  "action": "force_crystallize"
+}
+\`\`\``;
+}
+
+function e2eStubResponse(callIndex: number, input: LLMInput): string {
+  const system = input.system.toLowerCase();
+  const deepInterviewRound = e2eDeepInterviewRound(system);
+  if (deepInterviewRound !== null) {
+    return e2eDeepInterviewResponse(deepInterviewRound);
+  }
+  if (system.includes("wants to revise") || system.includes("apply their feedback as a delta")) {
+    return e2eCosRevisionResponse();
+  }
+  if (system.includes('"captured"') && system.includes("phase_decision")) {
+    return e2eCosGoalsResponse();
+  }
+  if (system.includes("agent_plan_proposal_v1") || system.includes('"plan"')) {
+    return e2eCosPlanResponse();
+  }
+
   // Canned responses: first three are engine turn responses (question + trailer
   // with ambiguity decreasing toward crystallize threshold). Fourth+ is a
   // plan proposal used by the CoS reply path.
@@ -229,7 +388,7 @@ export async function dispatchLLM(input: LLMInput): Promise<string> {
   // replier both route through this function, so one gate covers both paths.
   if (process.env.PAPERCLIP_E2E_SKIP_LLM === "true") {
     const idx = _e2eCallCount++;
-    const stubReply = e2eStubResponse(idx);
+    const stubReply = e2eStubResponse(idx, input);
     logger.info({ idx, adapter }, "[dispatch-llm] E2E stub — returning canned response");
     return stubReply;
   }

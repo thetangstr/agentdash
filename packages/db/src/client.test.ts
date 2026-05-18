@@ -44,6 +44,41 @@ if (!embeddedPostgresSupport.supported) {
 
 describeEmbeddedPostgres("applyPendingMigrations", () => {
   it(
+    "allows deep interview scope refs to use synthetic project keys",
+    async () => {
+      const connectionString = await createTempDatabase();
+
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const columns = await sql.unsafe<{ data_type: string }[]>(
+          `
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'deep_interview_states'
+              AND column_name = 'scope_ref_id'
+          `,
+        );
+        expect(columns[0]?.data_type).toBe("text");
+
+        const rows = await sql.unsafe<{ scope_ref_id: string }[]>(
+          `
+            INSERT INTO "deep_interview_states" ("scope", "scope_ref_id")
+            VALUES ('assess_project', 'company-1:pilot-onboarding')
+            RETURNING "scope_ref_id"
+          `,
+        );
+        expect(rows[0]?.scope_ref_id).toBe("company-1:pilot-onboarding");
+      } finally {
+        await sql.end();
+      }
+    },
+    20_000,
+  );
+
+  it(
     "applies an inserted earlier migration without replaying later legacy migrations",
     async () => {
       const connectionString = await createTempDatabase();

@@ -38,6 +38,14 @@ export {
   type MaterializeOnboardingGoalsInput,
   type MaterializeOnboardingGoalsDeps,
 } from "./materialize-onboarding-goals.js";
+export {
+  materializeOnboardingStarterWork,
+  ONBOARDING_STARTER_WORK_ORIGIN_KIND,
+  onboardingStarterWorkOriginId,
+  type MaterializeOnboardingStarterWorkDeps,
+  type MaterializeOnboardingStarterWorkInput,
+  type MaterializeOnboardingStarterWorkResult,
+} from "./materialize-onboarding-starter-work.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
@@ -72,7 +80,7 @@ export { conversationService } from "./conversations.js";
 export { conversationDispatch } from "./conversation-dispatch.js";
 export { cosReplier } from "./cos-replier.js";
 export { cosOnboardingStateService } from "./cos-onboarding-state.js";
-export { agentSummoner } from "./agent-summoner.js";
+export { agentSummoner, buildSummonedAgentFallbackReply } from "./agent-summoner.js";
 export { activityRouter } from "./activity-router.js";
 export { cosProactive } from "./cos-proactive.js";
 export { onboardingOrchestrator } from "./onboarding-orchestrator.js";

@@ -375,7 +375,12 @@ export function CompanyAccess() {
                   <div className="min-w-0 text-sm text-muted-foreground">{formatGrantSummary(member)}</div>
                   <div className="space-y-1 text-right">
                     <div className="flex justify-end gap-2">
-                      <Button size="sm" variant="outline" onClick={() => setEditingMemberId(member.id)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`company-settings-member-edit-${member.id}`}
+                        onClick={() => setEditingMemberId(member.id)}
+                      >
                         Edit
                       </Button>
                       <Button
@@ -414,6 +419,7 @@ export function CompanyAccess() {
                 <label className="space-y-2 text-sm">
                   <span className="font-medium">Company role</span>
                   <select
+                    data-testid={`company-settings-member-role-${editingMember.id}`}
                     className="w-full rounded-md border border-border bg-background px-3 py-2"
                     value={draftRole ?? ""}
                     onChange={(event) =>
@@ -510,6 +516,7 @@ export function CompanyAccess() {
               Cancel
             </Button>
             <Button
+              data-testid="company-settings-member-save-access"
               onClick={() => {
                 if (!editingMember) return;
                 updateMemberMutation.mutate({

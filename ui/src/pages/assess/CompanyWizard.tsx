@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Cpu,
   RotateCcw,
+  Send,
   Settings,
   Sparkles,
   Target,
@@ -97,6 +98,8 @@ const STEPS: StepDef[] = [
   { num: 4, label: "Goals", icon: Target },
 ];
 
+const DEEP_INTERVIEW_READY_RE = /\[deep-interview-ready\]\s*(\{[^\n}]*"stateId"[^\n}]*\})/;
+
 /* ------------------------------------------------------------------ */
 /*  CompanyWizard                                                      */
 /* ------------------------------------------------------------------ */
@@ -124,6 +127,7 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
   const [showResults, setShowResults] = useState(false);
+  const [followUpAnswer, setFollowUpAnswer] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
   // Hydrate the form with the active company's name on mount
@@ -140,9 +144,7 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
   const firedReadyRef = useRef(false);
   useEffect(() => {
     if (firedReadyRef.current || !onReadyToFinalize) return;
-    const match = output.match(
-      /\[deep-interview-ready\]\s*(\{[^\n}]*"stateId"[^\n}]*\})/,
-    );
+    const match = output.match(DEEP_INTERVIEW_READY_RE);
     if (!match) return;
     try {
       const env = JSON.parse(match[1]!) as {
@@ -204,21 +206,33 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
     return true;
   };
 
-  const runAssessment = useCallback(async () => {
+  const runAssessment = useCallback(async (userAnswer?: string) => {
     if (!companyId) return;
-    setOutput("");
+    const trimmedAnswer = userAnswer?.trim() ?? "";
+    if (trimmedAnswer) {
+      setOutput((prev) => {
+        const prefix = prev.trimEnd();
+        return `${prefix}${prefix ? "\n\n" : ""}**You:** ${trimmedAnswer}\n\n`;
+      });
+    } else {
+      firedReadyRef.current = false;
+      setOutput("");
+    }
     setError("");
     setIsStreaming(true);
     setShowResults(true);
     abortRef.current = new AbortController();
 
     try {
-      const stream = await assessApi.runAssessment(companyId, {
+      const assessmentBody: Record<string, unknown> = {
         ...form,
         industrySlug: toSlug(form.industry),
         currentSystems: [...form.currentSystems, form.customSystems].filter(Boolean).join(", "),
         companyUrl: form.companyUrl || undefined,
-      }, abortRef.current.signal);
+      };
+      if (trimmedAnswer) assessmentBody.userAnswer = trimmedAnswer;
+
+      const stream = await assessApi.runAssessment(companyId, assessmentBody, abortRef.current.signal);
 
       const reader = stream.getReader();
       const decoder = new TextDecoder();
@@ -243,11 +257,25 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
     setForm({ ...INITIAL_FORM, companyName: defaultCompanyName ?? "" });
     setOutput("");
     setError("");
+    setFollowUpAnswer("");
     setStep(1);
     setShowResults(false);
   };
 
   const showStored = !showResults && Boolean(storedQuery.data?.markdown);
+  const hasReadyMarker = DEEP_INTERVIEW_READY_RE.test(output);
+  const displayOutput = output.replace(
+    DEEP_INTERVIEW_READY_RE,
+    "Ready to hand off to your Chief of Staff.",
+  );
+  const showFollowUpInput = Boolean(onReadyToFinalize && showResults && output && !error && !isStreaming && !hasReadyMarker);
+  const canSendFollowUp = followUpAnswer.trim().length > 0 && !isStreaming && !hasReadyMarker;
+  const sendFollowUp = () => {
+    if (!canSendFollowUp) return;
+    const answer = followUpAnswer.trim();
+    setFollowUpAnswer("");
+    void runAssessment(answer);
+  };
 
   return (
     <>
@@ -293,7 +321,7 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
                   Next <ChevronRight size={14} strokeWidth={1.75} aria-hidden />
                 </Button>
               ) : (
-                <Button onClick={runAssessment} disabled={!canNext()}>
+                <Button onClick={() => void runAssessment()} disabled={!canNext()}>
                   <Sparkles size={14} strokeWidth={1.75} aria-hidden /> Generate assessment
                 </Button>
               )}
@@ -321,10 +349,30 @@ export function CompanyWizard({ companyId, defaultCompanyName, onSwitchMode, onR
           />
           <ReportPanel
             error={error}
-            output={output}
+            output={displayOutput}
             isStreaming={isStreaming}
             reportLabel={`Live report — ${form.companyName}`}
           />
+          {showFollowUpInput && (
+            <div className="mkt-assess__followup" data-testid="company-assess-followup">
+              <label className="mkt-assess__label" htmlFor="company-assess-followup-answer">
+                Your answer
+              </label>
+              <textarea
+                id="company-assess-followup-answer"
+                className="mkt-assess__input"
+                rows={3}
+                value={followUpAnswer}
+                onChange={(e) => setFollowUpAnswer(e.target.value)}
+                placeholder="Add context for the next question..."
+              />
+              <div className="mkt-assess__followup-actions">
+                <Button onClick={sendFollowUp} disabled={!canSendFollowUp}>
+                  <Send size={14} strokeWidth={1.75} aria-hidden /> Send answer
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>

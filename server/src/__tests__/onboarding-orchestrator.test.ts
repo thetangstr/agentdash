@@ -139,6 +139,34 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockCompanies.create).not.toHaveBeenCalled();
   });
 
+  it("serializes concurrent bootstrap calls for the same user so only one default conversation is created", async () => {
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let conversation: { id: string; companyId: string } | null = null;
+    const createConversation = vi.fn(async () => {
+      await delay(10);
+      conversation = { id: "conv-concurrent", companyId: "company-1" };
+      return conversation;
+    });
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1" },
+    ]);
+    mockCompanies.getById.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
+    mockAgents.list.mockResolvedValue([{ id: "agent-cos-1", role: "chief_of_staff", adapterType: "claude_api", adapterConfig: {} }]);
+    mockAgents.listKeys.mockResolvedValue([{ id: "key-1" }]);
+    mockConversations.findByCompany.mockImplementation(async () => conversation);
+    mockConversations.create.mockImplementation(createConversation);
+
+    const [first, second] = await Promise.all([
+      onboardingOrchestrator(deps as any).bootstrap("user-1"),
+      onboardingOrchestrator(deps as any).bootstrap("user-1"),
+    ]);
+
+    expect(first.conversationId).toBe("conv-concurrent");
+    expect(second.conversationId).toBe("conv-concurrent");
+    expect(createConversation).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("throws SingleCompanyInstallationError when an active company exists and the override is not active", async () => {
     // Simulate: an active company already exists, and the env-var override is NOT active.
     // The orchestrator should reject the bootstrap attempt.

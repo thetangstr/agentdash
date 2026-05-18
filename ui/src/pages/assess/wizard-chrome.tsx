@@ -476,6 +476,14 @@ export function AssessLocalStyles() {
         display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
         font-family: var(--mkt-font-mono); font-size: 12px; color: var(--mkt-accent-ink);
       }
+      .mkt-assess__followup {
+        margin-top: 16px; padding: 20px;
+        background: #fff; border: 1px solid var(--mkt-rule); border-radius: 12px;
+        box-shadow: 0 4px 18px -16px rgba(31,30,29,0.14);
+      }
+      .mkt-assess__followup-actions {
+        display: flex; justify-content: flex-end; margin-top: 12px;
+      }
       .mkt-assess__spin {
         animation: mkt-assess-spin 1.1s linear infinite;
       }

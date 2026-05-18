@@ -313,53 +313,6 @@ export function assessRoutes(db: Db) {
         return;
       }
 
-      if (deepInterviewEnabled()) {
-        // AgentDash (Phase D): engine path — drive one final turn, stream out
-        // the next question or the crystallization marker. Phase F will
-        // replace this with the crystallizeAndAdvanceCos handoff.
-        const projectId = typeof (intake as { projectId?: string }).projectId === "string"
-          ? (intake as { projectId: string }).projectId
-          : `${companyId}:${((intake as { projectName?: string }).projectName ?? "project").slice(0, 64)}`;
-        const initialIdea = [
-          (intake as { projectName?: string }).projectName ?? "",
-          (intake as { oneLineGoal?: string }).oneLineGoal ?? "",
-          (intake as { description?: string }).description ?? "",
-        ].filter(Boolean).join("\n\n");
-
-        const lastAnswer = answers.length > 0
-          ? String((answers[answers.length - 1] as { text?: unknown })?.text ?? "")
-          : "";
-
-        const turn = await engine.nextTurn({
-          scope: "assess_project" as DeepInterviewScope,
-          scopeRefId: projectId,
-          userId: req.actor.userId ?? "board",
-          companyId,
-          initialIdea,
-          adapter: defaultAdapter(),
-          userAnswer: lastAnswer || undefined,
-        });
-
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        // Closes #256: see matching company-assess path above.
-        if (res.writableEnded) return;
-        if (turn.kind === "question") {
-          res.write(turn.question);
-        } else {
-          // AgentDash (Phase F): structured marker — see company-mode emission above.
-          const env = JSON.stringify({
-            stateId: turn.stateId,
-            round: turn.round,
-            ambiguity: Number(turn.ambiguityScore.toFixed(3)),
-          });
-          res.write(`[deep-interview-ready] ${env}`);
-        }
-        res.end();
-        return;
-      }
-
       const { stream, onComplete } = await projectSvc.runProjectAssessment(companyId, {
         intake,
         answers,

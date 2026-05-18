@@ -26,11 +26,11 @@ export const deepInterviewStates = pgTable(
     // One of `DI_SCOPES`. Stored as text so that adding a new scope is a code-
     // only change with no migration; validated at the application boundary.
     scope: text("scope").notNull(),
-    // Polymorphic reference: for `cos_onboarding` this is the conversation_id;
-    // for `assess_project` it is the project_id. No FK is declared because the
-    // referenced table differs by scope — invariants are enforced in the
-    // service layer (server/src/services/deep-interview-engine.ts).
-    scopeRefId: uuid("scope_ref_id").notNull(),
+    // Polymorphic reference: for `cos_onboarding` this is usually the company
+    // or conversation id; for `assess_project` it may be a synthetic
+    // company/project key before a first-class project row exists. No FK is
+    // declared because the referenced surface differs by scope.
+    scopeRefId: text("scope_ref_id").notNull(),
     // "in_progress" | "crystallized" | "abandoned".
     status: text("status").notNull().default("in_progress"),
     currentRound: integer("current_round").notNull().default(0),

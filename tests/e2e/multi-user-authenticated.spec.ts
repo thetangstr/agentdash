@@ -29,6 +29,14 @@ type CompanyMember = {
   user: { id: string; email: string | null; name: string | null } | null;
 };
 
+type JoinRequestSummary = {
+  id: string;
+  status: "pending_approval" | "approved" | "rejected";
+  requestType: "human" | "agent";
+  requesterUser?: { email: string | null; name: string | null } | null;
+  requestEmailSnapshot?: string | null;
+};
+
 type SessionJsonResponse<T> = {
   ok: boolean;
   status: number;
@@ -90,9 +98,9 @@ function createBootstrapInvite() {
 
 async function signUp(page: Page, user: HumanUser) {
   await page.goto(`${BASE}/auth`);
-  await expect(page.getByRole("heading", { name: "Sign in to Paperclip" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await page.getByRole("button", { name: "Create one" }).click();
-  await expect(page.getByRole("heading", { name: "Create your Paperclip account" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create your workspace" })).toBeVisible();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
@@ -102,8 +110,8 @@ async function signUp(page: Page, user: HumanUser) {
 
 async function acceptBootstrapInvite(page: Page, inviteUrl: string) {
   await page.goto(inviteUrl);
-  await expect(page.getByRole("heading", { name: "Bootstrap your Paperclip instance" })).toBeVisible();
-  await page.getByRole("button", { name: "Accept bootstrap invite" }).click();
+  await expect(page.getByRole("heading", { name: "Set up AgentDash" })).toBeVisible();
+  await page.getByRole("button", { name: "Accept invite" }).click();
   await expect(page.getByRole("heading", { name: "Bootstrap complete" })).toBeVisible({
     timeout: 20_000,
   });
@@ -121,38 +129,36 @@ async function createCompanyForSession(page: Page, nextCompanyName: string) {
 }
 
 async function createAuthenticatedInvite(page: Page, companyPrefix: string) {
-  await page.goto(`${BASE}/${companyPrefix}/company/settings`);
+  await page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
   await expect(page.getByTestId("company-settings-invites-section")).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByTestId("company-settings-human-invite-role").selectOption("operator");
+  await page.getByTestId("company-settings-human-invite-role-operator").check();
   await page.getByTestId("company-settings-create-human-invite").click();
   const inviteField = page.getByTestId("company-settings-human-invite-url");
   await expect(inviteField).toBeVisible({ timeout: 20_000 });
-  return (await inviteField.inputValue()).trim();
+  return (await inviteField.textContent())?.trim() ?? "";
 }
 
 async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) {
   await page.goto(inviteUrl);
-  await expect(page.getByText("Sign in or create an account before submitting a human join request.")).toBeVisible();
-  await page.getByRole("link", { name: "Sign in / Create account" }).click();
-  await expect(page).toHaveURL(/\/auth\?next=/);
-  await expect(page.getByRole("heading", { name: "Sign in to Paperclip" })).toBeVisible();
-  await page.getByRole("button", { name: "Create one" }).click();
+  await expect(page.getByRole("heading", { name: /Join / })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("invite-inline-auth")).toBeVisible();
   await page.getByLabel("Name").fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
-  await page.getByRole("button", { name: "Create Account" }).click();
-  await expect(page).toHaveURL(new RegExp(`/invite/[^/]+$`), { timeout: 20_000 });
+  await page.getByRole("button", { name: "Create account and continue" }).click();
 }
 
-async function acceptHumanInvite(page: Page) {
-  await expect(page.getByRole("button", { name: "Join company" })).toBeEnabled();
-  await page.getByRole("button", { name: "Join company" }).click();
-  await expect(page.getByRole("heading", { name: "You joined the company" })).toBeVisible({
+async function requestHumanInviteAccess(page: Page) {
+  await expect(page).not.toHaveURL(/\/auth/, { timeout: 20_000 });
+  const acceptButton = page.getByRole("button", { name: "Accept invite" });
+  if (await acceptButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await acceptButton.click();
+  }
+  await expect(page.getByTestId("invite-pending-approval")).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("link", { name: "Open board" }).click();
 }
 
 async function sessionJsonRequest<T>(
@@ -223,6 +229,52 @@ async function waitForMember(page: Page, companyId: string, email: string) {
   return member!;
 }
 
+async function waitForHumanJoinRequest(page: Page, companyId: string, email: string) {
+  let joinRequest: JoinRequestSummary | null = null;
+  await expect
+    .poll(
+      async () => {
+        const joinRequestsRes = await sessionJsonRequest<JoinRequestSummary[]>(
+          page,
+          `${BASE}/api/companies/${companyId}/join-requests?status=pending_approval&requestType=human`
+        );
+        expect(joinRequestsRes.ok).toBe(true);
+        const body = joinRequestsRes.json;
+        if (!body) return null;
+        joinRequest =
+          body.find(
+            (request) =>
+              request.requesterUser?.email === email ||
+              request.requestEmailSnapshot === email
+          ) ?? null;
+        return joinRequest;
+      },
+      {
+        timeout: 20_000,
+        intervals: [500, 1_000, 2_000],
+      }
+    )
+    .toMatchObject({
+      status: "pending_approval",
+      requestType: "human",
+    });
+  return joinRequest!;
+}
+
+async function approveHumanJoinRequest(page: Page, companyId: string, requestId: string) {
+  const approveRes = await sessionJsonRequest<JoinRequestSummary>(
+    page,
+    `${BASE}/api/companies/${companyId}/join-requests/${requestId}/approve`,
+    { method: "POST" }
+  );
+  expect(approveRes.ok).toBe(true);
+  expect(approveRes.json).toMatchObject({
+    id: requestId,
+    status: "approved",
+    requestType: "human",
+  });
+}
+
 async function waitForMemberRole(
   page: Page,
   companyId: string,
@@ -287,21 +339,28 @@ test.describe("Multi-user: authenticated mode", () => {
     const invited = await newPage(browser);
     try {
       await signUpFromInvite(invited.page, inviteUrl, invitedUser);
-      await acceptHumanInvite(invited.page);
-      await expect(invited.page).not.toHaveURL(/\/auth/, { timeout: 10_000 });
+      await requestHumanInviteAccess(invited.page);
 
+      const joinRequest = await waitForHumanJoinRequest(page, company.id, invitedUser.email);
+      await approveHumanJoinRequest(page, company.id, joinRequest.id);
       const joinedMember = await waitForMember(page, company.id, invitedUser.email);
+      await invited.page.goto(`${BASE}/${companyPrefix}/dashboard`);
+      await expect(invited.page.getByTestId("layout-account-menu-trigger")).toContainText(
+        invitedUser.name
+      );
 
-      await page.goto(`${BASE}/${companyPrefix}/company/settings`);
+      await page.goto(`${BASE}/${companyPrefix}/company/settings/access`);
+      await page.getByTestId(`company-settings-member-edit-${joinedMember.id}`).click();
       const roleSelect = page.getByTestId(`company-settings-member-role-${joinedMember.id}`);
       await expect(roleSelect).toBeVisible({ timeout: 20_000 });
       await roleSelect.selectOption("viewer");
       await expect(roleSelect).toHaveValue("viewer");
+      await page.getByTestId("company-settings-member-save-access").click();
       await waitForMemberRole(page, company.id, joinedMember.id, "viewer");
 
-      await invited.page.goto(`${BASE}/${companyPrefix}/company/settings`);
+      await invited.page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
       await expect(
-        invited.page.getByText("Your current company role cannot create human invites.")
+        invited.page.getByText("You do not have permission to manage company invites.")
       ).toBeVisible({ timeout: 20_000 });
       await expect(
         invited.page.getByTestId("company-settings-create-human-invite")

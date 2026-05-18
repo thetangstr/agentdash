@@ -180,7 +180,7 @@ export function CompanyInvites() {
         </p>
       </div>
 
-      <section className="space-y-4 rounded-xl border border-border p-5">
+      <section className="space-y-4 rounded-xl border border-border p-5" data-testid="company-settings-invites-section">
         <div className="space-y-1">
           <h2 className="text-sm font-semibold">Create invite</h2>
           <p className="text-sm text-muted-foreground">
@@ -199,6 +199,7 @@ export function CompanyInvites() {
                   className={`flex cursor-pointer gap-3 px-4 py-4 ${index > 0 ? "border-t border-border" : ""}`}
                 >
                   <input
+                    data-testid={`company-settings-human-invite-role-${option.value}`}
                     type="radio"
                     name="invite-role"
                     value={option.value}
@@ -229,7 +230,11 @@ export function CompanyInvites() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={() => createInviteMutation.mutate()} disabled={createInviteMutation.isPending}>
+          <Button
+            data-testid="company-settings-create-human-invite"
+            onClick={() => createInviteMutation.mutate()}
+            disabled={createInviteMutation.isPending}
+          >
             {createInviteMutation.isPending ? "Creating…" : "Create invite"}
           </Button>
           <span className="text-sm text-muted-foreground">Invite history below keeps the audit trail.</span>
@@ -248,11 +253,12 @@ export function CompanyInvites() {
                 ) : null}
               </div>
               <div className="text-sm text-muted-foreground">
-                This URL includes the current Paperclip domain returned by the server.
+                This URL includes the current AgentDash domain returned by the server.
               </div>
             </div>
             <button
               type="button"
+              data-testid="company-settings-human-invite-url"
               onClick={async () => {
                 const copied = await copyInviteUrl(latestInviteUrl);
                 setLatestInviteCopied(copied);

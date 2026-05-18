@@ -3,8 +3,8 @@ import { parseMentions, type AgentDirEntry } from "@paperclipai/shared";
 interface Deps {
   conversations: any;
   agents: { listForCompany: (companyId: string) => Promise<any[]>; getById: (id: string) => Promise<any> };
-  summoner: { summon: (input: { conversationId: string; agentId: string; triggeringMessageId: string }) => Promise<any> };
-  replier: { reply: (input: { conversationId: string; cosAgentId: string }) => Promise<any> };
+  summoner: { summon: (input: { conversationId: string; companyId: string; agentId: string; triggeringMessageId: string }) => Promise<any> };
+  replier: { reply: (input: { conversationId: string; cosAgentId: string; companyId?: string }) => Promise<any> };
   cosResolver: { findByCompany: (companyId: string) => Promise<any> };
 }
 
@@ -28,6 +28,7 @@ export function conversationDispatch(deps: Deps) {
       if (resolved && resolved.agentId) {
         return deps.summoner.summon({
           conversationId: input.conversationId,
+          companyId: input.companyId,
           agentId: resolved.agentId,
           triggeringMessageId: input.messageId,
         });
@@ -38,6 +39,7 @@ export function conversationDispatch(deps: Deps) {
       return deps.replier.reply({
         conversationId: input.conversationId,
         cosAgentId: cos.id,
+        companyId: input.companyId,
       });
     },
   };

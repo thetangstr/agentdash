@@ -81,6 +81,21 @@ export function shouldClearStoredCompanySelection(input: {
   return !input.isLoading && !input.unauthorized && input.companies.length === 0;
 }
 
+function normalizeCompanyListResult(value: unknown): CompanyListResult {
+  if (Array.isArray(value)) {
+    return { companies: value as Company[], unauthorized: false };
+  }
+  if (value && typeof value === "object") {
+    const companies = (value as { companies?: unknown }).companies;
+    const unauthorized = (value as { unauthorized?: unknown }).unauthorized === true;
+    return {
+      companies: Array.isArray(companies) ? companies as Company[] : [],
+      unauthorized,
+    };
+  }
+  return { companies: [], unauthorized: false };
+}
+
 export function CompanyProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [selectionSource, setSelectionSource] = useState<CompanySelectionSource>("bootstrap");
@@ -92,7 +107,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       try {
         return { companies: await companiesApi.list(), unauthorized: false };
       } catch (err) {
-        if (err instanceof ApiError && err.status === 401) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           return { companies: [], unauthorized: true };
         }
         throw err;
@@ -101,8 +116,9 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     retry: 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
   });
-  const companies = companiesResult.companies;
-  const companyListUnauthorized = companiesResult.unauthorized;
+  const normalizedCompaniesResult = normalizeCompanyListResult(companiesResult);
+  const companies = normalizedCompaniesResult.companies;
+  const companyListUnauthorized = normalizedCompaniesResult.unauthorized;
   const sidebarCompanies = useMemo(
     () => companies.filter((company) => company.status !== "archived"),
     [companies],

@@ -62,6 +62,25 @@ interface BootstrapResult {
   conversationId: string;
 }
 
+const bootstrapLocks = new Map<string, Promise<BootstrapResult>>();
+
+function withBootstrapLock(
+  userId: string,
+  task: () => Promise<BootstrapResult>,
+): Promise<BootstrapResult> {
+  const previous = bootstrapLocks.get(userId);
+  const run = (previous ?? Promise.resolve()).then(task, task);
+  bootstrapLocks.set(userId, run);
+  void run
+    .finally(() => {
+      if (bootstrapLocks.get(userId) === run) {
+        bootstrapLocks.delete(userId);
+      }
+    })
+    .catch(() => undefined);
+  return run;
+}
+
 // In `local_trusted` deployment mode, the synthetic actor has userId="local-board"
 // and there is NO auth_users row. The orchestrator must still bootstrap a working
 // workspace so the founding user can hit /cos and start chatting.
@@ -78,7 +97,7 @@ function resolveLocalUser(userId: string): { id: string; email: string | null } 
 
 export function onboardingOrchestrator(deps: Deps) {
   return {
-    bootstrap: async (userId: string): Promise<BootstrapResult> => {
+    bootstrap: async (userId: string): Promise<BootstrapResult> => withBootstrapLock(userId, async () => {
       // Try the real auth_users lookup first; fall back to local-trusted sentinel.
       const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
@@ -226,7 +245,7 @@ export function onboardingOrchestrator(deps: Deps) {
         cosAgentId: cos.id,
         conversationId: conversation.id,
       };
-    },
+    }),
   };
 }
 

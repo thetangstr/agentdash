@@ -11,6 +11,7 @@ import {
   cosReplier,
   cosOnboardingStateService,
   agentSummoner,
+  buildSummonedAgentFallbackReply,
 } from "../services/index.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
@@ -39,7 +40,9 @@ export function conversationRoutes(db: Db) {
       conversations: svc,
       agents: { getById: (id: string) => agents.getById(id) },
       adapterFor: (_t: string) => ({
-        execute: async () => ({ output: "Stub agent reply" }),
+        execute: async ({ agent, prompt }: { agent: { name?: string | null; role?: string | null; title?: string | null }; prompt: string }) => ({
+          output: buildSummonedAgentFallbackReply({ agent, prompt }),
+        }),
       }),
     }),
     // dispatchLLM routes to the CoS chat adapter selected via `agentdash setup`

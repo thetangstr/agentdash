@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Company } from "@paperclipai/shared";
+import { ApiError } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import {
   CompanyProvider,
@@ -190,6 +191,46 @@ describe("CompanyProvider", () => {
     });
 
     expect(seen).toEqual([null, "company-1"]);
+    expect(localStorage.getItem("agentdash.selectedCompanyId")).toBe("company-1");
+  });
+
+  it("tolerates legacy array-shaped companies cache data", async () => {
+    queryClient.setQueryData(queryKeys.companies.all, [makeCompany("company-1")]);
+    mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+    const seen: Array<string | null> = [];
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyProvider>
+            <Probe onSelectedCompanyId={(companyId) => seen.push(companyId)} />
+          </CompanyProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(seen).toEqual([null, "company-1"]);
+  });
+
+  it("treats forbidden company lists as unauthorized instead of clearing selection", async () => {
+    localStorage.setItem("agentdash.selectedCompanyId", "company-1");
+    mockCompaniesApi.list.mockRejectedValue(new ApiError("Forbidden", 403, { error: "Forbidden" }));
+    const seen: Array<string | null> = [];
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyProvider>
+            <Probe onSelectedCompanyId={(companyId) => seen.push(companyId)} />
+          </CompanyProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(seen).toEqual([null]);
     expect(localStorage.getItem("agentdash.selectedCompanyId")).toBe("company-1");
   });
 });

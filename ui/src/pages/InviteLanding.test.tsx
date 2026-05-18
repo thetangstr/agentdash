@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteLandingPage } from "./InviteLanding";
+import { queryKeys } from "../lib/queryKeys";
 
 const getInviteMock = vi.hoisted(() => vi.fn());
 const acceptInviteMock = vi.hoisted(() => vi.fn());
@@ -146,7 +147,7 @@ describe("InviteLandingPage", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("You've been invited to join Paperclip");
+    expect(container.textContent).toContain("You've been invited to join AgentDash");
     expect(container.textContent).toContain("Join Acme Robotics");
     expect(container.textContent).toContain("Create account");
     expect(container.textContent).toContain("I already have an account");
@@ -272,7 +273,7 @@ describe("InviteLandingPage", () => {
       password: "wrongpass",
     });
     expect(container.textContent).toContain(
-      "That email and password did not match an existing Paperclip account. Check both fields, or create an account first if you are new here.",
+      "That email and password did not match an existing AgentDash account. Check both fields, or create an account first if you are new here.",
     );
 
     await act(async () => {
@@ -473,6 +474,62 @@ describe("InviteLandingPage", () => {
     expect(container.textContent).toContain(
       "Ask them to visit Company Settings → Access to approve your request.",
     );
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("handles the shared CompanyProvider-shaped companies cache on invite pages", async () => {
+    getInviteMock.mockResolvedValue({
+      id: "invite-1",
+      companyId: "company-1",
+      companyName: "Acme Robotics",
+      companyLogoUrl: "/api/invites/pcp_invite_test/logo",
+      companyBrandColor: "#114488",
+      inviteType: "company_join",
+      allowedJoinTypes: "both",
+      humanRole: "operator",
+      expiresAt: "2027-03-07T00:10:00.000Z",
+      inviteMessage: "Welcome aboard.",
+      joinRequestStatus: "pending_approval",
+      joinRequestType: "human",
+    });
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: {
+        id: "user-1",
+        name: "Jane Example",
+        email: "jane@example.com",
+        image: null,
+      },
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(queryKeys.companies.all, {
+      companies: [],
+      unauthorized: false,
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="invite-pending-approval"]')).not.toBeNull();
+    expect(container.textContent).toContain("Your request is still awaiting approval.");
 
     await act(async () => {
       root.unmount();

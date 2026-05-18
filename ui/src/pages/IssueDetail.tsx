@@ -129,6 +129,7 @@ import {
   Plus,
   Repeat,
   SlidersHorizontal,
+  Target,
   Trash2,
   XCircle,
 } from "lucide-react";
@@ -3130,6 +3131,21 @@ export function IssueDetail() {
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground opacity-50 px-1 -mx-1 py-0.5">
               <Hexagon className="h-3 w-3 shrink-0" />
               No project
+            </span>
+          )}
+
+          {issue.goalId ? (
+            <Link
+              to={`/goals/${issue.goalId}`}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors rounded px-1 -mx-1 py-0.5 min-w-0"
+            >
+              <Target className="h-3 w-3 shrink-0" />
+              <span className="truncate">{issue.goal?.title ?? issue.goalId.slice(0, 8)}</span>
+            </Link>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground opacity-50 px-1 -mx-1 py-0.5">
+              <Target className="h-3 w-3 shrink-0" />
+              No goal
             </span>
           )}
 

@@ -13,7 +13,8 @@ import { conversationService } from "../services/conversations.js";
 import { agentService } from "../services/agents.js";
 import { logger } from "../middleware/logger.js";
 import { sendEmail } from "../auth/email.js";
-import { unauthorized, forbidden } from "../errors.js";
+import { unauthorized } from "../errors.js";
+import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 interface RoutesConfig {
   stripe: any;
@@ -153,26 +154,27 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   });
 
   router.post("/checkout-session", async (req, res) => {
-    if (req.actor.type !== "board" || !req.actor.userId) throw unauthorized("Sign-in required");
     const { companyId } = req.body as { companyId: string };
-    if (!req.actor.companyIds?.includes(companyId)) throw forbidden("Not a member of this company");
+    assertBoard(req);
+    if (!req.actor.userId) throw unauthorized("Sign-in required");
+    assertCompanyAccess(req, companyId);
     const r = await svc.createCheckoutSession(companyId);
     res.json(r);
   });
 
   router.post("/portal-session", async (req, res) => {
-    if (req.actor.type !== "board" || !req.actor.userId) throw unauthorized("Sign-in required");
     const { companyId } = req.body as { companyId: string };
-    if (!req.actor.companyIds?.includes(companyId)) throw forbidden("Not a member of this company");
+    assertBoard(req);
+    if (!req.actor.userId) throw unauthorized("Sign-in required");
+    assertCompanyAccess(req, companyId);
     const r = await svc.createPortalSession(companyId);
     res.json(r);
   });
 
   router.get("/status", async (req, res) => {
     const companyId = String(req.query.companyId ?? "");
-    if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
-      throw forbidden("Not a member of this company");
-    }
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
     const r = await svc.getStatus(companyId);
     res.json(r);
   });

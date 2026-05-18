@@ -48,6 +48,19 @@ function makeMockDb(selectResults: unknown[][]) {
   } as any;
 }
 
+async function readStreamText(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    output += decoder.decode(value, { stream: true });
+  }
+  output += decoder.decode();
+  return output;
+}
+
 // ---- Subject under test ----------------------------------------------------
 
 import { assessProjectService } from "../services/assess-project.js";
@@ -214,5 +227,49 @@ describe("assessProjectService.listProjectAssessments", () => {
 
     expect(result[0].slug).toBe("newer");
     expect(result[1].slug).toBe("older");
+  });
+});
+
+describe("assessProjectService.runProjectAssessment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.ASSESS_MINIMAX_API_KEY;
+    process.env.PAPERCLIP_E2E_SKIP_LLM = "true";
+  });
+
+  it("uses a local report stream and persists output in E2E skip mode", async () => {
+    const db = makeMockDb([]);
+    const svc = assessProjectService(db);
+
+    const result = await svc.runProjectAssessment("company-1", {
+      intake: {
+        projectName: "SharePoint Cleanup",
+        oneLineGoal: "Retire stale documents",
+        description: "Find stale documents and nominate a source of truth.",
+        sponsor: "Ops",
+      },
+      answers: [{ questionId: "q1", text: "Reduce founder time." }],
+      rephrased: "Clean up SharePoint.",
+    });
+
+    const text = await readStreamText(result.stream);
+    expect(text).toContain("data: ");
+    expect(text).toContain("SharePoint Cleanup");
+
+    await result.onComplete("# Project Assessment\n\nReport body");
+
+    expect(db.insert).toHaveBeenCalledTimes(2);
+    expect(db.values).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-1",
+      contextType: "agent_research",
+      key: "project-assessment:sharepoint-cleanup",
+      value: "# Project Assessment\n\nReport body",
+    }));
+    expect(db.values).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: "company-1",
+      contextType: "agent_research",
+      key: "project-assessment-input:sharepoint-cleanup",
+      value: expect.stringContaining("SharePoint Cleanup"),
+    }));
   });
 });

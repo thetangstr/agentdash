@@ -5,6 +5,7 @@ import type {
   WorkspaceRuntimeService,
 } from "./workspace-runtime.js";
 import type { AgentEnvConfig } from "./secrets.js";
+import type { DefinitionOfDone } from "../validators/goals-eval-hitl.js";
 
 export type ProjectWorkspaceSourceType = "local_path" | "git_repo" | "remote_managed" | "non_git_path";
 export type ProjectWorkspaceVisibility = "default" | "advanced";
@@ -67,6 +68,7 @@ export interface Project {
   targetDate: string | null;
   color: string | null;
   env: AgentEnvConfig | null;
+  definitionOfDone?: DefinitionOfDone | null;
   pauseReason: PauseReason | null;
   pausedAt: Date | null;
   executionWorkspacePolicy: ProjectExecutionWorkspacePolicy | null;

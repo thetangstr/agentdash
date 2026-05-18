@@ -45,6 +45,61 @@ export function toSlug(s: string): string {
     .slice(0, 80) || "project";
 }
 
+function e2eSkipLLM(): boolean {
+  return process.env.PAPERCLIP_E2E_SKIP_LLM === "true";
+}
+
+function toSseTextStream(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const frame = JSON.stringify({
+        type: "content_block_delta",
+        delta: { text },
+      });
+      controller.enqueue(new TextEncoder().encode(`data: ${frame}\n\n`));
+      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+}
+
+function buildLocalProjectAssessment(input: {
+  intake: ProjectIntake;
+  answers: ProjectClarifyAnswer[];
+  rephrased: string;
+}): string {
+  const projectName = input.intake.projectName || "Project";
+  const goal = input.intake.oneLineGoal || input.rephrased || "Clarify the workflow and launch a first agent safely.";
+  const answerLines = input.answers
+    .filter((answer) => answer.text.trim().length > 0)
+    .map((answer) => `- ${answer.text.trim()}`)
+    .join("\n");
+
+  return [
+    `# ${projectName} - Project Assessment`,
+    "",
+    "## Recommended agent",
+    "Start with a project operations agent that can inventory the work, propose a source-of-truth model, and keep the rollout checklist current for the human owner.",
+    "",
+    "## Goal",
+    goal,
+    "",
+    "## Clarifying input",
+    answerLines || "- No clarifying answers were provided.",
+    "",
+    "## Rollout plan",
+    "1. Inventory the current source material and classify stale, duplicate, and authoritative content.",
+    "2. Define review criteria, approval owners, and the first workflow the agent may run.",
+    "3. Run a pilot on a narrow document set, measure review time, and capture exceptions.",
+    "4. Promote the working pattern into a recurring operating routine.",
+    "",
+    "## Risks and controls",
+    "- Require human approval before retiring documents or changing authoritative records.",
+    "- Keep an audit trail of source documents, decisions, and unresolved conflicts.",
+    "- Start with read-only access until the pilot criteria are met.",
+  ].join("\n");
+}
+
 async function getCompanyName(db: Db, companyId: string): Promise<string> {
   const rows = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1);
   return rows[0]?.name ?? "the company";
@@ -73,6 +128,50 @@ function extractJsonFromText(text: string): string {
 }
 
 export function assessProjectService(db: Db) {
+  async function persistProjectAssessment(
+    companyId: string,
+    input: {
+      intake: ProjectIntake;
+      answers: ProjectClarifyAnswer[];
+      rephrased: string;
+    },
+    slug: string,
+    fullOutput: string,
+  ): Promise<void> {
+    if (!fullOutput.trim()) {
+      logger.warn({ companyId, slug }, "Project assessment produced empty output; skipping persistence");
+      return;
+    }
+
+    await db.insert(companyContext).values({
+      companyId,
+      contextType: "agent_research",
+      key: PROJECT_KEY_PREFIX + slug,
+      value: fullOutput,
+      confidence: "0.95",
+    }).onConflictDoUpdate({
+      target: [companyContext.companyId, companyContext.contextType, companyContext.key],
+      set: { value: fullOutput, confidence: "0.95", updatedAt: new Date() },
+    });
+
+    const inputJson = JSON.stringify({
+      intake: input.intake,
+      answers: input.answers,
+      rephrased: input.rephrased,
+      projectName: input.intake.projectName,
+    });
+    await db.insert(companyContext).values({
+      companyId,
+      contextType: "agent_research",
+      key: PROJECT_INPUT_KEY_PREFIX + slug,
+      value: inputJson,
+      confidence: "0.99",
+    }).onConflictDoUpdate({
+      target: [companyContext.companyId, companyContext.contextType, companyContext.key],
+      set: { value: inputJson, updatedAt: new Date() },
+    });
+  }
+
   return {
     /**
      * Single non-streaming MiniMax call. Returns rephrased + 6-10 questions
@@ -210,9 +309,19 @@ export function assessProjectService(db: Db) {
       onComplete: (fullOutput: string) => Promise<void>;
       slug: string;
     }> {
+      const slug = toSlug(input.intake.projectName);
+
+      if (e2eSkipLLM()) {
+        const markdown = buildLocalProjectAssessment(input);
+        return {
+          stream: toSseTextStream(markdown),
+          slug,
+          onComplete: (fullOutput: string) => persistProjectAssessment(companyId, input, slug, fullOutput),
+        };
+      }
+
       const apiKey = getApiKey();
       const companyName = await getCompanyName(db, companyId);
-      const slug = toSlug(input.intake.projectName);
 
       const systemPrompt = buildReportSystemPrompt(companyName);
       const userPrompt = buildReportUserPrompt(input.intake, input.rephrased, input.answers, companyName);
@@ -244,43 +353,7 @@ export function assessProjectService(db: Db) {
       return {
         stream: upstreamRes.body!,
         slug,
-        onComplete: async (fullOutput: string) => {
-          if (!fullOutput.trim()) {
-            logger.warn({ companyId, slug }, "Project assessment produced empty output; skipping persistence");
-            return;
-          }
-
-          // Store markdown report
-          await db.insert(companyContext).values({
-            companyId,
-            contextType: "agent_research",
-            key: PROJECT_KEY_PREFIX + slug,
-            value: fullOutput,
-            confidence: "0.95",
-          }).onConflictDoUpdate({
-            target: [companyContext.companyId, companyContext.contextType, companyContext.key],
-            set: { value: fullOutput, confidence: "0.95", updatedAt: new Date() },
-          });
-
-          // AgentDash: Slimmed input shape — just intake + Q&A + rephrased.
-          // No legacy structured fields; the Q&A carries that information now.
-          const inputJson = JSON.stringify({
-            intake: input.intake,
-            answers: input.answers,
-            rephrased: input.rephrased,
-            projectName: input.intake.projectName,
-          });
-          await db.insert(companyContext).values({
-            companyId,
-            contextType: "agent_research",
-            key: PROJECT_INPUT_KEY_PREFIX + slug,
-            value: inputJson,
-            confidence: "0.99",
-          }).onConflictDoUpdate({
-            target: [companyContext.companyId, companyContext.contextType, companyContext.key],
-            set: { value: inputJson, updatedAt: new Date() },
-          });
-        },
+        onComplete: (fullOutput: string) => persistProjectAssessment(companyId, input, slug, fullOutput),
       };
     },
 
