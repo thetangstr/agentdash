@@ -98,8 +98,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-target-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runner_labels: ${{ steps.preflight.outputs.runner_labels }}
+      preflight_failed: ${{ steps.preflight.outputs.preflight_failed }}
+      preflight_first_failure: ${{ steps.preflight.outputs.preflight_first_failure }}
+      preflight_error_head: ${{ steps.preflight.outputs.preflight_error_head }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Resolve target runner labels
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUNNER_LABELS: ${{ github.event_name == 'schedule' && (vars.AGENTDASH_TARGET_RUNNER_LABELS || '["ubuntu-latest"]') || (inputs.runner_labels || '["ubuntu-latest"]') }}
+        run: |
+          node scripts/ci/target-runner-preflight.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --requested-labels "$REQUESTED_RUNNER_LABELS" \
+            --output "$RUNNER_TEMP/target-runner-preflight.json" \
+            --github-output "$GITHUB_OUTPUT"
+
   target-test:
-    runs-on: ${{ fromJSON(github.event_name == 'schedule' && (vars.AGENTDASH_TARGET_RUNNER_LABELS || '["ubuntu-latest"]') || (inputs.runner_labels || '["ubuntu-latest"]')) }}
+    needs: [resolve-target-runner]
+    runs-on: ${{ fromJSON(needs.resolve-target-runner.outputs.runner_labels) }}
     timeout-minutes: 90
     outputs:
       failed: ${{ steps.summary.outputs.failed }}
@@ -162,11 +193,70 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Write target runner preflight failure summary
+        if: ${{ needs.resolve-target-runner.outputs.preflight_failed == 'true' }}
+        env:
+          TARGET_PROFILE: ${{ steps.settings.outputs.profile }}
+          TARGET_REF: ${{ steps.settings.outputs.ref }}
+          TARGET_ARTIFACT_NAME: ${{ steps.settings.outputs.artifact_name }}
+          WORKFLOW_RUN_URL: ${{ steps.settings.outputs.workflow_run_url }}
+          PREFLIGHT_FIRST_FAILURE: ${{ needs.resolve-target-runner.outputs.preflight_first_failure }}
+          PREFLIGHT_ERROR_HEAD: ${{ needs.resolve-target-runner.outputs.preflight_error_head }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/target-machine-test/logs"
+          node - "$RUNNER_TEMP/target-machine-test/summary.json" "$RUNNER_TEMP/target-machine-test/logs/target-runner-preflight.log" <<'NODE'
+          const fs = require("node:fs");
+          const [summaryPath, logPath] = process.argv.slice(2);
+          const startedAt = new Date().toISOString();
+          const firstFailure = process.env.PREFLIGHT_FIRST_FAILURE || "Target runner preflight failed.";
+          const errorHead = process.env.PREFLIGHT_ERROR_HEAD || firstFailure;
+          fs.writeFileSync(logPath, `${errorHead}\n`);
+          const summary = {
+            profile: process.env.TARGET_PROFILE || "unknown",
+            requestedRef: process.env.TARGET_REF || "unknown",
+            commit: process.env.TARGET_REF || "",
+            nodeVersion: process.version,
+            pnpmVersion: "",
+            osDescription: `${process.platform} ${process.arch}`,
+            runnerName: process.env.RUNNER_NAME || "",
+            runnerOs: process.env.RUNNER_OS || process.platform,
+            runnerArch: process.env.RUNNER_ARCH || process.arch,
+            workflowRunUrl: process.env.WORKFLOW_RUN_URL || "",
+            repository: process.env.GITHUB_REPOSITORY || "",
+            artifactName: process.env.TARGET_ARTIFACT_NAME || "",
+            generatedAt: new Date().toISOString(),
+            conclusion: "failure",
+            commands: [
+              {
+                name: "target-runner-preflight",
+                command: "resolve target runner labels",
+                exitCode: 1,
+                logPath,
+                startedAt,
+                finishedAt: new Date().toISOString(),
+                firstFailure,
+                errorHead,
+              },
+            ],
+            failure: {
+              commandName: "target-runner-preflight",
+              command: "resolve target runner labels",
+              exitCode: 1,
+              logPath,
+              firstFailure,
+              errorHead,
+            },
+          };
+          fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+
       - name: Install dependencies
+        if: ${{ needs.resolve-target-runner.outputs.preflight_failed != 'true' }}
         run: pnpm install --frozen-lockfile
 
       - name: Run target test profile
         id: run-profile
+        if: ${{ needs.resolve-target-runner.outputs.preflight_failed != 'true' }}
         env:
           TARGET_PROFILE: ${{ steps.settings.outputs.profile }}
           TARGET_REF: ${{ steps.settings.outputs.ref }}

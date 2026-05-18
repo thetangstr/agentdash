@@ -186,6 +186,10 @@ the `target-test` label. Without this variable, target-machine tests fall back
 to `["ubuntu-latest"]`, which is useful parity coverage but not target-machine
 launch evidence.
 
+If the variable is set before a matching self-hosted runner is online, the
+target workflow fails fast on a GitHub-hosted runner and writes normal target
+test diagnostics instead of waiting indefinitely for unavailable labels.
+
 ### 6.2. Optional audit token
 
 The production-readiness workflow uses `GITHUB_TOKEN` by default. If that token

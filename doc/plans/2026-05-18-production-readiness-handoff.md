@@ -167,6 +167,12 @@ Observed narrow results from the latest continuation:
   branch protection, or release environments cannot be read, the audit reports
   that as a structured failed requirement instead of crashing. `pr.yml` also
   runs the audit helper unit test in the normal verify job.
+- `.github/workflows/target-machine-test.yml` now preflights configured
+  self-hosted runner labels on `ubuntu-latest` before dispatching the target
+  profile. If `AGENTDASH_TARGET_RUNNER_LABELS` is set before a matching runner
+  is online, the workflow emits a normal failing target-test summary, artifact,
+  PR comment, and issue-filing signal instead of sitting queued on unavailable
+  labels.
 - `.github/CODEOWNERS` now uses the current repository collaborator
   `@thetangstr` for release infrastructure and package ownership. Add more
   maintainer/team owners before enabling branch protection's CODEOWNERS
