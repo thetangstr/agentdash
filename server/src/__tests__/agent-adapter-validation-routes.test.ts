@@ -259,6 +259,27 @@ describe("agent routes adapter validation", () => {
     expect(res.body.adapterType).toBe("external_test");
   });
 
+  it("accepts type/config aliases when agents create local adapter workers", async () => {
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post("/api/companies/company-1/agents")
+        .send({
+          name: "Hermes Agent",
+          type: "hermes_local",
+          config: {
+            hermesCommand: "/Users/example/.local/bin/hermes",
+          },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.adapterType).toBe("hermes_local");
+    expect(res.body.adapterConfig).toEqual({
+      hermesCommand: "/Users/example/.local/bin/hermes",
+    });
+  });
+
   it("rejects unknown adapter types even when schema accepts arbitrary strings", async () => {
     const app = await createApp();
     const res = await requestApp(app, (baseUrl) =>
