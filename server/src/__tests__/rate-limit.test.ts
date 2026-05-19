@@ -79,6 +79,32 @@ describe("rate-limit middleware (#160)", () => {
     }
   });
 
+  it("local_trusted deployment bypasses rate limits for developer UAT", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildApp(createDefaultApiRateLimiter({ deploymentMode: "local_trusted" }));
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app).get("/").set("X-Forwarded-For", "10.0.0.20");
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("authenticated deployment keeps rate limits enabled", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildApp(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
+
+    const ok = await request(app).get("/").set("X-Forwarded-For", "10.0.0.21");
+    expect(ok.status).toBe(200);
+    const blocked = await request(app).get("/").set("X-Forwarded-For", "10.0.0.21");
+    expect(blocked.status).toBe(429);
+  });
+
   it("billing limiter enforces tighter cap (configurable, set to 2)", async () => {
     delete process.env.NODE_ENV;
     process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
