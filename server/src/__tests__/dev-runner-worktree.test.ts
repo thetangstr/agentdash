@@ -63,6 +63,31 @@ describe("dev-runner worktree env bootstrap", () => {
     expect(env.PAPERCLIP_OPTIONAL).toBe("");
   });
 
+  it("loads repo-local Paperclip env for normal git checkouts when present", () => {
+    const root = createTempRoot("paperclip-dev-runner-normal-checkout-env-");
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, ".paperclip"), { recursive: true });
+    fs.writeFileSync(
+      resolveWorktreeEnvFilePath(root),
+      [
+        "PAPERCLIP_HOME=/tmp/paperclip-target-tests",
+        "PAPERCLIP_INSTANCE_ID=agentdash-dev",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const env: NodeJS.ProcessEnv = {};
+    const result = bootstrapDevRunnerWorktreeEnv(root, env);
+
+    expect(result).toEqual({
+      envPath: resolveWorktreeEnvFilePath(root),
+      missingEnv: false,
+    });
+    expect(env.PAPERCLIP_HOME).toBe("/tmp/paperclip-target-tests");
+    expect(env.PAPERCLIP_INSTANCE_ID).toBe("agentdash-dev");
+  });
+
   it("reports uninitialized linked worktrees so dev runner can fail fast", () => {
     const root = createTempRoot("paperclip-dev-runner-worktree-missing-");
     fs.writeFileSync(path.join(root, ".git"), "gitdir: /tmp/paperclip/.git/worktrees/feature\n", "utf8");
