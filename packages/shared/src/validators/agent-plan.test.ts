@@ -55,7 +55,14 @@ describe("isAgentPlanPayload", () => {
   // Closes #231: per-agent + adapterType allowlist tests.
   describe("per-agent validation (#231)", () => {
     it("accepts each whitelisted adapterType", () => {
-      const allowed = ["claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local"];
+      const allowed = [
+        "claude_local",
+        "codex_local",
+        "gemini_local",
+        "hermes_local",
+        "opencode_local",
+        "pi_local",
+      ];
       for (const adapterType of allowed) {
         expect(
           isAgentPlanPayload({ ...valid, agents: [{ ...validAgent, adapterType }] }),
