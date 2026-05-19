@@ -387,6 +387,93 @@ describe("server adapter registry", () => {
     expect(hermesExecuteMock).toHaveBeenCalledWith(ctx);
   });
 
+  it("drops a poisoned Hermes resume session before execution", async () => {
+    const adapter = requireServerAdapter("hermes_local");
+    const onLog = vi.fn(async () => {});
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {
+        sessionId: "from",
+        sessionParams: { sessionId: "from" },
+        sessionDisplayId: "from",
+        taskKey: "issue:354",
+      },
+      config: {},
+      context: {},
+      onLog,
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.runtime).toMatchObject({
+      sessionId: null,
+      sessionParams: null,
+      sessionDisplayId: null,
+      taskKey: "issue:354",
+    });
+    expect(onLog).toHaveBeenCalledWith(
+      "stdout",
+      "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
+    );
+  });
+
+  it("clears Hermes result state when resume help text was parsed as session id", async () => {
+    hermesExecuteMock.mockResolvedValueOnce({
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      sessionParams: { sessionId: "from" },
+      sessionDisplayId: "from",
+      resultJson: {
+        result: "",
+        session_id: "from",
+        usage: null,
+        cost_usd: null,
+      },
+    });
+    const adapter = requireServerAdapter("hermes_local");
+
+    const result = await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      sessionId: null,
+      sessionParams: null,
+      sessionDisplayId: null,
+      clearSession: true,
+      resultJson: {
+        session_id: null,
+      },
+    });
+  });
+
   it("preserves an explicit Hermes Paperclip API key and does not set promptTemplate when none was configured", async () => {
     const adapter = requireServerAdapter("hermes_local");
 
