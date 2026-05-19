@@ -44,6 +44,22 @@ const adapterConfigSchema = z.record(z.unknown()).superRefine((value, ctx) => {
   }
 });
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeAgentAdapterAliases(value: unknown) {
+  if (!isPlainRecord(value)) return value;
+  const normalized = { ...value };
+  if (normalized.adapterType === undefined && typeof normalized.type === "string") {
+    normalized.adapterType = normalized.type;
+  }
+  if (normalized.adapterConfig === undefined && isPlainRecord(normalized.config)) {
+    normalized.adapterConfig = normalized.config;
+  }
+  return normalized;
+}
+
 export const createAgentInstructionsBundleSchema = z.object({
   entryFile: z.string().trim().min(1).optional(),
   files: z.record(z.string()).refine((files) => Object.keys(files).length > 0, {
@@ -63,7 +79,7 @@ export const agentRuntimeConfigSchema = z.object({
   }).strict().optional(),
 }).catchall(z.unknown());
 
-export const createAgentSchema = z.object({
+const createAgentBaseSchema = z.object({
   name: z.string().min(1),
   role: z.enum(AGENT_ROLES).optional().default("general"),
   title: z.string().optional().nullable(),
@@ -81,16 +97,18 @@ export const createAgentSchema = z.object({
   metadata: z.record(z.unknown()).optional().nullable(),
 });
 
+export const createAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema);
+
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
-export const createAgentHireSchema = createAgentSchema.extend({
+export const createAgentHireSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema.extend({
   sourceIssueId: z.string().uuid().optional().nullable(),
   sourceIssueIds: z.array(z.string().uuid()).optional(),
-});
+}));
 
 export type CreateAgentHire = z.infer<typeof createAgentHireSchema>;
 
-export const updateAgentSchema = createAgentSchema
+export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema
   .omit({ permissions: true })
   .partial()
   .extend({
@@ -98,7 +116,7 @@ export const updateAgentSchema = createAgentSchema
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),
-  });
+  }));
 
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
