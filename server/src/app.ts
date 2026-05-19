@@ -186,7 +186,7 @@ export async function createApp(
     }),
   );
   // AgentDash (#160): tighter rate limit on /api/auth/* (brute-force vector).
-  app.use("/api/auth", createAuthRateLimiter(), authRoutes(db));
+  app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }), authRoutes(db));
   if (opts.betterAuthHandler) {
     // AgentDash (AGE-104 follow-up): block free-mail signups on Pro at the
     // signup endpoint itself, not at company-creation time.
@@ -194,7 +194,7 @@ export async function createApp(
       corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
     );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
-    app.use("/api/auth", createAuthRateLimiter());
+    app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }));
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
   }
   app.use(llmRoutes(db));
@@ -206,7 +206,7 @@ export async function createApp(
   const api = Router();
   // AgentDash (#160): default-tier rate limit covering everything under /api
   // (excluding /api/auth which has a tighter limiter mounted on `app` directly).
-  api.use(createDefaultApiRateLimiter());
+  api.use(createDefaultApiRateLimiter({ deploymentMode: opts.deploymentMode }));
   api.use(boardMutationGuard());
   api.use(
     "/health",
@@ -250,7 +250,7 @@ export async function createApp(
   // AgentDash: tighter cap on the invite endpoint specifically — fans
   // out to Resend (cost amplification + sender-domain reputation risk).
   // Default API limiter still covers the rest of /onboarding.
-  api.use("/onboarding/invites", createInviteRateLimiter());
+  api.use("/onboarding/invites", createInviteRateLimiter({ deploymentMode: opts.deploymentMode }));
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));
@@ -286,7 +286,7 @@ export async function createApp(
   // AgentDash (#160): tighter rate limit on /billing/* (abuse vector). The
   // /billing/webhook subpath is hit by Stripe's servers, not users, and must
   // bypass — Stripe can send bursts during retries / high-traffic events.
-  const billingLimiter = createBillingRateLimiter();
+  const billingLimiter = createBillingRateLimiter({ deploymentMode: opts.deploymentMode });
   api.use(
     "/billing",
     (req, res, next) => {

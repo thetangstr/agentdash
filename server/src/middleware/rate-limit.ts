@@ -13,15 +13,25 @@
  *  AGENTDASH_RATE_LIMIT_INVITE_MAX  (default 20)
  *  AGENTDASH_RATE_LIMIT_API_MAX     (default 200)
  *  AGENTDASH_RATE_LIMIT_DISABLED=true  — no-op middleware (tests / dev)
+ *
+ * Local trusted deployments are loopback/private developer instances, so they
+ * also use no-op middleware by default. Authenticated deployments still keep
+ * the protection unless the explicit env override is set.
  */
 
 import { rateLimit, type Options as RateLimitOptions } from "express-rate-limit";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import type { DeploymentMode } from "@paperclipai/shared";
 
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
-function isDisabled(): boolean {
+interface RateLimiterFactoryOptions {
+  deploymentMode?: DeploymentMode;
+}
+
+function isDisabled(opts: RateLimiterFactoryOptions = {}): boolean {
   return (
+    opts.deploymentMode === "local_trusted" ||
     process.env.AGENTDASH_RATE_LIMIT_DISABLED === "true" ||
     process.env.NODE_ENV === "test"
   );
@@ -69,18 +79,18 @@ function noopMiddleware(_req: Request, _res: Response, next: NextFunction): void
   next();
 }
 
-export function createAuthRateLimiter(): RequestHandler {
-  if (isDisabled()) return noopMiddleware;
+export function createAuthRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_AUTH_MAX", 10));
 }
 
-export function createBillingRateLimiter(): RequestHandler {
-  if (isDisabled()) return noopMiddleware;
+export function createBillingRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_BILLING_MAX", 20));
 }
 
-export function createDefaultApiRateLimiter(): RequestHandler {
-  if (isDisabled()) return noopMiddleware;
+export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_API_MAX", 200));
 }
 
@@ -91,7 +101,7 @@ export function createDefaultApiRateLimiter(): RequestHandler {
  * per quarter-hour. That's well above any legit "invite my team" flow
  * but caps the cost-amplification window if a token is abused.
  */
-export function createInviteRateLimiter(): RequestHandler {
-  if (isDisabled()) return noopMiddleware;
+export function createInviteRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_INVITE_MAX", 20));
 }
