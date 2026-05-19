@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteLandingPage } from "./InviteLanding";
+import { queryKeys } from "@/lib/queryKeys";
 
 const getInviteMock = vi.hoisted(() => vi.fn());
 const acceptInviteMock = vi.hoisted(() => vi.fn());
@@ -354,7 +355,90 @@ describe("InviteLandingPage", () => {
     });
     expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
     expect(setSelectedCompanyIdMock).toHaveBeenCalledWith("company-1", { source: "manual" });
+    expect(queryClient.getQueryData(queryKeys.companies.all)).toBeUndefined();
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("still accepts the invite after account creation when the new user has no company list yet", async () => {
+    getSessionMock.mockResolvedValueOnce(null);
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: {
+        id: "user-1",
+        name: "Jane Example",
+        email: "jane@example.com",
+        image: null,
+      },
+    });
+    listCompaniesMock.mockRejectedValue(Object.assign(new Error("Forbidden"), { status: 403 }));
+    acceptInviteMock.mockResolvedValue({
+      id: "join-1",
+      companyId: "company-1",
+      requestType: "human",
+      status: "pending_approval",
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    expect(inputValueSetter).toBeTypeOf("function");
+
+    const nameInput = container.querySelector('input[name="name"]') as HTMLInputElement | null;
+    const emailInput = container.querySelector('input[name="email"]') as HTMLInputElement | null;
+    const passwordInput = container.querySelector('input[name="password"]') as HTMLInputElement | null;
+    expect(nameInput).not.toBeNull();
+    expect(emailInput).not.toBeNull();
+    expect(passwordInput).not.toBeNull();
+
+    await act(async () => {
+      inputValueSetter!.call(nameInput, "Jane Example");
+      nameInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      inputValueSetter!.call(emailInput, "jane@example.com");
+      emailInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      inputValueSetter!.call(passwordInput, "supersecret");
+      passwordInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const authForm = container.querySelector('[data-testid="invite-inline-auth"]') as HTMLFormElement | null;
+    expect(authForm).not.toBeNull();
+
+    await act(async () => {
+      authForm?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    expect(signUpEmailMock).toHaveBeenCalledWith({
+      name: "Jane Example",
+      email: "jane@example.com",
+      password: "supersecret",
+    });
+    expect(acceptInviteMock).toHaveBeenCalledWith("pcp_invite_test", { requestType: "human" });
+    expect(container.querySelector('[data-testid="invite-pending-approval"]')).not.toBeNull();
+    expect(container.textContent).toContain("Your request is still awaiting approval.");
 
     await act(async () => {
       root.unmount();

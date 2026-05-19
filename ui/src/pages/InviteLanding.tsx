@@ -42,6 +42,7 @@ const fieldClassName =
 const panelClassName = "border border-zinc-800 bg-zinc-950/95 p-6";
 const modeButtonBaseClassName =
   "flex-1 border px-3 py-2 text-sm transition-colors";
+const INVITE_COMPANIES_QUERY_KEY = ["invite-landing", "companies"] as const;
 
 function formatHumanRole(role: string | null | undefined) {
   if (!role) return null;
@@ -248,7 +249,7 @@ export function InviteLandingPage() {
   });
 
   const companiesQuery = useQuery({
-    queryKey: queryKeys.companies.all,
+    queryKey: INVITE_COMPANIES_QUERY_KEY,
     queryFn: () => companiesApi.list(),
     enabled: !!sessionQuery.data && !!inviteQuery.data?.companyId,
     retry: false,
@@ -375,11 +376,16 @@ export function InviteLandingPage() {
       setAuthFeedback(null);
       rememberPendingInviteToken(token);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      const companies = await queryClient.fetchQuery({
-        queryKey: queryKeys.companies.all,
-        queryFn: () => companiesApi.list(),
-        retry: false,
-      });
+      let companies: Awaited<ReturnType<typeof companiesApi.list>> = [];
+      try {
+        companies = await queryClient.fetchQuery({
+          queryKey: INVITE_COMPANIES_QUERY_KEY,
+          queryFn: () => companiesApi.list(),
+          retry: false,
+        });
+      } catch {
+        companies = [];
+      }
 
       if (invite?.companyId && companies.some((company) => company.id === invite.companyId)) {
         clearPendingInviteToken(token);

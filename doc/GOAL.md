@@ -11,8 +11,22 @@ Source repo: https://github.com/thetangstr/agentdash
 - 2026-05-19: Hermes completed the first target-machine pass against `agentdash_dev` at commit `74cc0f74e7668def6a373e687627e5668b73e4fb`.
 - Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/358 via https://github.com/thetangstr/agentdash/pull/359 at `62afdb534e89dd53f00fb80769b873b22f027f1d`.
 - Retest result: Hermes retest `agentdash-retest-359b` passed the #358 isolation check on `62afdb534e89dd53f00fb80769b873b22f027f1d`; `pnpm dev` started on `3101` from repo-local `.paperclip/.env`, `/api/health` was healthy, and `/instance/settings/about` plus `/instance/settings/changelog` returned 200.
-- Current blocker: https://github.com/thetangstr/agentdash/issues/360 — agent-directed setup can send `type` / `config`, which currently defaults to a `process` agent and breaks `hermes_local` runs.
-- Remaining target-machine finding: https://github.com/thetangstr/agentdash/issues/345 — `pnpm test:run` still reports a `workspace-runtime.test.ts` timeout on the Mac mini.
+- Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/360 via https://github.com/thetangstr/agentdash/pull/361 at `d23a546ee70074a9f1ef3de1ef8cf73974633549`.
+- Retest result: target smoke on the Mac mini passed the #360 alias path on `d23a546ee70074a9f1ef3de1ef8cf73974633549`; `POST /api/companies/:companyId/agents` with `type: "hermes_local"` and `config: {}` returned `adapterType: "hermes_local"` / `adapterConfig: {}`, and wakeup run `d36c404c-edc6-4d44-b359-d34d057f2069` succeeded with `exitCode: 0`.
+- Retired target finding: https://github.com/thetangstr/agentdash/issues/345 — focused `workspace-runtime.test.ts` and full `pnpm test:run` both passed on the Mac mini at `d23a546ee70074a9f1ef3de1ef8cf73974633549`; issue closed as stale/transient.
+
+### Next Work
+
+1. Resume the full first-time onboarding UAT on latest `origin/main`.
+   - New throwaway company.
+   - Two C-level humans: CEO and COO.
+   - One shared Chief of Staff agent that supports both humans.
+   - Company goals created through the setup flow.
+   - Adapter paths verified: `hermes_local` required; `codex_local` when Codex OAuth is available; `claude_local` when Claude local auth is available.
+
+2. Triage or retire remaining open target-machine issues that are no longer launch blockers.
+   - https://github.com/thetangstr/agentdash/issues/354 appears likely fixed by the heartbeat session-id guard, but still needs a GitHub status review against latest `origin/main`.
+   - https://github.com/thetangstr/agentdash/issues/350 remains post-launch/platform work unless a current launch criterion depends on it.
 
 ### Operating Loop
 
