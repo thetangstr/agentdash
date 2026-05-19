@@ -1,4 +1,4 @@
-import type { AdapterModelProfileDefinition, ServerAdapterModule } from "./types.js";
+import type { AdapterExecutionResult, AdapterModelProfileDefinition, ServerAdapterModule } from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as acpxExecute,
@@ -163,6 +163,74 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   return ctx;
 }
 
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function isHermesResumeHelpTextSessionId(value: unknown): boolean {
+  return readNonEmptyString(value)?.toLowerCase() === "from";
+}
+
+function sanitizeHermesRuntimeSession<T extends { runtime?: unknown }>(ctx: T): T {
+  const runtime =
+    ctx.runtime && typeof ctx.runtime === "object" && !Array.isArray(ctx.runtime)
+      ? (ctx.runtime as Record<string, unknown>)
+      : null;
+  const sessionParams =
+    runtime?.sessionParams && typeof runtime.sessionParams === "object" && !Array.isArray(runtime.sessionParams)
+      ? (runtime.sessionParams as Record<string, unknown>)
+      : null;
+  const hasInvalidSession =
+    isHermesResumeHelpTextSessionId(runtime?.sessionId) ||
+    isHermesResumeHelpTextSessionId(runtime?.sessionDisplayId) ||
+    isHermesResumeHelpTextSessionId(sessionParams?.sessionId);
+
+  if (!runtime || !hasInvalidSession) return ctx;
+
+  return {
+    ...ctx,
+    runtime: {
+      ...runtime,
+      sessionId: null,
+      sessionParams: null,
+      sessionDisplayId: null,
+    },
+  };
+}
+
+function sanitizeHermesExecutionResult(result: AdapterExecutionResult): AdapterExecutionResult {
+  const resultJson =
+    result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+      ? result.resultJson
+      : null;
+  const sessionParams =
+    result.sessionParams && typeof result.sessionParams === "object" && !Array.isArray(result.sessionParams)
+      ? result.sessionParams
+      : null;
+  const hasInvalidSession =
+    result.exitCode !== 0 &&
+    (isHermesResumeHelpTextSessionId(result.sessionId) ||
+      isHermesResumeHelpTextSessionId(result.sessionDisplayId) ||
+      isHermesResumeHelpTextSessionId(sessionParams?.sessionId) ||
+      isHermesResumeHelpTextSessionId(resultJson?.session_id));
+
+  if (!hasInvalidSession) return result;
+
+  return {
+    ...result,
+    sessionId: null,
+    sessionParams: null,
+    sessionDisplayId: null,
+    clearSession: true,
+    resultJson: resultJson
+      ? {
+          ...resultJson,
+          session_id: null,
+        }
+      : result.resultJson,
+  };
+}
+
 const claudeLocalAdapter: ServerAdapterModule = {
   type: "claude_local",
   execute: claudeExecute,
@@ -307,8 +375,14 @@ const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["exec
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
   execute: async (ctx) => {
-    const normalizedCtx = normalizeHermesConfig(ctx);
-    if (!ctx.authToken) return executeHermesLocal(normalizedCtx);
+    const normalizedCtx = sanitizeHermesRuntimeSession(normalizeHermesConfig(ctx));
+    if (normalizedCtx !== ctx) {
+      await normalizedCtx.onLog(
+        "stdout",
+        "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
+      );
+    }
+    if (!normalizedCtx.authToken) return sanitizeHermesExecutionResult(await executeHermesLocal(normalizedCtx));
 
     const existingConfig = (normalizedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const existingEnv =
@@ -352,7 +426,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return executeHermesLocal(patchedCtx);
+    return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
   },
   testEnvironment: (ctx) => hermesTestEnvironment(normalizeHermesConfig(ctx) as never),
   sessionCodec: hermesSessionCodec,
