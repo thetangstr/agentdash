@@ -14,15 +14,22 @@ Source repo: https://github.com/thetangstr/agentdash
 - Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/360 via https://github.com/thetangstr/agentdash/pull/361 at `d23a546ee70074a9f1ef3de1ef8cf73974633549`.
 - Retest result: target smoke on the Mac mini passed the #360 alias path on `d23a546ee70074a9f1ef3de1ef8cf73974633549`; `POST /api/companies/:companyId/agents` with `type: "hermes_local"` and `config: {}` returned `adapterType: "hermes_local"` / `adapterConfig: {}`, and wakeup run `d36c404c-edc6-4d44-b359-d34d057f2069` succeeded with `exitCode: 0`.
 - Retired target finding: https://github.com/thetangstr/agentdash/issues/345 — focused `workspace-runtime.test.ts` and full `pnpm test:run` both passed on the Mac mini at `d23a546ee70074a9f1ef3de1ef8cf73974633549`; issue closed as stale/transient.
+- Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/363 via https://github.com/thetangstr/agentdash/pull/362 at `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7`.
+- Post-merge target result: Codex directly retested latest `origin/main` on the Mac mini in `/Users/maxiaoer/workspace/agentdash_dev`; the isolated authenticated multi-user UAT on port `3216` passed with `pnpm test:e2e:multiuser-authenticated` (`1 passed`, 17.6s). Production `/Users/maxiaoer/agentdash` and port `3100` were not touched.
+- Hermes supervisor status: updated steering has been sent to the attached target-machine Hermes session with latest main `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7`; Hermes still needs to produce its independent full-pass report or file any remaining blocker issues.
+- Safety intervention: the follow-up Hermes transcript showed broad process cleanup commands while preparing dev port `3101`; production `3100` was immediately checked and was healthy, then Hermes was steered to stop broad `pkill` usage and avoid `3100` except read-only health checks.
 
 ### Next Work
 
-1. Resume the full first-time onboarding UAT on latest `origin/main`.
+1. Collect the independent Hermes full-pass report on latest `origin/main`.
+   - Confirm Hermes pulled or checked out `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7` or newer.
+   - Confirm Hermes reports production data touched: `no`.
    - New throwaway company.
    - Two C-level humans: CEO and COO.
    - One shared Chief of Staff agent that supports both humans.
    - Company goals created through the setup flow.
    - Adapter paths verified: `hermes_local` required; `codex_local` when Codex OAuth is available; `claude_local` when Claude local auth is available.
+   - Automated checks recorded from the target: `pnpm test:run`, `pnpm -r typecheck`, `pnpm build`, plus browser/UAT evidence.
 
 2. Triage or retire remaining open target-machine issues that are no longer launch blockers.
    - https://github.com/thetangstr/agentdash/issues/354 appears likely fixed by the heartbeat session-id guard, but still needs a GitHub status review against latest `origin/main`.
