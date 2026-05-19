@@ -59,15 +59,16 @@ export function bootstrapDevRunnerWorktreeEnv(
   rootDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): WorktreeEnvBootstrapResult {
-  if (!isLinkedGitWorktreeCheckout(rootDir)) {
-    return {
-      envPath: null,
-      missingEnv: false,
-    };
-  }
-
+  const isLinkedWorktree = isLinkedGitWorktreeCheckout(rootDir);
   const envPath = resolveWorktreeEnvFilePath(rootDir);
   if (!existsSync(envPath)) {
+    if (!isLinkedWorktree) {
+      return {
+        envPath: null,
+        missingEnv: false,
+      };
+    }
+
     return {
       envPath,
       missingEnv: true,
