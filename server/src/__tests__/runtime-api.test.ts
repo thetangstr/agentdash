@@ -17,6 +17,32 @@ describe("runtime API discovery", () => {
     ).toBe("https://paperclip.example.com");
   });
 
+  it("prefers the concrete bind host over allowed hostnames for local runtime calls", () => {
+    expect(
+      choosePrimaryRuntimeApiUrl({
+        authPublicBaseUrl: null,
+        allowedHostnames: ["192.168.86.48", "mac-mini.tail112187.ts.net"],
+        bindHost: "127.0.0.1",
+        port: 3101,
+      }),
+    ).toBe("http://127.0.0.1:3101");
+  });
+
+  it("orders concrete bind host before allowed hostname callback candidates", () => {
+    expect(
+      buildRuntimeApiCandidateUrls({
+        authPublicBaseUrl: null,
+        allowedHostnames: ["192.168.86.48"],
+        bindHost: "127.0.0.1",
+        port: 3101,
+        networkInterfacesMap: {},
+      }),
+    ).toEqual([
+      "http://127.0.0.1:3101",
+      "http://192.168.86.48:3101",
+    ]);
+  });
+
   it("builds ordered callback candidates from explicit, allowed, bind, and interface hosts", () => {
     expect(
       buildRuntimeApiCandidateUrls({
