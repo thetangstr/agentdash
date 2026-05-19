@@ -175,6 +175,8 @@ describe("cosReplier.reply (phase-aware path)", () => {
       cosAgentId: "cos1",
     });
 
+    expect(llm.mock.calls[0][0].system).toContain("hermes_local");
+
     // First postMessage should be the card (empty body, agent_plan_proposal_v1).
     expect(conversations.postMessage).toHaveBeenNthCalledWith(
       1,

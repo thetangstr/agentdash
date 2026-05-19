@@ -204,14 +204,14 @@ describe("POST /api/onboarding/confirm-plan", () => {
         {
           role: "engineering_lead",
           name: "Ellie",
-          adapterType: "claude_local",
+          adapterType: "hermes_local",
           responsibilities: ["own dashboard"],
           kpis: ["ship Q3"],
         },
         {
           role: "qa",
           name: "Quinn",
-          adapterType: "claude_local",
+          adapterType: "hermes_local",
           responsibilities: ["test nightly"],
           kpis: ["zero P0 escapes"],
         },
@@ -243,12 +243,12 @@ describe("POST /api/onboarding/confirm-plan", () => {
     expect(mockAgents.create).toHaveBeenNthCalledWith(
       1,
       "c1",
-      expect.objectContaining({ name: "Ellie", adapterType: "claude_local", reportsTo: "cos1" }),
+      expect.objectContaining({ name: "Ellie", adapterType: "hermes_local", reportsTo: "cos1" }),
     );
     expect(mockAgents.create).toHaveBeenNthCalledWith(
       2,
       "c1",
-      expect.objectContaining({ name: "Quinn", adapterType: "claude_local" }),
+      expect.objectContaining({ name: "Quinn", adapterType: "hermes_local" }),
     );
     expect(mockInstructions.materializeManagedBundle).toHaveBeenCalledTimes(2);
     expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "materializing");

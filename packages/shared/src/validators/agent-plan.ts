@@ -15,6 +15,7 @@ const ALLOWED_ADAPTER_TYPES: ReadonlySet<string> = new Set([
   "claude_local",
   "codex_local",
   "gemini_local",
+  "hermes_local",
   "opencode_local",
   "pi_local",
 ]);

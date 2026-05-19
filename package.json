@@ -19,6 +19,7 @@
     "test": "pnpm run test:run",
     "test:watch": "pnpm run preflight:workspace-links && vitest",
     "test:run": "pnpm run preflight:workspace-links && node scripts/run-vitest-stable.mjs",
+    "test:regression:hermes-onboarding": "pnpm run preflight:workspace-links && vitest run packages/shared/src/validators/agent-plan.test.ts server/src/__tests__/cos-replier.test.ts server/src/__tests__/onboarding-v2-routes.test.ts server/src/__tests__/hermes-local-adapter-patch.test.ts",
     "db:generate": "pnpm --filter @paperclipai/db generate",
     "db:migrate": "pnpm --filter @paperclipai/db migrate",
     "issue-references:backfill": "pnpm run preflight:workspace-links && tsx scripts/backfill-issue-reference-mentions.ts",

@@ -89,6 +89,9 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
+      - name: Run Hermes onboarding regression lane
+        run: pnpm run test:regression:hermes-onboarding
+
       - name: Run tests
         run: pnpm test:run
 
