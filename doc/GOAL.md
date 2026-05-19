@@ -16,24 +16,27 @@ Source repo: https://github.com/thetangstr/agentdash
 - Retired target finding: https://github.com/thetangstr/agentdash/issues/345 — focused `workspace-runtime.test.ts` and full `pnpm test:run` both passed on the Mac mini at `d23a546ee70074a9f1ef3de1ef8cf73974633549`; issue closed as stale/transient.
 - Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/363 via https://github.com/thetangstr/agentdash/pull/362 at `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7`.
 - Post-merge target result: Codex directly retested latest `origin/main` on the Mac mini in `/Users/maxiaoer/workspace/agentdash_dev`; the isolated authenticated multi-user UAT on port `3216` passed with `pnpm test:e2e:multiuser-authenticated` (`1 passed`, 17.6s). Production `/Users/maxiaoer/agentdash` and port `3100` were not touched.
-- Hermes supervisor status: updated steering has been sent to the attached target-machine Hermes session with latest main `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7`; Hermes still needs to produce its independent full-pass report or file any remaining blocker issues.
 - Safety intervention: the follow-up Hermes transcript showed broad process cleanup commands while preparing dev port `3101`; production `3100` was immediately checked and was healthy, then Hermes was steered to stop broad `pkill` usage and avoid `3100` except read-only health checks.
+- Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/354 via https://github.com/thetangstr/agentdash/pull/365 at `2346ef3374be8e134a494505aff2f42b491240b4`.
+  - Target result: `agentdash_dev` pulled latest main; focused Hermes/session tests passed, full `pnpm test:run` passed, `pnpm -r typecheck` passed, and `pnpm build` passed on the Mac mini. Issue #354 auto-closed after merge.
+- Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/366 via https://github.com/thetangstr/agentdash/pull/367 at `ca737cc3735130ad901127fa09be03d58b80609a`.
+  - Target result: local trusted dev UAT stopped tripping the API rate limiter; `POST /api/companies/:companyId/join-requests/:requestId/approve` succeeded after the fix, with production `3100` checked read-only and healthy.
+- Launch blocker fixed and closed: https://github.com/thetangstr/agentdash/issues/368 via https://github.com/thetangstr/agentdash/pull/369 at `cd8a34f8ca19b7938b315d79a8145bba8a4c71bd`.
+  - Target result: `agentdash_dev` pulled latest main, dev `3101` was restarted cleanly, and Hermes CoS wakeup run `30bd39c2-7be7-44b5-a092-517808bba675` succeeded with `exitCode: 0` and result `Checked: no open issues assigned to me, and no unassigned backlog issues. Nothing to do.`
+- Final target status on 2026-05-19: `/Users/maxiaoer/workspace/agentdash_dev` is at `cd8a34f8ca19b7938b315d79a8145bba8a4c71bd`; production `http://127.0.0.1:3100/api/health` is healthy and was not mutated; dev `http://127.0.0.1:3101/api/health` is healthy in `local_trusted` mode.
+- Final focused target verification on `cd8a34f8ca19b7938b315d79a8145bba8a4c71bd`: `pnpm exec vitest run server/src/__tests__/rate-limit.test.ts server/src/__tests__/runtime-api.test.ts server/src/__tests__/paperclip-env.test.ts server/src/__tests__/adapter-registry.test.ts server/src/__tests__/hermes-local-adapter-patch.test.ts` passed (`5` files, `39` tests).
+- Adapter availability on the target:
+  - `hermes_local`: environment test returned `warn` only because AgentDash env has no LLM API keys, but Hermes can use its local `~/.hermes` provider config; real wakeup run `30bd39c2-7be7-44b5-a092-517808bba675` succeeded.
+  - `codex_local`: environment test returned `warn`; Codex native auth is present (`admin@yarda.pro`), but the hello probe did not return exactly `hello`. Remediation: run the probe manually with `codex exec --json -` and inspect output before using Codex for launch-critical work.
+  - `claude_local`: environment test returned `fail` because `claude` is not in `PATH`. Remediation: install Claude Code CLI or add the authenticated `claude` binary to the target service PATH, then rerun the adapter environment test.
 
 ### Next Work
 
-1. Collect the independent Hermes full-pass report on latest `origin/main`.
-   - Confirm Hermes pulled or checked out `12874d4f40d143b2b7b232ffb3ac2d53c25ccee7` or newer.
-   - Confirm Hermes reports production data touched: `no`.
-   - New throwaway company.
-   - Two C-level humans: CEO and COO.
-   - One shared Chief of Staff agent that supports both humans.
-   - Company goals created through the setup flow.
-   - Adapter paths verified: `hermes_local` required; `codex_local` when Codex OAuth is available; `claude_local` when Claude local auth is available.
-   - Automated checks recorded from the target: `pnpm test:run`, `pnpm -r typecheck`, `pnpm build`, plus browser/UAT evidence.
-
-2. Triage or retire remaining open target-machine issues that are no longer launch blockers.
-   - https://github.com/thetangstr/agentdash/issues/354 appears likely fixed by the heartbeat session-id guard, but still needs a GitHub status review against latest `origin/main`.
-   - https://github.com/thetangstr/agentdash/issues/350 remains post-launch/platform work unless a current launch criterion depends on it.
+1. Keep https://github.com/thetangstr/agentdash/issues/350 as post-launch release/platform work unless a launch criterion starts depending on production readiness external gates.
+2. Before relying on non-Hermes adapters for launch-critical work, rerun:
+   - `codex_local` manual hello probe: `codex exec --json -` with prompt `Respond with hello`.
+   - `claude_local` environment test after installing or exposing the `claude` CLI in the target service PATH.
+3. Archive or refresh stale draft files under `/tmp/agentdash-target-issues/` on the target machine; the rate-limit draft is fixed by #367, and the old workspace-runtime timeout draft was retired by the later full target `pnpm test:run`.
 
 ### Operating Loop
 
