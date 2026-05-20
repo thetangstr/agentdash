@@ -5,7 +5,7 @@
   "outputDirectory": "ui/dist",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/:path((?!api/|api$).*)",
       "destination": "/index.html"
     }
   ]
