@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { onboardingOrchestrator } from "../services/onboarding-orchestrator.js";
+import {
+  OnboardingTierCapacityExceededError,
+  onboardingOrchestrator,
+} from "../services/onboarding-orchestrator.js";
 
-const mockAccess = { ensureMembership: vi.fn(), setPrincipalPermission: vi.fn(), listUserCompanyAccess: vi.fn() };
+const mockAccess = {
+  ensureMembership: vi.fn(),
+  setPrincipalPermission: vi.fn(),
+  listUserCompanyAccess: vi.fn(),
+  listActiveUserMemberships: vi.fn(),
+};
 const mockCompanies = { create: vi.fn(), getById: vi.fn(), findByEmailDomain: vi.fn(), hasActiveCompany: vi.fn(), list: vi.fn() };
 const mockAgents = { create: vi.fn(), createApiKey: vi.fn(), list: vi.fn(), listKeys: vi.fn() };
 const mockInstructions = { materializeManagedBundle: vi.fn() };
@@ -9,12 +17,36 @@ const mockConversations = { findByCompany: vi.fn(), create: vi.fn(), addParticip
 const mockUsers = { getById: vi.fn() };
 
 const deps = { access: mockAccess, companies: mockCompanies, agents: mockAgents, instructions: mockInstructions, conversations: mockConversations, users: mockUsers };
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+
+function tierCapacityDeps() {
+  return {
+    withCompanyLock: vi.fn(async (_companyId: string, work: (services: typeof deps) => Promise<unknown>) =>
+      work(deps),
+    ),
+    capacityDepsFor: (services: typeof deps) => ({
+      getCompany: async (id: string) => {
+        const company = await services.companies.getById(id);
+        return { planTier: company?.planTier ?? "free" };
+      },
+      counts: {
+        humans: async (companyId: string) =>
+          (await services.access.listActiveUserMemberships(companyId)).length,
+        agents: async (companyId: string) =>
+          (await services.agents.list(companyId)).length,
+      },
+    }),
+  };
+}
 
 describe("onboardingOrchestrator.bootstrap", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
     mockUsers.getById.mockResolvedValue({ id: "user-1", email: "alice@acme.com", name: "Alice Anderson" });
     mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    mockAccess.listActiveUserMemberships.mockResolvedValue([]);
     mockCompanies.hasActiveCompany.mockResolvedValue(false);
     mockCompanies.list.mockResolvedValue([]);
     mockCompanies.create.mockResolvedValue({ id: "company-1", name: "Acme", emailDomain: "acme.com" });
@@ -137,6 +169,66 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(result.companyId).toBe("company-acme");
     expect(mockCompanies.findByEmailDomain).toHaveBeenCalledWith("acme.com");
     expect(mockCompanies.create).not.toHaveBeenCalled();
+  });
+
+  it("blocks a second corp-domain human from joining a Free workspace through bootstrap", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockUsers.getById.mockResolvedValue({ id: "user-3", email: "alice@acme.com" });
+    mockAccess.listUserCompanyAccess.mockResolvedValue([]);
+    mockAccess.listActiveUserMemberships.mockResolvedValue([
+      { companyId: "company-acme", principalId: "existing-user" },
+    ]);
+    mockCompanies.findByEmailDomain.mockResolvedValue({
+      id: "company-acme",
+      name: "Acme",
+      emailDomain: "acme.com",
+    });
+    mockCompanies.getById.mockResolvedValue({
+      id: "company-acme",
+      name: "Acme",
+      emailDomain: "acme.com",
+      planTier: "free",
+    });
+    mockAgents.list.mockResolvedValue([
+      { id: "agent-cos-acme", role: "chief_of_staff" },
+    ]);
+
+    const tierCapacity = tierCapacityDeps();
+    await expect(
+      onboardingOrchestrator({ ...(deps as any), tierCapacity }).bootstrap("user-3"),
+    ).rejects.toBeInstanceOf(OnboardingTierCapacityExceededError);
+
+    expect(tierCapacity.withCompanyLock).toHaveBeenCalledWith("company-acme", expect.any(Function));
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockConversations.addParticipant).not.toHaveBeenCalled();
+  });
+
+  it("blocks bootstrap CoS creation when a Free workspace already has an agent", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockAccess.listUserCompanyAccess.mockResolvedValue([
+      { companyId: "company-1", status: "active", principalId: "user-1" },
+    ]);
+    mockAccess.listActiveUserMemberships.mockResolvedValue([
+      { companyId: "company-1", principalId: "user-1" },
+    ]);
+    mockCompanies.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Acme",
+      emailDomain: "acme.com",
+      planTier: "free",
+    });
+    mockAgents.list.mockResolvedValue([
+      { id: "agent-1", role: "researcher", status: "idle" },
+    ]);
+
+    await expect(
+      onboardingOrchestrator({ ...(deps as any), tierCapacity: tierCapacityDeps() }).bootstrap("user-1"),
+    ).rejects.toBeInstanceOf(OnboardingTierCapacityExceededError);
+
+    expect(mockAccess.ensureMembership).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockConversations.addParticipant).not.toHaveBeenCalled();
   });
 
   it("throws SingleCompanyInstallationError when an active company exists and the override is not active", async () => {

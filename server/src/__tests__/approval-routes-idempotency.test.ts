@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -28,6 +28,8 @@ const mockSecretService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
@@ -41,7 +43,39 @@ function registerModuleMocks() {
   }));
 }
 
-async function createApp(actorOverrides: Record<string, unknown> = {}) {
+function createTierDbStub(options: { planTier?: string; activeAgents?: number } = {}) {
+  const db: any = {
+    execute: vi.fn().mockResolvedValue([]),
+    transaction: vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn(db)),
+  };
+  db.select = vi.fn((shape?: Record<string, unknown>) => {
+    const rowsForShape = () => {
+      if (shape && Object.prototype.hasOwnProperty.call(shape, "count")) {
+        return [{ count: options.activeAgents ?? 0 }];
+      }
+      if (shape && Object.prototype.hasOwnProperty.call(shape, "spentMonthlyCents")) {
+        return [];
+      }
+      return [{
+        id: "company-1",
+        planTier: options.planTier ?? "pro_active",
+        spentMonthlyCents: 0,
+        logoAssetId: null,
+      }];
+    };
+    const chain: any = {
+      from: vi.fn(() => chain),
+      leftJoin: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      groupBy: vi.fn(() => chain),
+      then: vi.fn((resolve, reject) => Promise.resolve(rowsForShape()).then(resolve, reject)),
+    };
+    return chain;
+  });
+  return db;
+}
+
+async function createApp(actorOverrides: Record<string, unknown> = {}, db: unknown = {}) {
   const [{ errorHandler }, { approvalRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/approvals.js"),
@@ -59,7 +93,7 @@ async function createApp(actorOverrides: Record<string, unknown> = {}) {
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes(db as any));
   app.use(errorHandler);
   return app;
 }
@@ -112,6 +146,13 @@ describe("approval routes idempotent retries", () => {
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
     mockLogActivity.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
@@ -233,6 +274,90 @@ describe("approval routes idempotent retries", () => {
 
     expect(res.status).toBe(200);
     expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-4", "user-1", "ship it");
+  });
+
+  it("blocks approving a hire_agent approval that would create a second Free agent", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-free-cap",
+      companyId: "company-1",
+      type: "hire_agent",
+      status: "pending",
+      payload: { name: "Extra Agent" },
+      requestedByAgentId: null,
+    });
+
+    const res = await request(await createApp({}, createTierDbStub({
+      planTier: "free",
+      activeAgents: 1,
+    })))
+      .post("/api/approvals/approval-free-cap/approve")
+      .send({});
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockApprovalService.approve).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("blocks approving a revision-requested hire_agent approval that would create a second Free agent", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-free-cap-revision",
+      companyId: "company-1",
+      type: "hire_agent",
+      status: "revision_requested",
+      payload: { name: "Revised Agent" },
+      requestedByAgentId: null,
+    });
+
+    const res = await request(await createApp({}, createTierDbStub({
+      planTier: "free",
+      activeAgents: 1,
+    })))
+      .post("/api/approvals/approval-free-cap-revision/approve")
+      .send({});
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockApprovalService.approve).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps approved hire_agent retries idempotent even when the Free agent slot is used", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-free-retry",
+      companyId: "company-1",
+      type: "hire_agent",
+      status: "approved",
+      payload: { name: "Extra Agent" },
+      requestedByAgentId: null,
+    });
+    mockApprovalService.approve.mockResolvedValue({
+      approval: {
+        id: "approval-free-retry",
+        companyId: "company-1",
+        type: "hire_agent",
+        status: "approved",
+        payload: { name: "Extra Agent" },
+        requestedByAgentId: null,
+      },
+      applied: false,
+    });
+    const db = createTierDbStub({
+      planTier: "free",
+      activeAgents: 1,
+    });
+
+    const res = await request(await createApp({}, db))
+      .post("/api/approvals/approval-free-retry/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-free-retry", "user-1", undefined);
+    expect(db.execute).not.toHaveBeenCalled();
+    expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
   it("derives approval attribution from the authenticated actor on reject", async () => {

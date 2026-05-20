@@ -4,7 +4,7 @@
 // drive db.transaction to call its callback inline. The convergence guard
 // (FOR UPDATE) is exercised by sequencing the SELECT-active result so that
 // the second concurrent call observes the first hire.
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockLogActivity = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("../services/activity-log.js", () => ({
@@ -15,14 +15,24 @@ vi.mock("../services/activity-log.js", () => ({
 
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
+  list: vi.fn(),
 }));
 vi.mock("../services/agents.js", () => ({
   agentService: vi.fn(() => mockAgentService),
 }));
 
+const mockCompanyService = vi.hoisted(() => ({
+  getById: vi.fn(),
+}));
+vi.mock("../services/companies.js", () => ({
+  companyService: vi.fn(() => mockCompanyService),
+}));
+
 import { cosReviewerAutoHire } from "../services/cos-reviewer-auto-hire.ts";
 
 const C = "11111111-1111-1111-1111-111111111111";
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
 interface DbScript {
   /** Sequence of rows returned by tx.select().for("update") (active reviewers). */
@@ -120,6 +130,7 @@ function makeDb(script: DbScript) {
   });
 
   const db: any = {
+    execute: vi.fn().mockResolvedValue([]),
     select: select2,
     insert: vi.fn(() => ({ values: insertValues })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
@@ -133,8 +144,21 @@ function makeDb(script: DbScript) {
 beforeEach(() => {
   mockLogActivity.mockClear();
   mockAgentService.create.mockReset();
+  mockAgentService.list.mockReset();
+  mockCompanyService.getById.mockReset();
+  mockAgentService.list.mockResolvedValue([]);
+  mockCompanyService.getById.mockResolvedValue({ id: C, planTier: "pro_active" });
   delete process.env.AGENTDASH_REVIEWER_QUEUE_DEPTH_THRESHOLD;
   delete process.env.AGENTDASH_REVIEWER_MAX_CONCURRENT_HIRES;
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+});
+
+afterEach(() => {
+  if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+  if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+  else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
 });
 
 describe("cosReviewerAutoHire — neutrality_conflict", () => {
@@ -223,6 +247,30 @@ describe("cosReviewerAutoHire — MAX_CONCURRENT_HIRES cap", () => {
       (c: any[]) => c[1]?.action === "reviewer_hire_throttled",
     );
     expect(throttled).toHaveLength(1);
+  });
+});
+
+describe("cosReviewerAutoHire — Free tier cap", () => {
+  it("does not auto-hire a reviewer after the Free agent slot is used", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanyService.getById.mockResolvedValue({ id: C, planTier: "free" });
+    mockAgentService.list.mockResolvedValue([{ id: "cos-1", status: "idle" }]);
+    const inserts: DbScript["inserts"] = [];
+    const db = makeDb({
+      activeReviewerSeq: [[]],
+      depthSeq: [{ value: 1000 }],
+      inserts,
+    });
+    const createAgent = vi.fn().mockResolvedValue({ id: "agent-new" });
+    const svc = cosReviewerAutoHire(db, { createAgent });
+
+    const result = await svc.evaluateAndHireIfNeeded(C, "queue_depth");
+
+    expect(result.hired).toBe(false);
+    expect(result.reason).toBe("cap_reached");
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+    expect(db.execute).toHaveBeenCalled();
   });
 });
 

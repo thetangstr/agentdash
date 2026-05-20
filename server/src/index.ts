@@ -531,22 +531,44 @@ export async function startServer(): Promise<StartedServer> {
     const onUserCreated = legacyAutoBootstrap
       ? async (user: { id: string; email: string; name: string | null }) => {
           const services = await import("./services/index.js");
+          const tierPolicy = await import("./services/tier-policy.js");
           const { authUsers } = await import("@paperclipai/db");
           const { eq } = await import("drizzle-orm");
-          const orch = services.onboardingOrchestrator({
-            access: services.accessService(db as any),
-            companies: services.companyService(db as any),
-            agents: services.agentService(db as any),
+          const orchestratorServices = (dbOrTx: any) => ({
+            access: services.accessService(dbOrTx),
+            companies: services.companyService(dbOrTx),
+            agents: services.agentService(dbOrTx),
             instructions: services.agentInstructionsService(),
-            conversations: services.conversationService(db as any),
+            conversations: services.conversationService(dbOrTx),
             users: {
               getById: async (id: string) => {
-                const rows = await (db as any)
+                const rows = await dbOrTx
                   .select()
                   .from(authUsers)
                   .where(eq(authUsers.id, id));
                 return rows[0] ?? null;
               },
+            },
+          });
+          const orch = services.onboardingOrchestrator({
+            ...orchestratorServices(db as any),
+            tierCapacity: {
+              withCompanyLock: (companyId, work) =>
+                tierPolicy.withCompanyTierCapacityLock(db as any, companyId, (tx) =>
+                  work(orchestratorServices(tx)),
+                ),
+              capacityDepsFor: (scoped) => ({
+                getCompany: async (id) => {
+                  const company = await scoped.companies.getById(id);
+                  return { planTier: company?.planTier ?? "free" };
+                },
+                counts: {
+                  humans: async (companyId) =>
+                    (await scoped.access.listActiveUserMemberships(companyId)).length,
+                  agents: async (companyId) =>
+                    (await scoped.agents.list(companyId)).length,
+                },
+              }),
             },
           });
           const result = await orch.bootstrap(user.id);

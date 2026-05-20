@@ -19,6 +19,13 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
+import {
+  exceededFreeTierCapacityAction,
+  freeTierCapExceededPayload,
+  isBillingDisabled,
+  withCompanyTierCapacityLock,
+} from "../services/tier-policy.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -40,6 +47,20 @@ export function approvalRoutes(
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
+  function hireApprovalCreatesAgent(approval: {
+    type: string;
+    status?: string | null;
+    payload: unknown;
+  }): boolean {
+    if (approval.type !== "hire_agent") return false;
+    if (approval.status !== "pending" && approval.status !== "revision_requested") return false;
+    const payload =
+      typeof approval.payload === "object" && approval.payload !== null
+        ? (approval.payload as Record<string, unknown>)
+        : {};
+    return typeof payload.agentId !== "string";
+  }
+
   async function requireApprovalAccess(req: Request, id: string) {
     const approval = await svc.getById(id);
     if (!approval) {
@@ -47,6 +68,43 @@ export function approvalRoutes(
     }
     assertCompanyAccess(req, approval.companyId);
     return approval;
+  }
+
+  async function approveWithTierCapacity(
+    id: string,
+    existingApproval: Awaited<ReturnType<typeof svc.getById>>,
+    decidedByUserId: string,
+    decisionNote: string | null | undefined,
+    res: import("express").Response,
+  ) {
+    if (!existingApproval) return null;
+    if (!hireApprovalCreatesAgent(existingApproval) || isBillingDisabled()) {
+      return svc.approve(id, decidedByUserId, decisionNote);
+    }
+
+    return withCompanyTierCapacityLock(db, existingApproval.companyId, async (dbOrTx) => {
+      const txSvc = approvalService(dbOrTx);
+      const lockedApproval = await txSvc.getById(id);
+      if (!lockedApproval) {
+        res.status(404).json({ error: "Approval not found" });
+        return null;
+      }
+      if (!hireApprovalCreatesAgent(lockedApproval)) {
+        return txSvc.approve(id, decidedByUserId, decisionNote);
+      }
+
+      const blockedAction = await exceededFreeTierCapacityAction(
+        buildRequireTierDeps(dbOrTx),
+        lockedApproval.companyId,
+        { agents: 1 },
+      );
+      if (blockedAction) {
+        res.status(402).json(freeTierCapExceededPayload(blockedAction));
+        return null;
+      }
+
+      return txSvc.approve(id, decidedByUserId, decisionNote);
+    });
   }
 
   router.get("/companies/:companyId/approvals", async (req, res) => {
@@ -136,12 +194,21 @@ export function approvalRoutes(
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
-    if (!(await requireApprovalAccess(req, id))) {
+    const existingApproval = await requireApprovalAccess(req, id);
+    if (!existingApproval) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
     const decidedByUserId = req.actor.userId ?? "board";
-    const { approval, applied } = await svc.approve(id, decidedByUserId, req.body.decisionNote);
+    const resolution = await approveWithTierCapacity(
+      id,
+      existingApproval,
+      decidedByUserId,
+      req.body.decisionNote,
+      res,
+    );
+    if (!resolution) return;
+    const { approval, applied } = resolution;
 
     if (applied) {
       const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);

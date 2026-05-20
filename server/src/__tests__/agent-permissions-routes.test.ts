@@ -1,9 +1,11 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
 const baseAgent = {
   id: agentId,
@@ -184,7 +186,6 @@ function registerModuleMocks() {
 
   vi.doMock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
-    ISSUE_LIST_DEFAULT_LIMIT: 50,
     agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
@@ -203,22 +204,44 @@ function registerModuleMocks() {
   }));
 }
 
-function createDbStub(options: { requireBoardApprovalForNewAgents?: boolean } = {}) {
-  return {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          then: vi.fn((resolve) =>
-            Promise.resolve(resolve([{
-              id: companyId,
-              name: "Paperclip",
-              requireBoardApprovalForNewAgents: options.requireBoardApprovalForNewAgents ?? false,
-            }])),
-          ),
-        }),
-      }),
-    }),
+function createDbStub(
+  options: {
+    requireBoardApprovalForNewAgents?: boolean;
+    planTier?: string;
+    activeAgents?: number;
+  } = {},
+) {
+  const db: any = {
+    execute: vi.fn().mockResolvedValue([]),
+    transaction: vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn(db)),
   };
+  db.select = vi.fn((shape?: Record<string, unknown>) => {
+    const rowsForShape = () => {
+      if (shape && Object.prototype.hasOwnProperty.call(shape, "count")) {
+        return [{ count: options.activeAgents ?? 0 }];
+      }
+      if (shape && Object.prototype.hasOwnProperty.call(shape, "spentMonthlyCents")) {
+        return [];
+      }
+      return [{
+        id: companyId,
+        name: "Paperclip",
+        spentMonthlyCents: 0,
+        planTier: options.planTier ?? "pro_active",
+        requireBoardApprovalForNewAgents: options.requireBoardApprovalForNewAgents ?? false,
+        logoAssetId: null,
+      }];
+    };
+    const chain: any = {
+      from: vi.fn(() => chain),
+      leftJoin: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      groupBy: vi.fn(() => chain),
+      then: vi.fn((resolve, reject) => Promise.resolve(rowsForShape()).then(resolve, reject)),
+    };
+    return chain;
+  });
+  return db;
 }
 
 async function createApp(actor: Record<string, unknown>, dbOptions: { requireBoardApprovalForNewAgents?: boolean } = {}) {
@@ -389,6 +412,13 @@ describe.sequential("agent permission routes", () => {
       censorUsernameInLogs: false,
     });
     mockLogActivity.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("redacts agent detail for authenticated company members without agent admin permission", async () => {
@@ -803,6 +833,90 @@ describe.sequential("agent permission routes", () => {
     );
   });
 
+  it("checks direct agent creation authorization before returning Free tier cap errors", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockAccessService.canUser.mockResolvedValue(true);
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "other-company-user",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: ["different-company"],
+      },
+      { planTier: "free", activeAgents: 1 },
+    );
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({
+        name: "Backdoor",
+        role: "engineer",
+        adapterType: "process",
+        adapterConfig: {},
+      }));
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("does not have access");
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+  });
+
+  it("blocks direct agent creation on Free workspaces after the agent slot is used", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      { planTier: "free", activeAgents: 1 },
+    );
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({
+        name: "Builder",
+        role: "engineer",
+        adapterType: "process",
+        adapterConfig: {},
+      }));
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+  });
+
+  it("allows the first direct agent creation on a Free workspace", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      { planTier: "free", activeAgents: 0 },
+    );
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agents`)
+      .send({
+        name: "Builder",
+        role: "engineer",
+        adapterType: "process",
+        adapterConfig: {},
+      }));
+
+    expect(res.status).toBe(201);
+    expect(mockAgentService.create).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects direct agent creation when new agents require board approval", async () => {
     const app = await createApp(
       {
@@ -959,6 +1073,35 @@ describe.sequential("agent permission routes", () => {
         },
       }),
     );
+  });
+
+  it("blocks agent hire requests on Free workspaces after the agent slot is used", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+        companyIds: [companyId],
+      },
+      { planTier: "free", activeAgents: 1 },
+    );
+
+    const res = await requestApp(app, (baseUrl) => request(baseUrl)
+      .post(`/api/companies/${companyId}/agent-hires`)
+      .send({
+        name: "Builder",
+        role: "engineer",
+        adapterType: "process",
+        adapterConfig: {},
+      }));
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+    expect(mockApprovalService.create).not.toHaveBeenCalled();
   });
 
   it("allows board users to directly approve pending agents", async () => {

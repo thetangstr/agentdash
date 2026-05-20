@@ -1,6 +1,13 @@
 import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
 import { SingleCompanyInstallationError } from "./companies.js";
+import {
+  exceededFreeTierCapacityAction,
+  freeTierCapExceededPayload,
+  type TierCapAction,
+  type TierCapacityAdds,
+  type TierCapacityDeps,
+} from "./tier-policy.js";
 
 // AgentDash (#102): true when the single-company-installation constraint should
 // be bypassed. Mirrors the same check in server/src/routes/companies.ts.
@@ -47,7 +54,7 @@ async function postWelcomeSequence(
   });
 }
 
-interface Deps {
+interface BootstrapServices {
   access: any;          // accessService(db)
   companies: any;       // companyService(db)
   agents: any;          // agentService(db)
@@ -56,10 +63,32 @@ interface Deps {
   users: any;           // user lookup (auth-users service or direct query)
 }
 
+interface Deps extends BootstrapServices {
+  tierCapacity?: {
+    withCompanyLock<T>(
+      companyId: string,
+      work: (services: BootstrapServices) => Promise<T>,
+    ): Promise<T>;
+    capacityDepsFor(services: BootstrapServices): TierCapacityDeps;
+  };
+}
+
 interface BootstrapResult {
   companyId: string;
   cosAgentId: string;
   conversationId: string;
+}
+
+export class OnboardingTierCapacityExceededError extends Error {
+  readonly action: TierCapAction;
+  readonly code: string;
+
+  constructor(action: TierCapAction) {
+    const payload = freeTierCapExceededPayload(action);
+    super(payload.message);
+    this.action = action;
+    this.code = payload.code;
+  }
 }
 
 // In `local_trusted` deployment mode, the synthetic actor has userId="local-board"
@@ -77,6 +106,105 @@ function resolveLocalUser(userId: string): { id: string; email: string | null } 
 }
 
 export function onboardingOrchestrator(deps: Deps) {
+  async function assertBootstrapTierCapacity(
+    services: BootstrapServices,
+    companyId: string,
+    adds: TierCapacityAdds,
+  ) {
+    if (!deps.tierCapacity) return;
+    const blockedAction = await exceededFreeTierCapacityAction(
+      deps.tierCapacity.capacityDepsFor(services),
+      companyId,
+      adds,
+    );
+    if (blockedAction) throw new OnboardingTierCapacityExceededError(blockedAction);
+  }
+
+  async function finalizeBootstrap(
+    services: BootstrapServices,
+    company: { id: string; name?: string; emailDomain?: string | null },
+    user: { id: string; email: string | null; name?: string | null },
+  ): Promise<BootstrapResult> {
+    const currentMemberships = await services.access.listUserCompanyAccess(user.id);
+    const hasActiveMembership = currentMemberships.some(
+      (m: any) => m.companyId === company.id && m.status === "active",
+    );
+
+    // Step 3 needs the current agent list under the same capacity lock. That
+    // makes concurrent bootstrap calls observe any CoS created by the previous
+    // transaction before deciding whether this request consumes the free agent
+    // slot.
+    const existing = (await services.agents.list?.(company.id)) ?? [];
+    let cos = existing.find((a: any) => a.role === "chief_of_staff");
+
+    await assertBootstrapTierCapacity(services, company.id, {
+      humans: hasActiveMembership ? 0 : 1,
+      agents: cos ? 0 : 1,
+    });
+
+    // Step 2: grant agents:create FIRST (before owner promotion — see GH #72).
+    await services.access.setPrincipalPermission(
+      company.id,
+      "user",
+      user.id,
+      "agents:create",
+      true,
+      user.id,
+    );
+    await services.access.ensureMembership(company.id, "user", user.id, "owner", "active");
+
+    // Step 3: ensure a Chief of Staff agent exists.
+    if (!cos) {
+      const created = await services.agents.create(company.id, {
+        name: "Chief of Staff",
+        role: "chief_of_staff",
+        adapterType: (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_local").trim() || "claude_local",
+        adapterConfig: {},
+        status: "idle",
+        spentMonthlyCents: 0,
+        lastHeartbeatAt: null,
+      });
+      // Materialize the default chief_of_staff bundle.
+      const bundleFiles = await loadCosBundleFiles();
+      const materialized = await services.instructions.materializeManagedBundle(
+        created,
+        bundleFiles,
+        { entryFile: "AGENTS.md", replaceExisting: false },
+      );
+      cos = { ...created, adapterConfig: materialized.adapterConfig };
+    }
+
+    // Step 4: ensure CoS has an API key (carry from GH #71 — but POST handler creates it; here we
+    // need to make sure it exists if the agent was created by another path).
+    // For idempotency simplicity: just always ensure one key exists.
+    const existingKeys = (await services.agents.listKeys?.(cos.id)) ?? [];
+    if (existingKeys.length === 0) {
+      await services.agents.createApiKey(cos.id, "default");
+    }
+
+    // Step 5: ensure a conversation exists for this company; add the user as participant.
+    // The fresh-conversation branch is the atomic point: conversations.create only
+    // succeeds once per workspace, so we post the welcome sequence here. This
+    // eliminates the read-then-write race that the old route-handler check had.
+    let conversation = await services.conversations.findByCompany(company.id);
+    const isFreshConversation = !conversation;
+    if (!conversation) {
+      conversation = await services.conversations.create({ companyId: company.id, userId: user.id });
+    }
+    await services.conversations.addParticipant(conversation.id, user.id, "owner");
+    if (isFreshConversation) {
+      await postWelcomeSequence(services.conversations, conversation.id, cos.id, user.name);
+    }
+
+    logger.info({ userId: user.id, companyId: company.id, cosAgentId: cos.id, conversationId: conversation.id }, "onboarding bootstrap complete");
+
+    return {
+      companyId: company.id,
+      cosAgentId: cos.id,
+      conversationId: conversation.id,
+    };
+  }
+
   return {
     bootstrap: async (userId: string): Promise<BootstrapResult> => {
       // Try the real auth_users lookup first; fall back to local-trusted sentinel.
@@ -163,69 +291,10 @@ export function onboardingOrchestrator(deps: Deps) {
         }
       }
 
-      // Step 2: grant agents:create FIRST (before owner promotion — see GH #72).
-      await deps.access.setPrincipalPermission(
-        company.id,
-        "user",
-        userId,
-        "agents:create",
-        true,
-        userId,
+      if (!deps.tierCapacity) return finalizeBootstrap(deps, company, user);
+      return deps.tierCapacity.withCompanyLock(company.id, (services) =>
+        finalizeBootstrap(services, company, user),
       );
-      await deps.access.ensureMembership(company.id, "user", userId, "owner", "active");
-
-      // Step 3: ensure a Chief of Staff agent exists.
-      const existing = (await deps.agents.list?.(company.id)) ?? [];
-      let cos = existing.find((a: any) => a.role === "chief_of_staff");
-      if (!cos) {
-        const created = await deps.agents.create(company.id, {
-          name: "Chief of Staff",
-          role: "chief_of_staff",
-          adapterType: (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_local").trim() || "claude_local",
-          adapterConfig: {},
-          status: "idle",
-          spentMonthlyCents: 0,
-          lastHeartbeatAt: null,
-        });
-        // Materialize the default chief_of_staff bundle.
-        const bundleFiles = await loadCosBundleFiles();
-        const materialized = await deps.instructions.materializeManagedBundle(
-          created,
-          bundleFiles,
-          { entryFile: "AGENTS.md", replaceExisting: false },
-        );
-        cos = { ...created, adapterConfig: materialized.adapterConfig };
-      }
-
-      // Step 4: ensure CoS has an API key (carry from GH #71 — but POST handler creates it; here we
-      // need to make sure it exists if the agent was created by another path).
-      // For idempotency simplicity: just always ensure one key exists.
-      const existingKeys = (await deps.agents.listKeys?.(cos.id)) ?? [];
-      if (existingKeys.length === 0) {
-        await deps.agents.createApiKey(cos.id, "default");
-      }
-
-      // Step 5: ensure a conversation exists for this company; add the user as participant.
-      // The fresh-conversation branch is the atomic point: conversations.create only
-      // succeeds once per workspace, so we post the welcome sequence here. This
-      // eliminates the read-then-write race that the old route-handler check had.
-      let conversation = await deps.conversations.findByCompany(company.id);
-      const isFreshConversation = !conversation;
-      if (!conversation) {
-        conversation = await deps.conversations.create({ companyId: company.id, userId });
-      }
-      await deps.conversations.addParticipant(conversation.id, userId, "owner");
-      if (isFreshConversation) {
-        await postWelcomeSequence(deps.conversations, conversation.id, cos.id, user.name);
-      }
-
-      logger.info({ userId, companyId: company.id, cosAgentId: cos.id, conversationId: conversation.id }, "onboarding bootstrap complete");
-
-      return {
-        companyId: company.id,
-        cosAgentId: cos.id,
-        conversationId: conversation.id,
-      };
     },
   };
 }
