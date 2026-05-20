@@ -71,6 +71,16 @@ const agentInstructionsSvc = {
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
+function disableBillingForPortabilityDefaults() {
+  delete process.env.STRIPE_SECRET_KEY;
+  process.env.AGENTDASH_BILLING_DISABLED = "true";
+}
+
+function enableBillingForFreeTierTest() {
+  process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+}
+
 vi.mock("../services/companies.js", () => ({
   companyService: () => companySvc,
 }));
@@ -399,10 +409,7 @@ describe("company portability", () => {
         instructionsFilePath: `/tmp/${agent.id}/AGENTS.md`,
       },
     }));
-    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
-    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
-    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
-    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
+    disableBillingForPortabilityDefaults();
   });
 
   afterEach(() => {
@@ -1612,7 +1619,7 @@ describe("company portability", () => {
   });
 
   it("blocks agent imports on Free workspaces after the agent slot is used", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     companySvc.getById.mockResolvedValue({
       id: "company-1",
       name: "Paperclip",
@@ -1669,7 +1676,7 @@ describe("company portability", () => {
   });
 
   it("rechecks existing-company import capacity under lock before importing skills", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     companySvc.getById.mockResolvedValue({
       id: "company-1",
       name: "Paperclip",
@@ -2248,7 +2255,7 @@ describe("company portability", () => {
   });
 
   it("blocks safe new-company imports that would copy multiple humans into a Free workspace", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     const portability = companyPortabilityService({} as any);
 
     const exported = await portability.exportBundle("company-1", {
@@ -2310,7 +2317,7 @@ describe("company portability", () => {
   });
 
   it("blocks multi-agent imports into a new Free workspace before creating partial state", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     const portability = companyPortabilityService({} as any);
 
     const exported = await portability.exportBundle("company-1", {

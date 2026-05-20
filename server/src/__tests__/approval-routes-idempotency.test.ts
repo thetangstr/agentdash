@@ -31,6 +31,16 @@ const mockLogActivity = vi.hoisted(() => vi.fn());
 const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
+function disableBillingForApprovalDefaults() {
+  delete process.env.STRIPE_SECRET_KEY;
+  process.env.AGENTDASH_BILLING_DISABLED = "true";
+}
+
+function enableBillingForFreeTierTest() {
+  process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+}
+
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
@@ -146,6 +156,7 @@ describe("approval routes idempotent retries", () => {
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
     mockLogActivity.mockResolvedValue(undefined);
+    disableBillingForApprovalDefaults();
   });
 
   afterEach(() => {
@@ -277,7 +288,7 @@ describe("approval routes idempotent retries", () => {
   });
 
   it("blocks approving a hire_agent approval that would create a second Free agent", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     mockApprovalService.getById.mockResolvedValue({
       id: "approval-free-cap",
       companyId: "company-1",
@@ -301,7 +312,7 @@ describe("approval routes idempotent retries", () => {
   });
 
   it("blocks approving a revision-requested hire_agent approval that would create a second Free agent", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     mockApprovalService.getById.mockResolvedValue({
       id: "approval-free-cap-revision",
       companyId: "company-1",
@@ -325,7 +336,7 @@ describe("approval routes idempotent retries", () => {
   });
 
   it("keeps approved hire_agent retries idempotent even when the Free agent slot is used", async () => {
-    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    enableBillingForFreeTierTest();
     mockApprovalService.getById.mockResolvedValue({
       id: "approval-free-retry",
       companyId: "company-1",
