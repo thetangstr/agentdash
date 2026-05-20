@@ -7,6 +7,8 @@ const ORIGINAL_PAPERCLIP_LISTEN_HOST = process.env.PAPERCLIP_LISTEN_HOST;
 const ORIGINAL_PAPERCLIP_LISTEN_PORT = process.env.PAPERCLIP_LISTEN_PORT;
 const ORIGINAL_RUN_HEALER_ENABLED = process.env.RUN_HEALER_ENABLED;
 const ORIGINAL_RUN_HEALER_SCAN_INTERVAL_MS = process.env.RUN_HEALER_SCAN_INTERVAL_MS;
+const ORIGINAL_STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+const ORIGINAL_AGENTDASH_BILLING_DISABLED = process.env.AGENTDASH_BILLING_DISABLED;
 
 const {
   createAppMock,
@@ -219,6 +221,17 @@ vi.mock("../auth/better-auth.js", () => ({
 }));
 
 import { startServer } from "../index.ts";
+
+beforeEach(() => {
+  process.env.AGENTDASH_BILLING_DISABLED = "true";
+});
+
+afterEach(() => {
+  if (ORIGINAL_STRIPE_SECRET_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = ORIGINAL_STRIPE_SECRET_KEY;
+  if (ORIGINAL_AGENTDASH_BILLING_DISABLED === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+  else process.env.AGENTDASH_BILLING_DISABLED = ORIGINAL_AGENTDASH_BILLING_DISABLED;
+});
 
 function restoreRunHealerEnv() {
   if (ORIGINAL_RUN_HEALER_ENABLED === undefined) delete process.env.RUN_HEALER_ENABLED;

@@ -1,6 +1,9 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -245,6 +248,7 @@ function makeAgent(adapterType: string) {
 
 describe.sequential("agent skill routes", () => {
   beforeEach(() => {
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
     vi.resetModules();
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
@@ -358,6 +362,13 @@ describe.sequential("agent skill routes", () => {
       token: "agk_test_token",
       createdAt: new Date("2026-05-02T00:00:00.000Z"),
     });
+  });
+
+  afterEach(() => {
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("skips runtime materialization when listing Claude skills", async () => {
