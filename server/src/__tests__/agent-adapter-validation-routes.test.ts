@@ -3,6 +3,9 @@ import request from "supertest";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerAdapterModule } from "../adapters/index.js";
 
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
+
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   getById: vi.fn(),
@@ -194,6 +197,7 @@ async function unregisterTestAdapter(type: string) {
 
 describe("agent routes adapter validation", () => {
   beforeEach(async () => {
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
     vi.resetModules();
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
@@ -239,6 +243,10 @@ describe("agent routes adapter validation", () => {
   afterEach(async () => {
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter(missingAdapterType);
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("creates agents for dynamically registered external adapter types", async () => {
