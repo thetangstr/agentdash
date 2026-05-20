@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockOrchestrator = { bootstrap: vi.fn() };
 const mockConversations = {
@@ -17,6 +17,12 @@ const mockAgents = {
   list: vi.fn().mockResolvedValue([]),
   listKeys: vi.fn().mockResolvedValue([]),
 };
+const mockAccess = {
+  listActiveUserMemberships: vi.fn().mockResolvedValue([]),
+};
+const mockCompanies = {
+  getById: vi.fn().mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" }),
+};
 const mockInterview = { nextTurn: vi.fn() };
 const mockProposer = { propose: vi.fn() };
 const mockCreator = { create: vi.fn() };
@@ -27,6 +33,10 @@ const mockCosState = {
   setGoals: vi.fn(),
   advancePhase: vi.fn().mockResolvedValue(undefined),
 };
+const mockMaterializeOnboardingGoals = vi.fn().mockResolvedValue({
+  created: 0,
+  skipped: 0,
+});
 
 const mockInvites = {
   createCompanyInvite: vi.fn(),
@@ -51,17 +61,29 @@ vi.mock("../auth/email.js", () => ({
   sanitizeDisplayName: (s: string | null) => s,
 }));
 
+vi.mock("../services/materialize-onboarding-goals.js", () => ({
+  materializeOnboardingGoals: () => mockMaterializeOnboardingGoals,
+}));
+
 vi.mock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
   onboardingOrchestrator: () => mockOrchestrator,
+  OnboardingTierCapacityExceededError: class OnboardingTierCapacityExceededError extends Error {
+    action: "invite" | "hire";
+
+    constructor(action: "invite" | "hire") {
+      super(action);
+      this.action = action;
+    }
+  },
   cosInterview: () => mockInterview,
   agentProposer: () => mockProposer,
   agentCreatorFromProposal: () => mockCreator,
   conversationService: () => mockConversations,
   agentService: () => mockAgents,
-  accessService: () => ({}),
-  companyService: () => ({}),
+  accessService: () => mockAccess,
+  companyService: () => mockCompanies,
   agentInstructionsService: () => mockInstructions,
   cosOnboardingStateService: () => mockCosState,
   inviteService: () => mockInvites,
@@ -81,10 +103,25 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
 }));
 
 import { onboardingV2Routes } from "../routes/onboarding-v2.js";
 import { errorHandler } from "../middleware/error-handler.js";
+
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+
+beforeEach(() => {
+  mockAccess.listActiveUserMemberships.mockResolvedValue([]);
+  mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "pro_active" });
+  mockAgents.list.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+  else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+});
 
 function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
   const app = express();
@@ -109,6 +146,16 @@ function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
     return chain;
   };
   const stubDb: any = makeChain();
+  let transactionTail = Promise.resolve();
+  stubDb.execute = vi.fn().mockResolvedValue([]);
+  stubDb.transaction = vi.fn((fn: (tx: any) => Promise<unknown>) => {
+    const run = transactionTail.then(() => fn(stubDb));
+    transactionTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  });
   app.use("/api/onboarding", onboardingV2Routes(stubDb));
   app.use(errorHandler);
   return app;
@@ -178,6 +225,105 @@ describe("POST /api/onboarding/agent/confirm", () => {
       agent: { id: "agent-2", name: "Reese", title: "SDR" },
       apiKey: { token: "agk_x" },
     });
+  });
+
+  it("allows the first onboarding agent on a Free workspace", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([]);
+    mockProposer.propose.mockResolvedValue({
+      name: "Casey",
+      role: "Chief of Staff",
+      oneLineOkr: "ok",
+      rationale: "x",
+    });
+    mockCreator.create.mockResolvedValue({
+      agentId: "cos1",
+      apiKey: { id: "k", token: "agk_x" },
+    });
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv1",
+      reportsToAgentId: "owner",
+      companyId: "c1",
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      agent: { id: "cos1", name: "Casey", title: "Chief of Staff" },
+      apiKey: { token: "agk_x" },
+    });
+  });
+
+  it("blocks onboarding agent confirmation on Free workspaces that already have the CoS", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", status: "idle" },
+    ]);
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+
+    const res = await request(app).post("/api/onboarding/agent/confirm").send({
+      conversationId: "conv1",
+      reportsToAgentId: "cos1",
+      companyId: "c1",
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockProposer.propose).not.toHaveBeenCalled();
+    expect(mockCreator.create).not.toHaveBeenCalled();
+    expect(mockConversations.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent Free onboarding agent confirmations so only one agent is created", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    const activeAgents: Array<{ id: string; role: string; status: string }> = [];
+    mockAgents.list.mockImplementation(async () => activeAgents);
+
+    let proposalCalls = 0;
+    let releaseProposals!: () => void;
+    const bothRequestsReachedProposal = new Promise<void>((resolve) => {
+      releaseProposals = resolve;
+    });
+    mockProposer.propose.mockImplementation(async () => {
+      proposalCalls += 1;
+      if (proposalCalls === 2) releaseProposals();
+      await bothRequestsReachedProposal;
+      return {
+        name: "Casey",
+        role: "Chief of Staff",
+        oneLineOkr: "ok",
+        rationale: "x",
+      };
+    });
+    mockCreator.create.mockImplementation(async () => {
+      const id = `agent-${activeAgents.length + 1}`;
+      activeAgents.push({ id, role: "chief_of_staff", status: "idle" });
+      return {
+        agentId: id,
+        apiKey: { id: `key-${id}`, token: `agk_${id}` },
+      };
+    });
+
+    const app = buildApp({ type: "board", userId: "u1", source: "session", companyIds: ["c1"] });
+    const requestBody = {
+      conversationId: "conv1",
+      reportsToAgentId: "owner",
+      companyId: "c1",
+    };
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/onboarding/agent/confirm").send(requestBody),
+      request(app).post("/api/onboarding/agent/confirm").send(requestBody),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([201, 402]);
+    expect([first.body.code, second.body.code]).toContain("agent_cap_exceeded");
+    expect(mockCreator.create).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -262,6 +408,45 @@ describe("POST /api/onboarding/confirm-plan", () => {
         body: expect.stringContaining("Done"),
       }),
     );
+  });
+
+  it("blocks plan materialization on Free workspaces that already have the CoS", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "CoS", status: "idle" },
+    ]);
+    const planPayload = {
+      rationale: "ship + seed",
+      agents: [
+        {
+          role: "engineering_lead",
+          name: "Ellie",
+          adapterType: "hermes_local",
+          responsibilities: ["own dashboard"],
+          kpis: ["ship Q3"],
+        },
+      ],
+      alignmentToShortTerm: "ships v2",
+      alignmentToLongTerm: "lays groundwork",
+    };
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect(mockCosState.advancePhase).not.toHaveBeenCalled();
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockInstructions.materializeManagedBundle).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the conversation has no plan card", async () => {
@@ -369,6 +554,86 @@ describe("POST /api/onboarding/invites", () => {
         subject: expect.stringContaining("https://app.example.com/invite/pcp_invite_tok1"),
       }),
     );
+  });
+
+  it("allows the first teammate invite on a Free workspace with no active humans", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships.mockResolvedValue([]);
+    const expires = new Date("2099-01-01T00:00:00.000Z");
+    mockInvites.createCompanyInvite.mockResolvedValue({
+      id: "invite-1",
+      token: "tok1",
+      expiresAt: expires,
+    });
+    mockSendEmail.mockResolvedValue({ status: "skipped" });
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["owner@acme.com"],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.inviteIds).toEqual(["invite-1"]);
+    expect(mockInvites.createCompanyInvite).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks teammate invites on Free workspaces that already have one human", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships.mockResolvedValue([
+      { id: "member-1", principalType: "user", status: "active" },
+    ]);
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["teammate@acme.com"],
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("seat_cap_exceeded");
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("rechecks teammate capacity inside the lock before creating onboarding invites", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockCompanies.getById.mockResolvedValue({ id: "c1", name: "Acme", planTier: "free" });
+    mockAccess.listActiveUserMemberships
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "member-1", principalType: "user", status: "active" }]);
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app).post("/api/onboarding/invites").send({
+      conversationId: "conv1",
+      companyId: "c1",
+      emails: ["teammate@acme.com"],
+    });
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("seat_cap_exceeded");
+    expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
   });
 
   it("propagates sendEmail status into the response (sent / failed both flow through)", async () => {

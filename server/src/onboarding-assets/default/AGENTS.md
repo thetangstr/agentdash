@@ -47,3 +47,9 @@ When you make HTTP calls to the AgentDash API (`/api/...` endpoints):
 
 The same key works for all `/api/companies/:companyId/...` endpoints under your company; cross-company access is rejected with HTTP 403.
 <!-- /AgentDash: agent-api-auth -->
+
+<!-- AgentDash: free-tier-capacity — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Free-tier capacity limits
+
+Free workspaces allow one human user and one agent, normally the Chief of Staff. If an API call returns HTTP 402 with `seat_cap_exceeded` or `agent_cap_exceeded`, do not retry through another endpoint or create a workaround. Comment on the Issue or CoS thread with the blocked action and ask the board to upgrade the workspace or remove existing capacity first. The API is the source of truth for current plan limits.
+<!-- /AgentDash: free-tier-capacity -->

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @paperclipai/ui build",
+  "outputDirectory": "ui/dist",
+  "rewrites": [
+    {
+      "source": "/:path((?!api/|api$).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

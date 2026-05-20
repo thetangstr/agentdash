@@ -54,8 +54,16 @@ import {
 } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
-// AgentDash: billing-trio (#151, #153)
-import { requireTierFor } from "../middleware/require-tier.js";
+import {
+  exceededFreeTierCapacityAction,
+  freeTierCapExceededPayload,
+  isBillingDisabled,
+  lockCompanyTierCapacity,
+  withCompanyTierCapacityGuard,
+  withCompanyTierCapacityLock,
+  withCompanyTierInviteCapacityGuard,
+  type TierInviteJoinType,
+} from "../services/tier-policy.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import { seatQuantitySyncer } from "../services/seat-quantity-syncer.js";
 import { companyService } from "../services/companies.js";
@@ -2393,43 +2401,6 @@ async function probeInviteResolutionTarget(
   }
 }
 
-// AgentDash: billing-trio (#151) — Inline tier-cap check for the join-request
-// approve route. The route can approve either a human or an agent join, so the
-// requireTierFor middleware (which is fixed to "invite" or "hire" at mount
-// time) can't be used. This helper applies the same shape and codes as the
-// middleware. Sends a 402 to `res` when the cap is exceeded.
-async function assertJoinRequestTierAllowed(
-  deps: ReturnType<typeof buildRequireTierDeps>,
-  companyId: string,
-  requestType: string,
-  res: import("express").Response,
-): Promise<void> {
-  const billingDisabled =
-    process.env.AGENTDASH_BILLING_DISABLED === "true" || !process.env.STRIPE_SECRET_KEY;
-  if (billingDisabled) return;
-  const company = await deps.getCompany(companyId);
-  if (company.planTier === "pro_trial" || company.planTier === "pro_active") return;
-  if (requestType === "human") {
-    const humans = await deps.counts.humans(companyId);
-    if (humans >= 1) {
-      res.status(402).json({
-        code: "seat_cap_exceeded",
-        message: "Free workspaces are limited to 1 user. Upgrade to Pro to invite teammates.",
-      });
-      return;
-    }
-  } else if (requestType === "agent") {
-    const agents = await deps.counts.agents(companyId);
-    if (agents >= 1) {
-      res.status(402).json({
-        code: "agent_cap_exceeded",
-        message: "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents.",
-      });
-      return;
-    }
-  }
-}
-
 // AgentDash: billing-trio (#153) — Stripe seat-quantity syncer wired with the
 // real Stripe SDK when STRIPE_SECRET_KEY is set, otherwise a no-op shim that
 // preserves the service contract (idempotent, side-effect free in dev).
@@ -2442,6 +2413,7 @@ function createSeatSyncerForAccessRoutes(db: Db) {
       },
     };
   }
+
   const companies = companyService(db);
   const counts = {
     humans: async (companyId: string) => {
@@ -2491,17 +2463,76 @@ export function accessRoutes(
   const boardAuth = boardAuthService(db);
   const agents = agentService(db);
   // AgentDash: billing-trio (#151, #153)
-  const tierDeps = buildRequireTierDeps(db);
   const seatSyncer = createSeatSyncerForAccessRoutes(db);
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
+
+  async function withTierCapacityForJoinWrite<T>(
+    companyId: string,
+    work: (dbOrTx: Db) => Promise<T | null>,
+  ): Promise<T | null> {
+    if (isBillingDisabled()) return work(db);
+    return withCompanyTierCapacityLock(db, companyId, work);
+  }
+
+  async function withTierCapacityForInviteWrite<T>(
+    companyId: string,
+    allowedJoinTypes: TierInviteJoinType,
+    res: import("express").Response,
+    work: (dbOrTx: Db) => Promise<T>,
+  ): Promise<T | null> {
+    return withCompanyTierInviteCapacityGuard(
+      db,
+      companyId,
+      allowedJoinTypes,
+      buildRequireTierDeps,
+      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
+      work,
+    );
+  }
 
   async function assertInstanceAdmin(req: Request) {
     if (req.actor.type !== "board") throw unauthorized();
     if (isLocalImplicit(req)) return;
     const allowed = await access.isInstanceAdmin(req.actor.userId);
     if (!allowed) throw forbidden("Instance admin required");
+  }
+
+  async function enforceAdminCompanyAccessTierCapacity(
+    dbOrTx: Db,
+    userId: string,
+    companyIds: string[],
+    res: import("express").Response,
+  ): Promise<boolean> {
+    if (isBillingDisabled()) return true;
+
+    const target = Array.from(new Set(companyIds));
+    const scopedAccess = accessService(dbOrTx);
+    const existing = await scopedAccess.listUserCompanyAccess(userId);
+    const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
+    const activatingCompanyIds = target
+      .filter((companyId) => existingByCompany.get(companyId)?.status !== "active")
+      .sort();
+
+    if (activatingCompanyIds.length === 0) return true;
+
+    for (const companyId of activatingCompanyIds) {
+      await lockCompanyTierCapacity(dbOrTx, companyId);
+    }
+
+    const deps = buildRequireTierDeps(dbOrTx);
+    for (const companyId of activatingCompanyIds) {
+      const blockedAction = await exceededFreeTierCapacityAction(deps, companyId, {
+        humans: 1,
+      });
+      if (blockedAction) {
+        res.status(402).json(freeTierCapExceededPayload(blockedAction));
+        return false;
+      }
+    }
+
+    return true;
   }
 
   router.get("/board-claim/:token", async (req, res) => {
@@ -2764,12 +2795,14 @@ export function accessRoutes(
 
   async function createCompanyInviteForCompany(input: {
     req: Request;
+    db?: Db;
     companyId: string;
     allowedJoinTypes: "human" | "agent" | "both";
     humanRole?: "owner" | "admin" | "operator" | "viewer" | null;
     defaultsPayload?: Record<string, unknown> | null;
     agentMessage?: string | null;
   }) {
+    const writeDb = input.db ?? db;
     const normalizedAgentMessage =
       typeof input.agentMessage === "string"
         ? input.agentMessage.trim() || null
@@ -2796,7 +2829,7 @@ export function accessRoutes(
     for (let attempt = 0; attempt < INVITE_TOKEN_MAX_RETRIES; attempt += 1) {
       const candidateToken = createInviteToken();
       try {
-        const row = await db
+        const row = await writeDb
           .insert(invites)
           .values({
             ...insertValues,
@@ -2941,21 +2974,28 @@ export function accessRoutes(
 
   router.post(
     "/companies/:companyId/invites",
-    // AgentDash: billing-trio (#151) — Free workspaces capped at 1 human.
-    requireTierFor("invite", tierDeps),
     validate(createCompanyInviteSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCompanyPermission(req, companyId, "users:invite");
-      const { token, created, normalizedAgentMessage } =
-        await createCompanyInviteForCompany({
-          req,
-          companyId,
-          allowedJoinTypes: req.body.allowedJoinTypes,
-          humanRole: req.body.humanRole ?? null,
-          defaultsPayload: req.body.defaultsPayload ?? null,
-          agentMessage: req.body.agentMessage ?? null
-        });
+      const allowedJoinTypes = req.body.allowedJoinTypes as TierInviteJoinType;
+      const inviteResult = await withTierCapacityForInviteWrite(
+        companyId,
+        allowedJoinTypes,
+        res,
+        (dbOrTx) =>
+          createCompanyInviteForCompany({
+            req,
+            db: dbOrTx,
+            companyId,
+            allowedJoinTypes,
+            humanRole: req.body.humanRole ?? null,
+            defaultsPayload: req.body.defaultsPayload ?? null,
+            agentMessage: req.body.agentMessage ?? null
+          }),
+      );
+      if (!inviteResult) return;
+      const { token, created, normalizedAgentMessage } = inviteResult;
 
       await logActivity(db, {
         companyId,
@@ -3002,15 +3042,22 @@ export function accessRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       await assertCanGenerateOpenClawInvitePrompt(req, companyId);
-      const { token, created, normalizedAgentMessage } =
-        await createCompanyInviteForCompany({
+      const inviteResult = await withTierCapacityForInviteWrite(
+        companyId,
+        "agent",
+        res,
+        (dbOrTx) => createCompanyInviteForCompany({
           req,
+          db: dbOrTx,
           companyId,
           allowedJoinTypes: "agent",
           humanRole: null,
           defaultsPayload: null,
           agentMessage: req.body.agentMessage ?? null
-        });
+        }),
+      );
+      if (!inviteResult) return;
+      const { token, created, normalizedAgentMessage } = inviteResult;
 
       await logActivity(db, {
         companyId,
@@ -3788,113 +3835,165 @@ export function accessRoutes(
         .then((rows) => rows[0] ?? null);
       if (!invite) throw notFound("Invite not found");
 
-      // AgentDash: billing-trio (#151) — Free workspaces enforce 1 human + 1
-      // agent. The middleware can't run on this route because the cap to apply
-      // depends on the join-request type, so we apply it inline here.
-      await assertJoinRequestTierAllowed(tierDeps, companyId, existing.requestType, res);
-      if (res.headersSent) return;
+      const joinApproval = await withTierCapacityForJoinWrite(
+        companyId,
+        async (dbOrTx) => {
+          const txAccess = accessService(dbOrTx);
+          const txAgents = agentService(dbOrTx);
+          const lockedRequest = await dbOrTx
+            .select()
+            .from(joinRequests)
+            .where(
+              and(
+                eq(joinRequests.companyId, companyId),
+                eq(joinRequests.id, requestId)
+              )
+            )
+            .then((rows) => rows[0] ?? null);
+          if (!lockedRequest) throw notFound("Join request not found");
+          if (lockedRequest.status !== "pending_approval") {
+            throw conflict("Join request is not pending");
+          }
 
-      let createdAgentId: string | null = existing.createdAgentId ?? null;
-      if (existing.requestType === "human") {
-        if (!existing.requestingUserId)
-          throw conflict("Join request missing user identity");
-        const membershipRole = resolveHumanInviteRole(
-          invite.defaultsPayload as Record<string, unknown> | null,
-        );
-        await access.ensureMembership(
-          companyId,
-          "user",
-          existing.requestingUserId,
-          membershipRole,
-          "active"
-        );
-        // AgentDash: billing-trio (#153) — sync Stripe seat quantity after the
-        // membership lands. Failures must not block the membership write.
+          const lockedInvite = await dbOrTx
+            .select()
+            .from(invites)
+            .where(eq(invites.id, lockedRequest.inviteId))
+            .then((rows) => rows[0] ?? null);
+          if (!lockedInvite) throw notFound("Invite not found");
+
+          // AgentDash: billing-trio (#151) — Free workspaces enforce 1 human
+          // + 1 agent. The cap must be checked after locking and re-reading
+          // the join request so idempotent retries see the real status before
+          // capacity is consumed.
+          const blockedAction = await exceededFreeTierCapacityAction(
+            buildRequireTierDeps(dbOrTx),
+            companyId,
+            lockedRequest.requestType === "human"
+              ? { humans: 1 }
+              : lockedRequest.requestType === "agent"
+                ? { agents: 1 }
+                : {},
+          );
+          if (blockedAction) {
+            res.status(402).json(freeTierCapExceededPayload(blockedAction));
+            return null;
+          }
+
+          let createdAgentId: string | null = lockedRequest.createdAgentId ?? null;
+          if (lockedRequest.requestType === "human") {
+            if (!lockedRequest.requestingUserId)
+              throw conflict("Join request missing user identity");
+            const membershipRole = resolveHumanInviteRole(
+              lockedInvite.defaultsPayload as Record<string, unknown> | null,
+            );
+            await txAccess.ensureMembership(
+              companyId,
+              "user",
+              lockedRequest.requestingUserId,
+              membershipRole,
+              "active"
+            );
+            const grants = humanJoinGrantsFromDefaults(
+              lockedInvite.defaultsPayload as Record<string, unknown> | null,
+              membershipRole
+            );
+            await txAccess.setPrincipalGrants(
+              companyId,
+              "user",
+              lockedRequest.requestingUserId,
+              grants,
+              req.actor.userId ?? null
+            );
+          } else {
+            const existingAgents = await txAgents.list(companyId);
+            const managerId = resolveJoinRequestAgentManagerId(existingAgents);
+            if (!managerId) {
+              throw conflict(
+                "Join request cannot be approved because this company has no active CEO"
+              );
+            }
+
+            const agentName = deduplicateAgentName(
+              lockedRequest.agentName ?? "New Agent",
+              existingAgents.map((a) => ({
+                id: a.id,
+                name: a.name,
+                status: a.status
+              }))
+            );
+
+            const created = await txAgents.create(companyId, {
+              name: agentName,
+              role: "general",
+              title: null,
+              status: "idle",
+              reportsTo: managerId,
+              capabilities: lockedRequest.capabilities ?? null,
+              adapterType: lockedRequest.adapterType ?? "process",
+              adapterConfig:
+                lockedRequest.agentDefaultsPayload &&
+                typeof lockedRequest.agentDefaultsPayload === "object"
+                  ? (lockedRequest.agentDefaultsPayload as Record<string, unknown>)
+                  : {},
+              runtimeConfig: {},
+              budgetMonthlyCents: 0,
+              spentMonthlyCents: 0,
+              permissions: {},
+              lastHeartbeatAt: null,
+              metadata: null
+            });
+            createdAgentId = created.id;
+            await txAccess.ensureMembership(
+              companyId,
+              "agent",
+              created.id,
+              "member",
+              "active"
+            );
+            const grants = agentJoinGrantsFromDefaults(
+              lockedInvite.defaultsPayload as Record<string, unknown> | null
+            );
+            await txAccess.setPrincipalGrants(
+              companyId,
+              "agent",
+              created.id,
+              grants,
+              req.actor.userId ?? null
+            );
+          }
+
+          const approved = await dbOrTx
+            .update(joinRequests)
+            .set({
+              status: "approved",
+              approvedByUserId:
+                req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+              approvedAt: new Date(),
+              createdAgentId,
+              updatedAt: new Date()
+            })
+            .where(eq(joinRequests.id, requestId))
+            .returning()
+            .then((rows) => rows[0]);
+
+          return {
+            approved,
+            createdAgentId,
+            requestType: lockedRequest.requestType,
+          };
+        },
+      );
+      if (!joinApproval) return;
+      const { approved, createdAgentId } = joinApproval;
+
+      // AgentDash: billing-trio (#153) — sync Stripe seat quantity after the
+      // membership lands. Failures must not block the membership write.
+      if (joinApproval.requestType === "human") {
         seatSyncer.onMembershipChanged(companyId).catch((err) => {
           logger.error({ err, companyId }, "seat-quantity sync after join approval failed");
         });
-        const grants = humanJoinGrantsFromDefaults(
-          invite.defaultsPayload as Record<string, unknown> | null,
-          membershipRole
-        );
-        await access.setPrincipalGrants(
-          companyId,
-          "user",
-          existing.requestingUserId,
-          grants,
-          req.actor.userId ?? null
-        );
-      } else {
-        const existingAgents = await agents.list(companyId);
-        const managerId = resolveJoinRequestAgentManagerId(existingAgents);
-        if (!managerId) {
-          throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
-          );
-        }
-
-        const agentName = deduplicateAgentName(
-          existing.agentName ?? "New Agent",
-          existingAgents.map((a) => ({
-            id: a.id,
-            name: a.name,
-            status: a.status
-          }))
-        );
-
-        const created = await agents.create(companyId, {
-          name: agentName,
-          role: "general",
-          title: null,
-          status: "idle",
-          reportsTo: managerId,
-          capabilities: existing.capabilities ?? null,
-          adapterType: existing.adapterType ?? "process",
-          adapterConfig:
-            existing.agentDefaultsPayload &&
-            typeof existing.agentDefaultsPayload === "object"
-              ? (existing.agentDefaultsPayload as Record<string, unknown>)
-              : {},
-          runtimeConfig: {},
-          budgetMonthlyCents: 0,
-          spentMonthlyCents: 0,
-          permissions: {},
-          lastHeartbeatAt: null,
-          metadata: null
-        });
-        createdAgentId = created.id;
-        await access.ensureMembership(
-          companyId,
-          "agent",
-          created.id,
-          "member",
-          "active"
-        );
-        const grants = agentJoinGrantsFromDefaults(
-          invite.defaultsPayload as Record<string, unknown> | null
-        );
-        await access.setPrincipalGrants(
-          companyId,
-          "agent",
-          created.id,
-          grants,
-          req.actor.userId ?? null
-        );
       }
-
-      const approved = await db
-        .update(joinRequests)
-        .set({
-          status: "approved",
-          approvedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
-          approvedAt: new Date(),
-          createdAgentId,
-          updatedAt: new Date()
-        })
-        .where(eq(joinRequests.id, requestId))
-        .returning()
-        .then((rows) => rows[0]);
 
       await logActivity(db, {
         companyId,
@@ -3903,7 +4002,7 @@ export function accessRoutes(
         action: "join.approved",
         entityType: "join_request",
         entityId: requestId,
-        details: { requestType: existing.requestType, createdAgentId }
+        details: { requestType: joinApproval.requestType, createdAgentId }
       });
 
       if (createdAgentId) {
@@ -4469,11 +4568,31 @@ export function accessRoutes(
     async (req, res) => {
       await assertInstanceAdmin(req);
       const userId = req.params.userId as string;
-      await access.setUserCompanyAccess(
-        userId,
-        req.body.companyIds ?? [],
-        { actorUserId: req.actor.userId ?? null },
-      );
+      const companyIds = req.body.companyIds ?? [];
+      if (isBillingDisabled()) {
+        await access.setUserCompanyAccess(
+          userId,
+          companyIds,
+          { actorUserId: req.actor.userId ?? null },
+        );
+      } else {
+        await db.transaction(async (tx) => {
+          const dbOrTx = tx as unknown as Db;
+          const allowed = await enforceAdminCompanyAccessTierCapacity(
+            dbOrTx,
+            userId,
+            companyIds,
+            res,
+          );
+          if (!allowed) return;
+          await accessService(dbOrTx).setUserCompanyAccess(
+            userId,
+            companyIds,
+            { actorUserId: req.actor.userId ?? null },
+          );
+        });
+        if (res.headersSent) return;
+      }
       res.json(await loadUserCompanyAccessResponse(db, access, userId));
     }
   );

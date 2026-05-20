@@ -14,10 +14,19 @@ import {
   agentInstructionsService,
   cosOnboardingStateService,
   inviteService,
+  OnboardingTierCapacityExceededError,
 } from "../services/index.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
+import {
+  exceededFreeTierCapacityAction,
+  freeTierCapExceededPayload,
+  type TierCapacityAdds,
+  type TierCapacityDeps,
+  withCompanyTierCapacityLock,
+  withCompanyTierCapacityGuard,
+} from "../services/tier-policy.js";
 import { crystallizeAndAdvanceCos } from "../services/deep-interview-crystallize.js";
 import { materializeOnboardingGoals } from "../services/materialize-onboarding-goals.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
@@ -38,6 +47,18 @@ import {
 // Resend sends per call.
 const MAX_INVITE_BATCH = 25;
 
+type OnboardingTierCapacityServices = {
+  companies: {
+    getById: (id: string) => Promise<{ planTier?: string | null } | null>;
+  };
+  access: {
+    listActiveUserMemberships: (companyId: string) => Promise<unknown[]>;
+  };
+  agents: {
+    list: (companyId: string) => Promise<unknown[]>;
+  };
+};
+
 // Cheap email shape check — not RFC-compliant, just enough to reject
 // obviously-malformed entries (no `@`, no domain, embedded whitespace,
 // length > 254). Resend rejects bad addresses anyway, but pre-filtering
@@ -56,9 +77,11 @@ export function onboardingV2Routes(db: Db) {
   const router = Router();
   const conversations = conversationService(db);
   const agents = agentService(db);
+  const access = accessService(db);
   // Hoisted out of the request handler so we don't re-instantiate the
   // service per call (fixes review feedback re: per-request churn).
   const companies = companyService(db);
+  const tierServices = tierCapacityServices(db);
 
   const users = {
     getById: async (id: string) => {
@@ -70,14 +93,73 @@ export function onboardingV2Routes(db: Db) {
     },
   };
 
+  function onboardingOrchestratorServices(dbOrTx: Db) {
+    return {
+      access: accessService(dbOrTx),
+      companies: companyService(dbOrTx),
+      agents: agentService(dbOrTx),
+      instructions: agentInstructionsService(),
+      conversations: conversationService(dbOrTx),
+      users,
+    };
+  }
+
   const orch = onboardingOrchestrator({
-    access: accessService(db),
-    companies: companyService(db),
-    agents,
-    instructions: agentInstructionsService(),
-    conversations,
-    users,
+    ...onboardingOrchestratorServices(db),
+    tierCapacity: {
+      withCompanyLock: (companyId, work) =>
+        withCompanyTierCapacityLock(db, companyId, (tx) =>
+          work(onboardingOrchestratorServices(tx)),
+        ),
+      capacityDepsFor: (services) =>
+        onboardingTierCapacityDeps({
+          companies: services.companies,
+          access: services.access,
+          agents: services.agents,
+        }),
+    },
   });
+
+  function onboardingTierCapacityDeps(
+    services: OnboardingTierCapacityServices = tierServices,
+  ): TierCapacityDeps {
+    return {
+      getCompany: async (id) => {
+        const company = await services.companies.getById(id);
+        return { planTier: company?.planTier ?? "free" };
+      },
+      counts: {
+        humans: async (companyId) =>
+          (await services.access.listActiveUserMemberships(companyId)).length,
+        agents: async (companyId) =>
+          (await services.agents.list(companyId)).length,
+      },
+    };
+  }
+
+  async function enforceFreeTierCapacity(
+    companyId: string,
+    adds: TierCapacityAdds,
+    res: import("express").Response,
+    services: OnboardingTierCapacityServices = tierServices,
+  ): Promise<boolean> {
+    const blockedAction = await exceededFreeTierCapacityAction(
+      onboardingTierCapacityDeps(services),
+      companyId,
+      adds,
+    );
+    if (!blockedAction) return true;
+    res.status(402).json(freeTierCapExceededPayload(blockedAction));
+    return false;
+  }
+
+  function tierCapacityServices(dbOrTx: Db): OnboardingTierCapacityServices {
+    return {
+      companies: companyService(dbOrTx),
+      access: accessService(dbOrTx),
+      agents: agentService(dbOrTx),
+    };
+  }
 
   // POST /api/onboarding/bootstrap
   // The orchestrator owns the welcome sequence end-to-end (posted atomically
@@ -100,6 +182,10 @@ export function onboardingV2Routes(db: Db) {
             (err.existingCompanyId ?? "existing workspace") +
             "'). AgentDash supports one workspace per self-hosted installation. To run multiple workspaces, use the cloud-hosted version (coming soon) or set AGENTDASH_ALLOW_MULTI_COMPANY=true if you're testing.",
         });
+        return;
+      }
+      if (err instanceof OnboardingTierCapacityExceededError) {
+        res.status(402).json(freeTierCapExceededPayload(err.action));
         return;
       }
       throw err;
@@ -161,23 +247,36 @@ export function onboardingV2Routes(db: Db) {
     // materialize an agent in someone else's company. Verify the actor has
     // active access to the target companyId before any side effect.
     assertCompanyAccess(req, companyId);
+    if (!(await enforceFreeTierCapacity(companyId, { agents: 1 }, res))) return;
     const transcript = await loadInterviewTranscript(db, conversationId);
     const proposal = await agentProposer({ llm: defaultStubProposer }).propose(
       transcript.length > 0 ? transcript : [{ role: "user", content: "stub", ts: new Date().toISOString() }],
     );
-    const result = await agentCreatorFromProposal({
-      agents,
-      instructions: agentInstructionsService(),
-    }).create({ companyId, reportsToAgentId, proposal, transcript });
-    // Append a CoS message announcing the hire as a proposal_card_v1.
-    await conversations.postMessage({
-      conversationId,
-      authorKind: "agent",
-      authorId: reportsToAgentId,
-      body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
-      cardKind: "proposal_card_v1",
-      cardPayload: proposal as unknown as Record<string, unknown>,
-    });
+    const result = await withCompanyTierCapacityGuard(
+      db,
+      companyId,
+      { agents: 1 },
+      (dbOrTx) => onboardingTierCapacityDeps(tierCapacityServices(dbOrTx)),
+      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
+      async (tx) => {
+        const txAgents = agentService(tx);
+        const created = await agentCreatorFromProposal({
+          agents: txAgents,
+          instructions: agentInstructionsService(),
+        }).create({ companyId, reportsToAgentId, proposal, transcript });
+        // Append a CoS message announcing the hire as a proposal_card_v1.
+        await conversationService(tx).postMessage({
+          conversationId,
+          authorKind: "agent",
+          authorId: reportsToAgentId,
+          body: `${proposal.name} (${proposal.role}) is on your team. ${proposal.oneLineOkr}.`,
+          cardKind: "proposal_card_v1",
+          cardPayload: proposal as unknown as Record<string, unknown>,
+        });
+        return created;
+      },
+    );
+    if (!result) return;
     res.status(201).json({
       agent: { id: result.agentId, name: proposal.name, title: proposal.role },
       apiKey: result.apiKey,
@@ -268,53 +367,42 @@ export function onboardingV2Routes(db: Db) {
     if (!payload || !Array.isArray(payload.agents) || payload.agents.length === 0) {
       throw badRequest("Plan card has no agents to materialize");
     }
+    if (!(await enforceFreeTierCapacity(companyId, { agents: payload.agents.length }, res))) return;
 
-    const cosState = cosOnboardingStateService(db);
-    await cosState.advancePhase(conversationId, "materializing");
+    const materialized = await withCompanyTierCapacityGuard(
+      db,
+      companyId,
+      { agents: payload.agents.length },
+      (dbOrTx) => onboardingTierCapacityDeps(tierCapacityServices(dbOrTx)),
+      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
+      async (tx) => {
+        const txAgents = agentService(tx);
+        const txCosState = cosOnboardingStateService(tx);
+        const txConversations = conversationService(tx);
+        await txCosState.advancePhase(conversationId, "materializing");
 
-    // Find the CoS agent for this company so the new hires reportTo it.
-    const allAgents = await agents.list(companyId);
-    const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
-    const reportsToAgentId = cos?.id ?? null;
+        // Find the CoS agent for this company so the new hires reportTo it.
+        const allAgents = await txAgents.list(companyId);
+        const cos = allAgents.find((a: any) => a.role === "chief_of_staff") ?? null;
+        const reportsToAgentId = cos?.id ?? null;
 
-    // AgentDash (issue #174): materialize the captured onboarding goals
-    // ({shortTerm, longTerm}) into the goals table so the user sees them on
-    // /goals immediately. Idempotent on (conversationId, ownerAgentId), so
-    // a retry won't duplicate rows. Failures are logged but never block
-    // the materialization phase — the user's UX matters more than 100%
-    // goal materialization, and CoS can retry from the next turn.
-    if (cos) {
-      try {
-        await materializeOnboardingGoals({ db })({
-          conversationId,
-          companyId,
-          ownerAgentId: cos.id,
-        });
-      } catch (err) {
-        logger.error(
-          { err, conversationId, companyId, cosAgentId: cos.id },
-          "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
-        );
-      }
-    }
-
-    const instructions = agentInstructionsService();
-    const createdAgentIds: string[] = [];
-    for (const planAgent of payload.agents) {
-      const created = await agents.create(companyId, {
-        name: planAgent.name,
-        role: "general",
-        title: planAgent.role,
-        adapterType: planAgent.adapterType,
-        adapterConfig: {},
-        reportsTo: reportsToAgentId,
-        status: "idle",
-        spentMonthlyCents: 0,
-        lastHeartbeatAt: null,
-      });
-      const responsibilities = (planAgent.responsibilities ?? []).map((r) => `- ${r}`).join("\n");
-      const kpis = (planAgent.kpis ?? []).map((k) => `- ${k}`).join("\n");
-      const agentsMd = `# AGENTS.md — ${planAgent.name}
+        const instructions = agentInstructionsService();
+        const createdAgentIds: string[] = [];
+        for (const planAgent of payload.agents) {
+          const created = await txAgents.create(companyId, {
+            name: planAgent.name,
+            role: "general",
+            title: planAgent.role,
+            adapterType: planAgent.adapterType,
+            adapterConfig: {},
+            reportsTo: reportsToAgentId,
+            status: "idle",
+            spentMonthlyCents: 0,
+            lastHeartbeatAt: null,
+          });
+          const responsibilities = (planAgent.responsibilities ?? []).map((r) => `- ${r}`).join("\n");
+          const kpis = (planAgent.kpis ?? []).map((k) => `- ${k}`).join("\n");
+          const agentsMd = `# AGENTS.md — ${planAgent.name}
 
 ## Role
 ${planAgent.role}
@@ -336,26 +424,50 @@ ${kpis || "- (none captured)"}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 `;
-      await instructions.materializeManagedBundle(
-        created,
-        { "AGENTS.md": agentsMd },
-        { entryFile: "AGENTS.md", replaceExisting: false },
-      );
-      createdAgentIds.push(created.id);
+          await instructions.materializeManagedBundle(
+            created,
+            { "AGENTS.md": agentsMd },
+            { entryFile: "AGENTS.md", replaceExisting: false },
+          );
+          createdAgentIds.push(created.id);
+        }
+
+        if (cos) {
+          await txConversations.postMessage({
+            conversationId,
+            authorKind: "agent",
+            authorId: cos.id,
+            body: "Done — your team's ready. You can talk to any of them via @mention, or stay here and route through me.",
+          });
+        }
+
+        await txCosState.advancePhase(conversationId, "ready");
+        return { createdAgentIds, cosAgentId: cos?.id ?? null };
+      },
+    );
+    if (!materialized) return;
+
+    // AgentDash (issue #174): materialize the captured onboarding goals
+    // ({shortTerm, longTerm}) into the goals table so the user sees them on
+    // /goals immediately. Idempotent on (conversationId, ownerAgentId), so
+    // a retry won't duplicate rows. Failures are logged but never block
+    // agent materialization.
+    if (materialized.cosAgentId) {
+      try {
+        await materializeOnboardingGoals({ db })({
+          conversationId,
+          companyId,
+          ownerAgentId: materialized.cosAgentId,
+        });
+      } catch (err) {
+        logger.error(
+          { err, conversationId, companyId, cosAgentId: materialized.cosAgentId },
+          "[onboarding-v2] materializeOnboardingGoals failed; continuing with agent materialization",
+        );
+      }
     }
 
-    if (cos) {
-      await conversations.postMessage({
-        conversationId,
-        authorKind: "agent",
-        authorId: cos.id,
-        body: "Done — your team's ready. You can talk to any of them via @mention, or stay here and route through me.",
-      });
-    }
-
-    await cosState.advancePhase(conversationId, "ready");
-
-    res.status(201).json({ companyId, createdAgentIds });
+    res.status(201).json({ companyId, createdAgentIds: materialized.createdAgentIds });
   });
 
   // POST /api/onboarding/finalize-assessment
@@ -596,7 +708,6 @@ No greetings. No markdown headings outside the JSON block.`;
       /* fall back to "your teammate" */
     }
 
-    const inviteSvc = inviteService(db);
     const inviteIds: string[] = [];
     const created: Array<{
       id: string;
@@ -608,6 +719,7 @@ No greetings. No markdown headings outside the JSON block.`;
     }> = [];
     const errors: Array<{ email: string; reason: string }> = [];
     const seen = new Set<string>(); // dedupe within the same batch
+    const validEmails: string[] = [];
 
     for (const email of emails) {
       const trimmed = typeof email === "string" ? email.trim() : "";
@@ -625,48 +737,86 @@ No greetings. No markdown headings outside the JSON block.`;
         continue;
       }
       seen.add(lower);
+      validEmails.push(trimmed);
+    }
 
-      try {
-        const row = await inviteSvc.createCompanyInvite({
-          companyId,
-          invitedByUserId: req.actor.userId ?? null,
-          email: trimmed,
-        });
-        const invitePath = `/invite/${row.token}`;
-        const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;
+    if (validEmails.length > 0) {
+      if (!(await enforceFreeTierCapacity(companyId, { humans: validEmails.length }, res))) return;
+    }
 
-        // Fire the invite email. sendEmail returns {status} rather than
-        // throwing, so a missing RESEND_API_KEY (status:"skipped") or a
-        // Resend 4xx (status:"failed") never aborts the create — the
-        // inviter still has the URL to share by hand.
-        const { subject, html, text } = inviteEmailTemplate({
-          inviteUrl,
-          companyName,
-          inviterName,
-        });
-        const emailResult = await sendEmail({
-          to: trimmed,
-          subject,
-          html,
-          text,
-        });
+    const createdRows =
+      validEmails.length === 0
+        ? []
+        : await withCompanyTierCapacityGuard(
+            db,
+            companyId,
+            { humans: validEmails.length },
+            (dbOrTx) => onboardingTierCapacityDeps(tierCapacityServices(dbOrTx)),
+            (action) => res.status(402).json(freeTierCapExceededPayload(action)),
+            async (tx) => {
+              const txInviteSvc = inviteService(tx);
+              const rows: Array<{
+                id: string;
+                email: string;
+                invitePath: string;
+                inviteUrl: string;
+                expiresAt: Date;
+              }> = [];
+              for (const trimmed of validEmails) {
+                try {
+                  const row = await txInviteSvc.createCompanyInvite({
+                    companyId,
+                    invitedByUserId: req.actor.userId ?? null,
+                    email: trimmed,
+                  });
+                  const invitePath = `/invite/${row.token}`;
+                  const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;
+                  inviteIds.push(row.id);
+                  rows.push({
+                    id: row.id,
+                    email: trimmed,
+                    invitePath,
+                    inviteUrl,
+                    expiresAt: row.expiresAt,
+                  });
+                } catch (err) {
+                  logger.warn(
+                    { err, companyId, email: trimmed },
+                    "onboarding_invite_create_failed",
+                  );
+                  errors.push({ email: trimmed, reason: "invite-create-failed" });
+                }
+              }
+              return rows;
+            },
+          );
+    if (createdRows === null) return;
 
-        inviteIds.push(row.id);
-        created.push({
-          id: row.id,
-          email: trimmed,
-          invitePath,
-          inviteUrl,
-          expiresAt: row.expiresAt.toISOString(),
-          emailStatus: emailResult.status,
-        });
-      } catch (err) {
-        logger.warn(
-          { err, companyId, email: trimmed },
-          "onboarding_invite_create_failed",
-        );
-        errors.push({ email: trimmed, reason: "invite-create-failed" });
-      }
+    for (const row of createdRows) {
+      // Fire the invite email after the invite rows commit. sendEmail returns
+      // {status} rather than throwing, so a missing RESEND_API_KEY
+      // (status:"skipped") or a Resend 4xx (status:"failed") never aborts
+      // the create — the inviter still has the URL to share by hand.
+      const { subject, html, text } = inviteEmailTemplate({
+        inviteUrl: row.inviteUrl,
+        companyName,
+        inviterName,
+      });
+      const emailResult = await sendEmail({
+        to: row.email,
+        subject,
+        html,
+        text,
+      });
+
+      created.push({
+        id: row.id,
+        email: row.email,
+        invitePath: row.invitePath,
+        inviteUrl: row.inviteUrl,
+        expiresAt: row.expiresAt.toISOString(),
+        emailStatus: emailResult.status,
+      });
     }
 
     res.json({ inviteIds, invites: created, errors });

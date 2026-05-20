@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { errorHandler } from "../middleware/index.js";
 import { accessRoutes } from "../routes/access.js";
 
@@ -37,6 +37,15 @@ const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockStorage = vi.hoisted(() => ({
   headObject: vi.fn(),
 }));
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
+const mockTierDeps = vi.hoisted(() => ({
+  getCompany: vi.fn(async (_id: string) => ({ planTier: "pro_active" })),
+  counts: {
+    humans: vi.fn(async (_companyId: string) => 0),
+    agents: vi.fn(async (_companyId: string) => 0),
+  },
+}));
 
 vi.mock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
@@ -51,6 +60,10 @@ vi.mock("../services/index.js", () => ({
 
 vi.mock("../storage/index.js", () => ({
   getStorageService: () => mockStorage,
+}));
+
+vi.mock("../middleware/build-tier-deps.js", () => ({
+  buildRequireTierDeps: () => mockTierDeps,
 }));
 
 function createSelectChain(rows: unknown[]) {
@@ -102,6 +115,12 @@ function createDbStub(...selectResponses: unknown[][]) {
     ),
   );
   return {
+    execute: vi.fn().mockResolvedValue([]),
+    transaction: vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn({
+      insert,
+      select,
+      execute: vi.fn().mockResolvedValue([]),
+    })),
     insert,
     select,
     __insertValues: values,
@@ -148,6 +167,16 @@ describe.sequential("POST /companies/:companyId/openclaw/invite-prompt", () => {
     mockAgentService.getById.mockReset();
     mockLogActivity.mockResolvedValue(undefined);
     mockStorage.headObject.mockResolvedValue({ exists: true, contentLength: 3, contentType: "image/png" });
+    mockTierDeps.getCompany.mockResolvedValue({ planTier: "pro_active" });
+    mockTierDeps.counts.humans.mockResolvedValue(0);
+    mockTierDeps.counts.agents.mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("rejects non-CEO agent callers", async () => {
@@ -206,6 +235,60 @@ describe.sequential("POST /companies/:companyId/openclaw/invite-prompt", () => {
         allowedJoinTypes: "agent",
       }),
     );
+  });
+
+  it("allows OpenClaw agent invites on Free workspaces with a human owner but no agent yet", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockTierDeps.getCompany.mockResolvedValue({ planTier: "free" });
+    mockTierDeps.counts.humans.mockResolvedValue(1);
+    mockTierDeps.counts.agents.mockResolvedValue(0);
+    const db = createDbStub([companyBranding], [logoAsset]);
+    mockAccessService.canUser.mockResolvedValue(true);
+    const app = createApp(
+      {
+        type: "board",
+        userId: "user-1",
+        companyIds: ["company-1"],
+        source: "session",
+        isInstanceAdmin: false,
+      },
+      db,
+    );
+
+    const res = await request(app)
+      .post("/api/companies/company-1/openclaw/invite-prompt")
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(res.body.allowedJoinTypes).toBe("agent");
+    expect(mockTierDeps.counts.humans).not.toHaveBeenCalled();
+    expect(mockTierDeps.counts.agents).toHaveBeenCalledWith("company-1");
+  });
+
+  it("blocks OpenClaw agent invites on Free workspaces that already have the CoS", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+    mockTierDeps.getCompany.mockResolvedValue({ planTier: "free" });
+    mockTierDeps.counts.agents.mockResolvedValue(1);
+    const db = createDbStub();
+    mockAccessService.canUser.mockResolvedValue(true);
+    const app = createApp(
+      {
+        type: "board",
+        userId: "user-1",
+        companyIds: ["company-1"],
+        source: "session",
+        isInstanceAdmin: false,
+      },
+      db,
+    );
+
+    const res = await request(app)
+      .post("/api/companies/company-1/openclaw/invite-prompt")
+      .send({});
+
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe("agent_cap_exceeded");
+    expect((db as any).__insertValues).not.toHaveBeenCalled();
   });
 
   it("includes companyName in invite summary responses", async () => {

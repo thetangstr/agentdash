@@ -31,9 +31,11 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
-// AgentDash: billing-trio (#151)
-import { requireTierFor } from "../middleware/require-tier.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
+import {
+  freeTierCapExceededPayload,
+  withCompanyTierCapacityGuard,
+} from "../services/tier-policy.js";
 import {
   agentInstructionRefreshService,
   agentService,
@@ -159,8 +161,6 @@ export function agentRoutes(
   const router = Router();
   const svc = agentService(db);
   const access = accessService(db);
-  // AgentDash: billing-trio (#151)
-  const tierDeps = buildRequireTierDeps(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -186,6 +186,21 @@ export function agentRoutes(
     await assertEnvironmentSelectionForCompany(environmentService(db), companyId, environmentId, {
       allowedDrivers: allowedEnvironmentDriversForAgent(adapterType),
     });
+  }
+
+  async function createAgentWithinTierCapacity<T>(
+    companyId: string,
+    res: Response,
+    create: (dbOrTx: Db) => Promise<T>,
+  ): Promise<T | null> {
+    return withCompanyTierCapacityGuard(
+      db,
+      companyId,
+      { agents: 1 },
+      buildRequireTierDeps,
+      (action) => res.status(402).json(freeTierCapExceededPayload(action)),
+      create,
+    );
   }
 
   /**
@@ -1796,7 +1811,7 @@ export function agentRoutes(
     res.json(state);
   });
 
-  router.post("/companies/:companyId/agent-hires", requireTierFor("hire", tierDeps), validate(createAgentHireSchema), async (req, res) => {
+  router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
     const sourceIssueIds = parseSourceIssueIds(req.body);
@@ -1854,12 +1869,15 @@ export function agentRoutes(
 
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
-    const createdAgent = await svc.create(companyId, {
-      ...normalizedHireInput,
-      status,
-      spentMonthlyCents: 0,
-      lastHeartbeatAt: null,
-    });
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
+      agentService(dbOrTx).create(companyId, {
+        ...normalizedHireInput,
+        status,
+        spentMonthlyCents: 0,
+        lastHeartbeatAt: null,
+      }),
+    );
+    if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
@@ -1969,7 +1987,7 @@ export function agentRoutes(
     res.status(201).json({ agent, approval });
   });
 
-  router.post("/companies/:companyId/agents", requireTierFor("hire", tierDeps), validate(createAgentSchema), async (req, res) => {
+  router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
 
@@ -2028,14 +2046,17 @@ export function agentRoutes(
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
     });
 
-    const createdAgent = await svc.create(companyId, {
-      ...createInput,
-      adapterConfig: normalizedAdapterConfig,
-      runtimeConfig: normalizedRuntimeConfig,
-      status: "idle",
-      spentMonthlyCents: 0,
-      lastHeartbeatAt: null,
-    });
+    const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
+      agentService(dbOrTx).create(companyId, {
+        ...createInput,
+        adapterConfig: normalizedAdapterConfig,
+        runtimeConfig: normalizedRuntimeConfig,
+        status: "idle",
+        spentMonthlyCents: 0,
+        lastHeartbeatAt: null,
+      }),
+    );
+    if (!createdAgent) return;
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
 
     const actor = getActorInfo(req);

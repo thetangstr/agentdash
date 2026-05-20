@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanyPortabilityFileEntry } from "@paperclipai/shared";
 
 const companySvc = {
@@ -68,6 +68,18 @@ const agentInstructionsSvc = {
   exportFiles: vi.fn(),
   materializeManagedBundle: vi.fn(),
 };
+const originalStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const originalBillingDisabled = process.env.AGENTDASH_BILLING_DISABLED;
+
+function disableBillingForPortabilityDefaults() {
+  delete process.env.STRIPE_SECRET_KEY;
+  process.env.AGENTDASH_BILLING_DISABLED = "true";
+}
+
+function enableBillingForFreeTierTest() {
+  process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
+  delete process.env.AGENTDASH_BILLING_DISABLED;
+}
 
 vi.mock("../services/companies.js", () => ({
   companyService: () => companySvc,
@@ -115,6 +127,14 @@ vi.mock("../routes/org-chart-svg.js", () => ({
 
 const { companyPortabilityService, parseGitHubSourceUrl } = await import("../services/company-portability.js");
 
+function createTierDbStub() {
+  const db: any = {
+    execute: vi.fn().mockResolvedValue([]),
+  };
+  db.transaction = vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return db;
+}
+
 function asTextFile(entry: CompanyPortabilityFileEntry | undefined) {
   expect(typeof entry).toBe("string");
   return typeof entry === "string" ? entry : "";
@@ -134,6 +154,7 @@ describe("company portability", () => {
     companySvc.getById.mockResolvedValue({
       id: "company-1",
       name: "Paperclip",
+      planTier: "pro_active",
       description: null,
       issuePrefix: "PAP",
       brandColor: "#5c5fff",
@@ -388,6 +409,14 @@ describe("company portability", () => {
         instructionsFilePath: `/tmp/${agent.id}/AGENTS.md`,
       },
     }));
+    disableBillingForPortabilityDefaults();
+  });
+
+  afterEach(() => {
+    if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalStripeSecretKey;
+    if (originalBillingDisabled === undefined) delete process.env.AGENTDASH_BILLING_DISABLED;
+    else process.env.AGENTDASH_BILLING_DISABLED = originalBillingDisabled;
   });
 
   it("parses canonical GitHub import URLs with explicit ref and package path", () => {
@@ -1589,6 +1618,123 @@ describe("company portability", () => {
     expect(issueSvc.create).not.toHaveBeenCalled();
   });
 
+  it("blocks agent imports on Free workspaces after the agent slot is used", async () => {
+    enableBillingForFreeTierTest();
+    companySvc.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Paperclip",
+      planTier: "free",
+      requireBoardApprovalForNewAgents: false,
+    });
+    agentSvc.list.mockResolvedValue([
+      {
+        id: "cos-1",
+        name: "Chief of Staff",
+        status: "idle",
+        role: "chief_of_staff",
+        adapterType: "process",
+        adapterConfig: {},
+        runtimeConfig: {},
+        budgetMonthlyCents: 0,
+        permissions: {},
+        metadata: null,
+      },
+    ]);
+    const portability = companyPortabilityService(createTierDbStub() as any);
+    const files = {
+      "COMPANY.md": [
+        "---",
+        'schema: "agentcompanies/v1"',
+        'name: "Paperclip"',
+        "---",
+        "",
+      ].join("\n"),
+      "agents/imported/AGENTS.md": [
+        "---",
+        'name: "Imported Agent"',
+        'role: "engineer"',
+        "---",
+        "",
+        "You write code.",
+        "",
+      ].join("\n"),
+    };
+
+    await expect(portability.importBundle({
+      source: { type: "inline", rootPath: "paperclip-demo", files },
+      include: { company: false, agents: true, projects: false, issues: false, skills: false },
+      target: { mode: "existing_company", companyId: "company-1" },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, "user-1")).rejects.toMatchObject({
+      status: 402,
+      code: "agent_cap_exceeded",
+    });
+
+    expect(agentSvc.create).not.toHaveBeenCalled();
+    expect(companySkillSvc.importPackageFiles).not.toHaveBeenCalled();
+  });
+
+  it("rechecks existing-company import capacity under lock before importing skills", async () => {
+    enableBillingForFreeTierTest();
+    companySvc.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Paperclip",
+      planTier: "free",
+      requireBoardApprovalForNewAgents: false,
+    });
+    const cosAgent = {
+      id: "cos-1",
+      name: "Chief of Staff",
+      status: "idle",
+      role: "chief_of_staff",
+      adapterType: "process",
+      adapterConfig: {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      permissions: {},
+      metadata: null,
+    };
+    agentSvc.list
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([cosAgent]);
+
+    const portability = companyPortabilityService(createTierDbStub() as any);
+    const files = {
+      "COMPANY.md": [
+        "---",
+        'schema: "agentcompanies/v1"',
+        'name: "Paperclip"',
+        "---",
+        "",
+      ].join("\n"),
+      "agents/imported/AGENTS.md": [
+        "---",
+        'name: "Imported Agent"',
+        'role: "engineer"',
+        "---",
+        "",
+        "You write code.",
+        "",
+      ].join("\n"),
+    };
+
+    await expect(portability.importBundle({
+      source: { type: "inline", rootPath: "paperclip-demo", files },
+      include: { company: false, agents: true, projects: false, issues: false, skills: false },
+      target: { mode: "existing_company", companyId: "company-1" },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, "user-1")).rejects.toMatchObject({
+      status: 402,
+      code: "agent_cap_exceeded",
+    });
+
+    expect(companySkillSvc.importPackageFiles).not.toHaveBeenCalled();
+    expect(agentSvc.create).not.toHaveBeenCalled();
+  });
+
   it("migrates legacy schedule.recurrence imports into routine triggers", async () => {
     const portability = companyPortabilityService({} as any);
 
@@ -2106,6 +2252,111 @@ describe("company portability", () => {
     expect(companySkillSvc.importPackageFiles).toHaveBeenCalledWith("company-imported", textOnlyFiles, {
       onConflict: "rename",
     });
+  });
+
+  it("blocks safe new-company imports that would copy multiple humans into a Free workspace", async () => {
+    enableBillingForFreeTierTest();
+    const portability = companyPortabilityService({} as any);
+
+    const exported = await portability.exportBundle("company-1", {
+      include: {
+        company: true,
+        agents: false,
+        projects: false,
+        issues: false,
+      },
+    });
+
+    accessSvc.listActiveUserMemberships.mockResolvedValueOnce([
+      {
+        id: "membership-1",
+        companyId: "company-1",
+        principalType: "user",
+        principalId: "user-1",
+        membershipRole: "owner",
+        status: "active",
+      },
+      {
+        id: "membership-2",
+        companyId: "company-1",
+        principalType: "user",
+        principalId: "user-2",
+        membershipRole: "operator",
+        status: "active",
+      },
+    ]);
+
+    await expect(portability.importBundle({
+      source: {
+        type: "inline",
+        rootPath: exported.rootPath,
+        files: exported.files,
+      },
+      include: {
+        company: true,
+        agents: false,
+        projects: false,
+        issues: false,
+      },
+      target: {
+        mode: "new_company",
+        newCompanyName: "Imported Paperclip",
+      },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, null, {
+      mode: "agent_safe",
+      sourceCompanyId: "company-1",
+    })).rejects.toMatchObject({
+      status: 402,
+      code: "seat_cap_exceeded",
+    });
+
+    expect(companySvc.create).not.toHaveBeenCalled();
+    expect(accessSvc.copyActiveUserMemberships).not.toHaveBeenCalled();
+  });
+
+  it("blocks multi-agent imports into a new Free workspace before creating partial state", async () => {
+    enableBillingForFreeTierTest();
+    const portability = companyPortabilityService({} as any);
+
+    const exported = await portability.exportBundle("company-1", {
+      include: {
+        company: true,
+        agents: true,
+        projects: false,
+        issues: false,
+      },
+    });
+
+    agentSvc.list.mockResolvedValue([]);
+
+    await expect(portability.importBundle({
+      source: {
+        type: "inline",
+        rootPath: exported.rootPath,
+        files: exported.files,
+      },
+      include: {
+        company: true,
+        agents: true,
+        projects: false,
+        issues: false,
+      },
+      target: {
+        mode: "new_company",
+        newCompanyName: "Imported Paperclip",
+      },
+      agents: "all",
+      collisionStrategy: "rename",
+    }, "user-1")).rejects.toMatchObject({
+      status: 402,
+      code: "agent_cap_exceeded",
+    });
+
+    expect(companySvc.create).not.toHaveBeenCalled();
+    expect(companySkillSvc.importPackageFiles).not.toHaveBeenCalled();
+    expect(agentSvc.create).not.toHaveBeenCalled();
   });
 
   it("disables timer heartbeats on imported agents", async () => {

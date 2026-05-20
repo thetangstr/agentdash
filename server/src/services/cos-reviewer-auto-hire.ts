@@ -8,6 +8,12 @@ import {
 import { COS_REVIEW_DEFAULTS } from "@paperclipai/shared";
 import { logActivity } from "./activity-log.js";
 import { agentService } from "./agents.js";
+import { companyService } from "./companies.js";
+import {
+  exceededFreeTierCapacityAction,
+  isBillingDisabled,
+  lockCompanyTierCapacity,
+} from "./tier-policy.js";
 
 export type AutoHireReason = "queue_depth" | "neutrality_conflict";
 
@@ -159,7 +165,41 @@ export function cosReviewerAutoHire(db: Db, deps: AutoHireDeps = {}) {
         }
       }
 
-      // 4. Hire path. System-initiated: programmatic, no approval gate.
+      // 4. Tier-cap gate. This service has its own transaction for reviewer
+      // convergence; take the shared tier advisory lock inside that same
+      // transaction so auto-hire cannot race other agent-creation paths.
+      const txDb = tx as unknown as Db;
+      if (!isBillingDisabled()) {
+        await lockCompanyTierCapacity(txDb, companyId);
+        const blockedTierAction = await exceededFreeTierCapacityAction(
+          {
+            getCompany: async (id) => {
+              const company = await companyService(txDb).getById(id);
+              return { planTier: company?.planTier ?? "free" };
+            },
+            counts: {
+              humans: async () => 0,
+              agents: async (id) => (await agentService(txDb).list(id)).length,
+            },
+          },
+          companyId,
+          { agents: 1 },
+        );
+        if (blockedTierAction) {
+          await logActivity(txDb, {
+            companyId,
+            actorType: "system",
+            actorId: "cos_reviewer_auto_hire",
+            action: "reviewer_hire_throttled",
+            entityType: "company",
+            entityId: companyId,
+            details: { reason, activeCount, tierCapAction: blockedTierAction },
+          });
+          return { hired: false, reason: "cap_reached", activeCount };
+        }
+      }
+
+      // 5. Hire path. System-initiated: programmatic, no approval gate.
       const reviewerName = `CoS Reviewer ${new Date().toISOString().slice(0, 19)}`;
       const created = deps.createAgent
         ? await deps.createAgent(companyId, "reviewer", reviewerName)
