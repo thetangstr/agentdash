@@ -14,12 +14,12 @@ import { SectionContainer } from "../components/SectionContainer";
 import { LogoStrip } from "../components/LogoStrip";
 import { QuoteBlock } from "../components/QuoteBlock";
 
-const PLACEHOLDER_LOGOS = [
-  { name: "Logo 1" },
-  { name: "Logo 2" },
-  { name: "Logo 3" },
-  { name: "Logo 4" },
-  { name: "Logo 5" },
+const TRUST_MARKERS = [
+  { name: "Goals" },
+  { name: "Agents" },
+  { name: "Budgets" },
+  { name: "Approvals" },
+  { name: "Audit trails" },
 ];
 
 export function Landing() {
@@ -42,19 +42,19 @@ export function Landing() {
   });
 
   if (!previewMode && (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading))) return null;
-  const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
+  const loggedIn = healthQuery.isSuccess && (!isAuthenticatedMode || Boolean(sessionQuery.data));
   if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
 
   return (
     <MarketingShell>
       <Hero />
-      <SectionContainer>
-        <LogoStrip items={PLACEHOLDER_LOGOS} />
+      <SectionContainer spacing="compact">
+        <LogoStrip items={TRUST_MARKERS} />
       </SectionContainer>
       <SectionContainer background="cream-2">
         <QuoteBlock
-          quote="The first week our agents shipped, we caught up on six months of backlog. By month two, the board stopped asking how we'd staff the new initiative."
-          attribution="— Placeholder: replace with a real operator quote"
+          quote="The winning companies won't hire one AI assistant. They'll run accountable AI teams with goals, budgets, audits, and humans in the loop."
+          attribution="AgentDash launch thesis"
         />
       </SectionContainer>
       <LayeredDescent />

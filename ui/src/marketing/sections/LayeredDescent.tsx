@@ -48,10 +48,17 @@ export function LayeredDescent() {
           {DESCENT_LAYERS.map((layer, i) => {
             const offset = i - activeIndex;
             const isActive = i === activeIndex;
+            const isGhost = !isActive && Math.abs(offset) <= 3;
             return (
               <section
                 key={layer.number}
-                className={`mkt-descent__slab ${isActive ? "mkt-descent__slab--active" : ""}`}
+                className={[
+                  "mkt-descent__slab",
+                  isActive ? "mkt-descent__slab--active" : null,
+                  isGhost ? "mkt-descent__slab--ghost" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 style={{ ["--offset" as string]: String(offset) }}
                 aria-current={isActive ? "true" : undefined}
               >

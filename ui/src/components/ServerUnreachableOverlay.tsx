@@ -2,6 +2,14 @@ import { useServerHealth } from "@/hooks/useServerHealth";
 
 export function ServerUnreachableOverlay() {
   const { reachability, isOnline } = useServerHealth();
+  const pathname = typeof window !== "undefined" ? window.location.pathname : "";
+  const isPublicMarketingRoute =
+    pathname === "/" ||
+    pathname === "/auth" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
+    pathname === "/consulting" ||
+    pathname === "/about";
 
   // Closes #233: previously this only short-circuited on "reachable", so
   // on first mount react-query was "checking" → the full-screen overlay
@@ -15,6 +23,7 @@ export function ServerUnreachableOverlay() {
   // no network, we still want to surface the overlay regardless of the
   // health-check state.
   const isBrowserOffline = !isOnline;
+  if (!isBrowserOffline && isPublicMarketingRoute) return null;
   if (!isBrowserOffline && reachability !== "unreachable") return null;
   const message = isBrowserOffline
     ? "You're offline — check your internet connection."

@@ -13,7 +13,7 @@ export function LogoStrip({ items }: { items: LogoItem[] }) {
           {item.src ? (
             <img src={item.src} alt={item.name} className="mkt-logo-strip__item" />
           ) : (
-            <div className="mkt-logo-strip__placeholder" />
+            <span className="mkt-logo-strip__marker">{item.name}</span>
           )}
         </div>
       ))}
