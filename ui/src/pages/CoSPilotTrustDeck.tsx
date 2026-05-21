@@ -108,7 +108,7 @@ const levels = [
       "Access to shared knowledge base",
       "Access to Teams as an agent*",
     ],
-    footnote: "*To be validated. Each M365 implementation could have different limits.",
+    footnote: "*To be validated. M365 access requires the right tenant permissions to be granted.",
     graphic: {
       leftTitle: "Shared conversation",
       left: [

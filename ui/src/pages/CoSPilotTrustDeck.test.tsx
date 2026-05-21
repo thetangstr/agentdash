@@ -48,7 +48,8 @@ describe("CoSPilotTrustDeck", () => {
     expect(container.textContent).toContain("multiple humans can talk to the same agent");
     expect(container.textContent).toContain("Mac mini on your company network");
     expect(container.textContent).toContain("Access to Teams as an agent");
-    expect(container.textContent).toContain("Each M365 implementation could have different limits");
+    expect(container.textContent).toContain("M365 access requires the right tenant permissions to be granted");
+    expect(container.textContent).not.toContain("Each M365 implementation could have different limits");
     expect(container.textContent).toContain("Company-Aware Gateway Agent");
     expect(container.textContent).toContain("Level 1 plus approved company knowledge");
     expect(container.textContent).toContain("Level 1 inputs");
