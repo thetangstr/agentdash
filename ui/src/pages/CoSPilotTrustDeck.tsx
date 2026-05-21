@@ -151,11 +151,11 @@ const levels = [
       ],
       center: { label: "Gateway agent", icon: Network },
       centerAddon: { label: "Company knowledge database", icon: Database },
-      rightTitle: "Grounded work",
+      rightTitle: "Useful artifacts",
       right: [
         { label: "Cited brief", icon: ClipboardList },
         { label: "Comparison", icon: Layers3 },
-        { label: "Missing inputs", icon: CircleDot },
+        { label: "Open questions", icon: CircleDot },
       ],
     },
   },

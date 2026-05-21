@@ -54,6 +54,10 @@ describe("CoSPilotTrustDeck", () => {
     expect(container.textContent).toContain("Level 1 inputs");
     expect(container.textContent).toContain("Gateway agent");
     expect(container.textContent).toContain("Company knowledge database");
+    expect(container.textContent).toContain("Useful artifacts");
+    expect(container.textContent).toContain("Open questions");
+    expect(container.textContent).not.toContain("Grounded work");
+    expect(container.textContent).not.toContain("Missing inputs");
     expect(container.textContent).toContain("Access to a shared company database");
     expect(container.textContent).toContain("OneDrive / SharePoint / Google Drive / Confluence / Notion");
     expect(container.textContent).toContain("Managed Agent Operating System");
