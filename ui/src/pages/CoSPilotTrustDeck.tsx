@@ -13,7 +13,6 @@ import {
   KeyRound,
   Laptop,
   Layers3,
-  LockKeyhole,
   MessageSquare,
   Network,
   Send,
@@ -25,7 +24,6 @@ import {
 import type { CSSProperties, ComponentType, ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 
 type DeckStyle = CSSProperties & Record<`--${string}`, string>;
 
@@ -229,22 +227,7 @@ const levels = [
   },
 ];
 
-const inboxScenarios = [
-  {
-    title: "Scoped Read-Only Inbox",
-    level: "Level 3",
-    posture: "The executive chooses specific inbox areas and a time window.",
-    can: ["flag unanswered threads", "prepare meeting context", "extract follow-ups", "surface deadline risks"],
-    cannot: ["send email", "move or delete messages", "read excluded areas", "change records"],
-  },
-  {
-    title: "Draft-Only Executive Inbox",
-    level: "Level 4",
-    posture: "The CoS can draft work from approved context, but approval controls the send.",
-    can: ["draft replies", "write recap drafts", "suggest routing", "open approval requests"],
-    cannot: ["silently send external messages", "expand its own access", "override approval rules", "hide source traces"],
-  },
-];
+const inboxScenarios = ["Scoped Read-Only Inbox", "Draft-Only Executive Inbox"];
 
 const leverageOutcomes = [
   {
@@ -345,12 +328,18 @@ function LevelBadge({ value }: { value: string }) {
 function GraphicNode({
   icon: Icon,
   label,
+  compact = false,
 }: {
   icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   label: string;
+  compact?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-3">
+    <div
+      className={`flex items-center gap-3 rounded-md border border-border bg-card px-3 ${
+        compact ? "py-2" : "py-3"
+      }`}
+    >
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
         <Icon className="h-4 w-4 text-foreground" aria-hidden />
       </div>
@@ -370,6 +359,7 @@ function LevelGraphic({ level }: { level: (typeof levels)[number] }) {
       ? level.graphic.centerItems
       : [];
   const CenterAddonIcon = centerAddon?.icon;
+  const compactRight = level.level === "4";
 
   return (
     <div className="rounded-lg border border-border bg-muted/40 p-5">
@@ -432,14 +422,45 @@ function LevelGraphic({ level }: { level: (typeof levels)[number] }) {
         </div>
 
         <div>
-          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <p
+            className={`${
+              compactRight ? "mb-2" : "mb-3"
+            } text-xs font-medium uppercase tracking-wide text-muted-foreground`}
+          >
             {level.graphic.rightTitle}
           </p>
-          <div className="space-y-3">
+          <div className={compactRight ? "space-y-2" : "space-y-3"}>
             {level.graphic.right.map((node) => (
-              <GraphicNode key={node.label} icon={node.icon} label={node.label} />
+              <GraphicNode
+                key={node.label}
+                icon={node.icon}
+                label={node.label}
+                compact={compactRight}
+              />
             ))}
           </div>
+          {level.level === "4" ? (
+            <div className="mt-3 rounded-md border border-border bg-card p-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
+                  <Inbox className="h-4 w-4 text-foreground" aria-hidden />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Level 4 inbox access</p>
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    Observe first, draft later.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {inboxScenarios.map((scenario) => (
+                  <div key={scenario} className="text-xs text-muted-foreground">
+                    {scenario}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -501,73 +522,7 @@ function LevelStorySlide({ level }: { level: (typeof levels)[number] }) {
 
         <LevelGraphic level={level} />
       </div>
-      {level.level === "4" ? <InboxAccessScenarios /> : null}
     </SlideFrame>
-  );
-}
-
-function InboxAccessScenarios() {
-  return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-foreground">Level 4 inbox access</p>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Present executive inbox access as two delegation patterns: observe first,
-            draft later. Both keep the human in control.
-          </p>
-        </div>
-        <Badge variant="secondary">Executive context</Badge>
-      </div>
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        {inboxScenarios.map((scenario) => (
-          <div key={scenario.title} className="rounded-md border border-border bg-muted/40 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card">
-                  <Inbox className="h-4 w-4" aria-hidden />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{scenario.title}</p>
-                  <p className="text-xs text-muted-foreground">{scenario.level}</p>
-                </div>
-              </div>
-              <Badge variant="outline">{scenario.level}</Badge>
-            </div>
-            <p className="mt-4 text-sm leading-6 text-muted-foreground">{scenario.posture}</p>
-            <Separator className="my-4" />
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  CoS can
-                </p>
-                <ul className="mt-3 space-y-2">
-                  {scenario.can.map((item) => (
-                    <li key={item} className="flex gap-2 text-sm text-muted-foreground">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" aria-hidden />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  CoS cannot
-                </p>
-                <ul className="mt-3 space-y-2">
-                  {scenario.cannot.map((item) => (
-                    <li key={item} className="flex gap-2 text-sm text-muted-foreground">
-                      <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-foreground" aria-hidden />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -582,24 +537,24 @@ function SummaryProgression() {
   const summaryOptions = [
     {
       level: "1",
-      title: "Gateway feasibility",
-      badge: "Optional pre-pilot",
-      recommendation: "Use only if the first blocker is IT or collaboration-layer feasibility.",
-      detail: "Proves multiple humans can interact with one agent before connecting firm knowledge.",
+      title: "Start with a shared gateway",
+      badge: "Start here",
+      recommendation: "Give the leadership team one shared agent conversation before connecting broad company knowledge.",
+      detail: "The prompts, decisions, and useful artifacts become reusable operating memory for the next level.",
     },
     {
       level: "2",
-      title: "Access-safe first proof",
-      badge: "Conservative",
-      recommendation: "Use when stakeholders are cautious about access but want useful company context.",
-      detail: "Adds approved shared company repositories without executive inbox access or autonomous work.",
+      title: "Add company knowledge",
+      badge: "Then",
+      recommendation: "Connect approved repositories to the same gateway so L1 work becomes source-grounded.",
+      detail: "Shared conversations, source traces, and useful artifacts carry forward instead of being restarted.",
     },
     {
       level: "3",
-      title: "Business outcome pilot",
-      badge: "Recommended",
-      recommendation: "Best default for MKThink if the goal is measurable RFP/admin outcomes.",
-      detail: "Adds AgentDash or equivalent deployment, goals, agents, approvals, traces, and deliverables.",
+      title: "Add governed execution",
+      badge: "Then",
+      recommendation: "Promote proven L2 workflows into goals, agents, approvals, traces, and deliverables.",
+      detail: "The agent operating system inherits the shared memory and company context already built in L1 and L2.",
     },
     {
       level: "4",
@@ -626,39 +581,83 @@ function SummaryProgression() {
           </div>
         ))}
       </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        All timeframe estimates depend on how quickly the shared knowledge base can be created,
+        approved, and kept current.
+      </p>
       <div className="rounded-lg border border-border bg-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-foreground">Where to start</p>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Pick the first level that creates business evidence without overreaching on access.
+              Start at L1, then compound the same work and memory into L2 and L3.
             </p>
           </div>
-          <Badge variant="secondary">Recommendation: Level 3 pilot</Badge>
+          <Badge variant="secondary">L1 to L2 to L3 without restart</Badge>
         </div>
-        <div className="mt-5 grid gap-3 lg:grid-cols-4">
-          {summaryOptions.map((option) => (
-            <div
-              key={option.level}
-              className={`rounded-md border p-4 ${
-                option.badge === "Recommended"
-                  ? "border-foreground/30 bg-card"
-                  : "border-border bg-muted/40"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <LevelBadge value={option.level} />
-                <Badge variant={option.badge === "Recommended" ? "default" : "outline"}>
-                  {option.badge}
-                </Badge>
+        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_auto_1fr_auto_1fr]">
+          {summaryOptions.slice(0, 3).map((option, index) => (
+            <Fragment key={option.level}>
+              {index > 0 ? (
+                <div className="hidden items-center justify-center lg:flex">
+                  <ArrowRight className="h-5 w-5 text-muted-foreground" aria-hidden />
+                </div>
+              ) : null}
+              <div className="rounded-md border border-border bg-muted/40 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <LevelBadge value={option.level} />
+                  <Badge variant="outline">{option.badge}</Badge>
+                </div>
+                <p className="mt-4 text-sm font-semibold text-foreground">{option.title}</p>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  {option.recommendation}
+                </p>
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">{option.detail}</p>
               </div>
-              <p className="mt-4 text-sm font-semibold text-foreground">{option.title}</p>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                {option.recommendation}
-              </p>
-              <p className="mt-3 text-xs leading-5 text-muted-foreground">{option.detail}</p>
-            </div>
+            </Fragment>
           ))}
+        </div>
+        <div className="mt-3 rounded-md border border-border bg-background p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Memory carried forward
+          </p>
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {[
+              "L1 shared threads and decisions",
+              "L2 source traces and useful artifacts",
+              "L3 goals, approvals, and execution history",
+            ].map((item) => (
+              <div key={item} className="flex gap-2 text-sm text-muted-foreground">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" aria-hidden />
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">
+          Each step preserves the prior work, so the shared memory gets stronger instead of being rebuilt.
+        </p>
+        <div className="mt-5 grid gap-3 lg:grid-cols-1">
+          {summaryOptions.map((option) =>
+            option.level === "4" ? (
+              <div
+                key={option.level}
+                className="rounded-md border border-border bg-muted/40 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <LevelBadge value={option.level} />
+                  <Badge variant="outline">{option.badge}</Badge>
+                </div>
+                <p className="mt-4 text-sm font-semibold text-foreground">{option.title}</p>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  {option.recommendation}
+                </p>
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                  {option.detail}
+                </p>
+              </div>
+            ) : null,
+          )}
         </div>
       </div>
     </div>
