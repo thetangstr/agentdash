@@ -71,6 +71,7 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
+import { shouldShowServerUnreachableOverlay } from "./lib/server-health-overlay";
 
 // AgentDash: billing page wrapper — pulls companyId from context.
 function BillingPageRoute() {
@@ -280,6 +281,12 @@ function NoCompaniesStartPage() {
   );
 }
 
+function RouteScopedServerUnreachableOverlay() {
+  const location = useLocation();
+  if (!shouldShowServerUnreachableOverlay(location.pathname)) return null;
+  return <ServerUnreachableOverlay />;
+}
+
 export function App() {
   return (
     <>
@@ -359,7 +366,7 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
-      <ServerUnreachableOverlay />
+      <RouteScopedServerUnreachableOverlay />
     </>
   );
 }
