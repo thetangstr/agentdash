@@ -62,10 +62,16 @@ export const onboardingApi = {
     cosAgentId: string;
     reason?: string;
   }) => api.post<{ ok: true }>("/onboarding/agent/reject", input),
-  // Phase D: read the latest agent_plan_proposal_v1 card and materialize the
-  // agents server-side. Returns the new company-id + new agent ids.
+  // Phase D: read the latest CoS pilot or legacy agent-team proposal card and
+  // materialize it server-side. Returns company/project/agent identifiers.
   confirmPlan: (input: { conversationId: string }) =>
-    api.post<{ companyId: string; createdAgentIds: string[] }>(
+    api.post<{
+      companyId: string;
+      createdAgentIds: string[];
+      projectId?: string;
+      issueIds?: string[];
+      cosAgentId?: string;
+    }>(
       "/onboarding/confirm-plan",
       input,
     ),
@@ -73,7 +79,7 @@ export const onboardingApi = {
   // postMessage (clients receive it over WS) and returns the new card's
   // payload + message ID for the caller's convenience.
   revisePlan: (input: { conversationId: string; revisionText: string }) =>
-    api.post<{ cardMessageId: string | null; plan: unknown }>(
+    api.post<{ cardMessageId: string | null; plan?: unknown; pilot?: unknown }>(
       "/onboarding/revise-plan",
       input,
     ),

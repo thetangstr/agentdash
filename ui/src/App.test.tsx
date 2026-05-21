@@ -17,6 +17,11 @@ const mockAuthApi = vi.hoisted(() => ({
 const mockAccessApi = vi.hoisted(() => ({
   getCurrentBoardAccess: vi.fn(),
 }));
+const mockLocation = vi.hoisted(() => ({
+  pathname: "/instance/settings/general",
+  search: "",
+  hash: "",
+}));
 
 vi.mock("./api/health", () => ({
   healthApi: mockHealthApi,
@@ -35,7 +40,7 @@ vi.mock("@/lib/router", () => ({
   Outlet: () => <div>Outlet content</div>,
   Route: ({ children }: { children?: ReactNode }) => <>{children}</>,
   Routes: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  useLocation: () => ({ pathname: "/instance/settings/general", search: "", hash: "" }),
+  useLocation: () => mockLocation,
   useParams: () => ({}),
 }));
 
@@ -60,6 +65,9 @@ describe("CloudAccessGate", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
     });
+    mockLocation.pathname = "/instance/settings/general";
+    mockLocation.search = "";
+    mockLocation.hash = "";
   });
 
   afterEach(() => {
@@ -116,6 +124,45 @@ describe("CloudAccessGate", () => {
       userId: "user-1",
       isInstanceAdmin: false,
       companyIds: ["company-1"],
+      source: "session",
+      keyId: null,
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Outlet content");
+    expect(container.textContent).not.toContain("No company access");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("allows fresh signed-up users without company access to create their first workspace", async () => {
+    mockLocation.pathname = "/company-create";
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: [],
       source: "session",
       keyId: null,
     });

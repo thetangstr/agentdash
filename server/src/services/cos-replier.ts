@@ -11,7 +11,11 @@
 // transition; the next user turn re-runs the prompt.
 
 import { logger } from "../middleware/logger.js";
-import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import {
+  isAgentPlanPayload,
+  isCosPilotProposalPayload,
+  type AgentPlanProposalV1Payload,
+} from "@paperclipai/shared";
 
 interface CosStateRow {
   conversationId: string;
@@ -99,33 +103,60 @@ The visible chat body comes BEFORE the fenced block. Do not repeat the JSON in p
 function planPromptFromSpec(spec: DeepInterviewSpecView): string {
   const constraintsJson = JSON.stringify(spec.constraints, null, 2);
   const criteriaJson = JSON.stringify(spec.criteria, null, 2);
-  return `You are the Chief of Staff for AgentDash. The user already completed a deep-interview, so goals, constraints, and success criteria are ALREADY-CAPTURED. Do NOT re-ask Phase 1 (goals capture) questions; jump directly to Phase 2 (plan presentation).
+  return `You are the Chief of Staff for AgentDash. The user already completed a deep-interview, so goals, constraints, and success criteria are ALREADY-CAPTURED. Do NOT re-ask Phase 1 (goals capture) questions; jump directly to Phase 2 (Delegation Contract + 30-day CoS pilot presentation).
 
 ALREADY-CAPTURED CONTEXT
 Goal: ${spec.goal}
 Constraints: ${constraintsJson}
 Success criteria: ${criteriaJson}
 
-Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: "claude_local", "codex_local", "gemini_local", "opencode_local", "pi_local"), 2-4 responsibilities, and 1-3 KPIs.
+Propose a contained Chief of Staff pilot, not a broad agent team. The Chief of Staff already exists and should become the active pilot agent after setup.
 
-In the visible body (before the JSON), give the user a short paragraph of rationale that references at least one constraint and one success criterion verbatim from the captured context, then a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
+The proposal must reduce replacement anxiety: do not ask the user to create a "yourself.md" or frame this as replacing them. Frame the setup as a Delegation Contract: what the CoS may observe, draft, escalate, and measure; what requires explicit human approval; and what the CoS never does.
 
-Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 payload:
+In the visible body (before the JSON), give a short paragraph that references at least one captured constraint and one success criterion, then say that the formal output is a Delegation Contract and a 30-day pilot plan. End with the question "Want me to launch this pilot, or revise the contract?"
+
+Your reply MUST end with a fenced JSON block emitting a cos_pilot_proposal_v1 payload under the "pilot" key:
 
 \`\`\`json
 {
-  "phase_decision": "stay_in_plan" | "advance_to_materializing",
-  "plan": {
+  "phase_decision": "stay_in_plan",
+  "pilot": {
     "rationale": "...",
-    "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "claude_local", "responsibilities": ["..."], "kpis": ["..."] }
-    ],
-    "alignmentToShortTerm": "...",
-    "alignmentToLongTerm": "..."
+    "delegationContract": {
+      "stakeholders": ["CBO", "Sales development lead"],
+      "goals": ["More qualified RFP submissions", "Reduced admin overhead"],
+      "preferences": ["Human approval before external submissions and live admin changes"],
+      "access": [
+        { "system": "HubSpot", "purpose": "Qualify RFP opportunities", "mode": "read_only", "status": "requested" },
+        { "system": "Billing/HR/recruiting systems", "purpose": "Draft admin automation charters without live changes", "mode": "human_approved", "status": "not_connected" }
+      ],
+      "operatingBoundaries": {
+        "canDo": ["Draft RFP responses", "Prepare admin workflow charters", "Summarize evidence and time saved"],
+        "requiresApproval": ["Submit RFPs", "Send external emails", "Change billing, payroll, HR, or recruiting records"],
+        "neverDo": ["Make employment decisions", "Change live financial records without approval"]
+      },
+      "telemetry": ["Access used", "Drafts created", "Approval requests", "Time saved estimates", "Risks and blockers"]
+    },
+    "pilotPlan": {
+      "durationDays": 30,
+      "projectName": "30-day Chief of Staff pilot",
+      "heartbeatCadence": "Daily business-day brief",
+      "successMetrics": [
+        { "label": "Qualified RFP drafts", "target": "3 ready for human review" },
+        { "label": "CBO/sales lead time saved", "target": "8 hours" }
+      ],
+      "workstreams": [
+        { "id": "rfp", "title": "RFP pipeline", "outcome": "More qualified municipal RFP submissions drafted for review.", "weeklySteps": ["Map RFP sources", "Qualify opportunities", "Draft response packages"] },
+        { "id": "admin", "title": "Admin overhead", "outcome": "Human-in-loop billing, HR, recruiting, and payroll pilot charters.", "weeklySteps": ["Map recurring admin work", "Dry-run draft automations", "Measure time saved"] }
+      ],
+      "approvalGates": ["No external submission without human approval", "No billing/payroll/HR record changes without human approval"]
+    }
   }
 }
 \`\`\`
 
+Allowed phase_decision values are "stay_in_plan" and "advance_to_materializing".
 Set phase_decision to "stay_in_plan" the first time you propose — the user confirms or revises before we materialize.
 
 No greetings. No markdown headings outside the JSON block.`;
@@ -279,6 +310,25 @@ export function cosReplier(deps: Deps) {
             }
           } else if (state.phase === "plan" && trailer) {
             // Plan phase: post visible body + a second message carrying the card.
+            if (isCosPilotProposalPayload(trailer.pilot)) {
+              const cardMsg = await deps.conversations.postMessage({
+                conversationId: input.conversationId,
+                authorKind: "agent",
+                authorId: input.cosAgentId,
+                body: "",
+                cardKind: "cos_pilot_proposal_v1",
+                cardPayload: trailer.pilot as unknown as Record<string, unknown>,
+              });
+              await cosState.advancePhase(input.conversationId, "plan", {
+                proposalMessageId: cardMsg?.id ?? null,
+              });
+              return deps.conversations.postMessage({
+                conversationId: input.conversationId,
+                authorKind: "agent",
+                authorId: input.cosAgentId,
+                body: visibleBody,
+              });
+            }
             if (isAgentPlanPayload(trailer.plan)) {
               const cardMsg = await deps.conversations.postMessage({
                 conversationId: input.conversationId,

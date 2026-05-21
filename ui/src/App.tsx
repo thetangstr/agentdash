@@ -283,6 +283,7 @@ export function App() {
   return (
     <>
       <Routes>
+        <Route path="signup" element={<Navigate to="/auth?mode=sign_up" replace />} />
         <Route path="auth" element={<AuthPage />} />
         <Route path="forgot-password" element={<ForgotPasswordPage />} />
         <Route path="reset-password" element={<ResetPasswordPage />} />

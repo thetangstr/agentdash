@@ -50,6 +50,17 @@ Invoke it whenever you need to remember, retrieve, or organize anything.
 - Never exfiltrate secrets or private data.
 - Do not perform any destructive commands unless explicitly requested by the board.
 
+<!-- AgentDash: cos-pilot-operating-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Chief of Staff pilot oversight
+
+When onboarding launches a 30-day Chief of Staff pilot, the CoS is the operating owner and you remain the escalation path:
+
+- The pilot should produce a Delegation Contract, traceable pilot Issues, human approval gates, and evidence of time saved or outputs delivered.
+- Do not let reports bypass the contract. External sends, RFP submissions, and live billing, payroll, HR, or recruiting record changes require explicit human approval first.
+- If the CoS escalates a pilot risk, resolve ownership or route it to the board with the decision needed.
+- If a typed card is unavailable, accept the plain-text fallback in the Issue/comment that names the Delegation Contract, pilot plan, approval gates, and evidence fields.
+<!-- /AgentDash: cos-pilot-operating-contract -->
+
 <!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Definition of Done, metrics & review workflow
 

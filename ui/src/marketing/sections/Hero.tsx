@@ -18,7 +18,7 @@ export function Hero() {
             board would actually approve of.
           </p>
           <div className="mkt-hero__cta-row">
-            <Button href="/auth?mode=sign_up">Start free</Button>
+            <Button href="/signup">Sign up</Button>
             <Button href="#layered-descent" variant="ghost">See the architecture</Button>
           </div>
           <p className="mkt-hero__reassure">No credit card · Free single-seat tier</p>

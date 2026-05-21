@@ -17,7 +17,7 @@ export function MarketingHeader() {
         </nav>
         <div className="mkt-header__cta">
           <Button href="/auth" variant="link">Sign in</Button>
-          <Button href="/auth?mode=sign_up">Start free</Button>
+          <Button href="/signup">Sign up</Button>
         </div>
       </div>
     </header>

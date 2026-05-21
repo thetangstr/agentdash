@@ -4,6 +4,7 @@ import { InvitePrompt, type InviteSendResult } from "./InvitePrompt";
 import { AgentStatusCard } from "./AgentStatusCard";
 import { InterviewQuestion } from "./InterviewQuestion";
 import { AgentPlanProposal } from "./AgentPlanProposal";
+import { CosPilotProposal } from "./CosPilotProposal";
 // AgentDash: goals-eval-hitl card stubs (full components ship in Phase F/H)
 import { VerdictReviewCard } from "./VerdictReviewCard";
 import { HumanTasteGateCard } from "./HumanTasteGateCard";
@@ -54,6 +55,14 @@ export function CardRenderer({
           onRevise={(text) => context.onProposalReject?.(text)}
         />
       );
+    case "cos_pilot_proposal_v1":
+      return (
+        <CosPilotProposal
+          payload={payload as any}
+          onLaunch={context.onProposalConfirm ?? (() => {})}
+          onRevise={(text) => context.onProposalReject?.(text)}
+        />
+      );
     // AgentDash: goals-eval-hitl
     case "verdict_review":
       return <VerdictReviewCard payload={payload as any} />;
@@ -70,6 +79,7 @@ export {
   AgentStatusCard,
   InterviewQuestion,
   AgentPlanProposal,
+  CosPilotProposal,
   // AgentDash: goals-eval-hitl
   VerdictReviewCard,
   HumanTasteGateCard,

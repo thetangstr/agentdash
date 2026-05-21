@@ -41,3 +41,53 @@ export interface AgentPlanProposalV1Payload {
   alignmentToShortTerm: string;
   alignmentToLongTerm: string;
 }
+
+export type CosPilotAccessMode = "read_only" | "draft_only" | "human_approved";
+export type CosPilotAccessStatus = "not_connected" | "requested" | "available";
+
+export interface CosPilotAccessGrant {
+  system: string;
+  purpose: string;
+  mode: CosPilotAccessMode;
+  status: CosPilotAccessStatus;
+}
+
+export interface CosPilotDelegationContractV1 {
+  stakeholders: string[];
+  goals: string[];
+  preferences: string[];
+  access: CosPilotAccessGrant[];
+  operatingBoundaries: {
+    canDo: string[];
+    requiresApproval: string[];
+    neverDo: string[];
+  };
+  telemetry: string[];
+}
+
+export interface CosPilotSuccessMetric {
+  label: string;
+  target: string;
+}
+
+export interface CosPilotWorkstream {
+  id: string;
+  title: string;
+  outcome: string;
+  weeklySteps: string[];
+}
+
+export interface CosPilotPlanV1 {
+  durationDays: number;
+  projectName: string;
+  heartbeatCadence: string;
+  successMetrics: CosPilotSuccessMetric[];
+  workstreams: CosPilotWorkstream[];
+  approvalGates: string[];
+}
+
+export interface CosPilotProposalV1Payload {
+  rationale: string;
+  delegationContract: CosPilotDelegationContractV1;
+  pilotPlan: CosPilotPlanV1;
+}

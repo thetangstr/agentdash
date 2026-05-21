@@ -8,7 +8,7 @@ export function FinalCTA() {
       <div className="mkt-final">
         <h2 className="mkt-display-section">Start running your AI company.</h2>
         <div className="mkt-final__cta-row">
-          <Button href="/auth?mode=sign_up">Start free</Button>
+          <Button href="/signup">Sign up</Button>
           <Button href="mailto:consulting@agentdash.com" variant="ghost">Talk to sales</Button>
         </div>
       </div>

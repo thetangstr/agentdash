@@ -1,5 +1,5 @@
 // AgentDash: chat substrate page
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { useMessages } from "../realtime/useMessages";
 import { MessageList } from "../components/MessageList";
 import { Composer } from "../components/Composer";
@@ -13,12 +13,14 @@ export default function ChatPanel({
   agentDirectory = [],
   cardContext,
   headerProps,
+  rail,
 }: {
   conversationId: string;
   companyId: string;
   agentDirectory?: Array<{ id: string; name: string; role: string }>;
   cardContext?: CardContext;
   headerProps?: ChatHeaderProps;
+  rail?: ReactNode;
 }) {
   const messages = useMessages(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -63,23 +65,32 @@ export default function ChatPanel({
   return (
     <div className="chat-panel flex flex-col h-full bg-surface-page">
       <ChatHeader {...(headerProps ?? {})} />
-      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
-        {/* min-h-full + justify-end pins messages to the bottom of the scroll
-            area so a short conversation sits next to the composer instead of
-            floating at the top with a big empty gap. As messages accumulate
-            they push older content up and out via overflow-y-auto. */}
-        <div className="max-w-2xl mx-auto min-h-full flex flex-col justify-end">
-          <MessageList
-            messages={messages}
-            cardContext={resolvedCardContext}
-          />
-          <div ref={bottomRef} aria-hidden="true" />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
+            {/* min-h-full + justify-end pins messages to the bottom of the scroll
+                area so a short conversation sits next to the composer instead of
+                floating at the top with a big empty gap. As messages accumulate
+                they push older content up and out via overflow-y-auto. */}
+            <div className="max-w-2xl mx-auto min-h-full flex flex-col justify-end">
+              <MessageList
+                messages={messages}
+                cardContext={resolvedCardContext}
+              />
+              <div ref={bottomRef} aria-hidden="true" />
+            </div>
+          </div>
+          <div className="border-t border-border-soft bg-surface-raised px-4 py-2">
+            <div className="max-w-2xl mx-auto">
+              <Composer onSend={send} agentDirectory={agentDirectory} />
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="border-t border-border-soft bg-surface-raised px-4 py-2">
-        <div className="max-w-2xl mx-auto">
-          <Composer onSend={send} agentDirectory={agentDirectory} />
-        </div>
+        {rail && (
+          <aside className="hidden w-[320px] shrink-0 border-l border-border-soft bg-surface-raised lg:block">
+            {rail}
+          </aside>
+        )}
       </div>
     </div>
   );

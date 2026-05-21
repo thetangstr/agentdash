@@ -40,6 +40,10 @@ function NoBoardAccessPage() {
   );
 }
 
+function isFirstWorkspaceOnboardingPath(pathname: string): boolean {
+  return pathname === "/company-create";
+}
+
 export function CloudAccessGate() {
   const location = useLocation();
   const healthQuery = useQuery({
@@ -107,6 +111,12 @@ export function CloudAccessGate() {
     !boardAccessQuery.data?.isInstanceAdmin &&
     (boardAccessQuery.data?.companyIds.length ?? 0) === 0
   ) {
+    // Fresh sign-ups intentionally create their first company from this page.
+    // Blocking it here strands the public website -> sign-up walkthrough before
+    // the user can earn the company access that the rest of the app requires.
+    if (isFirstWorkspaceOnboardingPath(location.pathname)) {
+      return <Outlet />;
+    }
     return <NoBoardAccessPage />;
   }
 

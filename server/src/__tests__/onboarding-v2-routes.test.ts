@@ -12,11 +12,19 @@ const mockConversations = {
 };
 const mockAgents = {
   create: vi.fn(),
+  update: vi.fn(),
   getById: vi.fn(),
   createApiKey: vi.fn(),
   list: vi.fn().mockResolvedValue([]),
   listKeys: vi.fn().mockResolvedValue([]),
 };
+const mockProjects = {
+  create: vi.fn(),
+};
+const mockIssues = {
+  create: vi.fn(),
+};
+const mockLogActivity = vi.fn();
 const mockInterview = { nextTurn: vi.fn() };
 const mockProposer = { propose: vi.fn() };
 const mockCreator = { create: vi.fn() };
@@ -32,6 +40,7 @@ const mockInvites = {
   createCompanyInvite: vi.fn(),
 };
 const mockSendEmail = vi.fn().mockResolvedValue({ status: "skipped" });
+const mockDispatchLLM = vi.fn();
 
 vi.mock("../auth/email.js", () => ({
   sendEmail: (...args: unknown[]) => mockSendEmail(...args),
@@ -60,6 +69,9 @@ vi.mock("../services/index.js", () => ({
   agentCreatorFromProposal: () => mockCreator,
   conversationService: () => mockConversations,
   agentService: () => mockAgents,
+  projectService: () => mockProjects,
+  issueService: () => mockIssues,
+  logActivity: (...args: unknown[]) => mockLogActivity(...args),
   accessService: () => ({}),
   companyService: () => ({}),
   agentInstructionsService: () => mockInstructions,
@@ -81,6 +93,10 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
+}));
+
+vi.mock("../services/dispatch-llm.js", () => ({
+  dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
 }));
 
 import { onboardingV2Routes } from "../routes/onboarding-v2.js";
@@ -112,6 +128,61 @@ function buildApp(actor: any, dbResults: Array<unknown[]> = []) {
   app.use("/api/onboarding", onboardingV2Routes(stubDb));
   app.use(errorHandler);
   return app;
+}
+
+function buildPilotPayload() {
+  return {
+    rationale: "Use one Chief of Staff to run a contained pilot before production automation.",
+    delegationContract: {
+      stakeholders: ["CBO", "Sales development lead"],
+      goals: ["More qualified RFP submissions", "Reduced admin overhead"],
+      preferences: ["Human-in-loop approvals"],
+      access: [
+        {
+          system: "HubSpot",
+          purpose: "Qualify RFP opportunities",
+          mode: "read_only",
+          status: "requested",
+        },
+        {
+          system: "Billing/HR systems",
+          purpose: "Draft admin automation charters without live changes",
+          mode: "human_approved",
+          status: "not_connected",
+        },
+      ],
+      operatingBoundaries: {
+        canDo: ["Draft RFP responses", "Draft admin workflow charters"],
+        requiresApproval: ["Submit RFPs", "Change billing/payroll/HR records"],
+        neverDo: ["Make employment decisions"],
+      },
+      telemetry: ["Access used", "Drafts created", "Approval requests", "Time saved estimates"],
+    },
+    pilotPlan: {
+      durationDays: 30,
+      projectName: "30-day Chief of Staff pilot",
+      heartbeatCadence: "Daily business-day brief",
+      successMetrics: [
+        { label: "Qualified RFP drafts", target: "3 ready for human review" },
+        { label: "CBO/sales lead time saved", target: "8 hours" },
+      ],
+      workstreams: [
+        {
+          id: "rfp",
+          title: "RFP pipeline",
+          outcome: "More qualified municipal RFP drafts.",
+          weeklySteps: ["Map sources", "Draft one response"],
+        },
+        {
+          id: "admin",
+          title: "Admin overhead",
+          outcome: "Human-in-loop billing/HR/recruiting automation charters.",
+          weeklySteps: ["Map recurring admin work", "Dry-run two workflows"],
+        },
+      ],
+      approvalGates: ["No external submissions without human approval"],
+    },
+  };
 }
 
 describe("POST /api/onboarding/bootstrap", () => {
@@ -184,6 +255,9 @@ describe("POST /api/onboarding/agent/confirm", () => {
 describe("POST /api/onboarding/confirm-plan", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProjects.create.mockReset();
+    mockIssues.create.mockReset();
+    mockLogActivity.mockReset();
   });
 
   it("creates one agent per plan-card entry, posts a closing message, advances phase to ready", async () => {
@@ -225,7 +299,9 @@ describe("POST /api/onboarding/confirm-plan", () => {
       [
         // 1st db chain: lookup conversation
         [{ id: "conv1", companyId: "c1" }],
-        // 2nd db chain: lookup latest agent_plan_proposal_v1 message
+        // 2nd db chain: lookup latest cos_pilot_proposal_v1 message
+        [],
+        // 3rd db chain: fallback lookup for latest agent_plan_proposal_v1 message
         [{ id: "msg1", cardKind: "agent_plan_proposal_v1", cardPayload: planPayload }],
       ],
     );
@@ -270,7 +346,8 @@ describe("POST /api/onboarding/confirm-plan", () => {
       { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
       [
         [{ id: "conv1", companyId: "c1" }], // conversation lookup
-        [], // no plan card
+        [], // no CoS pilot card
+        [], // no legacy agent plan card
       ],
     );
     const res = await request(app)
@@ -278,11 +355,110 @@ describe("POST /api/onboarding/confirm-plan", () => {
       .send({ conversationId: "conv1" });
     expect(res.status).toBe(404);
   });
+
+  it("launches a CoS pilot proposal as one project, traceable pilot issues, and an enabled CoS heartbeat", async () => {
+    mockAgents.list.mockResolvedValue([
+      {
+        id: "cos1",
+        role: "chief_of_staff",
+        name: "CoS",
+        runtimeConfig: { heartbeat: { wakeOnDemand: true } },
+        metadata: { existing: true },
+      },
+    ]);
+    mockAgents.update.mockResolvedValue({ id: "cos1" });
+    mockProjects.create.mockResolvedValue({
+      id: "project-1",
+      name: "30-day Chief of Staff pilot",
+    });
+    let issueCount = 0;
+    mockIssues.create.mockImplementation(async (_companyId: string, data: any) => ({
+      id: `issue-${++issueCount}`,
+      ...data,
+    }));
+
+    const pilotPayload = buildPilotPayload();
+
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg-pilot", cardKind: "cos_pilot_proposal_v1", cardPayload: pilotPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/confirm-plan")
+      .send({ conversationId: "conv1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      createdAgentIds: [],
+      projectId: "project-1",
+      issueIds: ["issue-1", "issue-2", "issue-3", "issue-4"],
+      cosAgentId: "cos1",
+    });
+    expect(mockAgents.create).not.toHaveBeenCalled();
+    expect(mockProjects.create).toHaveBeenCalledWith(
+      "c1",
+      expect.objectContaining({
+        name: "30-day Chief of Staff pilot",
+        status: "in_progress",
+        leadAgentId: "cos1",
+      }),
+    );
+    expect(mockIssues.create).toHaveBeenCalledTimes(4);
+    expect(mockIssues.create).toHaveBeenNthCalledWith(
+      1,
+      "c1",
+      expect.objectContaining({
+        title: expect.stringContaining("Delegation contract"),
+        assigneeAgentId: "cos1",
+        projectId: "project-1",
+        status: "todo",
+      }),
+    );
+    expect(mockAgents.update).toHaveBeenCalledWith(
+      "cos1",
+      expect.objectContaining({
+        runtimeConfig: expect.objectContaining({
+          heartbeat: expect.objectContaining({
+            enabled: true,
+            intervalSec: 86400,
+            wakeOnDemand: true,
+          }),
+        }),
+        metadata: expect.objectContaining({
+          cosPilot: expect.objectContaining({
+            status: "active",
+            projectId: "project-1",
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        recordRevision: expect.objectContaining({ createdByUserId: "u1" }),
+      }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: "c1",
+        actorType: "user",
+        actorId: "u1",
+        action: "cos_pilot_launched",
+        entityType: "project",
+        entityId: "project-1",
+        agentId: "cos1",
+      }),
+    );
+  });
 });
 
 describe("POST /api/onboarding/revise-plan", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatchLLM.mockReset();
   });
 
   // Closes #330: route is no longer Phase-F-deferred (#210 / #231
@@ -297,6 +473,73 @@ describe("POST /api/onboarding/revise-plan", () => {
       .post("/api/onboarding/revise-plan")
       .send({ conversationId: "conv1", revisionText: "swap qa for marketing" });
     expect(res.status).toBe(404);
+  });
+
+  it("revises the latest CoS pilot proposal card", async () => {
+    mockAgents.list.mockResolvedValue([
+      { id: "cos1", role: "chief_of_staff", name: "CoS" },
+    ]);
+    mockConversations.postMessage
+      .mockResolvedValueOnce({ id: "visible-msg" })
+      .mockResolvedValueOnce({ id: "card-msg" });
+
+    const pilotPayload = buildPilotPayload();
+    const revisedPilotPayload = {
+      ...pilotPayload,
+      rationale: "Keep the CoS pilot read-only until the CBO approves each workstream.",
+      pilotPlan: {
+        ...pilotPayload.pilotPlan,
+        projectName: "30-day CBO Chief of Staff pilot",
+      },
+    };
+    mockDispatchLLM.mockResolvedValue(
+      `Updated the delegation contract: tightened the approval language.\n\n\`\`\`json\n${JSON.stringify({ pilot: revisedPilotPayload })}\n\`\`\``,
+    );
+
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [
+        [{ id: "conv1", companyId: "c1" }],
+        [{ id: "msg-pilot", cardKind: "cos_pilot_proposal_v1", cardPayload: pilotPayload }],
+      ],
+    );
+
+    const res = await request(app)
+      .post("/api/onboarding/revise-plan")
+      .send({ conversationId: "conv1", revisionText: "Make it CBO-first and stricter on access." });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      cardMessageId: "card-msg",
+      pilot: revisedPilotPayload,
+    });
+    expect(mockDispatchLLM).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("PRIOR COS PILOT") }),
+          expect.objectContaining({ content: expect.stringContaining("Make it CBO-first") }),
+        ]),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        body: expect.stringContaining("Updated the delegation contract"),
+      }),
+    );
+    expect(mockConversations.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        conversationId: "conv1",
+        authorKind: "agent",
+        authorId: "cos1",
+        cardKind: "cos_pilot_proposal_v1",
+        cardPayload: revisedPilotPayload,
+      }),
+    );
   });
 });
 

@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockBootstrap = vi.hoisted(() => vi.fn());
 const mockRejectAgent = vi.hoisted(() => vi.fn());
 const mockConfirmAgent = vi.hoisted(() => vi.fn());
+const mockConfirmPlan = vi.hoisted(() => vi.fn());
+const mockRevisePlan = vi.hoisted(() => vi.fn());
 const mockSendInvites = vi.hoisted(() => vi.fn());
 const mockUseMessages = vi.hoisted(() => vi.fn());
 const mockChatPanelProps = vi.hoisted(() => vi.fn());
@@ -17,6 +19,8 @@ vi.mock("../api/onboarding", () => ({
     bootstrap: mockBootstrap,
     interviewTurn: vi.fn(),
     confirmAgent: mockConfirmAgent,
+    confirmPlan: mockConfirmPlan,
+    revisePlan: mockRevisePlan,
     sendInvites: mockSendInvites,
     rejectAgent: mockRejectAgent,
   },
@@ -85,6 +89,8 @@ describe("CoSConversation", () => {
     root = createRoot(container);
     mockUseMessages.mockReturnValue([]);
     mockBootstrap.mockReset();
+    mockConfirmPlan.mockReset();
+    mockRevisePlan.mockReset();
     mockSendInvites.mockReset();
     mockChatPanelProps.mockClear();
   });
@@ -124,6 +130,60 @@ describe("CoSConversation", () => {
     await act(async () => {});
 
     expect(container.querySelector(".chat-panel")).toBeTruthy();
+  });
+
+  it("passes the guided CoS pilot rail into ChatPanel", async () => {
+    mockBootstrap.mockResolvedValue({
+      companyId: "c1",
+      cosAgentId: "a1",
+      conversationId: "conv1",
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<CoSConversation />);
+    });
+    await act(async () => {});
+
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as {
+      rail?: unknown;
+      headerProps?: { agentRole?: string };
+    };
+    expect(props.headerProps?.agentRole).toContain("30-day CoS pilot");
+    expect(props.rail).toBeTruthy();
+  });
+
+  it("launches the pilot through the plan confirmation callback", async () => {
+    mockBootstrap.mockResolvedValue({
+      companyId: "company-1",
+      cosAgentId: "agent-1",
+      conversationId: "conversation-1",
+    });
+    mockConfirmPlan.mockResolvedValue({
+      companyId: "company-1",
+      createdAgentIds: [],
+      projectId: "project-1",
+      issueIds: ["issue-1", "issue-2"],
+    });
+
+    await act(async () => {
+      const { CoSConversation } = await import("./CoSConversation");
+      root.render(<CoSConversation />);
+    });
+    await act(async () => {});
+
+    const props = mockChatPanelProps.mock.calls.at(-1)?.[0] as {
+      cardContext: {
+        onProposalConfirm: () => Promise<void>;
+      };
+    };
+    await act(async () => {
+      await props.cardContext.onProposalConfirm();
+    });
+
+    expect(mockConfirmPlan).toHaveBeenCalledWith({
+      conversationId: "conversation-1",
+    });
   });
 
   it("shows error state when bootstrap fails", async () => {

@@ -36,6 +36,7 @@ export function CompanyCreatePage() {
     onSuccess: async (company) => {
       setSelectedCompanyId(company.id);
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.currentBoardAccess });
       navigate("/assess?onboarding=1", { replace: true });
     },
     onError: (err) => {

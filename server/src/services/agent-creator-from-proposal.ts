@@ -83,6 +83,17 @@ ${p.oneLineOkr}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 
+<!-- AgentDash: cos-pilot-operating-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Chief of Staff pilot boundaries
+
+If you are assigned work created by a 30-day Chief of Staff pilot:
+
+- Work from the Delegation Contract and the Issue's Definition of Done.
+- Drafting and analysis are allowed when assigned. External sends, RFP submissions, and live billing, payroll, HR, or recruiting record changes require explicit human approval first.
+- Leave traceable evidence in comments, documents, or work products: source systems used, drafts produced, approvals requested, risks surfaced, and time-saved estimates.
+- If a typed card is unavailable, use the plain-text Issue/comment that names the Delegation Contract, pilot plan, approval gates, and evidence fields.
+<!-- /AgentDash: cos-pilot-operating-contract -->
+
 <!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Definition of Done & verdict workflow
 

@@ -995,6 +995,7 @@ export * from "./mention-parser.js";
 // `pnpm typecheck`) failed when this was only registered in
 // validators/index.ts — added here to keep both surfaces in sync.
 export { isAgentPlanPayload } from "./validators/agent-plan.js";
+export { isCosPilotProposalPayload } from "./validators/cos-pilot.js";
 
 // AgentDash: chat substrate card payload types
 export * from "./cards.js";

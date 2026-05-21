@@ -1,6 +1,7 @@
 // AgentDash: CoSConversation — onboarding v2 entry point
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Activity, CheckCircle2, Clock3, FileText, ShieldCheck } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
 import { agentsApi } from "../api/agents";
@@ -15,6 +16,10 @@ interface BootstrapState {
 export function CoSConversation() {
   const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pilotLaunch, setPilotLaunch] = useState<{
+    projectId: string;
+    issueIds: string[];
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,28 +70,34 @@ export function CoSConversation() {
 
   const cardContext: CardContext = {
     onProposalConfirm: async () => {
-      // Phase D: confirm the agent_plan_proposal_v1 card -> materialize agents.
-      // (The legacy proposal_card_v1 path is also fired via this callback; the
-      // server already created that agent at card-emit time, so confirm-plan
-      // is the only path that materializes here.)
+      // Confirming a plan either launches the CoS pilot project or materializes
+      // the legacy agent-team proposal, depending on the latest card kind.
       try {
-        await onboardingApi.confirmPlan({
+        const result = await onboardingApi.confirmPlan({
           conversationId: bootstrapped.conversationId,
         });
-      } catch {
-        // Non-blocking — the closing message + agents land via WS regardless.
+        if (result.projectId) {
+          setPilotLaunch({
+            projectId: result.projectId,
+            issueIds: result.issueIds ?? [],
+          });
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "Failed to launch plan";
+        setError(reason);
       }
     },
     onProposalReject: async (reason) => {
-      // Phase F revision-loop is deferred — server stub returns 501 — but we
-      // still wire the button so the round-trip is observable.
+      // Ask the CoS to revise the latest plan card; the server posts the
+      // replacement card into the conversation.
       try {
         await onboardingApi.revisePlan({
           conversationId: bootstrapped.conversationId,
           revisionText: reason ?? "",
         });
-      } catch {
-        // Expected until Phase F lands.
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "Failed to revise plan";
+        setError(reason);
       }
     },
     onInviteSend: async (emails) => {
@@ -115,6 +126,7 @@ export function CoSConversation() {
     <CoSConversationView
       bootstrapped={bootstrapped}
       cardContext={cardContext}
+      pilotLaunch={pilotLaunch}
     />
   );
 }
@@ -125,9 +137,11 @@ export function CoSConversation() {
 function CoSConversationView({
   bootstrapped,
   cardContext,
+  pilotLaunch,
 }: {
   bootstrapped: BootstrapState;
   cardContext: CardContext;
+  pilotLaunch: { projectId: string; issueIds: string[] } | null;
 }) {
   // #209: feed the composer's @mention typeahead with the company's agents.
   const { data: agents } = useQuery({
@@ -148,7 +162,92 @@ function CoSConversationView({
         companyId={bootstrapped.companyId}
         cardContext={cardContext}
         agentDirectory={agentDirectory}
+        headerProps={{
+          agentRole: pilotLaunch
+            ? "30-day CoS pilot running"
+            : "30-day CoS pilot setup",
+        }}
+        rail={<CoSPilotRail launched={pilotLaunch} />}
       />
+    </div>
+  );
+}
+
+function CoSPilotRail({
+  launched,
+}: {
+  launched: { projectId: string; issueIds: string[] } | null;
+}) {
+  const steps = launched
+    ? [
+        { label: "Delegation contract accepted", done: true },
+        { label: "Pilot project created", done: true },
+        { label: `${launched.issueIds.length} traceable issues opened`, done: true },
+        { label: "Heartbeat active", done: true },
+      ]
+    : [
+        { label: "Understand your work style", done: true },
+        { label: "Draft delegation contract", done: false },
+        { label: "Shape 30-day pilot", done: false },
+        { label: "Launch heartbeat", done: false },
+      ];
+
+  return (
+    <div className="flex h-full flex-col p-4">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-[0.08em] text-text-tertiary">Chief of Staff pilot</p>
+        <h2 className="mt-1 text-base font-semibold text-text-primary">
+          {launched ? "Operating mode" : "Guided setup"}
+        </h2>
+        <p className="mt-2 text-sm text-text-secondary">
+          {launched
+            ? "Your CoS now works from the pilot project, posts heartbeat briefs, drafts work, and escalates approval requests."
+            : "The setup creates a delegation contract first, then a contained 30-day pilot with human approval gates."}
+        </p>
+      </div>
+
+      <div className="mt-5 space-y-2">
+        {steps.map((step) => (
+          <div key={step.label} className="flex items-center gap-2 text-sm">
+            <CheckCircle2
+              className={`h-4 w-4 ${step.done ? "text-accent-600" : "text-text-tertiary"}`}
+              aria-hidden
+            />
+            <span className={step.done ? "text-text-primary" : "text-text-secondary"}>{step.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 rounded-md border border-border-soft bg-surface-base p-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+          <ShieldCheck className="h-4 w-4 text-accent-600" aria-hidden />
+          Approval boundaries
+        </div>
+        <p className="mt-2 text-sm text-text-secondary">
+          RFP submissions, external sends, and billing, payroll, HR, or recruiting changes stay human-approved.
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-md border border-border-soft bg-surface-base p-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+          <Activity className="h-4 w-4 text-accent-600" aria-hidden />
+          Trace hint
+        </div>
+        <p className="mt-2 text-sm text-text-secondary">
+          The dashboard tracks access used, drafts created, approvals requested, time saved, and risks surfaced.
+        </p>
+      </div>
+
+      <div className="mt-auto grid gap-2 pt-4 text-xs text-text-tertiary">
+        <div className="flex items-center gap-2">
+          <Clock3 className="h-3.5 w-3.5" aria-hidden />
+          Daily business-day brief after launch
+        </div>
+        <div className="flex items-center gap-2">
+          <FileText className="h-3.5 w-3.5" aria-hidden />
+          Outputs: delegation contract and 30-day pilot plan
+        </div>
+      </div>
     </div>
   );
 }

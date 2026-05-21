@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompanyCreatePage } from "./CompanyCreate";
 import { ApiError } from "../api/client";
+import { queryKeys } from "../lib/queryKeys";
 
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockCreate = vi.hoisted(() => vi.fn());
@@ -87,6 +88,7 @@ describe("CompanyCreatePage", () => {
 
   it("submits to companiesApi.create with fromSignup and navigates to /assess?onboarding=1", async () => {
     mockCreate.mockResolvedValue({ id: "company-1", name: "Acme" });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
     render();
     const input = container.querySelector("input#company-name") as HTMLInputElement;
@@ -106,6 +108,10 @@ describe("CompanyCreatePage", () => {
 
     expect(mockCreate).toHaveBeenCalledWith({ name: "Acme" }, { fromSignup: true });
     expect(mockSetSelectedCompanyId).toHaveBeenCalledWith("company-1");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.companies.all });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.access.currentBoardAccess,
+    });
     expect(mockNavigate).toHaveBeenCalledWith("/assess?onboarding=1", { replace: true });
   });
 

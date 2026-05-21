@@ -195,6 +195,102 @@ describe("cosReplier.reply (phase-aware path)", () => {
     });
   });
 
+  it("uses a deep-interview spec to emit a CoS pilot proposal card", async () => {
+    const conversations = makeConversations([
+      { role: "user", content: "The CBO and sales development lead need a 30-day pilot." },
+    ]);
+    const cosState = {
+      getOrCreate: vi.fn().mockResolvedValue({
+        conversationId: "conv1",
+        phase: "plan",
+        goals: {},
+        proposalMessageId: null,
+        turnsInPhase: 0,
+        deepInterviewSpecId: "spec-1",
+      }),
+      recordTurn: vi.fn().mockResolvedValue(undefined),
+      setGoals: vi.fn().mockResolvedValue(undefined),
+      advancePhase: vi.fn().mockResolvedValue(undefined),
+    };
+    const deepInterviewSpecs = {
+      getById: vi.fn().mockResolvedValue({
+        goal: "Run a 30-day Chief of Staff pilot for MKThink.",
+        constraints: ["human-in-loop for RFP submissions and HR/payroll changes"],
+        criteria: ["time saved for CBO/sales lead", "concrete RFP/admin pilot charters"],
+      }),
+    };
+    const pilotPayload = {
+      rationale: "One CoS pilot keeps the rollout contained.",
+      delegationContract: {
+        stakeholders: ["CBO", "Sales development lead"],
+        goals: ["More qualified RFP submissions", "Reduced admin overhead"],
+        preferences: ["Human-in-loop approvals"],
+        access: [
+          {
+            system: "HubSpot",
+            purpose: "Qualify RFP opportunities",
+            mode: "read_only",
+            status: "requested",
+          },
+        ],
+        operatingBoundaries: {
+          canDo: ["Draft RFP responses", "Draft admin workflow charters"],
+          requiresApproval: ["Submit RFPs", "Change billing/payroll/HR records"],
+          neverDo: ["Make employment decisions"],
+        },
+        telemetry: ["Access used", "Drafts created", "Approval requests", "Time saved estimates"],
+      },
+      pilotPlan: {
+        durationDays: 30,
+        projectName: "30-day Chief of Staff pilot",
+        heartbeatCadence: "Daily business-day brief",
+        successMetrics: [
+          { label: "Qualified RFP drafts", target: "3 ready for human review" },
+          { label: "Time saved", target: "8 hours" },
+        ],
+        workstreams: [
+          {
+            id: "rfp",
+            title: "RFP pipeline",
+            outcome: "More qualified RFP submissions drafted for review.",
+            weeklySteps: ["Map target sources", "Draft one response"],
+          },
+        ],
+        approvalGates: ["No external submissions without approval"],
+      },
+    };
+    const llm = vi.fn().mockResolvedValue(
+      [
+        "I would start with a contained CoS pilot.",
+        "",
+        "```json",
+        JSON.stringify({ phase_decision: "stay_in_plan", pilot: pilotPayload }),
+        "```",
+      ].join("\n"),
+    );
+
+    await cosReplier({ conversations, llm, cosState, deepInterviewSpecs } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+    });
+
+    expect(deepInterviewSpecs.getById).toHaveBeenCalledWith("spec-1");
+    expect(llm.mock.calls[0]?.[0].system).toContain("Delegation Contract");
+    expect(conversations.postMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        cardKind: "cos_pilot_proposal_v1",
+        cardPayload: pilotPayload,
+      }),
+    );
+    expect(conversations.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        body: "I would start with a contained CoS pilot.",
+      }),
+    );
+  });
+
   it("falls through gracefully when LLM omits a JSON trailer in goals phase", async () => {
     const conversations = makeConversations([{ role: "user", content: "hi" }]);
     const cosState = {
