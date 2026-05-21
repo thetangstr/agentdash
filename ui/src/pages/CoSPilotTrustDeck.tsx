@@ -64,7 +64,7 @@ const levels = [
     level: "0",
     name: "Personal Local Agent",
     headline: "Individual leverage, no shared operating memory.",
-    example: "Claude, Claude Code, Codex on your computer.",
+    example: "A personal AI assistant on your computer.",
     context: "Personal files, pasted text, local repo context, and whatever the individual user provides.",
     trust: "Individual experimentation only.",
     capability: "Personal drafting, coding, analysis, and brainstorming with no shared operating memory.",
@@ -93,7 +93,7 @@ const levels = [
     level: "1",
     name: "Communicable Agent",
     headline: "A shared conversation where multiple humans can talk to the same agent.",
-    example: "Hermes or OpenClaw reachable through a group chat or gateway.",
+    example: "A gateway agent reachable through a group chat or internal collaboration layer.",
     context: "Thread context, files, snippets, and company facts contributed by multiple participants.",
     trust: "Can build understanding from the group conversation, but still depends on what humans bring into the thread.",
     capability: "Answers the group, remembers thread context, drafts shared outputs, and asks for missing company context.",
@@ -104,9 +104,9 @@ const levels = [
     outcomes: [
       "Mac mini on your company network",
       "Access to shared knowledge base",
-      "Access to Teams as an agent*",
+      "Access to the collaboration layer as an agent*",
     ],
-    footnote: "*To be validated. M365 access requires the right tenant permissions to be granted.",
+    footnote: "*To be validated. Collaboration access requires the right tenant permissions to be granted.",
     graphic: {
       leftTitle: "Shared conversation",
       left: [
@@ -127,7 +127,7 @@ const levels = [
     level: "2",
     name: "Company-Aware Gateway Agent",
     headline: "Level 1 plus approved company knowledge: the shared gateway agent can now ground answers in firm sources.",
-    example: "Hermes with access to company-wide approved data.",
+    example: "A gateway agent with access to company-wide approved data.",
     context: "Everything from Level 1: multiple humans, shared thread context, files, snippets, and company facts, plus a shared company knowledge database.",
     trust: "Can hold the shared conversation and search approved company knowledge without acting across systems.",
     capability: "Answers the same group from source-grounded company memory, prepares briefs, compares opportunities, reuses past work, and identifies gaps.",
@@ -138,7 +138,7 @@ const levels = [
     outcomes: [
       "Level 1 shared conversation content",
       "Access to a shared company database",
-      "OneDrive / SharePoint / Google Drive / Confluence / Notion",
+      "Shared file drives, wiki pages, project docs, and proposal repositories",
     ],
     graphic: {
       leftTitle: "Level 1 inputs",
@@ -269,7 +269,54 @@ const frameWorkReturns = [
   { title: "Opportunity motion", label: "RFPs and business development actions moved toward qualified submissions.", icon: BriefcaseBusiness },
 ];
 
+const coverPillars = [
+  { value: "30 days", label: "Evidence pilot, not broad production rollout.", icon: ClipboardList },
+  { value: "L1 first", label: "Start with one shared gateway conversation.", icon: Network },
+  { value: "0 sends", label: "No autonomous inbox sends during the pilot.", icon: KeyRound },
+];
+
+const hookMetrics = [
+  {
+    value: "30 days",
+    title: "Controlled pilot",
+    label: "Enough time to prove value without granting broad production access.",
+    icon: ClipboardList,
+  },
+  {
+    value: "2 leaders",
+    title: "Focused first users",
+    label: "CBO and sales lead workflows give the pilot clear executive and growth value.",
+    icon: Users,
+  },
+  {
+    value: "10+",
+    title: "Useful artifacts",
+    label: "Meeting briefs, follow-up lists, opportunity snapshots, and pilot charters.",
+    icon: FileText,
+  },
+  {
+    value: "100%",
+    title: "Trace coverage",
+    label: "Every source, action, approval, and handoff should be inspectable.",
+    icon: CheckCircle2,
+  },
+];
+
+const hookScorecard = [
+  "Personal AI use is already happening, but it does not create shared operating memory.",
+  "The shared knowledge base is the gating asset: without it, the CoS has no company context.",
+  "Governed delegation is the difference between useful agents and uncontrolled automation.",
+];
+
+const hookGuardrails = [
+  "No executive inbox write access at the start.",
+  "No hidden access expansion or unlogged agent actions.",
+  "Move L1 to L3 without losing shared memory or artifacts.",
+];
+
 const navItems = [
+  { id: "cover", label: "Cover" },
+  { id: "hook", label: "Hook" },
   { id: "frame", label: "Frame" },
   { id: "level-0", label: "L0" },
   { id: "level-1", label: "L1" },
@@ -312,6 +359,166 @@ function SlideFrame({
           ) : null}
         </div>
         <div className="flex-1">{children}</div>
+      </div>
+    </section>
+  );
+}
+
+function CoverSlide() {
+  return (
+    <section
+      id="cover"
+      className="min-h-screen scroll-mt-6 border-b border-border bg-background px-6 py-10 md:px-10 lg:px-14"
+    >
+      <div className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl items-center gap-8 lg:grid-cols-[1.08fr_0.92fr]">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Executive CoS pilot
+          </p>
+          <h1 className="mt-3 max-w-4xl text-4xl font-bold tracking-tight text-foreground md:text-6xl">
+            Chief of Staff Agent Readiness
+          </h1>
+          <p className="mt-5 max-w-3xl text-lg leading-8 text-muted-foreground">
+            A controlled path from shared conversation to governed executive support,
+            built around trust, traceability, and useful work.
+          </p>
+
+          <div className="mt-8 flex flex-wrap gap-2">
+            <Badge variant="secondary">MKThink leadership pilot</Badge>
+            <Badge variant="outline">Context + Trust = Capability</Badge>
+            <Badge variant="outline">Human-approved access</Badge>
+          </div>
+
+          <div className="mt-10 grid gap-3 sm:grid-cols-3">
+            {coverPillars.map((pillar) => {
+              const Icon = pillar.icon;
+
+              return (
+                <div key={pillar.value} className="rounded-lg border border-border bg-card p-4">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-muted">
+                    <Icon className="h-4 w-4 text-foreground" aria-hidden />
+                  </div>
+                  <p className="mt-5 text-2xl font-bold text-foreground">{pillar.value}</p>
+                  <p className="mt-2 text-sm leading-5 text-muted-foreground">{pillar.label}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-6">
+          <div className="flex items-center gap-3">
+            <Sparkles className="h-5 w-5 text-foreground" aria-hidden />
+            <p className="text-sm font-semibold text-foreground">The buyer question</p>
+          </div>
+          <p className="mt-5 text-3xl font-bold leading-tight text-foreground">
+            How much context is useful enough to earn the next level of trust?
+          </p>
+          <p className="mt-4 text-sm leading-6 text-muted-foreground">
+            The pilot should not ask leaders to hand over everything. It should
+            prove that each added level of context creates visible, inspectable work.
+          </p>
+
+          <div className="mt-8 grid gap-3">
+            {[
+              { title: "Context", label: "Shared threads, approved sources, and executive preferences." },
+              { title: "Trust", label: "Delegation contracts, approval gates, and trace evidence." },
+              { title: "Capability", label: "Useful artifacts, business outcomes, and governed execution." },
+            ].map((item) => (
+              <div key={item.title} className="rounded-md border border-border bg-muted/40 p-4">
+                <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                <p className="mt-1 text-sm leading-5 text-muted-foreground">{item.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HookMetricsSlide() {
+  return (
+    <section
+      id="hook"
+      className="min-h-screen scroll-mt-6 border-b border-border bg-background px-6 py-8 md:px-10 lg:px-14"
+    >
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-7xl flex-col gap-5">
+        <div className="max-w-5xl">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Market hook
+          </p>
+          <h1 className="mt-2 max-w-5xl text-3xl font-bold tracking-tight text-foreground md:text-5xl">
+            Every company is onboarding AI agents. Not everyone is doing it right.
+          </h1>
+          <p className="mt-3 max-w-4xl text-base leading-7 text-muted-foreground">
+            The risk is not trying agents. The risk is adding agents without shared
+            context, permission boundaries, useful artifacts, and a trace leadership
+            can inspect.
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {hookMetrics.map((metric) => {
+            const Icon = metric.icon;
+
+            return (
+              <div key={metric.title} className="rounded-lg border border-border bg-card p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-2xl font-bold text-foreground">{metric.value}</p>
+                    <p className="mt-1 text-sm font-semibold text-foreground">{metric.title}</p>
+                  </div>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+                    <Icon className="h-4 w-4 text-foreground" aria-hidden />
+                  </div>
+                </div>
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">{metric.label}</p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center gap-3">
+              <BriefcaseBusiness className="h-5 w-5 text-foreground" aria-hidden />
+              <h2 className="text-lg font-semibold text-foreground">What this means for MKThink</h2>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {hookScorecard.map((item) => (
+                <div key={item} className="flex gap-3 rounded-md bg-muted/50 p-3 text-sm leading-5 text-muted-foreground">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" aria-hidden />
+                  {item}
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">
+              AgentDash and Paperclip should make this progression visible: start
+              shared, add approved knowledge, then add governed execution.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center gap-3">
+              <KeyRound className="h-5 w-5 text-foreground" aria-hidden />
+              <h2 className="text-lg font-semibold text-foreground">Access guardrails</h2>
+            </div>
+            <div className="mt-3 grid gap-2">
+              {hookGuardrails.map((item) => (
+                <div key={item} className="rounded-md border border-border bg-muted/40 p-3 text-sm leading-5 text-muted-foreground">
+                  {item}
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded-md border border-border bg-background p-3">
+              <p className="text-2xl font-bold text-foreground">0</p>
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Unapproved sends
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -718,6 +925,9 @@ export function CoSPilotTrustDeck() {
           </nav>
         </div>
       </div>
+
+      <CoverSlide />
+      <HookMetricsSlide />
 
       <SlideFrame
         id="frame"
