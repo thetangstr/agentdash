@@ -1,0 +1,11 @@
+{
+  "buildCommand": "pnpm --filter @paperclipai/ui build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "outputDirectory": "ui/dist",
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
