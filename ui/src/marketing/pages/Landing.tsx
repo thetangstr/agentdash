@@ -13,6 +13,7 @@ import { FinalCTA } from "../sections/FinalCTA";
 import { SectionContainer } from "../components/SectionContainer";
 import { LogoStrip } from "../components/LogoStrip";
 import { QuoteBlock } from "../components/QuoteBlock";
+import { isAuthenticatedDeployment, isPublicVisitorLoggedIn } from "../public-auth";
 
 const PLACEHOLDER_LOGOS = [
   { name: "Logo 1" },
@@ -33,7 +34,8 @@ export function Landing() {
     queryFn: () => healthApi.get(),
     retry: false,
   });
-  const isAuthenticatedMode = healthQuery.data?.deploymentMode === "authenticated";
+  const deploymentMode = healthQuery.data?.deploymentMode;
+  const isAuthenticatedMode = isAuthenticatedDeployment(deploymentMode);
   const sessionQuery = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -42,7 +44,10 @@ export function Landing() {
   });
 
   if (!previewMode && (healthQuery.isLoading || (isAuthenticatedMode && sessionQuery.isLoading))) return null;
-  const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
+  const loggedIn = isPublicVisitorLoggedIn({
+    deploymentMode,
+    hasSession: Boolean(sessionQuery.data),
+  });
   if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
 
   return (

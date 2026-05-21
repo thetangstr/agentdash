@@ -61,6 +61,7 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSConversation } from "./pages/CoSConversation";
+import { CoSPilotTrustDeck } from "./pages/CoSPilotTrustDeck";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
 import { Landing as MarketingLanding } from "./marketing/pages/Landing";
@@ -297,6 +298,7 @@ export function App() {
         <Route path="/" element={<MarketingLanding />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
+        <Route path="cos-pilot-deck" element={<CoSPilotTrustDeck />} />
         <Route path="assess" element={<AssessPage />} />
         <Route path="assess/history" element={<AssessHistoryPage />} />
 

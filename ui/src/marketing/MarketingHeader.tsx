@@ -12,6 +12,7 @@ export function MarketingHeader() {
         <nav className="mkt-header__nav" aria-label="Primary">
           <a href="/">Product</a>
           <a href="/consulting">Consulting</a>
+          <a href="/cos-pilot-deck">CoS Pilot</a>
           <a href="/assess">Assessment</a>
           <a href="/about">About</a>
         </nav>

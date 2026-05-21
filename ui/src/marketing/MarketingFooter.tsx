@@ -24,6 +24,7 @@ export function MarketingFooter() {
             <h4>Consulting</h4>
             <ul>
               <li><a href="/consulting">Approach</a></li>
+              <li><a href="/cos-pilot-deck">CoS pilot deck</a></li>
               <li><a href="/consulting#research">Research</a></li>
               <li><a href="mailto:consulting@agentdash.com">Talk to us</a></li>
             </ul>

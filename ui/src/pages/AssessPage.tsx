@@ -15,6 +15,7 @@ import { MarketingShell } from "../marketing/MarketingShell";
 import { SectionContainer } from "../marketing/components/SectionContainer";
 import { Eyebrow } from "../marketing/components/Eyebrow";
 import { Button } from "../marketing/components/Button";
+import { isAuthenticatedDeployment, isPublicVisitorLoggedIn } from "../marketing/public-auth";
 import { CompanyWizard } from "./assess/CompanyWizard";
 import { ProjectWizard } from "./assess/ProjectWizard";
 import { ModeChooser, type AssessmentMode } from "./assess/ModeChooser";
@@ -70,14 +71,18 @@ export function AssessPage() {
     queryFn: () => healthApi.get(),
     retry: false,
   });
-  const isAuthenticatedMode = healthQuery.data?.deploymentMode === "authenticated";
+  const deploymentMode = healthQuery.data?.deploymentMode;
+  const isAuthenticatedMode = isAuthenticatedDeployment(deploymentMode);
   const sessionQuery = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
     enabled: isAuthenticatedMode,
     retry: false,
   });
-  const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
+  const loggedIn = isPublicVisitorLoggedIn({
+    deploymentMode,
+    hasSession: Boolean(sessionQuery.data),
+  });
 
   // Load past project assessments so we can show them on the chooser.
   const projectsQuery = useQuery<ProjectAssessmentSummary[]>({
