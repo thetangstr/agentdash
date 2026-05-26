@@ -4,7 +4,7 @@ How to take AgentDash from a clean clone to your first paying customer. Read top
 
 The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs none of this. Everything below is for a real cloud deployment with a real signed-up user paying through Stripe.
 
-> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), `agentdash setup` is enough — one prompt (pick adapter) and safe defaults for everything else; the founding-user account is created on the dashboard's sign-up form (Better Auth), not in the CLI. The wizard auto-detects Tailscale and picks `bind=tailnet` if available, else falls back to loopback. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
+> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), use the macOS/native runbook in [docs/deploy/macos.md](../docs/deploy/macos.md) for a durable launchd service. `agentdash setup` is still the right local/dev first-run path; production pilots should run `authenticated/private` with a real signed-up user and an operator-owned env file. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
 
 ---
 
@@ -83,12 +83,13 @@ CoS chat (`/cos`) routes replies through `server/src/services/dispatch-llm.ts` b
 | `claude_local` | Spawns `claude --print -` with conversation piped to stdin | the `claude` CLI on PATH; auth handled by `claude login` |
 | `hermes_local` | Spawns `hermes chat -q "<prompt>" -Q` | the `hermes` CLI on PATH; Hermes manages its own auth via `hermes setup` |
 
-Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) currently fall back to the `claude_api` path with a warning log; they get adapter coverage at agent-execution time, not at CoS-chat time. Without ANY of these, the dispatch falls back to a stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
+Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) are not CoS-chat adapters today. They get adapter coverage at agent-execution time, not at CoS-chat time. If `AGENTDASH_DEFAULT_ADAPTER` is set to an unsupported CoS-chat adapter, the server returns HTTP 501 instead of silently misrouting the turn. If `claude_api` is selected without `ANTHROPIC_API_KEY`, the dispatch returns the local stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
 
 | Var | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed for `claude_api` path or fallback) |
-| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` / `gemini_local` / `codex_local` / `opencode_local` / `acpx_local` / `cursor` (default `claude_api` if unset) |
+| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` for CoS chat (default `claude_api` if unset). Other adapters are for agent execution unless separately wired into CoS chat. |
+| `AGENTDASH_HERMES_COMMAND` | Optional absolute path to `hermes`; defaults to `hermes` on PATH. |
 
 Costs for the API path are minimal at chat scale — the system prompt is cached (`cache_control: ephemeral`), so each repeat turn within a conversation is ~10% the input cost of the first.
 

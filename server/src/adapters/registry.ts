@@ -113,6 +113,8 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 
+const DEFAULT_HERMES_COMMAND = "hermes";
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -138,13 +140,13 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
     config.hermesCommand = configCommand;
   }
   if (config && !config.hermesCommand) {
-    config.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
+    config.hermesCommand = DEFAULT_HERMES_COMMAND;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand && agentCommand) {
     agentAdapterConfig.hermesCommand = agentCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
-    agentAdapterConfig.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
+    agentAdapterConfig.hermesCommand = DEFAULT_HERMES_COMMAND;
   }
   // Codex command defaults (parallel to hermesCommand pattern)
   if (config && !config.command && configCommand) {

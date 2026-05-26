@@ -1,55 +1,96 @@
 ---
 title: macOS Native Deployment
-summary: Run AgentDash as a native macOS launchd service on Mac Mini
+summary: Run AgentDash as a native macOS launchd service on a Mac mini
 ---
 
-This guide covers running AgentDash natively on macOS using `launchd`, suitable for Mac Mini servers.
+This guide covers the MSP/local-server path: one Mac mini, private access over Tailscale or LAN, a real signed-in operator, and a launchd service that restarts AgentDash after crashes or reboots.
+
+For this deployment, use `authenticated/private`, not `local_trusted`, unless the app is only ever opened on the Mac mini itself.
 
 ## Prerequisites
 
-- macOS with Homebrew or direct Node.js 20+ installation
-- PostgreSQL 17 (see options below)
-- AgentDash source or release
+- macOS with Node.js 20+ and pnpm 9+
+- Git
+- Either Docker for the managed PostgreSQL option, or an already-running PostgreSQL 14+ server
+- Optional but recommended: Tailscale
+- Optional for real CoS replies: Hermes CLI installed and configured with `hermes setup`
 
-## Option A: Managed Install (Recommended)
+## Managed Install
 
-Use the installer script which handles building, environment setup, and service installation:
+From the checkout you want to run in production:
 
 ```sh
-# Clone the repo
-git clone https://github.com/thetangstr/agentdash.git
-cd agentdash/docker/launchd
+git clone https://github.com/thetangstr/agentdash.git ~/agentdash
+cd ~/agentdash
 
-# Install with managed PostgreSQL via Docker
-./install.sh --with-postgres
+# Recommended: start and use a local PostgreSQL 17 Docker container.
+./docker/launchd/install.sh --with-postgres
 
-# OR install with an already-running PostgreSQL
-./install.sh
+# Or, if PostgreSQL is already running at DATABASE_URL in the env file:
+./docker/launchd/install.sh
 ```
 
-### Setting Up
+The installer:
 
-After installation, edit the environment file and set `BETTER_AUTH_SECRET`:
+- runs `pnpm install --frozen-lockfile`
+- runs `pnpm build`
+- creates `~/.config/agentdash/agentdash.env` on first install
+- installs `~/Library/LaunchAgents/ai.agentdash.agent.plist`
+- runs the service from the checkout with `pnpm --filter @paperclipai/server exec tsx src/index.ts`
+
+If Hermes is on PATH during install, the env file records its absolute path in `AGENTDASH_HERMES_COMMAND`. If not, install Hermes later and set that variable manually.
+
+## Required Env Review
+
+Open the env file after install:
 
 ```sh
 nano ~/.config/agentdash/agentdash.env
 ```
 
-Generate a secret:
+Minimum production-pilot settings:
+
 ```sh
-openssl rand -base64 32
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
+NODE_ENV=production
+PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+PAPERCLIP_BIND=tailnet              # or loopback for same-machine only
+PAPERCLIP_TAILNET_BIND_HOST=<tailscale-ip>
+PAPERCLIP_PUBLIC_URL=http://<tailscale-ip>:3100
+PAPERCLIP_MIGRATION_AUTO_APPLY=true
+BETTER_AUTH_SECRET=<generated-secret>
+PAPERCLIP_AGENT_JWT_SECRET=<generated-secret>
+AGENTDASH_DEFAULT_ADAPTER=hermes_local
+AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes
 ```
 
-Then restart the service:
+Optional launch integrations:
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-...
+RESEND_API_KEY=re_...
+AGENTDASH_EMAIL_FROM='AgentDash <noreply@example.com>'
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRO_PRICE_ID=price_...
+BILLING_PUBLIC_BASE_URL=http://<tailscale-ip>:3100
+```
+
+Restart after changing the env file:
+
 ```sh
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 ```
 
-### Managing the Service
+## Service Commands
 
 ```sh
-# View logs
+# Logs
 tail -f ~/.agentdash/logs/agentdash.log
+tail -f ~/.agentdash/logs/agentdash.err
+
+# Health
+curl -fsS http://127.0.0.1:3100/api/health
 
 # Stop
 launchctl unload ~/Library/LaunchAgents/ai.agentdash.agent.plist
@@ -60,98 +101,64 @@ launchctl load ~/Library/LaunchAgents/ai.agentdash.agent.plist
 # Restart
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 
-# Uninstall
-./install.sh --uninstall
+# Uninstall service only; data is preserved.
+./docker/launchd/install.sh --uninstall
 ```
 
-## Option B: Manual Install
+## Launch Smoke
 
-### 1. Install PostgreSQL
+Run this before putting MSP users on the instance:
 
-**Via Docker** (recommended):
-```sh
-docker run -d \
-  --name agentdash-pg \
-  --restart unless-stopped \
-  -e POSTGRES_USER=paperclip \
-  -e POSTGRES_PASSWORD=paperclip \
-  -e POSTGRES_DB=paperclip \
-  -v ~/.agentdash/data/postgres:/var/lib/postgresql/data \
-  -p 5432:5432 \
-  postgres:17-alpine
-```
+1. `curl -fsS http://127.0.0.1:3100/api/health` returns healthy JSON.
+2. Open `PAPERCLIP_PUBLIC_URL` from another machine on the tailnet or LAN.
+3. Sign up with the founding operator account.
+4. Complete `/company-create -> /assess?onboarding=1 -> /cos`.
+5. Send one CoS message and confirm the reply is real, not the Anthropic stub string.
+6. Create one test company/agent/task using `hermes_local`.
+7. Confirm one agent wakeup/run exits successfully and appears in the dashboard transcript.
+8. If billing is enabled, run one Stripe checkout/webhook test and confirm the company tier updates.
 
-**Via Homebrew**:
-```sh
-brew install postgresql@17
-brew services start postgresql@17
-createdb -U postgres paperclip 2>/dev/null || true
-# Create user/database manually if needed
-psql -U postgres -c "CREATE USER paperclip WITH PASSWORD 'paperclip';" 2>/dev/null || true
-psql -U postgres -c "CREATE DATABASE paperclip OWNER paperclip;" 2>/dev/null || true
-```
-
-### 2. Build AgentDash
-
-```sh
-git clone https://github.com/thetangstr/agentdash.git
-cd agentdash
-pnpm install
-pnpm build --filter agentdash-server --filter agentdash-cli
-```
-
-### 3. Configure
-
-```sh
-mkdir -p ~/.config/agentdash
-cat > ~/.config/agentdash/agentdash.env << 'EOF'
-DATABASE_URL=postgres://paperclip:paperclip@localhost:5432/paperclip
-PORT=3100
-SERVE_UI=true
-PAPERCLIP_DEPLOYMENT_MODE=authenticated
-PAPERCLIP_DEPLOYMENT_EXPOSURE=private
-PAPERCLIP_TAILNET_BIND_HOST=100.83.171.56
-PAPERCLIP_MIGRATION_AUTO_APPLY=true
-BETTER_AUTH_SECRET=<generate with: openssl rand -base64 32>
-EOF
-chmod 600 ~/.config/agentdash/agentdash.env
-```
-
-### 4. Install launchd Service
-
-```sh
-# Copy and edit the plist
-sed "s|%%HOME%%|${HOME}|g" \
-  docker/launchd/ai.agentdash.agent.plist \
-  | sed "s|%%SHARE_DIR%%|/usr/local/share/agentdash|g" \
-  | sed "s|%%ENV_FILE%%|${HOME}/.config/agentdash/agentdash.env|g" \
-  | sed "s|%%LOG_DIR%%|${HOME}/.agentdash/logs|g" \
-  > ~/Library/LaunchAgents/ai.agentdash.agent.plist
-
-# Install server files
-sudo mkdir -p /usr/local/share/agentdash
-sudo rsync -av --delete \
-  --exclude='node_modules' --exclude='.git' --exclude='*.ts' \
-  server/dist/ /usr/local/share/agentdash/server/dist/
-
-# Load
-launchctl load ~/Library/LaunchAgents/ai.agentdash.agent.plist
-```
-
-## Two-Company Setup
-
-AgentDash supports multiple companies in the same database. Once logged in, you can create a second company via the UI at `Settings → Companies → New Company`.
-
-Each company has its own agents, issues, and billing. Shared infrastructure (PostgreSQL, the server) is shared across both.
-
-## Updating
+## Update
 
 ```sh
 cd ~/agentdash
-git pull
-pnpm build --filter agentdash-server --filter agentdash-cli
-sudo rsync -av --delete \
-  --exclude='node_modules' --exclude='.git' --exclude='*.ts' \
-  server/dist/ /usr/local/share/agentdash/server/dist/
+git fetch origin
+git checkout main
+git pull --ff-only
+pnpm install --frozen-lockfile
+pnpm build
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
+curl -fsS http://127.0.0.1:3100/api/health
 ```
+
+Record the deployed SHA:
+
+```sh
+git rev-parse HEAD
+```
+
+## Rollback
+
+```sh
+cd ~/agentdash
+git checkout <previous-good-sha>
+pnpm install --frozen-lockfile
+pnpm build
+launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
+curl -fsS http://127.0.0.1:3100/api/health
+```
+
+Do not roll back across migrations after customer data has changed unless you have a tested database restore point.
+
+## Backups
+
+Back up all of these for full local-instance disaster recovery:
+
+- `~/.config/agentdash/agentdash.env`
+- `~/.agentdash/instances/default/data/backups`
+- `~/.agentdash/instances/default/data/storage`
+- `~/.agentdash/instances/default/secrets/master.key`
+- `~/.agentdash/data/postgres` when using the Docker PostgreSQL option
+- the deployed checkout SHA from `~/agentdash`
+
+Database logical backups alone are not enough: uploads, workspaces, and the local encrypted secrets key live outside the database.

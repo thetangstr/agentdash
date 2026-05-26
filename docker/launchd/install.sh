@@ -1,6 +1,6 @@
 #!/bin/bash
 # AgentDash LaunchD Installation Script
-# Installs AgentDash as a macOS launchd service (per-user)
+# Installs AgentDash as a macOS launchd service (per-user).
 #
 # Usage: ./install.sh [--with-postgres]
 #
@@ -16,11 +16,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 AGENTDASH_HOME="${HOME}/.agentdash"
 CONFIG_DIR="${HOME}/.config/agentdash"
 DATA_DIR="${AGENTDASH_HOME}/data"
 LOG_DIR="${AGENTDASH_HOME}/logs"
-SHARE_DIR="/usr/local/share/agentdash"
 PLIST_SRC="${SCRIPT_DIR}/ai.agentdash.agent.plist"
 PLIST_DST="${HOME}/Library/LaunchAgents/ai.agentdash.agent.plist"
 ENV_FILE="${CONFIG_DIR}/agentdash.env"
@@ -38,6 +38,28 @@ need() {
     if ! command -v "$1" &>/dev/null; then
         error "Required: $1 (not found in PATH)"
     fi
+}
+
+generate_secret() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -base64 32
+        return
+    fi
+    node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64"))'
+}
+
+detect_tailnet_host() {
+    if command -v tailscale &>/dev/null; then
+        tailscale ip -4 2>/dev/null | awk 'NF { print $1; exit }'
+    fi
+}
+
+sed_escape() {
+    printf '%s' "$1" | sed 's/[&|]/\\&/g'
+}
+
+service_loaded() {
+    launchctl list 2>/dev/null | awk -v label="$LABEL" '$3 == label { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 # -------------------------------------------------------------------
@@ -63,7 +85,7 @@ done
 uninstall_service() {
     info "Stopping and removing AgentDash launchd service..."
 
-    if launchctl list | grep -q "^${LABEL}"; then
+    if service_loaded; then
         launchctl unload "$PLIST_DST" 2>/dev/null || true
         info "Service unloaded."
     else
@@ -87,15 +109,24 @@ uninstall_service() {
 # -------------------------------------------------------------------
 
 need node
+NODE_BIN="$(command -v node)"
 node_major=$(node --version | cut -d. -f1 | tr -d v)
 if (( node_major < 20 )); then
     warn "Node.js $(node --version) detected — Node 20+ recommended"
 fi
 need pnpm
+PNPM_BIN="$(command -v pnpm)"
+PATH_VALUE="$(dirname "$PNPM_BIN"):$(dirname "$NODE_BIN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Check Postgres
 check_postgres() {
-    PGPASSWORD=paperclip psql -h localhost -U paperclip -d paperclip -c "SELECT 1" &>/dev/null
+    if command -v psql &>/dev/null; then
+        PGPASSWORD=paperclip psql -h localhost -U paperclip -d paperclip -c "SELECT 1" &>/dev/null && return 0
+    fi
+    if command -v docker &>/dev/null && docker ps --format '{{.Names}}' | grep -q '^agentdash-pg$'; then
+        docker exec agentdash-pg pg_isready -U paperclip -d paperclip &>/dev/null && return 0
+    fi
+    return 1
 }
 
 if check_postgres; then
@@ -140,77 +171,26 @@ fi
 # -------------------------------------------------------------------
 
 info "Building AgentDash..."
-cd "$SCRIPT_DIR/../.."
+cd "$APP_DIR"
 
-# Build server + CLI packages
-pnpm build --filter agentdash-server || error "Server build failed"
-pnpm build --filter agentdash-cli    || error "CLI build failed"
+"$PNPM_BIN" install --frozen-lockfile || error "Dependency install failed"
+"$PNPM_BIN" build || error "Build failed"
 
 if [[ ! -d "server/dist" ]]; then
     error "Build failed: server/dist not found."
 fi
+if [[ ! -f "ui/dist/index.html" ]]; then
+    error "Build failed: ui/dist/index.html not found."
+fi
 info "Build OK."
 
 # -------------------------------------------------------------------
-# Install files
+# Prepare directories
 # -------------------------------------------------------------------
 
-info "Installing to $SHARE_DIR..."
-
-mkdir -p "$SHARE_DIR"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$LOG_DIR"
 mkdir -p "$(dirname "$PLIST_DST")"
-
-# Copy built artifacts
-rsync -av --delete \
-    --exclude='node_modules' \
-    --exclude='.git' \
-    --exclude='*.ts' \
-    --exclude='*.map' \
-    server/dist/ "${SHARE_DIR}/server/dist/"
-
-rsync -av --delete \
-    --exclude='node_modules' \
-    --exclude='.git' \
-    packages/db/dist/ "${SHARE_DIR}/packages/db/dist/" 2>/dev/null || true
-rsync -av --delete \
-    --exclude='node_modules' \
-    --exclude='.git' \
-    packages/shared/dist/ "${SHARE_DIR}/packages/shared/dist/" 2>/dev/null || true
-rsync -av --delete \
-    --exclude='node_modules' \
-    --exclude='.git' \
-    packages/adapters/dist/ "${SHARE_DIR}/packages/adapters/dist/" 2>/dev/null || true
-
-# Copy UI dist if available
-if [[ -d "ui-dist" ]]; then
-    rsync -av --delete ui-dist/ "${SHARE_DIR}/ui-dist/"
-elif [[ -d "packages/ui/dist" ]]; then
-    rsync -av --delete packages/ui/dist/ "${SHARE_DIR}/ui-dist/"
-fi
-
-# Copy node_modules needed at runtime (better-sqlite3, drizzle, etc.)
-# These are needed by the server at runtime
-if [[ -d "node_modules/.pnpm" ]]; then
-    mkdir -p "${SHARE_DIR}/node_modules"
-    # Copy only the packages the server actually needs at runtime
-    for pkg in drizzle-orm better-sqlite3 drizzle-driver-pg-like postgres pg pg-native \
-                better-auth @auth/core better-sqlite3-admitter \
-                embedded-postgres ws express cors helmet \
-                ; do
-        if [[ -d "node_modules/${pkg}" ]]; then
-            rsync -av --delete node_modules/"${pkg}" "${SHARE_DIR}/node_modules/" 2>/dev/null || true
-        fi
-        # Also check pnpm store
-        pnpm_path=$(pnpm ls --depth=0 "${pkg}" --json 2>/dev/null | grep -o '"path":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -n "${pnpm_path}" && -d "${pnpm_path}" ]]; then
-            rsync -av --delete "${pnpm_path}" "${SHARE_DIR}/node_modules/" 2>/dev/null || true
-        fi
-    done
-fi
-
-info "Installed to $SHARE_DIR"
 
 # -------------------------------------------------------------------
 # Create env file
@@ -219,7 +199,18 @@ info "Installed to $SHARE_DIR"
 if [[ ! -f "$ENV_FILE" ]]; then
     info "Creating $ENV_FILE..."
     mkdir -p "$CONFIG_DIR"
-    cat > "$ENV_FILE" << 'ENVVARS'
+    BETTER_AUTH_SECRET_VALUE="$(generate_secret)"
+    AGENT_JWT_SECRET_VALUE="$(generate_secret)"
+    HERMES_COMMAND_VALUE="$(command -v hermes 2>/dev/null || true)"
+    TAILNET_HOST_VALUE="$(detect_tailnet_host || true)"
+    if [[ -n "$TAILNET_HOST_VALUE" ]]; then
+        BIND_VALUE="tailnet"
+        PUBLIC_URL_VALUE="http://${TAILNET_HOST_VALUE}:3100"
+    else
+        BIND_VALUE="loopback"
+        PUBLIC_URL_VALUE="http://127.0.0.1:3100"
+    fi
+    cat > "$ENV_FILE" << ENVVARS
 # AgentDash environment — loaded by the launchd service
 # Edit this file to configure your deployment.
 
@@ -227,27 +218,43 @@ if [[ ! -f "$ENV_FILE" ]]; then
 DATABASE_URL=postgres://paperclip:paperclip@localhost:5432/paperclip
 
 # Server
+NODE_ENV=production
 PORT=3100
 SERVE_UI=true
 
 # Deployment
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+PAPERCLIP_BIND=${BIND_VALUE}
+PAPERCLIP_PUBLIC_URL=${PUBLIC_URL_VALUE}
 
-# Auth — REQUIRED: generate with: openssl rand -base64 32
-BETTER_AUTH_SECRET=
+# Auth
+BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET_VALUE}
+PAPERCLIP_AGENT_JWT_SECRET=${AGENT_JWT_SECRET_VALUE}
 
-# Tailscale bind — set to your Mac Mini's Tailscale IP
-PAPERCLIP_TAILNET_BIND_HOST=100.83.171.56
+# Tailscale bind. Leave blank for loopback-only, or set to the Mac mini's
+# Tailscale IPv4 and set PAPERCLIP_BIND=tailnet.
+PAPERCLIP_TAILNET_BIND_HOST=${TAILNET_HOST_VALUE}
 
 # Auto-apply DB migrations on startup
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
-# Optional: generate secrets with: openssl rand -base64 32
-# PAPERCLIP_AGENT_JWT_SECRET=
+# CoS chat adapter. Only claude_api, claude_local, and hermes_local are
+# supported for CoS chat. Agent execution can use additional adapters.
+AGENTDASH_DEFAULT_ADAPTER=hermes_local
+AGENTDASH_HERMES_COMMAND=${HERMES_COMMAND_VALUE}
+
+# Optional production integrations.
+# ANTHROPIC_API_KEY=
+# RESEND_API_KEY=
+# AGENTDASH_EMAIL_FROM='AgentDash <noreply@example.com>'
+# STRIPE_SECRET_KEY=
+# STRIPE_WEBHOOK_SECRET=
+# STRIPE_PRO_PRICE_ID=
+# BILLING_PUBLIC_BASE_URL=${PUBLIC_URL_VALUE}
 ENVVARS
     chmod 600 "$ENV_FILE"
-    info "$ENV_FILE created — set BETTER_AUTH_SECRET before starting."
+    info "$ENV_FILE created."
 else
     info "Using existing $ENV_FILE"
 fi
@@ -258,8 +265,14 @@ fi
 
 info "Installing launchd service..."
 
-# Generate plist from template, substituting HOME
-sed "s|%%HOME%%|${HOME}|g; s|%%SHARE_DIR%%|${SHARE_DIR}|g; s|%%ENV_FILE%%|${ENV_FILE}|g; s|%%LOG_DIR%%|${LOG_DIR}|g" \
+HOME_ESCAPED="$(sed_escape "$HOME")"
+APP_DIR_ESCAPED="$(sed_escape "$APP_DIR")"
+ENV_FILE_ESCAPED="$(sed_escape "$ENV_FILE")"
+LOG_DIR_ESCAPED="$(sed_escape "$LOG_DIR")"
+PNPM_BIN_ESCAPED="$(sed_escape "$PNPM_BIN")"
+PATH_VALUE_ESCAPED="$(sed_escape "$PATH_VALUE")"
+
+sed "s|%%HOME%%|${HOME_ESCAPED}|g; s|%%APP_DIR%%|${APP_DIR_ESCAPED}|g; s|%%ENV_FILE%%|${ENV_FILE_ESCAPED}|g; s|%%LOG_DIR%%|${LOG_DIR_ESCAPED}|g; s|%%PNPM_BIN%%|${PNPM_BIN_ESCAPED}|g; s|%%PATH_VALUE%%|${PATH_VALUE_ESCAPED}|g" \
     "$PLIST_SRC" > "$PLIST_DST"
 chmod 644 "$PLIST_DST"
 
@@ -276,15 +289,16 @@ launchctl load "$PLIST_DST"
 # Wait a moment and verify
 sleep 2
 
-if launchctl list | grep -q "^${LABEL}"; then
+if service_loaded; then
     info ""
     info "AgentDash is installed and running."
+    info "  App dir: ${APP_DIR}"
     info "  Logs:    tail -f ${LOG_DIR}/agentdash.log"
     info "  Stop:    launchctl unload ${PLIST_DST}"
     info "  Restart: launchctl kickstart -k gui/\$(id -u)/${LABEL}"
     info "  Uninstall: ${SCRIPT_DIR}/install.sh --uninstall"
     info ""
-    info "IMPORTANT: Edit ${ENV_FILE} and set BETTER_AUTH_SECRET, then restart the service."
+    info "Health:  curl -fsS http://127.0.0.1:3100/api/health"
 else
     error "Service failed to load. Check: tail -50 ${LOG_DIR}/agentdash.err"
 fi
