@@ -6,6 +6,8 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini is reachable and the PR branch builds there, but the live `3100` service is still a dev-runner from an existing checkout. It is not yet the launchd production install.
+
 ## P0 Gates
 
 These must be complete before the first design partner is asked to use the instance.
@@ -19,6 +21,11 @@ These must be complete before the first design partner is asked to use the insta
 
 - [ ] Install on the target Mac mini.
   - Command: `./docker/launchd/install.sh --with-postgres`
+  - Current target evidence:
+    - SSH access confirmed for `maxiaoer@192.168.86.48`.
+    - Isolated launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` builds at `93ad33590a21ed7fdd2d4355735298e250fea23f`.
+    - Existing `3100` health check passes, but from a dev-runner process rather than launchd.
+    - `scripts/msp-mac-mini-readiness.sh` exits NOT READY before cutover because launchd/env/Hermes/private URL are not configured.
   - Evidence required:
     - `launchctl list | grep ai.agentdash.agent`
     - `curl -fsS http://127.0.0.1:3100/api/health`
@@ -27,7 +34,7 @@ These must be complete before the first design partner is asked to use the insta
 
 - [ ] Verify Hermes harness on the target Mac mini.
   - Commands:
-    - `which hermes`
+    - `which hermes` or use the known absolute command path `/Users/maxiaoer/.local/bin/hermes`
     - `hermes setup`
     - confirm `AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes` in `~/.config/agentdash/agentdash.env`
     - `scripts/msp-mac-mini-readiness.sh` reports Hermes command wiring as pass.
@@ -87,6 +94,7 @@ These should be complete before week-one usage expands beyond the initial operat
 
 - [ ] Security pass.
   - Rotate any secrets created during testing.
+  - Rotate any GitHub token that may have been embedded in target git config before the sanitized remote update.
   - Confirm `~/.config/agentdash/agentdash.env` is mode `600`.
   - Confirm only intended users have Mac mini user account access.
   - Confirm Tailscale ACLs/private network exposure are correct.
@@ -109,12 +117,19 @@ Completed on the launch candidate before PR:
 - `bash -n scripts/msp-mac-mini-readiness.sh`
 - isolated local TSX server smoke against `/api/health` and `/`.
 
+Completed on the target Mac mini without mutating the current `3100` runtime:
+
+- SSH reachability and read-only health audit.
+- `pnpm install --frozen-lockfile` in isolated checkout `/Users/maxiaoer/workspace/agentdash_msp_launch`.
+- `pnpm build` in isolated checkout at commit `93ad33590a21ed7fdd2d4355735298e250fea23f`.
+- `scripts/msp-mac-mini-readiness.sh` read-only pre-cutover check, expected NOT READY.
+
 ## External Blockers
 
-These cannot be completed from the local checkout alone:
+These cannot be completed from the local checkout alone or should wait for a controlled cutover window:
 
-- target Mac mini shell access
 - Hermes credentials/session on that Mac mini
 - partner Tailscale/LAN device access
+- replacing the active `3100` dev-runner with the launchd production service
 - Stripe and Resend production/test account decisions
 - operator confirmation of design-partner kickoff cadence.
