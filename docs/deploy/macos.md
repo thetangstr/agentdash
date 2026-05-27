@@ -13,7 +13,7 @@ For this deployment, use `authenticated/private`, not `local_trusted`, unless th
 - Git
 - Either Docker for the managed PostgreSQL option, or an already-running PostgreSQL 14+ server
 - Optional but recommended: Tailscale
-- Optional for real CoS replies: Hermes CLI installed and configured with `hermes setup`
+- Hermes CLI installed and configured with `hermes setup`. For this MSP pilot path, Hermes is the local agent execution harness under AgentDash.
 
 ## Managed Install
 
@@ -38,7 +38,7 @@ The installer:
 - installs `~/Library/LaunchAgents/ai.agentdash.agent.plist`
 - runs the service from the checkout with `pnpm --filter @paperclipai/server exec tsx src/index.ts`
 
-If Hermes is on PATH during install, the env file records its absolute path in `AGENTDASH_HERMES_COMMAND`. If not, install Hermes later and set that variable manually.
+If Hermes is on PATH during install, the env file records its absolute path in `AGENTDASH_HERMES_COMMAND`. If not, install Hermes later, run `hermes setup`, and set that variable manually before the design partner uses the instance.
 
 ## Required Env Review
 
@@ -63,6 +63,8 @@ PAPERCLIP_AGENT_JWT_SECRET=<generated-secret>
 AGENTDASH_DEFAULT_ADAPTER=hermes_local
 AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes
 ```
+
+`hermes_local` is the default local harness for this pilot: AgentDash remains the product/control plane, while Hermes executes local agent work and can power CoS chat when selected.
 
 Optional launch integrations:
 
