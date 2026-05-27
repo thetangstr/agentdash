@@ -6,7 +6,7 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
-**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean at PR head `fdbb150dfb76736d8a78b702e54d01259730ce23`; the runtime-critical Hermes/launchd fix landed in `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean on branch `codex/msp-mac-mini-launch`; the runtime-critical Hermes/launchd fix landed in `f379ce25887fd69b64f347a3f027a3d1c2187d51`, and the CI/browser-suite proof commit is `fdbb150dfb76736d8a78b702e54d01259730ce23`.
 
 ## P0 Gates
 
@@ -23,7 +23,7 @@ These must be complete before the first design partner is asked to use the insta
   - Command: `bash ./docker/launchd/install.sh` after starting Homebrew PostgreSQL 17.
   - Evidence:
     - SSH access confirmed for `maxiaoer@192.168.86.48`.
-    - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean at `fdbb150dfb76736d8a78b702e54d01259730ce23`.
+    - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean on branch `codex/msp-mac-mini-launch`.
     - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
     - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
     - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` exits with `24 pass, 9 warn, 0 fail`.
@@ -90,7 +90,7 @@ These should be complete before week-one usage expands beyond the initial operat
   - Completed:
     - Manual backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`.
     - Runtime-critical deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
-    - Current launch checkout SHA recorded after CI-only fast-forward: `fdbb150dfb76736d8a78b702e54d01259730ce23`.
+    - CI/browser-suite proof SHA recorded: `fdbb150dfb76736d8a78b702e54d01259730ce23`.
     - Non-destructive rollback precheck passed: target checkout is clean, launchd is loaded, latest backup exists, env mode is `600`, and local health is ready.
     - Rollback runbook added: `doc/plans/2026-05-27-mac-mini-rollback-runbook.md`.
   - Remaining:
@@ -146,7 +146,7 @@ Completed on the launch candidate before PR:
 - `bash -n scripts/msp-mac-mini-readiness.sh`
 - isolated local TSX server smoke against `/api/health` and `/`.
 
-Completed in PR CI on latest head `fdbb150dfb76736d8a78b702e54d01259730ce23`:
+Completed in PR CI on CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23`:
 
 - `check`
 - `audit`
@@ -168,7 +168,7 @@ Completed on the target Mac mini after cutover:
 
 - Launchd service installed and loaded from `/Users/maxiaoer/workspace/agentdash_msp_launch`.
 - `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
-- Target checkout fast-forwarded cleanly to `fdbb150dfb76736d8a78b702e54d01259730ce23`.
+- Target checkout fast-forwarded cleanly on branch `codex/msp-mac-mini-launch`.
 - Health passed locally and over LAN.
 - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` returned `24 pass, 9 warn, 0 fail`.
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.

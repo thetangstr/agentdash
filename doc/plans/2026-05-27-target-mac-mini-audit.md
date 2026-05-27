@@ -22,7 +22,8 @@ Remaining launch work is outside the code/host preflight: prove login from the a
 - Isolated launch checkout created at:
   - `/Users/maxiaoer/workspace/agentdash_msp_launch`
   - branch `codex/msp-mac-mini-launch`
-  - current clean checkout `fdbb150dfb76736d8a78b702e54d01259730ce23`
+  - clean checkout on branch `codex/msp-mac-mini-launch`
+  - CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23`
   - runtime-critical Hermes/launchd fix commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`
 - Target isolated build passed:
   - `pnpm install --frozen-lockfile`
@@ -36,7 +37,7 @@ Cutover evidence:
 
 - Legacy dev-runner launch agents were disabled before loading the new service.
 - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
-- Target checkout fast-forwarded cleanly to PR head `fdbb150dfb76736d8a78b702e54d01259730ce23`.
+- Target checkout fast-forwarded cleanly on branch `codex/msp-mac-mini-launch`.
 - The launchd plist exists at `~/Library/LaunchAgents/ai.agentdash.agent.plist`.
 - The env file exists at `~/.config/agentdash/agentdash.env` with mode `600`.
 - Health returns:
