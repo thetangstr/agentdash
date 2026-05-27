@@ -38,6 +38,8 @@ import {
   setOverridePaused,
 } from "../adapters/registry.js";
 
+const originalHermesCommand = process.env.AGENTDASH_HERMES_COMMAND;
+
 const externalAdapter: ServerAdapterModule = {
   type: "external_test",
   execute: async () => ({
@@ -57,12 +59,18 @@ const externalAdapter: ServerAdapterModule = {
 
 describe("server adapter registry", () => {
   beforeEach(() => {
+    delete process.env.AGENTDASH_HERMES_COMMAND;
     unregisterServerAdapter("external_test");
     unregisterServerAdapter("claude_local");
     setOverridePaused("claude_local", false);
   });
 
   afterEach(() => {
+    if (originalHermesCommand === undefined) {
+      delete process.env.AGENTDASH_HERMES_COMMAND;
+    } else {
+      process.env.AGENTDASH_HERMES_COMMAND = originalHermesCommand;
+    }
     unregisterServerAdapter("external_test");
     unregisterServerAdapter("claude_local");
     setOverridePaused("claude_local", false);
@@ -382,6 +390,35 @@ describe("server adapter registry", () => {
     const [patchedCtx] = hermesExecuteMock.mock.calls[0];
     expect(patchedCtx.config.hermesCommand).toBe("hermes");
     expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("hermes");
+  });
+
+  it("honors AGENTDASH_HERMES_COMMAND for Hermes command normalization", async () => {
+    process.env.AGENTDASH_HERMES_COMMAND = "/Users/example/.local/bin/hermes";
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+      authToken: "agent-run-jwt",
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.config.hermesCommand).toBe("/Users/example/.local/bin/hermes");
+    expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("/Users/example/.local/bin/hermes");
   });
 
   it("passes the original Hermes context through when authToken is absent", async () => {

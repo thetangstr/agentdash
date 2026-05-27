@@ -115,6 +115,13 @@ import { httpAdapter } from "./http/index.js";
 
 const DEFAULT_HERMES_COMMAND = "hermes";
 
+function defaultHermesCommand(): string {
+  const configured = process.env.AGENTDASH_HERMES_COMMAND;
+  return typeof configured === "string" && configured.trim().length > 0
+    ? configured.trim()
+    : DEFAULT_HERMES_COMMAND;
+}
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -135,18 +142,19 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
     typeof agentAdapterConfig?.command === "string" && agentAdapterConfig.command.length > 0
       ? agentAdapterConfig.command
       : undefined;
+  const fallbackHermesCommand = defaultHermesCommand();
 
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
   }
   if (config && !config.hermesCommand) {
-    config.hermesCommand = DEFAULT_HERMES_COMMAND;
+    config.hermesCommand = fallbackHermesCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand && agentCommand) {
     agentAdapterConfig.hermesCommand = agentCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
-    agentAdapterConfig.hermesCommand = DEFAULT_HERMES_COMMAND;
+    agentAdapterConfig.hermesCommand = fallbackHermesCommand;
   }
   // Codex command defaults (parallel to hermesCommand pattern)
   if (config && !config.command && configCommand) {

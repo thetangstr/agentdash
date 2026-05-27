@@ -116,7 +116,7 @@ if (( node_major < 20 )); then
 fi
 need pnpm
 PNPM_BIN="$(command -v pnpm)"
-PATH_VALUE="$(dirname "$PNPM_BIN"):$(dirname "$NODE_BIN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH_VALUE="$(dirname "$PNPM_BIN"):$(dirname "$NODE_BIN"):${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Check Postgres
 check_postgres() {
