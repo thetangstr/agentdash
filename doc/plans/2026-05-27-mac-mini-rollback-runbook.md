@@ -3,7 +3,7 @@
 **Target:** `maxiaoer@192.168.86.48`  
 **Service:** `ai.agentdash.agent`  
 **Launch checkout:** `/Users/maxiaoer/workspace/agentdash_msp_launch`  
-**Current deployed code SHA:** `f379ce25887fd69b64f347a3f027a3d1c2187d51`
+**Current launch checkout SHA:** `cd47db96bd72d3f471f3f381107b45649640e763`
 
 Use this only for the first MSP design-partner Mac mini path. It assumes the instance uses the Homebrew PostgreSQL 17 database configured in `~/.config/agentdash/agentdash.env`.
 
@@ -20,16 +20,18 @@ git rev-parse HEAD
 git status --short
 launchctl list | awk '$3 == "ai.agentdash.agent" { print }'
 find "$HOME/.agentdash/instances/default/data/backups" -type f -name "*.sql*" -print | sort | tail -n 3
+find "$HOME/.agentdash/instances/default/data/backups" -type f -name "agentdash-instance-files-*.tgz" -print | sort | tail -n 3
 curl -fsS http://127.0.0.1:3100/api/health
 REMOTE
 ```
 
 Dry-run evidence captured on 2026-05-27:
 
-- target checkout HEAD: `f379ce25887fd69b64f347a3f027a3d1c2187d51`
+- target checkout HEAD: `cd47db96bd72d3f471f3f381107b45649640e763`
 - target checkout dirty entries: `0`
 - launchd service loaded: `ai.agentdash.agent`
-- latest database backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`
+- latest database backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz`
+- latest instance-file backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz`
 - env file mode: `600`
 - local health: authenticated/ready
 
@@ -71,7 +73,7 @@ ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-backup_file="/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz"
+backup_file="/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz"
 
 launchctl unload "$HOME/Library/LaunchAgents/ai.agentdash.agent.plist" 2>/dev/null || true
 dropdb -h localhost -U paperclip paperclip
@@ -84,7 +86,18 @@ REMOTE
 
 ## Instance File Backup
 
-Database backups do not include the env file, local storage, or local secret material. Before expanding usage beyond the first operator, capture these files:
+Database backups do not include the env file, local storage, or local secret material. The readiness script can create the on-host archive without copying secrets into the repo:
+
+```sh
+ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
+set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+cd "$HOME/workspace/agentdash_msp_launch"
+scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100
+REMOTE
+```
+
+Manual fallback:
 
 ```sh
 ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'

@@ -23,8 +23,9 @@ Remaining launch work is outside the code/host preflight: prove login from the a
   - `/Users/maxiaoer/workspace/agentdash_msp_launch`
   - branch `codex/msp-mac-mini-launch`
   - clean checkout on branch `codex/msp-mac-mini-launch`
-  - CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23`
   - runtime-critical Hermes/launchd fix commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`
+  - CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23`
+  - latest readiness hardening evidence commit `cd47db96bd72d3f471f3f381107b45649640e763`
 - Target isolated build passed:
   - `pnpm install --frozen-lockfile`
   - `pnpm build`
@@ -53,12 +54,12 @@ Latest readiness was run from the launch checkout after cutover:
 
 ```sh
 cd ~/workspace/agentdash_msp_launch
-scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100
+scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100
 ```
 
 Result:
 
-- `Summary: 26 pass, 9 warn, 0 fail`
+- `Summary: 29 pass, 12 warn, 0 fail`
 - `Status: Code/host preflight passed.`
 
 Remaining warnings:
@@ -66,6 +67,7 @@ Remaining warnings:
 - Tailscale is not available on PATH; current proof is private LAN.
 - `PAPERCLIP_BIND=lan`; partner-device private access still needs direct proof.
 - Hermes product proof is manual from the script's perspective; evidence is recorded below.
+- instance backup source paths for config, local storage, and secrets master key do not exist yet.
 - local storage and secrets master key do not exist yet.
 - Stripe is not configured; launch posture is managed design-partner pilot.
 - Resend is not configured; launch posture is manual invites/password resets.
@@ -73,12 +75,19 @@ Remaining warnings:
 Manual backup evidence:
 
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100`
-- Backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`
+- Database backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz`
+- `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100`
+- Instance-file backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz`
 
 Local account evidence:
 
 - Readiness inventory detected one normal local macOS user: `maxiaoer 501`.
 - Readiness ran as `maxiaoer`, the only detected normal local user.
+
+Git remote evidence:
+
+- The target checkout remote is sanitized to `https://github.com/thetangstr/agentdash.git`.
+- The readiness script reports `Git remotes do not contain embedded credentials`.
 
 ## Hermes Product Proof
 
@@ -100,7 +109,7 @@ Agent execution proof:
 
 ## Security Note
 
-One target checkout had a GitHub token embedded in its `origin` remote URL. The remote was sanitized to `https://github.com/thetangstr/agentdash.git`. Rotate any GitHub token that may have been stored in the target git config before partner use.
+One target checkout had a GitHub token embedded in its `origin` remote URL. The remote was sanitized to `https://github.com/thetangstr/agentdash.git`, and readiness now checks for credential-bearing remotes. Rotate any GitHub token that may have been stored in the target git config before partner use.
 
 ## Remaining Cutover Gates
 
