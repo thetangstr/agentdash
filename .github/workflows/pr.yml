@@ -133,8 +133,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Install Playwright
-        run: npx playwright install --with-deps --only-shell chromium
+      - name: Verify system Chrome
+        run: google-chrome --version
 
       - name: Generate Paperclip config
         run: |
@@ -182,6 +182,7 @@ jobs:
           # Disable rate limiting for the e2e run; the per-actor limit
           # is a production-traffic concern, not a test concern.
           AGENTDASH_RATE_LIMIT_DISABLED: "true"
+          PLAYWRIGHT_CHROMIUM_CHANNEL: "chrome"
           # Successor of #311 (round 3) / closes #315: the
           # onboarding.spec wizard test picks "Claude Code" (claude_local)
           # and OnboardingWizard.handleStep2Next runs a real adapter
