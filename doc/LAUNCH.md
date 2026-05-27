@@ -6,6 +6,8 @@ The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs non
 
 > **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), use the macOS/native runbook in [docs/deploy/macos.md](../docs/deploy/macos.md) for a durable launchd service. `agentdash setup` is still the right local/dev first-run path; production pilots should run `authenticated/private` with a real signed-up user and an operator-owned env file. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
 
+For the first MSP Mac mini design partner, also capture `scripts/msp-mac-mini-readiness.sh` output and follow `doc/plans/2026-05-27-msp-design-partner-operating-plan.md` before inviting partner users.
+
 ---
 
 ## 1. Pick a cloud host and provision Postgres

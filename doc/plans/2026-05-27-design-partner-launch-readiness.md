@@ -23,12 +23,14 @@ These must be complete before the first design partner is asked to use the insta
     - `launchctl list | grep ai.agentdash.agent`
     - `curl -fsS http://127.0.0.1:3100/api/health`
     - `tail -50 ~/.agentdash/logs/agentdash.err` shows no startup failure.
+    - `scripts/msp-mac-mini-readiness.sh` exits with no P0 failures after install.
 
 - [ ] Verify Hermes harness on the target Mac mini.
   - Commands:
     - `which hermes`
     - `hermes setup`
     - confirm `AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes` in `~/.config/agentdash/agentdash.env`
+    - `scripts/msp-mac-mini-readiness.sh` reports Hermes command wiring as pass.
   - Product proof:
     - one CoS reply through `AGENTDASH_DEFAULT_ADAPTER=hermes_local`
     - one agent task/wakeup/run through `hermes_local`
@@ -40,6 +42,7 @@ These must be complete before the first design partner is asked to use the insta
     - `PAPERCLIP_PUBLIC_URL` points at the reachable Mac mini URL.
     - login works from non-localhost.
     - sign-up exposure is intentional; no public unauthenticated access path.
+    - capture `scripts/msp-mac-mini-readiness.sh --base-url <partner-visible-url>` output.
 
 - [ ] Run end-to-end launch smoke.
   - Steps:
@@ -57,7 +60,7 @@ These must be complete before the first design partner is asked to use the insta
 These should be complete before week-one usage expands beyond the initial operator.
 
 - [ ] Backup and rollback rehearsal.
-  - Run one manual database backup.
+  - Run one manual database backup with `scripts/msp-mac-mini-readiness.sh --run-backup`.
   - Confirm backup file exists under `~/.agentdash/instances/default/data/backups`.
   - Record deployed SHA.
   - Rehearse rollback command sequence without destroying data.
@@ -88,21 +91,11 @@ These should be complete before week-one usage expands beyond the initial operat
   - Confirm only intended users have Mac mini user account access.
   - Confirm Tailscale ACLs/private network exposure are correct.
   - Confirm logs do not expose secrets.
+  - Evidence: `scripts/msp-mac-mini-readiness.sh` security/log checks pass.
 
-- [ ] Partner success operating plan.
-  - Define week-one workflows:
-    - Ticket Concierge
-    - Daily MSP Ops Briefing
-    - Client Value Report
-  - Define issue-reporting channel and response SLA.
-  - Define daily check-in owner and time.
-  - Define data boundaries: what client data is allowed during the pilot.
-  - Define success metrics:
-    - time to first useful CoS response
-    - number of tickets triaged
-    - agent run success rate
-    - operator time saved estimate
-    - partner-reported trust/friction notes.
+- [x] Partner success operating plan prepared.
+  - Evidence: `doc/plans/2026-05-27-msp-design-partner-operating-plan.md`.
+  - Still required before usage expands: fill in named partner/operator owners and confirm the issue channel/check-in time with the design partner.
 
 ## Current Local Verification
 
@@ -113,6 +106,7 @@ Completed on the launch candidate before PR:
 - `pnpm build`
 - focused Hermes/launchd/onboard Vitest suites
 - `bash -n docker/launchd/install.sh`
+- `bash -n scripts/msp-mac-mini-readiness.sh`
 - isolated local TSX server smoke against `/api/health` and `/`.
 
 ## External Blockers

@@ -107,6 +107,31 @@ launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 ./docker/launchd/install.sh --uninstall
 ```
 
+## Readiness Evidence
+
+After install, collect one readiness artifact before inviting the design partner:
+
+```sh
+cd ~/agentdash
+scripts/msp-mac-mini-readiness.sh | tee ~/agentdash-readiness-$(date +%Y%m%d-%H%M%S).txt
+```
+
+The collector is read-only by default. It checks the launchd service, local health, core authenticated/private env values, Hermes command wiring, Tailscale/private URL posture, recent logs, backup posture, and billing/email posture. It exits nonzero when a P0 host/configuration gate fails.
+
+For the P1 backup rehearsal, run it with the explicit backup flag:
+
+```sh
+scripts/msp-mac-mini-readiness.sh --run-backup | tee ~/agentdash-readiness-backup-$(date +%Y%m%d-%H%M%S).txt
+```
+
+If the partner-visible URL differs from `PAPERCLIP_PUBLIC_URL`, test that URL explicitly:
+
+```sh
+scripts/msp-mac-mini-readiness.sh --base-url http://<tailscale-or-lan-host>:3100
+```
+
+This script does not replace the two product proofs: a real Hermes-backed CoS reply and one completed `hermes_local` agent run with a visible transcript.
+
 ## Launch Smoke
 
 Run this before putting MSP users on the instance:
@@ -119,6 +144,8 @@ Run this before putting MSP users on the instance:
 6. Create one test company/agent/task using `hermes_local`.
 7. Confirm one agent wakeup/run exits successfully and appears in the dashboard transcript.
 8. If billing is enabled, run one Stripe checkout/webhook test and confirm the company tier updates.
+
+For the first MSP design partner, use the operating plan in [doc/plans/2026-05-27-msp-design-partner-operating-plan.md](../../doc/plans/2026-05-27-msp-design-partner-operating-plan.md) to keep week-one usage focused on human-reviewed Ticket Concierge, Daily MSP Ops Briefing, and Client Value Report workflows.
 
 ## Update
 
