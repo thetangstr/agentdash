@@ -262,7 +262,7 @@ check_launchd() {
 check_logs() {
   local err_log="${LOG_DIR}/agentdash.err"
   local app_log="${LOG_DIR}/agentdash.log"
-  local secret_pattern='(sk-ant-|sk_live_|sk_test_|whsec_|re_[A-Za-z0-9]|BETTER_AUTH_SECRET=|PAPERCLIP_AGENT_JWT_SECRET=|PAPERCLIP_SECRETS_MASTER_KEY)'
+  local secret_pattern='(sk-ant-|sk_live_|sk_test_|whsec_|re_[A-Za-z0-9_-]{20,}|BETTER_AUTH_SECRET=|PAPERCLIP_AGENT_JWT_SECRET=|PAPERCLIP_SECRETS_MASTER_KEY)'
 
   if [[ -f "$err_log" ]]; then
     if tail -50 "$err_log" | grep -Eiq '(error|exception|traceback|EADDRINUSE|Refusing to start|Cannot find module|Unhandled)'; then
