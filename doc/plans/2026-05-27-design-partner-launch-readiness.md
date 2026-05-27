@@ -90,21 +90,23 @@ These should be complete before week-one usage expands beyond the initial operat
   - Completed:
     - Manual backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`.
     - Deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+    - Non-destructive rollback precheck passed: target checkout is clean, launchd is loaded, latest backup exists, env mode is `600`, and local health is ready.
+    - Rollback runbook added: `doc/plans/2026-05-27-mac-mini-rollback-runbook.md`.
   - Remaining:
-    - rollback command rehearsal.
-    - non-database asset backup procedure confirmation.
+    - execute the rollback command during a maintenance window only if rollback becomes necessary.
+    - capture non-database asset backup after storage or local secret material exists.
 
-- [ ] Decide billing posture.
-  - Option A: managed design-partner pilot, Stripe disabled/not used.
-  - Option B: Stripe configured and tested:
+- [x] Decide billing posture.
+  - Decision: managed design-partner pilot; Stripe is disabled/not used for week one.
+  - Revisit Stripe setup only before self-serve billing or paid expansion:
     - `STRIPE_SECRET_KEY`
     - `STRIPE_WEBHOOK_SECRET`
     - `STRIPE_PRO_PRICE_ID`
     - checkout/webhook test confirms company tier update.
 
-- [ ] Decide email posture.
-  - Option A: direct/manual invites and password reset handled by operator.
-  - Option B: Resend configured and tested:
+- [x] Decide email posture.
+  - Decision: direct/manual invites and password reset handled by the operator for week one.
+  - Revisit Resend setup only before broader user rollout:
     - `RESEND_API_KEY`
     - `AGENTDASH_EMAIL_FROM`
     - invite/welcome/password reset email reaches the partner.
