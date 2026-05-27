@@ -2,7 +2,8 @@
 # Readiness evidence collector for the first MSP Mac mini design-partner launch.
 #
 # Default mode is read-only. Use --run-backup to create a manual logical database
-# backup as part of the P1 backup rehearsal.
+# backup and --run-instance-backup to archive local instance files as part of the
+# P1 backup rehearsal.
 
 set -u
 
@@ -20,8 +21,10 @@ ENV_FILE="${AGENTDASH_ENV_FILE:-${CONFIG_DIR}/agentdash.env}"
 LOG_DIR="${AGENTDASH_LOG_DIR:-${AGENTDASH_HOME}/logs}"
 PLIST_FILE="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 BACKUP_DIR="${AGENTDASH_BACKUP_DIR:-${AGENTDASH_HOME}/instances/default/data/backups}"
+INSTANCE_BACKUP_DIR="${AGENTDASH_INSTANCE_BACKUP_DIR:-${BACKUP_DIR}}"
 
 RUN_BACKUP=false
+RUN_INSTANCE_BACKUP=false
 BASE_URL_OVERRIDE=""
 
 PASS_COUNT=0
@@ -30,7 +33,7 @@ FAIL_COUNT=0
 
 usage() {
   cat <<EOF
-Usage: scripts/msp-mac-mini-readiness.sh [--run-backup] [--base-url URL]
+Usage: scripts/msp-mac-mini-readiness.sh [--run-backup] [--run-instance-backup] [--base-url URL]
 
 Checks the Mac mini launch P0/P1 evidence:
   - launchd service, health endpoint, logs
@@ -42,9 +45,10 @@ Checks the Mac mini launch P0/P1 evidence:
   - local security basics
 
 Options:
-  --run-backup    Create a manual database backup using pnpm db:backup.
-  --base-url URL  Override PAPERCLIP_PUBLIC_URL for the remote health check.
-  -h, --help      Show this help.
+  --run-backup           Create a manual database backup using pnpm db:backup.
+  --run-instance-backup  Archive env/config/storage/secret files that exist.
+  --base-url URL         Override PAPERCLIP_PUBLIC_URL for the remote health check.
+  -h, --help             Show this help.
 EOF
 }
 
@@ -52,6 +56,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-backup)
       RUN_BACKUP=true
+      ;;
+    --run-instance-backup)
+      RUN_INSTANCE_BACKUP=true
       ;;
     --base-url)
       shift
@@ -394,6 +401,42 @@ check_backup() {
     fi
   fi
 
+  if [[ "$RUN_INSTANCE_BACKUP" == "true" ]]; then
+    local archive rel_paths path rel
+    archive="${INSTANCE_BACKUP_DIR}/agentdash-instance-files-$(date -u +%Y%m%dT%H%M%SZ).tgz"
+    rel_paths=()
+
+    for path in \
+      "$ENV_FILE" \
+      "${AGENTDASH_HOME}/instances/default/config.json" \
+      "${AGENTDASH_HOME}/instances/default/data/storage" \
+      "${AGENTDASH_HOME}/instances/default/secrets/master.key"
+    do
+      if [[ -e "$path" ]]; then
+        rel="${path#${HOME}/}"
+        if [[ "$rel" == "$path" ]]; then
+          warn "Instance backup path is outside HOME and was skipped: ${path}"
+        else
+          rel_paths+=("$rel")
+        fi
+      else
+        warn "Instance backup path not found yet: ${path}"
+      fi
+    done
+
+    if [[ "${#rel_paths[@]}" -eq 0 ]]; then
+      warn "No instance files were available for archive backup"
+    else
+      mkdir -p "$INSTANCE_BACKUP_DIR" 2>/dev/null || true
+      info "Creating instance file backup in ${INSTANCE_BACKUP_DIR}"
+      if tar -czf "$archive" -C "$HOME" "${rel_paths[@]}" 2>/dev/null && chmod 600 "$archive"; then
+        pass "Instance file backup created: ${archive}"
+      else
+        fail "Instance file backup failed: ${archive}"
+      fi
+    fi
+  fi
+
   if [[ -d "$BACKUP_DIR" ]]; then
     local latest_backup
     latest_backup="$(find "$BACKUP_DIR" -type f -name '*.sql*' -print 2>/dev/null | sort | tail -n 1)"
@@ -404,6 +447,18 @@ check_backup() {
     fi
   else
     warn "Backup directory does not exist yet: ${BACKUP_DIR}"
+  fi
+
+  if [[ -d "$INSTANCE_BACKUP_DIR" ]]; then
+    local latest_instance_backup
+    latest_instance_backup="$(find "$INSTANCE_BACKUP_DIR" -type f -name 'agentdash-instance-files-*.tgz' -print 2>/dev/null | sort | tail -n 1)"
+    if [[ -n "$latest_instance_backup" ]]; then
+      pass "Latest instance file backup found: ${latest_instance_backup}"
+    else
+      warn "No instance file backup archive found under ${INSTANCE_BACKUP_DIR}; run with --run-instance-backup before expanding usage"
+    fi
+  else
+    warn "Instance backup directory does not exist yet: ${INSTANCE_BACKUP_DIR}"
   fi
 
   if [[ -d "${AGENTDASH_HOME}/instances/default/data/storage" ]]; then
@@ -444,6 +499,30 @@ check_billing_email() {
   fi
 }
 
+check_git_remote_security() {
+  if ! have git; then
+    warn "git is not available; cannot inspect launch checkout remotes for embedded credentials"
+    return
+  fi
+
+  if [[ ! -d "${APP_DIR}/.git" ]]; then
+    warn "Launch checkout is not a git repository; cannot inspect remotes for embedded credentials"
+    return
+  fi
+
+  local remotes credential_pattern
+  remotes="$(git -C "$APP_DIR" remote -v 2>/dev/null || true)"
+  credential_pattern='https?://[^[:space:]/]+:[^[:space:]@]+@|https?://(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)[^[:space:]@]*@|(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9_]+'
+
+  if [[ -z "$remotes" ]]; then
+    warn "No git remotes configured for launch checkout"
+  elif printf '%s\n' "$remotes" | grep -Eiq "$credential_pattern"; then
+    fail "Git remotes appear to contain embedded credentials; sanitize remote URLs and rotate exposed tokens before launch"
+  else
+    pass "Git remotes do not contain embedded credentials"
+  fi
+}
+
 check_security() {
   if [[ -f "$ENV_FILE" ]]; then
     local mode
@@ -464,6 +543,7 @@ check_security() {
   check_env_equals AGENTDASH_DEFAULT_ADAPTER hermes_local
   check_env_present BETTER_AUTH_SECRET
   check_env_present PAPERCLIP_AGENT_JWT_SECRET
+  check_git_remote_security
 }
 
 check_local_users() {
