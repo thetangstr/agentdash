@@ -9,6 +9,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# SSH and launchd evidence runs often start with only /usr/bin:/bin:/usr/sbin:/sbin.
+# Include the standard Homebrew and user-local locations used by the Mac mini install.
+export PATH="${AGENTDASH_READINESS_PATH:-${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}:${PATH}"
+
 LABEL="${AGENTDASH_LAUNCHD_LABEL:-ai.agentdash.agent}"
 AGENTDASH_HOME="${PAPERCLIP_HOME:-${HOME}/.agentdash}"
 CONFIG_DIR="${AGENTDASH_CONFIG_DIR:-${HOME}/.config/agentdash}"
