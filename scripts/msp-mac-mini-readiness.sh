@@ -466,6 +466,31 @@ check_security() {
   check_env_present PAPERCLIP_AGENT_JWT_SECRET
 }
 
+check_local_users() {
+  if ! have dscl; then
+    warn "dscl is not available; cannot inventory normal local macOS users"
+    return
+  fi
+
+  local accounts count current_user
+  accounts="$(dscl . list /Users UniqueID 2>/dev/null | awk '$2 ~ /^[0-9]+$/ && $2 >= 500 { print $1 " " $2 }' || true)"
+  count="$(printf '%s\n' "$accounts" | sed '/^$/d' | wc -l | tr -d ' ')"
+  current_user="$(id -un 2>/dev/null || true)"
+
+  if [[ "$count" == "0" ]]; then
+    warn "No normal local macOS users with UID >= 500 were detected"
+  elif [[ "$count" == "1" ]]; then
+    pass "Normal local macOS user inventory: ${accounts}"
+    if [[ -n "$current_user" && "$accounts" == "${current_user} "* ]]; then
+      pass "Readiness is running as the only detected normal local user: ${current_user}"
+    else
+      warn "Readiness is running as ${current_user:-<unknown>}, but detected normal local user inventory is: ${accounts}"
+    fi
+  else
+    warn "Multiple normal local macOS users detected; confirm all are intended before partner launch: ${accounts//$'\n'/, }"
+  fi
+}
+
 print_header() {
   cat <<EOF
 AgentDash MSP Mac mini readiness evidence
@@ -521,6 +546,9 @@ check_logs
 
 info "Checking env/security posture"
 check_security
+
+info "Checking local macOS account posture"
+check_local_users
 
 info "Checking database posture"
 check_postgres
