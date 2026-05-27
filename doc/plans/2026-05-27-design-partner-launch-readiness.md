@@ -49,11 +49,16 @@ These must be complete before the first design partner is asked to use the insta
     - login works from non-localhost.
     - sign-up exposure is intentional; no public unauthenticated access path.
     - capture `scripts/msp-mac-mini-readiness.sh --base-url <partner-visible-url>` output.
+    - capture `scripts/msp-partner-access-proof.sh --base-url <partner-visible-url>` output from the partner machine.
   - Current evidence:
     - `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
     - LAN health from this operator machine passes.
+    - Partner proof runbook exists: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
+    - Operator LAN network-only precheck returned `9 pass, 1 warn, 0 fail`.
+    - Network-only precheck confirms unauthenticated `/api/auth/get-session` rejects with HTTP `401`.
+    - Network-only precheck confirms unauthenticated `/api/companies` rejects with HTTP `403`.
   - Remaining:
-    - partner-device login proof.
+    - partner-device login proof using `scripts/msp-partner-access-proof.sh` without `--network-only`.
     - Tailscale install/ACL proof if LAN is not the chosen private path.
 
 - [ ] Run end-to-end launch smoke.
@@ -135,6 +140,7 @@ These should be complete before week-one usage expands beyond the initial operat
 
 - [x] Partner success operating plan prepared.
   - Evidence: `doc/plans/2026-05-27-msp-design-partner-operating-plan.md`.
+  - Partner access proof runbook: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
   - Still required before usage expands: fill in named partner/operator owners and confirm the issue channel/check-in time with the design partner.
 
 ## Current Local Verification
@@ -176,6 +182,7 @@ Completed on the target Mac mini after cutover:
 - `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` returned `29 pass, 12 warn, 0 fail`.
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.
 - `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` created an on-host instance-file backup archive.
+- `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` from the operator LAN device.
 - Hermes CoS chat proof passed.
 - Hermes assigned issue-write proof passed.
 

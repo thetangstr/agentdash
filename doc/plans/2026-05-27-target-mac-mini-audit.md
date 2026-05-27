@@ -89,6 +89,14 @@ Git remote evidence:
 - The target checkout remote is sanitized to `https://github.com/thetangstr/agentdash.git`.
 - The readiness script reports `Git remotes do not contain embedded credentials`.
 
+Partner access precheck evidence:
+
+- `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` was run from the operator LAN device.
+- Result: `9 pass, 1 warn, 0 fail`.
+- The precheck confirms authenticated/private health, UI reachability, inactive bootstrap invite, and unauthenticated board API rejection.
+- The precheck does not satisfy the partner-device login proof gate because it intentionally skips sign-in.
+- Full proof procedure: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
+
 ## Hermes Product Proof
 
 CoS chat proof:
