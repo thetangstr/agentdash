@@ -6,7 +6,7 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
-**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini is now running the PR branch through launchd at deployed commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean at PR head `fdbb150dfb76736d8a78b702e54d01259730ce23`; the runtime-critical Hermes/launchd fix landed in `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
 
 ## P0 Gates
 
@@ -17,13 +17,13 @@ These must be complete before the first design partner is asked to use the insta
 
 - [x] Open launch PR.
   - Evidence: <https://github.com/thetangstr/agentdash/pull/376>.
-  - Status: draft until target-machine validation passes.
+  - Status: draft until partner-device access proof, GitHub token rotation confirmation, and named operator ownership are captured.
 
 - [x] Install on the target Mac mini.
   - Command: `bash ./docker/launchd/install.sh` after starting Homebrew PostgreSQL 17.
   - Evidence:
     - SSH access confirmed for `maxiaoer@192.168.86.48`.
-    - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` deployed at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+    - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean at `fdbb150dfb76736d8a78b702e54d01259730ce23`.
     - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
     - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
     - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` exits with `24 pass, 9 warn, 0 fail`.
@@ -89,7 +89,8 @@ These should be complete before week-one usage expands beyond the initial operat
     - `~/.agentdash/data/postgres` when using Docker PostgreSQL.
   - Completed:
     - Manual backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`.
-    - Deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+    - Runtime-critical deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+    - Current launch checkout SHA recorded after CI-only fast-forward: `fdbb150dfb76736d8a78b702e54d01259730ce23`.
     - Non-destructive rollback precheck passed: target checkout is clean, launchd is loaded, latest backup exists, env mode is `600`, and local health is ready.
     - Rollback runbook added: `doc/plans/2026-05-27-mac-mini-rollback-runbook.md`.
   - Remaining:
@@ -145,6 +146,17 @@ Completed on the launch candidate before PR:
 - `bash -n scripts/msp-mac-mini-readiness.sh`
 - isolated local TSX server smoke against `/api/health` and `/`.
 
+Completed in PR CI on latest head `fdbb150dfb76736d8a78b702e54d01259730ce23`:
+
+- `check`
+- `audit`
+- `drift`
+- `policy`
+- `verify` in `17m03s`
+- `e2e` in `2m35s`
+- Vercel
+- Vercel Preview Comments
+
 Completed on the target Mac mini without mutating the current `3100` runtime:
 
 - SSH reachability and read-only health audit.
@@ -156,6 +168,7 @@ Completed on the target Mac mini after cutover:
 
 - Launchd service installed and loaded from `/Users/maxiaoer/workspace/agentdash_msp_launch`.
 - `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+- Target checkout fast-forwarded cleanly to `fdbb150dfb76736d8a78b702e54d01259730ce23`.
 - Health passed locally and over LAN.
 - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` returned `24 pass, 9 warn, 0 fail`.
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.
@@ -167,5 +180,6 @@ Completed on the target Mac mini after cutover:
 These cannot be completed from the local checkout alone:
 
 - partner Tailscale/LAN device access
-- Stripe and Resend production/test account decisions
-- operator confirmation of design-partner kickoff cadence.
+- partner-device login proof from the chosen private URL
+- GitHub token rotation confirmation for any token that may have appeared in the target git config
+- operator confirmation of design-partner kickoff cadence and named owners.

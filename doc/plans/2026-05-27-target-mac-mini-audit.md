@@ -2,13 +2,13 @@
 
 **Date:** 2026-05-27  
 **Target:** `maxiaoer@192.168.86.48` (`mac-mini.lan`)  
-**Purpose:** Pre-cutover evidence for the first MSP design-partner launch path.
+**Purpose:** Post-cutover evidence for the first MSP design-partner launch path.
 
 ## Summary
 
 The target Mac mini is reachable over SSH and has been cut over to the launchd production candidate from the PR branch. The service is healthy on `http://192.168.86.48:3100`, authenticated/private mode is active, the readiness script has no P0 failures, and Hermes has completed both CoS-chat and assigned-issue agent-write smoke tests.
 
-Remaining launch work is outside the code/host preflight: prove login from the actual partner device or tailnet path, confirm the managed-pilot billing/email posture, rotate any historical target GitHub token, and fill in named partner operating owners.
+Remaining launch work is outside the code/host preflight: prove login from the actual partner device or tailnet path, rotate any historical target GitHub token, and fill in named partner operating owners.
 
 ## Evidence Collected
 
@@ -22,7 +22,8 @@ Remaining launch work is outside the code/host preflight: prove login from the a
 - Isolated launch checkout created at:
   - `/Users/maxiaoer/workspace/agentdash_msp_launch`
   - branch `codex/msp-mac-mini-launch`
-  - current deployed commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`
+  - current clean checkout `fdbb150dfb76736d8a78b702e54d01259730ce23`
+  - runtime-critical Hermes/launchd fix commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`
 - Target isolated build passed:
   - `pnpm install --frozen-lockfile`
   - `pnpm build`
@@ -35,6 +36,7 @@ Cutover evidence:
 
 - Legacy dev-runner launch agents were disabled before loading the new service.
 - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
+- Target checkout fast-forwarded cleanly to PR head `fdbb150dfb76736d8a78b702e54d01259730ce23`.
 - The launchd plist exists at `~/Library/LaunchAgents/ai.agentdash.agent.plist`.
 - The env file exists at `~/.config/agentdash/agentdash.env` with mode `600`.
 - Health returns:
@@ -103,8 +105,6 @@ P0:
 
 P1:
 
-- Rehearse rollback from a recorded deployed SHA.
-- Decide managed-pilot billing posture versus Stripe test/live setup.
-- Decide manual email posture versus Resend setup.
+- Rehearse rollback from a recorded deployed SHA during a maintenance window if rollback becomes necessary.
 - Confirm target env file permissions and log secret hygiene.
 - Confirm partner operator owner, issue channel, and week-one check-in cadence.
