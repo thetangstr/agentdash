@@ -58,7 +58,7 @@ scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100
 
 Result:
 
-- `Summary: 24 pass, 9 warn, 0 fail`
+- `Summary: 26 pass, 9 warn, 0 fail`
 - `Status: Code/host preflight passed.`
 
 Remaining warnings:
@@ -74,6 +74,11 @@ Manual backup evidence:
 
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100`
 - Backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`
+
+Local account evidence:
+
+- Readiness inventory detected one normal local macOS user: `maxiaoer 501`.
+- Readiness ran as `maxiaoer`, the only detected normal local user.
 
 ## Hermes Product Proof
 

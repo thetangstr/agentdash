@@ -26,7 +26,7 @@ These must be complete before the first design partner is asked to use the insta
     - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean on branch `codex/msp-mac-mini-launch`.
     - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
     - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
-    - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` exits with `24 pass, 9 warn, 0 fail`.
+    - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` exits with `26 pass, 9 warn, 0 fail`.
     - Docker was unavailable during cutover; Homebrew PostgreSQL 17 is running the production database.
 
 - [x] Verify Hermes harness on the target Mac mini.
@@ -124,10 +124,11 @@ These should be complete before week-one usage expands beyond the initial operat
     - target git remote sanitized.
     - readiness secret scan passes.
     - env file mode is `600`.
+    - normal local macOS user inventory shows only `maxiaoer 501`.
     - temporary smoke board API key revoked; post-revoke check returned `401`.
   - Remaining:
     - rotate any GitHub token previously embedded in target git config.
-    - confirm intended Mac mini account access.
+    - confirm `maxiaoer` is the intended operator Mac account for partner launch.
     - confirm partner private-network exposure.
 
 - [x] Partner success operating plan prepared.
@@ -170,7 +171,7 @@ Completed on the target Mac mini after cutover:
 - `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
 - Target checkout fast-forwarded cleanly on branch `codex/msp-mac-mini-launch`.
 - Health passed locally and over LAN.
-- `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` returned `24 pass, 9 warn, 0 fail`.
+- `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` returned `26 pass, 9 warn, 0 fail`.
 - `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.
 - Hermes CoS chat proof passed.
 - Hermes assigned issue-write proof passed.
