@@ -134,7 +134,7 @@ jobs:
         run: pnpm build
 
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Generate Paperclip config
         run: |
