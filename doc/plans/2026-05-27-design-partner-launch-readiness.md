@@ -6,7 +6,7 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
-**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini is reachable and the PR branch builds there, but the live `3100` service is still a dev-runner from an existing checkout. It is not yet the launchd production install.
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini is now running the PR branch through launchd at deployed commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
 
 ## P0 Gates
 
@@ -19,29 +19,28 @@ These must be complete before the first design partner is asked to use the insta
   - Evidence: <https://github.com/thetangstr/agentdash/pull/376>.
   - Status: draft until target-machine validation passes.
 
-- [ ] Install on the target Mac mini.
-  - Command: `./docker/launchd/install.sh --with-postgres`
-  - Current target evidence:
+- [x] Install on the target Mac mini.
+  - Command: `bash ./docker/launchd/install.sh` after starting Homebrew PostgreSQL 17.
+  - Evidence:
     - SSH access confirmed for `maxiaoer@192.168.86.48`.
-    - Isolated launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` builds at `93ad33590a21ed7fdd2d4355735298e250fea23f`.
-    - Existing `3100` health check passes, but from a dev-runner process rather than launchd.
-    - `scripts/msp-mac-mini-readiness.sh` exits NOT READY before cutover because launchd/env/Hermes/private URL are not configured.
-  - Evidence required:
-    - `launchctl list | grep ai.agentdash.agent`
-    - `curl -fsS http://127.0.0.1:3100/api/health`
-    - `tail -50 ~/.agentdash/logs/agentdash.err` shows no startup failure.
-    - `scripts/msp-mac-mini-readiness.sh` exits with no P0 failures after install.
+    - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` deployed at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+    - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
+    - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
+    - `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` exits with `24 pass, 9 warn, 0 fail`.
+    - Docker was unavailable during cutover; Homebrew PostgreSQL 17 is running the production database.
 
-- [ ] Verify Hermes harness on the target Mac mini.
+- [x] Verify Hermes harness on the target Mac mini.
   - Commands:
     - `which hermes` or use the known absolute command path `/Users/maxiaoer/.local/bin/hermes`
     - `hermes setup`
     - confirm `AGENTDASH_HERMES_COMMAND=/absolute/path/to/hermes` in `~/.config/agentdash/agentdash.env`
     - `scripts/msp-mac-mini-readiness.sh` reports Hermes command wiring as pass.
   - Product proof:
-    - one CoS reply through `AGENTDASH_DEFAULT_ADAPTER=hermes_local`
-    - one agent task/wakeup/run through `hermes_local`
-    - transcript visible in AgentDash.
+    - CoS reply routed through `AGENTDASH_DEFAULT_ADAPTER=hermes_local` and `/Users/maxiaoer/.local/bin/hermes`.
+    - Manual wakeup run `20e65705-8868-45bd-b72f-688e9c3672f0` succeeded with exit code `0`.
+    - Assigned issue-write run `75181d3f-655e-4939-b94d-a5fae645cb33` succeeded with liveness `completed`.
+    - Smoke issue `AGE-1` was marked `done`.
+    - Hermes wrote the comment `Hermes issue-write smoke completed`.
 
 - [ ] Verify partner network access.
   - Required:
@@ -50,6 +49,12 @@ These must be complete before the first design partner is asked to use the insta
     - login works from non-localhost.
     - sign-up exposure is intentional; no public unauthenticated access path.
     - capture `scripts/msp-mac-mini-readiness.sh --base-url <partner-visible-url>` output.
+  - Current evidence:
+    - `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
+    - LAN health from this operator machine passes.
+  - Remaining:
+    - partner-device login proof.
+    - Tailscale install/ACL proof if LAN is not the chosen private path.
 
 - [ ] Run end-to-end launch smoke.
   - Steps:
@@ -61,6 +66,12 @@ These must be complete before the first design partner is asked to use the insta
     6. CoS returns a real Hermes-backed reply.
     7. Operator creates one test agent and one test task.
     8. Agent run completes and appears in the transcript.
+  - Current evidence:
+    - API-level bootstrap/signup/onboarding smoke completed.
+    - CoS Hermes chat smoke completed.
+    - Assigned issue-write Hermes agent smoke completed.
+  - Remaining:
+    - human/browser proof from the partner-visible URL, including `/assess?onboarding=1` if that is still required for the pilot script.
 
 ## P1 Gates
 
@@ -76,6 +87,12 @@ These should be complete before week-one usage expands beyond the initial operat
     - `~/.agentdash/instances/default/data/storage`
     - `~/.agentdash/instances/default/secrets/master.key`
     - `~/.agentdash/data/postgres` when using Docker PostgreSQL.
+  - Completed:
+    - Manual backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`.
+    - Deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+  - Remaining:
+    - rollback command rehearsal.
+    - non-database asset backup procedure confirmation.
 
 - [ ] Decide billing posture.
   - Option A: managed design-partner pilot, Stripe disabled/not used.
@@ -100,6 +117,15 @@ These should be complete before week-one usage expands beyond the initial operat
   - Confirm Tailscale ACLs/private network exposure are correct.
   - Confirm logs do not expose secrets.
   - Evidence: `scripts/msp-mac-mini-readiness.sh` security/log checks pass.
+  - Completed:
+    - target git remote sanitized.
+    - readiness secret scan passes.
+    - env file mode is `600`.
+    - temporary smoke board API key revoked; post-revoke check returned `401`.
+  - Remaining:
+    - rotate any GitHub token previously embedded in target git config.
+    - confirm intended Mac mini account access.
+    - confirm partner private-network exposure.
 
 - [x] Partner success operating plan prepared.
   - Evidence: `doc/plans/2026-05-27-msp-design-partner-operating-plan.md`.
@@ -124,12 +150,20 @@ Completed on the target Mac mini without mutating the current `3100` runtime:
 - `pnpm build` in isolated checkout at commit `93ad33590a21ed7fdd2d4355735298e250fea23f`.
 - `scripts/msp-mac-mini-readiness.sh` read-only pre-cutover check, expected NOT READY.
 
+Completed on the target Mac mini after cutover:
+
+- Launchd service installed and loaded from `/Users/maxiaoer/workspace/agentdash_msp_launch`.
+- `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
+- Health passed locally and over LAN.
+- `scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100` returned `24 pass, 9 warn, 0 fail`.
+- `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.
+- Hermes CoS chat proof passed.
+- Hermes assigned issue-write proof passed.
+
 ## External Blockers
 
-These cannot be completed from the local checkout alone or should wait for a controlled cutover window:
+These cannot be completed from the local checkout alone:
 
-- Hermes credentials/session on that Mac mini
 - partner Tailscale/LAN device access
-- replacing the active `3100` dev-runner with the launchd production service
 - Stripe and Resend production/test account decisions
 - operator confirmation of design-partner kickoff cadence.

@@ -6,7 +6,9 @@
 
 ## Summary
 
-The target Mac mini is reachable over SSH, the current service on port `3100` is healthy, and the launch PR branch builds in an isolated checkout on the target. The target is not ready for design-partner use yet because the live service is still a dev-runner process from an existing checkout, not the launchd production install, and the production env/Hermes/network/backup posture has not been cut over.
+The target Mac mini is reachable over SSH and has been cut over to the launchd production candidate from the PR branch. The service is healthy on `http://192.168.86.48:3100`, authenticated/private mode is active, the readiness script has no P0 failures, and Hermes has completed both CoS-chat and assigned-issue agent-write smoke tests.
+
+Remaining launch work is outside the code/host preflight: prove login from the actual partner device or tailnet path, confirm the managed-pilot billing/email posture, rotate any historical target GitHub token, and fill in named partner operating owners.
 
 ## Evidence Collected
 
@@ -20,61 +22,73 @@ The target Mac mini is reachable over SSH, the current service on port `3100` is
 - Isolated launch checkout created at:
   - `/Users/maxiaoer/workspace/agentdash_msp_launch`
   - branch `codex/msp-mac-mini-launch`
-  - commit `93ad33590a21ed7fdd2d4355735298e250fea23f`
+  - current deployed commit `f379ce25887fd69b64f347a3f027a3d1c2187d51`
 - Target isolated build passed:
   - `pnpm install --frozen-lockfile`
   - `pnpm build`
 
 ## Current Runtime Posture
 
-The process currently listening on `3100` is a Node dev-runner from `/Users/maxiaoer/agentdash`, backed by the existing embedded Postgres process. It is not the launchd production candidate created by `./docker/launchd/install.sh --with-postgres`.
+The process listening on `3100` is the launchd service `ai.agentdash.agent` from `/Users/maxiaoer/workspace/agentdash_msp_launch`.
 
-Current target service gaps:
+Cutover evidence:
 
-- `launchctl list | grep ai.agentdash.agent` found no loaded `ai.agentdash.agent` service.
-- `~/Library/LaunchAgents/ai.agentdash.agent.plist` is missing.
-- `~/.config/agentdash/agentdash.env` is missing.
-- `~/.agentdash/logs/agentdash.log` and `~/.agentdash/logs/agentdash.err` are not present for the launchd service.
-
-Do not stop or replace the current `3100` runtime without explicit cutover timing, because it is the active local instance.
+- Legacy dev-runner launch agents were disabled before loading the new service.
+- `launchctl list | grep ai.agentdash.agent` shows the service loaded.
+- The launchd plist exists at `~/Library/LaunchAgents/ai.agentdash.agent.plist`.
+- The env file exists at `~/.config/agentdash/agentdash.env` with mode `600`.
+- Health returns:
+  - `{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false}`
+- PostgreSQL is running through Homebrew PostgreSQL 17 because Docker was unavailable for the target cutover.
+- `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
+- `AGENTDASH_DEFAULT_ADAPTER=hermes_local`.
+- `AGENTDASH_HERMES_COMMAND=/Users/maxiaoer/.local/bin/hermes`.
 
 ## Readiness Script Result
 
-Read-only readiness was run from the isolated launch checkout:
+Latest readiness was run from the launch checkout after cutover:
 
 ```sh
 cd ~/workspace/agentdash_msp_launch
-scripts/msp-mac-mini-readiness.sh
+scripts/msp-mac-mini-readiness.sh --base-url http://192.168.86.48:3100
 ```
 
 Result:
 
-- `Summary: 5 pass, 10 warn, 13 fail`
-- `Status: NOT READY for design-partner use.`
+- `Summary: 24 pass, 9 warn, 0 fail`
+- `Status: Code/host preflight passed.`
 
-Expected P0 failures before cutover:
+Remaining warnings:
 
-- launchd plist missing
-- launchd service not loaded
-- env file missing
-- `PAPERCLIP_DEPLOYMENT_MODE` unset
-- `PAPERCLIP_DEPLOYMENT_EXPOSURE` unset
-- `NODE_ENV` unset
-- `PAPERCLIP_MIGRATION_AUTO_APPLY` unset
-- `AGENTDASH_DEFAULT_ADAPTER` unset
-- `BETTER_AUTH_SECRET` unset
-- `PAPERCLIP_AGENT_JWT_SECRET` unset
-- `DATABASE_URL` unset
-- `AGENTDASH_HERMES_COMMAND` unset
-- `PAPERCLIP_PUBLIC_URL` unset
+- Tailscale is not available on PATH; current proof is private LAN.
+- `PAPERCLIP_BIND=lan`; partner-device private access still needs direct proof.
+- Hermes product proof is manual from the script's perspective; evidence is recorded below.
+- local storage and secrets master key do not exist yet.
+- Stripe is not configured; launch posture is managed design-partner pilot.
+- Resend is not configured; launch posture is manual invites/password resets.
 
-Expected P1 warnings before cutover:
+Manual backup evidence:
 
-- Tailscale is not available on PATH.
-- backup directory does not exist yet
-- local storage and secrets master key do not exist yet
-- Stripe is not configured
-- Resend is not configured
+- `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100`
+- Backup artifact: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-125056.sql.gz`
+
+## Hermes Product Proof
+
+CoS chat proof:
+
+- Bootstrap/signup/onboarding smoke created company `aa7be9e3-1e12-4845-b7ad-01ac009ba53b`.
+- CoS agent `9022f20b-bac1-441f-91b3-aaeb26b5bda6` replied through `hermes_local`.
+- Server log showed routing through `/Users/maxiaoer/.local/bin/hermes`.
+
+Agent execution proof:
+
+- Initial manual wakeup failed before the fix because launchd could not resolve `hermes` from PATH.
+- Fixed in commit `f379ce25887fd69b64f347a3f027a3d1c2187d51` by aligning Hermes agent execution with `AGENTDASH_HERMES_COMMAND` and adding `~/.local/bin` to launchd PATH.
+- Manual wakeup run `20e65705-8868-45bd-b72f-688e9c3672f0` succeeded with exit code `0` and Hermes session `20260527_130400_3d4eaf`.
+- Assigned issue-write smoke run `75181d3f-655e-4939-b94d-a5fae645cb33` succeeded with liveness `completed`.
+- Smoke issue `AGE-1` ended in status `done`.
+- Hermes wrote comment `Hermes issue-write smoke completed` as agent `9022f20b-bac1-441f-91b3-aaeb26b5bda6`, tied to run `75181d3f-655e-4939-b94d-a5fae645cb33`.
+- Temporary smoke board API key was revoked; post-revoke `/api/cli-auth/me` returned `401`.
 
 ## Security Note
 
@@ -84,19 +98,11 @@ One target checkout had a GitHub token embedded in its `origin` remote URL. The 
 
 P0:
 
-- Choose the cutover window for replacing the current dev-runner on `3100`.
-- Run `./docker/launchd/install.sh --with-postgres` from the intended production checkout.
-- Populate `~/.config/agentdash/agentdash.env` with `authenticated/private` settings.
-- Set `AGENTDASH_DEFAULT_ADAPTER=hermes_local`.
-- Set `AGENTDASH_HERMES_COMMAND=/Users/maxiaoer/.local/bin/hermes`.
-- Configure the partner-visible private URL and bind posture.
-- Run `scripts/msp-mac-mini-readiness.sh` until P0 failures are gone.
-- Prove one Hermes-backed CoS reply.
-- Prove one `hermes_local` agent task or wakeup with transcript evidence.
+- Prove private access and login from the actual partner machine or tailnet device.
+- Confirm there is no unintended public unauthenticated access path.
 
 P1:
 
-- Run `scripts/msp-mac-mini-readiness.sh --run-backup` and record the backup artifact.
 - Rehearse rollback from a recorded deployed SHA.
 - Decide managed-pilot billing posture versus Stripe test/live setup.
 - Decide manual email posture versus Resend setup.
