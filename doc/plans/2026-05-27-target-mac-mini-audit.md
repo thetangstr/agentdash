@@ -10,6 +10,8 @@ The target Mac mini is reachable over SSH and has been cut over to the launchd p
 
 Remaining launch work is outside the code/host preflight: prove login from the actual partner device or tailnet path, rotate any historical target GitHub token, and fill in named partner operating owners.
 
+Current launch signoff packet: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
+
 ## Evidence Collected
 
 - SSH reachability confirmed for `maxiaoer@192.168.86.48`.

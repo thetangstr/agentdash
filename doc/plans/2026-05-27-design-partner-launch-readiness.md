@@ -6,7 +6,9 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
-**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean on branch `codex/msp-mac-mini-launch`; the runtime-critical Hermes/launchd fix landed in `f379ce25887fd69b64f347a3f027a3d1c2187d51`, and the latest target readiness hardening evidence was collected at `cd47db96bd72d3f471f3f381107b45649640e763`.
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean on branch `codex/msp-mac-mini-launch` at current launch head `f6fbee4fcf83c21e07c8c60f5cee2f81d09b70d9`.
+
+**Launch signoff packet:** `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
 
 ## P0 Gates
 
@@ -54,6 +56,7 @@ These must be complete before the first design partner is asked to use the insta
     - `PAPERCLIP_PUBLIC_URL=http://192.168.86.48:3100`.
     - LAN health from this operator machine passes.
     - Partner proof runbook exists: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
+    - Launch signoff packet exists: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
     - Operator LAN network-only precheck returned `9 pass, 1 warn, 0 fail`.
     - Network-only precheck confirms unauthenticated `/api/auth/get-session` rejects with HTTP `401`.
     - Network-only precheck confirms unauthenticated `/api/companies` rejects with HTTP `403`.
@@ -141,6 +144,7 @@ These should be complete before week-one usage expands beyond the initial operat
 - [x] Partner success operating plan prepared.
   - Evidence: `doc/plans/2026-05-27-msp-design-partner-operating-plan.md`.
   - Partner access proof runbook: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
+  - Launch signoff packet: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
   - Still required before usage expands: fill in named partner/operator owners and confirm the issue channel/check-in time with the design partner.
 
 ## Current Local Verification
