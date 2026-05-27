@@ -505,7 +505,7 @@ check_git_remote_security() {
     return
   fi
 
-  if [[ ! -d "${APP_DIR}/.git" ]]; then
+  if ! git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     warn "Launch checkout is not a git repository; cannot inspect remotes for embedded credentials"
     return
   fi
