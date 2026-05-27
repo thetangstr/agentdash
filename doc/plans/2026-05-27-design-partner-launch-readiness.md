@@ -6,7 +6,7 @@
 
 **Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
-**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean on branch `codex/msp-mac-mini-launch` at current launch head `f6fbee4fcf83c21e07c8c60f5cee2f81d09b70d9`.
+**Current target audit:** `doc/plans/2026-05-27-target-mac-mini-audit.md`. The target Mac mini checkout is clean on branch `codex/msp-mac-mini-launch` at current launch head `6793d60662786e3cda41288219edbafd3ebf02b4`.
 
 **Launch signoff packet:** `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
 
@@ -159,14 +159,14 @@ Completed on the launch candidate before PR:
 - `bash -n scripts/msp-mac-mini-readiness.sh`
 - isolated local TSX server smoke against `/api/health` and `/`.
 
-Completed in PR CI on CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23` and revalidated on later launch-readiness heads through PR #376:
+Completed in PR CI on CI/browser-suite proof commit `fdbb150dfb76736d8a78b702e54d01259730ce23` and revalidated on latest launch-readiness head `6793d60662786e3cda41288219edbafd3ebf02b4` through PR #376:
 
 - `check`
 - `audit`
 - `drift`
 - `policy`
-- `verify` in `17m03s`
-- `e2e` in `2m35s`
+- `verify` in `15m13s`
+- `e2e` in `2m17s`
 - Vercel
 - Vercel Preview Comments
 

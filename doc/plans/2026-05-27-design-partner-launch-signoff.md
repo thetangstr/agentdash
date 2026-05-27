@@ -2,9 +2,9 @@
 
 **Purpose:** One-page go/no-go packet for moving PR #376 from draft to the first MSP design-partner launch.
 
-**Current PR:** <https://github.com/thetangstr/agentdash/pull/376>  
-**Current launch head:** `f6fbee4fcf83c21e07c8c60f5cee2f81d09b70d9`  
-**Target Mac mini:** `maxiaoer@192.168.86.48`  
+**Current PR:** <https://github.com/thetangstr/agentdash/pull/376>
+**Current launch head:** `6793d60662786e3cda41288219edbafd3ebf02b4`
+**Target Mac mini:** `maxiaoer@192.168.86.48`
 **Private URL under test:** `http://192.168.86.48:3100`
 
 Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, SSH keys, or raw customer secrets into this document.
@@ -14,8 +14,8 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | Area | Evidence | Status |
 | --- | --- | --- |
 | PR branch | `codex/msp-mac-mini-launch` pushed to origin | Complete |
-| PR checks | `check`, `audit`, `drift`, `policy`, `verify`, `e2e`, Vercel, Vercel Preview Comments pass on `f6fbee4fcf83c21e07c8c60f5cee2f81d09b70d9` | Complete |
-| Target checkout | `/Users/maxiaoer/workspace/agentdash_msp_launch` clean at `f6fbee4fcf83c21e07c8c60f5cee2f81d09b70d9` | Complete |
+| PR checks | `check`, `audit`, `drift`, `policy`, `verify`, `e2e`, Vercel, Vercel Preview Comments pass on `6793d60662786e3cda41288219edbafd3ebf02b4` | Complete |
+| Target checkout | `/Users/maxiaoer/workspace/agentdash_msp_launch` clean at `6793d60662786e3cda41288219edbafd3ebf02b4` | Complete |
 | Local health | `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready JSON | Complete |
 | Host readiness | `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` returned `29 pass, 12 warn, 0 fail` | Complete |
 | Network precheck | `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` | Precheck only |
