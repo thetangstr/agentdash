@@ -4,7 +4,7 @@
 
 **Launch stance:** AgentDash is the product and control plane. Hermes is the required local agent execution harness for the first MSP pilot path.
 
-**Current code candidate:** branch `codex/msp-mac-mini-launch`, commit `8bd6c14a4`, PR #376.
+**Current code candidate:** branch `codex/msp-mac-mini-launch`, PR #376. The PR head is the launch candidate.
 
 ## P0 Gates
 
