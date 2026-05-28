@@ -60,11 +60,13 @@ These must be complete before the first design partner is asked to use the insta
     - Partner proof runbook exists: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
     - Launch signoff packet exists: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
     - External confirmation request exists: `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
+    - External signoff validator exists: `scripts/msp-launch-signoff-check.sh`.
     - Operator LAN network-only precheck returned `9 pass, 1 warn, 0 fail`.
     - Network-only precheck confirms unauthenticated `/api/auth/get-session` rejects with HTTP `401`.
     - Network-only precheck confirms unauthenticated `/api/companies` rejects with HTTP `403`.
   - Remaining:
     - partner-device login proof using `scripts/msp-partner-access-proof.sh` without `--network-only`.
+    - external packet validation using `scripts/msp-launch-signoff-check.sh --response <response> --proof-output <proof>`.
     - Tailscale install/ACL proof if LAN is not the chosen private path.
 
 - [ ] Run end-to-end launch smoke.
@@ -149,6 +151,7 @@ These should be complete before week-one usage expands beyond the initial operat
   - Partner access proof runbook: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
   - Launch signoff packet: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
   - External confirmation request: `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
+  - External signoff validator: `scripts/msp-launch-signoff-check.sh`.
   - Still required before usage expands: fill in named partner/operator owners and confirm the issue channel/check-in time with the design partner.
 
 ## Current Local Verification

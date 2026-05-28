@@ -55,6 +55,16 @@ Required pass conditions:
 - authenticated session is visible
 - authenticated `/api/companies` returns a JSON array
 
+After saving the redacted proof output and the filled external confirmation response, run:
+
+```sh
+scripts/msp-launch-signoff-check.sh \
+  --response <filled-external-confirmation-response.txt> \
+  --proof-output <redacted-partner-proof-output.txt>
+```
+
+This must report `Status: Launch external signoff check passed.` before PR #376 leaves draft.
+
 ## Manual Browser Proof
 
 After the script passes, capture these human checks in the launch ticket or partner signoff note:

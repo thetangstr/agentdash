@@ -36,6 +36,19 @@ Required script result:
 - `Status: Partner-device access proof passed.`
 - `0 fail`
 
+After the proof output and response template are saved locally, validate the go/no-go packet before moving PR #376 out of draft:
+
+```sh
+scripts/msp-launch-signoff-check.sh \
+  --response <filled-external-confirmation-response.txt> \
+  --proof-output <redacted-partner-proof-output.txt>
+```
+
+Required validator result:
+
+- `Status: Launch external signoff check passed.`
+- `0 fail`
+
 3. Browser proof:
    - Login succeeds from the same private URL.
    - The proof/operator account can see the expected company.
@@ -81,6 +94,8 @@ No public URL used unless approved: yes/no
 ## Go/No-Go Interpretation
 
 Launch is **go** only when every response-template field is filled with a concrete value and the proof command reports `0 fail`.
+
+Before moving PR #376 out of draft, `scripts/msp-launch-signoff-check.sh` must also report `Status: Launch external signoff check passed.`
 
 Launch is **no-go** if any of these are true:
 

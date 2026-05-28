@@ -29,11 +29,13 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | Billing posture | Stripe disabled for managed week-one design-partner pilot | Complete |
 | Email posture | Resend disabled; manual invites/password resets for week one | Complete |
 | External confirmation request | `doc/plans/2026-05-28-design-partner-external-confirmation-request.md` is ready to send | Complete |
+| External signoff validator | `scripts/msp-launch-signoff-check.sh` validates the filled confirmation response and partner proof transcript before PR #376 leaves draft | Ready |
 
 ## Go/No-Go Checklist
 
 Move PR #376 out of draft only after every item below is filled.
 
+- [ ] `scripts/msp-launch-signoff-check.sh --response <response> --proof-output <proof>` reports `Status: Launch external signoff check passed.`
 - [ ] Partner login proof passes from the actual partner device or tailnet/LAN device.
 - [ ] Chosen access path is confirmed: LAN / Tailscale / other private network.
 - [ ] If Tailscale is chosen, Tailscale install and ACL exposure are confirmed.
@@ -64,6 +66,14 @@ Required result:
 
 - `Status: Partner-device access proof passed.`
 - `0 fail`
+
+Then validate the full external response packet:
+
+```sh
+scripts/msp-launch-signoff-check.sh \
+  --response <filled-external-confirmation-response.txt> \
+  --proof-output <redacted-partner-proof-output.txt>
+```
 
 Do not include the proof password when pasting the output into a launch ticket or PR comment.
 

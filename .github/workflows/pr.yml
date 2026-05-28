@@ -98,6 +98,9 @@ jobs:
       - name: Verify release registry test coverage
         run: pnpm run test:release-registry
 
+      - name: Verify MSP launch signoff checks
+        run: pnpm run test:launch-signoff
+
       - name: Build
         run: pnpm build
 
