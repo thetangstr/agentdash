@@ -28,7 +28,7 @@ These must be complete before the first design partner is asked to use the insta
     - Launch checkout `/Users/maxiaoer/workspace/agentdash_msp_launch` is clean on branch `codex/msp-mac-mini-launch`.
     - `launchctl list | grep ai.agentdash.agent` shows the service loaded.
     - `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready health.
-    - `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` exits with `29 pass, 12 warn, 0 fail`.
+    - `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` exits with `30 pass, 12 warn, 0 fail`.
     - Docker was unavailable during cutover; Homebrew PostgreSQL 17 is running the production database.
 
 - [x] Verify Hermes harness on the target Mac mini.
@@ -85,7 +85,7 @@ These must be complete before the first design partner is asked to use the insta
 
 These should be complete before week-one usage expands beyond the initial operator.
 
-- [ ] Backup and rollback rehearsal.
+- [x] Backup and rollback rehearsal.
   - Run one manual database backup with `scripts/msp-mac-mini-readiness.sh --run-backup`.
   - Confirm backup file exists under `~/.agentdash/instances/default/data/backups`.
   - Record deployed SHA.
@@ -96,15 +96,14 @@ These should be complete before week-one usage expands beyond the initial operat
     - `~/.agentdash/instances/default/secrets/master.key`
     - `~/.agentdash/data/postgres` when using Docker PostgreSQL.
   - Completed:
-    - Latest manual database backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz`.
-    - Instance-file backup archive created on target: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz`.
-    - Runtime-critical deployed SHA recorded: `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
-    - Latest target readiness hardening SHA recorded: `cd47db96bd72d3f471f3f381107b45649640e763`.
-    - Non-destructive rollback precheck passed: target checkout is clean, launchd is loaded, latest backup exists, env mode is `600`, and local health is ready.
+    - Latest manual database backup created: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-171657.sql.gz`.
+    - Latest instance-file backup archive created on target: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260528T001657Z.tgz`.
+    - Current deployed SHA is recorded by PR #376 and the rollback precheck `git rev-parse HEAD` command.
+    - Non-destructive rollback precheck passed on the latest PR #376 head: target checkout is clean, launchd is loaded, latest backups exist, env mode is `600`, and local health is ready.
     - Rollback runbook added: `doc/plans/2026-05-27-mac-mini-rollback-runbook.md`.
-  - Remaining:
-    - execute the rollback command during a maintenance window only if rollback becomes necessary.
-    - rerun instance-file backup after storage or local secret material exists.
+  - Operational follow-up:
+    - Execute the destructive database restore command only during an incident or maintenance window.
+    - Rerun instance-file backup after the first upload/work-product or local encrypted secret write if those directories are created.
 
 - [x] Decide billing posture.
   - Decision: managed design-partner pilot; Stripe is disabled/not used for week one.
@@ -131,6 +130,7 @@ These should be complete before week-one usage expands beyond the initial operat
   - Evidence: `scripts/msp-mac-mini-readiness.sh` security/log checks pass.
   - Completed:
     - target git remote sanitized.
+    - latest readiness run returned `30 pass, 12 warn, 0 fail`.
     - readiness secret scan passes.
     - env file mode is `600`.
     - readiness git remote credential check passes.
@@ -183,9 +183,8 @@ Completed on the target Mac mini after cutover:
 - `pnpm build` passed during launchd installer at `f379ce25887fd69b64f347a3f027a3d1c2187d51`.
 - Target checkout fast-forwarded cleanly on branch `codex/msp-mac-mini-launch`.
 - Health passed locally and over LAN.
-- `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` returned `29 pass, 12 warn, 0 fail`.
-- `scripts/msp-mac-mini-readiness.sh --run-backup --base-url http://192.168.86.48:3100` created a database backup.
-- `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` created an on-host instance-file backup archive.
+- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` returned `30 pass, 12 warn, 0 fail`.
+- `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` created a fresh database backup and on-host instance-file backup archive.
 - `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` from the operator LAN device.
 - Hermes CoS chat proof passed.
 - Hermes assigned issue-write proof passed.

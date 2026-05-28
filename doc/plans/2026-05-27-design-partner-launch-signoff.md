@@ -17,13 +17,13 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | PR checks | `check`, `audit`, `drift`, `policy`, `verify`, `e2e`, Vercel, Vercel Preview Comments pass on the latest PR #376 head | Complete |
 | Target checkout | `/Users/maxiaoer/workspace/agentdash_msp_launch` clean at the latest PR #376 head | Complete |
 | Local health | `curl -fsS http://127.0.0.1:3100/api/health` returns authenticated/ready JSON | Complete |
-| Host readiness | `scripts/msp-mac-mini-readiness.sh --run-instance-backup --base-url http://192.168.86.48:3100` returned `29 pass, 12 warn, 0 fail` | Complete |
+| Host readiness | `scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://192.168.86.48:3100` returned `30 pass, 12 warn, 0 fail` | Complete |
 | Network precheck | `scripts/msp-partner-access-proof.sh --network-only --base-url http://192.168.86.48:3100` returned `9 pass, 1 warn, 0 fail` | Precheck only |
 | Unauthenticated access | Network precheck confirmed `/api/auth/get-session` rejects with HTTP `401` and `/api/companies` rejects with HTTP `403` | Complete |
 | Hermes CoS | CoS reply routed through `hermes_local` and `/Users/maxiaoer/.local/bin/hermes` | Complete |
 | Hermes agent run | Assigned issue-write run completed and wrote `Hermes issue-write smoke completed` | Complete |
-| Database backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz` | Complete |
-| Instance-file backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz` | Complete |
+| Database backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-171657.sql.gz` | Complete |
+| Instance-file backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260528T001657Z.tgz` | Complete |
 | Git remote hygiene | Readiness reports target Git remotes do not contain embedded credentials | Complete |
 | Billing posture | Stripe disabled for managed week-one design-partner pilot | Complete |
 | Email posture | Resend disabled; manual invites/password resets for week one | Complete |

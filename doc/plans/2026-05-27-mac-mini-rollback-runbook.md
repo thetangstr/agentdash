@@ -3,7 +3,7 @@
 **Target:** `maxiaoer@192.168.86.48`  
 **Service:** `ai.agentdash.agent`  
 **Launch checkout:** `/Users/maxiaoer/workspace/agentdash_msp_launch`  
-**Current launch checkout SHA:** `cd47db96bd72d3f471f3f381107b45649640e763`
+**Current launch checkout SHA:** capture with `git rev-parse HEAD`; before launch it should match the latest PR #376 head.
 
 Use this only for the first MSP design-partner Mac mini path. It assumes the instance uses the Homebrew PostgreSQL 17 database configured in `~/.config/agentdash/agentdash.env`.
 
@@ -27,11 +27,11 @@ REMOTE
 
 Dry-run evidence captured on 2026-05-27:
 
-- target checkout HEAD: `cd47db96bd72d3f471f3f381107b45649640e763`
+- target checkout HEAD: latest PR #376 head
 - target checkout dirty entries: `0`
 - launchd service loaded: `ai.agentdash.agent`
-- latest database backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz`
-- latest instance-file backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260527T220254Z.tgz`
+- latest database backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-171657.sql.gz`
+- latest instance-file backup: `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260528T001657Z.tgz`
 - env file mode: `600`
 - local health: authenticated/ready
 
@@ -73,7 +73,7 @@ ssh maxiaoer@192.168.86.48 'zsh -s' <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-backup_file="/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-140344.sql.gz"
+backup_file="/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-171657.sql.gz"
 
 launchctl unload "$HOME/Library/LaunchAgents/ai.agentdash.agent.plist" 2>/dev/null || true
 dropdb -h localhost -U paperclip paperclip
