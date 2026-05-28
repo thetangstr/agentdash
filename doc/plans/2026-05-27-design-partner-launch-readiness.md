@@ -65,7 +65,7 @@ These must be complete before the first design partner is asked to use the insta
     - Network-only precheck confirms unauthenticated `/api/auth/get-session` rejects with HTTP `401`.
     - Network-only precheck confirms unauthenticated `/api/companies` rejects with HTTP `403`.
   - Remaining:
-    - partner-device login proof using `scripts/msp-partner-access-proof.sh` without `--network-only`.
+    - partner-device login proof using `scripts/msp-partner-access-proof.sh` without `--network-only` and with `--expected-company <expected-company-name-or-id>` or `AGENTDASH_EXPECTED_COMPANY`.
     - external packet validation using `scripts/msp-launch-signoff-check.sh --response <response> --proof-output <proof>`.
     - Tailscale install/ACL proof if LAN is not the chosen private path.
 

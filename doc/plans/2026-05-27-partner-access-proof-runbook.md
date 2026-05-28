@@ -36,6 +36,7 @@ Run this from the actual partner machine or tailnet/LAN device that will operate
 ```sh
 AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
+AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
   --base-url http://192.168.86.48:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
@@ -54,6 +55,7 @@ Required pass conditions:
 - proof-account sign-in succeeds
 - authenticated session is visible
 - authenticated `/api/companies` returns a JSON array
+- expected company name or id is visible in the authenticated `/api/companies` response
 
 After saving the redacted proof output and the filled external confirmation response, run:
 
@@ -84,6 +86,7 @@ Fill these before moving PR #376 out of draft:
 - Chosen access path: LAN / Tailscale / other private network
 - Proof command timestamp:
 - Proof output file or pasted redacted transcript:
+- Expected company name or id used for proof:
 - Operator account confirmed:
 - GitHub token rotation confirmed:
 - Launch owner:

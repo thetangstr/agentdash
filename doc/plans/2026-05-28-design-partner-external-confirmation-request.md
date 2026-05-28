@@ -26,6 +26,7 @@ Required before we move PR #376 out of draft:
 ```sh
 AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
+AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
   --base-url http://192.168.86.48:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
@@ -34,6 +35,7 @@ scripts/msp-partner-access-proof.sh \
 Required script result:
 
 - `Status: Partner-device access proof passed.`
+- `Expected company is visible after login: <expected-company-name-or-id>`
 - `0 fail`
 
 After the proof output and response template are saved locally, validate the go/no-go packet before moving PR #376 out of draft:
@@ -78,6 +80,7 @@ Tailscale ACL/private-network notes:
 Partner proof timestamp:
 Partner proof transcript location or redacted output:
 Proof account can see expected company: yes/no
+Expected company name or id used for proof:
 Browser /assess?onboarding=1 reachable if required: yes/no/not required
 Browser /cos Hermes-backed reply run id or transcript:
 Operator account maxiaoer confirmed: yes/no
@@ -102,6 +105,7 @@ Launch is **no-go** if any of these are true:
 - partner-device login proof fails
 - partner access uses an unintended public URL
 - proof account cannot see the expected company
+- proof transcript does not include `Expected company is visible after login`
 - `/cos` cannot trigger a Hermes-backed reply from the partner-visible path
 - GitHub token rotation is unconfirmed
 - `maxiaoer` is not the intended operator account

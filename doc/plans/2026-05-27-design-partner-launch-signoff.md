@@ -40,6 +40,7 @@ Move PR #376 out of draft only after every item below is filled.
 - [ ] Chosen access path is confirmed: LAN / Tailscale / other private network.
 - [ ] If Tailscale is chosen, Tailscale install and ACL exposure are confirmed.
 - [ ] Proof account can see the expected company after login.
+- [ ] Partner proof transcript includes `Expected company is visible after login`.
 - [ ] Browser proof confirms `/assess?onboarding=1` is reachable if the pilot still requires assessment onboarding.
 - [ ] Browser proof confirms `/cos` opens and can trigger one Hermes-backed CoS reply.
 - [ ] GitHub token rotation is confirmed for any token that may have been stored in the target Git remote before sanitization.
@@ -57,6 +58,7 @@ Run from the actual partner machine or chosen private-network device:
 ```sh
 AGENTDASH_PROOF_EMAIL="<proof-account-email>" \
 AGENTDASH_PROOF_PASSWORD="<proof-account-password>" \
+AGENTDASH_EXPECTED_COMPANY="<expected-company-name-or-id>" \
 scripts/msp-partner-access-proof.sh \
   --base-url http://192.168.86.48:3100 \
   --output "agentdash-partner-proof-$(date -u +%Y%m%dT%H%M%SZ).txt"
@@ -65,6 +67,7 @@ scripts/msp-partner-access-proof.sh \
 Required result:
 
 - `Status: Partner-device access proof passed.`
+- `Expected company is visible after login: <expected-company-name-or-id>`
 - `0 fail`
 
 Then validate the full external response packet:
@@ -87,6 +90,7 @@ For the full copy/paste request, use `doc/plans/2026-05-28-design-partner-extern
 | Chosen access path | |
 | Partner proof timestamp | |
 | Partner proof output location or redacted transcript | |
+| Expected company name or id used for proof | |
 | Operator account confirmed | |
 | GitHub token rotation confirmed | |
 | Launch owner | |

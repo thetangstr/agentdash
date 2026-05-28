@@ -38,6 +38,7 @@ Tailscale ACL/private-network notes: Private LAN only; no Tailscale.
 Partner proof timestamp: 2026-05-28T01:02:03Z
 Partner proof transcript location or redacted output: proof.txt
 Proof account can see expected company: yes
+Expected company name or id used for proof: Acme MSP
 Browser /assess?onboarding=1 reachable if required: not required
 Browser /cos Hermes-backed reply run id or transcript: run abc123
 Operator account maxiaoer confirmed: yes
@@ -56,6 +57,7 @@ Timestamp: 2026-05-28T01:02:03Z
 Mode: login proof
 
 Summary: 11 pass, 0 warn, 0 fail
+[PASS] Expected company is visible after login: Acme MSP
 Status: Partner-device access proof passed.
 `;
 
@@ -125,6 +127,49 @@ test("rejects network-only proof transcripts", () => {
 
       assert.notEqual(result.status, 0, result.stdout + result.stderr);
       assert.match(result.stdout, /Partner proof transcript must be a full login proof/i);
+    },
+  );
+});
+
+test("rejects proof transcripts without expected company visibility", () => {
+  withTempFiles(
+    {
+      "response.txt": completeResponse,
+      "proof.txt": partnerProof.replace("[PASS] Expected company is visible after login: Acme MSP\n", ""),
+    },
+    (paths) => {
+      const result = runSignoffCheck([
+        "--response",
+        paths["response.txt"],
+        "--proof-output",
+        paths["proof.txt"],
+      ]);
+
+      assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /Partner proof transcript must confirm the expected company is visible/i);
+    },
+  );
+});
+
+test("rejects proof transcripts that do not match the response expected company", () => {
+  withTempFiles(
+    {
+      "response.txt": completeResponse.replace(
+        "Expected company name or id used for proof: Acme MSP",
+        "Expected company name or id used for proof: Other Company",
+      ),
+      "proof.txt": partnerProof,
+    },
+    (paths) => {
+      const result = runSignoffCheck([
+        "--response",
+        paths["response.txt"],
+        "--proof-output",
+        paths["proof.txt"],
+      ]);
+
+      assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /Partner proof transcript must confirm the response expected company/i);
     },
   );
 });

@@ -10,6 +10,7 @@ set -u
 BASE_URL="${AGENTDASH_PARTNER_BASE_URL:-}"
 PROOF_EMAIL="${AGENTDASH_PROOF_EMAIL:-}"
 PROOF_PASSWORD="${AGENTDASH_PROOF_PASSWORD:-}"
+EXPECTED_COMPANY="${AGENTDASH_EXPECTED_COMPANY:-}"
 OUTPUT_FILE="${AGENTDASH_PROOF_OUTPUT:-}"
 NETWORK_ONLY=false
 
@@ -21,7 +22,7 @@ COOKIE_JAR=""
 
 usage() {
   cat <<EOF
-Usage: scripts/msp-partner-access-proof.sh --base-url URL [--email EMAIL] [--password PASSWORD] [--output FILE] [--network-only]
+Usage: scripts/msp-partner-access-proof.sh --base-url URL [--email EMAIL] [--password PASSWORD] [--expected-company VALUE] [--output FILE] [--network-only]
 
 Collects partner-device launch evidence:
   - partner-visible URL reaches the Mac mini
@@ -33,6 +34,8 @@ Options:
   --base-url URL     Partner-visible AgentDash URL, for example http://192.168.86.48:3100.
   --email EMAIL      Proof account email. Can also use AGENTDASH_PROOF_EMAIL.
   --password VALUE   Proof account password. Can also use AGENTDASH_PROOF_PASSWORD.
+  --expected-company VALUE
+                    Expected company name, id, or unique substring. Can also use AGENTDASH_EXPECTED_COMPANY.
   --output FILE      Write the redacted proof transcript to FILE.
   --network-only     Do not sign in; useful for URL reachability prechecks only.
   -h, --help         Show this help.
@@ -55,6 +58,11 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || { echo "Missing value for --password" >&2; exit 2; }
       PROOF_PASSWORD="$1"
+      ;;
+    --expected-company)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --expected-company" >&2; exit 2; }
+      EXPECTED_COMPANY="$1"
       ;;
     --output)
       shift
@@ -288,6 +296,15 @@ check_login() {
   else
     fail "Authenticated /api/companies failed with HTTP ${companies_status}"
     cat "$companies_response" 2>/dev/null || true
+    return
+  fi
+
+  if [[ -z "$EXPECTED_COMPANY" ]]; then
+    warn "Expected company check skipped; pass --expected-company or AGENTDASH_EXPECTED_COMPANY for launch signoff"
+  elif grep -Fq "$EXPECTED_COMPANY" "$companies_response"; then
+    pass "Expected company is visible after login: ${EXPECTED_COMPANY}"
+  else
+    fail "Expected company was not visible after login: ${EXPECTED_COMPANY}"
   fi
 }
 
@@ -307,6 +324,7 @@ AgentDash MSP partner access proof
 Timestamp: $(timestamp)
 Base URL: ${BASE_URL:-<unset>}
 Mode: $([[ "$NETWORK_ONLY" == "true" ]] && printf 'network-only precheck' || printf 'login proof')
+Expected company: ${EXPECTED_COMPANY:-<unset>}
 
 EOF
 

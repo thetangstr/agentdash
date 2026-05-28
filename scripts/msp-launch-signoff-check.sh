@@ -184,9 +184,10 @@ check_assess_field() {
 }
 
 check_proof_transcript() {
-  local source_file description
+  local source_file description expected_company
   source_file="$PROOF_OUTPUT_FILE"
   description="Partner proof transcript"
+  expected_company="$(field_value "Expected company name or id used for proof")"
 
   if [[ -z "$source_file" ]]; then
     source_file="$RESPONSE_FILE"
@@ -215,6 +216,20 @@ check_proof_transcript() {
     pass "Partner proof transcript summary reports 0 fail"
   else
     fail "Partner proof transcript must contain a Summary line with 0 fail"
+  fi
+
+  if is_placeholder "$expected_company"; then
+    fail "Expected company name or id used for proof is required"
+  elif grep -Fq "[PASS] Expected company is visible after login: ${expected_company}" "$source_file"; then
+    pass "Partner proof transcript confirms the response expected company: ${expected_company}"
+  else
+    fail "Partner proof transcript must confirm the response expected company: ${expected_company}"
+  fi
+
+  if grep -Eq '^\[PASS\] Expected company is visible after login: .+' "$source_file"; then
+    pass "Partner proof transcript confirms the expected company is visible"
+  else
+    fail "Partner proof transcript must confirm the expected company is visible"
   fi
 }
 
