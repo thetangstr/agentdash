@@ -10,6 +10,8 @@
 
 **Launch signoff packet:** `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
 
+**External confirmation request:** `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
+
 ## P0 Gates
 
 These must be complete before the first design partner is asked to use the instance.
@@ -57,6 +59,7 @@ These must be complete before the first design partner is asked to use the insta
     - LAN health from this operator machine passes.
     - Partner proof runbook exists: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
     - Launch signoff packet exists: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
+    - External confirmation request exists: `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
     - Operator LAN network-only precheck returned `9 pass, 1 warn, 0 fail`.
     - Network-only precheck confirms unauthenticated `/api/auth/get-session` rejects with HTTP `401`.
     - Network-only precheck confirms unauthenticated `/api/companies` rejects with HTTP `403`.
@@ -145,6 +148,7 @@ These should be complete before week-one usage expands beyond the initial operat
   - Evidence: `doc/plans/2026-05-27-msp-design-partner-operating-plan.md`.
   - Partner access proof runbook: `doc/plans/2026-05-27-partner-access-proof-runbook.md`.
   - Launch signoff packet: `doc/plans/2026-05-27-design-partner-launch-signoff.md`.
+  - External confirmation request: `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
   - Still required before usage expands: fill in named partner/operator owners and confirm the issue channel/check-in time with the design partner.
 
 ## Current Local Verification
@@ -197,3 +201,5 @@ These cannot be completed from the local checkout alone:
 - partner-device login proof from the chosen private URL
 - GitHub token rotation confirmation for any token that may have appeared in the target git config
 - operator confirmation of design-partner kickoff cadence and named owners.
+
+Use `doc/plans/2026-05-28-design-partner-external-confirmation-request.md` as the copy/paste request for those confirmations.

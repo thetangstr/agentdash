@@ -6,6 +6,7 @@
 **Current launch head:** use the latest PR #376 head and CI status line.
 **Target Mac mini:** `maxiaoer@192.168.86.48`
 **Private URL under test:** `http://192.168.86.48:3100`
+**External confirmation request:** `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`
 
 Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, SSH keys, or raw customer secrets into this document.
 
@@ -27,6 +28,7 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | Git remote hygiene | Readiness reports target Git remotes do not contain embedded credentials | Complete |
 | Billing posture | Stripe disabled for managed week-one design-partner pilot | Complete |
 | Email posture | Resend disabled; manual invites/password resets for week one | Complete |
+| External confirmation request | `doc/plans/2026-05-28-design-partner-external-confirmation-request.md` is ready to send | Complete |
 
 ## Go/No-Go Checklist
 
@@ -64,6 +66,8 @@ Required result:
 - `0 fail`
 
 Do not include the proof password when pasting the output into a launch ticket or PR comment.
+
+For the full copy/paste request, use `doc/plans/2026-05-28-design-partner-external-confirmation-request.md`.
 
 ## Signoff Fields
 
