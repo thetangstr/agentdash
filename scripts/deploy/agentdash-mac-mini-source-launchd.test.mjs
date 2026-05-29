@@ -8,6 +8,7 @@ import {
   mergeSourceEnv,
   renderSourceBackupScript,
   renderSourceLaunchdPlist,
+  renderSourceReadinessScript,
   renderSourceSupervisorScript,
   renderSourceUpdateScript,
   runMacMiniSourceLaunchdInstall,
@@ -85,6 +86,10 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(backup, /"\$PG_DUMP" "\$DATABASE_URL"/);
   assert.match(backup, /PGPASSWORD="\$\{POSTGRES_PASSWORD:-paperclip\}" "\$PG_DUMP"/);
   assert.match(backup, /PAPERCLIP_EMBEDDED_POSTGRES_PORT/);
+
+  const readiness = renderSourceReadinessScript(plan);
+  assert.match(readiness, /for attempt in \$\(seq 1 30\)/);
+  assert.match(readiness, /AgentDash health did not become ready/);
 
   const update = renderSourceUpdateScript(plan);
   assert.match(update, /git fetch --all --tags/);

@@ -241,7 +241,16 @@ REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 BASE_URL="${baseUrl}"
 
-curl -fsS "$BASE_URL/api/health" >/dev/null
+for attempt in $(seq 1 30); do
+  if curl -fsS "$BASE_URL/api/health" >/dev/null; then
+    break
+  fi
+  if [[ "$attempt" -eq 30 ]]; then
+    echo "AgentDash health did not become ready at $BASE_URL/api/health after $attempt attempts." >&2
+    exit 1
+  fi
+  sleep 2
+done
 
 if [[ -x "$REPO_DIR/scripts/msp-mac-mini-readiness.sh" ]]; then
   args=(
