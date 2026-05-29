@@ -68,6 +68,14 @@ function buildHeaders(input = {}) {
   return headers;
 }
 
+export function buildBrowserMutationHeaders(plan, headers = {}) {
+  return {
+    ...headers,
+    Origin: plan.baseUrl,
+    Referer: `${plan.baseUrl}/`,
+  };
+}
+
 function isLaunchRelevantAgent(agent) {
   return agent
     && typeof agent === "object"
@@ -169,7 +177,7 @@ export async function runHarnessSmoke(input = {}) {
       const result = await fetchJson(plan.testEnvironmentUrl(agent.adapterType), {
         method: "POST",
         headers: {
-          ...headers,
+          ...buildBrowserMutationHeaders(plan, headers),
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
