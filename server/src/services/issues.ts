@@ -248,6 +248,22 @@ function appendAcceptanceCriteriaToDescription(description: string | null | unde
   return base ? `${base}\n\n${criteriaMarkdown}` : criteriaMarkdown;
 }
 
+function definitionOfDoneFromAcceptanceCriteria(
+  title: string | null | undefined,
+  acceptanceCriteria: string[] | undefined,
+) {
+  const criteria = (acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean);
+  if (criteria.length === 0) return undefined;
+  return {
+    summary: title?.trim() || "Task acceptance criteria",
+    criteria: criteria.map((text, index) => ({
+      id: `c${index + 1}`,
+      text,
+      done: false,
+    })),
+  };
+}
+
 function createIssueDependencyReadiness(issueId: string): IssueDependencyReadiness {
   return {
     issueId,
@@ -2637,6 +2653,9 @@ export function issueService(db: Db) {
           Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0),
         ),
         description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
+        definitionOfDone:
+          issueData.definitionOfDone
+          ?? definitionOfDoneFromAcceptanceCriteria(issueData.title, acceptanceCriteria),
         inheritExecutionWorkspaceFromIssueId: parent.id,
       });
 

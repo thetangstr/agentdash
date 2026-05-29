@@ -136,10 +136,12 @@ describe("Assess routes", () => {
       expect(res.body.jumpstart).toBe("# Jumpstart");
     });
 
-    it("returns 404 when no assessment", async () => {
+    it("returns null when no assessment exists yet", async () => {
       mockAssess.getAssessment.mockResolvedValueOnce(null);
       const app = createApp();
-      await request(app).get("/api/companies/company-1/assess").expect(404);
+      const res = await request(app).get("/api/companies/company-1/assess").expect(200);
+
+      expect(res.body).toBeNull();
     });
 
     it("rejects wrong company access", async () => {
@@ -212,6 +214,18 @@ describe("Assess routes", () => {
       expect(callArg.userAnswer).toBe("Top of funnel growth");
       // Legacy MUST NOT have been invoked.
       expect(mockAssess.runAssessment).not.toHaveBeenCalled();
+    });
+
+    it("POST /companies/:cid/assess keeps the initial company assessment on the short report path", async () => {
+      const app = createApp();
+      const res = await request(app)
+        .post("/api/companies/company-1/assess")
+        .send({ assessmentKind: "initial_company", description: "Five-question intake" })
+        .expect(200);
+
+      expect(res.text).toBe("# Report");
+      expect(mockAssess.runAssessment).toHaveBeenCalledTimes(1);
+      expect(mockEngine.nextTurn).not.toHaveBeenCalled();
     });
 
     it("POST /assess/project/clarify routes through engine.nextTurn with assess_project scope", async () => {

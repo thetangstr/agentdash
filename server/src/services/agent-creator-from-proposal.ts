@@ -88,6 +88,7 @@ ${p.oneLineOkr}
 
 When picking up an Issue:
 
+- When creating an Issue directly, include \`definitionOfDone\` in \`POST /api/companies/:companyId/issues\` whenever the work is ready for assignment: \`{ summary, criteria: [{id, text, done: false}, ...], goalMetricLink? }\`. If you use child-issue \`acceptanceCriteria\`, those criteria become the child Issue's DoD.
 - Before transitioning out of \`backlog\`, the Issue must have a \`definitionOfDone\` (DoD). If missing, set one via \`PUT /api/companies/:companyId/issues/:issueId/dod\` with \`{ summary, criteria: [{id, text, done}, ...], goalMetricLink? }\`. Empty \`criteria\` is rejected. The DoD-guard returns HTTP 422 \`DOD_REQUIRED\` if you skip this when the company's \`dod_guard_enabled\` flag is on.
 - When you finish work, transition the Issue to \`in_review\` (NOT \`done\`). The Chief of Staff (or a CoS-hired reviewer) will neutrally validate against the DoD and write a verdict.
 - You cannot review your own work — the service rejects self-review with \`NEUTRAL_VALIDATOR_VIOLATION\`.

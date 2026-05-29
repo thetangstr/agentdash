@@ -21,6 +21,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-pr-process.mjs
+
       - name: Block manual lockfile edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
@@ -106,6 +111,28 @@ jobs:
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
+
+  launch-signoff:
+    needs: [policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run launch signoff policy checks
+        run: pnpm run test:launch-signoff
 
   e2e:
     needs: [policy]

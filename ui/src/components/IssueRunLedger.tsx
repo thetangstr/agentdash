@@ -5,6 +5,7 @@ import { Link } from "@/lib/router";
 import { accessApi, type CurrentBoardAccess } from "../api/access";
 import { activityApi, type RunForIssue, type RunLivenessState } from "../api/activity";
 import { ApiError } from "../api/client";
+import { issuesApi } from "../api/issues";
 import {
   heartbeatsApi,
   type ActiveRunForIssue,
@@ -16,6 +17,14 @@ import { cn, relativeTime } from "../lib/utils";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { describeRunRetryState } from "../lib/runRetryState";
+import {
+  AgentRunFailureGuidance,
+  failureClassificationBadgeTone,
+  readAgentRunFailureClassification,
+  type AgentRunFailureClassification,
+  type AgentRunFailureGuidanceAction,
+} from "./AgentRunFailureGuidance";
+import { buildHarnessSupportEscalationBody } from "../lib/harness-support-escalation";
 
 type IssueRunLedgerProps = {
   issueId: string;
@@ -29,6 +38,7 @@ type IssueRunLedgerProps = {
 };
 
 type IssueRunLedgerContentProps = {
+  issueId?: string;
   runs: RunForIssue[];
   liveRuns?: LiveRunForIssue[];
   activeRun?: ActiveRunForIssue | null;
@@ -41,6 +51,13 @@ type IssueRunLedgerContentProps = {
   canRecordWatchdogDecisions?: boolean;
   watchdogDecisionError?: string | null;
   onWatchdogDecision?: (input: WatchdogDecisionInput) => void;
+  pendingHarnessSupportRunId?: string | null;
+  harnessSupportError?: string | null;
+  onHarnessSupportEscalation?: (input: {
+    runId: string;
+    run: LedgerRun;
+    classification: AgentRunFailureClassification;
+  }) => void;
 };
 
 type LedgerRun = RunForIssue & {
@@ -300,6 +317,59 @@ function livenessCopyForRun(run: LedgerRun) {
   return isActiveRun(run) ? PENDING_LIVENESS_COPY : MISSING_LIVENESS_COPY;
 }
 
+function recoveryActionsForLedgerRun(
+  run: LedgerRun,
+  issueId?: string,
+  options?: {
+    classification?: AgentRunFailureClassification;
+    pendingHarnessSupportRunId?: string | null;
+    onHarnessSupportEscalation?: IssueRunLedgerContentProps["onHarnessSupportEscalation"];
+  },
+): Partial<Record<string, AgentRunFailureGuidanceAction>> {
+  const runHref = `/agents/${run.agentId}/runs/${run.runId}`;
+  const configurationHref = `/agents/${run.agentId}/configuration`;
+  const configAction: AgentRunFailureGuidanceAction = {
+    href: configurationHref,
+    title: "Open this agent's configuration.",
+  };
+  return {
+    retry: {
+      href: runHref,
+      title: "Open the run detail to retry with the original context.",
+    },
+    wait_and_retry: {
+      href: runHref,
+      title: "Open the run detail to retry after checking the transient condition.",
+    },
+    open_credentials: configAction,
+    run_adapter_test: {
+      ...configAction,
+      title: "Open configuration and run the adapter environment test.",
+    },
+    switch_model_or_adapter: configAction,
+    fix_workspace: configAction,
+    fix_permissions: configAction,
+    escalate_support: options?.onHarnessSupportEscalation && options.classification
+      ? {
+          onClick: () =>
+            options.onHarnessSupportEscalation?.({
+              runId: run.runId,
+              run,
+              classification: options.classification!,
+            }),
+          disabled: options.pendingHarnessSupportRunId === run.runId,
+          pending: options.pendingHarnessSupportRunId === run.runId,
+          title: "Add a safe support escalation note to this issue without raw logs or trace bundles.",
+        }
+      : {
+          href: issueId ? `/issues/${issueId}` : runHref,
+          title: issueId
+            ? "Open the issue thread to add a support escalation note."
+            : "Open the run detail for support escalation context.",
+        },
+  };
+}
+
 function stopReasonLabel(run: RunForIssue) {
   const result = asRecord(run.resultJson);
   const stopReason = readString(result?.stopReason);
@@ -408,6 +478,7 @@ export function IssueRunLedger({
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
   const [watchdogDecisionError, setWatchdogDecisionError] = useState<string | null>(null);
+  const [harnessSupportError, setHarnessSupportError] = useState<string | null>(null);
   const { data: boardAccess } = useQuery({
     queryKey: queryKeys.access.currentBoardAccess,
     queryFn: () => accessApi.getCurrentBoardAccess(),
@@ -455,9 +526,47 @@ export function IssueRunLedger({
       });
     },
   });
+  const harnessSupportEscalation = useMutation({
+    mutationFn: async (input: {
+      runId: string;
+      run: LedgerRun;
+      classification: AgentRunFailureClassification;
+    }) =>
+      issuesApi.addComment(
+        issueId,
+        buildHarnessSupportEscalationBody(input.run, input.classification),
+        false,
+        false,
+      ),
+    onMutate: () => {
+      setHarnessSupportError(null);
+    },
+    onSuccess: () => {
+      setHarnessSupportError(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(issueId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issueId) });
+      pushToast({
+        title: "Support escalation added",
+        body: "A safe harness support note was added to this issue without raw logs or trace bundles.",
+        tone: "success",
+      });
+    },
+    onError: (error) => {
+      const message = error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : "Paperclip could not add the harness support escalation.";
+      setHarnessSupportError(message);
+      pushToast({
+        title: "Support escalation failed",
+        body: message,
+        tone: "error",
+      });
+    },
+  });
 
   return (
     <IssueRunLedgerContent
+      issueId={issueId}
       runs={runs ?? []}
       liveRuns={liveRuns}
       activeRun={activeRun}
@@ -470,11 +579,15 @@ export function IssueRunLedger({
       canRecordWatchdogDecisions={canBoardRecordWatchdogDecision(companyId, boardAccess)}
       watchdogDecisionError={watchdogDecisionError}
       onWatchdogDecision={(input) => watchdogDecision.mutate(input)}
+      pendingHarnessSupportRunId={harnessSupportEscalation.variables?.runId ?? null}
+      harnessSupportError={harnessSupportError}
+      onHarnessSupportEscalation={(input) => harnessSupportEscalation.mutate(input)}
     />
   );
 }
 
 export function IssueRunLedgerContent({
+  issueId,
   runs,
   liveRuns,
   activeRun,
@@ -487,6 +600,9 @@ export function IssueRunLedgerContent({
   canRecordWatchdogDecisions = true,
   watchdogDecisionError,
   onWatchdogDecision,
+  pendingHarnessSupportRunId,
+  harnessSupportError,
+  onHarnessSupportEscalation,
 }: IssueRunLedgerContentProps) {
   const ledgerRuns = useMemo(() => mergeRuns(runs, liveRuns, activeRun), [activeRun, liveRuns, runs]);
   const latestRun = ledgerRuns[0] ?? null;
@@ -671,6 +787,11 @@ export function IssueRunLedgerContent({
           ) : null}
         </div>
       ) : null}
+      {harnessSupportError ? (
+        <p className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-900 dark:text-red-200">
+          {harnessSupportError}
+        </p>
+      ) : null}
 
       {feedItems.length === 0 ? (
         <div className="rounded-md border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
@@ -692,6 +813,7 @@ export function IssueRunLedgerContent({
             const continuation = continuationLabel(run);
             const retryState = describeRunRetryState(run);
             const agentName = compactAgentName(run, agentMap);
+            const failureClassification = readAgentRunFailureClassification(run.resultJson);
             return (
               <article
                 key={`run:${run.runId}`}
@@ -740,6 +862,17 @@ export function IssueRunLedgerContent({
                       )}
                     >
                       {retryState.badgeLabel}
+                    </span>
+                  ) : null}
+                  {failureClassification ? (
+                    <span
+                      className={cn(
+                        "rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+                        failureClassificationBadgeTone(failureClassification),
+                      )}
+                      title={`${failureClassification.title}: ${failureClassification.detail}`}
+                    >
+                      Harness: {failureClassification.category.replace(/_/g, " ")}
                     </span>
                   ) : null}
                   {run.outputSilence && RUN_OUTPUT_SILENCE_COPY[run.outputSilence.level] ? (
@@ -806,6 +939,17 @@ export function IssueRunLedgerContent({
                       </p>
                     ) : null}
                   </div>
+                ) : null}
+
+                {failureClassification ? (
+                  <AgentRunFailureGuidance
+                    classification={failureClassification}
+                    actions={recoveryActionsForLedgerRun(run, issueId, {
+                      classification: failureClassification,
+                      pendingHarnessSupportRunId,
+                      onHarnessSupportEscalation,
+                    })}
+                  />
                 ) : null}
 
                 {(() => {

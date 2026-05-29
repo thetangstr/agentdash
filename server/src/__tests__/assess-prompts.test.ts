@@ -57,6 +57,14 @@ describe("assess-prompts", () => {
     expect(prompt).toContain("RESEARCH DATA");
   });
 
+  it("buildSystemPrompt frames company assessment as a short AI adoption starting-point report", () => {
+    const prompt = buildSystemPrompt("sample research context");
+    expect(prompt).toContain("initial company-level assessment");
+    expect(prompt).toContain("AI Adoption Starting Point");
+    expect(prompt).toContain("What to do first");
+    expect(prompt).toContain("Do not produce a project charter");
+  });
+
   it("buildUserPrompt includes company profile fields", () => {
     const input = makeInput();
     const prompt = buildUserPrompt(input, "Some website content about hospitals");

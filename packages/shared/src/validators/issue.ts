@@ -12,6 +12,7 @@ import {
   ISSUE_THREAD_INTERACTION_STATUSES,
   MODEL_PROFILE_KEYS,
 } from "../constants.js";
+import { definitionOfDoneSchema } from "./goals-eval-hitl.js";
 import { multilineTextSchema } from "./text.js";
 
 export const ISSUE_EXECUTION_WORKSPACE_PREFERENCES = [
@@ -147,6 +148,7 @@ export const createIssueSchema = z.object({
   assigneeUserId: z.string().optional().nullable(),
   requestDepth: issueRequestDepthInputSchema.optional().default(0),
   billingCode: z.string().optional().nullable(),
+  definitionOfDone: definitionOfDoneSchema.optional().nullable(),
   assigneeAdapterOverrides: issueAssigneeAdapterOverridesSchema.optional().nullable(),
   executionPolicy: issueExecutionPolicySchema.optional().nullable(),
   executionWorkspaceId: z.string().uuid().optional().nullable(),
@@ -176,7 +178,7 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
-export const updateIssueSchema = createIssueSchema.partial().extend({
+export const updateIssueSchema = createIssueSchema.omit({ definitionOfDone: true }).partial().extend({
   requestDepth: issueRequestDepthInputSchema.optional(),
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),
   comment: multilineTextSchema.pipe(z.string().min(1)).optional(),

@@ -62,7 +62,7 @@ import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { environmentService } from "../services/environments.js";
 import { resolveEnvironmentExecutionTarget } from "../services/environment-execution-target.js";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
-import type { AdapterEnvironmentCheck } from "@paperclipai/adapter-utils";
+import type { AdapterEnvironmentCheck, AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
 import { secretService } from "../services/secrets.js";
 import {
   detectAdapterModel,
@@ -98,6 +98,11 @@ import {
 import { getTelemetryClient } from "../telemetry.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
+import {
+  evaluateAgentHarnessPreflightReadiness,
+  shouldRequireAgentHarnessPreflight,
+  withAgentHarnessPreflightMetadata,
+} from "../services/agent-harness-preflight-readiness.js";
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
@@ -306,6 +311,108 @@ export function agentRoutes(
         },
       ],
     };
+  }
+
+  function mergeAdapterTestResultWithFallbackChecks(
+    result: AdapterEnvironmentTestResult,
+    fallbackChecks: AdapterEnvironmentCheck[],
+  ): AdapterEnvironmentTestResult {
+    if (fallbackChecks.length === 0) return result;
+    const checks = [...fallbackChecks, ...result.checks];
+    const status: AdapterEnvironmentTestResult["status"] = checks.some((check) => check.level === "error")
+      ? "fail"
+      : checks.some((check) => check.level === "warn")
+        ? "warn"
+        : result.status;
+    return { ...result, checks, status };
+  }
+
+  function withHarnessPreflightMetadata(
+    metadata: Record<string, unknown> | null | undefined,
+    input: {
+      adapterType: string;
+      adapterConfig: Record<string, unknown>;
+      defaultEnvironmentId: string | null | undefined;
+      result: AdapterEnvironmentTestResult | null;
+    },
+  ) {
+    if (!input.result) return metadata;
+    return withAgentHarnessPreflightMetadata(metadata, {
+      adapterType: input.adapterType,
+      adapterConfig: input.adapterConfig,
+      defaultEnvironmentId: input.defaultEnvironmentId,
+      result: input.result,
+    });
+  }
+
+  async function runRequiredHarnessPreflight(input: {
+    companyId: string;
+    adapterType: string;
+    adapterConfig: Record<string, unknown>;
+    defaultEnvironmentId: string | null | undefined;
+    failureMessage?: string;
+  }): Promise<AdapterEnvironmentTestResult> {
+    const adapter = requireServerAdapter(input.adapterType);
+    const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
+      input.companyId,
+      input.adapterConfig,
+    );
+    const { executionTarget, environmentName, fallbackChecks } =
+      await resolveAdapterTestExecutionContext({
+        companyId: input.companyId,
+        adapterType: input.adapterType,
+        environmentId:
+          typeof input.defaultEnvironmentId === "string" && input.defaultEnvironmentId.trim().length > 0
+            ? input.defaultEnvironmentId
+            : null,
+      });
+    const result = mergeAdapterTestResultWithFallbackChecks(
+      await adapter.testEnvironment({
+        companyId: input.companyId,
+        adapterType: input.adapterType,
+        config: runtimeAdapterConfig,
+        executionTarget,
+        environmentName,
+      }),
+      fallbackChecks,
+    );
+
+    if (result.status !== "pass") {
+      throw unprocessable(
+        input.failureMessage
+          ?? "Agent harness preflight failed. Resolve the adapter environment checks before creating this agent.",
+        {
+          code: "agent_harness_preflight_failed",
+          result,
+        },
+      );
+    }
+
+    return result;
+  }
+
+  function assertAgentHarnessPreflightReadyForLaunch(agent: {
+    adapterType: string;
+    adapterConfig: unknown;
+    defaultEnvironmentId?: string | null;
+    metadata?: unknown;
+  }) {
+    if (!shouldRequireAgentHarnessPreflight()) return;
+    const readiness = evaluateAgentHarnessPreflightReadiness({
+      adapterType: agent.adapterType,
+      adapterConfig:
+        agent.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+          ? agent.adapterConfig as Record<string, unknown>
+          : {},
+      defaultEnvironmentId: agent.defaultEnvironmentId ?? null,
+      metadata: agent.metadata ?? null,
+    });
+    if (readiness.ready) return;
+    throw unprocessable(readiness.message, {
+      code: "agent_harness_preflight_required",
+      reason: readiness.reason,
+      testedAt: readiness.testedAt,
+    });
   }
 
   async function getCurrentUserRedactionOptions() {
@@ -1313,18 +1420,7 @@ export function agentRoutes(
         environmentName,
       });
 
-      if (fallbackChecks.length > 0) {
-        const checks = [...fallbackChecks, ...result.checks];
-        const status: typeof result.status = checks.some((c) => c.level === "error")
-          ? "fail"
-          : checks.some((c) => c.level === "warn")
-            ? "warn"
-            : result.status;
-        res.json({ ...result, checks, status });
-        return;
-      }
-
-      res.json(result);
+      res.json(mergeAdapterTestResultWithFallbackChecks(result, fallbackChecks));
     },
   );
 
@@ -1811,6 +1907,65 @@ export function agentRoutes(
     res.json(state);
   });
 
+  router.post("/agents/:id/harness-preflight", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await svc.getById(id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertBoardCanManageAgentsForCompany(req, agent.companyId);
+    assertCompanyAccess(req, agent.companyId);
+
+    const adapterConfig =
+      agent.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+        ? agent.adapterConfig as Record<string, unknown>
+        : {};
+    const result = await runRequiredHarnessPreflight({
+      companyId: agent.companyId,
+      adapterType: agent.adapterType,
+      adapterConfig,
+      defaultEnvironmentId: agent.defaultEnvironmentId,
+      failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
+    });
+    const metadata = withHarnessPreflightMetadata(
+      agent.metadata as Record<string, unknown> | null | undefined,
+      {
+        adapterType: agent.adapterType,
+        adapterConfig,
+        defaultEnvironmentId: agent.defaultEnvironmentId,
+        result,
+      },
+    );
+    const updated = await svc.update(id, { metadata });
+    const readiness = evaluateAgentHarnessPreflightReadiness({
+      adapterType: agent.adapterType,
+      adapterConfig,
+      defaultEnvironmentId: agent.defaultEnvironmentId,
+      metadata,
+    });
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "agent.harness_preflight_passed",
+      entityType: "agent",
+      entityId: id,
+      details: {
+        adapterType: agent.adapterType,
+        status: result.status,
+        testedAt: result.testedAt,
+      },
+    });
+
+    res.json({
+      agent: updated ?? { ...agent, metadata },
+      result,
+      readiness,
+    });
+  });
+
   router.post("/companies/:companyId/agent-hires", validate(createAgentHireSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanCreateAgentsForCompany(req, companyId);
@@ -1820,6 +1975,7 @@ export function agentRoutes(
       instructionsBundle,
       sourceIssueId: _sourceIssueId,
       sourceIssueIds: _sourceIssueIds,
+      requireHarnessPreflight,
       ...hireInput
     } = req.body;
     hireInput.adapterType = assertKnownAdapterType(hireInput.adapterType);
@@ -1867,11 +2023,26 @@ export function agentRoutes(
       return;
     }
 
+    const harnessPreflightResult = requireHarnessPreflight
+      ? await runRequiredHarnessPreflight({
+          companyId,
+          adapterType: normalizedHireInput.adapterType,
+          adapterConfig: normalizedAdapterConfig,
+          defaultEnvironmentId: normalizedHireInput.defaultEnvironmentId,
+        })
+      : null;
+
     const requiresApproval = company.requireBoardApprovalForNewAgents;
     const status = requiresApproval ? "pending_approval" : "idle";
     const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
       agentService(dbOrTx).create(companyId, {
         ...normalizedHireInput,
+        metadata: withHarnessPreflightMetadata(normalizedHireInput.metadata, {
+          adapterType: normalizedHireInput.adapterType,
+          adapterConfig: normalizedAdapterConfig,
+          defaultEnvironmentId: normalizedHireInput.defaultEnvironmentId,
+          result: harnessPreflightResult,
+        }),
         status,
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
@@ -2009,6 +2180,7 @@ export function agentRoutes(
     const {
       desiredSkills: requestedDesiredSkills,
       instructionsBundle,
+      requireHarnessPreflight,
       ...createInput
     } = req.body;
     createInput.adapterType = assertKnownAdapterType(createInput.adapterType);
@@ -2046,11 +2218,26 @@ export function agentRoutes(
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
     });
 
+    const harnessPreflightResult = requireHarnessPreflight
+      ? await runRequiredHarnessPreflight({
+          companyId,
+          adapterType: createInput.adapterType,
+          adapterConfig: normalizedAdapterConfig,
+          defaultEnvironmentId: createInput.defaultEnvironmentId,
+        })
+      : null;
+
     const createdAgent = await createAgentWithinTierCapacity(companyId, res, (dbOrTx) =>
       agentService(dbOrTx).create(companyId, {
         ...createInput,
         adapterConfig: normalizedAdapterConfig,
         runtimeConfig: normalizedRuntimeConfig,
+        metadata: withHarnessPreflightMetadata(createInput.metadata, {
+          adapterType: createInput.adapterType,
+          adapterConfig: normalizedAdapterConfig,
+          defaultEnvironmentId: createInput.defaultEnvironmentId,
+          result: harnessPreflightResult,
+        }),
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
@@ -2819,6 +3006,8 @@ export function agentRoutes(
       await assertBoardCanManageAgentsForCompany(req, agent.companyId);
     }
 
+    assertAgentHarnessPreflightReadyForLaunch(agent);
+
     const run = await heartbeat.wakeup(id, {
       source: req.body.source,
       triggerDetail: req.body.triggerDetail ?? "manual",
@@ -2872,6 +3061,8 @@ export function agentRoutes(
     } else {
       await assertBoardCanManageAgentsForCompany(req, agent.companyId);
     }
+
+    assertAgentHarnessPreflightReadyForLaunch(agent);
 
     const run = await heartbeat.invoke(
       id,

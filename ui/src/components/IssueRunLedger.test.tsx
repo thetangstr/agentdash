@@ -162,6 +162,9 @@ function renderLedger(props: Partial<ComponentProps<typeof IssueRunLedgerContent
       canRecordWatchdogDecisions={props.canRecordWatchdogDecisions}
       watchdogDecisionError={props.watchdogDecisionError}
       onWatchdogDecision={props.onWatchdogDecision}
+      pendingHarnessSupportRunId={props.pendingHarnessSupportRunId}
+      harnessSupportError={props.harnessSupportError}
+      onHarnessSupportEscalation={props.onHarnessSupportEscalation}
     />,
   );
 }
@@ -346,6 +349,81 @@ describe("IssueRunLedger", () => {
     expect(container.textContent).toContain("cancelled");
     expect(container.textContent).toContain("budget paused");
     expect(container.textContent).toContain("paused by board");
+  });
+
+  it("surfaces classified harness failures with operator recovery guidance", () => {
+    renderLedger({
+      runs: [
+        createRun({
+          runId: "run-missing-key",
+          status: "failed",
+          livenessState: "failed",
+          resultJson: {
+            stopReason: "adapter_failed",
+            failureClassification: {
+              category: "missing_credential",
+              severity: "customer_action_required",
+              title: "Credential setup is incomplete",
+              detail: "The adapter needs a configured API key or completed CLI login before this agent can run.",
+              nextActions: ["open_credentials", "run_adapter_test", "retry"],
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(container.textContent).toContain("Harness recovery");
+    expect(container.textContent).toContain("Credential setup is incomplete");
+    expect(container.textContent).toContain("The adapter needs a configured API key");
+    expect(container.textContent).toContain("Open credentials");
+    expect(container.textContent).toContain("Run adapter test");
+    expect(container.textContent).toContain("Retry");
+    expect(container.querySelector('a[href="/agents/agent-1/configuration"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/agents/agent-1/runs/run-missing-key"]')).not.toBeNull();
+  });
+
+  it("lets operators escalate a classified harness failure from the issue ledger", () => {
+    const onHarnessSupportEscalation = vi.fn();
+    renderLedger({
+      issueId: "issue-1",
+      runs: [
+        createRun({
+          runId: "run-needs-support",
+          status: "failed",
+          livenessState: "failed",
+          resultJson: {
+            stopReason: "adapter_failed",
+            failureClassification: {
+              category: "unknown",
+              severity: "product_bug_unknown",
+              title: "Run failed for an unknown reason",
+              detail: "AgentDash could not classify this failure from the adapter error.",
+              nextActions: ["run_adapter_test", "retry", "escalate_support"],
+            },
+          },
+        }),
+      ],
+      onHarnessSupportEscalation,
+    });
+
+    const escalateButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Escalate support"),
+    );
+    expect(escalateButton).not.toBeUndefined();
+
+    act(() => {
+      escalateButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(onHarnessSupportEscalation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-needs-support",
+        classification: expect.objectContaining({
+          category: "unknown",
+          severity: "product_bug_unknown",
+        }),
+      }),
+    );
   });
 
   it("surfaces active and completed child issue summaries", () => {

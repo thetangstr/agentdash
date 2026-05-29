@@ -193,6 +193,70 @@ describe("POST /api/onboarding/bootstrap", () => {
   });
 });
 
+describe("POST /api/onboarding/complete-initial-assessment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOrchestrator.bootstrap.mockResolvedValue({
+      companyId: "c1",
+      cosAgentId: "cos1",
+      conversationId: "conv1",
+    });
+    mockCosState.getOrCreate.mockResolvedValue({ conversationId: "conv1" });
+    mockCosState.setGoals.mockResolvedValue({ conversationId: "conv1" });
+    mockCosState.advancePhase.mockResolvedValue({ conversationId: "conv1", phase: "plan" });
+  });
+
+  it("attaches the short assessment to CoS onboarding state and advances to plan", async () => {
+    const app = buildApp({
+      type: "board",
+      userId: "u1",
+      source: "session",
+      companyIds: ["c1"],
+    });
+
+    const res = await request(app)
+      .post("/api/onboarding/complete-initial-assessment")
+      .send({
+        companyId: "c1",
+        assessmentMarkdown: "## AI Adoption Starting Point\nStart with proposal response.",
+        assessmentInput: {
+          companyName: "Acme",
+          industry: "Healthcare",
+          challenges: "Sales teams wait too long for compliant proposal answers.",
+          currentSystems: "Salesforce, SharePoint",
+          targets: "Shorten proposal response time by 50%.",
+          selectedFunctions: ["sales"],
+          aiUsageLevel: "individual",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      companyId: "c1",
+      cosAgentId: "cos1",
+      conversationId: "conv1",
+      redirectUrl: "/cos",
+    });
+    expect(mockOrchestrator.bootstrap).toHaveBeenCalledWith("u1");
+    expect(mockCosState.getOrCreate).toHaveBeenCalledWith("conv1");
+    expect(mockCosState.setGoals).toHaveBeenCalledWith(
+      "conv1",
+      expect.objectContaining({
+        shortTerm: "Shorten proposal response time by 50%.",
+        longTerm: expect.stringContaining("Acme"),
+        constraints: expect.objectContaining({
+          source: "initial_company_assessment",
+          industry: "Healthcare",
+          currentSystems: "Salesforce, SharePoint",
+          selectedFunctions: ["sales"],
+          assessmentSummary: expect.stringContaining("AI Adoption Starting Point"),
+        }),
+      }),
+    );
+    expect(mockCosState.advancePhase).toHaveBeenCalledWith("conv1", "plan");
+  });
+});
+
 describe("POST /api/onboarding/agent/confirm", () => {
   beforeEach(() => {
     vi.clearAllMocks();

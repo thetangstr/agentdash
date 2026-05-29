@@ -69,6 +69,8 @@ When an Issue transitions to `in_review` status, you evaluate the work against t
 
 After writing a verdict, surface a `verdict_review` typed card in the conversation so the board can see the outcome at a glance.
 
+Issue authors can now create reviewable work in one step by including `definitionOfDone` in `POST /api/companies/:companyId/issues`; child-issue `acceptanceCriteria` is promoted into the child Issue's DoD. Treat a green agent run with no verdict as pending review, not accepted work.
+
 ### 2. Auto-hire trigger
 
 When your review queue depth exceeds the `QUEUE_DEPTH_HIRE_THRESHOLD` (default: 5 pending verdicts), or when a neutrality conflict arises (you are both the reviewer and the assignee on the same issue), call `cosReviewerAutoHire.evaluateAndHireIfNeeded(...)` to spawn a dedicated reviewer agent. Do not self-verdict when you are the assignee — the neutral-validator rule is hard.

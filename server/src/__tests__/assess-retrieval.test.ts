@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { retrieveContext, type AssessmentInput } from "../services/assess-retrieval.js";
+import {
+  expandSelectedFunctionSlugs,
+  retrieveContext,
+  type AssessmentInput,
+} from "../services/assess-retrieval.js";
 
 // Closes #286 (assess-retrieval portion): retrieveContext reads JSON
 // fixtures from server/src/data/{matrix,markets,companies}/ — but that
@@ -48,6 +52,26 @@ function makeInput(overrides?: Partial<AssessmentInput>): AssessmentInput {
 }
 
 describe("assess-retrieval", () => {
+  it("expands top-level function categories to matrix function slugs", () => {
+    expect(expandSelectedFunctionSlugs(["sales"])).toEqual([
+      "business-development",
+      "account-management",
+      "revenue-operations",
+    ]);
+    expect(expandSelectedFunctionSlugs(["operations", "cybersecurity"])).toEqual([
+      "supply-chain",
+      "facilities",
+      "quality-regulatory",
+      "program-management",
+      "cybersecurity",
+    ]);
+    expect(expandSelectedFunctionSlugs(["sales", "business-development"])).toEqual([
+      "business-development",
+      "account-management",
+      "revenue-operations",
+    ]);
+  });
+
   it.skipIf(!hasMatrixData)("returns matrix cells for a known industry", () => {
     const ctx = retrieveContext(makeInput({ industrySlug: "healthcare" }));
     expect(ctx.matrixCells.length).toBeGreaterThan(0);
