@@ -1,4 +1,5 @@
 import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
 
@@ -10,7 +11,7 @@ type HarnessCheck = {
 };
 
 export type AgentHarnessPreflightStatus = {
-  state: "missing" | "pass" | "warn" | "fail" | "malformed";
+  state: "missing" | "pass" | "warn" | "fail" | "malformed" | "stale";
   title: string;
   message: string;
   adapterType: string | null;
@@ -66,12 +67,26 @@ export function readAgentHarnessPreflightStatus(metadata: unknown): AgentHarness
   const adapterType = readString(harness.adapterType);
   const testedAt = readString(harness.testedAt);
   const configDigest = readString(harness.configDigest);
+  const contractVersion = typeof harness.contractVersion === "number" && Number.isInteger(harness.contractVersion)
+    ? harness.contractVersion
+    : null;
   const checks = readChecks(harness.checks);
   if (!status || !adapterType || !testedAt || !configDigest) {
     return {
       state: "malformed",
       title: "Harness preflight evidence is incomplete",
       message: "Run preflight again so launch-mode checks can verify this saved agent configuration.",
+      adapterType,
+      testedAt,
+      checks,
+    };
+  }
+
+  if (contractVersion !== AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION) {
+    return {
+      state: "stale",
+      title: "Harness preflight evidence is stale",
+      message: "Run preflight again because the saved evidence was produced for an older launch contract.",
       adapterType,
       testedAt,
       checks,

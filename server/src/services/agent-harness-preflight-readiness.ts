@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdapterEnvironmentTestResult } from "@paperclipai/adapter-utils";
-
-const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
+import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
 
 export type AgentHarnessPreflightReadinessReason =
   | "passed"
