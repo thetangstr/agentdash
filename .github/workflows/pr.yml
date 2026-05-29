@@ -160,8 +160,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+      - name: Verify hosted Chrome
+        run: google-chrome --version
 
       - name: Generate Paperclip config
         run: |
@@ -217,6 +217,10 @@ jobs:
           # to step 3. The bypass returns a synthetic "pass" so the
           # test can exercise the rest of the wizard.
           AGENTDASH_ADAPTER_ENV_BYPASS: "true"
+          # GitHub-hosted Ubuntu runners already include Chrome. Use it
+          # directly instead of downloading Playwright's bundled Chromium,
+          # which can stall in CI after the archive reaches 100%.
+          PLAYWRIGHT_CHROMIUM_CHANNEL: "chrome"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report
