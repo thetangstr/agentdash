@@ -41,6 +41,7 @@ export interface DashboardTaskOutcomeQuality {
   unreviewedDoneIssues: number;
   acceptanceRatePercent: number;
   greenRunsPendingReview: number;
+  greenRunsWithOpenTasks: number;
   issueLinkedSpendCents: number;
   issueLinkedTokens: number;
   spendPerAcceptedIssueCents: number | null;

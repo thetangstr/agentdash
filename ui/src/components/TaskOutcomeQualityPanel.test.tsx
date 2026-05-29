@@ -20,6 +20,7 @@ describe("TaskOutcomeQualityPanel", () => {
       unreviewedDoneIssues: 1,
       acceptanceRatePercent: 50,
       greenRunsPendingReview: 1,
+      greenRunsWithOpenTasks: 1,
       issueLinkedSpendCents: 2300,
       issueLinkedTokens: 2600,
       spendPerAcceptedIssueCents: 2300,
@@ -31,6 +32,7 @@ describe("TaskOutcomeQualityPanel", () => {
     expect(html).toContain("50%");
     expect(html).toContain("75%");
     expect(html).toContain("$23.00");
+    expect(html).toContain("green run left a task open");
     expect(html).toContain("green runs pending review");
   });
 });
