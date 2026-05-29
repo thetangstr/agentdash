@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { ArrowDown } from "lucide-react";
 import { usePanel } from "../context/PanelContext";
 import { cn } from "../lib/utils";
@@ -35,7 +36,7 @@ function distanceFromBottom(target: ReturnType<typeof resolveScrollTarget>) {
  */
 export function ScrollToBottom() {
   const [visible, setVisible] = useState(false);
-  const { panelVisible, panelContent } = usePanel();
+  const { panelVisible, panelContent, panelWidth } = usePanel();
 
   useEffect(() => {
     const check = () => {
@@ -70,13 +71,19 @@ export function ScrollToBottom() {
 
   if (!visible) return null;
 
+  const panelOffsetStyle =
+    panelVisible && panelContent
+      ? ({ "--properties-panel-offset": `${panelWidth + 24}px` } as CSSProperties)
+      : undefined;
+
   return (
     <button
       onClick={scroll}
       className={cn(
         "fixed bottom-[calc(1.5rem+5rem+env(safe-area-inset-bottom))] right-6 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-[background-color,right] duration-200 md:bottom-6",
-        panelVisible && panelContent && "md:right-[calc(320px+1.5rem)]",
+        panelVisible && panelContent && "md:right-[var(--properties-panel-offset)]",
       )}
+      style={panelOffsetStyle}
       aria-label="Scroll to bottom"
     >
       <ArrowDown className="h-4 w-4" />

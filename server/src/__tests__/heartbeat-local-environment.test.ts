@@ -63,6 +63,26 @@ async function waitForRunLeasesToRelease(
     .where(eq(environmentLeases.heartbeatRunId, runId));
 }
 
+async function waitForRunReleaseActivity(
+  db: ReturnType<typeof createDb>,
+  runId: string,
+  timeoutMs = 5_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await db
+      .select()
+      .from(activityLog)
+      .where(and(eq(activityLog.runId, runId), eq(activityLog.action, "environment.lease_released")));
+    if (rows.length > 0) return rows;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return await db
+    .select()
+    .from(activityLog)
+    .where(and(eq(activityLog.runId, runId), eq(activityLog.action, "environment.lease_released")));
+}
+
 describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
   let db!: ReturnType<typeof createDb>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
@@ -136,6 +156,9 @@ describeEmbeddedPostgres("heartbeat local environment lifecycle", () => {
     expect(leases[0]?.status).toBe("released");
     expect(leases[0]?.provider).toBe("local");
     expect(leases[0]?.releasedAt).not.toBeNull();
+
+    const releaseActivity = await waitForRunReleaseActivity(db, queued!.id);
+    expect(releaseActivity).toHaveLength(1);
 
     const context = finished?.contextSnapshot as Record<string, unknown>;
     expect(context.paperclipEnvironment).toMatchObject({

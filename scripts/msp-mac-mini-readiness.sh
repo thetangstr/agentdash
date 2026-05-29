@@ -26,19 +26,22 @@ INSTANCE_BACKUP_DIR="${AGENTDASH_INSTANCE_BACKUP_DIR:-${BACKUP_DIR}}"
 RUN_BACKUP=false
 RUN_INSTANCE_BACKUP=false
 BASE_URL_OVERRIDE=""
+EXPECTED_COMPANY="${AGENTDASH_EXPECTED_COMPANY:-AgentDash MSP Demo}"
 
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
+LAUNCHD_PID=""
 
 usage() {
   cat <<EOF
-Usage: scripts/msp-mac-mini-readiness.sh [--run-backup] [--run-instance-backup] [--base-url URL]
+Usage: scripts/msp-mac-mini-readiness.sh [--run-backup] [--run-instance-backup] [--base-url URL] [--expected-company VALUE]
 
 Checks the Mac mini launch P0/P1 evidence:
   - launchd service, health endpoint, logs
   - authenticated/private env posture
   - Hermes harness command wiring
+  - local agent API write-back URL
   - Tailscale/private URL posture
   - backup posture, optional backup creation
   - billing/email decision posture
@@ -48,6 +51,9 @@ Options:
   --run-backup           Create a manual database backup using pnpm db:backup.
   --run-instance-backup  Archive env/config/storage/secret files that exist.
   --base-url URL         Override PAPERCLIP_PUBLIC_URL for the remote health check.
+  --expected-company VALUE
+                         Company name or id that must have pro_trial/pro_active entitlement.
+                         Defaults to AGENTDASH_EXPECTED_COMPANY or AgentDash MSP Demo.
   -h, --help             Show this help.
 EOF
 }
@@ -64,6 +70,11 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || { echo "Missing value for --base-url" >&2; exit 2; }
       BASE_URL_OVERRIDE="$1"
+      ;;
+    --expected-company)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --expected-company" >&2; exit 2; }
+      EXPECTED_COMPANY="$1"
       ;;
     -h|--help)
       usage
@@ -111,6 +122,23 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+pid_has_ancestor() {
+  local pid="$1"
+  local ancestor="$2"
+  local parent
+
+  [[ -n "$pid" && -n "$ancestor" && "$pid" != "-" && "$ancestor" != "-" ]] || return 1
+  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
+    if [[ "$pid" == "$ancestor" ]]; then
+      return 0
+    fi
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$parent" && "$parent" != "$pid" ]] || return 1
+    pid="$parent"
+  done
+  return 1
+}
+
 file_mode() {
   local path="$1"
   if stat -f %Lp "$path" >/dev/null 2>&1; then
@@ -143,6 +171,27 @@ env_value() {
 redact_url() {
   local value="$1"
   printf '%s' "$value" | sed -E 's#(postgres://[^:/@]+:)[^@]+@#\1REDACTED@#g'
+}
+
+sql_literal_value() {
+  local value="$1"
+  printf '%s' "$value" | sed "s/'/''/g"
+}
+
+default_embedded_db_url() {
+  local port
+  port="$(env_value PAPERCLIP_EMBEDDED_POSTGRES_PORT)"
+  printf 'postgres://paperclip:paperclip@localhost:%s/paperclip' "${port:-54329}"
+}
+
+resolved_database_url() {
+  local db_url
+  db_url="$(env_value DATABASE_URL)"
+  if [[ -n "$db_url" ]]; then
+    printf '%s' "$db_url"
+  else
+    default_embedded_db_url
+  fi
 }
 
 trim_trailing_slash() {
@@ -225,12 +274,12 @@ check_env_present() {
 
 check_postgres() {
   local db_url
-  db_url="$(env_value DATABASE_URL)"
-  if [[ -z "$db_url" ]]; then
-    fail "DATABASE_URL is not set in ${ENV_FILE}"
-    return
+  db_url="$(resolved_database_url)"
+  if [[ -n "$(env_value DATABASE_URL)" ]]; then
+    pass "DATABASE_URL is set: $(redact_url "$db_url")"
+  else
+    pass "DATABASE_URL is unset; checking managed embedded Postgres default: $(redact_url "$db_url")"
   fi
-  pass "DATABASE_URL is set: $(redact_url "$db_url")"
 
   if have docker && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentdash-pg$'; then
     if docker exec agentdash-pg pg_isready -U paperclip -d paperclip >/dev/null 2>&1; then
@@ -253,6 +302,8 @@ check_postgres() {
 }
 
 check_launchd() {
+  local launchd_row expected_port listener_pids listener_pid listener_owned
+
   if [[ -f "$PLIST_FILE" ]]; then
     pass "LaunchAgent plist exists: ${PLIST_FILE}"
   else
@@ -260,13 +311,47 @@ check_launchd() {
   fi
 
   if have launchctl; then
-    if launchctl list 2>/dev/null | awk -v label="$LABEL" '$3 == label { found = 1 } END { exit found ? 0 : 1 }'; then
+    launchd_row="$(launchctl list 2>/dev/null | awk -v label="$LABEL" '$3 == label { print $0; exit }' || true)"
+    if [[ -n "$launchd_row" ]]; then
+      LAUNCHD_PID="$(printf '%s' "$launchd_row" | awk '{ print $1 }')"
       pass "launchd service is loaded: ${LABEL}"
     else
       fail "launchd service is not loaded: ${LABEL}"
     fi
   else
     fail "launchctl is not available; this does not look like a macOS launchd environment"
+  fi
+
+  expected_port="$(env_value PORT)"
+  expected_port="${expected_port:-3100}"
+  if ! have lsof; then
+    warn "lsof is not available; cannot prove launchd owns TCP port ${expected_port}"
+    return
+  fi
+  if [[ -z "$LAUNCHD_PID" || "$LAUNCHD_PID" == "-" ]]; then
+    fail "launchd service has no live PID; cannot prove it owns TCP port ${expected_port}"
+    return
+  fi
+
+  listener_pids="$(lsof -nP -t -iTCP:"$expected_port" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+  if [[ -z "$listener_pids" ]]; then
+    fail "No process is listening on configured PORT=${expected_port}"
+    return
+  fi
+
+  listener_owned=false
+  while IFS= read -r listener_pid; do
+    [[ -n "$listener_pid" ]] || continue
+    if pid_has_ancestor "$listener_pid" "$LAUNCHD_PID"; then
+      listener_owned=true
+      break
+    fi
+  done <<< "$listener_pids"
+
+  if [[ "$listener_owned" == "true" ]]; then
+    pass "launchd service owns configured TCP port ${expected_port}"
+  else
+    fail "Configured TCP port ${expected_port} is not owned by launchd service ${LABEL}; a stale process may be masking a shifted service port"
   fi
 }
 
@@ -340,9 +425,11 @@ check_network() {
       fail "PAPERCLIP_BIND=tailnet but PAPERCLIP_TAILNET_BIND_HOST is empty"
     fi
   elif [[ "$bind" == "loopback" ]]; then
-    fail "PAPERCLIP_BIND=loopback; partner devices will not reach the Mac mini"
+    warn "PAPERCLIP_BIND=loopback; acceptable only when Tailscale Serve or another private proxy reaches this app"
+  elif [[ "$bind" == "lan" ]]; then
+    pass "PAPERCLIP_BIND=lan; confirm the Mac mini is not publicly port-forwarded"
   else
-    warn "PAPERCLIP_BIND is '${bind:-<unset>}'; expected tailnet for the MSP pilot"
+    warn "PAPERCLIP_BIND is '${bind:-<unset>}'; expected lan, tailnet, or loopback behind Tailscale Serve for the MSP pilot"
   fi
 
   if have tailscale; then
@@ -374,6 +461,25 @@ check_network() {
   base_url="$(trim_trailing_slash "$public_url")"
   curl_health "$base_url" || true
   warn "Partner-device proof is manual: run the same health/login check from the partner machine or tailnet device"
+}
+
+check_agent_api_url() {
+  local api_url base_url
+  api_url="$(env_value PAPERCLIP_API_URL)"
+
+  if [[ -z "$api_url" ]]; then
+    fail "PAPERCLIP_API_URL is not set; local agent harnesses may inherit the partner URL and fail API write-back"
+    return
+  fi
+
+  if is_loopback_url "$api_url"; then
+    pass "PAPERCLIP_API_URL is loopback for local agent write-back: ${api_url}"
+  else
+    fail "PAPERCLIP_API_URL must be loopback for local Mac mini agents, found ${api_url}"
+  fi
+
+  base_url="$(trim_trailing_slash "$api_url")"
+  curl_health "$base_url" || true
 }
 
 check_backup() {
@@ -475,19 +581,43 @@ check_backup() {
 }
 
 check_billing_email() {
-  local stripe_key stripe_webhook stripe_price resend from_email
+  local stripe_key stripe_webhook stripe_price resend from_email entitlement_tier db_url
   stripe_key="$(env_value STRIPE_SECRET_KEY)"
   stripe_webhook="$(env_value STRIPE_WEBHOOK_SECRET)"
   stripe_price="$(env_value STRIPE_PRO_PRICE_ID)"
   resend="$(env_value RESEND_API_KEY)"
   from_email="$(env_value AGENTDASH_EMAIL_FROM)"
+  db_url="$(resolved_database_url)"
 
   if [[ -z "$stripe_key" && -z "$stripe_webhook" && -z "$stripe_price" ]]; then
-    warn "Stripe is not configured; launch posture is managed design-partner pilot without self-serve billing"
+    pass "Stripe is not configured on the private Mac mini; paid trial is collected through AgentDash-owned Stripe"
   elif [[ -n "$stripe_key" && -n "$stripe_webhook" && -n "$stripe_price" ]]; then
-    pass "Stripe env vars are present; run checkout/webhook test before expanding usage"
+    warn "Stripe env vars are present on the private Mac mini; confirm this host is not relying on public inbound webhooks"
   else
     fail "Stripe env vars are partially configured; either complete them or remove them for managed pilot posture"
+  fi
+
+  if ! have psql; then
+    fail "Cannot verify local entitlement because psql is not available"
+  else
+    local expected_company_sql
+    expected_company_sql="$(sql_literal_value "$EXPECTED_COMPANY")"
+    entitlement_tier="$(
+      PGPASSWORD=paperclip psql "$db_url" -At \
+        -c "SELECT plan_tier FROM companies WHERE name = '${expected_company_sql}' OR id::text = '${expected_company_sql}' ORDER BY updated_at DESC LIMIT 1;" \
+        2>/dev/null || true
+    )"
+    case "$entitlement_tier" in
+      pro_trial|pro_active)
+        pass "Local entitlement for ${EXPECTED_COMPANY} is ${entitlement_tier}"
+        ;;
+      "")
+        fail "Local entitlement company was not found: ${EXPECTED_COMPANY}"
+        ;;
+      *)
+        fail "Local entitlement for ${EXPECTED_COMPANY} must be pro_trial or pro_active, found ${entitlement_tier}"
+        ;;
+    esac
   fi
 
   if [[ -z "$resend" ]]; then
@@ -579,6 +709,7 @@ App dir: ${APP_DIR}
 Env file: ${ENV_FILE}
 Home: ${AGENTDASH_HOME}
 Launch label: ${LABEL}
+Expected company entitlement: ${EXPECTED_COMPANY}
 
 EOF
 }
@@ -638,6 +769,9 @@ check_hermes
 
 info "Checking partner network posture"
 check_network
+
+info "Checking local agent API posture"
+check_agent_api_url
 
 info "Checking backup posture"
 check_backup

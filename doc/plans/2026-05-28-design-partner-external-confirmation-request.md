@@ -65,8 +65,17 @@ Required validator result:
    - Confirm the week-one issue channel.
    - Confirm the week-one daily check-in time.
    - Confirm the data classes approved for week-one use.
+   - Confirm the 24/7 Support Watch Agent is configured.
+   - Confirm support sessions use private-network access only after explicit customer consent.
+   - Confirm week-one outputs remain human-reviewed only and no direct PSA/RMM writes are enabled.
 
-5. Security confirmation:
+5. Billing confirmation:
+   - Confirm the paid trial/subscription was created through AgentDash-owned Stripe or payment-link flow.
+   - Provide a non-secret Stripe/customer/checkout evidence pointer.
+   - Confirm the local customer company entitlement is recorded as `pro_trial` or `pro_active`.
+   - Confirm the Billing page is reachable from the sidebar and displays the plan/trial state.
+
+6. Security confirmation:
    - Confirm rotation of any GitHub token that may have appeared in the target Git remote before sanitization.
    - Confirm no public URL is being used unless explicitly approved by the launch owner.
 
@@ -84,6 +93,13 @@ Expected company name or id used for proof:
 Browser /assess?onboarding=1 reachable if required: yes/no/not required
 Browser /cos Hermes-backed reply run id or transcript:
 Operator account maxiaoer confirmed: yes/no
+Paid trial/subscription created: yes/no
+Stripe payment/portal evidence location:
+Local entitlement state recorded: pro_trial/pro_active
+24/7 Support Watch Agent configured: yes/no
+Support-session consent model confirmed: yes/no
+No direct PSA/RMM writes for week one: yes/no
+Human-reviewed outputs only confirmed: yes/no
 GitHub token rotation confirmed: yes/no
 Launch owner:
 Partner champion:
@@ -107,6 +123,11 @@ Launch is **no-go** if any of these are true:
 - proof account cannot see the expected company
 - proof transcript does not include `Expected company is visible after login`
 - `/cos` cannot trigger a Hermes-backed reply from the partner-visible path
+- paid trial/subscription evidence is missing
+- local entitlement is not `pro_trial` or `pro_active`
+- 24/7 Support Watch Agent is unset
+- support-session consent model is unset
+- week-one safety allows direct PSA/RMM writes or unreviewed external outputs
 - GitHub token rotation is unconfirmed
 - `maxiaoer` is not the intended operator account
 - named owner/cadence/data-boundary fields are blank

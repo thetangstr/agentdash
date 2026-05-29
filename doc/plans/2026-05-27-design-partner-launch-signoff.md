@@ -26,7 +26,7 @@ Do not paste passwords, session cookies, invite tokens, API keys, OAuth tokens, 
 | Database backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/paperclip-20260527-171657.sql.gz` | Complete |
 | Instance-file backup | `/Users/maxiaoer/.agentdash/instances/default/data/backups/agentdash-instance-files-20260528T001657Z.tgz` | Complete |
 | Git remote hygiene | Readiness reports target Git remotes do not contain embedded credentials | Complete |
-| Billing posture | Stripe disabled for managed week-one design-partner pilot | Complete |
+| Billing posture | Paid trial collected through AgentDash-owned Stripe; private Mac mini records local entitlement and does not depend on public inbound Stripe webhooks | Required |
 | Email posture | Resend disabled; manual invites/password resets for week one | Complete |
 | External confirmation request | `doc/plans/2026-05-28-design-partner-external-confirmation-request.md` is ready to send | Complete |
 | External signoff validator | `scripts/msp-launch-signoff-check.sh` validates the filled confirmation response and partner proof transcript before PR #376 leaves draft | Ready |
@@ -43,6 +43,12 @@ Move PR #376 out of draft only after every item below is filled.
 - [ ] Partner proof transcript includes `Expected company is visible after login`.
 - [ ] Browser proof confirms `/assess?onboarding=1` is reachable if the pilot still requires assessment onboarding.
 - [ ] Browser proof confirms `/cos` opens and can trigger one Hermes-backed CoS reply.
+- [ ] Paid trial/subscription is created in AgentDash-owned Stripe or payment-link flow.
+- [ ] Local customer company entitlement is recorded as `pro_trial` or `pro_active`.
+- [ ] Billing page is reachable from the sidebar and displays the plan/trial state.
+- [ ] 24/7 Support Watch Agent is configured in the AgentDash operating company.
+- [ ] Support-session model is private-network access with explicit customer consent.
+- [ ] Week-one outputs are human-reviewed only, with no direct PSA/RMM writes.
 - [ ] GitHub token rotation is confirmed for any token that may have been stored in the target Git remote before sanitization.
 - [ ] `maxiaoer` is confirmed as the intended Mac mini operator account.
 - [ ] Launch owner is named.
@@ -92,6 +98,11 @@ For the full copy/paste request, use `doc/plans/2026-05-28-design-partner-extern
 | Partner proof output location or redacted transcript | |
 | Expected company name or id used for proof | |
 | Operator account confirmed | |
+| Paid trial/subscription evidence | |
+| Local entitlement state (`pro_trial` or `pro_active`) | |
+| 24/7 Support Watch Agent configured | |
+| Support-session consent model confirmed | |
+| Human-reviewed outputs / no direct PSA/RMM writes confirmed | |
 | GitHub token rotation confirmed | |
 | Launch owner | |
 | Partner champion | |
@@ -120,5 +131,9 @@ Do not launch if any of these are true:
 - target logs expose secret-like material
 - target Git remotes contain embedded credentials
 - backup evidence is missing
+- paid trial/subscription evidence is missing
+- local entitlement is not `pro_trial` or `pro_active`
 - Hermes CoS or assigned-agent proof is missing
+- Support Watch Agent or support-session consent model is unset
+- week-one output safety allows direct PSA/RMM writes or unreviewed external output
 - named owner/cadence fields are blank

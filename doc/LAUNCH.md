@@ -8,6 +8,8 @@ The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs non
 
 For the first MSP Mac mini design partner, also capture `scripts/msp-mac-mini-readiness.sh` output and follow `doc/plans/2026-05-27-msp-design-partner-operating-plan.md` before inviting partner users.
 
+**Private Mac mini billing stance.** The first MSP launch is a paid trial, but the customer Mac mini should stay private-network only for week one. Collect payment through AgentDash-owned Stripe/customer-portal/payment-link flow, then record the customer company locally as `pro_trial` or `pro_active`. Do not depend on Stripe webhooks reaching the private Mac mini. Before the second customer, add a pull-based entitlement sync from AgentDash-owned billing into private installs.
+
 ---
 
 ## 1. Pick a cloud host and provision Postgres

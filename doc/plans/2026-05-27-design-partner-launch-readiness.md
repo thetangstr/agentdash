@@ -86,6 +86,19 @@ These must be complete before the first design partner is asked to use the insta
   - Remaining:
     - human/browser proof from the partner-visible URL, including `/assess?onboarding=1` if that is still required for the pilot script.
 
+- [ ] Confirm paid-trial entitlement and support watch posture.
+  - Required:
+    - paid trial or subscription is collected through AgentDash-owned Stripe/payment-link/customer-portal flow.
+    - private Mac mini does not depend on public inbound Stripe webhooks.
+    - the customer company row is locally recorded as `pro_trial` or `pro_active`.
+    - Billing page is reachable from the sidebar and shows plan/trial/past-due state.
+    - 24/7 Support Watch Agent exists in the AgentDash operating company.
+    - support-session access uses private network plus explicit consent.
+    - week-one outputs remain human-reviewed, with no direct PSA/RMM writes.
+  - Evidence:
+    - `scripts/msp-launch-signoff-check.sh` requires paid-trial evidence, local entitlement state, support-watch confirmation, support-session consent, and human-review/no-direct-write confirmations.
+    - `scripts/msp-mac-mini-readiness.sh --expected-company "AgentDash MSP Demo"` checks that the launch company has `pro_trial` or `pro_active`.
+
 ## P1 Gates
 
 These should be complete before week-one usage expands beyond the initial operator.
@@ -110,13 +123,14 @@ These should be complete before week-one usage expands beyond the initial operat
     - Execute the destructive database restore command only during an incident or maintenance window.
     - Rerun instance-file backup after the first upload/work-product or local encrypted secret write if those directories are created.
 
-- [x] Decide billing posture.
-  - Decision: managed design-partner pilot; Stripe is disabled/not used for week one.
-  - Revisit Stripe setup only before self-serve billing or paid expansion:
-    - `STRIPE_SECRET_KEY`
-    - `STRIPE_WEBHOOK_SECRET`
-    - `STRIPE_PRO_PRICE_ID`
-    - checkout/webhook test confirms company tier update.
+- [ ] Confirm paid-trial billing posture.
+  - Decision: paid trial for the design partner.
+  - Private Mac mini rule: collect payment through AgentDash-owned Stripe flow, then record entitlement locally as `pro_trial` or `pro_active`; do not require public inbound Stripe webhooks to the customer Mac mini for week one.
+  - Before the second customer, add self-hosted entitlement sync so private installs can pull billing state from AgentDash-owned billing without public inbound webhooks.
+  - Required evidence:
+    - Stripe payment link/customer/subscription evidence is captured in the launch packet.
+    - local customer company is `pro_trial` or `pro_active`.
+    - Billing UI is reachable from the sidebar and displays the entitlement state.
 
 - [x] Decide email posture.
   - Decision: direct/manual invites and password reset handled by the operator for week one.

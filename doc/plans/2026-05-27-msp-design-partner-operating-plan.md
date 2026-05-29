@@ -103,11 +103,13 @@ Default check-in: 15 minutes daily at the partner's preferred morning operations
 
 Default issue channel: one private `#agentdash-pilot` Slack channel or Google Chat space with the AgentDash launch owner, partner champion, and service manager. If the partner does not want chat, use a single email thread plus GitHub issue links for product defects.
 
-Default response SLA during week one:
+Default support SLA during week one:
 
-- P0 install/security/data-loss issue: same business day, interruptible
-- P1 workflow blocker: next business day
-- P2 product friction or feature request: captured for weekly triage
+- 24/7 Support Watch Agent monitors health, GitHub issues, customer feedback tasks, stale support work, and Mac mini readiness signals.
+- Human response is async by default.
+- P0 install/security/data-loss issue: Support Watch Agent wakes the launch owner immediately and the human response becomes interruptible.
+- P1 workflow blocker: captured same day, human response by the next business day unless it blocks the launch session.
+- P2 product friction or feature request: captured for daily clustering and weekly triage.
 
 ## Roles
 
@@ -117,6 +119,9 @@ Default response SLA during week one:
 | Partner champion | Confirms business value, chooses pilot data, approves expansion |
 | MSP service manager | Runs Ticket Concierge and Daily Ops Briefing workflows |
 | Security reviewer | Confirms data boundaries, tailnet access, logs, and secret posture |
+| 24/7 Support Watch Agent | Monitors Mac mini health, feedback, GitHub launch blockers, and stale support tasks |
+| Customer Success Agent | Prepares daily check-ins, accepted/rejected recommendation counts, and weekly value report |
+| Feedback Analyst Agent | Clusters bugs, UX friction, feature requests, and value signals |
 
 Named people must be filled in before week-one usage expands beyond the initial operator.
 
@@ -129,6 +134,7 @@ Named people must be filled in before week-one usage expands beyond the initial 
 - Keep all PSA/RMM writes human-mediated during week one.
 - Client-facing output must be reviewed by a human before sending.
 - Security remediation remains advisory/read-only during week one.
+- AgentDash support sessions require explicit customer consent before accessing the private Mac mini over Tailscale/private networking.
 
 ## Success Metrics
 
@@ -140,6 +146,9 @@ Named people must be filled in before week-one usage expands beyond the initial 
 - Agent run success rate.
 - Operator time saved estimate.
 - Partner trust/friction notes.
+- Accepted/rejected recommendation counts.
+- Daily operator friction log.
+- Data-boundary concerns.
 - Any data-boundary or security concerns raised.
 
 ## Expansion Criteria

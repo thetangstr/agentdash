@@ -2,10 +2,10 @@
  * AgentDash: tiered API rate limiting (#160)
  *
  * Four tiers:
- *  - Auth  (/api/auth/*):           10 req / 15 min  — brute-force / credential-stuffing
+ *  - Auth  (/api/auth/* mutations): 10 req / 15 min  — brute-force / credential-stuffing
  *  - Billing mutations:             20 req / 15 min  — abuse / billing-fraud
  *  - Onboarding invites:            20 req / 15 min  — Resend cost amplification
- *  - Default (/api/*):             200 req / 15 min  — generous ceiling for legit usage
+ *  - Default (/api/* mutations):   200 req / 15 min  — abuse ceiling for state-changing calls
  *
  * Env-var overrides:
  *  AGENTDASH_RATE_LIMIT_AUTH_MAX    (default 10)
@@ -16,7 +16,9 @@
  *
  * Local trusted deployments are loopback/private developer instances, so they
  * also use no-op middleware by default. Authenticated deployments still keep
- * the protection unless the explicit env override is set.
+ * the protection unless the explicit env override is set. The default limiter
+ * skips health checks and authenticated read polling so normal dashboard use
+ * does not exhaust the mutation/abuse quota.
  */
 
 import { rateLimit, type Options as RateLimitOptions } from "express-rate-limit";
@@ -79,9 +81,30 @@ function noopMiddleware(_req: Request, _res: Response, next: NextFunction): void
   next();
 }
 
+function hasAuthenticatedActor(req: Request): boolean {
+  const actor = (req as any).actor;
+  return actor?.type === "board" || actor?.type === "agent";
+}
+
+function isSafeReadMethod(method: string): boolean {
+  return method === "GET" || method === "HEAD";
+}
+
+function isPreflightMethod(method: string): boolean {
+  return method === "OPTIONS";
+}
+
+function isHealthPath(req: Request): boolean {
+  return req.path === "/health" || req.path === "/health/";
+}
+
 export function createAuthRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
-  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_AUTH_MAX", 10));
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_AUTH_MAX", 10), {
+    skip(req) {
+      return isSafeReadMethod(req.method) || isPreflightMethod(req.method);
+    },
+  });
 }
 
 export function createBillingRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
@@ -91,7 +114,13 @@ export function createBillingRateLimiter(opts: RateLimiterFactoryOptions = {}): 
 
 export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
-  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_API_MAX", 200));
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_API_MAX", 200), {
+    skip(req) {
+      if (isHealthPath(req)) return true;
+      if (isPreflightMethod(req.method)) return true;
+      return isSafeReadMethod(req.method) && hasAuthenticatedActor(req);
+    },
+  });
 }
 
 /**

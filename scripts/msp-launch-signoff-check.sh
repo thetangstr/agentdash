@@ -183,6 +183,21 @@ check_assess_field() {
   esac
 }
 
+check_entitlement_state() {
+  local label value
+  label="Local entitlement state recorded"
+  value="$(lower "$(trim "$(field_value "$label")")")"
+
+  case "$value" in
+    "pro_trial"|"pro_active")
+      pass "${label}=${value}"
+      ;;
+    *)
+      fail "${label} must be pro_trial or pro_active"
+      ;;
+  esac
+}
+
 check_proof_transcript() {
   local source_file description expected_company
   source_file="$PROOF_OUTPUT_FILE"
@@ -248,6 +263,13 @@ if [[ "$FAIL_COUNT" -eq 0 ]]; then
   check_assess_field
   require_field "Browser /cos Hermes-backed reply run id or transcript"
   require_yes "Operator account maxiaoer confirmed"
+  require_yes "Paid trial/subscription created"
+  require_field "Stripe payment/portal evidence location"
+  check_entitlement_state
+  require_yes "24/7 Support Watch Agent configured"
+  require_yes "Support-session consent model confirmed"
+  require_yes "No direct PSA/RMM writes for week one"
+  require_yes "Human-reviewed outputs only confirmed"
   require_yes "GitHub token rotation confirmed"
   require_field "Launch owner"
   require_field "Partner champion"

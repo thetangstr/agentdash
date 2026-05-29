@@ -54,9 +54,10 @@ Minimum production-pilot settings:
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 NODE_ENV=production
 PAPERCLIP_DEPLOYMENT_EXPOSURE=private
-PAPERCLIP_BIND=tailnet              # or loopback for same-machine only
-PAPERCLIP_TAILNET_BIND_HOST=<tailscale-ip>
+PAPERCLIP_BIND=lan                  # private LAN/tailnet only; do not port-forward publicly
+PAPERCLIP_ALLOWED_HOSTNAMES=<tailscale-ip>,<lan-ip>
 PAPERCLIP_PUBLIC_URL=http://<tailscale-ip>:3100
+PAPERCLIP_API_URL=http://127.0.0.1:3100
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 BETTER_AUTH_SECRET=<generated-secret>
 PAPERCLIP_AGENT_JWT_SECRET=<generated-secret>
@@ -72,11 +73,13 @@ Optional launch integrations:
 ANTHROPIC_API_KEY=sk-ant-...
 RESEND_API_KEY=re_...
 AGENTDASH_EMAIL_FROM='AgentDash <noreply@example.com>'
-STRIPE_SECRET_KEY=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-STRIPE_PRO_PRICE_ID=price_...
-BILLING_PUBLIC_BASE_URL=http://<tailscale-ip>:3100
 ```
+
+`PAPERCLIP_PUBLIC_URL` is the partner-visible private URL. `PAPERCLIP_API_URL` is the local write-back URL used by Hermes and other local harnesses; keep it loopback so agent API calls do not depend on partner-device routing. If you use Tailscale Serve instead, bind AgentDash to loopback and point Tailscale Serve at `http://127.0.0.1:3100`.
+
+For the embedded Postgres install path, leave `DATABASE_URL` unset and set `PAPERCLIP_EMBEDDED_POSTGRES_PORT=54329` only if you need an explicit port. Do not keep a stale Homebrew `DATABASE_URL` in the launch env while also running embedded Postgres; that creates split-brain instances and can make launchd move to `3101` while a stale process masks `3100`.
+
+For the private MSP Mac mini paid trial, do not rely on Stripe webhooks reaching this host. Collect payment through AgentDash-owned Stripe/customer-portal/payment-link flow, then record the launch company locally as `pro_trial` or `pro_active`. The readiness collector verifies that local entitlement for the expected company.
 
 Restart after changing the env file:
 
@@ -113,10 +116,15 @@ After install, collect one readiness artifact before inviting the design partner
 
 ```sh
 cd ~/agentdash
-scripts/msp-mac-mini-readiness.sh | tee ~/agentdash-readiness-$(date +%Y%m%d-%H%M%S).txt
+scripts/msp-mac-mini-readiness.sh \
+  --run-backup \
+  --run-instance-backup \
+  --base-url http://<tailscale-or-lan-host>:3100 \
+  --expected-company "AgentDash MSP Demo" \
+  | tee ~/agentdash-readiness-$(date +%Y%m%d-%H%M%S).txt
 ```
 
-The collector is read-only by default. It checks the launchd service, local health, core authenticated/private env values, Hermes command wiring, Tailscale/private URL posture, recent logs, backup posture, and billing/email posture. It exits nonzero when a P0 host/configuration gate fails.
+The collector is read-only by default. It checks the launchd service, local health, core authenticated/private env values, Hermes command wiring, local agent API write-back, Tailscale/private URL posture, recent logs, backup posture, and billing/email posture. It exits nonzero when a P0 host/configuration gate fails.
 
 For the P1 backup rehearsal, run it with the explicit backup flag:
 
@@ -143,7 +151,7 @@ Run this before putting MSP users on the instance:
 5. Send one CoS message and confirm the reply is real, not the Anthropic stub string.
 6. Create one test company/agent/task using `hermes_local`.
 7. Confirm one agent wakeup/run exits successfully and appears in the dashboard transcript.
-8. If billing is enabled, run one Stripe checkout/webhook test and confirm the company tier updates.
+8. Confirm the paid trial is captured in AgentDash-owned Stripe evidence and the local launch company shows `pro_trial` or `pro_active` in `/billing`.
 
 For the first MSP design partner, use the operating plan in [doc/plans/2026-05-27-msp-design-partner-operating-plan.md](../../doc/plans/2026-05-27-msp-design-partner-operating-plan.md) to keep week-one usage focused on human-reviewed Ticket Concierge, Daily MSP Ops Briefing, and Client Value Report workflows.
 
@@ -151,13 +159,15 @@ For the first MSP design partner, use the operating plan in [doc/plans/2026-05-2
 
 ```sh
 cd ~/agentdash
+scripts/msp-mac-mini-readiness.sh --run-backup --run-instance-backup --base-url http://<tailscale-or-lan-host>:3100 --expected-company "AgentDash MSP Demo"
 git fetch origin
-git checkout main
+git checkout <approved-release-branch-or-sha>
 git pull --ff-only
 pnpm install --frozen-lockfile
 pnpm build
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 curl -fsS http://127.0.0.1:3100/api/health
+scripts/msp-mac-mini-readiness.sh --base-url http://<tailscale-or-lan-host>:3100 --expected-company "AgentDash MSP Demo"
 ```
 
 Record the deployed SHA:

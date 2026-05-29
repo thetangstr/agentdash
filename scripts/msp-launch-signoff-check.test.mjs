@@ -42,6 +42,13 @@ Expected company name or id used for proof: Acme MSP
 Browser /assess?onboarding=1 reachable if required: not required
 Browser /cos Hermes-backed reply run id or transcript: run abc123
 Operator account maxiaoer confirmed: yes
+Paid trial/subscription created: yes
+Stripe payment/portal evidence location: Stripe customer cus_123 and paid trial invoice in launch notes.
+Local entitlement state recorded: pro_trial
+24/7 Support Watch Agent configured: yes
+Support-session consent model confirmed: yes
+No direct PSA/RMM writes for week one: yes
+Human-reviewed outputs only confirmed: yes
 GitHub token rotation confirmed: yes
 Launch owner: Alice
 Partner champion: Bob
@@ -101,6 +108,30 @@ test("rejects no-go confirmation fields", () => {
 
       assert.notEqual(result.status, 0, result.stdout + result.stderr);
       assert.match(result.stdout, /GitHub token rotation confirmed must be yes/i);
+      assert.match(result.stdout, /Status: NOT READY for external launch signoff\./);
+    },
+  );
+});
+
+test("rejects missing paid-trial entitlement evidence", () => {
+  withTempFiles(
+    {
+      "response.txt": completeResponse.replace(
+        "Local entitlement state recorded: pro_trial",
+        "Local entitlement state recorded: free",
+      ),
+      "proof.txt": partnerProof,
+    },
+    (paths) => {
+      const result = runSignoffCheck([
+        "--response",
+        paths["response.txt"],
+        "--proof-output",
+        paths["proof.txt"],
+      ]);
+
+      assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /Local entitlement state recorded must be pro_trial or pro_active/i);
       assert.match(result.stdout, /Status: NOT READY for external launch signoff\./);
     },
   );
