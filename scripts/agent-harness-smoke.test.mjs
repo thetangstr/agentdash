@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   applyLaunchHarnessRequirements,
+  buildBrowserMutationHeaders,
   buildHarnessSmokePlan,
   selectSmokeAgents,
   summarizeSmokeResults,
@@ -19,6 +20,23 @@ test("builds harness smoke API endpoints from a private base URL", () => {
   assert.equal(
     plan.testEnvironmentUrl("codex_local"),
     "http://100.64.0.10:3100/api/companies/company-1/adapters/codex_local/test-environment",
+  );
+});
+
+test("adds browser-origin headers for authenticated mutation probes", () => {
+  const plan = buildHarnessSmokePlan({
+    baseUrl: "http://100.64.0.10:3100/",
+    companyId: "company-1",
+  });
+
+  assert.deepEqual(
+    buildBrowserMutationHeaders(plan, { Accept: "application/json", Cookie: "paperclip-default.session_token=value" }),
+    {
+      Accept: "application/json",
+      Cookie: "paperclip-default.session_token=value",
+      Origin: "http://100.64.0.10:3100",
+      Referer: "http://100.64.0.10:3100/",
+    },
   );
 });
 
