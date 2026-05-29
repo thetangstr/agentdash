@@ -80,7 +80,10 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(plist, /agentdash-source-supervisor\.sh/);
 
   const backup = renderSourceBackupScript(plan);
-  assert.match(backup, /pg_dump "\$DATABASE_URL"/);
+  assert.match(backup, /resolve_pg_dump\(\)/);
+  assert.match(backup, /\/opt\/homebrew\/opt\/libpq\/bin\/pg_dump/);
+  assert.match(backup, /"\$PG_DUMP" "\$DATABASE_URL"/);
+  assert.match(backup, /PGPASSWORD="\$\{POSTGRES_PASSWORD:-paperclip\}" "\$PG_DUMP"/);
   assert.match(backup, /PAPERCLIP_EMBEDDED_POSTGRES_PORT/);
 
   const update = renderSourceUpdateScript(plan);
