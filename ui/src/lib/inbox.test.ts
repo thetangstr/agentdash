@@ -321,6 +321,7 @@ const dashboard: DashboardSummary = {
     unreviewedDoneIssues: 0,
     acceptanceRatePercent: 0,
     greenRunsPendingReview: 0,
+    greenRunsWithOpenTasks: 0,
     issueLinkedSpendCents: 0,
     issueLinkedTokens: 0,
     spendPerAcceptedIssueCents: null,

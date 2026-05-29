@@ -9,7 +9,12 @@ function tone(quality: DashboardTaskOutcomeQuality) {
   if (quality.reviewedIssues > 0 && quality.acceptanceRatePercent < 50) {
     return "border-red-500/30 bg-red-500/10 text-red-900 dark:text-red-200";
   }
-  if (quality.dodCoveragePercent < 80 || quality.greenRunsPendingReview > 0 || quality.unreviewedDoneIssues > 0) {
+  if (
+    quality.dodCoveragePercent < 80
+    || quality.greenRunsWithOpenTasks > 0
+    || quality.greenRunsPendingReview > 0
+    || quality.unreviewedDoneIssues > 0
+  ) {
     return "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200";
   }
   return "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200";
@@ -37,7 +42,11 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
   const spendPerAccepted = quality.spendPerAcceptedIssueCents === null
     ? "n/a"
     : formatCents(quality.spendPerAcceptedIssueCents);
+  const openTaskRunLabel = quality.greenRunsWithOpenTasks === 1
+    ? "1 green run left a task open"
+    : `${quality.greenRunsWithOpenTasks} green runs left tasks open`;
   const hasSecondarySignals =
+    quality.greenRunsWithOpenTasks > 0 ||
     quality.greenRunsPendingReview > 0 ||
     quality.unreviewedDoneIssues > 0 ||
     quality.escalatedIssues > 0 ||
@@ -83,6 +92,12 @@ export function TaskOutcomeQualityPanel({ quality }: { quality: DashboardTaskOut
 
       {hasSecondarySignals ? (
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+          {quality.greenRunsWithOpenTasks > 0 ? (
+            <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>{openTaskRunLabel}</span>
+            </div>
+          ) : null}
           {quality.greenRunsPendingReview > 0 ? (
             <div className="flex items-center gap-1.5 rounded-md border border-current/15 bg-background/50 px-2 py-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />

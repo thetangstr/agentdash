@@ -1322,6 +1322,7 @@ export const storybookDashboardSummary: DashboardSummary = {
     unreviewedDoneIssues: 2,
     acceptanceRatePercent: 71.43,
     greenRunsPendingReview: 2,
+    greenRunsWithOpenTasks: 1,
     issueLinkedSpendCents: 31_500,
     issueLinkedTokens: 184_000,
     spendPerAcceptedIssueCents: 6_300,

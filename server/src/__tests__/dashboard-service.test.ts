@@ -345,10 +345,12 @@ describeEmbeddedPostgres("dashboard service", () => {
     const passedIssueId = randomUUID();
     const failedIssueId = randomUUID();
     const unreviewedIssueId = randomUUID();
+    const openAfterGreenIssueId = randomUUID();
     const noDodIssueId = randomUUID();
     const malformedDodIssueId = randomUUID();
     const passedRunId = randomUUID();
     const unreviewedRunId = randomUUID();
+    const openAfterGreenRunId = randomUUID();
     const now = new Date();
     const recent = new Date(now.getTime() - 2 * 60 * 60 * 1000);
 
@@ -405,6 +407,14 @@ describeEmbeddedPostgres("dashboard service", () => {
         updatedAt: recent,
       },
       {
+        id: openAfterGreenIssueId,
+        companyId,
+        title: "Green run but task stayed open",
+        status: "in_progress",
+        definitionOfDone,
+        updatedAt: recent,
+      },
+      {
         id: noDodIssueId,
         companyId,
         title: "No acceptance criteria",
@@ -438,6 +448,15 @@ describeEmbeddedPostgres("dashboard service", () => {
         invocationSource: "assignment",
         status: "succeeded",
         contextSnapshot: { issueId: unreviewedIssueId },
+        createdAt: recent,
+      },
+      {
+        id: openAfterGreenRunId,
+        companyId,
+        agentId,
+        invocationSource: "assignment",
+        status: "succeeded",
+        contextSnapshot: { issueId: openAfterGreenIssueId },
         createdAt: recent,
       },
     ]);
@@ -514,15 +533,16 @@ describeEmbeddedPostgres("dashboard service", () => {
 
     expect(summary.taskQuality).toMatchObject({
       windowDays: 30,
-      issuesInScope: 5,
-      issuesWithDefinitionOfDone: 3,
-      dodCoveragePercent: 60,
+      issuesInScope: 6,
+      issuesWithDefinitionOfDone: 4,
+      dodCoveragePercent: 66.67,
       reviewedIssues: 2,
       passedIssues: 1,
       failedIssues: 1,
       acceptanceRatePercent: 50,
       unreviewedDoneIssues: 1,
-      greenRunsPendingReview: 1,
+      greenRunsPendingReview: 2,
+      greenRunsWithOpenTasks: 1,
       issueLinkedSpendCents: 2300,
       issueLinkedTokens: 2600,
       spendPerAcceptedIssueCents: 2300,

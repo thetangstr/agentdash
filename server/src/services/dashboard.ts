@@ -279,6 +279,7 @@ export function dashboardService(db: Db) {
         );
 
       const taskQualityIssueIds = new Set(taskQualityIssueRows.map((row) => row.id));
+      const taskQualityIssueStatusById = new Map(taskQualityIssueRows.map((row) => [row.id, row.status]));
       const taskQualityVerdictRows = await db
         .select({
           issueId: verdicts.issueId,
@@ -362,6 +363,12 @@ export function dashboardService(db: Db) {
         const issueId = readIssueIdFromRunContext(row.contextSnapshot);
         return Boolean(issueId && taskQualityIssueIds.has(issueId) && !latestVerdictByIssueId.has(issueId));
       }).length;
+      const greenRunsWithOpenTasks = taskQualityRunRows.filter((row) => {
+        const issueId = readIssueIdFromRunContext(row.contextSnapshot);
+        if (!issueId || !taskQualityIssueIds.has(issueId)) return false;
+        const status = taskQualityIssueStatusById.get(issueId);
+        return Boolean(status && status !== "done" && status !== "cancelled");
+      }).length;
 
       const issuesInScope = taskQualityIssueRows.length;
       const taskQuality = {
@@ -381,6 +388,7 @@ export function dashboardService(db: Db) {
           ? Number(((passedIssues / reviewedIssues) * 100).toFixed(2))
           : 0,
         greenRunsPendingReview,
+        greenRunsWithOpenTasks,
         issueLinkedSpendCents,
         issueLinkedTokens,
         spendPerAcceptedIssueCents: passedIssues > 0
