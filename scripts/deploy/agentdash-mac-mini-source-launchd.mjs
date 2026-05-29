@@ -188,11 +188,35 @@ set -a
 . "$ENV_FILE"
 set +a
 
+resolve_pg_dump() {
+  if [[ -n "\${PG_DUMP_BIN:-}" && -x "\${PG_DUMP_BIN:-}" ]]; then
+    echo "$PG_DUMP_BIN"
+    return 0
+  fi
+
+  for candidate in \\
+    /opt/homebrew/opt/libpq/bin/pg_dump \\
+    /opt/homebrew/Cellar/libpq/*/bin/pg_dump \\
+    /usr/local/opt/libpq/bin/pg_dump \\
+    /usr/local/Cellar/libpq/*/bin/pg_dump \\
+    /opt/homebrew/bin/pg_dump \\
+    /usr/local/bin/pg_dump \\
+    /usr/bin/pg_dump; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  command -v pg_dump
+}
+
+PG_DUMP="$(resolve_pg_dump)"
 output="$BACKUP_DIR/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
 if [[ -n "\${DATABASE_URL:-}" ]]; then
-  pg_dump "$DATABASE_URL" -Fc > "$output"
+  "$PG_DUMP" "$DATABASE_URL" -Fc > "$output"
 elif [[ -n "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT:-}" ]]; then
-  PGPASSWORD="\${POSTGRES_PASSWORD:-paperclip}" pg_dump \\
+  PGPASSWORD="\${POSTGRES_PASSWORD:-paperclip}" "$PG_DUMP" \\
     -h 127.0.0.1 \\
     -p "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT}" \\
     -U "\${POSTGRES_USER:-paperclip}" \\
