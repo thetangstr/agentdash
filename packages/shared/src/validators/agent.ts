@@ -92,6 +92,7 @@ const createAgentBaseSchema = z.object({
   instructionsBundle: createAgentInstructionsBundleSchema.optional(),
   runtimeConfig: agentRuntimeConfigSchema.optional().default({}),
   defaultEnvironmentId: z.string().uuid().optional().nullable(),
+  requireHarnessPreflight: z.boolean().optional().default(false),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
   metadata: z.record(z.unknown()).optional().nullable(),

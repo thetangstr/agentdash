@@ -66,8 +66,9 @@ export function assessRoutes(db: Db) {
       assertBoard(req);
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      const isInitialCompanyAssessment = req.body?.assessmentKind === "initial_company";
 
-      if (deepInterviewEnabled()) {
+      if (deepInterviewEnabled() && !isInitialCompanyAssessment) {
         const initialIdea = typeof req.body?.description === "string"
           ? req.body.description
           : typeof req.body?.oneLineGoal === "string"
@@ -183,7 +184,7 @@ export function assessRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       const result = await svc.getAssessment(companyId);
-      if (!result) { res.status(404).json({ error: "No assessment found" }); return; }
+      if (!result) { res.json(null); return; }
       res.json(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Internal server error";

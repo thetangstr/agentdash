@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent, type DragEvent, type RefObject } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { DefinitionOfDone } from "@paperclipai/shared";
 import { pickTextColorForSolidBg } from "@/lib/color-contrast";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
@@ -52,6 +53,7 @@ import {
   Paperclip,
   FileText,
   Loader2,
+  ListChecks,
   ListTree,
   X,
   Eye,
@@ -71,6 +73,7 @@ const DEBOUNCE_MS = 800;
 interface IssueDraft {
   title: string;
   description: string;
+  acceptanceCriteria: string;
   status: string;
   priority: string;
   assigneeValue: string;
@@ -199,6 +202,37 @@ function formatFileSize(file: File) {
   if (file.size < 1024) return `${file.size} B`;
   if (file.size < 1024 * 1024) return `${(file.size / 1024).toFixed(1)} KB`;
   return `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function parseAcceptanceCriteria(value: string) {
+  return value
+    .split(/\r?\n/g)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function buildDefinitionOfDone(title: string, acceptanceCriteriaText: string): DefinitionOfDone | undefined {
+  const criteria = parseAcceptanceCriteria(acceptanceCriteriaText);
+  if (criteria.length === 0) return undefined;
+  return {
+    summary: title,
+    criteria: criteria.map((text, index) => ({
+      id: `c${index + 1}`,
+      text,
+      done: false,
+    })),
+  };
+}
+
+function acceptanceCriteriaTextFromDefaults(defaults: {
+  acceptanceCriteria?: string[];
+  definitionOfDone?: DefinitionOfDone | null;
+}) {
+  if (Array.isArray(defaults.acceptanceCriteria)) {
+    return defaults.acceptanceCriteria.map((item) => item.trim()).filter(Boolean).join("\n");
+  }
+  return defaults.definitionOfDone?.criteria.map((criterion) => criterion.text.trim()).filter(Boolean).join("\n") ?? "";
 }
 
 const statuses = [
@@ -364,8 +398,10 @@ export function NewIssueDialog() {
   const { pushToast } = useToastActions();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [acceptanceCriteriaText, setAcceptanceCriteriaText] = useState("");
   const titleRef = useRef("");
   const descriptionRef = useRef("");
+  const acceptanceCriteriaRef = useRef("");
   const [titleHasText, setTitleHasText] = useState(false);
   const [draftHasText, setDraftHasText] = useState(false);
   const [status, setStatus] = useState("todo");
@@ -588,16 +624,36 @@ export function NewIssueDialog() {
     setTitle(nextTitle);
     setDescription(nextDescription);
     setTitleHasText(nextTitle.trim().length > 0);
-    setDraftHasText(nextTitle.trim().length > 0 || nextDescription.trim().length > 0);
+    setDraftHasText(
+      nextTitle.trim().length > 0 ||
+      nextDescription.trim().length > 0 ||
+      acceptanceCriteriaRef.current.trim().length > 0,
+    );
   }, []);
 
-  const queueDraftSave = useCallback((overrides: { title?: string; description?: string } = {}) => {
+  const setAcceptanceCriteriaDraft = useCallback((nextAcceptanceCriteria: string) => {
+    acceptanceCriteriaRef.current = nextAcceptanceCriteria;
+    setAcceptanceCriteriaText(nextAcceptanceCriteria);
+    setDraftHasText(
+      titleRef.current.trim().length > 0 ||
+      descriptionRef.current.trim().length > 0 ||
+      nextAcceptanceCriteria.trim().length > 0,
+    );
+  }, []);
+
+  const queueDraftSave = useCallback((overrides: {
+    title?: string;
+    description?: string;
+    acceptanceCriteria?: string;
+  } = {}) => {
     if (!newIssueOpen) return;
     const nextTitle = overrides.title ?? titleRef.current;
     const nextDescription = overrides.description ?? descriptionRef.current;
+    const nextAcceptanceCriteria = overrides.acceptanceCriteria ?? acceptanceCriteriaRef.current;
     scheduleSave({
       title: nextTitle,
       description: nextDescription,
+      acceptanceCriteria: nextAcceptanceCriteria,
       status,
       priority,
       assigneeValue,
@@ -632,7 +688,10 @@ export function NewIssueDialog() {
   const handleTitleChange = useCallback((nextTitle: string) => {
     titleRef.current = nextTitle;
     const nextTitleHasText = nextTitle.trim().length > 0;
-    const nextDraftHasText = nextTitleHasText || descriptionRef.current.trim().length > 0;
+    const nextDraftHasText =
+      nextTitleHasText ||
+      descriptionRef.current.trim().length > 0 ||
+      acceptanceCriteriaRef.current.trim().length > 0;
     setTitleHasText((current) => current === nextTitleHasText ? current : nextTitleHasText);
     setDraftHasText((current) => current === nextDraftHasText ? current : nextDraftHasText);
     queueDraftSave({ title: nextTitle });
@@ -640,9 +699,23 @@ export function NewIssueDialog() {
 
   const handleDescriptionChange = useCallback((nextDescription: string) => {
     descriptionRef.current = nextDescription;
-    const nextDraftHasText = titleRef.current.trim().length > 0 || nextDescription.trim().length > 0;
+    const nextDraftHasText =
+      titleRef.current.trim().length > 0 ||
+      nextDescription.trim().length > 0 ||
+      acceptanceCriteriaRef.current.trim().length > 0;
     setDraftHasText((current) => current === nextDraftHasText ? current : nextDraftHasText);
     queueDraftSave({ description: nextDescription });
+  }, [queueDraftSave]);
+
+  const handleAcceptanceCriteriaChange = useCallback((nextAcceptanceCriteria: string) => {
+    acceptanceCriteriaRef.current = nextAcceptanceCriteria;
+    setAcceptanceCriteriaText(nextAcceptanceCriteria);
+    const nextDraftHasText =
+      titleRef.current.trim().length > 0 ||
+      descriptionRef.current.trim().length > 0 ||
+      nextAcceptanceCriteria.trim().length > 0;
+    setDraftHasText((current) => current === nextDraftHasText ? current : nextDraftHasText);
+    queueDraftSave({ acceptanceCriteria: nextAcceptanceCriteria });
   }, [queueDraftSave]);
 
   // Save draft on meaningful changes
@@ -663,6 +736,7 @@ export function NewIssueDialog() {
     assigneeChrome,
     executionWorkspaceMode,
     selectedExecutionWorkspaceId,
+    acceptanceCriteriaText,
     newIssueOpen,
     queueDraftSave,
   ]);
@@ -701,6 +775,7 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceMode);
       setSelectedExecutionWorkspaceId(newIssueDefaults.executionWorkspaceId ?? "");
+      setAcceptanceCriteriaDraft(acceptanceCriteriaTextFromDefaults(newIssueDefaults));
       executionWorkspaceDefaultProjectId.current = hasExplicitProjectWorkspaceId || defaultProject
         ? defaultProjectId || null
         : null;
@@ -722,6 +797,7 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceModeForProject(defaultProject));
       setSelectedExecutionWorkspaceId("");
+      setAcceptanceCriteriaDraft(acceptanceCriteriaTextFromDefaults(newIssueDefaults));
       executionWorkspaceDefaultProjectId.current = defaultProject ? defaultProjectId || null : null;
     } else if (draft && draft.title.trim()) {
       const restoredProjectId = newIssueDefaults.projectId ?? draft.projectId;
@@ -749,6 +825,7 @@ export function NewIssueDialog() {
           ?? (draft.useIsolatedExecutionWorkspace ? "isolated_workspace" : defaultExecutionWorkspaceModeForProject(restoredProject)),
       );
       setSelectedExecutionWorkspaceId(draft.selectedExecutionWorkspaceId ?? "");
+      setAcceptanceCriteriaDraft(draft.acceptanceCriteria ?? "");
       executionWorkspaceDefaultProjectId.current = draft.projectWorkspaceId || restoredProject
         ? restoredProjectId || null
         : null;
@@ -770,9 +847,10 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceModeForProject(defaultProject));
       setSelectedExecutionWorkspaceId("");
+      setAcceptanceCriteriaDraft(acceptanceCriteriaTextFromDefaults(newIssueDefaults));
       executionWorkspaceDefaultProjectId.current = defaultProject ? defaultProjectId || null : null;
     }
-  }, [newIssueOpen, newIssueDefaults, orderedProjects, selectedCompanyId, setIssueText]);
+  }, [newIssueOpen, newIssueDefaults, orderedProjects, selectedCompanyId, setAcceptanceCriteriaDraft, setIssueText]);
 
   useEffect(() => {
     if (!supportsAssigneeOverrides) {
@@ -813,6 +891,7 @@ export function NewIssueDialog() {
 
   function reset() {
     setIssueText("", "");
+    setAcceptanceCriteriaDraft("");
     setStatus("todo");
     setPriority("");
     setAssigneeValue("");
@@ -855,6 +934,7 @@ export function NewIssueDialog() {
     setAssigneeChrome(false);
     setExecutionWorkspaceMode("shared_workspace");
     setSelectedExecutionWorkspaceId("");
+    setAcceptanceCriteriaDraft("");
   }
 
   function discardDraft() {
@@ -866,7 +946,11 @@ export function NewIssueDialog() {
   function handleSubmit() {
     const currentTitle = titleRef.current.trim();
     const currentDescription = descriptionRef.current.trim();
+    const currentAcceptanceCriteriaText = acceptanceCriteriaRef.current;
+    const acceptanceCriteriaRequired = status !== "backlog";
+    const definitionOfDone = buildDefinitionOfDone(currentTitle, currentAcceptanceCriteriaText);
     if (!effectiveCompanyId || !currentTitle || createIssue.isPending) return;
+    if (acceptanceCriteriaRequired && !definitionOfDone) return;
     const effectiveLane = assigneeSupportsCheapLane
       ? assigneeModelLane
       : assigneeModelLane === "cheap"
@@ -903,6 +987,7 @@ export function NewIssueDialog() {
       stagedFiles,
       title: currentTitle,
       description: currentDescription || undefined,
+      ...(definitionOfDone ? { definitionOfDone } : {}),
       status,
       priority: priority || "medium",
       ...(selectedAssigneeAgentId ? { assigneeAgentId: selectedAssigneeAgentId } : {}),
@@ -993,6 +1078,9 @@ export function NewIssueDialog() {
 
   const hasDraft = draftHasText || stagedFiles.length > 0;
   const currentStatus = statuses.find((s) => s.value === status) ?? statuses[1]!;
+  const acceptanceCriteriaCount = parseAcceptanceCriteria(acceptanceCriteriaText).length;
+  const acceptanceCriteriaRequired = status !== "backlog";
+  const canSubmitIssue = titleHasText && (!acceptanceCriteriaRequired || acceptanceCriteriaCount > 0);
   const currentPriority = priorities.find((p) => p.value === priority);
   const currentAssignee = selectedAssigneeAgentId
     ? (agents ?? []).find((a) => a.id === selectedAssigneeAgentId)
@@ -1677,6 +1765,34 @@ export function NewIssueDialog() {
                 onChange={handleDescriptionChange}
               />
             </div>
+            <div className="mt-3 rounded-md border border-border/70 bg-muted/20 p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <ListChecks className="h-3.5 w-3.5" />
+                  <span>Acceptance criteria</span>
+                </div>
+                <span className={cn(
+                  "text-[11px]",
+                  acceptanceCriteriaRequired && acceptanceCriteriaCount === 0
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-muted-foreground",
+                )}>
+                  {acceptanceCriteriaCount > 0
+                    ? `${acceptanceCriteriaCount} criteria`
+                    : acceptanceCriteriaRequired
+                      ? "Required before agent work"
+                      : "Optional for backlog"}
+                </span>
+              </div>
+              <textarea
+                aria-label="Acceptance criteria"
+                className="min-h-[72px] w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="One verifiable outcome per line"
+                value={acceptanceCriteriaText}
+                onChange={(event) => handleAcceptanceCriteriaChange(event.target.value)}
+                readOnly={createIssue.isPending}
+              />
+            </div>
             {stagedFiles.length > 0 ? (
               <div className="mt-4 space-y-3 rounded-lg border border-border/70 p-3">
               {stagedDocuments.length > 0 ? (
@@ -1874,12 +1990,14 @@ export function NewIssueDialog() {
                 </span>
               ) : createIssue.isError ? (
                 <span className="text-xs text-destructive">{createIssueErrorMessage}</span>
+              ) : !canSubmitIssue && titleHasText ? (
+                <span className="text-xs text-amber-600 dark:text-amber-400">Add acceptance criteria before agent work.</span>
               ) : null}
             </div>
             <Button
               size="sm"
               className="min-w-[8.5rem] disabled:opacity-100"
-              disabled={!titleHasText || createIssue.isPending}
+              disabled={!canSubmitIssue || createIssue.isPending}
               onClick={handleSubmit}
               aria-busy={createIssue.isPending}
             >

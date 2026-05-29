@@ -23,6 +23,8 @@ import { cn, formatCents } from "../lib/utils";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { HarnessHealthPanel } from "../components/HarnessHealthPanel";
+import { TaskOutcomeQualityPanel } from "../components/TaskOutcomeQualityPanel";
 // AgentDash: goals-eval-hitl
 import { TraceabilityCoverageTile } from "../components/TraceabilityCoverageTile";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -238,6 +240,9 @@ export function Dashboard() {
               </Link>
             </div>
           ) : null}
+
+          <HarnessHealthPanel health={data.harness} />
+          <TaskOutcomeQualityPanel quality={data.taskQuality} />
 
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
             <MetricCard

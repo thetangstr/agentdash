@@ -5,6 +5,11 @@ scripts/release*.sh @cryppadotta @devinfoley
 scripts/release-*.mjs @cryppadotta @devinfoley
 scripts/create-github-release.sh @cryppadotta @devinfoley
 scripts/rollback-latest.sh @cryppadotta @devinfoley
+scripts/deploy/** @cryppadotta @devinfoley
+docker/docker-compose.production.yml @cryppadotta @devinfoley
+docker/launchd/** @cryppadotta @devinfoley
+doc/MAC-MINI-DEPLOYMENT.md @cryppadotta @devinfoley
+doc/VPS-DEPLOYMENT.md @cryppadotta @devinfoley
 doc/RELEASING.md @cryppadotta @devinfoley
 doc/PUBLISHING.md @cryppadotta @devinfoley
 doc/RELEASE-AUTOMATION-SETUP.md @cryppadotta @devinfoley
@@ -15,3 +20,41 @@ package.json @cryppadotta @devinfoley
 pnpm-lock.yaml @cryppadotta @devinfoley
 pnpm-workspace.yaml @cryppadotta @devinfoley
 .npmrc @cryppadotta @devinfoley
+
+# PR process and fork policy
+AGENTS.md @cryppadotta @devinfoley
+CONTRIBUTING.md @cryppadotta @devinfoley
+doc/UPSTREAM-POLICY.md @cryppadotta @devinfoley
+scripts/ci/** @cryppadotta @devinfoley
+
+# Agent-facing prompt surfaces — keep these reviewed together.
+server/src/onboarding-assets/default/AGENTS.md @cryppadotta @devinfoley
+server/src/onboarding-assets/ceo/AGENTS.md @cryppadotta @devinfoley
+server/src/onboarding-assets/chief_of_staff/AGENTS.md @cryppadotta @devinfoley
+server/src/services/agent-creator-from-proposal.ts @cryppadotta @devinfoley
+
+# AgentDash-owned product surfaces and governance boundaries.
+server/src/routes/billing.ts @cryppadotta @devinfoley
+server/src/services/billing*.ts @cryppadotta @devinfoley
+server/src/services/seat-quantity-syncer.ts @cryppadotta @devinfoley
+ui/src/pages/BillingPage.tsx @cryppadotta @devinfoley
+packages/db/src/schema/budget_*.ts @cryppadotta @devinfoley
+packages/db/src/schema/stripe_*.ts @cryppadotta @devinfoley
+packages/db/src/schema/cost_events.ts @cryppadotta @devinfoley
+
+server/src/routes/assess.ts @cryppadotta @devinfoley
+server/src/services/assess-*.ts @cryppadotta @devinfoley
+ui/src/pages/Assess*.tsx @cryppadotta @devinfoley
+ui/src/pages/assess/** @cryppadotta @devinfoley
+
+server/src/routes/company-skills.ts @cryppadotta @devinfoley
+packages/db/src/schema/company_skills.ts @cryppadotta @devinfoley
+
+# Adapter/plugin boundaries are high-conflict with upstream and external packages.
+server/src/routes/adapters.ts @cryppadotta @devinfoley
+server/src/routes/plugins.ts @cryppadotta @devinfoley
+server/src/services/plugin-*.ts @cryppadotta @devinfoley
+packages/adapters/** @cryppadotta @devinfoley
+packages/plugins/** @cryppadotta @devinfoley
+ui/src/pages/AdapterManager.tsx @cryppadotta @devinfoley
+ui/src/pages/Plugin*.tsx @cryppadotta @devinfoley

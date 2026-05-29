@@ -231,6 +231,78 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(mockConversations.addParticipant).not.toHaveBeenCalled();
   });
 
+  it("dry-runs a new company with CEO + COO sharing one CoS and one onboarding conversation", async () => {
+    const orch = onboardingOrchestrator(deps as any);
+
+    mockUsers.getById.mockResolvedValueOnce({
+      id: "ceo-user",
+      email: "ceo@mkthink.com",
+      name: "Maya CEO",
+    });
+    mockAccess.listUserCompanyAccess.mockResolvedValueOnce([]);
+    mockCompanies.findByEmailDomain.mockResolvedValueOnce(null);
+    mockCompanies.create.mockResolvedValueOnce({
+      id: "mkthink-company",
+      name: "Mkthink",
+      emailDomain: "mkthink.com",
+    });
+    mockCompanies.getById.mockResolvedValue({ id: "mkthink-company", name: "Mkthink", emailDomain: "mkthink.com" });
+    mockAgents.list.mockResolvedValueOnce([]);
+    mockAgents.create.mockResolvedValueOnce({
+      id: "mkthink-cos",
+      companyId: "mkthink-company",
+      role: "chief_of_staff",
+      adapterType: "claude_api",
+      adapterConfig: {},
+    });
+    mockAgents.listKeys.mockResolvedValueOnce([]);
+    mockConversations.findByCompany.mockResolvedValueOnce(null);
+    mockConversations.create.mockResolvedValueOnce({ id: "mkthink-cos-conv", companyId: "mkthink-company" });
+
+    const ceo = await orch.bootstrap("ceo-user");
+
+    mockUsers.getById.mockResolvedValueOnce({
+      id: "coo-user",
+      email: "coo@mkthink.com",
+      name: "Owen COO",
+    });
+    mockAccess.listUserCompanyAccess.mockResolvedValueOnce([]);
+    mockCompanies.findByEmailDomain.mockResolvedValueOnce({
+      id: "mkthink-company",
+      name: "Mkthink",
+      emailDomain: "mkthink.com",
+    });
+    mockAgents.list.mockResolvedValueOnce([
+      {
+        id: "mkthink-cos",
+        companyId: "mkthink-company",
+        role: "chief_of_staff",
+        adapterType: "claude_api",
+        adapterConfig: {},
+      },
+    ]);
+    mockAgents.listKeys.mockResolvedValueOnce([{ id: "cos-key" }]);
+    mockConversations.findByCompany.mockResolvedValueOnce({ id: "mkthink-cos-conv", companyId: "mkthink-company" });
+
+    const coo = await orch.bootstrap("coo-user");
+
+    expect(ceo).toEqual({
+      companyId: "mkthink-company",
+      cosAgentId: "mkthink-cos",
+      conversationId: "mkthink-cos-conv",
+    });
+    expect(coo).toEqual(ceo);
+    expect(mockCompanies.create).toHaveBeenCalledTimes(1);
+    expect(mockAgents.create).toHaveBeenCalledTimes(1);
+    expect(mockAgents.createApiKey).toHaveBeenCalledTimes(1);
+    expect(mockConversations.create).toHaveBeenCalledTimes(1);
+    expect(mockConversations.postMessage).toHaveBeenCalledTimes(1);
+    expect(mockConversations.addParticipant).toHaveBeenCalledWith("mkthink-cos-conv", "ceo-user", "owner");
+    expect(mockConversations.addParticipant).toHaveBeenCalledWith("mkthink-cos-conv", "coo-user", "owner");
+    expect(mockAccess.ensureMembership).toHaveBeenCalledWith("mkthink-company", "user", "ceo-user", "owner", "active");
+    expect(mockAccess.ensureMembership).toHaveBeenCalledWith("mkthink-company", "user", "coo-user", "owner", "active");
+  });
+
   it("throws SingleCompanyInstallationError when an active company exists and the override is not active", async () => {
     // Simulate: an active company already exists, and the env-var override is NOT active.
     // The orchestrator should reject the bootstrap attempt.

@@ -71,8 +71,8 @@ export const assessApi = {
     return res.body!;
   },
 
-  getAssessment: (companyId: string) =>
-    api.get<StoredAssessment>(`/companies/${companyId}/assess`),
+  getAssessment: (companyId: string): Promise<StoredAssessment | null> =>
+    api.get<StoredAssessment | null>(`/companies/${companyId}/assess`),
 
   // ── AgentDash: Project-mode endpoints ───────────────────────────────────
   generateProjectClarify: (companyId: string, intake: ProjectIntake) =>

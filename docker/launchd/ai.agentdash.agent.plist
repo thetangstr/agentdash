@@ -29,12 +29,7 @@
 	<true/>
 
 	<key>KeepAlive</key>
-	<dict>
-		<key>Crashed</key>
-		<true/>
-		<key>AfterInitialDemand</key>
-		<true/>
-	</dict>
+	<true/>
 
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -45,10 +40,10 @@
 	</dict>
 
 	<key>StandardOutPath</key>
-	<string>%%HOME%%/.agentdash/logs/agentdash.log</string>
+	<string>/opt/agentdash/logs/launchd.out.log</string>
 
 	<key>StandardErrorPath</key>
-	<string>%%HOME%%/.agentdash/logs/agentdash.err</string>
+	<string>/opt/agentdash/logs/launchd.err.log</string>
 
 	<key>ProcessType</key>
 	<string>Background</string>
@@ -58,11 +53,5 @@
 
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
-
-	<key>HardResourceLimits</key>
-	<dict>
-		<key>NumberOfFiles</key>
-		<integer>1024</integer>
-	</dict>
 </dict>
 </plist>

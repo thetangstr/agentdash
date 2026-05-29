@@ -43,6 +43,7 @@ diagnostics/
 *.tmp
 .vscode/
 .claude/settings.local.json
+.superpowers/
 .paperclip-local/
 /.idea/
 /.agents/

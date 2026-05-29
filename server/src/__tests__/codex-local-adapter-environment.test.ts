@@ -139,4 +139,115 @@ describe("codex_local environment diagnostics", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("fails when the Codex runtime cannot reach the Paperclip control plane", async () => {
+    const root = path.join(
+      os.tmpdir(),
+      `paperclip-codex-api-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const binDir = path.join(root, "bin");
+    const cwd = path.join(root, "workspace");
+    const fakeCodex = path.join(binDir, "codex");
+    const script = [
+      "#!/usr/bin/env node",
+      "let stdin = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { stdin += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  console.log('{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}');",
+      "  if (stdin.includes('PAPERCLIP_CONTROL_PLANE_REACHABLE')) {",
+      "    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'PAPERCLIP_CONTROL_PLANE_UNREACHABLE curl: connection refused' } }));",
+      "  } else {",
+      "    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'hello' } }));",
+      "  }",
+      "  console.log('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1}}');",
+      "});",
+      "",
+    ].join("\n");
+
+    try {
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(fakeCodex, script, { mode: 0o755 });
+
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: "codex",
+          cwd,
+          env: {
+            OPENAI_API_KEY: "test-key",
+            PAPERCLIP_API_URL: "http://127.0.0.1:3100",
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      });
+
+      expect(result.status).toBe("fail");
+      expect(result.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "codex_control_plane_api_unreachable",
+            level: "error",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes when the Codex runtime proves Paperclip control-plane reachability", async () => {
+    const root = path.join(
+      os.tmpdir(),
+      `paperclip-codex-api-pass-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const binDir = path.join(root, "bin");
+    const cwd = path.join(root, "workspace");
+    const fakeCodex = path.join(binDir, "codex");
+    const script = [
+      "#!/usr/bin/env node",
+      "let stdin = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => { stdin += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  console.log('{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}');",
+      "  const text = stdin.includes('PAPERCLIP_CONTROL_PLANE_REACHABLE') ? 'PAPERCLIP_CONTROL_PLANE_REACHABLE' : 'hello';",
+      "  console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }));",
+      "  console.log('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1}}');",
+      "});",
+      "",
+    ].join("\n");
+
+    try {
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(fakeCodex, script, { mode: 0o755 });
+
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: "codex",
+          cwd,
+          env: {
+            OPENAI_API_KEY: "test-key",
+            PAPERCLIP_API_URL: "http://127.0.0.1:3100",
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      });
+
+      expect(result.status).toBe("pass");
+      expect(result.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "codex_control_plane_api_reachable",
+            level: "info",
+          }),
+        ]),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
