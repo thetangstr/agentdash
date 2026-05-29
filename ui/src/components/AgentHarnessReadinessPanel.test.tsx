@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { renderToStaticMarkup } from "react-dom/server";
+import { AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
 import {
   AgentHarnessReadinessPanel,
@@ -28,6 +29,7 @@ describe("AgentHarnessReadinessPanel", () => {
         adapterType: "codex_local",
         status: "pass",
         testedAt: "2026-05-29T12:00:00.000Z",
+        contractVersion: AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
         configDigest: "abc123",
         checks: [],
       },
@@ -42,12 +44,34 @@ describe("AgentHarnessReadinessPanel", () => {
     expect(html).toContain("Saved evidence");
   });
 
+  it("does not show a passing state for stale launch contract evidence", () => {
+    const status = readAgentHarnessPreflightStatus({
+      harnessPreflight: {
+        adapterType: "codex_local",
+        status: "pass",
+        testedAt: "2026-05-29T12:00:00.000Z",
+        contractVersion: 1,
+        configDigest: "abc123",
+        checks: [],
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      <AgentHarnessReadinessPanel status={status} />,
+    );
+
+    expect(html).toContain("Harness preflight evidence is stale");
+    expect(html).toContain("Run preflight again");
+    expect(html).not.toContain("Harness preflight passed");
+  });
+
   it("renders failing preflight checks with hints", () => {
     const status = readAgentHarnessPreflightStatus({
       harnessPreflight: {
         adapterType: "claude_local",
         status: "fail",
         testedAt: "2026-05-29T12:00:00.000Z",
+        contractVersion: AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
         configDigest: "abc123",
         checks: [
           {
