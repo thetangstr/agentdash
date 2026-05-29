@@ -15,7 +15,8 @@ APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export PATH="${AGENTDASH_READINESS_PATH:-${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}:${PATH}"
 
 LABEL="${AGENTDASH_LAUNCHD_LABEL:-ai.agentdash.agent}"
-AGENTDASH_HOME="${PAPERCLIP_HOME:-${HOME}/.agentdash}"
+AGENTDASH_HOME_OVERRIDE="${AGENTDASH_HOME:-}"
+AGENTDASH_HOME="${AGENTDASH_HOME_OVERRIDE:-${HOME}/.agentdash}"
 CONFIG_DIR="${AGENTDASH_CONFIG_DIR:-${HOME}/.config/agentdash}"
 ENV_FILE="${AGENTDASH_ENV_FILE:-${CONFIG_DIR}/agentdash.env}"
 LOG_DIR="${AGENTDASH_LOG_DIR:-${AGENTDASH_HOME}/logs}"
@@ -167,6 +168,14 @@ env_value() {
   fi
   printf '%s' "$value"
 }
+
+PAPERCLIP_HOME_FROM_ENV="$(env_value PAPERCLIP_HOME)"
+if [[ -z "$AGENTDASH_HOME_OVERRIDE" && -n "$PAPERCLIP_HOME_FROM_ENV" ]]; then
+  AGENTDASH_HOME="$PAPERCLIP_HOME_FROM_ENV"
+  LOG_DIR="${AGENTDASH_LOG_DIR:-${AGENTDASH_HOME}/logs}"
+  BACKUP_DIR="${AGENTDASH_BACKUP_DIR:-${AGENTDASH_HOME}/instances/default/data/backups}"
+  INSTANCE_BACKUP_DIR="${AGENTDASH_INSTANCE_BACKUP_DIR:-${BACKUP_DIR}}"
+fi
 
 redact_url() {
   local value="$1"
