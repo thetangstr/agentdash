@@ -982,6 +982,7 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
         }
         if (reconnectAttempt > 0) {
           gateRef.current.suppressUntil = Date.now() + RECONNECT_SUPPRESS_MS;
+          queryClient.invalidateQueries({ queryKey: ["serverHealth"] });
         }
         reconnectAttempt = 0;
       };
