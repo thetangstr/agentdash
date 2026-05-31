@@ -197,9 +197,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Resolved @playwright/test version: $version"
 
-      - name: Cache Playwright browsers
+      # Restore-only: the combined actions/cache saves the browser cache ONLY
+      # on job success. While e2e was flaky the job never succeeded, so the
+      # cache was never populated and every run re-ran the hang-prone download
+      # the cache was meant to eliminate. We restore here and save explicitly
+      # (with if: always()) the moment the binary downloads, breaking that
+      # chicken-and-egg so the first good download is reused on every run.
+      - name: Restore Playwright browser cache
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
@@ -216,26 +222,48 @@ jobs:
       # per-attempt `timeout` + 3-attempt retry loop. A hang now fails fast
       # and retries instead of burning the whole budget. The browser cache
       # above still eliminates the (separate) binary download on warm runs.
+      # `timeout -s KILL`: a stalled Playwright download ignores the default
+      # SIGTERM (node stays blocked in the socket read), so a plain `timeout`
+      # never actually reaps the hang and the step ran to the 45m job
+      # backstop. SIGKILL force-terminates it, so each attempt is bounded for
+      # real and the retry loop can move on.
       - name: Install Playwright system dependencies
         run: |
           ok=0
           for i in 1 2 3; do
-            if timeout 5m npx playwright install-deps chromium; then ok=1; break; fi
+            if timeout -s KILL 5m npx playwright install-deps chromium; then ok=1; break; fi
             echo "playwright install-deps attempt $i failed/hung; retrying"; sleep 5
           done
           [ "$ok" = 1 ] || { echo "playwright install-deps failed after retries"; exit 1; }
 
       - name: Install Playwright browser binary
+        id: playwright-install
         # Only on a cache miss; on a cache hit the binary is already restored
         # and we skip the (hang-prone) download entirely.
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           ok=0
           for i in 1 2 3; do
-            if timeout 6m npx playwright install chromium; then ok=1; break; fi
+            if timeout -s KILL 6m npx playwright install chromium; then ok=1; break; fi
             echo "playwright install attempt $i failed/hung; retrying"; sleep 5
           done
-          [ "$ok" = 1 ] || { echo "playwright install failed after retries"; exit 1; }
+          if [ "$ok" = 1 ]; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "playwright install failed after retries"; exit 1
+          fi
+
+      # Persist the cache as soon as the binary downloads, even if the e2e
+      # tests below later fail. Gated on the install step's success output so a
+      # failed/partial download is never cached (which would poison later runs
+      # with a browserless cache hit). After one good download lands, every
+      # subsequent run hits the cache and skips the download entirely.
+      - name: Save Playwright browser cache
+        if: always() && steps.playwright-install.outputs.installed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
 
       - name: Generate Paperclip config
         run: |
