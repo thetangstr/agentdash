@@ -144,12 +144,25 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit production dependencies (advisory)
-        run: pnpm run audit:deps
+        # Advisory only: `|| true` guarantees a zero exit so the step (and
+        # therefore the job's check) reports SUCCESS even when `pnpm audit`
+        # finds advisories and exits non-zero. `continue-on-error: true` on
+        # the job is a belt-and-suspenders second guard. Findings are still
+        # printed in the step log for triage.
+        run: |
+          pnpm run audit:deps || true
+          echo "::notice::Dependency audit is advisory and never fails the PR. Review the findings above; promote to a blocking check once advisories are triaged."
 
   e2e:
     needs: [policy]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 (was 30): the job runs pnpm install + build + a full Playwright
+    # browser download + the e2e suite. On a cold cache the Chromium
+    # download alone repeatedly pushed the job past the old 30m ceiling and
+    # GitHub canceled it mid-install ("exceeded the maximum execution time
+    # of 30m0s"), failing every PR. The browser cache below removes the
+    # download on warm runs; 45m gives headroom on cold-cache runs.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -174,6 +187,35 @@ jobs:
 
       - name: Verify system Chrome
         run: google-chrome --version
+
+      # Derive the resolved @playwright/test version from the lockfile so the
+      # browser cache key invalidates automatically on a Playwright bump.
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          version="$(node -e "const fs=require('fs');const lock=fs.readFileSync('pnpm-lock.yaml','utf8');const m=lock.match(/@playwright\/test@([0-9]+\.[0-9]+\.[0-9]+)/);if(!m){console.error('Could not resolve @playwright/test version from pnpm-lock.yaml');process.exit(1);}console.log(m[1]);")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved @playwright/test version: $version"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright browsers
+        # On a cache hit the browser binaries are already restored, so only
+        # the (fast) system dependencies need installing. On a miss, install
+        # the Chromium binary plus its deps from scratch.
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       - name: Generate Paperclip config
         run: |
