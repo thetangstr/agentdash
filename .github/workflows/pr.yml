@@ -110,6 +110,42 @@ jobs:
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
 
+  # Dependency vulnerability audit.
+  #
+  # INTENTIONALLY ADVISORY (non-blocking) for now: `continue-on-error: true`
+  # means this job surfaces HIGH/CRITICAL production advisories in the PR
+  # checks UI but never fails the PR. We don't want to block launch on
+  # pre-existing transitive advisories (e.g. the picomatch ReDoS that reaches
+  # us only through vitest/vite). Promote this to a BLOCKING required check
+  # once the existing advisories are triaged/overridden — drop
+  # `continue-on-error` and add it to branch protection.
+  dependency-audit:
+    needs: [policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies (advisory)
+        run: pnpm run audit:deps
+
   e2e:
     needs: [policy]
     runs-on: ubuntu-latest
