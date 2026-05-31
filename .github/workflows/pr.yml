@@ -331,7 +331,15 @@ jobs:
           # to step 3. The bypass returns a synthetic "pass" so the
           # test can exercise the rest of the wizard.
           AGENTDASH_ADAPTER_ENV_BYPASS: "true"
-        run: pnpm run test:e2e
+        # Bound the suite itself: a healthy e2e run is ~17m, but a hung spec
+        # (e.g. a webServer that never becomes ready, or a test awaiting an
+        # event that never fires) otherwise runs unbounded — the job-level
+        # `timeout-minutes: 45` was observed NOT to cancel such a hang (a run
+        # sat in this step for 60m+). `timeout -s KILL 30m` force-kills a hung
+        # suite well under the backstop so the job fails fast instead of
+        # burning the whole budget. Which tests run and their env are
+        # unchanged; this only adds a hard upper bound.
+        run: timeout -s KILL 30m pnpm run test:e2e
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
