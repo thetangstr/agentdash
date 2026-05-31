@@ -244,8 +244,19 @@ jobs:
         run: |
           ok=0
           for i in 1 2 3; do
-            if timeout -s KILL 6m npx playwright install chromium; then ok=1; break; fi
-            echo "playwright install attempt $i failed/hung; retrying"; sleep 5
+            # Each attempt starts from a clean browser dir. `timeout -s KILL`
+            # reaps the parent npx/node but not the download/extract children
+            # Playwright spawns; those orphans keep writing to
+            # ~/.cache/ms-playwright, so a bare retry races a second installer
+            # into a half-written dir and corrupts the extract (observed: the
+            # post-download "extract" phase hangs ~6m every attempt). Wiping
+            # the dir + `setsid` (own process group, killed as a group) makes
+            # every attempt independent and self-contained.
+            rm -rf ~/.cache/ms-playwright
+            if timeout -s KILL 6m setsid npx playwright install chromium; then ok=1; break; fi
+            echo "playwright install attempt $i failed/hung; retrying"
+            pkill -f 'playwright|chrome-linux' 2>/dev/null || true
+            sleep 5
           done
           if [ "$ok" = 1 ]; then
             echo "installed=true" >> "$GITHUB_OUTPUT"
