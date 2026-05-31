@@ -44,6 +44,7 @@ import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
+import { initSentry, captureServerError } from "./observability/sentry.js";
 import { conflict } from "./errors.js";
 import type {
   InstanceDatabaseBackupRunResult,
@@ -88,6 +89,9 @@ export interface StartedServer {
 }
 
 export async function startServer(): Promise<StartedServer> {
+  // AgentDash: initialize remote error tracking as early as possible so any
+  // startup failure below is captured. No-op unless SENTRY_DSN is set.
+  initSentry();
   let config = loadConfig();
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
@@ -1198,6 +1202,21 @@ function isMainModule(metaUrl: string): boolean {
 }
 
 if (isMainModule(import.meta.url)) {
+  // AgentDash: initialize Sentry before anything else so process-level
+  // crashes during startup are captured. No-op unless SENTRY_DSN is set.
+  initSentry();
+  // Capture otherwise-unhandled crashes. These guards only run when the
+  // server is launched as the main process (not when startServer is imported
+  // by tests), and each capture is a no-op unless SENTRY_DSN is set. We keep
+  // the existing logging behavior and do not change process lifecycle.
+  process.on("uncaughtException", (err) => {
+    captureServerError(err, { kind: "uncaughtException" });
+    logger.error({ err }, "uncaught exception");
+  });
+  process.on("unhandledRejection", (reason) => {
+    captureServerError(reason, { kind: "unhandledRejection" });
+    logger.error({ err: reason }, "unhandled promise rejection");
+  });
   void startServer().catch((err) => {
     logger.error({ err }, "Paperclip server failed to start");
     process.exit(1);
