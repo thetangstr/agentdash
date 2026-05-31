@@ -206,16 +206,36 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      - name: Install Playwright browsers
-        # On a cache hit the browser binaries are already restored, so only
-        # the (fast) system dependencies need installing. On a miss, install
-        # the Chromium binary plus its deps from scratch.
+      # The single `npx playwright install --with-deps chromium` step used to
+      # hang here: the Chromium download finished in ~1 min, then the
+      # system-deps/apt install stalled (network/apt) until the 45m job
+      # timeout killed and CANCELED the whole run, failing every PR. e2e is a
+      # required, enforce_admins check, so this blocked all merges.
+      #
+      # Fix: split system-deps from the browser binary, each with a
+      # per-attempt `timeout` + 3-attempt retry loop. A hang now fails fast
+      # and retries instead of burning the whole budget. The browser cache
+      # above still eliminates the (separate) binary download on warm runs.
+      - name: Install Playwright system dependencies
         run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            npx playwright install-deps chromium
-          else
-            npx playwright install --with-deps chromium
-          fi
+          ok=0
+          for i in 1 2 3; do
+            if timeout 5m npx playwright install-deps chromium; then ok=1; break; fi
+            echo "playwright install-deps attempt $i failed/hung; retrying"; sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "playwright install-deps failed after retries"; exit 1; }
+
+      - name: Install Playwright browser binary
+        # Only on a cache miss; on a cache hit the binary is already restored
+        # and we skip the (hang-prone) download entirely.
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            if timeout 6m npx playwright install chromium; then ok=1; break; fi
+            echo "playwright install attempt $i failed/hung; retrying"; sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "playwright install failed after retries"; exit 1; }
 
       - name: Generate Paperclip config
         run: |
