@@ -32,6 +32,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import type { Db } from "@paperclipai/db";
+import type { DeploymentMode } from "@paperclipai/shared";
 import { pluginRegistryService } from "../services/plugin-registry.js";
 import { logger } from "../middleware/logger.js";
 
@@ -177,6 +178,103 @@ function computeETag(size: number, mtimeMs: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// CORS
+// ---------------------------------------------------------------------------
+
+/**
+ * Inputs for resolving the `Access-Control-Allow-Origin` value for a plugin
+ * UI static asset response.
+ */
+export interface PluginUiCorsInput {
+  /** The deployment mode (`local_trusted` vs `authenticated`). */
+  deploymentMode: DeploymentMode;
+  /** The request's `Origin` header (if any). */
+  requestOrigin: string | undefined;
+  /**
+   * Explicit allowlist of permitted origins (e.g. from
+   * `AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS`). Origins are matched exactly.
+   */
+  allowedOrigins: string[];
+  /**
+   * The instance's public base URL (PAPERCLIP_PUBLIC_URL / authPublicBaseUrl).
+   * Used to derive the same-origin default in authenticated mode.
+   */
+  publicBaseUrl: string | undefined;
+}
+
+/**
+ * Normalize a URL or origin string to its origin form (`scheme://host[:port]`),
+ * or `null` if it cannot be parsed.
+ */
+function normalizeOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the `Access-Control-Allow-Origin` header value for a plugin UI
+ * static asset response.
+ *
+ * Behavior:
+ * - `local_trusted` / dev: permissive `*` so local plugin development (cross-
+ *   origin dev servers, file://-style loads) keeps working.
+ * - `authenticated`: never reflect an arbitrary `Origin`. Echo the request's
+ *   `Origin` only when it is present in the allowlist (the configured
+ *   `allowedOrigins` plus the derived same-origin from `publicBaseUrl`). When
+ *   no allowlist and no public URL are configured, send no CORS header at all
+ *   (returns `null`) rather than a wildcard.
+ *
+ * @returns the header value to set, or `null` to omit the header entirely.
+ */
+export function resolvePluginUiAllowedOrigin(input: PluginUiCorsInput): string | null {
+  if (input.deploymentMode === "local_trusted") {
+    return "*";
+  }
+
+  // authenticated mode — build the effective allowlist (same-origin + configured).
+  const allowSet = new Set<string>();
+  const sameOrigin = normalizeOrigin(input.publicBaseUrl);
+  if (sameOrigin) allowSet.add(sameOrigin);
+  for (const candidate of input.allowedOrigins) {
+    const normalized = normalizeOrigin(candidate);
+    if (normalized) allowSet.add(normalized);
+  }
+
+  if (allowSet.size === 0) {
+    // No allowlist and no public URL — do NOT fall back to a wildcard.
+    return null;
+  }
+
+  const requestOrigin = normalizeOrigin(input.requestOrigin);
+  if (requestOrigin && allowSet.has(requestOrigin)) {
+    return requestOrigin;
+  }
+
+  // The request origin is not allowlisted — do not reflect it. Fall back to the
+  // same-origin value when available so first-party loads still work.
+  return sameOrigin;
+}
+
+/**
+ * Parse a comma-separated origin allowlist (e.g. the
+ * `AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS` env var) into a trimmed,
+ * non-empty list.
+ */
+export function parsePluginUiAllowedOrigins(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+// ---------------------------------------------------------------------------
 // Route factory
 // ---------------------------------------------------------------------------
 
@@ -190,6 +288,23 @@ export interface PluginUiStaticRouteOptions {
    * Defaults to the standard `~/.paperclip/plugins/` location.
    */
   localPluginDir: string;
+  /**
+   * The deployment mode. In `local_trusted` the route serves a permissive
+   * `Access-Control-Allow-Origin: *`; in `authenticated` it restricts to the
+   * allowlist / same-origin. Defaults to `local_trusted`.
+   */
+  deploymentMode?: DeploymentMode;
+  /**
+   * Explicit allowlist of origins permitted to load plugin UI bundles
+   * cross-origin in authenticated mode (from
+   * `AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS`).
+   */
+  allowedOrigins?: string[];
+  /**
+   * The instance's public base URL, used to derive the same-origin default
+   * for plugin UI CORS in authenticated mode.
+   */
+  publicBaseUrl?: string;
 }
 
 /**
@@ -471,8 +586,24 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
       res.set("Content-Type", contentType);
     }
 
-    // Step 9: Set CORS headers (plugin UI may be loaded from different origin in dev)
-    res.set("Access-Control-Allow-Origin", "*");
+    // Step 9: Set CORS headers (plugin UI may be loaded from a different origin
+    // in dev). In local_trusted/dev this stays permissive (`*`); in
+    // authenticated mode it is restricted to the configured allowlist /
+    // same-origin and never reflects an arbitrary Origin.
+    const allowedOrigin = resolvePluginUiAllowedOrigin({
+      deploymentMode: options.deploymentMode ?? "local_trusted",
+      requestOrigin: req.headers.origin,
+      allowedOrigins: options.allowedOrigins ?? [],
+      publicBaseUrl: options.publicBaseUrl,
+    });
+    if (allowedOrigin) {
+      res.set("Access-Control-Allow-Origin", allowedOrigin);
+      // When echoing a specific origin (not `*`), advertise that responses vary
+      // by Origin so caches don't serve one origin's response to another.
+      if (allowedOrigin !== "*") {
+        res.vary("Origin");
+      }
+    }
 
     // Step 10: Send the file
     // The plugin source can live in Git worktrees (e.g. ".worktrees/...").

@@ -49,7 +49,7 @@ import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
-import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
+import { pluginUiStaticRoutes, parsePluginUiAllowedOrigins } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -147,6 +147,9 @@ export async function createApp(
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
+    // AgentDash: instance public base URL used to derive the same-origin
+    // default for plugin-UI CORS in authenticated mode.
+    pluginUiPublicBaseUrl?: string;
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
@@ -387,6 +390,14 @@ export async function createApp(
   });
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
+    deploymentMode: opts.deploymentMode,
+    // AgentDash: restrict plugin-UI CORS in authenticated mode to an explicit
+    // allowlist (AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS) plus the instance's own
+    // public origin; local_trusted stays permissive for plugin dev.
+    allowedOrigins: parsePluginUiAllowedOrigins(
+      process.env.AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS,
+    ),
+    publicBaseUrl: opts.pluginUiPublicBaseUrl,
   }));
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
