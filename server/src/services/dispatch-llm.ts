@@ -4,9 +4,9 @@ import { anthropicLLM } from "./anthropic-llm.js";
 import { logger } from "../middleware/logger.js";
 import { HttpError } from "../errors.js";
 
-// Default hermes binary path — matches the mini's installation.
+// Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
-const DEFAULT_HERMES_COMMAND = "/Users/maxiaoer/.local/bin/hermes";
+const DEFAULT_HERMES_COMMAND = "hermes";
 
 // ---------------------------------------------------------------------------
 // AgentDash (Phase G): token-budget instrumentation

@@ -333,7 +333,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
   // wizard. `onboard` is the advanced path with full database / LLM /
   // storage / secrets prompts. Surface the nudge once so it's discoverable.
   p.log.info(
-    `${pc.dim("Most users only need")} ${pc.cyan("agentdash setup")} ${pc.dim("— pick adapter + email, safe defaults for everything else.")}`,
+    `${pc.dim("Most users only need")} ${pc.cyan("agentdash setup")} ${pc.dim("— pick an adapter, then create the first user in the dashboard.")}`,
   );
   const configPath = resolveConfigPath(opts.config);
   const instance = describeLocalInstancePaths(resolvePaperclipInstanceId());

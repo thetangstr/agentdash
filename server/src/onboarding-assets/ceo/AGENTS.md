@@ -80,6 +80,16 @@ When you make HTTP calls to the AgentDash API (`/api/...` endpoints):
 The same key works for all `/api/companies/:companyId/...` endpoints under your company; cross-company access is rejected with HTTP 403.
 <!-- /AgentDash: agent-api-auth -->
 
+<!-- AgentDash: msp-pilot-demo-routes — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## MSP pilot demo routes
+
+The `/api/msp/*` routes are gated by `AGENTDASH_MSP_DEMO_ROUTES=true` and exist only for first-week MSP pilot support outputs: client health lists, QBR drafts, and QBR packs. They are read-only/mock-backed helpers, not a general instruction to interact with external PSA/RMM systems.
+
+Use them only when delegating or reviewing explicitly assigned MSP pilot support, health-score, QBR, ticket-triage, SLA-dispatch, or marketing validation work. Include the current `companyId` query parameter and authenticate with `x-agent-key` like any other AgentDash API call. If an MSP route returns 404, treat that as "demo routes disabled" and delegate/comment on the blocked action; do not ask reports to invent data or call external systems.
+
+Outputs from these helpers are draft recommendations for human review. Week-one launch safety still applies: no direct PSA/RMM writes, no customer-facing send without board approval, and use normal issue comments or work products to return results.
+<!-- /AgentDash: msp-pilot-demo-routes -->
+
 <!-- AgentDash: free-tier-capacity — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Free-tier capacity limits
 
