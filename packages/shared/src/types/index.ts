@@ -276,6 +276,19 @@ export type {
   UserCompanyAccessResponse,
 } from "./access.js";
 export type { QuotaWindow, ProviderQuotaResult } from "./quota.js";
+// AgentDash: Connectors (AGE-106)
+export type {
+  ConnectionAutonomyConfig,
+  Connection,
+  ConnectorWorkspaceDefaults,
+  AgentConnectorOverrides,
+  ActingAsResolution,
+  ActingAsBlocked,
+  ActingAsResult,
+  ConnectorActionDefinition,
+  ConnectorDefinition,
+  ConnectorApprovalPayload,
+} from "./connector.js";
 export {
   INTERVIEW_MAX_TURNS,
   FIXED_QUESTIONS,

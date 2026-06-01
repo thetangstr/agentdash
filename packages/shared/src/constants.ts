@@ -1010,6 +1010,60 @@ export function deriveCompanyEmailDomain(creatorEmail: string): string {
   return domain;
 }
 
+// AgentDash: Connectors (AGE-106)
+
+/** Owner types for connections — who initiated the connection. */
+export const CONNECTION_OWNER_TYPES = ["user", "agent"] as const;
+export type ConnectionOwnerType = (typeof CONNECTION_OWNER_TYPES)[number];
+
+/** Supported OAuth2 providers. Extensible — individual connectors register here. */
+export const CONNECTION_PROVIDERS = [
+  "google",
+  "microsoft",
+  "slack",
+  "github",
+  "linear",
+  "notion",
+  "jira",
+] as const;
+export type ConnectionProvider = (typeof CONNECTION_PROVIDERS)[number] | (string & {});
+
+/** Connection lifecycle statuses. */
+export const CONNECTION_STATUSES = ["active", "expired", "revoked", "error"] as const;
+export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
+
+/** Send-identity modes: who messages/actions appear from. */
+export const CONNECTION_SEND_IDENTITIES = ["service", "delegated"] as const;
+export type ConnectionSendIdentity = (typeof CONNECTION_SEND_IDENTITIES)[number];
+
+/** Autonomy levels for each action class (read, draft, send). */
+export const CONNECTION_AUTONOMY_LEVELS = [
+  "full",          // agent can act without approval
+  "draft_only",    // agent drafts; human approves before execution
+  "blocked",       // agent cannot perform this action class
+] as const;
+export type ConnectionAutonomyLevel = (typeof CONNECTION_AUTONOMY_LEVELS)[number];
+
+/** Visibility: who in the workspace can use this connection. */
+export const CONNECTION_VISIBILITIES = ["private", "workspace"] as const;
+export type ConnectionVisibility = (typeof CONNECTION_VISIBILITIES)[number];
+
+/** Connector action classes used in autonomy and audit. */
+export const CONNECTOR_ACTION_CLASSES = ["read", "draft", "send"] as const;
+export type ConnectorActionClass = (typeof CONNECTOR_ACTION_CLASSES)[number];
+
+/** Activity log action names written by the connectors subsystem. */
+export const ACTIVITY_LOG_ACTIONS_CONNECTORS = [
+  "connection.created",
+  "connection.revoked",
+  "connection.read",
+  "connection.draft",
+  "connection.send",
+  "connection.approve",
+  "connection.token_refreshed",
+] as const;
+export type ActivityLogActionConnector = (typeof ACTIVITY_LOG_ACTIONS_CONNECTORS)[number];
+
 // AgentDash: goals-eval-hitl
 
 export const VERDICT_OUTCOMES = [
