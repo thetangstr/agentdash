@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { anthropicLLM } from "./anthropic-llm.js";
+import { minimaxLLM } from "./minimax-llm.js";
 import { logger } from "../middleware/logger.js";
 import { HttpError } from "../errors.js";
 
@@ -23,7 +24,7 @@ const DEFAULT_HERMES_COMMAND = "/Users/maxiaoer/.local/bin/hermes";
 
 const TOKEN_BUDGET_LOG_ENABLED = Boolean(process.env.AGENTDASH_TOKEN_BUDGET_LOG);
 const TOKEN_BUDGET_FILE = process.env.AGENTDASH_TOKEN_BUDGET_FILE ?? "/tmp/agentdash-token-budget.json";
-const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "hermes_local", "claude_local"] as const;
+const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "minimax", "hermes_local", "claude_local"] as const;
 
 function emitTokenBudget(adapterName: string, input: LLMInput): void {
   if (!TOKEN_BUDGET_LOG_ENABLED) return;
@@ -239,6 +240,22 @@ export async function dispatchLLM(input: LLMInput): Promise<string> {
 
   if (adapter === "claude_api" || adapter === "") {
     return anthropicLLM(input);
+  }
+
+  if (adapter === "minimax") {
+    // MiniMax via its Anthropic-compatible Messages API (see minimax-llm.ts).
+    logger.info({ adapter }, "[dispatch-llm] routing CoS reply through minimax");
+    try {
+      const reply = await minimaxLLM(input);
+      if (!reply) {
+        logger.warn({ adapter }, "[dispatch-llm] minimax returned empty reply, using fallback");
+        return anthropicLLM(input);
+      }
+      return reply;
+    } catch (err) {
+      logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back to claude_api");
+      return anthropicLLM(input);
+    }
   }
 
   if (adapter === "hermes_local") {
