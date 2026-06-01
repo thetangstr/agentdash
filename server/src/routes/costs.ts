@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import {
+  agentRunService,
   budgetService,
   costService,
   financeService,
@@ -349,6 +350,26 @@ export function costRoutes(
     );
 
     res.json(updated);
+  });
+
+  // ---------------------------------------------------------------------------
+  // AgentDash (AGE-119): agent-run metering endpoints
+  // ---------------------------------------------------------------------------
+  const agentRuns = agentRunService(db);
+
+  router.get("/companies/:companyId/agent-runs/monthly", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const agentId = req.query.agentId as string | undefined;
+    const summary = await agentRuns.monthlyCount(companyId, { agentId });
+    res.json(summary);
+  });
+
+  router.get("/companies/:companyId/agent-runs/monthly-by-agent", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const rows = await agentRuns.monthlyCountByAgent(companyId);
+    res.json(rows);
   });
 
   return router;

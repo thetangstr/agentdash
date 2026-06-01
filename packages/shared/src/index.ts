@@ -216,6 +216,10 @@ export {
   type PluginApiRouteCheckoutPolicy,
   type PluginEventType,
   type PluginBridgeErrorCode,
+  // AgentDash (AGE-119): agent-run metering
+  AGENT_RUN_COMPLEXITY_TIERS,
+  AGENT_RUN_COMPLEXITY_THRESHOLDS,
+  type AgentRunComplexityTier,
   // AgentDash: Connectors (AGE-106)
   CONNECTION_OWNER_TYPES,
   CONNECTION_PROVIDERS,

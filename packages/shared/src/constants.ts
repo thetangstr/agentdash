@@ -1017,6 +1017,23 @@ export const QUOTA_FREE_INCLUDED_RUNS = 50;
 export const QUOTA_PRO_BASE_INCLUDED_RUNS = 1_000;
 export const QUOTA_PRO_PER_SEAT_RUNS = 250;
 
+// AgentDash (AGE-119): agent-run complexity tiers. All three map to a single
+// displayed "agent-run" unit. The tier is derived from token usage + duration
+// at recording time and stored on each agent_runs row for future pricing
+// differentiation (AGE-120 quota model, AGE-122 overage billing).
+export const AGENT_RUN_COMPLEXITY_TIERS = ["simple", "medium", "complex"] as const;
+export type AgentRunComplexityTier = (typeof AGENT_RUN_COMPLEXITY_TIERS)[number];
+
+/**
+ * Thresholds for classifying an agent run's complexity tier.
+ * A run is "complex" if it exceeds EITHER the token OR the duration threshold
+ * for complex; "medium" if it exceeds either medium threshold; "simple" otherwise.
+ */
+export const AGENT_RUN_COMPLEXITY_THRESHOLDS = {
+  medium: { tokens: 10_000, durationMs: 60_000 },
+  complex: { tokens: 100_000, durationMs: 600_000 },
+} as const;
+
 // AgentDash: Connectors (AGE-106)
 
 /** Owner types for connections — who initiated the connection. */
