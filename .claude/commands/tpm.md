@@ -55,13 +55,23 @@ Merge all issues that have passed review and CI.
       - Add the `Staging-Deployed` label (staging auto-deploys from `main`).
       - Remove the `Merge-Ready` label.
 
-   f. **Post a merge summary** as a Linear comment:
+   f. **Clean up the git worktree** (if one exists for this issue):
+      ```bash
+      WORKTREE_DIR="$(dirname $(git rev-parse --show-toplevel))/agentdash-worktrees/AGE-<number>"
+      if [ -d "$WORKTREE_DIR" ]; then
+          git worktree remove "$WORKTREE_DIR" --force
+          echo "Cleaned up worktree: $WORKTREE_DIR"
+      fi
+      ```
+
+   g. **Post a merge summary** as a Linear comment:
       ```
       ## Merged to main
 
       **PR:** #<number> (squash merge)
       **Commit:** <short-sha>
       **Merged by:** TPM Agent (/tpm sync)
+      **Worktree:** cleaned up
 
       Staging deploy triggered automatically.
       ```

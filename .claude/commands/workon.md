@@ -10,11 +10,61 @@ You are the **MAW Orchestrator** -- the autonomous pipeline driver for Multi-Age
 
 ---
 
+## Git Worktree Isolation (Default)
+
+**Every issue gets its own git worktree.** This is the default — it means multiple agents can work on different issues in parallel without branch conflicts or dirty working trees.
+
+### How it works
+
+```
+~/Projects/agentdash/                          # main worktree — stays on main, always clean
+~/Projects/agentdash-worktrees/AGE-106/        # worktree for AGE-106
+~/Projects/agentdash-worktrees/AGE-119/        # worktree for AGE-119
+```
+
+### Worktree lifecycle
+
+1. **Create**: Orchestrator creates worktree before dispatching Builder
+2. **Work**: Builder, Tester, Reviewer all work inside the worktree
+3. **PR**: PR is created from the worktree's branch
+4. **Merge**: TPM merges the PR from main, then cleans up the worktree
+5. **Cleanup**: `git worktree remove` after merge
+
+### Setup (run once)
+
+```bash
+mkdir -p ~/Projects/agentdash-worktrees
+```
+
+### Worktree creation (orchestrator does this)
+
+```bash
+# From the main worktree:
+cd ~/Projects/agentdash
+git fetch origin main
+git worktree add ~/Projects/agentdash-worktrees/AGE-<number> -b feat/AGE-<number>-<slug> origin/main
+
+# Install dependencies in the worktree
+cd ~/Projects/agentdash-worktrees/AGE-<number>
+pnpm install
+```
+
+### Working in the worktree
+
+All subsequent commands (builder, tester, reviewer) run inside:
+```
+~/Projects/agentdash-worktrees/AGE-<number>/
+```
+
+The main worktree at `~/Projects/agentdash/` is **never modified** by agents — it stays on `main` as a clean base.
+
+---
+
 ## Invocation Modes
 
 | Command | Behavior |
 |---------|----------|
-| `/workon AGE-123` | Drive a specific Linear issue through the pipeline |
+| `/workon AGE-123` | Drive a specific Linear issue through the pipeline (in its own worktree) |
 | `/workon 123` | Shorthand -- assumes `AGE-123` |
 | `/workon` (no args) | **Auto-pickup:** query Linear for the highest-priority `Todo` issue and start working on it |
 | Webhook trigger | Same as `/workon AGE-XXX` -- webhook payload supplies the issue ID |
@@ -137,15 +187,52 @@ Dispatch PM agent:
 
 ---
 
-### `build` -- Implement the Feature
+### `build` -- Create Worktree + Implement the Feature
 
-Spawn the Builder agent to create a branch, implement, and open a PR.
+**Step 1: Create a git worktree for this issue (if it doesn't exist yet).**
+
+The worktree isolates this issue's work from the main directory and from other in-flight issues. Multiple agents can work on different issues in parallel.
+
+```bash
+# Define paths
+MAIN_WORKTREE="$(git rev-parse --show-toplevel)"   # e.g. ~/Projects/agentdash
+WORKTREE_BASE="$(dirname $MAIN_WORKTREE)/agentdash-worktrees"
+ISSUE_NUM=<number>                                  # e.g. 106
+SLUG=<2-4-word-kebab-slug>                          # e.g. connector-framework
+BRANCH="feat/AGE-${ISSUE_NUM}-${SLUG}"
+WORKTREE_DIR="${WORKTREE_BASE}/AGE-${ISSUE_NUM}"
+
+# Create worktree directory and the worktree itself
+mkdir -p "$WORKTREE_BASE"
+git fetch origin main
+
+# Only create if it doesn't already exist (re-entry after fix-ci/fix-tests)
+if [ ! -d "$WORKTREE_DIR" ]; then
+    git worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/main
+    cd "$WORKTREE_DIR"
+    pnpm install
+else
+    cd "$WORKTREE_DIR"
+    # Worktree exists (re-entry) — rebase on latest main
+    git fetch origin main
+    git rebase origin/main
+fi
+```
+
+**Step 2: Dispatch Builder agent in the worktree.**
 
 ```
 Dispatch Builder agent:
+- Working directory: <WORKTREE_DIR>  (NOT the main worktree)
 - Read .claude/commands/builder.md before acting
 - Prompt: |
     You are the Builder Agent. Implement AGE-<number>.
+
+    *** WORKTREE MODE ***
+    You are working in a git worktree at: <WORKTREE_DIR>
+    Branch: <BRANCH>
+    The main worktree at <MAIN_WORKTREE> must NOT be modified.
+    All your work happens in this worktree directory.
 
     Issue title: <title>
     Size: <XS|S|M|L|XL>
@@ -159,14 +246,14 @@ Dispatch Builder agent:
 
     Follow the full Builder workflow from .claude/commands/builder.md:
     1. Read acceptance criteria from the Linear issue
-    2. Create feature branch: pap-<number>-<short-name>
+    2. Branch already exists — you are on it. Do NOT create a new branch.
     3. Implement the feature (directly or via /team based on size)
     4. Write unit tests + E2E tests (S+)
     5. Run mandatory regression suite: pnpm -r typecheck && pnpm test:run && pnpm build
     6. Rebase on main: git fetch origin main && git rebase origin/main
     7. Push and create PR targeting main
     8. Set labels: PR-Open (remove Building)
-    9. Add comment: "Implementation complete. PR #<number> opened."
+    9. Add comment: "Implementation complete. PR #<number> opened. Worktree: <WORKTREE_DIR>"
 ```
 
 **On completion:** Next tick detects `PR-Open` and routes to `ci-wait`.

@@ -89,14 +89,42 @@ Use mcp__linear__save_comment with:
 - body: "## Builder Started\n\nClaimed at <timestamp>.\nSize: <size>\nApproach: Architect/Editor split."
 ```
 
-### 1.4 Create Feature Branch
+### 1.4 Verify Worktree (or Create Feature Branch)
+
+**Worktree mode (default):** The orchestrator has already created a worktree and placed you in it. Verify you are in the correct location:
+
+```bash
+# Verify we're in a worktree, not the main working tree
+WORKTREE_DIR="$(pwd)"
+MAIN_WORKTREE="$(git rev-parse --path-format=absolute --git-common-dir | sed 's|/.git$||')"
+
+if [ "$WORKTREE_DIR" = "$MAIN_WORKTREE" ]; then
+    echo "WARNING: Running in main worktree. Creating worktree for isolation..."
+    WORKTREE_BASE="$(dirname $MAIN_WORKTREE)/agentdash-worktrees"
+    mkdir -p "$WORKTREE_BASE"
+    BRANCH="feat/AGE-<number>-<slug>"
+    git fetch origin main
+    git worktree add "$WORKTREE_BASE/AGE-<number>" -b "$BRANCH" origin/main
+    cd "$WORKTREE_BASE/AGE-<number>"
+    pnpm install
+else
+    echo "Worktree confirmed: $WORKTREE_DIR"
+    echo "Branch: $(git branch --show-current)"
+fi
+```
+
+**Fallback (no orchestrator):** If invoked directly via `/builder AGE-123` without a worktree, create one:
 
 ```bash
 git fetch origin main
-git checkout -b feat/AGE-<number>-<slug> origin/main
+git worktree add ~/Projects/agentdash-worktrees/AGE-<number> -b feat/AGE-<number>-<slug> origin/main
+cd ~/Projects/agentdash-worktrees/AGE-<number>
+pnpm install
 ```
 
-Branch naming: `feat/AGE-<number>-<slug>` where `<slug>` is a 2-4 word kebab-case summary (e.g., `feat/AGE-123-add-billing`).
+Branch naming: `feat/AGE-<number>-<slug>` where `<slug>` is a 2-4 word kebab-case summary (e.g., `feat/AGE-123-connector-framework`).
+
+> **CRITICAL:** Never modify the main worktree (`~/Projects/agentdash/`). All implementation happens in the issue worktree.
 
 ---
 
