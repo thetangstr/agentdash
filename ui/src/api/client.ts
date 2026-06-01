@@ -3,13 +3,20 @@ const BASE = "/api";
 export class ApiError extends Error {
   status: number;
   body: unknown;
+  retryAfterMs: number | null;
 
-  constructor(message: string, status: number, body: unknown) {
+  constructor(message: string, status: number, body: unknown, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+export function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return error.status === 0 || error.status === 429 || error.status >= 500;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -56,10 +63,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         }
       }
     }
+    let retryAfterMs: number | null = null;
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After");
+      if (retryAfter) {
+        const seconds = parseInt(retryAfter, 10);
+        retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : null;
+      }
+    }
     throw new ApiError(
       (errorBody as { error?: string } | null)?.error ?? `Request failed: ${res.status}`,
       res.status,
       errorBody,
+      retryAfterMs,
     );
   }
   if (res.status === 204) return undefined as T;

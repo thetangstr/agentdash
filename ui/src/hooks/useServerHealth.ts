@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 const HEALTH_POLL_INTERVAL_MS = 30_000;
+const HEALTH_POLL_FAST_MS = 5_000;
 // Number of consecutive failed polls before reachability flips to
 // "unreachable" (and the overlay shows). One failure = "checking" only —
 // avoids spurious overlays on transient blips.
@@ -13,6 +14,7 @@ interface ServerHealth {
   reachability: ServerReachability;
   lastCheck: Date | null;
   isOnline: boolean; // browser navigator.onLine
+  recheck: () => void;
 }
 
 async function checkHealth(): Promise<boolean> {
@@ -44,10 +46,13 @@ async function checkHealth(): Promise<boolean> {
 //      Now sourced from react-query's `dataUpdatedAt` (the timestamp of
 //      the most recently completed fetch).
 export function useServerHealth(): ServerHealth {
+  const queryClient = useQueryClient();
   const [isOnline, setIsOnline] = useState(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
   const [unreachableConsecutive, setUnreachableConsecutive] = useState(0);
+
+  const isHealthy = unreachableConsecutive === 0;
 
   const {
     data: isReachable,
@@ -56,9 +61,9 @@ export function useServerHealth(): ServerHealth {
   } = useQuery({
     queryKey: ["serverHealth"],
     queryFn: checkHealth,
-    refetchInterval: HEALTH_POLL_INTERVAL_MS,
+    refetchInterval: isHealthy ? HEALTH_POLL_INTERVAL_MS : HEALTH_POLL_FAST_MS,
     retry: false,
-    staleTime: HEALTH_POLL_INTERVAL_MS - 1_000,
+    staleTime: (isHealthy ? HEALTH_POLL_INTERVAL_MS : HEALTH_POLL_FAST_MS) - 1_000,
   });
 
   // Track consecutive unreachable results — drives the "checking" badge
@@ -101,9 +106,21 @@ export function useServerHealth(): ServerHealth {
     };
   }, []);
 
+  const recheck = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["serverHealth"] });
+  }, [queryClient]);
+
+  // When the browser comes back online, immediately recheck
+  useEffect(() => {
+    if (isOnline && unreachableConsecutive > 0) {
+      recheck();
+    }
+  }, [isOnline, unreachableConsecutive, recheck]);
+
   return {
     reachability,
     lastCheck: dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null,
     isOnline,
+    recheck,
   };
 }

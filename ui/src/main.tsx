@@ -6,6 +6,7 @@ import { BrowserRouter } from "@/lib/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ApiError, isRetryableError } from "./api/client";
 import { CompanyProvider } from "./context/CompanyContext";
 import { LiveUpdatesProvider } from "./context/LiveUpdatesProvider";
 import { BreadcrumbProvider } from "./context/BreadcrumbContext";
@@ -43,6 +44,16 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 30_000,
       refetchOnWindowFocus: true,
+      retry(failureCount, error) {
+        if (!isRetryableError(error)) return false;
+        return failureCount < 3;
+      },
+      retryDelay(attemptIndex, error) {
+        if (error instanceof ApiError && error.retryAfterMs) {
+          return Math.min(error.retryAfterMs, 30_000);
+        }
+        return Math.min(1000 * 2 ** attemptIndex, 15_000);
+      },
     },
   },
 });

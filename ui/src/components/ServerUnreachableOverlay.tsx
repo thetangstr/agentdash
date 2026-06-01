@@ -1,19 +1,10 @@
 import { useServerHealth } from "@/hooks/useServerHealth";
+import { useQueryClient } from "@tanstack/react-query";
 
 export function ServerUnreachableOverlay() {
-  const { reachability, isOnline } = useServerHealth();
+  const { reachability, isOnline, recheck } = useServerHealth();
+  const queryClient = useQueryClient();
 
-  // Closes #233: previously this only short-circuited on "reachable", so
-  // on first mount react-query was "checking" → the full-screen overlay
-  // flashed for 50ms–2s before the first /api/health response landed,
-  // regressing cold-load UX vs. having no overlay at all. The hook now
-  // only flips to "unreachable" after UNREACHABLE_THRESHOLD consecutive
-  // failures (per #229), so "checking" no longer warrants the full-screen
-  // takeover — at most a quiet indicator (which ConnectionStatus handles).
-  //
-  // The browser-offline branch is independent: if navigator says we have
-  // no network, we still want to surface the overlay regardless of the
-  // health-check state.
   const isBrowserOffline = !isOnline;
   if (!isBrowserOffline && reachability !== "unreachable") return null;
   const message = isBrowserOffline
@@ -51,8 +42,8 @@ export function ServerUnreachableOverlay() {
           {reachability === "unreachable" && (
             <button
               onClick={() => {
-                // Force refetch all queries to trigger a retry
-                window.location.reload();
+                recheck();
+                queryClient.invalidateQueries();
               }}
               className="px-4 py-2 rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors text-sm"
             >
@@ -63,7 +54,8 @@ export function ServerUnreachableOverlay() {
 
         {reachability === "unreachable" && (
           <p className="text-xs text-muted-foreground">
-            If this persists, the server may be restarting. Try again in a moment.
+            Automatically retrying every few seconds.
+            If this persists, the server may be restarting.
           </p>
         )}
       </div>
