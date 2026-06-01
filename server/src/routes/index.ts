@@ -19,6 +19,8 @@ export { llmRoutes } from "./llms.js";
 export { accessRoutes } from "./access.js";
 export { instanceSettingsRoutes } from "./instance-settings.js";
 export { instanceDatabaseBackupRoutes } from "./instance-database-backups.js";
+// AgentDash: Connectors (AGE-106)
+export { connectorRoutes } from "./connectors.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";

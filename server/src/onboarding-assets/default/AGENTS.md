@@ -63,3 +63,39 @@ Outputs from these helpers are draft recommendations for human review. Week-one 
 
 Free workspaces allow one human user and one agent, normally the Chief of Staff. If an API call returns HTTP 402 with `seat_cap_exceeded` or `agent_cap_exceeded`, do not retry through another endpoint or create a workaround. Comment on the Issue or CoS thread with the blocked action and ask the board to upgrade the workspace or remove existing capacity first. The API is the source of truth for current plan limits.
 <!-- /AgentDash: free-tier-capacity -->
+
+<!-- AgentDash: connectors — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Connectors & connections
+
+Connections let agents interact with external services (email, calendar, CRM, etc.) through a governed autonomy model. Each connection stores encrypted OAuth tokens and is company-scoped.
+
+### Autonomy model
+
+Every connection carries an `autonomy` config with three action classes: `read` (fetch/list data), `draft` (create draft content), and `send` (perform a visible external action like sending an email). Each class has an autonomy level: `full`, `draft_only`, `approve_to_send`, `blocked`, or `read_only`.
+
+### Send identity
+
+- `delegated` — action appears as the human connection owner
+- `service` — action appears as the workspace service account
+
+### Resolution order
+
+The acting-as resolver determines effective autonomy and identity. Priority (highest first): per-agent override, per-connection setting, workspace default.
+
+### API endpoints
+
+- `GET /api/companies/:companyId/connections` — list connections (filter by `provider`, `status`, `ownerId`)
+- `POST /api/companies/:companyId/connections` — create a connection
+- `GET /api/connections/:id` — get a single connection
+- `PATCH /api/connections/:id` — update settings (sendIdentity, autonomy, visibility)
+- `POST /api/connections/:id/revoke` — revoke a connection (clears token)
+- `GET /api/companies/:companyId/connections/resolve?agentId=&actionClass=&provider=` — resolve acting-as identity
+- `GET /api/companies/:companyId/connector-defaults` — get workspace defaults
+- `PUT /api/companies/:companyId/connector-defaults` — set workspace defaults
+- `GET /api/companies/:companyId/agents/:agentId/connector-overrides` — get per-agent overrides
+- `PUT /api/companies/:companyId/agents/:agentId/connector-overrides` — set per-agent overrides
+
+### Usage
+
+Before performing an external action, call the resolve endpoint. If `ok: false`, respect the block — comment on the Issue with the blocked action and the `reason` (`no_connection` or `autonomy_blocked`). Do not bypass autonomy controls.
+<!-- /AgentDash: connectors -->

@@ -55,6 +55,8 @@ import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
+// AgentDash: Connectors (AGE-106)
+import { connectorRoutes } from "./routes/connectors.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
@@ -259,6 +261,8 @@ export async function createApp(
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));
+  // AgentDash: Connectors (AGE-106)
+  api.use(connectorRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));
