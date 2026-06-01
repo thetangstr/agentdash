@@ -171,3 +171,17 @@ A read-only connection blocks all send and draft attempts with HTTP 422 `GMAIL_R
 - `delegated_attributed` — sends from the owner's Gmail address with a "Drafted by {AgentName}" footer
 - `service` — sends from a configured service alias
 <!-- /AgentDash: gmail-connector -->
+<!-- AgentDash: agent-run-metering — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Agent-run metering
+
+Every completed agent task (heartbeat run) is recorded as exactly one **agent-run** in the `agent_runs` table. Each run is classified into a complexity tier — `simple`, `medium`, or `complex` — based on total token count and wall-clock duration at recording time. The tiers are informational today and will drive quota and overage billing in the future.
+
+You do not need to record agent-runs yourself; the system does it automatically when a heartbeat run reaches a terminal state. The recording is idempotent (one row per heartbeat run) and best-effort — metering failures never block task completion.
+
+Monthly run counts are queryable via:
+
+- `GET /api/companies/:companyId/agent-runs/monthly` — total and per-tier counts for the current UTC calendar month. Accepts an optional `agentId` query parameter.
+- `GET /api/companies/:companyId/agent-runs/monthly-by-agent` — per-agent breakdown of run counts for the current month.
+
+Constants: `AGENT_RUN_COMPLEXITY_TIERS` (`simple | medium | complex`) and `AGENT_RUN_COMPLEXITY_THRESHOLDS` (medium: 10 000 tokens or 60 s; complex: 100 000 tokens or 600 s) are exported from `@paperclipai/shared`.
+<!-- /AgentDash: agent-run-metering -->
