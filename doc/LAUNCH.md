@@ -193,3 +193,25 @@ BILLING_PUBLIC_BASE_URL=https://your-domain.com
 ```
 
 That's it. With those env vars and a Postgres connection string, AgentDash launches.
+
+## Error tracking (Sentry)
+
+Remote error tracking via [Sentry](https://sentry.io) is **optional and disabled by default**. When `SENTRY_DSN` is unset, the server runs exactly as before — no remote capture, no startup overhead, no behavior change.
+
+It uses a tiny built-in transport (the global `fetch` available in Node 24) that
+POSTs a minimal event to Sentry's ingestion endpoint derived from the DSN — **no
+extra npm dependency required** (so it never touches the lockfile that CI owns).
+
+To enable it, set the DSN for your Sentry project on the server:
+
+```sh
+# Optional — leave unset to disable error tracking entirely.
+export SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+```
+
+When set, the server captures 5xx responses and unhandled errors (including
+uncaught exceptions and unhandled promise rejections). `environment` is taken
+from `NODE_ENV`. Capture is fire-and-forget with a short timeout and all
+transport errors are swallowed, so it never blocks or fails a request. Existing
+pino logging and HTTP responses are unchanged; Sentry capture is purely
+additive.
