@@ -156,11 +156,12 @@ jobs:
   e2e:
     needs: [policy]
     runs-on: ubuntu-latest
-    # 60 (was 45/30): the job runs pnpm install + build + a full Playwright
-    # browser download + the e2e suite. The cold SEEDING run needs headroom:
-    # up to ~30m install worst-case (3 x 15m attempts) + ~3m build + ~17m
-    # suite. The saving browser cache below removes the download on warm
-    # runs, so once one green run seeds the cache later runs land in ~20m.
+    # 60 (was 45/30): the job runs pnpm install + build + a Playwright
+    # browser install + the e2e suite. With `--no-shell` the install now
+    # COMPLETES fast (~1s edge-cached Chromium download + extract; the
+    # hang-prone chromium-headless-shell artifact is skipped), so the cold
+    # SEEDING run lands well inside this budget: ~3m build + ~17m suite. The
+    # saving browser cache below removes even the install on warm runs.
     timeout-minutes: 60
 
     steps:
@@ -246,12 +247,20 @@ jobs:
             # Playwright spawns; those orphans keep writing to
             # ~/.cache/ms-playwright, so a bare retry races a second installer
             # into a half-written dir and corrupts the extract. Wiping the dir
-            # makes every attempt independent and self-contained. 15m per
-            # attempt: the main Chromium download is fast but the secondary
-            # components (chromium-headless-shell, ffmpeg) intermittently stall
-            # against the CDN, and a tighter cap killed the install mid-stall.
+            # makes every attempt independent and self-contained.
+            #
+            # `--no-shell`: the main Chromium zip downloads in ~1s (GitHub
+            # edge-cached), but the SECONDARY `chromium-headless-shell`
+            # artifact hangs silently against cdn.playwright.dev until the
+            # per-attempt timeout — that hang was what burned all 3 retries
+            # and failed every PR. The e2e suite runs headless with full
+            # Chromium (Playwright's default headless mode = full Chromium,
+            # NOT the separate shell; the config sets browserName "chromium"
+            # with no channel), so the shell is unused at runtime. Skipping
+            # it makes the install COMPLETE fast and seed the cache. 8m per
+            # attempt is ample now that the hang-prone artifact is gone.
             rm -rf ~/.cache/ms-playwright
-            if timeout -s KILL 15m npx playwright install chromium; then ok=1; break; fi
+            if timeout -s KILL 8m npx playwright install --no-shell chromium; then ok=1; break; fi
             echo "playwright install attempt $i failed/hung; retrying"
             pkill -f 'playwright|chrome-linux' 2>/dev/null || true
             sleep 5
