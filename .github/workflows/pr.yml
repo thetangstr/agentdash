@@ -226,6 +226,14 @@ jobs:
       # backstop. SIGKILL force-terminates it, so each attempt is bounded for
       # real and the retry loop can move on.
       - name: Install Playwright system dependencies
+        env:
+          # Route Playwright artifact downloads through Playwright's official
+          # Akamai edge host instead of cdn.playwright.dev, which intermittently
+          # throttles GitHub runners and stalls the browser download until the
+          # per-attempt timeout. The Akamai edge serves the same Chrome-for-
+          # Testing (builds/cft/...) layout this Playwright version needs and
+          # responds fast. (npmmirror does NOT host the cft layout — it 404s.)
+          PLAYWRIGHT_DOWNLOAD_HOST: https://playwright-akamai.azureedge.net
         run: |
           ok=0
           for i in 1 2 3; do
@@ -239,6 +247,14 @@ jobs:
         # Only on a cache miss; on a cache hit the binary is already restored
         # and we skip the (hang-prone) download entirely.
         if: steps.playwright-cache.outputs.cache-hit != 'true'
+        env:
+          # Route the Chromium download through Playwright's official Akamai
+          # edge host instead of cdn.playwright.dev, which intermittently
+          # throttles GitHub runners and stalls the download until the per-
+          # attempt timeout. The Akamai edge resolves to the Chrome-for-Testing
+          # public bucket (verified 206 application/zip) and completes the
+          # install quickly so the actions/cache step seeds reliably.
+          PLAYWRIGHT_DOWNLOAD_HOST: https://playwright-akamai.azureedge.net
         run: |
           ok=0
           for i in 1 2 3; do
