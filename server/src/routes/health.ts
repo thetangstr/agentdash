@@ -110,13 +110,6 @@ export function healthRoutes(
       }
     }
 
-    // AgentDash: self-serve-bootstrap — expose whether the flag is on and
-    // whether any non-archived company already exists, so the CloudAccessGate
-    // UI can route the first user to the onboarding wizard instead of the CLI
-    // bootstrap page or a dead-end "No company access" screen.
-    const selfServeBootstrap = isSelfServeBootstrapEnabled();
-    const instanceHasCompany = await companyService(db).hasActiveCompany();
-
     const persistedDevServerStatus = readPersistedDevServerStatus();
     let devServer: ReturnType<typeof toDevServerHealthStatus> | undefined;
     if (exposeDevServerDetails && persistedDevServerStatus && typeof (db as { select?: unknown }).select === "function") {
@@ -133,6 +126,18 @@ export function healthRoutes(
         activeRunCount,
       });
     }
+
+    // AgentDash: self-serve-bootstrap — expose whether the flag is on and
+    // whether any non-archived company already exists, so the CloudAccessGate
+    // UI can route the first user to the onboarding wizard instead of the CLI
+    // bootstrap page or a dead-end "No company access" screen. Computed AFTER
+    // the bootstrap + dev-server queries above so it doesn't perturb their
+    // (order-sensitive) DB access.
+    const selfServeBootstrap = isSelfServeBootstrapEnabled();
+    const instanceHasCompany =
+      typeof (db as { select?: unknown }).select === "function"
+        ? await companyService(db).hasActiveCompany()
+        : false;
 
     if (!exposeFullDetails) {
       res.json({
