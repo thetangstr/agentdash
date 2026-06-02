@@ -268,6 +268,7 @@ export const accessApi = {
       humanRole?: HumanCompanyRole | null;
       defaultsPayload?: Record<string, unknown> | null;
       agentMessage?: string | null;
+      autoApprove?: boolean;
     } = {},
   ) =>
     api.post<CompanyInviteCreated>(`/companies/${companyId}/invites`, input),

@@ -193,6 +193,7 @@ describe("CompanyInvites", () => {
       allowedJoinTypes: "human",
       humanRole: "viewer",
       agentMessage: null,
+      autoApprove: true,
     });
     expect(clipboardWriteTextMock).toHaveBeenCalledWith("https://paperclip.local/invite/new-token");
     expect(container.textContent).toContain("Latest invite link");
@@ -223,6 +224,55 @@ describe("CompanyInvites", () => {
     await flushReact();
 
     expect(revokeInviteMock).toHaveBeenCalledWith("invite-25");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("sends autoApprove=false when the auto-approve toggle is unchecked", async () => {
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <CompanyInvites />
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    await act(async () => {
+      const autoApproveCheckbox = container.querySelector(
+        'input[type="checkbox"]',
+      ) as HTMLInputElement | null;
+      // default is checked (auto-approve on); click toggles it off and notifies React
+      autoApproveCheckbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      autoApproveCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushReact();
+
+    const createButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Create invite",
+    );
+    await act(async () => {
+      createButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(createCompanyInviteMock).toHaveBeenCalledWith("company-1", {
+      allowedJoinTypes: "human",
+      humanRole: "operator",
+      agentMessage: null,
+      autoApprove: false,
+    });
 
     await act(async () => {
       root.unmount();
