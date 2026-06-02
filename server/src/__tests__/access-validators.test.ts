@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createCompanyInviteSchema,
   updateCompanyMemberWithPermissionsSchema,
   updateCurrentUserProfileSchema,
 } from "@paperclipai/shared";
@@ -29,5 +30,17 @@ describe("access validators", () => {
     });
 
     expect(result.grants).toEqual([]);
+  });
+
+  // AgentDash: auto-approve-invites — autoApprove defaults to false and is
+  // accepted when explicitly provided.
+  it("defaults createCompanyInvite autoApprove to false when omitted", () => {
+    const result = createCompanyInviteSchema.parse({});
+    expect(result.autoApprove).toBe(false);
+  });
+
+  it("accepts an explicit autoApprove flag on createCompanyInvite", () => {
+    const result = createCompanyInviteSchema.parse({ autoApprove: true });
+    expect(result.autoApprove).toBe(true);
   });
 });

@@ -99,6 +99,8 @@ describe("GET /health", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
+      selfServeBootstrap: false,
+      instanceHasCompany: true,
     });
   });
 
@@ -133,6 +135,8 @@ describe("GET /health", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
+      selfServeBootstrap: false,
+      instanceHasCompany: true,
     });
   });
 
