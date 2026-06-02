@@ -50,6 +50,10 @@ export function CompanyInvites() {
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const [humanRole, setHumanRole] = useState<"owner" | "admin" | "operator" | "viewer">("operator");
+  // AgentDash: auto-approve invited teammates by default so they join the
+  // workspace instantly on accept (no admin approval click). Uncheck to fall
+  // back to the approval queue.
+  const [autoApprove, setAutoApprove] = useState(true);
   const [latestInviteUrl, setLatestInviteUrl] = useState<string | null>(null);
   const [latestInviteCopied, setLatestInviteCopied] = useState(false);
 
@@ -113,6 +117,7 @@ export function CompanyInvites() {
         allowedJoinTypes: "human",
         humanRole,
         agentMessage: null,
+        autoApprove,
       }),
     onSuccess: async (invite) => {
       setLatestInviteUrl(invite.inviteUrl);
@@ -224,8 +229,27 @@ export function CompanyInvites() {
           </div>
         </fieldset>
 
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border px-4 py-4">
+          <input
+            type="checkbox"
+            checked={autoApprove}
+            onChange={(event) => setAutoApprove(event.target.checked)}
+            className="mt-1 h-4 w-4 border-border text-foreground"
+          />
+          <span className="min-w-0 space-y-1">
+            <span className="block text-sm font-medium">Auto-approve on accept</span>
+            <span className="block max-w-2xl text-sm text-muted-foreground">
+              {autoApprove
+                ? "The invitee joins the workspace immediately when they accept — no approval step."
+                : "The invitee's join request waits in the approval queue until an admin approves it."}
+            </span>
+          </span>
+        </label>
+
         <div className="rounded-lg border border-border px-4 py-3 text-sm text-muted-foreground">
-          Each invite link is single-use. The first successful use consumes the link and creates or reuses the matching join request before approval.
+          {autoApprove
+            ? "Each invite link is single-use. The first successful use consumes the link and admits the invitee with the chosen role."
+            : "Each invite link is single-use. The first successful use consumes the link and creates or reuses the matching join request before approval."}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
