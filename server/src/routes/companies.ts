@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { authUsers } from "@paperclipai/db";
+import { authUsers, instanceUserRoles } from "@paperclipai/db";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
   companyPortabilityExportSchema,
@@ -420,6 +420,28 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       }
     }
 
+    // AgentDash: self-serve-bootstrap — when AGENTDASH_SELF_SERVE_BOOTSTRAP is
+    // on, a fresh instance (no instance_admin, no company) lets the first real
+    // authenticated user self-serve: they create the first company AND get
+    // promoted to instance_admin below. Compute eligibility BEFORE creating the
+    // company (so the "no company yet" check reflects the pre-create state).
+    // Gated entirely behind the env flag so existing deployments are unaffected.
+    const selfServeBootstrapEnabled =
+      process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true";
+    const isRealAuthenticatedUser =
+      req.actor.source !== "local_implicit" && Boolean(req.actor.userId);
+    let shouldPromoteFirstUserToInstanceAdmin = false;
+    if (selfServeBootstrapEnabled && isRealAuthenticatedUser) {
+      const adminCount = await db
+        .select({ count: count() })
+        .from(instanceUserRoles)
+        .where(eq(instanceUserRoles.role, "instance_admin"))
+        .then((rows) => Number(rows[0]?.count ?? 0));
+      const hasExistingCompany = await svc.hasActiveCompany();
+      shouldPromoteFirstUserToInstanceAdmin =
+        adminCount === 0 && !hasExistingCompany;
+    }
+
     let company: Awaited<ReturnType<typeof svc.create>>;
     try {
       company = await svc.create({
@@ -461,6 +483,29 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       ownerPrincipalId,
     );
     await access.ensureMembership(company.id, "user", ownerPrincipalId, "owner", "active");
+
+    // AgentDash: self-serve-bootstrap — promote the first user of a fresh
+    // instance to instance_admin so they own the instance without the CLI
+    // `auth bootstrap-ceo` step. promoteFirstInstanceAdmin serializes concurrent
+    // first-creates under an advisory lock and re-checks the admin count inside
+    // it, so at most one user wins the bootstrap; it returns true only when this
+    // call performed the promotion.
+    if (shouldPromoteFirstUserToInstanceAdmin && req.actor.userId) {
+      const promoterUserId = req.actor.userId;
+      const promoted = await access.promoteFirstInstanceAdmin(promoterUserId);
+      if (promoted) {
+        await logActivity(db, {
+          companyId: company.id,
+          actorType: "user",
+          actorId: promoterUserId,
+          action: "instance.admin_self_serve_bootstrap",
+          entityType: "instance",
+          entityId: promoterUserId,
+          details: { companyId: company.id },
+        });
+      }
+    }
+
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",

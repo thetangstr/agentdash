@@ -36,6 +36,11 @@ export type CreateCompanyInviteInput = {
   email?: string | null;
   /** Defaults to "both" (humans + agents may redeem). */
   allowedJoinTypes?: "human" | "agent" | "both";
+  /**
+   * AgentDash: auto-approve-invites — when true, a human accepting this invite
+   * is granted active membership immediately (no admin approval). Defaults false.
+   */
+  autoApprove?: boolean;
 };
 
 export type CreateCompanyInviteOutput = {
@@ -68,6 +73,7 @@ export function inviteService(db: Db) {
               companyId: input.companyId,
               inviteType: "company_join",
               allowedJoinTypes: input.allowedJoinTypes ?? "both",
+              autoApprove: input.autoApprove ?? false,
               defaultsPayload,
               expiresAt,
               invitedByUserId: input.invitedByUserId,

@@ -447,6 +447,26 @@ export function accessService(db: Db) {
       .then((rows) => rows[0]);
   }
 
+  // AgentDash: self-serve-bootstrap — atomically promote the FIRST instance
+  // admin of a fresh instance. Serializes concurrent first-creates under a
+  // transaction-scoped advisory lock and re-checks the admin count inside the
+  // lock, so at most one user wins the bootstrap even under a race. Returns
+  // true only when this call performed the promotion. Lock key 4017 is an
+  // arbitrary fixed constant scoped to this bootstrap path.
+  async function promoteFirstInstanceAdmin(userId: string): Promise<boolean> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(4017)`);
+      const adminCount = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(instanceUserRoles)
+        .where(eq(instanceUserRoles.role, "instance_admin"))
+        .then((rows) => Number(rows[0]?.count ?? 0));
+      if (adminCount > 0) return false;
+      await tx.insert(instanceUserRoles).values({ userId, role: "instance_admin" });
+      return true;
+    });
+  }
+
   async function demoteInstanceAdmin(userId: string) {
     return db
       .delete(instanceUserRoles)
@@ -792,6 +812,7 @@ export function accessService(db: Db) {
     setMemberPermissions,
     updateMemberAndPermissions,
     promoteInstanceAdmin,
+    promoteFirstInstanceAdmin,
     demoteInstanceAdmin,
     listUserCompanyAccess,
     setUserCompanyAccess,

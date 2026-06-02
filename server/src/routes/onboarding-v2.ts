@@ -739,10 +739,13 @@ No greetings. No markdown headings outside the JSON block.`;
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { companyId, emails } = req.body as {
+    const { companyId, emails, autoApprove } = req.body as {
       conversationId: string;
       companyId: string;
       emails: string[];
+      // AgentDash: auto-approve-invites — default false; when true, invited
+      // humans are granted membership immediately on accept.
+      autoApprove?: boolean;
     };
     if (!companyId || typeof companyId !== "string") {
       throw badRequest("companyId is required");
@@ -849,6 +852,7 @@ No greetings. No markdown headings outside the JSON block.`;
                     companyId,
                     invitedByUserId: req.actor.userId ?? null,
                     email: trimmed,
+                    autoApprove: autoApprove ?? false,
                   });
                   const invitePath = `/invite/${row.token}`;
                   const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;

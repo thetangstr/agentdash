@@ -20,6 +20,9 @@ export type HealthStatus = {
   authReady?: boolean;
   bootstrapStatus?: "ready" | "bootstrap_pending";
   bootstrapInviteActive?: boolean;
+  // AgentDash: self-serve-bootstrap — first-user self-serve company creation.
+  selfServeBootstrap?: boolean;
+  instanceHasCompany?: boolean;
   features?: {
     companyDeletionEnabled?: boolean;
   };

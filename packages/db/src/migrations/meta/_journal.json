@@ -589,6 +589,13 @@
       "when": 1780089969692,
       "tag": "0083_normalize_legacy_dod_arrays",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1779840000000,
+      "tag": "0084_invite_auto_approve",
+      "breakpoints": true
     }
   ]
 }

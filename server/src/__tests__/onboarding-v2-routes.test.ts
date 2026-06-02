@@ -608,6 +608,7 @@ describe("POST /api/onboarding/invites", () => {
       companyId: "c1",
       invitedByUserId: "u1",
       email: "bob@acme.com",
+      autoApprove: false,
     });
     // sendEmail invoked per invite, with the URL we just minted.
     expect(mockSendEmail).toHaveBeenCalledTimes(2);

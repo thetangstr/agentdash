@@ -98,6 +98,8 @@ describe("GET /health dev-server supervisor access", () => {
         deploymentMode: "authenticated",
         bootstrapStatus: "ready",
         bootstrapInviteActive: false,
+        selfServeBootstrap: false,
+        instanceHasCompany: false,
         devServer: {
           enabled: true,
           restartRequired: true,

@@ -7,7 +7,15 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { companyService } from "../services/companies.js";
 import { serverVersion } from "../version.js";
+
+// AgentDash: self-serve-bootstrap — gate the first-user self-serve company
+// creation + instance-admin promotion behind an env flag so existing
+// deployments are unaffected. Default OFF.
+function isSelfServeBootstrapEnabled(): boolean {
+  return process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP === "true";
+}
 
 function shouldExposeFullHealthDetails(
   actorType: "none" | "board" | "agent" | null | undefined,
@@ -119,12 +127,26 @@ export function healthRoutes(
       });
     }
 
+    // AgentDash: self-serve-bootstrap — expose whether the flag is on and
+    // whether any non-archived company already exists, so the CloudAccessGate
+    // UI can route the first user to the onboarding wizard instead of the CLI
+    // bootstrap page or a dead-end "No company access" screen. Computed AFTER
+    // the bootstrap + dev-server queries above so it doesn't perturb their
+    // (order-sensitive) DB access.
+    const selfServeBootstrap = isSelfServeBootstrapEnabled();
+    const instanceHasCompany =
+      typeof (db as { select?: unknown }).select === "function"
+        ? await companyService(db).hasActiveCompany()
+        : false;
+
     if (!exposeFullDetails) {
       res.json({
         status: "ok",
         deploymentMode: opts.deploymentMode,
         bootstrapStatus,
         bootstrapInviteActive,
+        selfServeBootstrap,
+        instanceHasCompany,
         ...(devServer ? { devServer } : {}),
       });
       return;
@@ -138,6 +160,8 @@ export function healthRoutes(
       authReady: opts.authReady,
       bootstrapStatus,
       bootstrapInviteActive,
+      selfServeBootstrap,
+      instanceHasCompany,
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
