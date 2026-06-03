@@ -49,6 +49,7 @@ let findByEmailDomainMock: ReturnType<typeof vi.fn>;
 let ensureMembershipMock: ReturnType<typeof vi.fn>;
 
 vi.mock("../services/index.js", () => ({
+  agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
   companyService: () => ({
