@@ -101,8 +101,8 @@ export function quotaService(db: Db) {
         .where(
           and(
             eq(agentRuns.companyId, companyId),
-            gte(agentRuns.startedAt, start),
-            lt(agentRuns.startedAt, end),
+            gte(agentRuns.completedAt, start),
+            lt(agentRuns.completedAt, end),
           ),
         );
 
