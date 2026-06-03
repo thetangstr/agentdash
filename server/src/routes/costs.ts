@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import {
+  agentRunService,
   budgetService,
   costService,
   financeService,
@@ -18,6 +19,7 @@ import {
   heartbeatService,
   logActivity,
 } from "../services/index.js";
+import { quotaService } from "../services/quota.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { badRequest } from "../errors.js";
@@ -351,5 +353,115 @@ export function costRoutes(
     res.json(updated);
   });
 
+  // ---------------------------------------------------------------------------
+  // AgentDash (AGE-119): agent-run metering endpoints
+  // ---------------------------------------------------------------------------
+  const runs = agentRunService(db);
+
+  router.get("/companies/:companyId/agent-runs/monthly", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const agentId = req.query.agentId as string | undefined;
+    const summary = await runs.monthlyCount(companyId, { agentId });
+    res.json(summary);
+  });
+
+  router.get("/companies/:companyId/agent-runs/monthly-by-agent", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const rows = await runs.monthlyCountByAgent(companyId);
+    res.json(rows);
+  });
+
+  // ---------------------------------------------------------------------------
+  // AgentDash (AGE-123): Run ledger + receipt endpoints
+  // ---------------------------------------------------------------------------
+
+  router.get("/companies/:companyId/agent-runs/ledger", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const dateRange = parseCostDateRange(req.query);
+    const limit = parseCostLimit(req.query);
+    const offsetRaw = req.query.offset as string | undefined;
+    const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : 0;
+    if (!Number.isFinite(offset) || offset < 0) throw badRequest("invalid 'offset' value");
+    const sort = (req.query.sort as string | undefined) === "asc" ? "asc" as const : "desc" as const;
+
+    const page = await runs.ledger(companyId, {
+      from: dateRange?.from,
+      to: dateRange?.to,
+      limit,
+      offset,
+      sort,
+    });
+    res.json(page);
+  });
+
+  router.get("/companies/:companyId/agent-runs/ledger.csv", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const dateRange = parseCostDateRange(req.query);
+
+    // Fetch all matching rows (up to 10k for CSV export).
+    const page = await runs.ledger(companyId, {
+      from: dateRange?.from,
+      to: dateRange?.to,
+      limit: 10_000,
+      offset: 0,
+      sort: "desc",
+    });
+
+    const header = "Date,Agent,Task,Complexity,Cost ($),Tokens,Duration (min)\n";
+    const csvRows = page.rows.map((r) => {
+      const date = new Date(r.completedAt).toISOString().slice(0, 19).replace("T", " ");
+      const agent = csvEscape(r.agentName);
+      const task = csvEscape(r.issueTitle ?? "—");
+      const cost = (r.costCents / 100).toFixed(4);
+      const durationMin = r.durationMs != null ? (r.durationMs / 60_000).toFixed(1) : "";
+      return `${date},${agent},${task},${r.complexityTier},${cost},${r.tokenCount},${durationMin}`;
+    });
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="agent-runs-${companyId.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    res.send(header + csvRows.join("\n"));
+  });
+
+  // AGE-123: Monthly receipt — wraps quota + monthly count into a single response.
+  const quota = quotaService(db);
+
+  router.get("/companies/:companyId/agent-runs/receipt", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const [quotaSnap, monthlySummary, byAgent] = await Promise.all([
+      quota.getQuota(companyId),
+      runs.monthlyCount(companyId),
+      runs.monthlyCountByAgent(companyId),
+    ]);
+
+    // Count distinct agents that completed at least one run this month.
+    const activeAgentCount = byAgent.length;
+
+    res.json({
+      quota: quotaSnap,
+      summary: monthlySummary,
+      activeAgentCount,
+      byAgent,
+    });
+  });
+
   return router;
+}
+
+// ---------------------------------------------------------------------------
+// CSV helpers
+// ---------------------------------------------------------------------------
+
+function csvEscape(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
 }

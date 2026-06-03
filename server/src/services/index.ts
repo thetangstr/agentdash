@@ -90,6 +90,9 @@ export { stripeWebhookLedger } from "./stripe-webhook-ledger.js";
 export { seatQuantitySyncer } from "./seat-quantity-syncer.js";
 export { billingReconcile } from "./billing-reconcile.js";
 
+// AgentDash (AGE-119): agent-run metering
+export { agentRunService, classifyComplexity } from "./agent-runs.js";
+
 // AgentDash: Connectors (AGE-106)
 export { connectorService } from "./connectors.js";
 

@@ -154,6 +154,11 @@ export const queryKeys = {
     ["usage-window-spend", companyId] as const,
   usageQuotaWindows: (companyId: string) =>
     ["usage-quota-windows", companyId] as const,
+  // AgentDash (AGE-123): run ledger + receipt
+  agentRunLedger: (companyId: string, from?: string, to?: string, limit?: number, offset?: number, sort?: string) =>
+    ["agent-run-ledger", companyId, from, to, limit, offset, sort] as const,
+  agentRunReceipt: (companyId: string) =>
+    ["agent-run-receipt", companyId] as const,
   heartbeats: (companyId: string, agentId?: string) =>
     ["heartbeats", companyId, agentId] as const,
   runDetail: (runId: string) => ["heartbeat-run", runId] as const,

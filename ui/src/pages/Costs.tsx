@@ -23,6 +23,7 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
+import { RunLedger } from "./RunLedger";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
@@ -151,7 +152,7 @@ export function Costs() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
-  const [mainTab, setMainTab] = useState<"overview" | "budgets" | "providers" | "billers" | "finance">("overview");
+  const [mainTab, setMainTab] = useState<"overview" | "budgets" | "providers" | "billers" | "finance" | "runs">("overview");
   const [activeProvider, setActiveProvider] = useState("all");
   const [activeBiller, setActiveBiller] = useState("all");
 
@@ -624,6 +625,7 @@ export function Costs() {
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="billers">Billers</TabsTrigger>
           <TabsTrigger value="finance">Finance</TabsTrigger>
+          <TabsTrigger value="runs">Runs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -1095,6 +1097,11 @@ export function Costs() {
               </div>
             </>
           )}
+        </TabsContent>
+
+        {/* AgentDash (AGE-123): Run ledger + monthly receipt */}
+        <TabsContent value="runs" className="mt-4">
+          <RunLedger />
         </TabsContent>
       </Tabs>
     </div>

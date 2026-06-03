@@ -99,3 +99,22 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 
 Before performing an external action, call the resolve endpoint. If `ok: false`, respect the block — comment on the Issue with the blocked action and the `reason` (`no_connection` or `autonomy_blocked`). Do not bypass autonomy controls.
 <!-- /AgentDash: connectors -->
+
+<!-- AgentDash: run-ledger — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Run ledger and quota (AGE-123)
+
+Each completed heartbeat run is recorded as an "agent-run" with a complexity tier (simple, medium, complex) derived from token count and duration. The workspace has an included-run allotment based on its plan tier. Agents should be aware of their workspace's run usage.
+
+### API endpoints
+
+- `GET /api/companies/:companyId/agent-runs/ledger` — paginated list of runs with agent name, task title, complexity, cost, tokens, duration. Supports `from`, `to`, `limit`, `offset`, `sort` query params.
+- `GET /api/companies/:companyId/agent-runs/ledger.csv` — CSV export of runs. Supports `from`, `to` query params.
+- `GET /api/companies/:companyId/agent-runs/receipt` — monthly receipt: quota snapshot (included/used/remaining/overage runs), monthly summary by complexity, active agent count, per-agent breakdown.
+- `GET /api/companies/:companyId/agent-runs/monthly` — monthly run count (total, simple, medium, complex). Optional `agentId` filter.
+- `GET /api/companies/:companyId/agent-runs/monthly-by-agent` — monthly run count grouped by agent.
+- `GET /api/companies/:companyId/quota` — full quota snapshot (tier, includedRuns, usedRuns, remainingRuns, overageRuns, seatsCount, billingPeriodStart, billingPeriodEnd).
+
+### Behavior
+
+These endpoints are read-only display data. Agents do not write to the ledger directly — runs are recorded automatically when heartbeat runs complete. Agents can query their own run usage to inform cost-conscious task planning.
+<!-- /AgentDash: run-ledger -->

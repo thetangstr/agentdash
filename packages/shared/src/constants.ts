@@ -1010,6 +1010,27 @@ export function deriveCompanyEmailDomain(creatorEmail: string): string {
   return domain;
 }
 
+// AgentDash (AGE-120): agent-run quota model
+export const QUOTA_FREE_INCLUDED_RUNS = 50;
+export const QUOTA_PRO_BASE_INCLUDED_RUNS = 1_000;
+export const QUOTA_PRO_PER_SEAT_RUNS = 250;
+
+// AgentDash (AGE-119): agent-run complexity tiers
+// Every completed heartbeat run is recorded as exactly one "agent-run" at a
+// complexity tier. The tier is derived from token count + duration at
+// recording time. Users see runs as a single unit; complexity is metadata.
+export const AGENT_RUN_COMPLEXITY_TIERS = ["simple", "medium", "complex"] as const;
+export type AgentRunComplexityTier = (typeof AGENT_RUN_COMPLEXITY_TIERS)[number];
+
+/** Thresholds for classifying runs into complexity buckets.
+ *  A run is "complex" if it exceeds EITHER the token OR duration threshold
+ *  for complex; "medium" if it exceeds either medium threshold; "simple"
+ *  otherwise. */
+export const AGENT_RUN_COMPLEXITY_THRESHOLDS = {
+  medium: { tokens: 10_000, durationMs: 60_000 },
+  complex: { tokens: 100_000, durationMs: 600_000 },
+} as const;
+
 // AgentDash: Connectors (AGE-106)
 
 /** Owner types for connections — who initiated the connection. */

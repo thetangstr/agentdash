@@ -55,6 +55,8 @@ import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
+// AgentDash: Agent-run quota (AGE-120)
+import { quotaRoutes } from "./routes/quota.js";
 // AgentDash: Connectors (AGE-106)
 import { connectorRoutes } from "./routes/connectors.js";
 // AgentDash: goals-eval-hitl
@@ -263,6 +265,8 @@ export async function createApp(
   api.use(agentResearchRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
+  // AgentDash: Agent-run quota (AGE-120)
+  api.use(quotaRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));
