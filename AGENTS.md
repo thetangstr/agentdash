@@ -266,3 +266,30 @@ This makes the conflict surface explicit if an upstream cherry-pick later touche
 
 `.github/workflows/agents-md-drift-check.yml` runs on every pull request against `main` and fails when a PR adds new files under `server/src/routes/`, `server/src/services/`, or `packages/db/src/schema/` without also touching at least one of the four prompt surfaces. Bypass when the change genuinely doesn't apply to agent prompts by including `[no-prompt-update]` (case-insensitive) in the PR title or body. Use the bypass sparingly — the default assumption is that agent-facing infrastructure changes need prompt updates.
 <!-- /AgentDash: agent-facing-feature-convention -->
+
+<!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash: Slack Connector (AGE-108)
+
+The Slack connector lets agents be summoned from Slack and post results back. It registers as provider `slack` in the connector framework (AGE-106).
+
+### Key files
+
+- `server/src/services/slack-connector.ts` — OAuth flow, event handling, message posting
+- `server/src/routes/slack-connector.ts` — REST endpoints for OAuth, Events API, interactions, send
+- `server/src/__tests__/slack-connector.test.ts` — unit tests
+
+### Routes (under `/api/connectors/slack/`)
+
+- `POST /oauth/initiate` — start Slack OAuth flow (returns `authorizeUrl`)
+- `GET /oauth/callback` — Slack redirects here after authorization
+- `POST /events` — Slack Events API endpoint (URL verification + event dispatch)
+- `POST /interactions` — interactive message callbacks (approval buttons)
+- `POST /send` — agent posts a message to Slack (respects autonomy)
+
+### Environment variables
+
+- `SLACK_CLIENT_ID` — Slack app OAuth client ID
+- `SLACK_CLIENT_SECRET` — Slack app OAuth client secret
+- `SLACK_SIGNING_SECRET` — Slack request signing secret (for verifying inbound events)
+- `AGENTDASH_PUBLIC_BASE_URL` — base URL for OAuth redirect (defaults to `http://localhost:3100`)
+<!-- /AgentDash: slack-connector -->

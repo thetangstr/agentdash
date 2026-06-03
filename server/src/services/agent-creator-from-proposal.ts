@@ -178,6 +178,14 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 
 Before performing an external action, call the resolve endpoint. If \`ok: false\`, respect the block — comment on the Issue with the blocked action and the \`reason\` (\`no_connection\` or \`autonomy_blocked\`). Do not bypass autonomy controls.
 <!-- /AgentDash: connectors -->
+
+<!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Slack connector
+
+When a workspace has a Slack connection (provider \`slack\`), agents can be summoned from Slack via @-mention and post results back.
+
+To post a message to Slack, call \`POST /api/connectors/slack/send\` with \`{ companyId, connectionId, channel, text, threadTs?, agentId }\`. The connector respects autonomy controls: \`full\` posts immediately, \`draft_only\` returns a draft, and \`approve_to_send\` creates an approval step. Always reply in the originating thread (\`threadTs\`) when responding to an inbound mention. Revoking a Slack connection stops all Slack posting/reading immediately.
+<!-- /AgentDash: slack-connector -->
 `;
 }
 

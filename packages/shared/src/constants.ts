@@ -1071,6 +1071,17 @@ export const ACTIVITY_LOG_ACTIONS_CONNECTORS = [
 ] as const;
 export type ActivityLogActionConnector = (typeof ACTIVITY_LOG_ACTIONS_CONNECTORS)[number];
 
+// AgentDash: Slack Connector (AGE-108)
+
+/** Slack-specific activity log actions (superset of connectors base). */
+export const ACTIVITY_LOG_ACTIONS_SLACK = [
+  "slack.message_received",
+  "slack.message_posted",
+  "slack.oauth_connected",
+  "slack.oauth_revoked",
+] as const;
+export type ActivityLogActionSlack = (typeof ACTIVITY_LOG_ACTIONS_SLACK)[number];
+
 // AgentDash: goals-eval-hitl
 
 export const VERDICT_OUTCOMES = [

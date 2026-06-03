@@ -143,6 +143,14 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 When delegating or reviewing work that involves external service actions, ensure the agent's connector autonomy level permits the action. The resolve endpoint (`GET /api/companies/:companyId/connections/resolve`) checks permissions before any external action. If it returns `ok: false`, the action is blocked — do not ask reports to bypass autonomy controls.
 <!-- /AgentDash: connectors -->
 
+<!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Slack connector
+
+When a workspace has a Slack connection (provider `slack`), agents can be summoned from Slack via @-mention and post results back. The Slack connector uses the same autonomy model as all connectors — `full`, `draft_only`, or `blocked`.
+
+When delegating work that involves Slack, ensure the assigned agent has access to a Slack connection. Outbound posts use `POST /api/connectors/slack/send`. If the agent's autonomy level is `draft_only`, the draft is surfaced for board approval before posting. Revoking a Slack connection stops all Slack activity immediately.
+<!-- /AgentDash: slack-connector -->
+
 ## References
 
 These files are essential. Read them.

@@ -23,6 +23,8 @@ export { instanceDatabaseBackupRoutes } from "./instance-database-backups.js";
 export { quotaRoutes } from "./quota.js";
 // AgentDash: Connectors (AGE-106)
 export { connectorRoutes } from "./connectors.js";
+// AgentDash: Slack Connector (AGE-108)
+export { slackConnectorRoutes } from "./slack-connector.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";
