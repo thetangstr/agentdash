@@ -111,6 +111,10 @@ export {
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_EVENT_TYPES,
   PLUGIN_BRIDGE_ERROR_CODES,
+  // AgentDash (AGE-120): agent-run quota model
+  QUOTA_FREE_INCLUDED_RUNS,
+  QUOTA_PRO_BASE_INCLUDED_RUNS,
+  QUOTA_PRO_PER_SEAT_RUNS,
   // AgentDash (AGE-55): FRE Plan B — domain-keyed companies
   FREE_MAIL_DOMAINS,
   deriveCompanyEmailDomain,
