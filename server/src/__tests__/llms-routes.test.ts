@@ -13,6 +13,7 @@ vi.mock("../services/agents.js", () => ({
 }));
 
 vi.mock("../adapters/index.js", () => ({
+  listAdapterModelProfiles: vi.fn().mockReturnValue([]),
   listServerAdapters: mockListServerAdapters,
 }));
 
