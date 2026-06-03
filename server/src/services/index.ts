@@ -93,6 +93,9 @@ export { billingReconcile } from "./billing-reconcile.js";
 // AgentDash: Connectors (AGE-106)
 export { connectorService } from "./connectors.js";
 
+// AgentDash (AGE-119): agent-run metering
+export { agentRunService, classifyComplexity } from "./agent-runs.js";
+
 // AgentDash: goals-eval-hitl
 export { verdictsService, type VerdictsService } from "./verdicts.js";
 export { featureFlagsService, type FeatureFlagsService, type FeatureFlagRow } from "./feature-flags.js";

@@ -1,6 +1,11 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }) };
+});
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { createDb, companies, agents, costEvents, financeEvents, issues, projects } from "@paperclipai/db";

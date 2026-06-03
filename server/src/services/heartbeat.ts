@@ -51,6 +51,7 @@ import type {
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
+import { agentRunService } from "./agent-runs.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
@@ -6169,6 +6170,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
         } finally {
           const latestRun = await getRun(run.id).catch(() => null);
+          // AgentDash (AGE-119): record exactly one agent-run per completed
+          // heartbeat run. Best-effort — metering must not block the
+          // heartbeat completion path.
+          if (latestRun && isHeartbeatRunTerminalStatus(latestRun.status)) {
+            const runContext = parseObject(latestRun.contextSnapshot);
+            const ledgerScope = await resolveLedgerScopeForRun(db, run.companyId, latestRun).catch(() => ({
+              issueId: readNonEmptyString(runContext.issueId) ?? null,
+              projectId: readNonEmptyString(runContext.projectId) ?? null,
+            }));
+            await agentRunService(db).recordRun({
+              companyId: run.companyId,
+              agentId: run.agentId,
+              heartbeatRunId: run.id,
+              issueId: ledgerScope.issueId,
+              projectId: ledgerScope.projectId,
+              startedAt: latestRun.startedAt,
+              finishedAt: latestRun.finishedAt ?? new Date(),
+            }).catch((err) => {
+              logger.warn({ err, runId: run.id }, "[agent-runs] failed to record agent run in finally block");
+            });
+          }
           await releaseEnvironmentLeasesForRun({
             runId: run.id,
             companyId: run.companyId,

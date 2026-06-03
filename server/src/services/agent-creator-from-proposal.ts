@@ -194,6 +194,13 @@ The Gmail connector lets agents read and send email through the owner's Gmail ac
 
 Gmail endpoints live under \`/api/companies/:companyId/connectors/gmail/...\` — OAuth initiate/callback, search, list messages, read threads, create drafts, and send. The send identity can be \`delegated\` (from owner), \`delegated_attributed\` (from owner with agent footer), or \`service\` (from a configured alias).
 <!-- /AgentDash: gmail-connector -->
+<!-- AgentDash: agent-run-metering — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Agent-run metering
+
+Every completed agent task (heartbeat run) is recorded as exactly one **agent-run**. Each run is classified into a complexity tier — \`simple\`, \`medium\`, or \`complex\` — based on total token count and wall-clock duration. The tiers are informational today and will drive quota and overage billing in the future.
+
+Agent-runs are recorded automatically; you do not need to take any action. Monthly run counts are available at \`GET /api/companies/:companyId/agent-runs/monthly\` and \`/monthly-by-agent\`.
+<!-- /AgentDash: agent-run-metering -->
 `;
 }
 

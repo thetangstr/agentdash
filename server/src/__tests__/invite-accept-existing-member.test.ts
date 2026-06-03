@@ -5,6 +5,7 @@ import { accessRoutes } from "../routes/access.js";
 import { errorHandler } from "../middleware/index.js";
 
 vi.mock("../services/index.js", () => ({
+  agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
   accessService: () => ({

@@ -95,12 +95,12 @@ export { verdicts } from "./verdicts.js";
 export { cosReviewerAssignments } from "./cos_reviewer_assignments.js";
 export { issueReviewQueueState } from "./issue_review_queue_state.js";
 export { featureFlags } from "./feature_flags.js";
+// AgentDash: agent-run metering (AGE-119)
+export { agentRuns } from "./agent_runs.js";
 // AgentDash: self-healing run fixer
 export { healAttempts, healEvents } from "./heal_attempts.js";
 export type { HealAttempt, HealEvent } from "./heal_attempts.js";
 // AgentDash: cold-signup re-engagement (#228)
 export { reengagementEmails } from "./reengagement-emails.js";
-// AgentDash: agent-run metering (AGE-119/AGE-120)
-export { agentRuns } from "./agent_runs.js";
 // AgentDash: Connectors (AGE-106)
 export { connections, connectorWorkspaceDefaults, agentConnectorOverrides } from "./connections.js";
