@@ -240,6 +240,13 @@ export {
   // AgentDash: Slack Connector (AGE-108)
   ACTIVITY_LOG_ACTIONS_SLACK,
   type ActivityLogActionSlack,
+  // AgentDash: MCP Client (AGE-107)
+  MCP_SERVER_STATUSES,
+  MCP_TOOL_ACTION_CLASSES,
+  ACTIVITY_LOG_ACTIONS_MCP,
+  type McpServerStatus,
+  type McpToolActionClass,
+  type ActivityLogActionMcp,
   // AgentDash: goals-eval-hitl
   VERDICT_OUTCOMES,
   VERDICT_INDEXED_OUTCOMES,
@@ -582,6 +589,11 @@ export type {
   ConnectorActionDefinition,
   ConnectorDefinition,
   ConnectorApprovalPayload,
+  // AgentDash: MCP Client (AGE-107)
+  McpTool,
+  McpServerConfig,
+  McpToolCallResult,
+  McpHealthCheckResult,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
@@ -1050,6 +1062,11 @@ export {
   type InitiateOAuth,
   type OAuthCallback,
   type ConnectorApprovalDecision,
+  // AgentDash: MCP Client (AGE-107)
+  registerMcpServerSchema,
+  callMcpToolSchema,
+  type RegisterMcpServer,
+  type CallMcpTool,
 } from "./validators/index.js";
 
 // AgentDash (#234, #231): canonical agent-plan validator. Re-exported

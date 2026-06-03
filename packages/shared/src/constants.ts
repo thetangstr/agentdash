@@ -1099,6 +1099,27 @@ export const ACTIVITY_LOG_ACTIONS_SLACK = [
 ] as const;
 export type ActivityLogActionSlack = (typeof ACTIVITY_LOG_ACTIONS_SLACK)[number];
 
+// AgentDash: MCP Client (AGE-107)
+
+/** MCP server health statuses. */
+export const MCP_SERVER_STATUSES = ["healthy", "degraded", "unreachable"] as const;
+export type McpServerStatus = (typeof MCP_SERVER_STATUSES)[number];
+
+/** MCP tool action class — derived from tool description for autonomy gating. */
+export const MCP_TOOL_ACTION_CLASSES = ["read", "draft", "send"] as const;
+export type McpToolActionClass = (typeof MCP_TOOL_ACTION_CLASSES)[number];
+
+/** MCP-specific activity log actions. */
+export const ACTIVITY_LOG_ACTIONS_MCP = [
+  "mcp.server_registered",
+  "mcp.server_removed",
+  "mcp.tools_discovered",
+  "mcp.tool_called",
+  "mcp.tool_blocked",
+  "mcp.health_check",
+] as const;
+export type ActivityLogActionMcp = (typeof ACTIVITY_LOG_ACTIONS_MCP)[number];
+
 // AgentDash: goals-eval-hitl
 
 export const VERDICT_OUTCOMES = [

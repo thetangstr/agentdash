@@ -144,7 +144,6 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 When delegating or reviewing work that involves external service actions, ensure the agent's connector autonomy level permits the action. The resolve endpoint (`GET /api/companies/:companyId/connections/resolve`) checks permissions before any external action. If it returns `ok: false`, the action is blocked — do not ask reports to bypass autonomy controls.
 <!-- /AgentDash: connectors -->
 
-<<<<<<< HEAD
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Slack connector
 
@@ -159,7 +158,15 @@ The Gmail connector lets agents read and send email through the owner's Gmail ac
 
 Gmail endpoints live under `/api/companies/:companyId/connectors/gmail/...` — OAuth initiate/callback, search, list messages, read threads, create drafts, and send. The send identity can be `delegated` (from owner), `delegated_attributed` (from owner with agent footer), or `service` (from a configured alias).
 <!-- /AgentDash: gmail-connector -->
-=======
+<!-- AgentDash: mcp-client — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## MCP connector
+
+The MCP connector lets agents use tools from vendor-maintained MCP (Model Context Protocol) servers. MCP connections use provider `mcp` and store the server URL, auth, and discovered tools. Each tool is classified into an action class (`read`, `draft`, or `send`) and gated by the connection's autonomy settings.
+
+When delegating work that involves external tool servers (Calendar, Drive, Notion, Linear, GitHub, etc.), ensure a relevant MCP server is registered. MCP tool calls obey the same autonomy model as other connectors. If an MCP server is unreachable, the agent should continue with other available tools.
+
+MCP endpoints live under `/api/companies/:companyId/connectors/mcp/...` — register, list tools, call tools, refresh, health check, and remove.
+<!-- /AgentDash: mcp-client -->
 <!-- AgentDash: agent-run-metering — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Agent-run metering
 
@@ -167,7 +174,6 @@ Every completed agent task (heartbeat run) is recorded as exactly one **agent-ru
 
 Agent-runs are recorded automatically; you do not need to take any action. Monthly run counts are available at `GET /api/companies/:companyId/agent-runs/monthly` and `/monthly-by-agent`. When reviewing workspace costs or agent productivity, these endpoints provide the per-agent and per-tier breakdown for the current UTC calendar month.
 <!-- /AgentDash: agent-run-metering -->
->>>>>>> 9a9fc2c (docs(agents): add agent-run metering to all prompt surfaces (AGE-119))
 
 ## References
 
