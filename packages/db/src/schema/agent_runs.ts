@@ -3,7 +3,7 @@
 // "agent-run" unit. This table is the foundation for quota enforcement
 // (AGE-120), overage billing (AGE-122), and the ledger UX (AGE-123).
 
-import { pgTable, uuid, text, timestamp, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
@@ -32,6 +32,10 @@ export const agentRuns = pgTable(
     tokenCount: integer("token_count").notNull().default(0),
     // Aggregate cost in cents across all cost_events for this run.
     costCents: integer("cost_cents").notNull().default(0),
+    // AgentDash (AGE-121): true when this run executed beyond the workspace's
+    // included monthly allotment. Only relevant for Pro workspaces (Free
+    // workspaces are hard-blocked before execution starts).
+    isOverage: boolean("is_overage").notNull().default(false),
     // When the agent task completed (heartbeatRun.finishedAt).
     completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

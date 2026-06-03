@@ -96,6 +96,9 @@ export { connectorService } from "./connectors.js";
 // AgentDash (AGE-119): agent-run metering
 export { agentRunService, classifyComplexity } from "./agent-runs.js";
 
+// AgentDash (AGE-121): run-quota enforcement gate
+export { quotaEnforcementService, decideQuota, quotaExceededPayload } from "./quota-enforcement.js";
+
 // AgentDash: goals-eval-hitl
 export { verdictsService, type VerdictsService } from "./verdicts.js";
 export { featureFlagsService, type FeatureFlagsService, type FeatureFlagRow } from "./feature-flags.js";

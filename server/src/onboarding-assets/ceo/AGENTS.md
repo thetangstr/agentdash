@@ -101,8 +101,13 @@ Free workspaces allow one human user and one agent, normally the Chief of Staff.
 
 Each workspace has a monthly agent-run allotment based on plan tier:
 
-- **Free:** 50 runs/month
-- **Pro:** 1,000 base + 250 per paid seat (adjusts in real-time when seats change)
+- **Free:** 50 runs/month (hard cap — runs are blocked when exhausted)
+- **Pro:** 1,000 base + 250 per paid seat (soft cap — overage runs continue but are metered)
+
+The system enforces quotas automatically before each agent task starts:
+
+- **Free at quota:** the run is cancelled before execution with a `quota_exceeded` error. Reports assigned work that gets blocked should comment on the Issue explaining the quota is exhausted. Do not ask reports to retry or work around it — escalate to the board to upgrade.
+- **Pro at quota:** the run proceeds but is flagged as overage. Overage runs accrue charges beyond the included allotment.
 
 Check remaining quota via `GET /api/companies/:companyId/quota`. The response includes `includedRuns`, `usedRuns`, `remainingRuns`, `overageRuns`, `seatsCount`, and the billing period window. When delegating work to reports, be aware of the workspace's remaining run budget. If `remainingRuns` reaches 0, inform the board and ask whether to continue into overage territory.
 <!-- /AgentDash: agent-run-quota -->

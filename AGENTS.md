@@ -267,6 +267,30 @@ This makes the conflict surface explicit if an upstream cherry-pick later touche
 `.github/workflows/agents-md-drift-check.yml` runs on every pull request against `main` and fails when a PR adds new files under `server/src/routes/`, `server/src/services/`, or `packages/db/src/schema/` without also touching at least one of the four prompt surfaces. Bypass when the change genuinely doesn't apply to agent prompts by including `[no-prompt-update]` (case-insensitive) in the PR title or body. Use the bypass sparingly — the default assumption is that agent-facing infrastructure changes need prompt updates.
 <!-- /AgentDash: agent-facing-feature-convention -->
 
+<!-- AgentDash: quota-enforcement — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash: Run-Quota Enforcement (AGE-121)
+
+The system enforces per-workspace run quotas before each agent task starts. The gate runs in `claimQueuedRun` inside `server/src/services/heartbeat.ts`, after budget checks and before issue-tree-hold checks.
+
+### Enforcement behavior
+
+- **Free tier at 0 remaining runs:** hard block. The queued run is cancelled with a `quota_exceeded` error message before the adapter is invoked. The agent never starts.
+- **Pro tier at 0 remaining runs:** soft allow. The run proceeds, but is tagged as overage (`isOverage: true` on the `agent_runs` row). Overage runs accrue charges beyond the included allotment.
+- **Billing disabled (dev mode):** the gate is bypassed entirely, matching the existing `isBillingDisabled()` pattern from `tier-policy.ts`.
+
+### Key files
+
+- `server/src/services/quota-enforcement.ts` — `decideQuota()` pure function + `quotaEnforcementService` (DB-backed)
+- `server/src/services/quota.ts` — `quotaService.getQuota()` (AGE-120 dependency)
+- `server/src/services/heartbeat.ts` — quota gate integration in `claimQueuedRun`
+- `packages/db/src/schema/agent_runs.ts` — `isOverage` column
+- `server/src/__tests__/quota-enforcement.test.ts` — unit tests
+
+### Agent-facing impact
+
+All four prompt surfaces (`default/AGENTS.md`, `ceo/AGENTS.md`, `chief_of_staff/AGENTS.md`, `agent-creator-from-proposal.ts`) have been updated in the `agent-run-quota` named block to describe the enforcement behavior. Agents should not retry quota-blocked runs and should escalate to the board for an upgrade.
+<!-- /AgentDash: quota-enforcement -->
+
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash: Slack Connector (AGE-108)
 
