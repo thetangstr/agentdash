@@ -179,7 +179,6 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 When coordinating work that involves external service actions, use the resolve endpoint to verify an agent's connector permissions before the action proceeds. If `ok: false`, the action is blocked — surface the blocked action and `reason` (`no_connection` or `autonomy_blocked`) to the board. Do not bypass autonomy controls.
 <!-- /AgentDash: connectors -->
 
-<<<<<<< HEAD
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Slack connector
 
@@ -198,7 +197,6 @@ To post a message to Slack, call `POST /api/connectors/slack/send` with `{ compa
 
 Always reply in the originating thread (`threadTs`). When reviewing agent work that resulted in a Slack post, verify the post went to the correct channel and thread. If the Slack connection is revoked, any pending outbound work should be surfaced to the board.
 <!-- /AgentDash: slack-connector -->
-=======
 <!-- AgentDash: gmail-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Gmail connector
 
@@ -206,4 +204,3 @@ The Gmail connector lets agents read and send email through the owner's Gmail ac
 
 Gmail endpoints live under `/api/companies/:companyId/connectors/gmail/...` — OAuth initiate/callback, search, list messages, read threads, create drafts, and send. The send identity can be `delegated` (from owner), `delegated_attributed` (from owner with agent footer), or `service` (from a configured alias).
 <!-- /AgentDash: gmail-connector -->
->>>>>>> 8822e78 (feat(connectors): Gmail connector with read + send and autonomy model (AGE-109))

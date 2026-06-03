@@ -26,6 +26,9 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: node scripts/ci/check-pr-process.mjs
 
+      - name: Block leftover merge-conflict markers
+        run: node scripts/ci/check-conflict-markers.mjs
+
       - name: Block manual lockfile edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
