@@ -155,6 +155,7 @@ Every connection carries an \`autonomy\` config with three action classes: \`rea
 ### Send identity
 
 - \`delegated\` — action appears as the human connection owner
+- \`delegated_attributed\` — action appears as the human connection owner with a "Drafted by {Agent}" footer
 - \`service\` — action appears as the workspace service account
 
 ### Resolution order
@@ -186,6 +187,13 @@ When a workspace has a Slack connection (provider \`slack\`), agents can be summ
 
 To post a message to Slack, call \`POST /api/connectors/slack/send\` with \`{ companyId, connectionId, channel, text, threadTs?, agentId }\`. The connector respects autonomy controls: \`full\` posts immediately, \`draft_only\` returns a draft, and \`approve_to_send\` creates an approval step. Always reply in the originating thread (\`threadTs\`) when responding to an inbound mention. Revoking a Slack connection stops all Slack posting/reading immediately.
 <!-- /AgentDash: slack-connector -->
+<!-- AgentDash: gmail-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Gmail connector
+
+The Gmail connector lets agents read and send email through the owner's Gmail account, governed by the autonomy model above. Connections are created with read-only (\`gmail.readonly\`) or read+send (\`gmail.readonly\` + \`gmail.send\` + \`gmail.compose\`) scopes. Read-only connections block send/draft with HTTP 422 \`GMAIL_READ_ONLY_SCOPE\`. With \`draft_only\` autonomy, sends create a Gmail draft instead; \`full\` autonomy sends directly.
+
+Gmail endpoints live under \`/api/companies/:companyId/connectors/gmail/...\` — OAuth initiate/callback, search, list messages, read threads, create drafts, and send. The send identity can be \`delegated\` (from owner), \`delegated_attributed\` (from owner with agent footer), or \`service\` (from a configured alias).
+<!-- /AgentDash: gmail-connector -->
 `;
 }
 

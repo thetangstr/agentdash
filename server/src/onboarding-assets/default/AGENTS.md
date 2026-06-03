@@ -111,6 +111,7 @@ Every connection carries an `autonomy` config with three action classes: `read` 
 ### Send identity
 
 - `delegated` — action appears as the human connection owner
+- `delegated_attributed` — action appears as the human connection owner with a "Drafted by {Agent}" footer
 - `service` — action appears as the workspace service account
 
 ### Resolution order
@@ -134,3 +135,39 @@ The acting-as resolver determines effective autonomy and identity. Priority (hig
 
 Before performing an external action, call the resolve endpoint. If `ok: false`, respect the block — comment on the Issue with the blocked action and the `reason` (`no_connection` or `autonomy_blocked`). Do not bypass autonomy controls.
 <!-- /AgentDash: connectors -->
+
+<!-- AgentDash: gmail-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Gmail connector
+
+The Gmail connector lets agents read and send email through the owner's Gmail account, governed by the autonomy model above.
+
+### Scopes
+
+Connections are created with one of two scope levels:
+- **Read-only** (`gmail.readonly`) — search, list, and read threads in the owner's mailbox only
+- **Read+Send** (`gmail.readonly` + `gmail.send` + `gmail.compose`) — read plus draft/send capability
+
+A read-only connection blocks all send and draft attempts with HTTP 422 `GMAIL_READ_ONLY_SCOPE`.
+
+### Autonomy enforcement for send
+
+- `draft_only` — creates a Gmail draft in the owner's account; nothing sends until the owner approves
+- `full` (autonomous) + read+send scope — sends directly as the configured identity; the action is audited
+- `blocked` — the send action is rejected
+
+### Gmail API endpoints
+
+- `POST /api/companies/:companyId/connectors/gmail/oauth/initiate` — start OAuth flow (body: `{ redirectUri, scopes?: "read_only" | "read_send" }`)
+- `POST /api/companies/:companyId/connectors/gmail/oauth/callback` — exchange auth code for tokens (body: `{ code, state, redirectUri }`)
+- `GET /api/companies/:companyId/connectors/gmail/:connectionId/search?q=...` — search mailbox
+- `GET /api/companies/:companyId/connectors/gmail/:connectionId/messages` — list recent inbox
+- `GET /api/companies/:companyId/connectors/gmail/:connectionId/threads/:threadId` — read a thread
+- `POST /api/companies/:companyId/connectors/gmail/:connectionId/drafts` — create a draft (body: `{ to, subject, body }`)
+- `POST /api/companies/:companyId/connectors/gmail/:connectionId/send` — send email (body: `{ to, subject, body, agentId? }`)
+
+### Send identity for Gmail
+
+- `delegated` — sends from the owner's Gmail address
+- `delegated_attributed` — sends from the owner's Gmail address with a "Drafted by {AgentName}" footer
+- `service` — sends from a configured service alias
+<!-- /AgentDash: gmail-connector -->
