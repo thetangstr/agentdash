@@ -206,7 +206,7 @@ describe("Connector constants", () => {
     expect(shared.CONNECTION_OWNER_TYPES).toEqual(["user", "agent"]);
     expect(shared.CONNECTION_STATUSES).toContain("active");
     expect(shared.CONNECTION_STATUSES).toContain("revoked");
-    expect(shared.CONNECTION_SEND_IDENTITIES).toEqual(["service", "delegated"]);
+    expect(shared.CONNECTION_SEND_IDENTITIES).toEqual(["service", "delegated", "delegated_attributed"]);
     expect(shared.CONNECTION_AUTONOMY_LEVELS).toContain("full");
     expect(shared.CONNECTION_AUTONOMY_LEVELS).toContain("draft_only");
     expect(shared.CONNECTION_AUTONOMY_LEVELS).toContain("blocked");
