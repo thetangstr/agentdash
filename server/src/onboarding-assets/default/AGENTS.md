@@ -49,6 +49,29 @@ When you make HTTP calls to the AgentDash API (`/api/...` endpoints):
 The same key works for all `/api/companies/:companyId/...` endpoints under your company; cross-company access is rejected with HTTP 403.
 <!-- /AgentDash: agent-api-auth -->
 
+<!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Slack connector
+
+When a workspace has a Slack connection (provider `slack`), agents can be summoned from Slack via @-mention and post results back.
+
+### Inbound
+
+A Slack @-mention or slash-command triggers an agent run scoped to the workspace. The Slack message becomes the conversation's first message. You do not need to poll Slack — the connector dispatches events to you.
+
+### Outbound
+
+To post a message to Slack, call `POST /api/connectors/slack/send` with `{ companyId, connectionId, channel, text, threadTs?, agentId }`. The connector respects autonomy controls:
+- `full` — message posts immediately
+- `draft_only` — returns a draft payload without posting; surface it to the board for manual send
+- `approve_to_send` — creates an approval step; the board clicks Approve in Slack or the dashboard
+
+Always reply in the originating thread (`threadTs`) when responding to an inbound mention. Never broadcast to the channel unless the task explicitly requires it.
+
+### Revoking
+
+When a Slack connection is revoked (`POST /api/connections/:id/revoke`), all posting and reading stops immediately. If your outbound call returns a connection-revoked error, stop retrying and comment on the Issue.
+<!-- /AgentDash: slack-connector -->
+
 <!-- AgentDash: msp-pilot-demo-routes — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## MSP pilot demo routes
 

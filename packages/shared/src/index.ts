@@ -233,6 +233,9 @@ export {
   type ConnectionVisibility,
   type ConnectorActionClass,
   type ActivityLogActionConnector,
+  // AgentDash: Slack Connector (AGE-108)
+  ACTIVITY_LOG_ACTIONS_SLACK,
+  type ActivityLogActionSlack,
   // AgentDash: goals-eval-hitl
   VERDICT_OUTCOMES,
   VERDICT_INDEXED_OUTCOMES,

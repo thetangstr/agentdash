@@ -59,6 +59,8 @@ import { agentResearchRoutes } from "./routes/agent-research.js";
 import { quotaRoutes } from "./routes/quota.js";
 // AgentDash: Connectors (AGE-106)
 import { connectorRoutes } from "./routes/connectors.js";
+// AgentDash: Slack Connector (AGE-108)
+import { slackConnectorRoutes } from "./routes/slack-connector.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
@@ -267,6 +269,8 @@ export async function createApp(
   api.use(quotaRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
+  // AgentDash: Slack Connector (AGE-108)
+  api.use("/connectors", slackConnectorRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));
