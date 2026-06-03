@@ -171,6 +171,29 @@ A read-only connection blocks all send and draft attempts with HTTP 422 `GMAIL_R
 - `delegated_attributed` — sends from the owner's Gmail address with a "Drafted by {AgentName}" footer
 - `service` — sends from a configured service alias
 <!-- /AgentDash: gmail-connector -->
+<!-- AgentDash: mcp-client — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## MCP connector
+
+The MCP connector lets agents use tools from vendor-maintained MCP (Model Context Protocol) servers. MCP connections are registered with provider `mcp` and store the server URL, auth, and discovered tools.
+
+### Tool discovery
+
+When an MCP server is registered, its tools are automatically discovered and cached. Each tool is classified into an action class (`read`, `draft`, or `send`) based on its name and description, and gated by the connection's autonomy settings.
+
+### API endpoints
+
+- `POST /api/companies/:companyId/connectors/mcp/register` — register an MCP server (body: `{ serverUrl, authType, authValue, displayName, autonomy?, visibility? }`)
+- `GET /api/companies/:companyId/connectors/mcp/:connectionId/tools` — list discovered tools
+- `POST /api/companies/:companyId/connectors/mcp/:connectionId/call` — invoke a tool (body: `{ toolName, arguments, agentId }`)
+- `POST /api/companies/:companyId/connectors/mcp/:connectionId/refresh` — re-discover tools from the server
+- `GET /api/companies/:companyId/connectors/mcp/:connectionId/health` — check server health
+- `GET /api/companies/:companyId/connectors/mcp/health` — check all MCP servers health
+- `DELETE /api/companies/:companyId/connectors/mcp/:connectionId` — remove an MCP server
+
+### Usage
+
+Before calling an MCP tool, the autonomy model is checked automatically. If `read` autonomy is `full`, read tools execute immediately. If `send` autonomy is `draft_only`, write tools return a draft for human approval. If autonomy is `blocked`, the call is rejected. Every tool call is audited with the acting-as identity. If an MCP server is unreachable, the call fails gracefully and the agent should continue with other available tools.
+<!-- /AgentDash: mcp-client -->
 <!-- AgentDash: agent-run-metering — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Agent-run metering
 

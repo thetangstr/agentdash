@@ -63,6 +63,8 @@ import { connectorRoutes } from "./routes/connectors.js";
 import { slackConnectorRoutes } from "./routes/slack-connector.js";
 // AgentDash: Gmail Connector (AGE-109)
 import { gmailRoutes } from "./routes/gmail.js";
+// AgentDash: MCP Client (AGE-107)
+import { mcpClientRoutes } from "./routes/mcp-client.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
@@ -275,6 +277,8 @@ export async function createApp(
   api.use("/connectors", slackConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
+  // AgentDash: MCP Client (AGE-107)
+  api.use(mcpClientRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));

@@ -194,6 +194,25 @@ The Gmail connector lets agents read and send email through the owner's Gmail ac
 
 Gmail endpoints live under \`/api/companies/:companyId/connectors/gmail/...\` — OAuth initiate/callback, search, list messages, read threads, create drafts, and send. The send identity can be \`delegated\` (from owner), \`delegated_attributed\` (from owner with agent footer), or \`service\` (from a configured alias).
 <!-- /AgentDash: gmail-connector -->
+<!-- AgentDash: mcp-client — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## MCP connector
+
+The MCP connector lets agents use tools from vendor-maintained MCP (Model Context Protocol) servers. MCP connections use provider \`mcp\` and store the server URL, auth, and discovered tools. Each tool is classified into an action class (\`read\`, \`draft\`, or \`send\`) and gated by the connection's autonomy settings.
+
+### API endpoints
+
+- \`POST /api/companies/:companyId/connectors/mcp/register\` — register an MCP server (body: \`{ serverUrl, authType, authValue, displayName, autonomy?, visibility? }\`)
+- \`GET /api/companies/:companyId/connectors/mcp/:connectionId/tools\` — list discovered tools
+- \`POST /api/companies/:companyId/connectors/mcp/:connectionId/call\` — invoke a tool (body: \`{ toolName, arguments, agentId }\`)
+- \`POST /api/companies/:companyId/connectors/mcp/:connectionId/refresh\` — re-discover tools
+- \`GET /api/companies/:companyId/connectors/mcp/:connectionId/health\` — check server health
+- \`GET /api/companies/:companyId/connectors/mcp/health\` — check all MCP servers health
+- \`DELETE /api/companies/:companyId/connectors/mcp/:connectionId\` — remove an MCP server
+
+### Usage
+
+Before calling an MCP tool, the autonomy model is checked automatically. If autonomy is \`blocked\`, the call is rejected. If \`draft_only\`, write tools return a draft for human approval. Every tool call is audited. If an MCP server is unreachable, the call fails gracefully — continue with other available tools.
+<!-- /AgentDash: mcp-client -->
 <!-- AgentDash: agent-run-metering — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Agent-run metering
 

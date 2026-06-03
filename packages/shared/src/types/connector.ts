@@ -8,6 +8,8 @@ import type {
   ConnectionAutonomyLevel,
   ConnectionVisibility,
   ConnectorActionClass,
+  McpServerStatus,
+  McpToolActionClass,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -124,4 +126,61 @@ export interface ConnectorApprovalPayload {
   provider: ConnectionProvider;
   sendIdentity: ConnectionSendIdentity;
   draftPayload?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// MCP Client types (AGE-107)
+// ---------------------------------------------------------------------------
+
+/** A discovered tool from an MCP server. */
+export interface McpTool {
+  /** Tool name as reported by the MCP server. */
+  name: string;
+  /** Human-readable description. */
+  description: string;
+  /** JSON Schema for the tool's input parameters. */
+  inputSchema: Record<string, unknown>;
+  /** Derived action class for autonomy gating. */
+  actionClass: McpToolActionClass;
+}
+
+/** MCP server configuration stored on a connection. */
+export interface McpServerConfig {
+  /** HTTPS endpoint of the MCP server. */
+  serverUrl: string;
+  /** Auth type: "api_key" or "oauth_token". */
+  authType: "api_key" | "oauth_token";
+  /** Discovered tools — populated on registration and refreshed periodically. */
+  tools: McpTool[];
+  /** Last time tools were successfully discovered. */
+  toolsDiscoveredAt: string | null;
+  /** Current health status. */
+  healthStatus: McpServerStatus;
+  /** Last time a health check was performed. */
+  lastHealthCheckAt: string | null;
+  /** Human-readable display name for the MCP server. */
+  displayName: string;
+}
+
+/** Result of calling an MCP tool. */
+export interface McpToolCallResult {
+  /** Whether the call succeeded. */
+  success: boolean;
+  /** The tool's response content (array of content blocks per MCP spec). */
+  content?: Array<{ type: string; text?: string; [key: string]: unknown }>;
+  /** Error message if the call failed. */
+  error?: string;
+  /** Whether the result is partial / was truncated. */
+  isError?: boolean;
+}
+
+/** Health check result for an MCP server. */
+export interface McpHealthCheckResult {
+  connectionId: string;
+  serverUrl: string;
+  status: McpServerStatus;
+  latencyMs: number;
+  toolCount: number;
+  error?: string;
+  checkedAt: string;
 }

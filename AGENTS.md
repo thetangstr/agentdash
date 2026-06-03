@@ -293,3 +293,36 @@ The Slack connector lets agents be summoned from Slack and post results back. It
 - `SLACK_SIGNING_SECRET` — Slack request signing secret (for verifying inbound events)
 - `AGENTDASH_PUBLIC_BASE_URL` — base URL for OAuth redirect (defaults to `http://localhost:3100`)
 <!-- /AgentDash: slack-connector -->
+
+<!-- AgentDash: mcp-client — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash: MCP Client (AGE-107)
+
+The MCP client lets agents use tools from vendor-maintained MCP (Model Context Protocol) servers as connectors. It registers as provider `mcp` in the connector framework (AGE-106). This enables Tier 2 connectors (Calendar, Drive, Notion, Linear, GitHub) to route through vendor MCP servers instead of custom builds.
+
+### Key files
+
+- `server/src/services/mcp-client.ts` — MCP JSON-RPC transport, tool discovery, tool invocation with autonomy gating
+- `server/src/routes/mcp-client.ts` — REST endpoints for register, list tools, call, refresh, health, remove
+- `server/src/__tests__/mcp-client.test.ts` — unit tests
+- `packages/shared/src/types/connector.ts` — McpTool, McpServerConfig, McpToolCallResult, McpHealthCheckResult types
+- `packages/shared/src/validators/connector.ts` — registerMcpServerSchema, callMcpToolSchema
+- `packages/shared/src/constants.ts` — MCP_SERVER_STATUSES, MCP_TOOL_ACTION_CLASSES, ACTIVITY_LOG_ACTIONS_MCP
+
+### Routes (under `/api/companies/:companyId/connectors/mcp/`)
+
+- `POST /register` — register an MCP server (validates connectivity, discovers tools)
+- `GET /:connectionId/tools` — list discovered tools
+- `POST /:connectionId/call` — invoke a tool (autonomy-gated, audited)
+- `POST /:connectionId/refresh` — re-discover tools from the server
+- `GET /:connectionId/health` — health check a single MCP server
+- `GET /health` — health check all MCP servers in the company
+- `DELETE /:connectionId` — remove (revoke) an MCP server
+
+### Autonomy model
+
+Each discovered tool is classified as `read`, `draft`, or `send` based on its name and description. Tool calls go through the connector framework's acting-as resolver: `full` executes immediately, `draft_only` returns a draft for approval, `blocked` rejects the call. Every call is audited with the acting-as identity.
+
+### Transport
+
+Uses HTTPS/SSE MCP transport (JSON-RPC 2.0 over HTTP POST). Fetch-based client with no MCP SDK dependency. Auth via Bearer token (API key or OAuth token).
+<!-- /AgentDash: mcp-client -->

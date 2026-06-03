@@ -27,6 +27,8 @@ export { connectorRoutes } from "./connectors.js";
 export { slackConnectorRoutes } from "./slack-connector.js";
 // AgentDash: Gmail Connector (AGE-109)
 export { gmailRoutes } from "./gmail.js";
+// AgentDash: MCP Client (AGE-107)
+export { mcpClientRoutes } from "./mcp-client.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";

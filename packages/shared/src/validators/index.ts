@@ -404,6 +404,11 @@ export {
   type InitiateOAuth,
   type OAuthCallback,
   type ConnectorApprovalDecision,
+  // AgentDash: MCP Client (AGE-107)
+  registerMcpServerSchema,
+  callMcpToolSchema,
+  type RegisterMcpServer,
+  type CallMcpTool,
 } from "./connector.js";
 
 // AgentDash (#234): canonical type guard for AgentPlanProposalV1Payload;

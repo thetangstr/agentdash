@@ -7,6 +7,7 @@ import {
   CONNECTION_AUTONOMY_LEVELS,
   CONNECTION_VISIBILITIES,
   CONNECTOR_ACTION_CLASSES,
+  MCP_TOOL_ACTION_CLASSES,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -105,3 +106,40 @@ export const connectorApprovalDecisionSchema = z.object({
 });
 
 export type ConnectorApprovalDecision = z.infer<typeof connectorApprovalDecisionSchema>;
+
+// ---------------------------------------------------------------------------
+// MCP Client (AGE-107)
+// ---------------------------------------------------------------------------
+
+/** Register an MCP server as a connection. */
+export const registerMcpServerSchema = z.object({
+  /** HTTPS endpoint of the MCP server. */
+  serverUrl: z.string().url().refine(
+    (url) => url.startsWith("https://"),
+    { message: "MCP server URL must use HTTPS" },
+  ),
+  /** Auth type: "api_key" or "oauth_token". */
+  authType: z.enum(["api_key", "oauth_token"]),
+  /** The API key or OAuth token value. */
+  authValue: z.string().min(1),
+  /** Human-readable display name for the MCP server. */
+  displayName: z.string().min(1).max(200),
+  /** Autonomy settings for this connection. */
+  autonomy: connectionAutonomyConfigSchema.optional(),
+  /** Visibility: who in the workspace can use this connection. */
+  visibility: z.enum(CONNECTION_VISIBILITIES).default("private"),
+});
+
+export type RegisterMcpServer = z.infer<typeof registerMcpServerSchema>;
+
+/** Call an MCP tool. */
+export const callMcpToolSchema = z.object({
+  /** The tool name to invoke. */
+  toolName: z.string().min(1),
+  /** Arguments to pass to the tool. */
+  arguments: z.record(z.unknown()).default({}),
+  /** The agent making the call (for autonomy + audit). */
+  agentId: z.string().uuid(),
+});
+
+export type CallMcpTool = z.infer<typeof callMcpToolSchema>;

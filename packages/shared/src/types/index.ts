@@ -295,6 +295,10 @@ export type {
   ConnectorActionDefinition,
   ConnectorDefinition,
   ConnectorApprovalPayload,
+  McpTool,
+  McpServerConfig,
+  McpToolCallResult,
+  McpHealthCheckResult,
 } from "./connector.js";
 export {
   INTERVIEW_MAX_TURNS,
