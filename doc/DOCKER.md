@@ -88,6 +88,12 @@ BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
 
 PostgreSQL data persists in a named Docker volume (`pgdata`). Paperclip data persists in `paperclip-data`.
 
+### Production pinned-image compose
+
+For customer or design-partner deployments, do not build from local source or pull floating `latest`. Use `docker/docker-compose.production.yml` with `AGENTDASH_IMAGE` pinned to a GHCR SHA tag, then update with `scripts/deploy/agentdash-ota-update.mjs` so every deployment runs backup, health checks, and writes a deploy receipt.
+
+See [Managed VPS Deployment](VPS-DEPLOYMENT.md) for the VPS flow and [Mac Mini Deployment](MAC-MINI-DEPLOYMENT.md) for the private launchd-managed design-partner flow.
+
 ### Untrusted PR review
 
 Isolated container for reviewing untrusted pull requests with Codex or Claude, without exposing your host machine. See `doc/UNTRUSTED-PR-REVIEW.md` for the full workflow.

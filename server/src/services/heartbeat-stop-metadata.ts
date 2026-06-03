@@ -1,3 +1,8 @@
+import {
+  classifyAgentRunFailure,
+  type AgentRunFailureClassification,
+} from "./agent-run-failure-classifier.js";
+
 export type HeartbeatRunOutcome = "succeeded" | "failed" | "cancelled" | "timed_out";
 
 export type HeartbeatRunStopReason =
@@ -19,6 +24,7 @@ export interface HeartbeatRunTimeoutPolicy {
 export interface HeartbeatRunStopMetadata extends HeartbeatRunTimeoutPolicy {
   stopReason: HeartbeatRunStopReason;
   timeoutFired: boolean;
+  failureClassification: AgentRunFailureClassification | null;
 }
 
 function readFiniteNumber(value: unknown): number | null {
@@ -96,10 +102,17 @@ export function buildHeartbeatRunStopMetadata(input: {
 }): HeartbeatRunStopMetadata {
   const timeoutPolicy = resolveHeartbeatRunTimeoutPolicy(input.adapterType, input.adapterConfig);
   const stopReason = inferHeartbeatRunStopReason(input);
+  const failureClassification = classifyAgentRunFailure({
+    outcome: input.outcome,
+    adapterType: input.adapterType,
+    errorCode: input.errorCode,
+    errorMessage: input.errorMessage,
+  });
   return {
     ...timeoutPolicy,
     stopReason,
     timeoutFired: stopReason === "timeout",
+    failureClassification,
   };
 }
 
@@ -114,6 +127,7 @@ export function mergeHeartbeatRunStopMetadata(
     timeoutConfigured: metadata.timeoutConfigured,
     timeoutSource: metadata.timeoutSource,
     timeoutFired: metadata.timeoutFired,
+    ...(metadata.failureClassification ? { failureClassification: metadata.failureClassification } : {}),
     ...(metadata.effectiveTimeoutMs != null ? { effectiveTimeoutMs: metadata.effectiveTimeoutMs } : {}),
   };
 }

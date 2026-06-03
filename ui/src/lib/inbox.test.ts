@@ -300,6 +300,32 @@ const dashboard: DashboardSummary = {
     pausedProjects: 0,
   },
   runActivity: [],
+  harness: {
+    windowHours: 24,
+    overallStatus: "ok",
+    totalRuns: 0,
+    failedRuns: 0,
+    failureRatePercent: 0,
+    adapters: [],
+  },
+  taskQuality: {
+    windowDays: 30,
+    issuesInScope: 0,
+    issuesWithDefinitionOfDone: 0,
+    dodCoveragePercent: 0,
+    reviewedIssues: 0,
+    passedIssues: 0,
+    failedIssues: 0,
+    revisionRequestedIssues: 0,
+    escalatedIssues: 0,
+    unreviewedDoneIssues: 0,
+    acceptanceRatePercent: 0,
+    greenRunsPendingReview: 0,
+    greenRunsWithOpenTasks: 0,
+    issueLinkedSpendCents: 0,
+    issueLinkedTokens: 0,
+    spendPerAcceptedIssueCents: null,
+  },
 };
 
 describe("inbox helpers", () => {

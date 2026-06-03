@@ -56,7 +56,7 @@ Invoke it whenever you need to remember, retrieve, or organize anything.
 When you create work:
 
 - **Goals** must carry a measurable `metricDefinition` (target, unit, source). Set via `PUT /api/companies/:companyId/goals/:goalId/metric-definition`. The traceability dashboard measures real progress against this — without it, the Goal isn't trackable.
-- **Projects and Issues** you delegate must have a `definitionOfDone` (DoD) before they leave `backlog`. Set DoD when delegating, or instruct the assignee to set one as their first step. The DoD-guard rejects status transitions out of backlog when `dod_guard_enabled` is on for the company.
+- **Projects and Issues** you delegate must have a `definitionOfDone` (DoD) before they leave `backlog`. When creating an Issue directly, include DoD in `POST /api/companies/:companyId/issues`; when creating child Issues, provide `acceptanceCriteria` so the child gets a real DoD. The DoD-guard rejects status transitions out of backlog when `dod_guard_enabled` is on for the company.
 
 When work comes back to you for review:
 

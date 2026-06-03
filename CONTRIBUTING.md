@@ -37,7 +37,17 @@ PRs that follow this path are **much** more likely to be accepted, even when the
 
 ### Use the PR Template
 
-Every pull request **must** follow the PR template at [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). If you create a PR via the GitHub API or other tooling that bypasses the template, copy its contents into your PR description manually. The template includes required sections: Thinking Path, What Changed, Verification, Risks, Model Used, and a Checklist.
+Every pull request **must** follow the PR template at [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). If you create a PR via the GitHub API or other tooling that bypasses the template, copy its contents into your PR description manually. The template includes required sections: Thinking Path, What Changed, Verification, Risks, AgentDash Review, Model Used, and a Checklist.
+
+PR policy CI validates that required sections are present and filled in before expensive checks run. Placeholder text, bare `-` bullets, and bare `None` / `N/A` answers in AgentDash Review fail the check. Use `None - <reason>` when a field genuinely has no impact.
+
+### AgentDash Review (Required)
+
+Every PR must include fork-safety metadata:
+
+- **Upstream impact:** Say whether the change is fork-local, upstream-derived, or likely to affect future cherry-picks. If it is upstream-derived, include the upstream SHA and follow `doc/UPSTREAM-POLICY.md`.
+- **Agent-facing prompt surfaces:** Say which of the four prompt surfaces were updated, or `None - <reason>` when no agent behavior changes.
+- **AgentDash-owned subsystem:** Name the AgentDash-owned area involved, such as billing, pipeline/orchestration, CRM, action policy, assessment, skills registry, prompt surfaces, or `None - <reason>`.
 
 ### Model Used (Required)
 
@@ -50,6 +60,10 @@ All tests must pass before a PR can be merged. Run them locally first and verify
 ### Greptile Review
 
 We use [Greptile](https://greptile.com) for automated code review. Your PR must achieve a **5/5 Greptile score** with **all Greptile comments addressed** before it can be merged. If Greptile leaves comments, fix or respond to each one and request a re-review.
+
+### Merge Gates
+
+Maintainers should keep branch protection aligned with the process above. At minimum, PRs should require the `policy`, `verify`, `e2e`, Snyk security, and Greptile review statuses before merge. The `policy` job intentionally runs the PR description check first so incomplete PRs fail before expensive CI work starts.
 
 ## Feature Contributions
 

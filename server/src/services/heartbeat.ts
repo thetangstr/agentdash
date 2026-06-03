@@ -712,7 +712,8 @@ const heartbeatRunSafeResultJsonColumn = sql<Record<string, unknown> | null>`
         ),
         'truncated', true,
         'truncationReason', 'oversized_result_json',
-        'originalSizeBytes', pg_column_size(${heartbeatRuns.resultJson})
+        'originalSizeBytes', pg_column_size(${heartbeatRuns.resultJson}),
+        'failureClassification', ${heartbeatRuns.resultJson} -> 'failureClassification'
       )
     )
   end

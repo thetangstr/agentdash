@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import type { DefinitionOfDone } from "@paperclipai/shared";
 
 interface NewIssueDefaults {
   status?: string;
@@ -16,6 +17,8 @@ interface NewIssueDefaults {
   assigneeUserId?: string;
   title?: string;
   description?: string;
+  acceptanceCriteria?: string[];
+  definitionOfDone?: DefinitionOfDone | null;
 }
 
 interface NewGoalDefaults {

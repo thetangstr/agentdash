@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
@@ -28,6 +28,10 @@ import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { isValidAdapterType } from "../adapters/metadata";
 import { ReportsToPicker } from "../components/ReportsToPicker";
 import { buildNewAgentHirePayload } from "../lib/new-agent-hire-payload";
+import {
+  buildAgentHarnessPreflightKey,
+  getAgentCreateHarnessPreflightGate,
+} from "../lib/agent-harness-preflight";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
@@ -79,6 +83,7 @@ export function NewAgent() {
     errorMessage: null,
     result: null,
   });
+  const [passedHarnessPreflightKey, setPassedHarnessPreflightKey] = useState<string | null>(null);
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -145,14 +150,39 @@ export function NewAgent() {
     },
   });
 
-  function buildAdapterConfig() {
+  const builtAdapterConfig = useMemo(() => {
     const adapter = getUIAdapter(configValues.adapterType);
     return adapter.buildAdapterConfig(configValues);
+  }, [configValues]);
+
+  function buildAdapterConfig() {
+    return builtAdapterConfig;
   }
+
+  const currentHarnessPreflightKey = useMemo(
+    () => buildAgentHarnessPreflightKey({
+      adapterType: configValues.adapterType,
+      defaultEnvironmentId: configValues.defaultEnvironmentId ?? null,
+      adapterConfig: builtAdapterConfig,
+    }),
+    [builtAdapterConfig, configValues.adapterType, configValues.defaultEnvironmentId],
+  );
+
+  const harnessPreflightGate = getAgentCreateHarnessPreflightGate({
+    currentConfigKey: currentHarnessPreflightKey,
+    passedConfigKey: passedHarnessPreflightKey,
+    pending: testAgentState.pending,
+    result: testAgentFeedback.result,
+    errorMessage: testAgentFeedback.errorMessage,
+  });
 
   function handleSubmit() {
     if (!selectedCompanyId || !name.trim()) return;
     setFormError(null);
+    if (!harnessPreflightGate.canCreate) {
+      setFormError(harnessPreflightGate.message ?? "Run Test Agent before creating this agent.");
+      return;
+    }
     if (configValues.adapterType === "opencode_local") {
       const selectedModel = configValues.model.trim();
       if (!selectedModel) {
@@ -190,6 +220,7 @@ export function NewAgent() {
         selectedSkillKeys,
         configValues,
         adapterConfig: buildAdapterConfig(),
+        requireHarnessPreflight: true,
       }),
     );
   }
@@ -218,7 +249,10 @@ export function NewAgent() {
     result: AdapterEnvironmentTestResult | null;
   }) => {
     setTestAgentFeedback(feedback);
-  }, []);
+    if (feedback.result?.status === "pass") {
+      setPassedHarnessPreflightKey(currentHarnessPreflightKey);
+    }
+  }, [currentHarnessPreflightKey]);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -356,6 +390,11 @@ export function NewAgent() {
             {testAgentFeedback.result && (
               <AdapterEnvironmentResult result={testAgentFeedback.result} />
             )}
+            {!harnessPreflightGate.canCreate && (
+              <p className="text-xs text-muted-foreground">
+                {harnessPreflightGate.message}
+              </p>
+            )}
             <div className="flex items-center justify-between gap-2">
               <Button variant="outline" size="sm" onClick={() => navigate("/agents")}>
                 Cancel
@@ -372,7 +411,7 @@ export function NewAgent() {
                 </Button>
                 <Button
                   size="sm"
-                  disabled={!name.trim() || createAgent.isPending}
+                  disabled={!name.trim() || createAgent.isPending || !harnessPreflightGate.canCreate}
                   onClick={handleSubmit}
                 >
                   {createAgent.isPending ? "Creating…" : "Create agent"}

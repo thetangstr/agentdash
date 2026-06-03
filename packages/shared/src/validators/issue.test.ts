@@ -87,6 +87,26 @@ describe("issue validators", () => {
     expect(parsed.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
   });
 
+  it("preserves valid definition of done payloads when creating issues", () => {
+    const definitionOfDone = {
+      summary: "Customer-visible task outcome",
+      criteria: [
+        { id: "c1", text: "The operator can verify the requested outcome", done: false },
+      ],
+    };
+
+    const parsed = createIssueSchema.parse({
+      title: "Create launch task",
+      definitionOfDone,
+    });
+
+    expect(parsed.definitionOfDone).toEqual(definitionOfDone);
+    expect(createIssueSchema.safeParse({
+      title: "Create malformed task",
+      definitionOfDone: { summary: "", criteria: [] },
+    }).success).toBe(false);
+  });
+
   it("clamps oversized requestDepth values on update", () => {
     const parsed = updateIssueSchema.parse({
       requestDepth: MAX_ISSUE_REQUEST_DEPTH + 1,

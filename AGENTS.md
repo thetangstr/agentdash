@@ -163,8 +163,13 @@ When creating a pull request (via `gh pr create` or any other method), you **mus
 - **What Changed** — bullet list of concrete changes
 - **Verification** — how a reviewer can confirm it works
 - **Risks** — what could go wrong
+- **AgentDash Review** — upstream impact, agent-facing prompt-surface impact, and AgentDash-owned subsystem impact
 - **Model Used** — the AI model that produced or assisted with the change (provider, exact model ID, context window, capabilities). Write "None — human-authored" if no AI was used.
 - **Checklist** — all items checked
+
+PR policy CI validates that these sections are present and filled in. Placeholder
+text, bare `-` bullets, and bare `None` / `N/A` AgentDash Review answers fail
+the check; write `None - <reason>` when a field genuinely has no impact.
 
 ## 11. Definition of Done
 
@@ -174,7 +179,7 @@ A change is done when all are true:
 2. Typecheck, tests, and build pass
 3. Contracts are synced across db/shared/server/ui
 4. Docs updated when behavior or commands change
-5. PR description follows the [PR template](.github/PULL_REQUEST_TEMPLATE.md) with all sections filled in (including Model Used)
+5. PR description follows the [PR template](.github/PULL_REQUEST_TEMPLATE.md) with all sections filled in (including AgentDash Review and Model Used)
 
 ## 11. Fork-Specific: HenkDz/paperclip
 

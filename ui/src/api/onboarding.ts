@@ -39,6 +39,13 @@ export interface InvitesResponse {
   errors: Array<{ email: string; reason: string }>;
 }
 
+export interface CompleteInitialAssessmentResponse {
+  companyId: string;
+  cosAgentId: string;
+  conversationId: string;
+  redirectUrl: string;
+}
+
 export const onboardingApi = {
   bootstrap: () => api.post<BootstrapResponse>("/onboarding/bootstrap", {}),
   interviewTurn: (input: {
@@ -85,5 +92,14 @@ export const onboardingApi = {
     api.post<{ specId: string; conversationId: string; redirectUrl: string }>(
       "/onboarding/finalize-assessment",
       { stateId },
+    ),
+  completeInitialAssessment: (input: {
+    companyId: string;
+    assessmentMarkdown: string;
+    assessmentInput: Record<string, unknown>;
+  }) =>
+    api.post<CompleteInitialAssessmentResponse>(
+      "/onboarding/complete-initial-assessment",
+      input,
     ),
 };

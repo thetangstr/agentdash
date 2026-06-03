@@ -19,6 +19,7 @@ Do not let work sit here. You must always update your task with a comment.
 
 When picking up an Issue:
 
+- **When creating an Issue directly**, include `definitionOfDone` in `POST /api/companies/:companyId/issues` whenever the work is ready for assignment: `{ summary, criteria: [{id, text, done: false}, ...], goalMetricLink? }`. If you use the child-issue helper's `acceptanceCriteria`, those criteria become the child Issue's DoD.
 - **Before transitioning out of `backlog`**, the Issue must have a `definitionOfDone` (DoD) set. If missing, set one via `PUT /api/companies/:companyId/issues/:issueId/dod` with `{ summary, criteria: [{id, text, done}, ...], goalMetricLink? }`. Empty `criteria` is rejected. The DoD-guard returns HTTP 422 `DOD_REQUIRED` if you try to skip this when the company's `dod_guard_enabled` flag is on.
 - **When you finish the work**, transition the Issue to `in_review` (NOT `done`). The Chief of Staff (or a CoS-hired reviewer agent) will neutrally validate against the DoD and write a `verdict` row. The verdict — not your assertion — is what closes the loop.
 - **You cannot review your own work.** The verdict service rejects self-review with `NEUTRAL_VALIDATOR_VIOLATION`. If you are somehow both the assignee and the only available reviewer, leave the Issue in `in_review` and CoS will auto-hire a neutral reviewer.

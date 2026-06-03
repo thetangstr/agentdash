@@ -21,6 +21,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-pr-process.mjs
+
       - name: Block manual lockfile edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
@@ -185,7 +190,7 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Verify system Chrome
+      - name: Verify hosted Chrome
         run: google-chrome --version
 
       # Derive the resolved @playwright/test version from the lockfile so the

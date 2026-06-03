@@ -1,4 +1,12 @@
-import type { AdapterExecutionResult, AdapterModelProfileDefinition, ServerAdapterModule } from "./types.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type {
+  AdapterEnvironmentCheck,
+  AdapterEnvironmentTestResult,
+  AdapterExecutionResult,
+  AdapterModelProfileDefinition,
+  ServerAdapterModule,
+} from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as acpxExecute,
@@ -122,6 +130,8 @@ function defaultHermesCommand(): string {
     : DEFAULT_HERMES_COMMAND;
 }
 
+const execFileAsync = promisify(execFile);
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -171,6 +181,24 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   }
 
   return ctx;
+}
+
+function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
+  const config =
+    ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
+      ? (ctx.config as Record<string, unknown>)
+      : null;
+  const agent =
+    ctx.agent && typeof ctx.agent === "object" && !Array.isArray(ctx.agent)
+      ? (ctx.agent as Record<string, unknown>)
+      : null;
+  const agentConfig =
+    agent?.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+      ? (agent.adapterConfig as Record<string, unknown>)
+      : null;
+  return readNonEmptyString(config?.hermesCommand)
+    ?? readNonEmptyString(agentConfig?.hermesCommand)
+    ?? "/Users/maxiaoer/.local/bin/hermes";
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -292,6 +320,71 @@ Address the comment, POST a reply if needed, then continue working.
 4. If truly nothing to do, report briefly what you checked.
 {{/noTask}}`;
 
+function sectionAfter(content: string, start: string, end: string): string {
+  const startIndex = content.indexOf(start);
+  if (startIndex < 0) return "";
+  const rest = content.slice(startIndex + start.length);
+  const endIndex = rest.indexOf(end);
+  return endIndex < 0 ? rest : rest.slice(0, endIndex);
+}
+
+export function hermesStatusHasConfiguredCredentials(statusOutput: string): boolean {
+  const apiKeyProviders = sectionAfter(statusOutput, "API-Key Providers", "Terminal Backend");
+  if (apiKeyProviders
+    .split(/\r?\n/)
+    .some((line) => /\bconfigured\b/i.test(line) && !/\bnot configured\b/i.test(line))) {
+    return true;
+  }
+
+  const authProviders = sectionAfter(statusOutput, "Auth Providers", "API-Key Providers");
+  return authProviders
+    .split(/\r?\n/)
+    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line));
+}
+
+async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(command, ["status"], {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return hermesStatusHasConfiguredCredentials(stdout);
+  } catch {
+    return false;
+  }
+}
+
+function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
+  if (checks.some((check) => check.level === "error")) return "fail";
+  if (checks.some((check) => check.level === "warn")) return "warn";
+  return "pass";
+}
+
+async function testHermesEnvironment(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
+  const normalizedCtx = normalizeHermesConfig(ctx);
+  const result = await hermesTestEnvironment(normalizedCtx as never);
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  const hasAgentDashEnvWarning = checks.some((check) => check.code === "hermes_no_api_keys" && check.level === "warn");
+  if (!hasAgentDashEnvWarning) return result;
+
+  const command = getHermesCommandFromContext(normalizedCtx);
+  if (!await hermesCommandHasConfiguredCredentials(command)) return result;
+
+  const normalizedChecks = checks.map((check) => {
+    if (check.code !== "hermes_no_api_keys") return check;
+    return {
+      ...check,
+      level: "info" as const,
+      message: "Hermes status reports a configured local provider",
+      hint: "AgentDash env keys are not required when Hermes owns the provider credentials in its local config.",
+    };
+  });
+  return {
+    ...result,
+    status: summarizeAdapterEnvironmentChecks(normalizedChecks),
+    checks: normalizedChecks,
+  };
+}
 function isHermesResumeHelpTextSessionId(value: unknown): boolean {
   return readNonEmptyString(value)?.toLowerCase() === "from";
 }
@@ -557,7 +650,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
   },
-  testEnvironment: (ctx) => hermesTestEnvironment(normalizeHermesConfig(ctx) as never),
+  testEnvironment: testHermesEnvironment,
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
   syncSkills: hermesSyncSkills,

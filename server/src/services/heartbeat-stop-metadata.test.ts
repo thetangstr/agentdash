@@ -39,6 +39,13 @@ describe("heartbeat stop metadata", () => {
       timeoutSource: "config",
       stopReason: "timeout",
       timeoutFired: true,
+      failureClassification: {
+        category: "timeout",
+        severity: "transient",
+        title: "Run timed out",
+        detail: "The adapter did not complete before its configured timeout.",
+        nextActions: ["retry", "run_adapter_test", "escalate_support"],
+      },
     });
   });
 
@@ -81,6 +88,26 @@ describe("heartbeat stop metadata", () => {
       timeoutConfigured: true,
       timeoutSource: "default",
       timeoutFired: false,
+    });
+    expect(result).not.toHaveProperty("failureClassification");
+  });
+
+  it("merges customer-actionable failure classification into failed run metadata", () => {
+    const result = mergeHeartbeatRunStopMetadata(
+      {},
+      buildHeartbeatRunStopMetadata({
+        adapterType: "codex_local",
+        adapterConfig: {},
+        outcome: "failed",
+        errorCode: "adapter_failed",
+        errorMessage: "OPENAI_API_KEY is missing",
+      }),
+    );
+
+    expect(result.failureClassification).toMatchObject({
+      category: "missing_credential",
+      severity: "customer_action_required",
+      nextActions: expect.arrayContaining(["open_credentials", "run_adapter_test"]),
     });
   });
 });
