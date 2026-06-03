@@ -1040,7 +1040,7 @@ export const CONNECTION_STATUSES = ["active", "expired", "revoked", "error"] as 
 export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
 
 /** Send-identity modes: who messages/actions appear from. */
-export const CONNECTION_SEND_IDENTITIES = ["service", "delegated"] as const;
+export const CONNECTION_SEND_IDENTITIES = ["service", "delegated", "delegated_attributed"] as const;
 export type ConnectionSendIdentity = (typeof CONNECTION_SEND_IDENTITIES)[number];
 
 /** Autonomy levels for each action class (read, draft, send). */

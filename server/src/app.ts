@@ -59,8 +59,13 @@ import { agentResearchRoutes } from "./routes/agent-research.js";
 import { quotaRoutes } from "./routes/quota.js";
 // AgentDash: Connectors (AGE-106)
 import { connectorRoutes } from "./routes/connectors.js";
+<<<<<<< HEAD
 // AgentDash: Slack Connector (AGE-108)
 import { slackConnectorRoutes } from "./routes/slack-connector.js";
+=======
+// AgentDash: Gmail Connector (AGE-109)
+import { gmailRoutes } from "./routes/gmail.js";
+>>>>>>> 8822e78 (feat(connectors): Gmail connector with read + send and autonomy model (AGE-109))
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
@@ -269,8 +274,13 @@ export async function createApp(
   api.use(quotaRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
+<<<<<<< HEAD
   // AgentDash: Slack Connector (AGE-108)
   api.use("/connectors", slackConnectorRoutes(db));
+=======
+  // AgentDash: Gmail Connector (AGE-109)
+  api.use(gmailRoutes(db));
+>>>>>>> 8822e78 (feat(connectors): Gmail connector with read + send and autonomy model (AGE-109))
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));

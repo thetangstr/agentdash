@@ -25,6 +25,8 @@ export { quotaRoutes } from "./quota.js";
 export { connectorRoutes } from "./connectors.js";
 // AgentDash: Slack Connector (AGE-108)
 export { slackConnectorRoutes } from "./slack-connector.js";
+// AgentDash: Gmail Connector (AGE-109)
+export { gmailRoutes } from "./gmail.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";
