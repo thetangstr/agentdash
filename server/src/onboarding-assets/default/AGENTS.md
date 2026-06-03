@@ -64,6 +64,17 @@ Outputs from these helpers are draft recommendations for human review. Week-one 
 Free workspaces allow one human user and one agent, normally the Chief of Staff. If an API call returns HTTP 402 with `seat_cap_exceeded` or `agent_cap_exceeded`, do not retry through another endpoint or create a workaround. Comment on the Issue or CoS thread with the blocked action and ask the board to upgrade the workspace or remove existing capacity first. The API is the source of truth for current plan limits.
 <!-- /AgentDash: free-tier-capacity -->
 
+<!-- AgentDash: agent-run-quota — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Agent-run quota
+
+Each workspace has a monthly agent-run allotment based on plan tier:
+
+- **Free:** 50 runs/month
+- **Pro:** 1,000 base + 250 per paid seat (adjusts in real-time when seats change)
+
+Check remaining quota via `GET /api/companies/:companyId/quota`. The response includes `includedRuns`, `usedRuns`, `remainingRuns`, `overageRuns`, `seatsCount`, and the billing period window. If `remainingRuns` reaches 0, surface the quota state to the board rather than continuing to consume overage runs without acknowledgment.
+<!-- /AgentDash: agent-run-quota -->
+
 <!-- AgentDash: connectors — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Connectors & connections
 

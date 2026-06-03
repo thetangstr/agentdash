@@ -1010,6 +1010,12 @@ export function deriveCompanyEmailDomain(creatorEmail: string): string {
   return domain;
 }
 
+// AgentDash: Agent-run quota model (AGE-120)
+// Per-tier included run allotments. Pro allotment scales with paid seats.
+export const QUOTA_FREE_INCLUDED_RUNS = 50;
+export const QUOTA_PRO_BASE_INCLUDED_RUNS = 1_000;
+export const QUOTA_PRO_PER_SEAT_RUNS = 250;
+
 // AgentDash: Connectors (AGE-106)
 
 /** Owner types for connections — who initiated the connection. */
