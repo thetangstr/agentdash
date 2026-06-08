@@ -10,6 +10,7 @@
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { type Db, costEvents } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
+import { inferenceMarkupEnabled } from "./license.js";
 
 export interface UsagePricing {
   /** Multiplier applied to COGS to produce the billable amount (e.g. 1.5 = 50% margin). */
@@ -119,11 +120,16 @@ export function usageBillingService(db: Db) {
     currentBill: async (companyId: string, range?: UsagePeriod): Promise<UsageBill> => {
       const totals = await periodUsage(companyId, range);
       const pricing = usagePricingFromEnv();
+      // On-prem brings its own tokens — never mark up their usage (G2). The
+      // bill is then informational (markup 1.0, billable == raw COGS).
+      const effective: UsagePricing = inferenceMarkupEnabled()
+        ? pricing
+        : { ...pricing, markup: 1 };
       return {
         companyId,
         ...totals,
-        markup: pricing.markup,
-        billableCents: computeBillableCents(totals, pricing),
+        markup: effective.markup,
+        billableCents: computeBillableCents(totals, effective),
       };
     },
   };
