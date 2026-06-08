@@ -31,6 +31,22 @@ A single product trunk produces both; the difference is packaging (key ownership
 
 ---
 
+## Implementation status (2026-06-08, branch `feat/inference-skus`)
+
+G1–G5 are **code-complete and committed** (full regression green: all-package typecheck, server 1992 tests pass / 0 fail, full build). G0's trunk question was resolved by **default to `main`** (it holds the billing substrate); the mini stays the on-prem deploy target, full reconciliation still pending.
+
+| Milestone | Shipped |
+|---|---|
+| **G1** | `openai_compat` adapter (`server/src/services/openai-compat-llm.ts`) + dispatch wiring; OpenRouter/Fireworks via env; 10 tests |
+| **G3** | CoS chat metered to `cost_events` (optional `meter` threaded replier→dispatch, non-fatal); tests |
+| **G4** | `usage-billing.ts` (COGS×markup, token-price floor, Stripe meter reporter) + `GET /api/billing/usage`; 11 tests |
+| **G2** | ed25519 license verify + opt-in `requireLicense` + on-prem markup-off; `scripts/mint-license.mjs`; on-prem guide; 12 tests |
+| **G5** | `scripts/cloud-preflight.mjs` go-live gate (fails closed on unsafe public config) + key-secret hardening docs; 9 tests |
+
+**Still human-gated (cannot be done in code):** issue an OpenRouter/Fireworks key and run the live mini CoS check (G1); create the Stripe Billing Meter + metered price (G4); provision a license keypair for real on-prem customers (G2); set the public domain/cert and run `cloud-preflight.mjs` against prod env (G5); and the eventual `main` ↔ mini trunk reconciliation (G0).
+
+---
+
 ## Open decision (blocks G0, therefore most code)
 
 **Which codebase is the product trunk: `main`, or the mini's divergent line?**
