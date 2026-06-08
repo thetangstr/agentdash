@@ -149,6 +149,14 @@ Without `RESEARCH_APP_URL` + `RESEARCH_APP_API_KEY` the route returns HTTP 503 �
 
 ## 5. Deploy and smoke-test
 
+**Before going public, run the cloud preflight** (G5) — it fails closed on an unsafe public config (wrong auth mode, weak `BETTER_AUTH_SECRET`, missing DB, non-https base URL, an LLM adapter with no key → stub replies, or a dev bypass like `AGENTDASH_RATE_LIMIT_DISABLED=true` left on):
+
+```sh
+node scripts/cloud-preflight.mjs   # exits non-zero on any error; warns on soft issues
+```
+
+The inference key (`OPENAI_COMPAT_API_KEY` / `ANTHROPIC_API_KEY` / …) is a **server-side secret** — it is read from env at dispatch time and never sent to the browser. The preflight verifies it is set so the CoS returns real replies.
+
 After the container boots:
 
 1. Visit `https://your-domain.com/` — should render the AgentDash marketing landing on cream surface.
