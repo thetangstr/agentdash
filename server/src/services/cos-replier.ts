@@ -12,6 +12,8 @@
 
 import { logger } from "../middleware/logger.js";
 import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipai/shared";
+import type { Db } from "@paperclipai/db";
+import type { DispatchMeter } from "./dispatch-llm.js";
 
 const AGENT_PLAN_ADAPTER_TYPES =
   '"claude_local", "codex_local", "gemini_local", "hermes_local", "opencode_local", "pi_local"';
@@ -57,10 +59,16 @@ export interface DeepInterviewSpecsService {
 
 interface Deps {
   conversations: any; // conversationService
-  llm: (input: {
-    system: string;
-    messages: Array<{ role: "user" | "assistant"; content: string }>;
-  }) => Promise<string>;
+  llm: (
+    input: {
+      system: string;
+      messages: Array<{ role: "user" | "assistant"; content: string }>;
+    },
+    meter?: DispatchMeter,
+  ) => Promise<string>;
+  // AgentDash (Cloud SKU, G3): when provided, the CoS reply is metered —
+  // dispatchLLM writes a cost_events row for usage-based billing.
+  db?: Db;
   cosState?: CosStateService;
   // AgentDash (Phase F): deep-interview spec loader. When provided AND the
   // current conversation's cos_onboarding_state has a deepInterviewSpecId,
@@ -201,7 +209,7 @@ export function cosReplier(deps: Deps) {
   const deepInterviewSpecs = deps.deepInterviewSpecs;
 
   return {
-    reply: async (input: { conversationId: string; cosAgentId: string }) => {
+    reply: async (input: { conversationId: string; cosAgentId: string; companyId?: string }) => {
       const recent = await deps.conversations.paginate(input.conversationId, { limit: 20 });
       const messages = recent
         .slice()
@@ -265,7 +273,12 @@ export function cosReplier(deps: Deps) {
         }
       }
 
-      const text = await deps.llm({ system, messages });
+      // AgentDash (Cloud SKU, G3): meter the call when we have db + companyId.
+      const meter: DispatchMeter | undefined =
+        deps.db && input.companyId
+          ? { db: deps.db, companyId: input.companyId, agentId: input.cosAgentId }
+          : undefined;
+      const text = await deps.llm({ system, messages }, meter);
       const { body, trailer } = parseTrailer(text);
       const visibleBody = body.length > 0 ? body : text.trimEnd();
 

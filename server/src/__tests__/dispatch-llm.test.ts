@@ -3,7 +3,11 @@ import type { HttpError } from "../errors.js";
 
 const anthropicLLM = vi.hoisted(() => vi.fn(async () => "anthropic fallback"));
 const minimaxLLM = vi.hoisted(() => vi.fn(async () => "minimax reply"));
-const openaiCompatLLM = vi.hoisted(() => vi.fn(async () => "openai_compat reply"));
+const openaiCompatLLMDetailed = vi.hoisted(() =>
+  vi.fn(async () => ({ text: "openai_compat reply" }) as { text: string; usage?: unknown }),
+);
+const createEvent = vi.hoisted(() => vi.fn(async () => ({})));
+const costService = vi.hoisted(() => vi.fn(() => ({ createEvent })));
 
 vi.mock("../services/anthropic-llm.js", () => ({
   anthropicLLM,
@@ -14,7 +18,11 @@ vi.mock("../services/minimax-llm.js", () => ({
 }));
 
 vi.mock("../services/openai-compat-llm.js", () => ({
-  openaiCompatLLM,
+  openaiCompatLLMDetailed,
+}));
+
+vi.mock("../services/costs.js", () => ({
+  costService,
 }));
 
 import { dispatchLLM } from "../services/dispatch-llm.js";
@@ -27,8 +35,10 @@ describe("dispatchLLM", () => {
     anthropicLLM.mockClear();
     minimaxLLM.mockClear();
     minimaxLLM.mockResolvedValue("minimax reply");
-    openaiCompatLLM.mockClear();
-    openaiCompatLLM.mockResolvedValue("openai_compat reply");
+    openaiCompatLLMDetailed.mockClear();
+    openaiCompatLLMDetailed.mockResolvedValue({ text: "openai_compat reply" });
+    createEvent.mockClear();
+    costService.mockClear();
     delete process.env.PAPERCLIP_E2E_SKIP_LLM;
   });
 
@@ -111,13 +121,13 @@ describe("dispatchLLM", () => {
     });
 
     expect(reply).toBe("openai_compat reply");
-    expect(openaiCompatLLM).toHaveBeenCalledTimes(1);
+    expect(openaiCompatLLMDetailed).toHaveBeenCalledTimes(1);
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
   it("falls back to claude_api when the openai_compat adapter throws", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "openai_compat";
-    openaiCompatLLM.mockRejectedValueOnce(new Error("openrouter 500"));
+    openaiCompatLLMDetailed.mockRejectedValueOnce(new Error("openrouter 500"));
 
     const reply = await dispatchLLM({
       system: "You are a Chief of Staff.",
@@ -125,7 +135,70 @@ describe("dispatchLLM", () => {
     });
 
     expect(reply).toBe("anthropic fallback");
-    expect(openaiCompatLLM).toHaveBeenCalledTimes(1);
+    expect(openaiCompatLLMDetailed).toHaveBeenCalledTimes(1);
     expect(anthropicLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it("meters openai_compat usage via cost_events when a meter is provided (G3)", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "openai_compat";
+    openaiCompatLLMDetailed.mockResolvedValueOnce({
+      text: "Routed reply.",
+      usage: {
+        model: "openai/gpt-4o-mini",
+        promptTokens: 120,
+        completionTokens: 30,
+        costUsd: 0.07,
+      },
+    });
+    const fakeDb = {} as never;
+
+    const reply = await dispatchLLM(
+      { system: "s", messages: [{ role: "user", content: "hi" }] },
+      { db: fakeDb, companyId: "co-1", agentId: "ag-1" },
+    );
+
+    expect(reply).toBe("Routed reply.");
+    expect(costService).toHaveBeenCalledWith(fakeDb);
+    expect(createEvent).toHaveBeenCalledTimes(1);
+    expect(createEvent).toHaveBeenCalledWith(
+      "co-1",
+      expect.objectContaining({
+        agentId: "ag-1",
+        provider: "openai_compat",
+        billingType: "usage",
+        model: "openai/gpt-4o-mini",
+        inputTokens: 120,
+        outputTokens: 30,
+        costCents: 7, // 0.07 USD => 7 cents
+      }),
+    );
+  });
+
+  it("does not meter when no meter context is provided", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "openai_compat";
+    openaiCompatLLMDetailed.mockResolvedValueOnce({
+      text: "Routed reply.",
+      usage: { model: "m", promptTokens: 1, completionTokens: 1, costUsd: 1 },
+    });
+
+    await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+    expect(createEvent).not.toHaveBeenCalled();
+  });
+
+  it("never fails the reply when metering throws (non-fatal)", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "openai_compat";
+    openaiCompatLLMDetailed.mockResolvedValueOnce({
+      text: "Routed reply.",
+      usage: { model: "m", promptTokens: 1, completionTokens: 1, costUsd: 1 },
+    });
+    createEvent.mockRejectedValueOnce(new Error("db down"));
+
+    const reply = await dispatchLLM(
+      { system: "s", messages: [{ role: "user", content: "hi" }] },
+      { db: {} as never, companyId: "co-1", agentId: "ag-1" },
+    );
+
+    expect(reply).toBe("Routed reply.");
   });
 });
