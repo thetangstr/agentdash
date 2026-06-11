@@ -315,4 +315,86 @@ describe("paperclip MCP tools", () => {
 
     expect(response.content[0]?.text).toContain("must not contain '..'");
   });
+
+  // ---- AgentDash: onboarding / provisioning tools ----
+
+  it("agentdashBootstrapWorkspace POSTs to /onboarding/bootstrap", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ company: { id: "co-1" }, cosAgent: { id: "cos-1" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("agentdashBootstrapWorkspace");
+    const response = await tool.execute({});
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://localhost:3100/api/onboarding/bootstrap");
+    expect(init.method).toBe("POST");
+    expect(response.content[0]?.text).toContain("cos-1");
+  });
+
+  it("agentdashCreateCompany POSTs to /companies with the company body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "co-2" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("agentdashCreateCompany");
+    await tool.execute({ name: "Acme Co", description: "B2B SaaS" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://localhost:3100/api/companies");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: "Acme Co",
+      description: "B2B SaaS",
+      budgetMonthlyCents: 0,
+    });
+  });
+
+  it("agentdashCosChat resolves the inbox then posts the message", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockJsonResponse({ id: "66666666-6666-4666-8666-666666666666" }))
+      .mockResolvedValueOnce(mockJsonResponse({ id: "msg-1", conversationId: "66666666-6666-4666-8666-666666666666" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("agentdashCosChat");
+    const response = await tool.execute({ message: "I run a B2B SaaS and want help with support" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [inboxUrl, inboxInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(inboxUrl)).toBe(
+      "http://localhost:3100/api/conversations/companies/11111111-1111-1111-1111-111111111111/inbox",
+    );
+    expect(inboxInit.method).toBe("GET");
+
+    const [postUrl, postInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(String(postUrl)).toBe(
+      "http://localhost:3100/api/conversations/66666666-6666-4666-8666-666666666666/messages",
+    );
+    expect(postInit.method).toBe("POST");
+    expect(JSON.parse(String(postInit.body))).toEqual({
+      body: "I run a B2B SaaS and want help with support",
+      companyId: "11111111-1111-1111-1111-111111111111",
+    });
+    expect(response.content[0]?.text).toContain("msg-1");
+  });
+
+  it("agentdashHireAgent POSTs to company agent-hires without companyId in the body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "agent-9" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("agentdashHireAgent");
+    await tool.execute({ name: "Morgan", adapterType: "claude_code", role: "product_manager" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe(
+      "http://localhost:3100/api/companies/11111111-1111-1111-1111-111111111111/agent-hires",
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: "Morgan",
+      adapterType: "claude_code",
+      role: "product_manager",
+    });
+  });
 });
