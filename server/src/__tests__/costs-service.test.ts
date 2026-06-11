@@ -102,6 +102,9 @@ function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
+    // AGE-119: costRoutes constructs agentRunService(db) at setup; the per-test
+    // mock must provide it or costRoutes throws "No agentRunService export".
+    agentRunService: () => ({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     budgetService: () => mockBudgetService,
     costService: () => mockCostService,
     financeService: () => mockFinanceService,
