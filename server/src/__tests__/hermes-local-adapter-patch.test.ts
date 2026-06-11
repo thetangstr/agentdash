@@ -50,6 +50,43 @@ describe("patched hermes-paperclip-adapter behavior", () => {
     );
   });
 
+  it("treats Hermes local provider credentials as passing launch preflight evidence", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-provider-"));
+    const hermesCommand = join(tempDir, "hermes");
+    await writeFile(
+      hermesCommand,
+      [
+        "#!/usr/bin/env node",
+        'if (process.argv[2] === "--version") {',
+        '  process.stdout.write("Hermes Agent v0.14.0 Project: /tmp Python: 3.11.15\\n");',
+        "  process.exit(0);",
+        "}",
+        'if (process.argv[2] === "status") {',
+        '  process.stdout.write(["API-Key Providers", "  MiniMax (China)  configured", "Terminal Backend"].join("\\n"));',
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+      ].join("\n"),
+    );
+    await chmod(hermesCommand, 0o755);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const result = await getServerAdapter("hermes_local").testEnvironment({
+      adapterType: "hermes_local",
+      companyId: "company-1",
+      config: { hermesCommand },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "hermes_no_api_keys",
+        level: "info",
+        message: "Hermes status reports a configured local provider",
+      }),
+    );
+  });
+
   it("lets Hermes use its configured default model when no adapter model is set", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-adapter-"));
     const argsPath = join(tempDir, "args.json");

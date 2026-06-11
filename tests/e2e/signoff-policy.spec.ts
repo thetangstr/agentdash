@@ -42,12 +42,6 @@ interface TestContext {
   issueIds: string[];
 }
 
-interface IssueRunLockState {
-  assigneeAgentId: string | null;
-  checkoutRunId: string | null;
-  executionRunId: string | null;
-}
-
 /** Create an authenticated APIRequestContext for an agent (token set, no run ID yet). */
 async function createAgentRequest(token: string): Promise<APIRequestContext> {
   return pwRequest.newContext({
@@ -62,17 +56,6 @@ async function invokeHeartbeat(board: APIRequestContext, agentId: string): Promi
   expect(res.ok()).toBe(true);
   const run = await res.json();
   return run.id;
-}
-
-async function getIssueRunLockState(board: APIRequestContext, issueId: string): Promise<IssueRunLockState> {
-  const res = await board.get(`${BASE_URL}/api/issues/${issueId}`);
-  expect(res.ok()).toBe(true);
-  const issue = await res.json();
-  return {
-    assigneeAgentId: issue.assigneeAgentId ?? null,
-    checkoutRunId: issue.checkoutRunId ?? null,
-    executionRunId: issue.executionRunId ?? null,
-  };
 }
 
 /** PATCH an issue as an agent with a fresh heartbeat run ID. */
@@ -90,7 +73,7 @@ async function agentPatch(
   return res;
 }
 
-/** Checkout an issue as an agent, then PATCH it. Used for executor mark-done. */
+/** Submit executor work for signoff without starting a competing heartbeat runner. */
 async function agentCheckoutAndPatch(
   board: APIRequestContext,
   agent: AgentAuth,
@@ -98,41 +81,13 @@ async function agentCheckoutAndPatch(
   expectedStatuses: string[],
   patchData: Record<string, unknown>,
 ) {
-  const runId = await invokeHeartbeat(board, agent.agentId);
-  // Checkout (sets executionRunId so PATCH is allowed)
-  const checkoutRes = await agent.request.post(`${BASE_URL}/api/issues/${issueId}/checkout`, {
-    headers: { "X-Paperclip-Run-Id": runId },
-    data: { agentId: agent.agentId, expectedStatuses },
-  });
-  if (!checkoutRes.ok()) {
-    if (checkoutRes.status() === 409) {
-      const issueRunLock = await getIssueRunLockState(board, issueId);
-      const lockedRunId = issueRunLock.checkoutRunId ?? issueRunLock.executionRunId;
-      const res = await agent.request.patch(`${BASE_URL}/api/issues/${issueId}`, {
-        headers: { "X-Paperclip-Run-Id": lockedRunId ?? runId },
-        data: patchData,
-      });
-      if (res.ok() && issueRunLock.assigneeAgentId === agent.agentId) {
-        return res;
-      }
-    }
-    // If agent checkout fails (e.g. run expired), fall back to board checkout
-    // then PATCH with the agent's identity
-    const boardCheckout = await board.post(`${BASE_URL}/api/issues/${issueId}/checkout`, {
-      data: { agentId: agent.agentId, expectedStatuses },
-    });
-    if (!boardCheckout.ok()) {
-      throw new Error(`Board checkout failed: ${await boardCheckout.text()}`);
-    }
-    // Board PATCH (executor mark-done triggers signoff regardless of actor)
-    const res = await board.patch(`${BASE_URL}/api/issues/${issueId}`, {
-      data: patchData,
-    });
-    return res;
-  }
-  // PATCH with agent identity
-  const res = await agent.request.patch(`${BASE_URL}/api/issues/${issueId}`, {
-    headers: { "X-Paperclip-Run-Id": runId },
+  const issueRes = await board.get(`${BASE_URL}/api/issues/${issueId}`);
+  expect(issueRes.ok()).toBe(true);
+  const issue = await issueRes.json();
+  expect(issue.assigneeAgentId).toBe(agent.agentId);
+  expect(expectedStatuses).toContain(issue.status);
+
+  const res = await board.patch(`${BASE_URL}/api/issues/${issueId}`, {
     data: patchData,
   });
   return res;

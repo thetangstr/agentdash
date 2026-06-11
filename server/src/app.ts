@@ -33,6 +33,7 @@ import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { mspRoutes } from "./routes/msp.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
@@ -48,12 +49,20 @@ import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
-import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
+import { pluginUiStaticRoutes, parsePluginUiAllowedOrigins } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
+// AgentDash: Agent-run quota (AGE-120)
+import { quotaRoutes } from "./routes/quota.js";
+// AgentDash: Connectors (AGE-106)
+import { connectorRoutes } from "./routes/connectors.js";
+// AgentDash: Slack Connector (AGE-108)
+import { slackConnectorRoutes } from "./routes/slack-connector.js";
+// AgentDash: Gmail Connector (AGE-109)
+import { gmailRoutes } from "./routes/gmail.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
@@ -146,6 +155,9 @@ export async function createApp(
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
+    // AgentDash: instance public base URL used to derive the same-origin
+    // default for plugin-UI CORS in authenticated mode.
+    pluginUiPublicBaseUrl?: string;
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
@@ -241,6 +253,7 @@ export async function createApp(
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
   api.use(dashboardRoutes(db));
+  api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
@@ -254,6 +267,14 @@ export async function createApp(
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));
+  // AgentDash: Agent-run quota (AGE-120)
+  api.use(quotaRoutes(db));
+  // AgentDash: Connectors (AGE-106)
+  api.use(connectorRoutes(db));
+  // AgentDash: Slack Connector (AGE-108)
+  api.use("/connectors", slackConnectorRoutes(db));
+  // AgentDash: Gmail Connector (AGE-109)
+  api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
   api.use(featureFlagRoutes(db));
@@ -385,6 +406,14 @@ export async function createApp(
   });
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
+    deploymentMode: opts.deploymentMode,
+    // AgentDash: restrict plugin-UI CORS in authenticated mode to an explicit
+    // allowlist (AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS) plus the instance's own
+    // public origin; local_trusted stays permissive for plugin dev.
+    allowedOrigins: parsePluginUiAllowedOrigins(
+      process.env.AGENTDASH_PLUGIN_UI_ALLOWED_ORIGINS,
+    ),
+    publicBaseUrl: opts.pluginUiPublicBaseUrl,
   }));
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));

@@ -45,6 +45,16 @@ import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
+import {
+  AgentRunFailureGuidance,
+  readAgentRunFailureClassification,
+  type AgentRunFailureGuidanceAction,
+} from "../components/AgentRunFailureGuidance";
+import {
+  AgentHarnessReadinessPanel,
+  readAgentHarnessPreflightStatus,
+} from "../components/AgentHarnessReadinessPanel";
+import { buildHarnessSupportEscalationBody } from "../lib/harness-support-escalation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/ui/tabs";
@@ -741,6 +751,10 @@ export function AgentDetail() {
     () => (heartbeats ?? []).find((r) => r.status === "running" || r.status === "queued") ?? null,
     [heartbeats],
   );
+  const harnessPreflightStatus = useMemo(
+    () => readAgentHarnessPreflightStatus(agent?.metadata ?? null),
+    [agent?.metadata],
+  );
 
   useEffect(() => {
     if (!agent) return;
@@ -802,6 +816,20 @@ export function AgentDetail() {
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Action failed");
+    },
+  });
+
+  const harnessPreflight = useMutation({
+    mutationFn: () => {
+      if (!agentLookupRef) throw new Error("No agent reference");
+      return agentsApi.runHarnessPreflight(agentLookupRef, resolvedCompanyId ?? undefined);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
+      if (resolvedCompanyId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+      }
     },
   });
 
@@ -1046,6 +1074,21 @@ export function AgentDetail() {
             <span>Approve agent</span>
           </Button>
         </div>
+      )}
+
+      {!urlRunId && (
+        <AgentHarnessReadinessPanel
+          status={harnessPreflightStatus}
+          onRunPreflight={() => harnessPreflight.mutate()}
+          pending={harnessPreflight.isPending}
+          error={
+            harnessPreflight.error instanceof Error
+              ? harnessPreflight.error.message
+              : harnessPreflight.error
+                ? "Harness preflight failed"
+                : null
+          }
+        />
       )}
 
       {/* Floating Save/Cancel (desktop) */}
@@ -3028,6 +3071,7 @@ function RunsTab({
 function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { pushToast } = useToastActions();
   const { data: hydratedRun } = useQuery({
     queryKey: queryKeys.runDetail(initialRun.id),
     queryFn: () => heartbeatsApi.get(initialRun.id),
@@ -3174,6 +3218,97 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const sessionId = run.sessionIdAfter || run.sessionIdBefore;
   const hasNonZeroExit = run.exitCode !== null && run.exitCode !== 0;
   const retryState = describeRunRetryState(run);
+  const failureClassification = readAgentRunFailureClassification(run.resultJson);
+  const supportIssueId = useMemo(() => {
+    const context = asRecord(run.contextSnapshot);
+    if (!context) return null;
+    return asNonEmptyString(context.issueId) ?? asNonEmptyString(context.taskId);
+  }, [run.contextSnapshot]);
+  const escalateSupport = useMutation({
+    mutationFn: async () => {
+      if (!supportIssueId || !failureClassification) {
+        throw new Error("This run is not linked to an issue support can track.");
+      }
+      return issuesApi.addComment(
+        supportIssueId,
+        buildHarnessSupportEscalationBody(run, failureClassification),
+        false,
+        false,
+      );
+    },
+    onSuccess: () => {
+      if (supportIssueId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(supportIssueId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(supportIssueId) });
+      }
+      pushToast({
+        title: "Support escalation added",
+        body: "A diagnostic support note was added to the linked issue without raw logs or trace bundles.",
+        tone: "success",
+      });
+    },
+    onError: (error) => {
+      pushToast({
+        title: "Support escalation failed",
+        body: error instanceof Error ? error.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+  const recoveryActions = useMemo<Partial<Record<string, AgentRunFailureGuidanceAction>>>(() => {
+    const configurationHref = `/agents/${agentRouteId}/configuration`;
+    const configAction: AgentRunFailureGuidanceAction = {
+      href: configurationHref,
+      title: "Open this agent's configuration.",
+    };
+    return {
+      retry: {
+        onClick: () => retryRun.mutate(),
+        disabled: !canRetryRun || retryRun.isPending,
+        pending: retryRun.isPending,
+        title: "Retry this run with the original issue context.",
+      },
+      wait_and_retry: {
+        onClick: () => retryRun.mutate(),
+        disabled: !canRetryRun || retryRun.isPending,
+        pending: retryRun.isPending,
+        title: "Retry now after checking the transient condition.",
+      },
+      open_credentials:
+        adapterType === "claude_local" && run.errorCode === "claude_auth_required"
+          ? {
+              onClick: () => runClaudeLogin.mutate(),
+              disabled: runClaudeLogin.isPending,
+              pending: runClaudeLogin.isPending,
+              title: "Run the Claude login flow for this agent.",
+            }
+          : configAction,
+      run_adapter_test: {
+        ...configAction,
+        title: "Open configuration and run the adapter environment test.",
+      },
+      switch_model_or_adapter: configAction,
+      fix_workspace: configAction,
+      fix_permissions: configAction,
+      escalate_support: {
+        onClick: () => escalateSupport.mutate(),
+        disabled: !supportIssueId || escalateSupport.isPending,
+        pending: escalateSupport.isPending,
+        title: supportIssueId
+          ? "Add a support escalation note to the linked issue."
+          : "This run has no linked issue for support escalation.",
+      },
+    };
+  }, [
+    adapterType,
+    agentRouteId,
+    canRetryRun,
+    escalateSupport,
+    retryRun,
+    run.errorCode,
+    runClaudeLogin,
+    supportIssueId,
+  ]);
 
   return (
     <div className="space-y-4 min-w-0">
@@ -3275,6 +3410,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                 {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
               </div>
             )}
+            {failureClassification ? (
+              <AgentRunFailureGuidance classification={failureClassification} actions={recoveryActions} />
+            ) : null}
             {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
               <div className="space-y-2">
                 <Button

@@ -73,6 +73,47 @@ function isLikelyEmail(value: string): boolean {
   return domain.length > 0 && domain.includes(".") && !domain.endsWith(".");
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readString(source: Record<string, unknown>, key: string): string {
+  const value = source[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readStringArray(source: Record<string, unknown>, key: string): string[] {
+  const value = source[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+function initialAssessmentGoals(input: Record<string, unknown>, markdown: string) {
+  const companyName = readString(input, "companyName") || "the company";
+  const targets = readString(input, "targets");
+  const challenges = readString(input, "challenges");
+
+  return {
+    shortTerm: targets || challenges || "Turn the initial AI assessment into a concrete first pilot.",
+    longTerm: `Build an AI agent operating model for ${companyName} from the initial company assessment.`,
+    constraints: {
+      source: "initial_company_assessment",
+      companyName,
+      industry: readString(input, "industry"),
+      businessOutcome: challenges,
+      currentSystems: readString(input, "currentSystems"),
+      aiUsageLevel: readString(input, "aiUsageLevel"),
+      aiGovernance: readString(input, "aiGovernance"),
+      agentExperience: readString(input, "agentExperience"),
+      aiOwnership: readString(input, "aiOwnership"),
+      selectedFunctions: readStringArray(input, "selectedFunctions"),
+      assessmentSummary: markdown.trim().slice(0, 2000),
+    },
+  };
+}
+
 export function onboardingV2Routes(db: Db) {
   const router = Router();
   const conversations = conversationService(db);
@@ -190,6 +231,46 @@ export function onboardingV2Routes(db: Db) {
       }
       throw err;
     }
+  });
+
+  // POST /api/onboarding/complete-initial-assessment
+  // The compact /assess?onboarding=1 path does not produce a deep-interview
+  // spec, but it still needs to hand useful context to the CoS flow. Attach
+  // the short assessment as captured onboarding goals and advance the
+  // conversation to plan phase before routing the user to /cos.
+  router.post("/complete-initial-assessment", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+
+    const companyId = typeof req.body?.companyId === "string"
+      ? req.body.companyId
+      : "";
+    if (!companyId) throw badRequest("companyId required");
+    assertCompanyAccess(req, companyId);
+
+    const assessmentInput = asRecord(req.body?.assessmentInput);
+    const assessmentMarkdown = typeof req.body?.assessmentMarkdown === "string"
+      ? req.body.assessmentMarkdown
+      : "";
+    if (!readString(assessmentInput, "companyName") && !assessmentMarkdown.trim()) {
+      throw badRequest("assessmentInput or assessmentMarkdown required");
+    }
+
+    const result = await orch.bootstrap(req.actor.userId);
+    if (result.companyId !== companyId) {
+      throw badRequest("Bootstrapped company does not match completed assessment");
+    }
+
+    const cosState = cosOnboardingStateService(db);
+    await cosState.getOrCreate(result.conversationId);
+    await cosState.setGoals(
+      result.conversationId,
+      initialAssessmentGoals(assessmentInput, assessmentMarkdown),
+    );
+    await cosState.advancePhase(result.conversationId, "plan");
+
+    res.json({ ...result, redirectUrl: "/cos" });
   });
 
   // POST /api/onboarding/interview/turn
@@ -658,10 +739,13 @@ No greetings. No markdown headings outside the JSON block.`;
     if (req.actor.type !== "board" || !req.actor.userId) {
       throw unauthorized("Sign-in required");
     }
-    const { companyId, emails } = req.body as {
+    const { companyId, emails, autoApprove } = req.body as {
       conversationId: string;
       companyId: string;
       emails: string[];
+      // AgentDash: auto-approve-invites — default false; when true, invited
+      // humans are granted membership immediately on accept.
+      autoApprove?: boolean;
     };
     if (!companyId || typeof companyId !== "string") {
       throw badRequest("companyId is required");
@@ -768,6 +852,7 @@ No greetings. No markdown headings outside the JSON block.`;
                     companyId,
                     invitedByUserId: req.actor.userId ?? null,
                     email: trimmed,
+                    autoApprove: autoApprove ?? false,
                   });
                   const invitePath = `/invite/${row.token}`;
                   const inviteUrl = baseUrl ? `${baseUrl}${invitePath}` : invitePath;

@@ -90,6 +90,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
 };
 
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
+export const AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION = 2;
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 
 export const MODEL_PROFILE_KEYS = ["cheap"] as const;
@@ -1009,6 +1010,94 @@ export function deriveCompanyEmailDomain(creatorEmail: string): string {
   }
   return domain;
 }
+
+// AgentDash: Agent-run quota model (AGE-120)
+// Per-tier included run allotments. Pro allotment scales with paid seats.
+export const QUOTA_FREE_INCLUDED_RUNS = 50;
+export const QUOTA_PRO_BASE_INCLUDED_RUNS = 1_000;
+export const QUOTA_PRO_PER_SEAT_RUNS = 250;
+
+// AgentDash (AGE-119): agent-run complexity tiers. All three map to a single
+// displayed "agent-run" unit. The tier is derived from token usage + duration
+// at recording time and stored on each agent_runs row for future pricing
+// differentiation (AGE-120 quota model, AGE-122 overage billing).
+export const AGENT_RUN_COMPLEXITY_TIERS = ["simple", "medium", "complex"] as const;
+export type AgentRunComplexityTier = (typeof AGENT_RUN_COMPLEXITY_TIERS)[number];
+
+/**
+ * Thresholds for classifying an agent run's complexity tier.
+ * A run is "complex" if it exceeds EITHER the token OR the duration threshold
+ * for complex; "medium" if it exceeds either medium threshold; "simple" otherwise.
+ */
+export const AGENT_RUN_COMPLEXITY_THRESHOLDS = {
+  medium: { tokens: 10_000, durationMs: 60_000 },
+  complex: { tokens: 100_000, durationMs: 600_000 },
+} as const;
+
+// AgentDash: Connectors (AGE-106)
+
+/** Owner types for connections — who initiated the connection. */
+export const CONNECTION_OWNER_TYPES = ["user", "agent"] as const;
+export type ConnectionOwnerType = (typeof CONNECTION_OWNER_TYPES)[number];
+
+/** Supported OAuth2 providers. Extensible — individual connectors register here. */
+export const CONNECTION_PROVIDERS = [
+  "google",
+  "microsoft",
+  "slack",
+  "github",
+  "linear",
+  "notion",
+  "jira",
+] as const;
+export type ConnectionProvider = (typeof CONNECTION_PROVIDERS)[number] | (string & {});
+
+/** Connection lifecycle statuses. */
+export const CONNECTION_STATUSES = ["active", "expired", "revoked", "error"] as const;
+export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
+
+/** Send-identity modes: who messages/actions appear from. */
+export const CONNECTION_SEND_IDENTITIES = ["service", "delegated", "delegated_attributed"] as const;
+export type ConnectionSendIdentity = (typeof CONNECTION_SEND_IDENTITIES)[number];
+
+/** Autonomy levels for each action class (read, draft, send). */
+export const CONNECTION_AUTONOMY_LEVELS = [
+  "full",          // agent can act without approval
+  "draft_only",    // agent drafts; human approves before execution
+  "blocked",       // agent cannot perform this action class
+] as const;
+export type ConnectionAutonomyLevel = (typeof CONNECTION_AUTONOMY_LEVELS)[number];
+
+/** Visibility: who in the workspace can use this connection. */
+export const CONNECTION_VISIBILITIES = ["private", "workspace"] as const;
+export type ConnectionVisibility = (typeof CONNECTION_VISIBILITIES)[number];
+
+/** Connector action classes used in autonomy and audit. */
+export const CONNECTOR_ACTION_CLASSES = ["read", "draft", "send"] as const;
+export type ConnectorActionClass = (typeof CONNECTOR_ACTION_CLASSES)[number];
+
+/** Activity log action names written by the connectors subsystem. */
+export const ACTIVITY_LOG_ACTIONS_CONNECTORS = [
+  "connection.created",
+  "connection.revoked",
+  "connection.read",
+  "connection.draft",
+  "connection.send",
+  "connection.approve",
+  "connection.token_refreshed",
+] as const;
+export type ActivityLogActionConnector = (typeof ACTIVITY_LOG_ACTIONS_CONNECTORS)[number];
+
+// AgentDash: Slack Connector (AGE-108)
+
+/** Slack-specific activity log actions (superset of connectors base). */
+export const ACTIVITY_LOG_ACTIONS_SLACK = [
+  "slack.message_received",
+  "slack.message_posted",
+  "slack.oauth_connected",
+  "slack.oauth_revoked",
+] as const;
+export type ActivityLogActionSlack = (typeof ACTIVITY_LOG_ACTIONS_SLACK)[number];
 
 // AgentDash: goals-eval-hitl
 

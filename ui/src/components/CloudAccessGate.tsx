@@ -92,7 +92,18 @@ export function CloudAccessGate() {
     );
   }
 
+  // AgentDash: self-serve-bootstrap — when the env flag is on, a signed-in
+  // first user on a fresh instance is routed to the onboarding wizard to
+  // create the first company (and is promoted to instance_admin server-side
+  // on company creation) instead of the CLI bootstrap page. When the flag is
+  // off, the CLI BootstrapPendingPage is shown as before.
+  const selfServeBootstrap = healthQuery.data?.selfServeBootstrap === true;
+  const instanceHasCompany = healthQuery.data?.instanceHasCompany === true;
+
   if (isAuthenticatedMode && healthQuery.data?.bootstrapStatus === "bootstrap_pending") {
+    if (selfServeBootstrap && sessionQuery.data) {
+      return <Navigate to="/onboarding" replace />;
+    }
     return <BootstrapPendingPage hasActiveInvite={healthQuery.data.bootstrapInviteActive} />;
   }
 
@@ -107,6 +118,12 @@ export function CloudAccessGate() {
     !boardAccessQuery.data?.isInstanceAdmin &&
     (boardAccessQuery.data?.companyIds.length ?? 0) === 0
   ) {
+    // AgentDash: self-serve-bootstrap — on a fresh instance (flag on, no
+    // company yet) route the first user to the onboarding wizard instead of a
+    // dead-end. Once any company exists, keep invite-only "No company access".
+    if (selfServeBootstrap && !instanceHasCompany) {
+      return <Navigate to="/onboarding" replace />;
+    }
     return <NoBoardAccessPage />;
   }
 

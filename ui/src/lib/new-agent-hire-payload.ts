@@ -9,6 +9,7 @@ export function buildNewAgentHirePayload(input: {
   selectedSkillKeys?: string[];
   configValues: CreateConfigValues;
   adapterConfig: Record<string, unknown>;
+  requireHarnessPreflight?: boolean;
 }) {
   const {
     name,
@@ -18,6 +19,7 @@ export function buildNewAgentHirePayload(input: {
     selectedSkillKeys = [],
     configValues,
     adapterConfig,
+    requireHarnessPreflight,
   } = input;
 
   return {
@@ -36,5 +38,6 @@ export function buildNewAgentHirePayload(input: {
       cheapModelEnabled: configValues.cheapModelEnabled,
     }),
     budgetMonthlyCents: 0,
+    ...(requireHarnessPreflight ? { requireHarnessPreflight: true } : {}),
   };
 }

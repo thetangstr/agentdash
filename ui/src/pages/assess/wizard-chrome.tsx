@@ -340,8 +340,26 @@ export function AssessLocalStyles() {
         outline: none; border-color: var(--mkt-accent);
       }
       textarea.mkt-assess__input { min-height: 80px; resize: vertical; }
+      .mkt-assess__question-block {
+        padding-bottom: 26px; border-bottom: 1px solid var(--mkt-rule);
+      }
+      .mkt-assess__question-block:last-child { padding-bottom: 0; border-bottom: none; }
+      .mkt-assess__question-meta {
+        font-family: var(--mkt-font-mono); font-size: 11px; font-weight: 500;
+        text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--mkt-accent-ink); margin-bottom: 8px;
+      }
+      .mkt-assess__question-title {
+        margin: 0; font-family: var(--mkt-font-serif); font-size: 24px;
+        line-height: 1.2; color: var(--mkt-ink);
+      }
+      .mkt-assess__question-sub {
+        margin: 6px 0 0; max-width: 72ch;
+        font-size: 14px; line-height: 1.55; color: var(--mkt-ink-soft);
+      }
       .mkt-assess__chips { display: flex; flex-wrap: wrap; gap: 6px; }
       .mkt-assess__chip {
+        display: inline-flex; align-items: center; gap: 6px;
         padding: 7px 14px; border-radius: 999px;
         background: transparent; color: var(--mkt-ink-soft);
         border: 1px solid var(--mkt-rule);

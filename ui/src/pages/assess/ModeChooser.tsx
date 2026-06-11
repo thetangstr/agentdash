@@ -21,8 +21,8 @@ export function ModeChooser({ onPick }: ModeChooserProps) {
         </span>
         <h3 className="mkt-assess__mode-title">Assess the entire company</h3>
         <p className="mkt-assess__mode-desc">
-          A four-step readiness scan across industry, operations, functions, and goals.
-          Produces a tailored agent deployment proposal grounded in our research data.
+          A five-question company-level scan that gives the board a readiness
+          snapshot and the first practical AI adoption wedge.
         </p>
         <span className="mkt-assess__mode-cta">Start company assessment →</span>
       </button>

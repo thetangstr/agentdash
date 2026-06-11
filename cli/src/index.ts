@@ -57,17 +57,17 @@ program
   .option("--run", "Start Paperclip immediately after saving config", false)
   .action(onboard);
 
-// AgentDash: frictionless first-run wizard. Two prompts (adapter + email)
-// + safe defaults autowritten if no config exists. Subcommands stay
-// available as escape hatches for re-running a single step.
+// AgentDash: frictionless first-run wizard. Adapter prompt plus safe defaults
+// autowritten if no config exists. Subcommands stay available as escape
+// hatches for re-running a single step.
 const setupCmd = program
   .command("setup")
-  .description("AgentDash first-run wizard — pick adapter + founding user email")
+  .description("AgentDash first-run wizard — pick adapter and write safe local defaults")
   .option("-c, --config <path>", "Path to config file")
   .option("-d, --data-dir <path>", DATA_DIR_OPTION_HELP)
-  .option("--email <address>", "Founding user email (skips the prompt)")
+  .option("--email <address>", "Deprecated compatibility hint; sign-up happens in the dashboard")
   .option("--adapter <type>", "Adapter type to use for the first agent (skips the prompt)")
-  .option("-y, --yes", "Non-interactive — requires --email; defaults adapter to claude_local", false)
+  .option("-y, --yes", "Non-interactive; defaults adapter to claude_local", false)
   .action(setup);
 
 setupCmd

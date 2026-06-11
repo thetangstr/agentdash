@@ -81,6 +81,7 @@ vi.mock("../telemetry.js", () => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
   // Closes #322: routes/agents.ts also imports agentInstructionRefreshService
   // and ISSUE_LIST_DEFAULT_LIMIT from this barrel. Without them in the mock,
   // the route factory throws at construction (TypeError on undefined) before

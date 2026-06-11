@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 export const invites = pgTable(
@@ -9,6 +9,10 @@ export const invites = pgTable(
     inviteType: text("invite_type").notNull().default("company_join"),
     tokenHash: text("token_hash").notNull(),
     allowedJoinTypes: text("allowed_join_types").notNull().default("both"),
+    // AgentDash: auto-approve-invites — when true and a human accepts a
+    // company_join invite, membership is granted immediately (the join request
+    // is created already-approved) instead of going through admin approval.
+    autoApprove: boolean("auto_approve").notNull().default(false),
     defaultsPayload: jsonb("defaults_payload").$type<Record<string, unknown> | null>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     invitedByUserId: text("invited_by_user_id"),

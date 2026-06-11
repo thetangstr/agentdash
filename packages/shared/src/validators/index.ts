@@ -386,6 +386,26 @@ export {
   type ListPluginState,
 } from "./plugin.js";
 
+// AgentDash: Connectors (AGE-106)
+export {
+  connectionAutonomyConfigSchema,
+  createConnectionSchema,
+  updateConnectionSchema,
+  connectorWorkspaceDefaultsSchema,
+  agentConnectorOverridesSchema,
+  initiateOAuthSchema,
+  oauthCallbackSchema,
+  connectorApprovalDecisionSchema,
+  type ConnectionAutonomyConfigInput,
+  type CreateConnection,
+  type UpdateConnection,
+  type ConnectorWorkspaceDefaultsInput,
+  type AgentConnectorOverridesInput,
+  type InitiateOAuth,
+  type OAuthCallback,
+  type ConnectorApprovalDecision,
+} from "./connector.js";
+
 // AgentDash (#234): canonical type guard for AgentPlanProposalV1Payload;
 // replaces the previously-duplicated isPlanPayload + isAgentPlanPayload.
 export { isAgentPlanPayload } from "./agent-plan.js";

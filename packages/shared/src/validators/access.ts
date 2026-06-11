@@ -14,6 +14,9 @@ export const createCompanyInviteSchema = z.object({
   humanRole: z.enum(HUMAN_COMPANY_MEMBERSHIP_ROLES).optional().nullable(),
   defaultsPayload: z.record(z.string(), z.unknown()).optional().nullable(),
   agentMessage: z.string().max(4000).optional().nullable(),
+  // AgentDash: auto-approve-invites — grant active membership immediately on
+  // human accept instead of creating a pending_approval join request.
+  autoApprove: z.boolean().optional().default(false),
 });
 
 export type CreateCompanyInvite = z.infer<typeof createCompanyInviteSchema>;

@@ -12,6 +12,7 @@ export {
   AGENT_ROLES,
   AGENT_ROLE_LABELS,
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
   WORKSPACE_BRANCH_ROUTINE_VARIABLE,
   MODEL_PROFILE_KEYS,
   AGENT_ICON_NAMES,
@@ -110,6 +111,10 @@ export {
   PLUGIN_API_ROUTE_CHECKOUT_POLICIES,
   PLUGIN_EVENT_TYPES,
   PLUGIN_BRIDGE_ERROR_CODES,
+  // AgentDash (AGE-120): agent-run quota model
+  QUOTA_FREE_INCLUDED_RUNS,
+  QUOTA_PRO_BASE_INCLUDED_RUNS,
+  QUOTA_PRO_PER_SEAT_RUNS,
   // AgentDash (AGE-55): FRE Plan B — domain-keyed companies
   FREE_MAIL_DOMAINS,
   deriveCompanyEmailDomain,
@@ -211,6 +216,30 @@ export {
   type PluginApiRouteCheckoutPolicy,
   type PluginEventType,
   type PluginBridgeErrorCode,
+  // AgentDash (AGE-119): agent-run metering
+  AGENT_RUN_COMPLEXITY_TIERS,
+  AGENT_RUN_COMPLEXITY_THRESHOLDS,
+  type AgentRunComplexityTier,
+  // AgentDash: Connectors (AGE-106)
+  CONNECTION_OWNER_TYPES,
+  CONNECTION_PROVIDERS,
+  CONNECTION_STATUSES,
+  CONNECTION_SEND_IDENTITIES,
+  CONNECTION_AUTONOMY_LEVELS,
+  CONNECTION_VISIBILITIES,
+  CONNECTOR_ACTION_CLASSES,
+  ACTIVITY_LOG_ACTIONS_CONNECTORS,
+  type ConnectionOwnerType,
+  type ConnectionProvider,
+  type ConnectionStatus,
+  type ConnectionSendIdentity,
+  type ConnectionAutonomyLevel,
+  type ConnectionVisibility,
+  type ConnectorActionClass,
+  type ActivityLogActionConnector,
+  // AgentDash: Slack Connector (AGE-108)
+  ACTIVITY_LOG_ACTIONS_SLACK,
+  type ActivityLogActionSlack,
   // AgentDash: goals-eval-hitl
   VERDICT_OUTCOMES,
   VERDICT_INDEXED_OUTCOMES,
@@ -438,8 +467,12 @@ export type {
   AgentWakeupRequest,
   InstanceSchedulerHeartbeatAgent,
   LiveEvent,
+  DashboardHarnessAdapterHealth,
+  DashboardHarnessHealth,
+  DashboardHarnessStatus,
   DashboardRunActivityDay,
   DashboardSummary,
+  DashboardTaskOutcomeQuality,
   ActivityEvent,
   UserProfileActivitySummary,
   UserProfileAgentUsage,
@@ -538,6 +571,17 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  // AgentDash: Connectors (AGE-106)
+  ConnectionAutonomyConfig,
+  Connection,
+  ConnectorWorkspaceDefaults,
+  AgentConnectorOverrides,
+  ActingAsResolution,
+  ActingAsBlocked,
+  ActingAsResult,
+  ConnectorActionDefinition,
+  ConnectorDefinition,
+  ConnectorApprovalPayload,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
@@ -987,6 +1031,26 @@ export type {
 } from "./environment-support.js";
 
 export * from "./mention-parser.js";
+
+// AgentDash: Connectors (AGE-106) — validator re-exports
+export {
+  connectionAutonomyConfigSchema,
+  createConnectionSchema,
+  updateConnectionSchema,
+  connectorWorkspaceDefaultsSchema,
+  agentConnectorOverridesSchema,
+  initiateOAuthSchema,
+  oauthCallbackSchema,
+  connectorApprovalDecisionSchema,
+  type ConnectionAutonomyConfigInput,
+  type CreateConnection,
+  type UpdateConnection,
+  type ConnectorWorkspaceDefaultsInput,
+  type AgentConnectorOverridesInput,
+  type InitiateOAuth,
+  type OAuthCallback,
+  type ConnectorApprovalDecision,
+} from "./validators/index.js";
 
 // AgentDash (#234, #231): canonical agent-plan validator. Re-exported
 // here so server-side code can `import { isAgentPlanPayload } from

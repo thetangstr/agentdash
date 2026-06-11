@@ -19,6 +19,14 @@ export { llmRoutes } from "./llms.js";
 export { accessRoutes } from "./access.js";
 export { instanceSettingsRoutes } from "./instance-settings.js";
 export { instanceDatabaseBackupRoutes } from "./instance-database-backups.js";
+// AgentDash: Agent-run quota (AGE-120)
+export { quotaRoutes } from "./quota.js";
+// AgentDash: Connectors (AGE-106)
+export { connectorRoutes } from "./connectors.js";
+// AgentDash: Slack Connector (AGE-108)
+export { slackConnectorRoutes } from "./slack-connector.js";
+// AgentDash: Gmail Connector (AGE-109)
+export { gmailRoutes } from "./gmail.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";

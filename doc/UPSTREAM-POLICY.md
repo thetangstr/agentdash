@@ -159,8 +159,6 @@ Until then, keep calm and fork on.
 
 ## Cherry-pick log
 
-_No cherry-picks yet under this policy (as of 2026-04-17). Record future cherry-picks here._
-
 | Date | Upstream SHA | Reason | Verification | Author |
 |------|--------------|--------|--------------|--------|
-| — | — | — | — | — |
+| 2026-06-03 | `d58a862549` | Coerce `anchor.createdAt` to Date before Postgres binding (PRO-3144 / #5220). We had the exact buggy code in `issues.ts` comment-pagination (gt/lt/eq on `issueComments.createdAt` with a possibly-string anchor) — a latent 500 on the CoS-chat comment-feed cursor path. | `pnpm -r typecheck` + `pnpm build` pass; targeted `issues-service.test.ts` 39/39 (kept upstream's pagination regression test; dropped 2 bundled run-log-attribution tests for a feature we never inherited — eb452fba30 lineage). | yt@d4d.group |

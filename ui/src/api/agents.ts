@@ -69,6 +69,17 @@ export interface AgentPermissionUpdate {
   canAssignTasks: boolean;
 }
 
+export interface AgentHarnessPreflightResponse {
+  agent: Agent;
+  result: AdapterEnvironmentTestResult;
+  readiness: {
+    ready: boolean;
+    reason: string;
+    message: string;
+    testedAt: string | null;
+  };
+}
+
 function withCompanyScope(path: string, companyId?: string) {
   if (!companyId) return path;
   const separator = path.includes("?") ? "&" : "?";
@@ -195,6 +206,8 @@ export const agentsApi = {
       `/companies/${companyId}/adapters/${type}/test-environment`,
       data,
     ),
+  runHarnessPreflight: (id: string, companyId?: string) =>
+    api.post<AgentHarnessPreflightResponse>(agentPath(id, companyId, "/harness-preflight"), {}),
   invoke: (id: string, companyId?: string) => api.post<HeartbeatRun>(agentPath(id, companyId, "/heartbeat/invoke"), {}),
   wakeup: (
     id: string,

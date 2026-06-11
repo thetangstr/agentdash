@@ -1,4 +1,12 @@
-import type { AdapterExecutionResult, AdapterModelProfileDefinition, ServerAdapterModule } from "./types.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type {
+  AdapterEnvironmentCheck,
+  AdapterEnvironmentTestResult,
+  AdapterExecutionResult,
+  AdapterModelProfileDefinition,
+  ServerAdapterModule,
+} from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as acpxExecute,
@@ -113,6 +121,17 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 
+const DEFAULT_HERMES_COMMAND = "hermes";
+
+function defaultHermesCommand(): string {
+  const configured = process.env.AGENTDASH_HERMES_COMMAND;
+  return typeof configured === "string" && configured.trim().length > 0
+    ? configured.trim()
+    : DEFAULT_HERMES_COMMAND;
+}
+
+const execFileAsync = promisify(execFile);
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -133,18 +152,19 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
     typeof agentAdapterConfig?.command === "string" && agentAdapterConfig.command.length > 0
       ? agentAdapterConfig.command
       : undefined;
+  const fallbackHermesCommand = defaultHermesCommand();
 
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
   }
   if (config && !config.hermesCommand) {
-    config.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
+    config.hermesCommand = fallbackHermesCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand && agentCommand) {
     agentAdapterConfig.hermesCommand = agentCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand) {
-    agentAdapterConfig.hermesCommand = "/Users/maxiaoer/.local/bin/hermes";
+    agentAdapterConfig.hermesCommand = fallbackHermesCommand;
   }
   // Codex command defaults (parallel to hermesCommand pattern)
   if (config && !config.command && configCommand) {
@@ -163,10 +183,208 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   return ctx;
 }
 
+function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
+  const config =
+    ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
+      ? (ctx.config as Record<string, unknown>)
+      : null;
+  const agent =
+    ctx.agent && typeof ctx.agent === "object" && !Array.isArray(ctx.agent)
+      ? (ctx.agent as Record<string, unknown>)
+      : null;
+  const agentConfig =
+    agent?.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+      ? (agent.adapterConfig as Record<string, unknown>)
+      : null;
+  return readNonEmptyString(config?.hermesCommand)
+    ?? readNonEmptyString(agentConfig?.hermesCommand)
+    ?? "/Users/maxiaoer/.local/bin/hermes";
+}
+
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function deriveHermesPaperclipTaskConfig(ctx: { config?: unknown; context?: unknown }) {
+  const existingConfig = readRecord(ctx.config);
+  const context = readRecord(ctx.context);
+  if (!context) return null;
+
+  const issue = readRecord(context.paperclipIssue);
+  const wakeComment = readRecord(context.paperclipWakeComment);
+  const workspace = readRecord(context.paperclipWorkspace);
+
+  const patch: Record<string, unknown> = {};
+  const setIfMissing = (key: string, value: string | null) => {
+    if (!value) return;
+    if (readNonEmptyString(existingConfig?.[key])) return;
+    patch[key] = value;
+  };
+
+  const taskId =
+    readNonEmptyString(context.taskId) ??
+    readNonEmptyString(context.issueId) ??
+    readNonEmptyString(issue?.id);
+  const taskIdentifier = readNonEmptyString(issue?.identifier);
+  const taskTitle = [
+    taskIdentifier,
+    readNonEmptyString(issue?.title),
+  ].filter(Boolean).join(" - ");
+  const taskBody =
+    readNonEmptyString(context.paperclipTaskMarkdown) ??
+    readNonEmptyString(issue?.description);
+  const commentId =
+    readNonEmptyString(context.commentId) ??
+    readNonEmptyString(context.wakeCommentId) ??
+    readNonEmptyString(wakeComment?.id);
+
+  setIfMissing("taskId", taskId);
+  setIfMissing("taskTitle", taskTitle || null);
+  setIfMissing("taskBody", taskBody);
+  setIfMissing("commentId", commentId);
+  setIfMissing("wakeReason", readNonEmptyString(context.wakeReason));
+  setIfMissing("projectName", readNonEmptyString(workspace?.cwd));
+  setIfMissing("workspaceDir", readNonEmptyString(workspace?.cwd));
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+const HERMES_AUTH_GUARD_PROMPT = [
+  "Paperclip API safety rule:",
+  "Use Authorization: Bearer $PAPERCLIP_API_KEY on every Paperclip API request.",
+  "Use X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID on every Paperclip API request that writes or mutates data, including comments and issue updates.",
+  "Never use a board, browser, or local-board session for Paperclip API writes.",
+].join("\n");
+
+const HERMES_AUTHENTICATED_DEFAULT_PROMPT_TEMPLATE = `You are "{{agentName}}", an AI agent employee in a Paperclip-managed company.
+
+${HERMES_AUTH_GUARD_PROMPT}
+
+IMPORTANT: Use \`terminal\` tool with \`curl\` for ALL Paperclip API calls (web_extract and browser cannot access localhost).
+
+Your Paperclip identity:
+  Agent ID: {{agentId}}
+  Company ID: {{companyId}}
+  API Base: {{paperclipApiUrl}}
+
+{{#taskId}}
+## Assigned Task
+
+Issue ID: {{taskId}}
+Title: {{taskTitle}}
+
+{{taskBody}}
+
+## Workflow
+
+1. Work on the task using your tools.
+2. When done, mark the issue as completed:
+   \`curl -s -X PATCH "{{paperclipApiUrl}}/issues/{{taskId}}" -H "Authorization: Bearer $PAPERCLIP_API_KEY" -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" -H "Content-Type: application/json" -d '{"status":"done"}'\`
+3. Post a completion comment on the issue summarizing what you did:
+   \`curl -s -X POST "{{paperclipApiUrl}}/issues/{{taskId}}/comments" -H "Authorization: Bearer $PAPERCLIP_API_KEY" -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" -H "Content-Type: application/json" -d '{"body":"DONE: <your summary here>"}'\`
+4. If this issue has a parent, post a brief notification on the parent issue:
+   \`curl -s -X POST "{{paperclipApiUrl}}/issues/PARENT_ISSUE_ID/comments" -H "Authorization: Bearer $PAPERCLIP_API_KEY" -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" -H "Content-Type: application/json" -d '{"body":"{{agentName}} completed {{taskId}}. Summary: <brief>"}'\`
+{{/taskId}}
+
+{{#commentId}}
+## Comment on This Issue
+
+Someone commented. Read it:
+   \`curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" "{{paperclipApiUrl}}/issues/{{taskId}}/comments/{{commentId}}" | python3 -m json.tool\`
+
+Address the comment, POST a reply if needed, then continue working.
+{{/commentId}}
+
+{{#noTask}}
+## Heartbeat Wake - Check for Work
+
+1. List ALL open issues assigned to you (todo, backlog, in_progress):
+   \`curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" "{{paperclipApiUrl}}/companies/{{companyId}}/issues?assigneeAgentId={{agentId}}" | python3 -c "import sys,json;issues=json.loads(sys.stdin.read());[print(f'{i[\\"identifier\\"]} {i[\\"status\\"]:>12} {i[\\"priority\\"]:>6} {i[\\"title\\"]}') for i in issues if i['status'] not in ('done','cancelled')]"\`
+
+2. If issues found, pick the highest priority one that is not done/cancelled and work on it:
+   - Read the issue details: \`curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" "{{paperclipApiUrl}}/issues/ISSUE_ID"\`
+   - Do the work in the project directory: {{projectName}}
+   - When done, mark complete and post a comment using the workflow commands above.
+
+3. If no issues assigned to you, check for unassigned issues:
+   \`curl -s -H "Authorization: Bearer $PAPERCLIP_API_KEY" "{{paperclipApiUrl}}/companies/{{companyId}}/issues?status=backlog" | python3 -c "import sys,json;issues=json.loads(sys.stdin.read());[print(f'{i[\\"identifier\\"]} {i[\\"title\\"]}') for i in issues if not i.get('assigneeAgentId')]"\`
+   If you find a relevant issue, assign it to yourself:
+   \`curl -s -X PATCH "{{paperclipApiUrl}}/issues/ISSUE_ID" -H "Authorization: Bearer $PAPERCLIP_API_KEY" -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" -H "Content-Type: application/json" -d '{"assigneeAgentId":"{{agentId}}","status":"todo"}'\`
+
+4. If truly nothing to do, report briefly what you checked.
+{{/noTask}}`;
+
+function sectionAfter(content: string, start: string, end: string): string {
+  const startIndex = content.indexOf(start);
+  if (startIndex < 0) return "";
+  const rest = content.slice(startIndex + start.length);
+  const endIndex = rest.indexOf(end);
+  return endIndex < 0 ? rest : rest.slice(0, endIndex);
+}
+
+export function hermesStatusHasConfiguredCredentials(statusOutput: string): boolean {
+  const apiKeyProviders = sectionAfter(statusOutput, "API-Key Providers", "Terminal Backend");
+  if (apiKeyProviders
+    .split(/\r?\n/)
+    .some((line) => /\bconfigured\b/i.test(line) && !/\bnot configured\b/i.test(line))) {
+    return true;
+  }
+
+  const authProviders = sectionAfter(statusOutput, "Auth Providers", "API-Key Providers");
+  return authProviders
+    .split(/\r?\n/)
+    .some((line) => /\blogged in\b/i.test(line) && !/\bnot logged in\b/i.test(line));
+}
+
+async function hermesCommandHasConfiguredCredentials(command: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(command, ["status"], {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return hermesStatusHasConfiguredCredentials(stdout);
+  } catch {
+    return false;
+  }
+}
+
+function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
+  if (checks.some((check) => check.level === "error")) return "fail";
+  if (checks.some((check) => check.level === "warn")) return "warn";
+  return "pass";
+}
+
+async function testHermesEnvironment(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
+  const normalizedCtx = normalizeHermesConfig(ctx);
+  const result = await hermesTestEnvironment(normalizedCtx as never);
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  const hasAgentDashEnvWarning = checks.some((check) => check.code === "hermes_no_api_keys" && check.level === "warn");
+  if (!hasAgentDashEnvWarning) return result;
+
+  const command = getHermesCommandFromContext(normalizedCtx);
+  if (!await hermesCommandHasConfiguredCredentials(command)) return result;
+
+  const normalizedChecks = checks.map((check) => {
+    if (check.code !== "hermes_no_api_keys") return check;
+    return {
+      ...check,
+      level: "info" as const,
+      message: "Hermes status reports a configured local provider",
+      hint: "AgentDash env keys are not required when Hermes owns the provider credentials in its local config.",
+    };
+  });
+  return {
+    ...result,
+    status: summarizeAdapterEnvironmentChecks(normalizedChecks),
+    checks: normalizedChecks,
+  };
+}
 function isHermesResumeHelpTextSessionId(value: unknown): boolean {
   return readNonEmptyString(value)?.toLowerCase() === "from";
 }
@@ -376,15 +594,25 @@ const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
   execute: async (ctx) => {
     const normalizedCtx = sanitizeHermesRuntimeSession(normalizeHermesConfig(ctx));
+    const paperclipTaskConfig = deriveHermesPaperclipTaskConfig(normalizedCtx);
+    const taskPatchedCtx = paperclipTaskConfig
+      ? {
+          ...normalizedCtx,
+          config: {
+            ...(readRecord(normalizedCtx.config) ?? {}),
+            ...paperclipTaskConfig,
+          },
+        }
+      : normalizedCtx;
     if (normalizedCtx !== ctx) {
-      await normalizedCtx.onLog(
+      await taskPatchedCtx.onLog(
         "stdout",
         "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
       );
     }
-    if (!normalizedCtx.authToken) return sanitizeHermesExecutionResult(await executeHermesLocal(normalizedCtx));
+    if (!taskPatchedCtx.authToken) return sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx));
 
-    const existingConfig = (normalizedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
+    const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const existingEnv =
       typeof existingConfig.env === "object" && existingConfig.env !== null && !Array.isArray(existingConfig.env)
         ? (existingConfig.env as Record<string, string>)
@@ -395,13 +623,6 @@ const hermesLocalAdapter: ServerAdapterModule = {
       typeof existingConfig.promptTemplate === "string" && existingConfig.promptTemplate.trim().length > 0
         ? existingConfig.promptTemplate
         : "";
-    const authGuardPrompt = [
-      "Paperclip API safety rule:",
-      "Use Authorization: Bearer $PAPERCLIP_API_KEY on every Paperclip API request.",
-      "Use X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID on every Paperclip API request that writes or mutates data, including comments and issue updates.",
-      "Never use a board, browser, or local-board session for Paperclip API writes.",
-    ].join("\n");
-
     const patchedConfig: Record<string, unknown> = {
       ...existingConfig,
       env: {
@@ -411,24 +632,25 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    // Only inject the auth guard into promptTemplate when a custom template already exists.
-    // When no custom template is set, Hermes uses its built-in default heartbeat/task prompt —
-    // overwriting it with only the auth guard text would strip the assigned issue/workflow instructions.
+    // Hermes' package default prompt predates authenticated mode and shows bare curl examples.
+    // In authenticated mode, replace it with an equivalent auth-aware template.
     if (promptTemplate) {
-      patchedConfig.promptTemplate = `${authGuardPrompt}\n\n${promptTemplate}`;
+      patchedConfig.promptTemplate = `${HERMES_AUTH_GUARD_PROMPT}\n\n${promptTemplate}`;
+    } else {
+      patchedConfig.promptTemplate = HERMES_AUTHENTICATED_DEFAULT_PROMPT_TEMPLATE;
     }
 
     const patchedCtx = {
-      ...normalizedCtx,
+      ...taskPatchedCtx,
       agent: {
-        ...normalizedCtx.agent,
+        ...taskPatchedCtx.agent,
         adapterConfig: patchedConfig,
       },
     };
 
     return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
   },
-  testEnvironment: (ctx) => hermesTestEnvironment(normalizeHermesConfig(ctx) as never),
+  testEnvironment: testHermesEnvironment,
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
   syncSkills: hermesSyncSkills,

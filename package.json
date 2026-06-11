@@ -34,6 +34,9 @@
     "release:stable": "./scripts/release.sh stable",
     "release:github": "./scripts/create-github-release.sh",
     "release:rollback": "./scripts/rollback-latest.sh",
+    "check:pr-process": "node scripts/ci/check-pr-process.mjs",
+    "test:pr-process": "node --test scripts/ci/check-pr-process.test.mjs",
+    "test:launch-signoff": "node scripts/ci/check-launch-signoff.mjs && node --test scripts/ci/check-launch-signoff.test.mjs scripts/deploy/agentdash-ota-update.test.mjs scripts/deploy/agentdash-mac-mini-launchd.test.mjs scripts/deploy/agentdash-mac-mini-source-launchd.test.mjs scripts/agent-harness-smoke.test.mjs scripts/msp-mac-mini-readiness.test.mjs scripts/msp-partner-access-proof.test.mjs",
     "check:tokens": "node scripts/check-forbidden-tokens.mjs",
     "docs:dev": "cd docs && npx mintlify dev",
     "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
@@ -41,6 +44,7 @@
     "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh",
     "smoke:terminal-bench-loop-skill": "node scripts/smoke/terminal-bench-loop-skill-smoke.mjs",
     "test:release-registry": "node --test scripts/verify-release-registry-state.test.mjs",
+    "test:launch-signoff": "node --test scripts/msp-launch-signoff-check.test.mjs scripts/msp-partner-access-proof.test.mjs",
     "test:e2e": "npx playwright test --config tests/e2e/playwright.config.ts",
     "test:e2e:headed": "npx playwright test --config tests/e2e/playwright.config.ts --headed",
     "test:e2e:multiuser-authenticated": "npx playwright test --config tests/e2e/playwright-multiuser-authenticated.config.ts",
@@ -48,7 +52,8 @@
     "test:release-smoke": "npx playwright test --config tests/release-smoke/playwright.config.ts",
     "test:release-smoke:headed": "npx playwright test --config tests/release-smoke/playwright.config.ts --headed",
     "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts",
-    "perf:issue-chat-long-thread": "node scripts/measure-issue-chat-long-thread.mjs"
+    "perf:issue-chat-long-thread": "node scripts/measure-issue-chat-long-thread.mjs",
+    "audit:deps": "pnpm audit --audit-level=high --prod"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

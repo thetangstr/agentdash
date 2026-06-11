@@ -241,6 +241,12 @@ async function typeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   await flush();
 }
 
+async function fillAcceptanceCriteria(container: HTMLElement, value = "The requested outcome is verifiable") {
+  const criteriaInput = container.querySelector('textarea[aria-label="Acceptance criteria"]') as HTMLTextAreaElement | null;
+  expect(criteriaInput).not.toBeNull();
+  await typeTextareaValue(criteriaInput!, value);
+}
+
 async function waitForAssertion(assertion: () => void, attempts = 20) {
   let lastError: unknown;
 
@@ -380,6 +386,7 @@ describe("NewIssueDialog", () => {
       projectId: "project-1",
       executionWorkspaceId: "workspace-1",
       goalId: "goal-1",
+      acceptanceCriteria: ["Child work meets the parent outcome"],
     };
 
     const { root } = renderDialog(container);
@@ -433,6 +440,7 @@ describe("NewIssueDialog", () => {
 
     await typeTextareaValue(titleInput!, "Typed issue");
     await typeTextareaValue(descriptionInput!, "Typed description");
+    await fillAcceptanceCriteria(container, "The work matches the requested launch outcome");
 
     await act(async () => {
       resolveProjects([
@@ -471,6 +479,42 @@ describe("NewIssueDialog", () => {
     act(() => root.unmount());
   });
 
+  it("submits acceptance criteria as the issue definition of done", async () => {
+    const { root } = renderDialog(container);
+    await flush();
+
+    const titleInput = container.querySelector('textarea[placeholder="Issue title"]') as HTMLTextAreaElement | null;
+    expect(titleInput).not.toBeNull();
+
+    await typeTextareaValue(titleInput!, "Create launch acceptance criteria");
+    await fillAcceptanceCriteria(container, "Customer can confirm the outcome\nSpend is tied to the task");
+
+    const submitButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Create Issue"));
+    expect(submitButton).not.toBeUndefined();
+
+    await act(async () => {
+      submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(mockIssuesApi.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        title: "Create launch acceptance criteria",
+        definitionOfDone: {
+          summary: "Create launch acceptance criteria",
+          criteria: [
+            { id: "c1", text: "Customer can confirm the outcome", done: false },
+            { id: "c2", text: "Spend is tied to the task", done: false },
+          ],
+        },
+      }),
+    );
+
+    act(() => root.unmount());
+  });
+
   it("submits the parent assignee when a sub-issue opens with inherited defaults", async () => {
     dialogState.newIssueDefaults = {
       parentId: "issue-1",
@@ -480,6 +524,7 @@ describe("NewIssueDialog", () => {
       projectId: "project-1",
       goalId: "goal-1",
       assigneeAgentId: "agent-1",
+      acceptanceCriteria: ["Child work meets the parent outcome"],
     };
 
     const { root } = renderDialog(container);

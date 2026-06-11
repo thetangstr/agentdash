@@ -11,13 +11,17 @@
 		<string>-c</string>
 		<string>
 			# Load env vars
+			set -a
 			. %%ENV_FILE%%
+			set +a
 
 			# Ensure log directory exists
 			mkdir -p %%LOG_DIR%%
 
-			# Start the server
-			exec node %%SHARE_DIR%%/server/dist/index.js
+			# Start the server from the source checkout. The build step still
+			# verifies TypeScript and prepares ui/dist for static serving.
+			cd %%APP_DIR%%
+			exec %%PNPM_BIN%% --filter @paperclipai/server exec tsx src/index.ts
 		</string>
 	</array>
 
@@ -25,24 +29,21 @@
 	<true/>
 
 	<key>KeepAlive</key>
-	<dict>
-		<key>Crashed</key>
-		<true/>
-		<key>AfterInitialDemand</key>
-		<true/>
-	</dict>
+	<true/>
 
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PAPERCLIP_HOME</key>
 		<string>%%HOME%%/.agentdash</string>
+		<key>PATH</key>
+		<string>%%PATH_VALUE%%</string>
 	</dict>
 
 	<key>StandardOutPath</key>
-	<string>%%HOME%%/.agentdash/logs/agentdash.log</string>
+	<string>/opt/agentdash/logs/launchd.out.log</string>
 
 	<key>StandardErrorPath</key>
-	<string>%%HOME%%/.agentdash/logs/agentdash.err</string>
+	<string>/opt/agentdash/logs/launchd.err.log</string>
 
 	<key>ProcessType</key>
 	<string>Background</string>
@@ -52,11 +53,5 @@
 
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
-
-	<key>HardResourceLimits</key>
-	<dict>
-		<key>NumberOfFiles</key>
-		<integer>1024</integer>
-	</dict>
 </dict>
 </plist>

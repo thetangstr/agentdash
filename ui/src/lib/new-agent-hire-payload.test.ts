@@ -41,4 +41,21 @@ describe("buildNewAgentHirePayload", () => {
       defaultEnvironmentId: null,
     });
   });
+
+  it("can require a launch-safe harness preflight before creating the agent", () => {
+    expect(
+      buildNewAgentHirePayload({
+        name: "Launch Agent",
+        effectiveRole: "general",
+        configValues: {
+          ...defaultCreateValues,
+          adapterType: "codex_local",
+        },
+        adapterConfig: { model: "gpt-5.5" },
+        requireHarnessPreflight: true,
+      }),
+    ).toMatchObject({
+      requireHarnessPreflight: true,
+    });
+  });
 });

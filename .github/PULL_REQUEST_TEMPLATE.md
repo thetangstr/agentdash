@@ -2,12 +2,12 @@
 
 <!--
   Required. Trace your reasoning from the top of the project down to this
-  specific change. Start with what Paperclip is, then narrow through the
+  specific change. Start with what AgentDash/Paperclip is, then narrow through the
   subsystem, the problem, and why this PR exists. Use blockquote style.
   Aim for 5–8 steps. See CONTRIBUTING.md for full examples.
 -->
 
-> - Paperclip orchestrates AI agents for zero-human companies
+> - AgentDash is a fork of Paperclip that orchestrates AI agents for autonomous companies
 > - [Which subsystem or capability is involved]
 > - [What problem or gap exists]
 > - [Why it needs to be addressed]
@@ -40,6 +40,18 @@
 
 > For core feature work, check [`ROADMAP.md`](ROADMAP.md) first and discuss it in `#dev` before opening the PR. Feature PRs that overlap with planned core work may need to be redirected — check the roadmap first. See `CONTRIBUTING.md`.
 
+## AgentDash Review
+
+<!--
+  Required. Keep these three lines and fill in a short reason after each colon.
+  Use "None - <reason>" when there is no impact; a bare "None" or "N/A" will
+  fail PR policy CI.
+-->
+
+- **Upstream impact:** -
+- **Agent-facing prompt surfaces:** -
+- **AgentDash-owned subsystem:** -
+
 ## Model Used
 
 <!--
@@ -59,10 +71,13 @@
 
 - [ ] I have included a thinking path that traces from project context to this change
 - [ ] I have specified the model used (with version and capability details)
+- [ ] I have filled out AgentDash Review with upstream impact, prompt-surface impact, and owned subsystem
 - [ ] I have checked ROADMAP.md and confirmed this PR does not duplicate planned core work
 - [ ] I have run tests locally and they pass
 - [ ] I have added or updated tests where applicable
 - [ ] If this change affects the UI, I have included before/after screenshots
 - [ ] I have updated relevant documentation to reflect my changes
 - [ ] I have considered and documented any risks above
+- [ ] If this is upstream-derived, I have followed `doc/UPSTREAM-POLICY.md` and recorded the upstream SHA/reason/verification
+- [ ] If this changes agent-facing behavior, I have updated all four prompt surfaces or explained why they do not apply
 - [ ] I will address all Greptile and reviewer comments before requesting merge

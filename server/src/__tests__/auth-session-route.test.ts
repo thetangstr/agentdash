@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
@@ -57,5 +58,44 @@ describe("actorMiddleware authenticated session profile", () => {
       memberships: [],
       isInstanceAdmin: false,
     });
+  });
+
+  it("ignores malformed run-id headers before they reach UUID columns", async () => {
+    const app = express();
+    app.use(
+      actorMiddleware({} as any, {
+        deploymentMode: "local_trusted",
+      }),
+    );
+    app.get("/actor", (req, res) => {
+      res.json(req.actor);
+    });
+
+    const res = await request(app)
+      .get("/actor")
+      .set("X-Paperclip-Run-Id", "heartbeat-check");
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("runId");
+  });
+
+  it("preserves valid UUID run-id headers", async () => {
+    const runId = randomUUID();
+    const app = express();
+    app.use(
+      actorMiddleware({} as any, {
+        deploymentMode: "local_trusted",
+      }),
+    );
+    app.get("/actor", (req, res) => {
+      res.json(req.actor);
+    });
+
+    const res = await request(app)
+      .get("/actor")
+      .set("X-Paperclip-Run-Id", runId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.runId).toBe(runId);
   });
 });

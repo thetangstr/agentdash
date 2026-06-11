@@ -106,7 +106,8 @@ export function activityService(db: Db) {
         'effectiveTimeoutMs', ${heartbeatRuns.resultJson} -> 'effectiveTimeoutMs',
         'timeoutConfigured', ${heartbeatRuns.resultJson} -> 'timeoutConfigured',
         'timeoutSource', ${heartbeatRuns.resultJson} -> 'timeoutSource',
-        'timeoutFired', ${heartbeatRuns.resultJson} -> 'timeoutFired'
+        'timeoutFired', ${heartbeatRuns.resultJson} -> 'timeoutFired',
+        'failureClassification', ${heartbeatRuns.resultJson} -> 'failureClassification'
       ))
     end
   `.as("resultJson");

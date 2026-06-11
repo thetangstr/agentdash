@@ -2801,6 +2801,8 @@ export function accessRoutes(
     humanRole?: "owner" | "admin" | "operator" | "viewer" | null;
     defaultsPayload?: Record<string, unknown> | null;
     agentMessage?: string | null;
+    // AgentDash: auto-approve-invites — grant human membership immediately on accept.
+    autoApprove?: boolean;
   }) {
     const writeDb = input.db ?? db;
     const normalizedAgentMessage =
@@ -2820,6 +2822,7 @@ export function accessRoutes(
         normalizedAgentMessage,
         effectiveHumanRole,
       ),
+      autoApprove: input.autoApprove ?? false,
       expiresAt: companyInviteExpiresAt(),
       invitedByUserId: input.req.actor.userId ?? null
     };
@@ -2991,7 +2994,8 @@ export function accessRoutes(
             allowedJoinTypes,
             humanRole: req.body.humanRole ?? null,
             defaultsPayload: req.body.defaultsPayload ?? null,
-            agentMessage: req.body.agentMessage ?? null
+            agentMessage: req.body.agentMessage ?? null,
+            autoApprove: req.body.autoApprove ?? false
           }),
       );
       if (!inviteResult) return;
@@ -3419,6 +3423,116 @@ export function accessRoutes(
         : null;
       if (inviteAlreadyAccepted && !replayJoinRequestId) {
         throw conflict("Join request not found");
+      }
+
+      // AgentDash: auto-approve-invites — when a human accepts an invite that
+      // was created with auto_approve = true, grant active membership
+      // immediately instead of creating a pending_approval join request. This
+      // mirrors the human branch of the approve endpoint
+      // (POST /companies/:companyId/join-requests/:requestId/approve): in one
+      // transaction we mark the invite accepted, ensure an active membership +
+      // role grants, and persist the join request already in "approved" status.
+      // The returned join request row carries status:"approved", which the
+      // invite landing UI (isApprovedHumanJoinPayload) recognizes to navigate
+      // the user straight home. When auto_approve is false the original
+      // pending_approval flow below is unchanged.
+      if (
+        requestType === "human" &&
+        invite.autoApprove === true &&
+        !inviteAlreadyAccepted
+      ) {
+        const requestingUserId = req.actor.userId ?? "local-board";
+        const autoApproved = await withTierCapacityForJoinWrite(
+          companyId,
+          async (dbOrTx) => {
+            const txAccess = accessService(dbOrTx);
+
+            // AgentDash: billing-trio (#151) — Free workspaces enforce 1 human.
+            // Re-check capacity inside the lock before consuming a seat.
+            const blockedAction = await exceededFreeTierCapacityAction(
+              buildRequireTierDeps(dbOrTx),
+              companyId,
+              { humans: 1 },
+            );
+            if (blockedAction) {
+              res.status(402).json(freeTierCapExceededPayload(blockedAction));
+              return null;
+            }
+
+            await dbOrTx
+              .update(invites)
+              .set({ acceptedAt: new Date(), updatedAt: new Date() })
+              .where(
+                and(
+                  eq(invites.id, invite.id),
+                  isNull(invites.acceptedAt),
+                  isNull(invites.revokedAt),
+                ),
+              );
+
+            const membershipRole = resolveHumanInviteRole(
+              invite.defaultsPayload as Record<string, unknown> | null,
+            );
+            await txAccess.ensureMembership(
+              companyId,
+              "user",
+              requestingUserId,
+              membershipRole,
+              "active",
+            );
+            await txAccess.setPrincipalGrants(
+              companyId,
+              "user",
+              requestingUserId,
+              humanJoinGrantsFromDefaults(
+                invite.defaultsPayload as Record<string, unknown> | null,
+                membershipRole,
+              ),
+              req.actor.userId ?? null,
+            );
+
+            const approved = await dbOrTx
+              .insert(joinRequests)
+              .values({
+                inviteId: invite.id,
+                companyId,
+                requestType: "human",
+                status: "approved",
+                requestIp: requestIp(req),
+                requestingUserId,
+                requestEmailSnapshot: await resolveActorEmail(db, req),
+                approvedByUserId:
+                  req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+                approvedAt: new Date(),
+              })
+              .returning()
+              .then((rows) => rows[0]);
+            return approved ?? null;
+          },
+        );
+        if (!autoApproved) return;
+
+        // AgentDash: billing-trio (#153) — sync Stripe seat quantity after the
+        // membership lands. Failures must not block the membership write.
+        seatSyncer.onMembershipChanged(companyId).catch((err) => {
+          logger.error(
+            { err, companyId },
+            "seat-quantity sync after auto-approved invite failed",
+          );
+        });
+
+        await logActivity(db, {
+          companyId,
+          actorType: "user",
+          actorId: req.actor.userId ?? "board",
+          action: "join.auto_approved",
+          entityType: "join_request",
+          entityId: autoApproved.id,
+          details: { requestType: "human", inviteId: invite.id },
+        });
+
+        res.status(202).json(toJoinRequestResponse(autoApproved));
+        return;
       }
 
       const replayMergedDefaults = inviteAlreadyAccepted

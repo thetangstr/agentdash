@@ -21,6 +21,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ci/check-pr-process.mjs
+
+      - name: Block leftover merge-conflict markers
+        run: node scripts/ci/check-conflict-markers.mjs
+
       - name: Block manual lockfile edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
@@ -57,7 +65,10 @@ jobs:
   verify:
     needs: [policy]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35 (was 20): once tests pass, the full lane (install + test:run + build +
+    # release canary dry-run) runs to completion and exceeds 20m. The 20m cap
+    # was only "passing" because verify used to fail fast at a broken test.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -98,6 +109,9 @@ jobs:
       - name: Verify release registry test coverage
         run: pnpm run test:release-registry
 
+      - name: Verify MSP launch signoff checks
+        run: pnpm run test:launch-signoff
+
       - name: Build
         run: pnpm build
 
@@ -107,10 +121,59 @@ jobs:
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
 
+  # Dependency vulnerability audit.
+  #
+  # INTENTIONALLY ADVISORY (non-blocking) for now: `continue-on-error: true`
+  # means this job surfaces HIGH/CRITICAL production advisories in the PR
+  # checks UI but never fails the PR. We don't want to block launch on
+  # pre-existing transitive advisories (e.g. the picomatch ReDoS that reaches
+  # us only through vitest/vite). Promote this to a BLOCKING required check
+  # once the existing advisories are triaged/overridden — drop
+  # `continue-on-error` and add it to branch protection.
+  dependency-audit:
+    needs: [policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies (advisory)
+        # Advisory only: `|| true` guarantees a zero exit so the step (and
+        # therefore the job's check) reports SUCCESS even when `pnpm audit`
+        # finds advisories and exits non-zero. `continue-on-error: true` on
+        # the job is a belt-and-suspenders second guard. Findings are still
+        # printed in the step log for triage.
+        run: |
+          pnpm run audit:deps || true
+          echo "::notice::Dependency audit is advisory and never fails the PR. Review the findings above; promote to a blocking check once advisories are triaged."
+
   e2e:
     needs: [policy]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 (was 45/30): the job runs pnpm install + build + a Playwright
+    # browser install + the e2e suite. With `--no-shell` the install now
+    # COMPLETES fast (~1s edge-cached Chromium download + extract; the
+    # hang-prone chromium-headless-shell artifact is skipped), so the cold
+    # SEEDING run lands well inside this budget: ~3m build + ~17m suite. The
+    # saving browser cache below removes even the install on warm runs.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -133,8 +196,103 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+      - name: Verify hosted Chrome
+        run: google-chrome --version
+
+      # Derive the resolved @playwright/test version from the lockfile so the
+      # browser cache key invalidates automatically on a Playwright bump.
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          version="$(node -e "const fs=require('fs');const lock=fs.readFileSync('pnpm-lock.yaml','utf8');const m=lock.match(/@playwright\/test@([0-9]+\.[0-9]+\.[0-9]+)/);if(!m){console.error('Could not resolve @playwright/test version from pnpm-lock.yaml');process.exit(1);}console.log(m[1]);")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved @playwright/test version: $version"
+
+      # Full actions/cache (restore at step start AND save in the post-job on
+      # success). The first green run seeds the browser cache so every later
+      # run restores it and skips the hang-prone download entirely. This
+      # replaces the earlier restore-only + explicit-save pair.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      # The single `npx playwright install --with-deps chromium` step used to
+      # hang here: the Chromium download finished in ~1 min, then the
+      # system-deps/apt install stalled (network/apt) until the 45m job
+      # timeout killed and CANCELED the whole run, failing every PR. e2e is a
+      # required, enforce_admins check, so this blocked all merges.
+      #
+      # Fix: split system-deps from the browser binary, each with a
+      # per-attempt `timeout` + 3-attempt retry loop. A hang now fails fast
+      # and retries instead of burning the whole budget. The browser cache
+      # above still eliminates the (separate) binary download on warm runs.
+      # `timeout -s KILL`: a stalled Playwright download ignores the default
+      # SIGTERM (node stays blocked in the socket read), so a plain `timeout`
+      # never actually reaps the hang and the step ran to the 45m job
+      # backstop. SIGKILL force-terminates it, so each attempt is bounded for
+      # real and the retry loop can move on.
+      - name: Install Playwright system dependencies
+        env:
+          # Route Playwright artifact downloads through Playwright's official
+          # Akamai edge host instead of cdn.playwright.dev, which intermittently
+          # throttles GitHub runners and stalls the browser download until the
+          # per-attempt timeout. The Akamai edge serves the same Chrome-for-
+          # Testing (builds/cft/...) layout this Playwright version needs and
+          # responds fast. (npmmirror does NOT host the cft layout — it 404s.)
+          PLAYWRIGHT_DOWNLOAD_HOST: https://playwright-akamai.azureedge.net
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            if timeout -s KILL 5m npx playwright install-deps chromium; then ok=1; break; fi
+            echo "playwright install-deps attempt $i failed/hung; retrying"; sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "playwright install-deps failed after retries"; exit 1; }
+
+      - name: Install Playwright browser binary
+        id: playwright-install
+        # Only on a cache miss; on a cache hit the binary is already restored
+        # and we skip the (hang-prone) download entirely.
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        env:
+          # Route the Chromium download through Playwright's official Akamai
+          # edge host instead of cdn.playwright.dev, which intermittently
+          # throttles GitHub runners and stalls the download until the per-
+          # attempt timeout. The Akamai edge resolves to the Chrome-for-Testing
+          # public bucket (verified 206 application/zip) and completes the
+          # install quickly so the actions/cache step seeds reliably.
+          PLAYWRIGHT_DOWNLOAD_HOST: https://playwright-akamai.azureedge.net
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            # Each attempt starts from a clean browser dir. `timeout -s KILL`
+            # reaps the parent npx/node but not the download/extract children
+            # Playwright spawns; those orphans keep writing to
+            # ~/.cache/ms-playwright, so a bare retry races a second installer
+            # into a half-written dir and corrupts the extract. Wiping the dir
+            # makes every attempt independent and self-contained.
+            #
+            # `--no-shell`: the main Chromium zip downloads in ~1s (GitHub
+            # edge-cached), but the SECONDARY `chromium-headless-shell`
+            # artifact hangs silently against cdn.playwright.dev until the
+            # per-attempt timeout — that hang was what burned all 3 retries
+            # and failed every PR. The e2e suite runs headless with full
+            # Chromium (Playwright's default headless mode = full Chromium,
+            # NOT the separate shell; the config sets browserName "chromium"
+            # with no channel), so the shell is unused at runtime. Skipping
+            # it makes the install COMPLETE fast and seed the cache. 8m per
+            # attempt is ample now that the hang-prone artifact is gone.
+            rm -rf ~/.cache/ms-playwright
+            if timeout -s KILL 8m npx playwright install --no-shell chromium; then ok=1; break; fi
+            echo "playwright install attempt $i failed/hung; retrying"
+            pkill -f 'playwright|chrome-linux' 2>/dev/null || true
+            sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "playwright install failed after retries"; exit 1; }
 
       - name: Generate Paperclip config
         run: |
@@ -182,6 +340,7 @@ jobs:
           # Disable rate limiting for the e2e run; the per-actor limit
           # is a production-traffic concern, not a test concern.
           AGENTDASH_RATE_LIMIT_DISABLED: "true"
+          PLAYWRIGHT_CHROMIUM_CHANNEL: "chrome"
           # Successor of #311 (round 3) / closes #315: the
           # onboarding.spec wizard test picks "Claude Code" (claude_local)
           # and OnboardingWizard.handleStep2Next runs a real adapter

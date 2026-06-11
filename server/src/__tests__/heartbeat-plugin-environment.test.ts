@@ -30,6 +30,7 @@ const adapterExecute = vi.hoisted(() => vi.fn(async () => ({
 })));
 
 vi.mock("../adapters/index.js", () => ({
+  listAdapterModelProfiles: vi.fn().mockReturnValue([]),
   getServerAdapter: () => ({
     type: "codex_local",
     execute: adapterExecute,

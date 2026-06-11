@@ -31,6 +31,7 @@ function buildApp(mw: express.RequestHandler): Express {
   app.set("trust proxy", true);
   app.use(mw);
   app.get("/", (_req, res) => res.json({ ok: true }));
+  app.post("/", (_req, res) => res.json({ ok: true }));
   return app;
 }
 
@@ -48,7 +49,7 @@ describe("rate-limit middleware (#160)", () => {
     }
   });
 
-  it("auth limiter enforces tighter cap (configurable, set to 3 for test)", async () => {
+  it("auth limiter enforces tighter cap on auth mutations", async () => {
     delete process.env.NODE_ENV;
     process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
     process.env.AGENTDASH_RATE_LIMIT_AUTH_MAX = "3";
@@ -56,14 +57,32 @@ describe("rate-limit middleware (#160)", () => {
     const app = buildApp(createAuthRateLimiter());
 
     for (let i = 0; i < 3; i++) {
-      const ok = await request(app).get("/").set("X-Forwarded-For", "10.0.0.1");
+      const ok = await request(app).post("/").set("X-Forwarded-For", "10.0.0.1");
       expect(ok.status).toBe(200);
     }
-    const blocked = await request(app).get("/").set("X-Forwarded-For", "10.0.0.1");
+    const blocked = await request(app).post("/").set("X-Forwarded-For", "10.0.0.1");
     expect(blocked.status).toBe(429);
     expect(blocked.body).toMatchObject({ error: "Rate limited" });
     expect(blocked.body.retryAfter).toBeGreaterThan(0);
     expect(blocked.headers["retry-after"]).toBeDefined();
+  });
+
+  it("auth safe reads do not consume the sign-in limiter", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_AUTH_MAX = "1";
+    const { createAuthRateLimiter } = await loadFactories();
+    const app = buildApp(createAuthRateLimiter());
+
+    for (let i = 0; i < 5; i++) {
+      const read = await request(app).get("/").set("X-Forwarded-For", "10.0.0.5");
+      expect(read.status).toBe(200);
+    }
+
+    const ok = await request(app).post("/").set("X-Forwarded-For", "10.0.0.5");
+    expect(ok.status).toBe(200);
+    const blocked = await request(app).post("/").set("X-Forwarded-For", "10.0.0.5");
+    expect(blocked.status).toBe(429);
   });
 
   it("AGENTDASH_RATE_LIMIT_DISABLED=true bypasses entirely", async () => {
@@ -92,17 +111,74 @@ describe("rate-limit middleware (#160)", () => {
     }
   });
 
-  it("authenticated deployment keeps rate limits enabled", async () => {
+  it("authenticated deployment keeps rate limits enabled for mutations", async () => {
     delete process.env.NODE_ENV;
     process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
     process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
     const { createDefaultApiRateLimiter } = await loadFactories();
     const app = buildApp(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
 
-    const ok = await request(app).get("/").set("X-Forwarded-For", "10.0.0.21");
+    const ok = await request(app).post("/").set("X-Forwarded-For", "10.0.0.21");
     expect(ok.status).toBe(200);
-    const blocked = await request(app).get("/").set("X-Forwarded-For", "10.0.0.21");
+    const blocked = await request(app).post("/").set("X-Forwarded-For", "10.0.0.21");
     expect(blocked.status).toBe(429);
+  });
+
+  it.each(["board", "agent"] as const)(
+    "authenticated %s safe reads bypass the default mutation limiter",
+    async (actorType) => {
+      delete process.env.NODE_ENV;
+      process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+      process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
+      const { createDefaultApiRateLimiter } = await loadFactories();
+
+      const app = express();
+      app.set("trust proxy", true);
+      app.use((req, _res, next) => {
+        (req as any).actor =
+          actorType === "board"
+            ? { type: "board", userId: "alice" }
+            : { type: "agent", agentId: "agent-123", companyId: "company-123" };
+        next();
+      });
+      app.use(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
+      app.get("/", (_req, res) => res.json({ ok: true }));
+
+      for (let i = 0; i < 5; i++) {
+        const res = await request(app).get("/").set("X-Forwarded-For", "10.0.0.22");
+        expect(res.status).toBe(200);
+      }
+    },
+  );
+
+  it("unauthenticated safe reads still count against the default limiter", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildApp(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
+
+    const ok = await request(app).get("/").set("X-Forwarded-For", "10.0.0.24");
+    expect(ok.status).toBe(200);
+    const blocked = await request(app).get("/").set("X-Forwarded-For", "10.0.0.24");
+    expect(blocked.status).toBe(429);
+  });
+
+  it("health checks bypass the default limiter", async () => {
+    delete process.env.NODE_ENV;
+    process.env.AGENTDASH_RATE_LIMIT_DISABLED = "false";
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "1";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+
+    const app = express();
+    app.set("trust proxy", true);
+    app.use(createDefaultApiRateLimiter({ deploymentMode: "authenticated" }));
+    app.get("/health", (_req, res) => res.json({ ok: true }));
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app).get("/health").set("X-Forwarded-For", "10.0.0.23");
+      expect(res.status).toBe(200);
+    }
   });
 
   it("billing limiter enforces tighter cap (configurable, set to 2)", async () => {

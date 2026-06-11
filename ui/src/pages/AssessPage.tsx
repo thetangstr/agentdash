@@ -26,11 +26,11 @@ export function AssessPage() {
   const companyId = selectedCompany?.id;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  // AgentDash (Phase F): `?onboarding=1` means the user just landed here
-  // from /company-create as part of the post-signup chain. Skip the mode
-  // chooser, jump straight into the company wizard, and on the deep-interview
-  // ready marker call /api/onboarding/finalize-assessment to crystallize the
-  // spec + flip the CoS phase, then redirect to /cos.
+  // AgentDash: `?onboarding=1` means the user just landed here from
+  // /company-create as part of the post-signup chain. Skip the mode chooser
+  // and jump straight into the short company-level assessment. If the legacy
+  // deep-interview marker appears, finalize it; otherwise the short report
+  // offers an explicit handoff to /cos.
   const onboardingFlow = useMemo(
     () => searchParams.get("onboarding") === "1",
     [searchParams],
@@ -57,6 +57,28 @@ export function AssessPage() {
     } catch (err) {
       setFinalizeError(
         err instanceof Error ? err.message : "Could not finalize the interview.",
+      );
+      setFinalizing(false);
+    }
+  };
+
+  const handleInitialAssessmentComplete = async (info: {
+    assessmentMarkdown: string;
+    assessmentInput: Record<string, unknown>;
+  }) => {
+    if (!companyId || finalizing) return;
+    setFinalizing(true);
+    setFinalizeError(null);
+    try {
+      const result = await onboardingApi.completeInitialAssessment({
+        companyId,
+        assessmentMarkdown: info.assessmentMarkdown,
+        assessmentInput: info.assessmentInput,
+      });
+      navigate(result.redirectUrl, { replace: true });
+    } catch (err) {
+      setFinalizeError(
+        err instanceof Error ? err.message : "Could not hand off the assessment.",
       );
       setFinalizing(false);
     }
@@ -164,13 +186,13 @@ export function AssessPage() {
           {mode === "project"
             ? `Assess a specific project for ${companyName}.`
             : mode === "company"
-              ? `Where does ${companyName} sit on the readiness curve?`
+              ? `Start ${companyName} with a five-question AI adoption scan.`
               : `How would you like to assess ${companyName}?`}
         </h1>
         <p className="mkt-body-lg" style={{ color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
           {mode === "project"
             ? "Tell us about the project, answer a few adaptive clarifying questions, and we'll draft a project-specific agent recommendation you can download as a Word doc."
-            : "Two ways in: a four-step company-wide readiness scan, or a project-scoped assessment that produces a downloadable Word doc."}
+            : "The initial assessment is company-level only: five focused questions, a readiness snapshot, and a practical recommendation for where AI agents should start first."}
         </p>
 
         {mode === null && (
@@ -210,9 +232,12 @@ export function AssessPage() {
               companyId={companyId}
               defaultCompanyName={selectedCompany?.name}
               // In the onboarding chain, the chooser is the entry point —
-              // hide the "switch mode" affordance so users don't bail out
-              // before crystallization.
+              // hide the "switch mode" affordance so users stay on the
+              // company-level initial assessment.
               onSwitchMode={onboardingFlow ? undefined : () => setMode(null)}
+              onInitialAssessmentComplete={
+                onboardingFlow ? handleInitialAssessmentComplete : undefined
+              }
               onReadyToFinalize={onboardingFlow ? handleReadyToFinalize : undefined}
             />
           </>

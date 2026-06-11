@@ -5,6 +5,7 @@ import type {
 } from "@paperclipai/adapter-utils";
 import {
   asString,
+  buildPaperclipEnv,
   parseObject,
   ensurePathInEnv,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -55,6 +56,22 @@ function summarizeProbeDetail(stdout: string, stderr: string, parsedError: strin
 const CODEX_AUTH_REQUIRED_RE =
   /(?:not\s+logged\s+in|login\s+required|authentication\s+required|unauthorized|invalid(?:\s+or\s+missing)?\s+api(?:[_\s-]?key)?|openai[_\s-]?api[_\s-]?key|api[_\s-]?key.*required|please\s+run\s+`?codex\s+login`?)/i;
 
+const CONTROL_PLANE_REACHABLE_TOKEN = "PAPERCLIP_CONTROL_PLANE_REACHABLE";
+const CONTROL_PLANE_UNREACHABLE_TOKEN = "PAPERCLIP_CONTROL_PLANE_UNREACHABLE";
+
+function buildControlPlaneApiProbePrompt(apiUrl: string): string {
+  return [
+    "You are running a Paperclip harness preflight.",
+    "Test whether this exact Codex runtime can reach the Paperclip control-plane API.",
+    "Run a shell command equivalent to:",
+    "node -e \"const base=(process.env.PAPERCLIP_API_URL||'').replace(/\\/$/,''); const url=base + '/api/health'; fetch(url,{headers:{accept:'application/json'}}).then((r)=>{ if(!r.ok) throw new Error('HTTP '+r.status); console.log('ok'); }).catch((err)=>{ console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });\"",
+    `If the command succeeds, respond exactly: ${CONTROL_PLANE_REACHABLE_TOKEN}`,
+    `If it fails, respond exactly: ${CONTROL_PLANE_UNREACHABLE_TOKEN}: <short error>`,
+    "Do not change files.",
+    `PAPERCLIP_API_URL is set to: ${apiUrl}`,
+  ].join("\n");
+}
+
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
@@ -98,7 +115,9 @@ export async function testEnvironment(
   }
 
   const envConfig = parseObject(config.env);
-  const env: Record<string, string> = {};
+  const env: Record<string, string> = {
+    ...buildPaperclipEnv({ id: "environment-test", companyId: ctx.companyId }),
+  };
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
@@ -215,6 +234,65 @@ export async function testEnvironment(
                 hint: "Try the probe manually (`codex exec --json -` then prompt: Respond with hello) to inspect full output.",
               }),
         });
+        const paperclipApiUrl = env.PAPERCLIP_API_URL?.trim() ?? "";
+        if (hasHello && paperclipApiUrl) {
+          const controlPlaneProbe = await runAdapterExecutionTargetProcess(
+            runId,
+            target,
+            command,
+            args,
+            {
+              cwd,
+              env,
+              timeoutSec: 45,
+              graceSec: 5,
+              stdin: buildControlPlaneApiProbePrompt(paperclipApiUrl),
+              onLog: async () => {},
+            },
+          );
+          const controlPlaneParsed = parseCodexJsonl(controlPlaneProbe.stdout);
+          const controlPlaneSummary = controlPlaneParsed.summary.replace(/\s+/g, " ").trim();
+          const controlPlaneDetail = summarizeProbeDetail(
+            controlPlaneProbe.stdout,
+            controlPlaneProbe.stderr,
+            controlPlaneParsed.errorMessage,
+          );
+          if (controlPlaneProbe.timedOut) {
+            checks.push({
+              code: "codex_control_plane_api_probe_timed_out",
+              level: "warn",
+              message: "Codex control-plane API reachability probe timed out.",
+              detail: paperclipApiUrl,
+              hint: "Retry the probe. If this persists, verify the Codex runtime can reach PAPERCLIP_API_URL from its execution sandbox.",
+            });
+          } else if (controlPlaneSummary.includes(CONTROL_PLANE_REACHABLE_TOKEN)) {
+            checks.push({
+              code: "codex_control_plane_api_reachable",
+              level: "info",
+              message: "Codex runtime can reach the Paperclip control-plane API.",
+              detail: paperclipApiUrl,
+            });
+          } else if (
+            controlPlaneSummary.includes(CONTROL_PLANE_UNREACHABLE_TOKEN) ||
+            (controlPlaneProbe.exitCode ?? 1) !== 0
+          ) {
+            checks.push({
+              code: "codex_control_plane_api_unreachable",
+              level: "error",
+              message: "Codex runtime cannot reach the Paperclip control-plane API.",
+              detail: controlPlaneSummary || controlPlaneDetail || paperclipApiUrl,
+              hint: "Set PAPERCLIP_API_URL to an address reachable from the Codex runtime, use a supported execution target bridge, or adjust sandbox settings before assigning customer work.",
+            });
+          } else {
+            checks.push({
+              code: "codex_control_plane_api_probe_unexpected_output",
+              level: "warn",
+              message: "Codex control-plane API probe ran, but did not prove API reachability.",
+              ...(controlPlaneDetail ? { detail: controlPlaneDetail } : { detail: paperclipApiUrl }),
+              hint: `The probe must report ${CONTROL_PLANE_REACHABLE_TOKEN} after reaching /api/health from inside the Codex runtime.`,
+            });
+          }
+        }
       } else if (CODEX_AUTH_REQUIRED_RE.test(authEvidence)) {
         checks.push({
           code: "codex_hello_probe_auth_required",

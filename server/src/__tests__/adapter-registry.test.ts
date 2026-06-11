@@ -38,6 +38,8 @@ import {
   setOverridePaused,
 } from "../adapters/registry.js";
 
+const originalHermesCommand = process.env.AGENTDASH_HERMES_COMMAND;
+
 const externalAdapter: ServerAdapterModule = {
   type: "external_test",
   execute: async () => ({
@@ -57,12 +59,18 @@ const externalAdapter: ServerAdapterModule = {
 
 describe("server adapter registry", () => {
   beforeEach(() => {
+    delete process.env.AGENTDASH_HERMES_COMMAND;
     unregisterServerAdapter("external_test");
     unregisterServerAdapter("claude_local");
     setOverridePaused("claude_local", false);
   });
 
   afterEach(() => {
+    if (originalHermesCommand === undefined) {
+      delete process.env.AGENTDASH_HERMES_COMMAND;
+    } else {
+      process.env.AGENTDASH_HERMES_COMMAND = originalHermesCommand;
+    }
     unregisterServerAdapter("external_test");
     unregisterServerAdapter("claude_local");
     setOverridePaused("claude_local", false);
@@ -323,6 +331,62 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain("Existing prompt");
   });
 
+  it("bridges Paperclip issue wake context into Hermes task config", async () => {
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "cmo",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {
+        issueId: "issue-123",
+        commentId: "comment-123",
+        wakeReason: "issue_reopened_via_comment",
+        paperclipIssue: {
+          id: "issue-123",
+          identifier: "AGE-8",
+          title: "Stand up MSP marketing collateral",
+          description: "Create draft assets.",
+        },
+        paperclipWakeComment: {
+          id: "comment-123",
+          body: "Create tasks for yourself and execute the approved marketing deliverables.",
+        },
+        paperclipTaskMarkdown:
+          "Paperclip task context:\nLatest wake comment:\nCreate tasks for yourself and execute the approved marketing deliverables.",
+        paperclipWorkspace: {
+          cwd: "/Users/example/project",
+        },
+      },
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+      authToken: "agent-run-jwt",
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.config).toMatchObject({
+      taskId: "issue-123",
+      taskTitle: "AGE-8 - Stand up MSP marketing collateral",
+      commentId: "comment-123",
+      wakeReason: "issue_reopened_via_comment",
+      projectName: "/Users/example/project",
+      workspaceDir: "/Users/example/project",
+    });
+    expect(patchedCtx.config.taskBody).toContain("Latest wake comment");
+    expect(patchedCtx.config.taskBody).toContain("execute the approved marketing deliverables");
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain("Assigned Task");
+  });
+
   it("preserves Hermes command normalization while injecting auth", async () => {
     const adapter = requireServerAdapter("hermes_local");
 
@@ -354,6 +418,72 @@ describe("server adapter registry", () => {
     expect(patchedCtx.config.hermesCommand).toBe("runtime-hermes");
     expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("agent-hermes");
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Authorization: Bearer $PAPERCLIP_API_KEY",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Heartbeat Wake - Check for Work",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID",
+    );
+  });
+
+  it("defaults Hermes command normalization to the hermes binary on PATH", async () => {
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+      authToken: "agent-run-jwt",
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.config.hermesCommand).toBe("hermes");
+    expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("hermes");
+  });
+
+  it("honors AGENTDASH_HERMES_COMMAND for Hermes command normalization", async () => {
+    process.env.AGENTDASH_HERMES_COMMAND = "/Users/example/.local/bin/hermes";
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+      authToken: "agent-run-jwt",
+    });
+
+    expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.config.hermesCommand).toBe("/Users/example/.local/bin/hermes");
+    expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("/Users/example/.local/bin/hermes");
   });
 
   it("passes the original Hermes context through when authToken is absent", async () => {
@@ -474,7 +604,7 @@ describe("server adapter registry", () => {
     });
   });
 
-  it("preserves an explicit Hermes Paperclip API key and does not set promptTemplate when none was configured", async () => {
+  it("preserves an explicit Hermes Paperclip API key while using the auth-aware default prompt", async () => {
     const adapter = requireServerAdapter("hermes_local");
 
     await adapter.execute({
@@ -504,13 +634,18 @@ describe("server adapter registry", () => {
     const [patchedCtx] = hermesExecuteMock.mock.calls[0];
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("explicit-agent-key");
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_RUN_ID).toBe("run-123");
-    // No custom promptTemplate was set — Hermes must use its built-in default.
-    // Setting promptTemplate here would replace the full default with just the auth guard text,
-    // stripping assigned issue / workflow instructions.
-    expect(patchedCtx.agent.adapterConfig.promptTemplate).toBeUndefined();
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Authorization: Bearer $PAPERCLIP_API_KEY",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Heartbeat Wake - Check for Work",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID",
+    );
   });
 
-  it("does not set promptTemplate when no custom template is configured, preserving Hermes default", async () => {
+  it("uses the auth-aware default Hermes prompt when no custom template is configured", async () => {
     const adapter = requireServerAdapter("hermes_local");
 
     await adapter.execute({
@@ -533,10 +668,16 @@ describe("server adapter registry", () => {
     });
 
     const [patchedCtx] = hermesExecuteMock.mock.calls[0];
-    // promptTemplate must remain unset so Hermes uses its built-in heartbeat/task prompt.
-    expect(patchedCtx.agent.adapterConfig.promptTemplate).toBeUndefined();
-    // Auth token is still injected.
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Authorization: Bearer $PAPERCLIP_API_KEY",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "Heartbeat Wake - Check for Work",
+    );
+    expect(patchedCtx.agent.adapterConfig.promptTemplate).toContain(
+      "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID",
+    );
   });
 });
 

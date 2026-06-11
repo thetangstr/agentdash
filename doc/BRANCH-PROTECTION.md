@@ -23,10 +23,13 @@ GitHub branch protection on `main` with:
 - ✅ Require a pull request before merging
 - ✅ Require status checks to pass before merging
   - Required checks (mark them required after they've run at least once):
-    - `Hermes PR Audit / audit`
-    - `Hermes Prompt Drift Check / drift`
-    - `Agents MD Drift Check / check`
-    - The existing `pr` / `e2e` lanes you care about
+    - `policy`
+    - `verify`
+    - `e2e`
+    - `launch-signoff`
+    - `audit`
+    - `drift`
+    - `check`
 - ✅ Require branches to be up to date before merging (catches `main` advancing during review)
 - ✅ Do not allow bypassing the above settings
 - ✅ Restrict who can push to matching branches → empty list (PR-only)
@@ -53,6 +56,10 @@ gh api \
   "required_status_checks": {
     "strict": true,
     "contexts": [
+      "policy",
+      "verify",
+      "e2e",
+      "launch-signoff",
       "audit",
       "drift",
       "check"
@@ -78,11 +85,10 @@ EOF
 `enforce_admins: true` is the critical line — it stops you (and Hermes) from
 slipping a direct push through admin privilege.
 
-The `contexts` list names the **check JOB names** (not workflow names). The
-Hermes audit workflow's job is named `audit` (see `.github/workflows/hermes-pr-audit.yml`),
-the drift workflow's job is named `drift`, and the existing agents-md drift
-job is named `check`. If you add more required workflows, append their job
-names here.
+The `contexts` list names the **check JOB names** (not workflow names). The PR
+workflow jobs are `policy`, `verify`, `e2e`, and `launch-signoff`; Hermes audit
+is `audit`, Hermes prompt drift is `drift`, and agents-md drift is `check`.
+If you add more required workflows, append their job names here.
 
 ### 2. Verify
 
@@ -100,7 +106,7 @@ Expected:
 
 ```json
 {
-  "required_status_checks": ["audit", "drift", "check"],
+  "required_status_checks": ["policy", "verify", "e2e", "launch-signoff", "audit", "drift", "check"],
   "enforce_admins": true,
   "require_pr": true,
   "linear_history": true

@@ -163,6 +163,13 @@ describeEmbeddedPostgres("activity service", () => {
         stopReason: "timeout",
         effectiveTimeoutSec: 30,
         timeoutFired: true,
+        failureClassification: {
+          category: "missing_credential",
+          severity: "customer_action_required",
+          title: "Credential setup is incomplete",
+          detail: "The adapter needs a configured API key or completed CLI login before this agent can run.",
+          nextActions: ["open_credentials", "run_adapter_test", "retry"],
+        },
         summary: "done",
         nestedHuge: { payload: "y".repeat(256_000) },
       },
@@ -204,6 +211,13 @@ describeEmbeddedPostgres("activity service", () => {
       stopReason: "timeout",
       effectiveTimeoutSec: 30,
       timeoutFired: true,
+      failureClassification: {
+        category: "missing_credential",
+        severity: "customer_action_required",
+        title: "Credential setup is incomplete",
+        detail: "The adapter needs a configured API key or completed CLI login before this agent can run.",
+        nextActions: ["open_credentials", "run_adapter_test", "retry"],
+      },
     });
     expect(runs[0]).toMatchObject({
       livenessState: "advanced",

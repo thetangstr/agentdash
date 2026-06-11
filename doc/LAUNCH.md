@@ -4,7 +4,11 @@ How to take AgentDash from a clean clone to your first paying customer. Read top
 
 The local-trusted dev experience (`pnpm dev` → `localhost:3100/cos`) needs none of this. Everything below is for a real cloud deployment with a real signed-up user paying through Stripe.
 
-> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), `agentdash setup` is enough — one prompt (pick adapter) and safe defaults for everything else; the founding-user account is created on the dashboard's sign-up form (Better Auth), not in the CLI. The wizard auto-detects Tailscale and picks `bind=tailnet` if available, else falls back to loopback. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
+> **Cloud container vs bare-metal host.** This doc covers the **cloud container path** — Railway / Fly / Render running the [Dockerfile](../Dockerfile), env vars set through the platform's dashboard. If you're instead running on a bare-metal host you control directly (Mac mini on your LAN, a workstation behind Tailscale, an EC2/Lightsail VM you SSH into), use the macOS/native runbook in [docs/deploy/macos.md](../docs/deploy/macos.md) for a durable launchd service. `agentdash setup` is still the right local/dev first-run path; production pilots should run `authenticated/private` with a real signed-up user and an operator-owned env file. The Stripe + Anthropic env vars (steps 3–4 below) still apply to the bare-metal path if you want billing + real Claude replies.
+
+For the first MSP Mac mini design partner, also capture `scripts/msp-mac-mini-readiness.sh` output and follow `doc/plans/2026-05-27-msp-design-partner-operating-plan.md` before inviting partner users.
+
+**Private Mac mini billing stance.** The first MSP launch is a paid trial, but the customer Mac mini should stay private-network only for week one. Collect payment through AgentDash-owned Stripe/customer-portal/payment-link flow, then record the customer company locally as `pro_trial` or `pro_active`. Do not depend on Stripe webhooks reaching the private Mac mini. Before the second customer, add a pull-based entitlement sync from AgentDash-owned billing into private installs.
 
 ---
 
@@ -107,12 +111,13 @@ If the MiniMax call errors or returns empty, dispatch falls back to the `claude_
 
 This is the inference path for the usage-based **Cloud SKU** — OpenRouter/Fireworks return per-request `usage` (OpenRouter returns actual `usage.cost`) for metered billing (see [doc/2026-06-08-deployment-and-inference-skus.md](2026-06-08-deployment-and-inference-skus.md), milestones G3/G4). On error or empty reply, dispatch falls back to the `claude_api` path. No new SDK dependency — it's a fetch wrapper.
 
-Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) currently fall back to the `claude_api` path with a warning log; they get adapter coverage at agent-execution time, not at CoS-chat time. Without ANY of these, the dispatch falls back to a stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
+Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) are not CoS-chat adapters today. They get adapter coverage at agent-execution time, not at CoS-chat time. If `AGENTDASH_DEFAULT_ADAPTER` is set to an unsupported CoS-chat adapter, the server returns HTTP 501 instead of silently misrouting the turn. If `claude_api` is selected without `ANTHROPIC_API_KEY`, the dispatch returns the local stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
 
 | Var | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed for `claude_api` path or fallback) |
-| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` / `gemini_local` / `codex_local` / `opencode_local` / `acpx_local` / `cursor` (default `claude_api` if unset) |
+| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` for CoS chat (default `claude_api` if unset). Other adapters are for agent execution unless separately wired into CoS chat. |
+| `AGENTDASH_HERMES_COMMAND` | Optional absolute path to `hermes`; defaults to `hermes` on PATH. |
 
 Costs for the API path are minimal at chat scale — the system prompt is cached (`cache_control: ephemeral`), so each repeat turn within a conversation is ~10% the input cost of the first.
 
@@ -226,3 +231,25 @@ BILLING_PUBLIC_BASE_URL=https://your-domain.com
 ```
 
 That's it. With those env vars and a Postgres connection string, AgentDash launches.
+
+## Error tracking (Sentry)
+
+Remote error tracking via [Sentry](https://sentry.io) is **optional and disabled by default**. When `SENTRY_DSN` is unset, the server runs exactly as before — no remote capture, no startup overhead, no behavior change.
+
+It uses a tiny built-in transport (the global `fetch` available in Node 24) that
+POSTs a minimal event to Sentry's ingestion endpoint derived from the DSN — **no
+extra npm dependency required** (so it never touches the lockfile that CI owns).
+
+To enable it, set the DSN for your Sentry project on the server:
+
+```sh
+# Optional — leave unset to disable error tracking entirely.
+export SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+```
+
+When set, the server captures 5xx responses and unhandled errors (including
+uncaught exceptions and unhandled promise rejections). `environment` is taken
+from `NODE_ENV`. Capture is fire-and-forget with a short timeout and all
+transport errors are swallowed, so it never blocks or fails a request. Existing
+pino logging and HTTP responses are unchanged; Sentry capture is purely
+additive.
