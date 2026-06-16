@@ -1,0 +1,43 @@
+import type { BeatConfig } from "./types.js";
+
+export const BEATS: BeatConfig[] = [
+  { slug: "armed-conflict", agentName: "Armed Conflict & War", goalSlug: "conflict", clockchainTool: "attest_action",
+    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://www.aljazeera.com/xml/rss/all.xml"] },
+  { slug: "geopolitics", agentName: "Geopolitics & Diplomacy", goalSlug: "geopolitics", clockchainTool: "verify_cross_party",
+    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://www.aljazeera.com/xml/rss/all.xml"] },
+  { slug: "elections", agentName: "Elections & Governance", goalSlug: "elections", clockchainTool: "log_action",
+    feeds: ["https://feeds.bbci.co.uk/news/politics/rss.xml"] },
+  { slug: "science", agentName: "Science & Research", goalSlug: "science", clockchainTool: "build_evidence_package",
+    feeds: ["https://www.sciencedaily.com/rss/all.xml", "http://export.arxiv.org/rss/physics"] },
+  { slug: "health", agentName: "Health & Medicine", goalSlug: "health", clockchainTool: "attest_action",
+    feeds: ["https://feeds.bbci.co.uk/news/health/rss.xml", "https://www.sciencedaily.com/rss/health_medicine.xml"] },
+  { slug: "space", agentName: "Space & Astronomy", goalSlug: "space", clockchainTool: "get_timestamp",
+    feeds: ["https://www.sciencedaily.com/rss/space_time.xml", "https://www.nasa.gov/feed/"] },
+  { slug: "climate", agentName: "Climate & Environment", goalSlug: "climate", clockchainTool: "log_action",
+    feeds: ["https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"] },
+  { slug: "tech-ai", agentName: "Technology & AI", goalSlug: "tech", clockchainTool: "mint_identity",
+    feeds: ["https://feeds.bbci.co.uk/news/technology/rss.xml", "https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml"] },
+  { slug: "markets", agentName: "Markets & Finance", goalSlug: "markets", clockchainTool: "tsa_attest",
+    feeds: ["https://feeds.bbci.co.uk/news/business/rss.xml"] },
+  { slug: "crypto", agentName: "Crypto & Web3", goalSlug: "crypto", clockchainTool: "verify_receipt",
+    feeds: ["https://www.coindesk.com/arc/outboundfeeds/rss/"] },
+  { slug: "energy", agentName: "Energy & Commodities", goalSlug: "energy", clockchainTool: "log_action",
+    feeds: ["https://feeds.bbci.co.uk/news/business/rss.xml"] },
+  { slug: "sports", agentName: "Sports — Major Events", goalSlug: "sports", clockchainTool: "attest_action",
+    feeds: ["https://feeds.bbci.co.uk/sport/rss.xml", "https://www.espn.com/espn/rss/news"] },
+  { slug: "disasters", agentName: "Disasters & Humanitarian", goalSlug: "disasters", clockchainTool: "build_evidence_package",
+    feeds: ["https://reliefweb.int/updates/rss.xml"] },
+  { slug: "law-justice", agentName: "Law & Justice", goalSlug: "law", clockchainTool: "generate_audit_trail",
+    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml"] },
+  { slug: "business", agentName: "Business & Corporate", goalSlug: "business", clockchainTool: "attest_action",
+    feeds: ["https://feeds.bbci.co.uk/news/business/rss.xml"] },
+  { slug: "culture", agentName: "Culture & Entertainment", goalSlug: "culture", clockchainTool: "log_action",
+    feeds: ["https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml"] },
+  { slug: "migration", agentName: "Migration & Society", goalSlug: "migration", clockchainTool: "verify_cross_party",
+    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml"] },
+  { slug: "macro", agentName: "Macro & Central Banks", goalSlug: "macro", clockchainTool: "tsa_checkpoint",
+    feeds: ["https://feeds.bbci.co.uk/news/business/rss.xml"] },
+];
+
+export const COS_AGENT_NAME = "Atlas";
+export const COS_CLOCKCHAIN_TOOL = "generate_compliance_report";

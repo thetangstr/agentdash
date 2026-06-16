@@ -522,6 +522,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.888.0
         version: 3.994.0
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
       '@paperclipai/adapter-acpx-local':
         specifier: workspace:*
         version: link:../packages/adapters/acpx-local
@@ -597,6 +600,9 @@ importers:
       express-rate-limit:
         specifier: ^7.5.0
         version: 7.5.1(express@5.2.1)
+      fast-xml-parser:
+        specifier: '>=5.5.6'
+        version: 5.8.0
       googleapis:
         specifier: ^173.0.0
         version: 173.0.0
