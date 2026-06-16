@@ -4,7 +4,7 @@ export const BEATS: BeatConfig[] = [
   { slug: "armed-conflict", agentName: "Armed Conflict & War", goalSlug: "conflict", clockchainTool: "attest_action",
     feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://www.aljazeera.com/xml/rss/all.xml"] },
   { slug: "geopolitics", agentName: "Geopolitics & Diplomacy", goalSlug: "geopolitics", clockchainTool: "verify_cross_party",
-    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://rss.dw.com/rdf/rss-en-world"] },
+    feeds: ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://www.aljazeera.com/xml/rss/all.xml"] },
   { slug: "elections", agentName: "Elections & Governance", goalSlug: "elections", clockchainTool: "log_action",
     feeds: ["https://feeds.bbci.co.uk/news/politics/rss.xml"] },
   { slug: "science", agentName: "Science & Research", goalSlug: "science", clockchainTool: "build_evidence_package",

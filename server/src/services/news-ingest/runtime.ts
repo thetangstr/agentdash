@@ -8,6 +8,7 @@ import { assertNoActiveNewsAgents } from "./guard.js";
 import { connectClockchain } from "./clockchain-client.js";
 import { createMinimaxLlm, extractEvent } from "./extractor.js";
 import { recordEvent } from "./writer.js";
+import { sourceUrlHash } from "./event-hash.js";
 import type { IngestResult } from "./types.js";
 
 export interface RunCycleOptions {
@@ -55,10 +56,30 @@ export async function runCycle(db: Db, opts: RunCycleOptions): Promise<IngestRes
         maxPerBeat,
         fetchText,
         extract: (item, b) => extractEvent(item, b, { llm }),
-        attest: async (tool, args) => {
+        // Every event is notarized via attest_action (returns the verifiable
+        // receipt: eventHash + on-chain anchor). The beat's specialty tool
+        // (beat.clockchainTool) is stored on the row as the agent's signature.
+        attest: async (item, extracted) => {
           if (opts.dryRun || !cc) return { dryRun: true };
           await pace();
-          return cc.client.attest(tool, args);
+          return cc.client.attest("attest_action", {
+            agent_id: beat.agentName,
+            action: `news.${beat.slug}.event`,
+            inputs: {
+              title: item.title,
+              sourceUrl: item.link,
+              outlet: item.outlet,
+              occurredAt: item.publishedAt?.toISOString() ?? null,
+              beat: beat.slug,
+            },
+            outputs: {
+              entities: extracted.entities,
+              geo: extracted.geo,
+              confidence: extracted.confidence,
+              inflection: extracted.inflection,
+            },
+            idempotency_key: sourceUrlHash(item.link),
+          });
         },
         record: async (item, extracted, receipt) => {
           if (opts.dryRun) return { inserted: true };
