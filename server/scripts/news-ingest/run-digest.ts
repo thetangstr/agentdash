@@ -2,12 +2,12 @@
 // Queries today's news_events for the Atlas Wire company, builds per-agent
 // and atlas-level daily digest issues (status="done"), and inserts them directly.
 // Run once per day (see deploy/launchd plist in Task 13).
-import { createDb, companies, agents, issues } from "../../packages/db/src/index.js";
-import { newsEvents } from "../../packages/db/src/index.js";
+import { createDb, companies, agents, issues } from "@paperclipai/db";
+import { newsEvents } from "@paperclipai/db";
 import { and, eq, gte } from "drizzle-orm";
-import { loadConfig } from "../../server/src/config.js";
-import { buildDigests } from "../../server/src/services/news-ingest/digest.js";
-import { COS_AGENT_NAME } from "../../server/src/services/news-ingest/feeds.js";
+import { loadConfig } from "../../src/config.js";
+import { buildDigests } from "../../src/services/news-ingest/digest.js";
+import { COS_AGENT_NAME } from "../../src/services/news-ingest/feeds.js";
 
 function flag(name: string): string | null {
   const i = process.argv.indexOf(name);
