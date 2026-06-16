@@ -8,7 +8,7 @@ export interface IngestBeatDeps {
   maxPerBeat: number;
   fetchText: (url: string) => Promise<string>;
   extract: (item: NewsItem, beat: BeatConfig) => Promise<ExtractedEvent>;
-  attest: (tool: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  attest: (item: NewsItem, extracted: ExtractedEvent) => Promise<Record<string, unknown>>;
   record: (item: NewsItem, extracted: ExtractedEvent, receipt: Record<string, unknown>) => Promise<{ inserted: boolean }>;
 }
 
@@ -34,13 +34,7 @@ export async function ingestBeat(beat: BeatConfig, deps: IngestBeatDeps): Promis
     if (result.newEvents >= deps.maxPerBeat) break;
     try {
       const extracted = await deps.extract(item, beat);
-      const receipt = await deps.attest(beat.clockchainTool, {
-        action: "news.event",
-        beat: beat.slug,
-        title: item.title,
-        sourceUrl: item.link,
-        occurredAt: item.publishedAt?.toISOString() ?? null,
-      });
+      const receipt = await deps.attest(item, extracted);
       const { inserted } = await deps.record(item, extracted, receipt);
       if (inserted) result.newEvents += 1;
       else result.skippedDuplicates += 1;

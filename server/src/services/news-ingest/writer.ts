@@ -2,6 +2,7 @@ import type { Db } from "@paperclipai/db";
 import { newsEvents } from "@paperclipai/db";
 import { logActivity as realLogActivity } from "../activity-log.js";
 import { canonicalEventHash, sourceUrlHash } from "./event-hash.js";
+import { normalizeReceipt } from "./clockchain-client.js";
 import type { ExtractedEvent, NewsItem } from "./types.js";
 
 export interface RecordEventInput {
@@ -11,7 +12,7 @@ export interface RecordEventInput {
   clockchainTool: string;
   item: NewsItem;
   extracted: ExtractedEvent;
-  receipt: { ledgerId?: string; blockHeight?: string; clockchainTime?: string } & Record<string, unknown>;
+  receipt: Record<string, unknown>;
 }
 
 export async function recordEvent(
@@ -21,7 +22,10 @@ export async function recordEvent(
 ): Promise<{ inserted: boolean; id?: string }> {
   const log = deps.logActivity ?? realLogActivity;
   const urlHash = sourceUrlHash(input.item.link);
-  const eventHash = canonicalEventHash({
+  const norm = normalizeReceipt(input.receipt);
+  // Prefer the Clockchain-anchored event hash (the verifiable one); fall back to
+  // our canonical hash when the receipt has none (e.g. dry-run / failed anchor).
+  const eventHash = norm.eventHash ?? canonicalEventHash({
     title: input.item.title, beat: input.beat, sourceUrl: input.item.link,
     occurredAt: input.item.publishedAt?.toISOString() ?? "",
   });
@@ -37,10 +41,10 @@ export async function recordEvent(
       sourceUrlHash: urlHash,
       sourceOutlet: input.item.outlet,
       occurredAt: input.item.publishedAt,
-      clockchainTime: input.receipt.clockchainTime ?? null,
+      clockchainTime: norm.clockchainTime ?? null,
       eventHash,
-      ledgerId: input.receipt.ledgerId ?? null,
-      blockHeight: input.receipt.blockHeight ?? null,
+      ledgerId: norm.ledgerId ?? null,
+      blockHeight: norm.blockHeight ?? null,
       clockchainTool: input.clockchainTool,
       entities: input.extracted.entities,
       geo: input.extracted.geo,
@@ -67,8 +71,8 @@ export async function recordEvent(
       title: input.item.title,
       sourceUrl: input.item.link,
       outlet: input.item.outlet,
-      ledgerId: input.receipt.ledgerId ?? null,
-      blockHeight: input.receipt.blockHeight ?? null,
+      ledgerId: norm.ledgerId ?? null,
+      blockHeight: norm.blockHeight ?? null,
     },
   });
   return { inserted: true, id: row.id };
