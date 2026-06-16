@@ -104,3 +104,5 @@ export type { HealAttempt, HealEvent } from "./heal_attempts.js";
 export { reengagementEmails } from "./reengagement-emails.js";
 // AgentDash: Connectors (AGE-106)
 export { connections, connectorWorkspaceDefaults, agentConnectorOverrides } from "./connections.js";
+// AgentDash: Atlas Wire world-events newsroom
+export { newsEvents } from "./news_events.js";
