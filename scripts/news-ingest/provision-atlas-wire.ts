@@ -20,16 +20,21 @@ async function main() {
     if (dryRun) { console.log(`[dry] would create company ${name}`); }
     else company = (await db.insert(companies).values({ name }).returning())[0];
   }
-  const companyId = company?.id ?? "(dry-run)";
-  console.log(`company: ${companyId}`);
+  const companyId = company?.id ?? null;
+  // In dry-run before the company exists, companyId is null — skip DB lookups
+  // (a string placeholder would crash the uuid-typed columns) and just preview.
+  const companyMissingInDryRun = dryRun && !companyId;
+  console.log(`company: ${companyId ?? "(dry-run, not yet created)"}`);
 
   // 2. CoS (Atlas) — paused. reportsTo = null.
   async function upsertAgent(input: { name: string; title: string; tool: string; reportsTo: string | null }) {
-    const existing = (await db.select().from(agents).where(and(eq(agents.companyId, companyId), eq(agents.name, input.name))))[0];
+    const existing = companyMissingInDryRun
+      ? undefined
+      : (await db.select().from(agents).where(and(eq(agents.companyId, companyId!), eq(agents.name, input.name))))[0];
     if (existing) return existing.id;
     if (dryRun) { console.log(`[dry] would create agent ${input.name} (paused)`); return "(dry)"; }
     const row = (await db.insert(agents).values({
-      companyId,
+      companyId: companyId!,
       name: input.name,
       title: input.title,
       role: "general",
@@ -48,10 +53,12 @@ async function main() {
 
   // 3. Company vision goal + per-desk goals + beat agents.
   async function upsertGoal(input: { title: string; level: string; parentId: string | null; ownerAgentId: string | null }) {
-    const existing = (await db.select().from(goals).where(and(eq(goals.companyId, companyId), eq(goals.title, input.title))))[0];
+    const existing = companyMissingInDryRun
+      ? undefined
+      : (await db.select().from(goals).where(and(eq(goals.companyId, companyId!), eq(goals.title, input.title))))[0];
     if (existing) return existing.id;
     if (dryRun) { console.log(`[dry] would create goal ${input.title}`); return "(dry)"; }
-    return (await db.insert(goals).values({ companyId, title: input.title, level: input.level, status: "active", parentId: input.parentId, ownerAgentId: input.ownerAgentId }).returning())[0].id;
+    return (await db.insert(goals).values({ companyId: companyId!, title: input.title, level: input.level, status: "active", parentId: input.parentId, ownerAgentId: input.ownerAgentId }).returning())[0].id;
   }
 
   const visionId = await upsertGoal({ title: "A verifiable public ledger of significant world events", level: "company", parentId: null, ownerAgentId: atlasId });
