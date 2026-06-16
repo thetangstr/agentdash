@@ -54,9 +54,9 @@
     "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts",
     "perf:issue-chat-long-thread": "node scripts/measure-issue-chat-long-thread.mjs",
     "audit:deps": "pnpm audit --audit-level=high --prod",
-    "news:ingest": "tsx scripts/news-ingest/run-cycle.ts",
-    "news:provision": "tsx scripts/news-ingest/provision-atlas-wire.ts",
-    "news:digest": "tsx scripts/news-ingest/run-digest.ts"
+    "news:ingest": "tsx server/scripts/news-ingest/run-cycle.ts",
+    "news:provision": "tsx server/scripts/news-ingest/provision-atlas-wire.ts",
+    "news:digest": "tsx server/scripts/news-ingest/run-digest.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

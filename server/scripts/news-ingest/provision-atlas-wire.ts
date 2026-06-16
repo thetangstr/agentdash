@@ -1,8 +1,8 @@
 // scripts/news-ingest/provision-atlas-wire.ts
-import { createDb, companies, agents, goals } from "../../packages/db/src/index.js";
+import { createDb, companies, agents, goals } from "@paperclipai/db";
 import { and, eq } from "drizzle-orm";
-import { loadConfig } from "../../server/src/config.js";
-import { BEATS, COS_AGENT_NAME, COS_CLOCKCHAIN_TOOL } from "../../server/src/services/news-ingest/feeds.js";
+import { loadConfig } from "../../src/config.js";
+import { BEATS, COS_AGENT_NAME, COS_CLOCKCHAIN_TOOL } from "../../src/services/news-ingest/feeds.js";
 
 const has = (n: string) => process.argv.includes(n);
 
