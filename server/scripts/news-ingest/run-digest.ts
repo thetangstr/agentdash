@@ -4,7 +4,7 @@
 // Run once per day (see deploy/launchd plist in Task 13).
 import { createDb, companies, agents, issues } from "@paperclipai/db";
 import { newsEvents } from "@paperclipai/db";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { loadConfig } from "../../src/config.js";
 import { buildDigests } from "../../src/services/news-ingest/digest.js";
 import { COS_AGENT_NAME } from "../../src/services/news-ingest/feeds.js";
@@ -66,8 +66,32 @@ async function main() {
   }
 
   const now = new Date();
+  const day = todayUtc.toISOString().slice(0, 10);
+  const fingerprintFor = (agentId: string) => `${agentId}:${day}`;
+
+  // Idempotency: skip digests whose (originKind, originFingerprint) issue already
+  // exists for today, so a re-run (or a launchd retry) does not create duplicates.
+  const fingerprints = digests.map((d) => fingerprintFor(d.agentId));
+  const existing = fingerprints.length
+    ? await db
+        .select({ fp: issues.originFingerprint })
+        .from(issues)
+        .where(and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, "atlas_wire_digest"),
+          inArray(issues.originFingerprint, fingerprints),
+        ))
+    : [];
+  const alreadyDone = new Set(existing.map((r) => r.fp));
+  const fresh = digests.filter((d) => !alreadyDone.has(fingerprintFor(d.agentId)));
+
+  if (fresh.length === 0) {
+    console.log(JSON.stringify({ created: 0, skipped: digests.length, note: `digests already generated for ${day}` }, null, 2));
+    return;
+  }
+
   const inserted = await db.insert(issues).values(
-    digests.map((d) => ({
+    fresh.map((d) => ({
       companyId,
       title: d.title,
       description: d.body,
@@ -77,11 +101,11 @@ async function main() {
       createdByAgentId: d.agentId,
       completedAt: now,
       originKind: "atlas_wire_digest" as const,
-      originFingerprint: `${d.agentId}:${todayUtc.toISOString().slice(0, 10)}`,
+      originFingerprint: fingerprintFor(d.agentId),
     }))
   ).returning({ id: issues.id });
 
-  console.log(JSON.stringify({ created: inserted.length, digests: digests.map((d) => ({ agentId: d.agentId, count: d.count, title: d.title })) }, null, 2));
+  console.log(JSON.stringify({ created: inserted.length, skipped: digests.length - fresh.length, digests: fresh.map((d) => ({ agentId: d.agentId, count: d.count, title: d.title })) }, null, 2));
 }
 
 void main().catch((e) => { console.error(e); process.exit(1); });
