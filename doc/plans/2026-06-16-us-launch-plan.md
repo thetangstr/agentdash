@@ -48,19 +48,32 @@ Research: the SaaS-vs-self-host binary is dead; every leader ships **BYOC** (ven
 - **Self-host / BYOC (Enterprise):** Docker today (already running on the mini), **Kubernetes next** — and upstream already shipped a **self-hostable Kubernetes sandbox provider** (`#5790` + `#7938` + `#7934`, the plugin-kubernetes 3-stage series) plus agent-runtime sandbox images. That is the cleanest foundation for the self-host SKU's isolated agent execution. Adopt it for the Enterprise SKU rather than building from scratch.
 - **Isolation:** for running agent-generated code at scale, microVM/pod isolation is the bar (upstream K8s sandbox provides this).
 
+### 4a. The access/exposure ladder (external-service requests fold in here)
+
+"Give person X access" and "how do we host/deploy" are the **same ladder** — each rung is how an external party reaches an AgentDash instance, in increasing reach/control. External-access requests are served by picking the right rung, not by a separate mechanism.
+
+| Rung | Mechanism | Reach | Use it for | Guardrails |
+|------|-----------|-------|------------|------------|
+| 0 | Tailnet-only (`tailscale serve`) | People on our tailnet | Internal dev / our own use | Tailnet ACLs |
+| 1 | **Tailscale Funnel** (`tailscale funnel`) | Anyone with the URL | Quick external pilots, one-off viewers, demos | Login-gated + per-company membership + rate limit + `PAPERCLIP_ALLOWED_HOSTNAMES` |
+| 2 | Cloudflare Tunnel + Access on a `*.clockchain.network` subdomain | Public, custom domain | Ongoing customer-facing access, per-person email allowlist in front of app auth | CF Access OTP + app auth + WAF |
+| 3 | Managed cloud deploy | Public SaaS | GA managed SKU (Free/Pro) | Full prod hardening + Stripe caps |
+| 4 | BYOC / on-prem (Docker → K8s sandbox provider) | Customer's own cloud | Enterprise / regulated | Customer-owned infra; we ship control plane |
+
+**Current state (2026-06-16):** Rung 1 is **live** — the mini is funneled at `https://mac-mini.tail112187.ts.net/` for external pilots (login-gated, rate limit re-enabled at `API_MAX=10000`, hostname allow-listed). This is the pilot path; Rung 2 (Cloudflare on a clockchain subdomain) is the next step for anything customer-facing, and Rungs 3–4 are the GA SKUs. **An external-access request = "which rung, and add their membership," nothing bespoke.**
+
 ---
 
 ## 5. Security must-dos before any public exposure
 
 Going to market = going public, which changes the threat model from the current private tailnet box:
 
-- **Re-enable the rate limiter** (currently disabled on the mini for tailnet use) — set a high `AGENTDASH_RATE_LIMIT_API_MAX`, keep auth/billing/invite limits. Also fix the latent bug where the limiter sits above the `/api` prefix so its `/health` skip never matches (cherry-pick-worthy cleanup).
-- **Set `PAPERCLIP_ALLOWED_HOSTNAMES`** to the public host(s).
+- **Rate limiter — DONE for the Rung-1 funnel** (re-enabled at `AGENTDASH_RATE_LIMIT_API_MAX=10000`, auth/billing/invite limits intact). Still TODO: fix the latent bug where the limiter sits above the `/api` prefix so its `/health` skip never matches (small code PR).
+- **`PAPERCLIP_ALLOWED_HOSTNAMES` — DONE** for the funnel host (`mac-mini.tail112187.ts.net` added).
 - **Adopt upstream tenant-isolation security work** (high priority for multi-customer cloud):
-  - `bb7978327` — redact passwords/tokens from HTTP error logs (we handle live tokens; do this first).
-  - `70357b961` — per-company JWT signing keys (multi-tenant isolation).
-  - `05bcd3ce8` — plugin tables get `company_id` FK (tenant isolation).
-- **Billing enforcement on:** set `STRIPE_SECRET_KEY` so caps are enforced (Free 1+1, Pro per-seat) — currently bypassed on the mini.
+  - `bb7978327` redact tokens from logs + `70357b961` per-company JWT keys — **DONE, in PR #403.**
+  - `05bcd3ce8` plugin `company_id` FK tenant isolation — **deferred** (migration/`NULLS NOT DISTINCT` index reconciliation on our line; see PR #403 description). Do before multi-customer GA.
+- **Billing enforcement on:** set `STRIPE_SECRET_KEY` so caps are enforced (Free 1+1, Pro per-seat) — currently bypassed on the mini. Required before Rung 3 (managed GA).
 
 ---
 
