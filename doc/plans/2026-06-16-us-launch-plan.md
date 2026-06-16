@@ -62,6 +62,19 @@ Research: the SaaS-vs-self-host binary is dead; every leader ships **BYOC** (ven
 
 **Current state (2026-06-16):** Rung 1 is **live** — the mini is funneled at `https://mac-mini.tail112187.ts.net/` for external pilots (login-gated, rate limit re-enabled at `API_MAX=10000`, hostname allow-listed). This is the pilot path; Rung 2 (Cloudflare on a clockchain subdomain) is the next step for anything customer-facing, and Rungs 3–4 are the GA SKUs. **An external-access request = "which rung, and add their membership," nothing bespoke.**
 
+**Instance separation (2026-06-16):** the mini now runs **two** instances — `:3100` PUBLIC (funnel) with the demo companies (Atlas Wire + Meridian Pay), and `:3200` PRIVATE (tailnet-only) with the 8 internal/work companies. This is the concrete first instance of the strategy: **demos on a public instance, real work on a private one** — which generalizes to "managed cloud (customers) vs private/BYOC (us / enterprise)."
+
+### 4b. Access & identity (how people get into an instance)
+
+Reaching an instance (rungs above) is separate from getting *in*. Identity = **an account + a per-company membership**; a signup with no membership sees nothing (the gate). Roles: `owner`, `admin`, `operator`, **`viewer` (read-only)**, `member`.
+
+Three grant paths (all end with the recipient setting their own password — we never mint shared passwords):
+- **Invite by email (product way, default):** board user → `POST /api/onboarding/invites {companyId, emails[], autoApprove:true}` → Resend sends `/invite/<token>` → recipient signs up → auto-member. Scales, audited.
+- **Manual membership:** recipient self-signs-up → we add a `company_memberships` row.
+- **Shared `viewer` account:** read-only guest on a demo company for hand-out demos.
+
+**Demo guidance:** invite demo lookers as **`viewer`** (read-only — can't mutate the live demo); reserve `member`/`admin` for real collaborators. For the broadest, zero-login demo, point people at the static `clockchain-research /atlas-wire` site; the live funnel instance is for hands-on access. This invite + role-gated membership model **is** the identity layer of the managed SKU.
+
 ---
 
 ## 5. Security must-dos before any public exposure
