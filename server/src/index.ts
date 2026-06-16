@@ -482,6 +482,7 @@ export async function startServer(): Promise<StartedServer> {
   
   let authReady = config.deploymentMode === "local_trusted";
   let betterAuthHandler: RequestHandler | undefined;
+  let betterAuthInstance: Parameters<typeof createApp>[1]["betterAuth"] | undefined;
   let resolveSession:
     | ((req: ExpressRequest) => Promise<BetterAuthSessionResult | null>)
     | undefined;
@@ -597,6 +598,7 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
+    betterAuthInstance = auth as any;
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
   }
@@ -697,6 +699,7 @@ export async function startServer(): Promise<StartedServer> {
     pluginUiPublicBaseUrl: config.authPublicBaseUrl,
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
+    betterAuth: betterAuthInstance,
     resolveSession,
     pluginWorkerManager,
     // AgentDash: corp-email requirement removed at user request
