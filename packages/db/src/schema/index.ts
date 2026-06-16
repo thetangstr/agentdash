@@ -100,3 +100,5 @@ export { healAttempts, healEvents } from "./heal_attempts.js";
 export type { HealAttempt, HealEvent } from "./heal_attempts.js";
 // AgentDash: cold-signup re-engagement (#228)
 export { reengagementEmails } from "./reengagement-emails.js";
+// AgentDash: Atlas Wire world-events newsroom
+export { newsEvents } from "./news_events.js";
