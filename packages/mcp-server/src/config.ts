@@ -4,6 +4,9 @@ export interface PaperclipMcpConfig {
   companyId: string | null;
   agentId: string | null;
   runId: string | null;
+  // AgentDash: provision key for agentdashOnboardUser tool.
+  // Set via PAPERCLIP_PROVISION_KEY env var; sent as x-provision-key header.
+  provisionKey: string | null;
 }
 
 function nonEmpty(value: string | undefined): string | null {
@@ -35,5 +38,7 @@ export function readConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Papercl
     companyId: nonEmpty(env.PAPERCLIP_COMPANY_ID),
     agentId: nonEmpty(env.PAPERCLIP_AGENT_ID),
     runId: nonEmpty(env.PAPERCLIP_RUN_ID),
+    // AgentDash: provision key — optional; only needed for agentdashOnboardUser.
+    provisionKey: nonEmpty(env.PAPERCLIP_PROVISION_KEY),
   };
 }

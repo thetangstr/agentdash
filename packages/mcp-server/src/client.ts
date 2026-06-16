@@ -25,6 +25,8 @@ export class PaperclipApiError extends Error {
 export interface JsonRequestOptions {
   body?: unknown;
   includeRunId?: boolean;
+  // AgentDash: extra headers merged after the standard Authorization/Accept set.
+  extraHeaders?: Record<string, string>;
 }
 
 function isWriteMethod(method: string): boolean {
@@ -56,6 +58,8 @@ export class PaperclipApiClient {
       companyId: this.config.companyId,
       agentId: this.config.agentId,
       runId: this.config.runId,
+      // AgentDash: provision key for agentdashOnboardUser.
+      provisionKey: this.config.provisionKey,
     };
   }
 
@@ -90,6 +94,9 @@ export class PaperclipApiClient {
     }
     if ((options.includeRunId ?? isWriteMethod(method)) && this.config.runId) {
       headers["X-Paperclip-Run-Id"] = this.config.runId;
+    }
+    if (options.extraHeaders) {
+      Object.assign(headers, options.extraHeaders);
     }
 
     const response = await fetch(url, {
