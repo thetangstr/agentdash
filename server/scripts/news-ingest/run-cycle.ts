@@ -1,8 +1,8 @@
 // scripts/news-ingest/run-cycle.ts
-import { createDb, companies } from "../../packages/db/src/index.js";
+import { createDb, companies } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
-import { loadConfig } from "../../server/src/config.js";
-import { runCycle } from "../../server/src/services/news-ingest/runtime.js";
+import { loadConfig } from "../../src/config.js";
+import { runCycle } from "../../src/services/news-ingest/runtime.js";
 
 function flag(name: string): string | null {
   const i = process.argv.indexOf(name);
