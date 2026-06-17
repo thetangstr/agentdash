@@ -1,19 +1,20 @@
 {
-  "name": "@paperclipai/mcp-server",
+  "name": "@agentdash/mcp-server",
   "version": "0.1.0",
   "license": "MIT",
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "description": "AgentDash MCP server — Model Context Protocol tools for AgentDash workspaces, agents, and onboarding.",
+  "homepage": "https://github.com/thetangstr/agentdash",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/thetangstr/agentdash/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "git+https://github.com/thetangstr/agentdash.git",
     "directory": "packages/mcp-server"
   },
   "type": "module",
   "bin": {
-    "paperclip-mcp-server": "./dist/stdio.js"
+    "agentdash-mcp-server": "./dist/stdio.js"
   },
   "exports": {
     ".": "./src/index.ts"
@@ -21,7 +22,7 @@
   "publishConfig": {
     "access": "public",
     "bin": {
-      "paperclip-mcp-server": "./dist/stdio.js"
+      "agentdash-mcp-server": "./dist/stdio.js"
     },
     "exports": {
       ".": {
@@ -37,18 +38,19 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config);\" && chmod +x dist/stdio.js",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@paperclipai/shared": "workspace:*",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@paperclipai/shared": "workspace:*",
     "@types/node": "^24.6.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }

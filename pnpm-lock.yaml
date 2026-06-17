@@ -297,16 +297,19 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
-      '@paperclipai/shared':
-        specifier: workspace:*
-        version: link:../shared
       zod:
         specifier: ^3.24.2
         version: 3.25.76
     devDependencies:
+      '@paperclipai/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^24.6.0
         version: 24.12.0
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

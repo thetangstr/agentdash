@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { runServer } from "./index.js";
 
 void runServer().catch((error) => {
