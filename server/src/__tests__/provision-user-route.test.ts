@@ -270,7 +270,9 @@ describe("POST /api/onboarding/provision-user", () => {
         .send({ email: "alice@example.com", name: "Alice", companyName: "Acme Corp" });
 
       expect(mockOnboardingOrchestrator.bootstrap).toHaveBeenCalledOnce();
-      expect(mockOnboardingOrchestrator.bootstrap).toHaveBeenCalledWith(USER_ID);
+      // Identity is passed through (id + name) so bootstrap skips the auth_users
+      // lookup the just-created user isn't yet visible to.
+      expect(mockOnboardingOrchestrator.bootstrap).toHaveBeenCalledWith(USER_ID, { id: USER_ID, name: "Alice" });
     });
 
     it("accepts optional redirectTo in body without error", async () => {
