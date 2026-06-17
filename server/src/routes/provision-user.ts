@@ -206,8 +206,10 @@ export function provisionUserRoutes(
       });
 
       // bootstrap() will find the active membership, skip company creation,
-      // and provision the CoS agent + conversation.
-      const bootstrapResult = await orch.bootstrap(userId);
+      // and provision the CoS agent + conversation. Pass the identity directly
+      // (id + name) because the just-created user isn't yet visible to the
+      // auth_users lookup bootstrap would otherwise use.
+      const bootstrapResult = await orch.bootstrap(userId, { id: userId, name });
 
       logger.info(
         { userId, companyId: bootstrapResult.companyId, cosAgentId: bootstrapResult.cosAgentId },
