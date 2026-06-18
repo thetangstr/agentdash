@@ -168,12 +168,26 @@ export async function createApp(
 ) {
   const app = express();
 
+  // AgentDash: capture the raw request body so downstream webhook/connector
+  // routes (Stripe, Slack) can verify HMAC signatures. Shared by both the JSON
+  // and urlencoded parsers so the captured bytes are identical regardless of
+  // content-type. Each parser only handles its own content-type, so registering
+  // both is safe and non-overlapping.
+  const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+    (req as unknown as { rawBody: Buffer }).rawBody = buf;
+  };
   app.use(express.json({
     // Company import/export payloads can inline full portable packages.
     limit: "10mb",
-    verify: (req, _res, buf) => {
-      (req as unknown as { rawBody: Buffer }).rawBody = buf;
-    },
+    verify: captureRawBody,
+  }));
+  // AgentDash: Slack sends interactive-component callbacks as
+  // application/x-www-form-urlencoded with a `payload` JSON field. Without this
+  // parser req.body.payload and rawBody are undefined and every interaction 401s.
+  app.use(express.urlencoded({
+    extended: true,
+    limit: "10mb",
+    verify: captureRawBody,
   }));
   app.use(httpLogger);
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({

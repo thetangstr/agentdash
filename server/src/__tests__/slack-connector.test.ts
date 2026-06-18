@@ -1,9 +1,12 @@
 // AgentDash: Slack Connector (AGE-108) — unit tests
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import request from "supertest";
 import {
   verifySlackSignature,
   type SlackEventPayload,
 } from "../services/slack-connector.js";
+import { slackConnectorRoutes } from "../routes/slack-connector.js";
 import crypto from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -202,5 +205,101 @@ describe("Slack default scopes", () => {
   it("includes user scopes for delegated identity", async () => {
     const { SLACK_USER_SCOPES } = await import("../services/slack-connector.js");
     expect(SLACK_USER_SCOPES).toContain("chat:write");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slack connector route security tests (fail-closed + body parsing)
+// ---------------------------------------------------------------------------
+
+describe("Slack connector route security", () => {
+  const SIGNING_SECRET = "test_route_signing_secret_xyz";
+
+  // The events/interactions endpoints short-circuit (503/401) before any DB
+  // access, so a stub db is sufficient for these route-level checks.
+  const stubDb = {} as unknown as Parameters<typeof slackConnectorRoutes>[0];
+
+  function buildApp() {
+    const app = express();
+    // Mirror the parser stack registered in app.ts so rawBody is captured for
+    // both JSON and urlencoded payloads.
+    const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+      (req as unknown as { rawBody: Buffer }).rawBody = buf;
+    };
+    app.use(express.json({ limit: "10mb", verify: captureRawBody }));
+    app.use(express.urlencoded({ extended: true, limit: "10mb", verify: captureRawBody }));
+    app.use("/api/connectors", slackConnectorRoutes(stubDb));
+    return app;
+  }
+
+  function makeSignature(secret: string, timestamp: string, body: string): string {
+    const sigBasestring = `v0:${timestamp}:${body}`;
+    return (
+      "v0=" +
+      crypto.createHmac("sha256", secret).update(sigBasestring, "utf8").digest("hex")
+    );
+  }
+
+  let originalSigningSecret: string | undefined;
+
+  beforeEach(() => {
+    originalSigningSecret = process.env.SLACK_SIGNING_SECRET;
+  });
+
+  afterEach(() => {
+    if (originalSigningSecret === undefined) {
+      delete process.env.SLACK_SIGNING_SECRET;
+    } else {
+      process.env.SLACK_SIGNING_SECRET = originalSigningSecret;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("events endpoint fails closed with 503 when signing secret is unset", async () => {
+    delete process.env.SLACK_SIGNING_SECRET;
+    const res = await request(buildApp())
+      .post("/api/connectors/slack/events")
+      .send({ type: "url_verification", challenge: "abc" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("Slack connector not configured");
+  });
+
+  it("interactions endpoint fails closed with 503 when signing secret is unset", async () => {
+    delete process.env.SLACK_SIGNING_SECRET;
+    const res = await request(buildApp())
+      .post("/api/connectors/slack/interactions")
+      .type("form")
+      .send({ payload: JSON.stringify({ type: "block_actions" }) });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe("Slack connector not configured");
+  });
+
+  it("parses a urlencoded interactions request with a valid signature", async () => {
+    process.env.SLACK_SIGNING_SECRET = SIGNING_SECRET;
+
+    const payloadObj = {
+      type: "block_actions",
+      user: { id: "U123" },
+      channel: { id: "C123" },
+      actions: [{ action_id: "approve_send", value: "ref-1" }],
+    };
+    // Slack url-encodes the form body; replicate the exact wire bytes so the
+    // HMAC matches what verify() computes over rawBody.
+    const rawBody = `payload=${encodeURIComponent(JSON.stringify(payloadObj))}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = makeSignature(SIGNING_SECRET, timestamp, rawBody);
+
+    const res = await request(buildApp())
+      .post("/api/connectors/slack/interactions")
+      .set("Content-Type", "application/x-www-form-urlencoded")
+      .set("x-slack-request-timestamp", timestamp)
+      .set("x-slack-signature", signature)
+      .send(rawBody);
+
+    // A valid signature + urlencoded body parses cleanly and is acked with 200.
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 });

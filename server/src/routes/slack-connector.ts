@@ -82,28 +82,34 @@ export function slackConnectorRoutes(db: Db) {
   router.post("/slack/events", async (req, res) => {
     const config = svc.getConfig();
 
-    // Verify Slack signature if signing secret is configured
-    if (config.signingSecret) {
-      const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
-      const signature = req.headers["x-slack-signature"] as string | undefined;
-      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    // AgentDash: security — FAIL CLOSED. If no signing secret is configured we
+    // cannot verify that requests genuinely originate from Slack, so we must
+    // reject everything rather than process forged payloads. Mirrors the Stripe
+    // webhook guard in billing.ts.
+    if (!config.signingSecret) {
+      res.status(503).json({ error: "Slack connector not configured" });
+      return;
+    }
 
-      if (!timestamp || !signature || !rawBody) {
-        res.status(401).json({ error: "Missing Slack signature headers" });
-        return;
-      }
+    const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
+    const signature = req.headers["x-slack-signature"] as string | undefined;
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
 
-      const isValid = verifySlackSignature(
-        config.signingSecret,
-        timestamp,
-        rawBody.toString("utf8"),
-        signature,
-      );
+    if (!timestamp || !signature || !rawBody) {
+      res.status(401).json({ error: "Missing Slack signature headers" });
+      return;
+    }
 
-      if (!isValid) {
-        res.status(401).json({ error: "Invalid Slack signature" });
-        return;
-      }
+    const isValid = verifySlackSignature(
+      config.signingSecret,
+      timestamp,
+      rawBody.toString("utf8"),
+      signature,
+    );
+
+    if (!isValid) {
+      res.status(401).json({ error: "Invalid Slack signature" });
+      return;
     }
 
     const payload = req.body as SlackEventPayload;
@@ -151,28 +157,31 @@ export function slackConnectorRoutes(db: Db) {
   router.post("/slack/interactions", async (req, res) => {
     const config = svc.getConfig();
 
-    // Verify Slack signature
-    if (config.signingSecret) {
-      const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
-      const signature = req.headers["x-slack-signature"] as string | undefined;
-      const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+    // AgentDash: security — FAIL CLOSED. See /slack/events above.
+    if (!config.signingSecret) {
+      res.status(503).json({ error: "Slack connector not configured" });
+      return;
+    }
 
-      if (!timestamp || !signature || !rawBody) {
-        res.status(401).json({ error: "Missing Slack signature headers" });
-        return;
-      }
+    const timestamp = req.headers["x-slack-request-timestamp"] as string | undefined;
+    const signature = req.headers["x-slack-signature"] as string | undefined;
+    const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
 
-      const isValid = verifySlackSignature(
-        config.signingSecret,
-        timestamp,
-        rawBody.toString("utf8"),
-        signature,
-      );
+    if (!timestamp || !signature || !rawBody) {
+      res.status(401).json({ error: "Missing Slack signature headers" });
+      return;
+    }
 
-      if (!isValid) {
-        res.status(401).json({ error: "Invalid Slack signature" });
-        return;
-      }
+    const isValid = verifySlackSignature(
+      config.signingSecret,
+      timestamp,
+      rawBody.toString("utf8"),
+      signature,
+    );
+
+    if (!isValid) {
+      res.status(401).json({ error: "Invalid Slack signature" });
+      return;
     }
 
     // Slack sends interactions as form-encoded with a `payload` JSON field
