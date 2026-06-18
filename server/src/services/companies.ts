@@ -30,6 +30,7 @@ import {
   documents,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { environmentService } from "./environments.js";
 
 // AgentDash (AGE-55): typed conflict surfaced when a creator tries to claim
@@ -169,11 +170,8 @@ export function companyService(db: Db) {
   }
 
   function pgUniqueConstraintName(error: unknown): string | undefined {
-    if (typeof error !== "object" || error === null) return undefined;
-    if (!("code" in error) || (error as { code?: string }).code !== "23505") return undefined;
-    if ("constraint" in error) return (error as { constraint?: string }).constraint;
-    if ("constraint_name" in error) return (error as { constraint_name?: string }).constraint_name;
-    return undefined;
+    if (!isUniqueViolation(error)) return undefined;
+    return pgConstraintName(error);
   }
 
   function isIssuePrefixConflict(error: unknown) {

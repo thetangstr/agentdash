@@ -23,6 +23,7 @@ import {
 import { parseObject, asBoolean, asNumber } from "../../adapters/utils.js";
 import { runningProcesses } from "../../adapters/index.js";
 import { forbidden, notFound } from "../../errors.js";
+import { isUniqueViolation, pgConstraintName, unwrapPgError } from "../../lib/pg-error.js";
 import { logger } from "../../middleware/logger.js";
 import { redactCurrentUserText } from "../../log-redaction.js";
 import { redactSensitiveText } from "../../redaction.js";
@@ -230,18 +231,19 @@ function livenessRecoveryLeafKey(companyId: string, state: string, leafIssueId: 
 }
 
 function isUniqueLivenessRecoveryConflict(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const maybe = error as { code?: string; constraint?: string; message?: string };
-  return maybe.code === "23505" &&
-    (
-      maybe.constraint === "issues_active_liveness_recovery_incident_uq" ||
-      maybe.constraint === "issues_active_liveness_recovery_leaf_uq" ||
-      typeof maybe.message === "string" &&
-        (
-          maybe.message.includes("issues_active_liveness_recovery_incident_uq") ||
-          maybe.message.includes("issues_active_liveness_recovery_leaf_uq")
-        )
-    );
+  if (!isUniqueViolation(error)) return false;
+  const constraint = pgConstraintName(error);
+  if (
+    constraint === "issues_active_liveness_recovery_incident_uq" ||
+    constraint === "issues_active_liveness_recovery_leaf_uq"
+  ) {
+    return true;
+  }
+  const message = unwrapPgError(error).message ?? "";
+  return (
+    message.includes("issues_active_liveness_recovery_incident_uq") ||
+    message.includes("issues_active_liveness_recovery_leaf_uq")
+  );
 }
 
 function formatDependencyPath(finding: IssueLivenessFinding) {
@@ -869,23 +871,21 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   function isUniqueStaleRunEvaluationConflict(error: unknown) {
-    if (!error || typeof error !== "object") return false;
-    const maybe = error as { code?: string; constraint?: string; message?: string };
-    return maybe.code === "23505" &&
-      (
-        maybe.constraint === "issues_active_stale_run_evaluation_uq" ||
-        typeof maybe.message === "string" && maybe.message.includes("issues_active_stale_run_evaluation_uq")
-      );
+    if (!isUniqueViolation(error)) return false;
+    const message = unwrapPgError(error).message ?? "";
+    return (
+      pgConstraintName(error) === "issues_active_stale_run_evaluation_uq" ||
+      message.includes("issues_active_stale_run_evaluation_uq")
+    );
   }
 
   function isUniqueStrandedIssueRecoveryConflict(error: unknown) {
-    if (!error || typeof error !== "object") return false;
-    const maybe = error as { code?: string; constraint?: string; message?: string };
-    return maybe.code === "23505" &&
-      (
-        maybe.constraint === "issues_active_stranded_issue_recovery_uq" ||
-        typeof maybe.message === "string" && maybe.message.includes("issues_active_stranded_issue_recovery_uq")
-      );
+    if (!isUniqueViolation(error)) return false;
+    const message = unwrapPgError(error).message ?? "";
+    return (
+      pgConstraintName(error) === "issues_active_stranded_issue_recovery_uq" ||
+      message.includes("issues_active_stranded_issue_recovery_uq")
+    );
   }
 
   async function ensureSourceIssueBlockedByStaleEvaluation(input: {

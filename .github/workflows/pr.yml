@@ -123,18 +123,20 @@ jobs:
 
   # Dependency vulnerability audit.
   #
-  # INTENTIONALLY ADVISORY (non-blocking) for now: `continue-on-error: true`
-  # means this job surfaces HIGH/CRITICAL production advisories in the PR
-  # checks UI but never fails the PR. We don't want to block launch on
-  # pre-existing transitive advisories (e.g. the picomatch ReDoS that reaches
-  # us only through vitest/vite). Promote this to a BLOCKING required check
-  # once the existing advisories are triaged/overridden — drop
-  # `continue-on-error` and add it to branch protection.
+  # BLOCKING required check: this job FAILS the PR when `pnpm audit` finds any
+  # HIGH/CRITICAL advisory reachable through the production dependency tree.
+  # The HIGH/CRITICAL production advisories present at launch review (drizzle-orm
+  # SQLi, react-router DoS/XSS, defu/path-to-regexp/lodash-es/undici/hono/
+  # form-data/fast-uri/tmp/multer/ws) were bumped or pinned via root
+  # `pnpm.overrides`, so a clean tree is the expectation. New HIGH/CRITICAL
+  # production advisories must be fixed (bump/override) — do NOT re-add
+  # `continue-on-error` to silence the gate. Dev-only advisories (vitest, vite,
+  # picomatch reached only via test tooling) are excluded by `--prod` and never
+  # block. Keep this as its own fast job and add it to branch protection.
   dependency-audit:
     needs: [policy]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -154,15 +156,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Audit production dependencies (advisory)
-        # Advisory only: `|| true` guarantees a zero exit so the step (and
-        # therefore the job's check) reports SUCCESS even when `pnpm audit`
-        # finds advisories and exits non-zero. `continue-on-error: true` on
-        # the job is a belt-and-suspenders second guard. Findings are still
-        # printed in the step log for triage.
-        run: |
-          pnpm run audit:deps || true
-          echo "::notice::Dependency audit is advisory and never fails the PR. Review the findings above; promote to a blocking check once advisories are triaged."
+      - name: Audit production dependencies (blocking)
+        # `pnpm audit --audit-level=high --prod` exits non-zero on any
+        # HIGH/CRITICAL advisory in the production tree, failing the step and
+        # the job. No `|| true`, no `continue-on-error` — findings block merge.
+        run: pnpm run audit:deps
 
   e2e:
     needs: [policy]
