@@ -4,6 +4,7 @@ import {
   askUserQuestionsPayloadSchema,
   checkoutIssueSchema,
   createApprovalSchema,
+  createCompanySchema,
   createIssueSchema,
   issueThreadInteractionContinuationPolicySchema,
   requestConfirmationPayloadSchema,
@@ -159,6 +160,28 @@ const apiRequestSchema = z.object({
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: z.string().min(1),
   jsonBody: z.string().optional(),
+});
+
+// AgentDash: company-provisioning + CoS onboarding tool schemas.
+const cosChatToolSchema = z.object({
+  companyId: companyIdOptional,
+  message: z.string().min(1),
+});
+
+const readConversationToolSchema = z.object({
+  conversationId: z.string().uuid(),
+  limit: z.number().int().positive().max(200).optional(),
+});
+
+const hireAgentToolSchema = z.object({
+  companyId: companyIdOptional,
+  name: z.string().min(1),
+  adapterType: z.string().min(1),
+  role: z.string().optional(),
+  title: z.string().optional().nullable(),
+  capabilities: z.string().optional().nullable(),
+  desiredSkills: z.array(z.string().min(1)).optional(),
+  budgetMonthlyCents: z.number().int().nonnegative().optional(),
 });
 
 const workspaceRuntimeControlTargetSchema = z.object({
@@ -604,6 +627,75 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
           body: parseOptionalJson(jsonBody),
         });
       },
+    ),
+    // ---- AgentDash: company provisioning + Chief-of-Staff onboarding ----
+    // Lets agents/humans create and set up a workspace through the LLM-led CoS,
+    // reducing onboarding friction. Marked with the agentdash* prefix to keep
+    // these AgentDash extensions distinct from inherited paperclip* tools.
+    makeTool(
+      "agentdashBootstrapWorkspace",
+      "AgentDash: provision a workspace for the authenticated user — creates the company, a Chief of Staff agent, and the opening conversation. The lowest-friction way to start onboarding. Takes no input.",
+      z.object({}),
+      async () => client.requestJson("POST", "/onboarding/bootstrap", { body: {} }),
+    ),
+    makeTool(
+      "agentdashListCompanies",
+      "AgentDash: list the companies (workspaces) the authenticated actor can access",
+      z.object({}),
+      async () => client.requestJson("GET", "/companies"),
+    ),
+    makeTool(
+      "agentdashGetCompany",
+      "AgentDash: get a company (workspace) by id",
+      z.object({ companyId: companyIdOptional }),
+      async ({ companyId }) =>
+        client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}`),
+    ),
+    makeTool(
+      "agentdashCreateCompany",
+      "AgentDash: explicitly create a new company (workspace). For full onboarding prefer agentdashBootstrapWorkspace, which also provisions a Chief of Staff.",
+      createCompanySchema,
+      async (body) => client.requestJson("POST", "/companies", { body }),
+    ),
+    makeTool(
+      "agentdashCosChat",
+      "AgentDash: send a message to a company's Chief of Staff (drives the onboarding interview). The CoS reply is generated asynchronously — call agentdashReadConversation shortly after to read it. Returns the posted message, including its conversationId.",
+      cosChatToolSchema,
+      async ({ companyId, message }) => {
+        const cid = client.resolveCompanyId(companyId);
+        const inbox = await client.requestJson<{ id: string }>(
+          "GET",
+          `/conversations/companies/${cid}/inbox`,
+        );
+        return client.requestJson(
+          "POST",
+          `/conversations/${encodeURIComponent(inbox.id)}/messages`,
+          { body: { body: message, companyId: cid } },
+        );
+      },
+    ),
+    makeTool(
+      "agentdashReadConversation",
+      "AgentDash: read recent messages in a conversation (e.g. to fetch the Chief of Staff's reply after agentdashCosChat)",
+      readConversationToolSchema,
+      async ({ conversationId, limit }) => {
+        const qs = limit ? `?limit=${limit}` : "";
+        return client.requestJson(
+          "GET",
+          `/conversations/${encodeURIComponent(conversationId)}/messages${qs}`,
+        );
+      },
+    ),
+    makeTool(
+      "agentdashHireAgent",
+      "AgentDash: hire an agent into a company (e.g. agents the Chief of Staff proposes during onboarding). adapterType selects the runtime (e.g. claude_code, hermes_local).",
+      hireAgentToolSchema,
+      async ({ companyId, ...body }) =>
+        client.requestJson(
+          "POST",
+          `/companies/${client.resolveCompanyId(companyId)}/agent-hires`,
+          { body },
+        ),
     ),
   ];
 }

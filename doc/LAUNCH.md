@@ -84,8 +84,32 @@ CoS chat (`/cos`) routes replies through `server/src/services/dispatch-llm.ts` b
 | Adapter | What it spawns | Required env |
 |---|---|---|
 | `claude_api` *(default)* | Direct HTTP call to Anthropic's Messages API with prompt caching | `ANTHROPIC_API_KEY=sk-ant-…` |
+| `minimax` | MiniMax via its **Anthropic-compatible** Messages API (same `@anthropic-ai/sdk` client, MiniMax base URL + model) | `MINIMAX_API_KEY=…` (optional: `MINIMAX_BASE_URL`, `MINIMAX_MODEL`) |
+| `openai_compat` | Any **OpenAI-compatible** provider (OpenRouter, Fireworks, Together, Groq) via fetch to `{base}/chat/completions` | `OPENAI_COMPAT_API_KEY=…` (optional: `OPENAI_COMPAT_BASE_URL`, `OPENAI_COMPAT_MODEL`, `OPENAI_COMPAT_MAX_TOKENS`) |
 | `claude_local` | Spawns `claude --print -` with conversation piped to stdin | the `claude` CLI on PATH; auth handled by `claude login` |
 | `hermes_local` | Spawns `hermes chat -q "<prompt>" -Q` | the `hermes` CLI on PATH; Hermes manages its own auth via `hermes setup` |
+
+**MiniMax (`minimax`) details.** MiniMax exposes an Anthropic-compatible endpoint, so it reuses the Anthropic SDK with only the base URL/key/model swapped (`server/src/services/minimax-llm.ts`). Set `AGENTDASH_DEFAULT_ADAPTER=minimax` and:
+
+| Var | Value | Default |
+|---|---|---|
+| `MINIMAX_API_KEY` | your MiniMax key | unset → stub reply |
+| `MINIMAX_BASE_URL` | Anthropic-compat base URL | `https://api.minimaxi.com/anthropic` |
+| `MINIMAX_MODEL` | model id (e.g. `MiniMax-M3`, `MiniMax-M2.5`) | `MiniMax-M3` |
+| `MINIMAX_MAX_TOKENS` | max output tokens | `1024` |
+
+If the MiniMax call errors or returns empty, dispatch falls back to the `claude_api` path (which itself stubs without `ANTHROPIC_API_KEY`).
+
+**OpenAI-compatible (`openai_compat`) details.** Set `AGENTDASH_DEFAULT_ADAPTER=openai_compat` and:
+
+| Var | Value | Default |
+|---|---|---|
+| `OPENAI_COMPAT_API_KEY` | provider key (OpenRouter `sk-or-…`, Fireworks `fw_…`) | unset → stub reply |
+| `OPENAI_COMPAT_BASE_URL` | OpenAI-compatible base URL | `https://openrouter.ai/api/v1` |
+| `OPENAI_COMPAT_MODEL` | model id (`openai/gpt-4o-mini`, `accounts/fireworks/models/llama-v3p1-70b-instruct`, …) | `openai/gpt-4o-mini` |
+| `OPENAI_COMPAT_MAX_TOKENS` | max output tokens | `1024` |
+
+This is the inference path for the usage-based **Cloud SKU** — OpenRouter/Fireworks return per-request `usage` (OpenRouter returns actual `usage.cost`) for metered billing (see [doc/2026-06-08-deployment-and-inference-skus.md](2026-06-08-deployment-and-inference-skus.md), milestones G3/G4). On error or empty reply, dispatch falls back to the `claude_api` path. No new SDK dependency — it's a fetch wrapper.
 
 Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) are not CoS-chat adapters today. They get adapter coverage at agent-execution time, not at CoS-chat time. If `AGENTDASH_DEFAULT_ADAPTER` is set to an unsupported CoS-chat adapter, the server returns HTTP 501 instead of silently misrouting the turn. If `claude_api` is selected without `ANTHROPIC_API_KEY`, the dispatch returns the local stub reply (`"Got it. (stub reply — set ANTHROPIC_API_KEY to wire real Claude)"`).
 
@@ -129,6 +153,14 @@ Without `RESEARCH_APP_URL` + `RESEARCH_APP_API_KEY` the route returns HTTP 503 �
 ---
 
 ## 5. Deploy and smoke-test
+
+**Before going public, run the cloud preflight** (G5) — it fails closed on an unsafe public config (wrong auth mode, weak `BETTER_AUTH_SECRET`, missing DB, non-https base URL, an LLM adapter with no key → stub replies, or a dev bypass like `AGENTDASH_RATE_LIMIT_DISABLED=true` left on):
+
+```sh
+node scripts/cloud-preflight.mjs   # exits non-zero on any error; warns on soft issues
+```
+
+The inference key (`OPENAI_COMPAT_API_KEY` / `ANTHROPIC_API_KEY` / …) is a **server-side secret** — it is read from env at dispatch time and never sent to the browser. The preflight verifies it is set so the CoS returns real replies.
 
 After the container boots:
 
@@ -177,7 +209,13 @@ PAPERCLIP_PUBLIC_URL=https://your-domain.com  # e.g. http://100.83.171.56:3100 f
 
 # LLM (CoS chat dispatch)
 ANTHROPIC_API_KEY=sk-ant-…
-AGENTDASH_DEFAULT_ADAPTER=claude_api  # or claude_local / hermes_local / …
+AGENTDASH_DEFAULT_ADAPTER=claude_api  # or claude_local / hermes_local / minimax / openai_compat
+
+# OpenAI-compatible provider (Cloud SKU — usage-based via OpenRouter / Fireworks)
+# AGENTDASH_DEFAULT_ADAPTER=openai_compat
+# OPENAI_COMPAT_API_KEY=sk-or-…
+# OPENAI_COMPAT_BASE_URL=https://openrouter.ai/api/v1
+# OPENAI_COMPAT_MODEL=openai/gpt-4o-mini
 
 # Email (welcome + password reset, via Resend)
 RESEND_API_KEY=re_…

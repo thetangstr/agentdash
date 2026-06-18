@@ -60,10 +60,12 @@ describe("cosReplier.reply (legacy single-arg path)", () => {
     });
 
     expect(conversations.paginate).toHaveBeenCalledWith("conv1", { limit: 20 });
+    // No db/companyId provided -> metering is skipped (meter arg is undefined).
     expect(llm).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.any(Array),
       }),
+      undefined,
     );
     expect(conversations.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -72,6 +74,26 @@ describe("cosReplier.reply (legacy single-arg path)", () => {
         authorId: "cos1",
         body: "Outbound volume sits around 80/week today.",
       }),
+    );
+  });
+
+  it("forwards a metering context to the LLM when db + companyId are provided (G3)", async () => {
+    const conversations = {
+      paginate: vi.fn().mockResolvedValue([{ role: "user", content: "hi" }]),
+      postMessage: vi.fn().mockResolvedValue({ id: "m1" }),
+    };
+    const llm = vi.fn().mockResolvedValue("reply");
+    const db = {} as any;
+
+    await cosReplier({ conversations, llm, db } as any).reply({
+      conversationId: "conv1",
+      cosAgentId: "cos1",
+      companyId: "co1",
+    });
+
+    expect(llm).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: expect.any(Array) }),
+      { db, companyId: "co1", agentId: "cos1" },
     );
   });
 });

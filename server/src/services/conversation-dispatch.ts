@@ -4,7 +4,7 @@ interface Deps {
   conversations: any;
   agents: { listForCompany: (companyId: string) => Promise<any[]>; getById: (id: string) => Promise<any> };
   summoner: { summon: (input: { conversationId: string; agentId: string; triggeringMessageId: string }) => Promise<any> };
-  replier: { reply: (input: { conversationId: string; cosAgentId: string }) => Promise<any> };
+  replier: { reply: (input: { conversationId: string; cosAgentId: string; companyId?: string }) => Promise<any> };
   cosResolver: { findByCompany: (companyId: string) => Promise<any> };
 }
 
@@ -38,6 +38,7 @@ export function conversationDispatch(deps: Deps) {
       return deps.replier.reply({
         conversationId: input.conversationId,
         cosAgentId: cos.id,
+        companyId: input.companyId,
       });
     },
   };

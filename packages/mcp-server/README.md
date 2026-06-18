@@ -75,6 +75,29 @@ Write tools:
 - `paperclipApprovalDecision`
 - `paperclipAddApprovalComment`
 
+AgentDash onboarding / provisioning tools:
+
+These let an agent or human create and set up a workspace through the LLM-led
+Chief of Staff, reducing onboarding friction. They use the `agentdash*` prefix
+to stay distinct from the inherited `paperclip*` tools.
+
+- `agentdashBootstrapWorkspace` — provision a workspace for the authenticated
+  user (company + Chief of Staff agent + opening conversation). Lowest-friction
+  start; takes no input.
+- `agentdashListCompanies` — list accessible workspaces.
+- `agentdashGetCompany` — get a workspace by id.
+- `agentdashCreateCompany` — explicitly create a workspace (prefer
+  `agentdashBootstrapWorkspace` for full onboarding).
+- `agentdashCosChat` — send a message to a workspace's Chief of Staff (drives
+  the onboarding interview). The reply is generated asynchronously — read it
+  back with `agentdashReadConversation`.
+- `agentdashReadConversation` — read recent messages in a conversation.
+- `agentdashHireAgent` — hire an agent (e.g. one the Chief of Staff proposes).
+
+A typical zero-to-working-workspace flow: `agentdashBootstrapWorkspace` →
+`agentdashCosChat` (answer the CoS interview) → `agentdashReadConversation`
+(read the proposed plan) → `agentdashHireAgent` for each proposed agent.
+
 Escape hatch:
 
 - `paperclipApiRequest`

@@ -1,0 +1,868 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MAW v6 Handoff Schemas",
+  "description": "Structured handoff payloads for the Multi-Agent Workflow v6 pipeline. Each schema defines the contract between two agents (or an agent and an external system) at a specific transition point in the PM -> Builder -> Tester -> TPM pipeline.",
+  "definitions": {
+    "issue_ref": {
+      "type": "object",
+      "description": "Minimal reference to a Linear issue.",
+      "required": ["id", "title"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Linear issue identifier, e.g. 'AGE-123'."
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable issue title."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Direct URL to the Linear issue."
+        }
+      }
+    },
+    "t_shirt_size": {
+      "type": "string",
+      "enum": ["XS", "S", "M", "L", "XL"],
+      "description": "T-shirt size estimate. Maps to Linear points: XS=1, S=2, M=3, L=5, XL=8."
+    },
+    "deployment_path": {
+      "type": "string",
+      "enum": ["default", "staging-required"],
+      "description": "'default' targets agentdash-main directly. 'staging-required' targets the staging branch first (XL issues with high-risk surface area)."
+    },
+    "label_set": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Current Linear labels on the issue at the time of handoff."
+    },
+    "cuj_entry": {
+      "type": "object",
+      "description": "A single Critical User Journey reference.",
+      "required": ["id", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "CUJ identifier, e.g. '#auth-login', '#pay-checkout'."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line description of the journey."
+        }
+      }
+    },
+    "test_result_entry": {
+      "type": "object",
+      "description": "Result of a single test or CUJ verification.",
+      "required": ["name", "status"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Test name or CUJ identifier."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "skip", "flaky"],
+          "description": "Outcome of this test."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Failure message, skip reason, or notes."
+        },
+        "evidence_path": {
+          "type": "string",
+          "description": "Path or URL to screenshot, GIF, or log artifact."
+        }
+      }
+    },
+    "code_review_finding": {
+      "type": "object",
+      "description": "A single code review finding from the Tester's diff review.",
+      "required": ["file", "severity", "description"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative file path in the repository."
+        },
+        "line": {
+          "type": "integer",
+          "description": "Line number of the finding (approximate is acceptable)."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"],
+          "description": "Severity level. Critical/High block the handoff; Medium/Low are informational."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the issue is and why it matters."
+        },
+        "suggested_fix": {
+          "type": "string",
+          "description": "Recommended remediation, if known."
+        }
+      }
+    },
+    "regression_gate_result": {
+      "type": "object",
+      "description": "Result of the mandatory project-wide regression suite (typecheck + test + build).",
+      "required": ["typecheck", "test", "build"],
+      "properties": {
+        "typecheck": {
+          "type": "string",
+          "enum": ["pass", "fail"],
+          "description": "Result of 'pnpm -r typecheck'."
+        },
+        "test": {
+          "type": "string",
+          "enum": ["pass", "fail"],
+          "description": "Result of 'pnpm test:run'."
+        },
+        "test_pass_count": {
+          "type": "integer",
+          "description": "Number of passing test cases."
+        },
+        "test_fail_count": {
+          "type": "integer",
+          "description": "Number of failing test cases (0 when test is 'pass')."
+        },
+        "build": {
+          "type": "string",
+          "enum": ["pass", "fail"],
+          "description": "Result of 'pnpm build'."
+        },
+        "pre_existing_failures": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of test cases that failed but are known pre-existing flakes unrelated to this change."
+        }
+      }
+    }
+  },
+
+  "pm_to_builder": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "PM -> Builder Handoff",
+    "description": "Payload the PM agent produces when an issue is fully elaborated and ready for implementation. Posted as a Linear comment and consumed by the Builder agent (or the /workon orchestrator).",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "issue",
+      "epic",
+      "size",
+      "deployment_path",
+      "acceptance_criteria",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "pm_to_builder",
+        "description": "Discriminator for schema routing."
+      },
+      "issue": { "$ref": "#/definitions/issue_ref" },
+      "epic": {
+        "type": "string",
+        "description": "Epic label, e.g. 'epic:onboarding', 'epic:billing'."
+      },
+      "size": { "$ref": "#/definitions/t_shirt_size" },
+      "estimate_points": {
+        "type": "integer",
+        "enum": [1, 2, 3, 5, 8],
+        "description": "Linear estimate points corresponding to the size."
+      },
+      "deployment_path": { "$ref": "#/definitions/deployment_path" },
+      "pr_target_branch": {
+        "type": "string",
+        "default": "main",
+        "description": "Branch the PR should target. 'main' for default path, 'staging' for staging-required."
+      },
+      "acceptance_criteria": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string" },
+        "description": "Ordered list of acceptance criteria. Each item is a testable statement."
+      },
+      "cujs": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/cuj_entry" },
+        "description": "Critical User Journeys affected by this issue. Required for M+ sizes."
+      },
+      "test_plan": {
+        "type": "object",
+        "description": "Test plan for the Tester agent. Required for M+ sizes.",
+        "properties": {
+          "automated_command": {
+            "type": "string",
+            "description": "Exact shell command to run the automated test suite, e.g. 'pnpm exec playwright test tests/e2e/billing/checkout.spec.ts'."
+          },
+          "manual_checks": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Manual verification steps that require human or browser-driven checking."
+          }
+        }
+      },
+      "out_of_scope": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Explicitly excluded items to prevent scope creep."
+      },
+      "user_stories": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "User stories in 'As a <role>, I want <goal>, so that <benefit>' format."
+      },
+      "staging_required": {
+        "type": "boolean",
+        "default": false,
+        "description": "True when the XL issue needs staging validation before production."
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the handoff."
+      }
+    }
+  },
+
+  "builder_to_ci": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Builder -> CI / Tester Handoff",
+    "description": "Payload the Builder agent produces after implementation is complete and the PR is ready for testing. Posted as a Linear comment with the PR-Ready label. Consumed by the Tester agent.",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "issue",
+      "size",
+      "pr",
+      "branch",
+      "regression_gates",
+      "labels_applied",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "builder_to_ci",
+        "description": "Discriminator for schema routing."
+      },
+      "issue": { "$ref": "#/definitions/issue_ref" },
+      "size": { "$ref": "#/definitions/t_shirt_size" },
+      "epic": {
+        "type": "string",
+        "description": "Epic label inherited from PM handoff."
+      },
+      "pr": {
+        "type": "object",
+        "description": "Pull request details.",
+        "required": ["number", "url", "base_branch"],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "GitHub PR number."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Direct URL to the pull request."
+          },
+          "base_branch": {
+            "type": "string",
+            "description": "Target branch: 'main' or 'staging'."
+          },
+          "head_branch": {
+            "type": "string",
+            "description": "Feature branch name, e.g. 'pap-123-add-billing'."
+          },
+          "commit_count": {
+            "type": "integer",
+            "description": "Number of commits in the PR."
+          },
+          "files_changed": {
+            "type": "integer",
+            "description": "Total number of files changed."
+          }
+        }
+      },
+      "branch": {
+        "type": "string",
+        "description": "Feature branch name (shorthand, same as pr.head_branch)."
+      },
+      "regression_gates": { "$ref": "#/definitions/regression_gate_result" },
+      "e2e_tests": {
+        "type": "object",
+        "description": "E2E test files created or modified by Builder (S+ sizes).",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Relative paths to E2E test files."
+          },
+          "run_command": {
+            "type": "string",
+            "description": "Command to execute the E2E tests for this feature."
+          }
+        }
+      },
+      "cujs": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/cuj_entry" },
+        "description": "CUJs carried forward from PM handoff for Tester to verify."
+      },
+      "execution_engine": {
+        "type": "string",
+        "enum": ["direct", "omc-team-2", "omc-team-3", "omc-ralph"],
+        "description": "Which execution engine was used. 'direct' for XS/S, 'omc-team-N' for M/L, 'omc-ralph' for XL."
+      },
+      "implementation_notes": {
+        "type": "string",
+        "description": "Free-form notes from Builder about decisions, risks, or areas Tester should focus on."
+      },
+      "labels_applied": { "$ref": "#/definitions/label_set" },
+      "fix_attempt": {
+        "type": "integer",
+        "default": 0,
+        "description": "Number of fix iterations this PR has been through (0 = first submission, 1 = first fix, 2 = second fix). Max 2 before human escalation."
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the handoff."
+      }
+    }
+  },
+
+  "tester_to_reviewer": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Tester -> Reviewer / Human Handoff",
+    "description": "Payload the Tester agent produces after completing automated tests, code review, and Chrome CUJ verification. Contains the full evidence package. Consumed by human reviewers (or auto-verified for XS/S in pre-real-users mode).",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "issue",
+      "verdict",
+      "regression_gates",
+      "labels_applied",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "tester_to_reviewer",
+        "description": "Discriminator for schema routing."
+      },
+      "issue": { "$ref": "#/definitions/issue_ref" },
+      "size": { "$ref": "#/definitions/t_shirt_size" },
+      "verdict": {
+        "type": "string",
+        "enum": ["pass", "fail", "blocked"],
+        "description": "'pass' -> Locally-Tested/Staging-Tested. 'fail' -> Tests-Failed, routes back to Builder. 'blocked' -> environment or infra issue, escalate to human."
+      },
+      "quality_gate_label": {
+        "type": "string",
+        "enum": ["Locally-Tested", "Staging-Tested"],
+        "description": "The quality gate label applied when verdict is 'pass'."
+      },
+      "regression_gates": { "$ref": "#/definitions/regression_gate_result" },
+      "e2e_results": {
+        "type": "object",
+        "description": "E2E test suite results.",
+        "required": ["total", "passed", "failed"],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "description": "Total number of E2E test cases executed."
+          },
+          "passed": {
+            "type": "integer",
+            "description": "Number of passing E2E tests."
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Number of failing E2E tests."
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Number of skipped E2E tests."
+          },
+          "ultraqa_cycles": {
+            "type": "integer",
+            "description": "Number of UltraQA auto-fix cycles consumed (0-5). Does not count against the manual retry budget."
+          },
+          "details": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/test_result_entry" },
+            "description": "Per-test breakdown."
+          }
+        }
+      },
+      "code_review": {
+        "type": "object",
+        "description": "Code review findings from the diff review phase.",
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/code_review_finding" },
+            "description": "All findings, ordered by severity descending."
+          },
+          "blocking_count": {
+            "type": "integer",
+            "description": "Number of critical + high findings that block the handoff."
+          },
+          "informational_count": {
+            "type": "integer",
+            "description": "Number of medium + low findings (non-blocking)."
+          }
+        }
+      },
+      "cuj_verification": {
+        "type": "array",
+        "description": "Chrome CUJ walk-through results. Populated for all sizes (inline for XS/S, qa-tester delegated for M+).",
+        "items": { "$ref": "#/definitions/test_result_entry" }
+      },
+      "console_errors": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "JavaScript console errors observed during CUJ verification. Empty array means clean."
+      },
+      "network_failures": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string" },
+            "status": { "type": "integer" },
+            "method": { "type": "string" }
+          }
+        },
+        "description": "Non-2xx network requests observed during CUJ verification."
+      },
+      "human_only_checklist": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Items that only a human can verify (third-party dashboards, email delivery, subjective content quality). Empty for XS/S issues."
+      },
+      "failure_sub_issues": {
+        "type": "array",
+        "description": "Sub-issues created in Linear for each failure (only when verdict is 'fail').",
+        "items": {
+          "type": "object",
+          "required": ["id", "title", "test_name"],
+          "properties": {
+            "id": { "type": "string", "description": "Linear sub-issue ID." },
+            "title": { "type": "string" },
+            "test_name": { "type": "string" },
+            "expected": { "type": "string" },
+            "actual": { "type": "string" }
+          }
+        }
+      },
+      "fix_attempt": {
+        "type": "integer",
+        "description": "Current retry count. 0 = first pass, 1 = after first Builder fix, 2 = after second. At 2+ with verdict 'fail', escalate to human instead of re-spawning Builder."
+      },
+      "labels_applied": { "$ref": "#/definitions/label_set" },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the handoff."
+      }
+    }
+  },
+
+  "reviewer_to_tpm": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Reviewer -> TPM Handoff",
+    "description": "Payload representing a human-verified (or auto-verified) issue ready for TPM to merge and deploy. The TPM agent reads this from Linear labels/comments during '/tpm sync'.",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "issue",
+      "size",
+      "deployment_path",
+      "pr",
+      "verification_method",
+      "labels_applied",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "reviewer_to_tpm",
+        "description": "Discriminator for schema routing."
+      },
+      "issue": { "$ref": "#/definitions/issue_ref" },
+      "size": { "$ref": "#/definitions/t_shirt_size" },
+      "deployment_path": { "$ref": "#/definitions/deployment_path" },
+      "pr": {
+        "type": "object",
+        "description": "The PR to merge. For staging-required issues, this may be PR #2 (feature -> main) which the TPM creates.",
+        "required": ["number", "url", "base_branch"],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "GitHub PR number."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Direct URL to the pull request."
+          },
+          "base_branch": {
+            "type": "string",
+            "description": "Must be 'main' for TPM to merge. Staging-required issues get a second PR."
+          },
+          "head_branch": {
+            "type": "string",
+            "description": "Feature branch name."
+          },
+          "is_production_pr": {
+            "type": "boolean",
+            "default": false,
+            "description": "True when this is PR #2 created by TPM for a staging-required issue."
+          }
+        }
+      },
+      "verification_method": {
+        "type": "string",
+        "enum": ["human", "auto-xs-s", "auto-pre-real-users"],
+        "description": "How the Human-Verified label was applied. 'human' = a person reviewed. 'auto-xs-s' = XS/S auto-ship rule. 'auto-pre-real-users' = pre-real-users mode (all sizes auto-verified)."
+      },
+      "human_checklist_items_verified": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Which human-only checklist items were explicitly verified. Empty for auto-verified issues."
+      },
+      "wave": {
+        "type": "object",
+        "description": "Wave context if this issue is part of a multi-wave project.",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "Wave number (1-indexed)."
+          },
+          "total_in_wave": {
+            "type": "integer",
+            "description": "Total issues in this wave."
+          },
+          "completed_in_wave": {
+            "type": "integer",
+            "description": "Issues already shipped in this wave (before this one)."
+          }
+        }
+      },
+      "labels_applied": { "$ref": "#/definitions/label_set" },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the handoff."
+      }
+    }
+  },
+
+  "tpm_merge_report": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "TPM Merge Report",
+    "description": "Payload the TPM agent produces after completing the merge-deploy-smoke cycle for one issue. Posted as a Linear comment and used for dashboard reporting. This is the terminal handoff -- the issue moves to 'Done' state.",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "issue",
+      "merge_result",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "tpm_merge_report",
+        "description": "Discriminator for schema routing."
+      },
+      "issue": { "$ref": "#/definitions/issue_ref" },
+      "merge_result": {
+        "type": "string",
+        "enum": ["shipped", "reverted", "blocked"],
+        "description": "'shipped' = merged + smoke passed + In-Production. 'reverted' = merged but smoke failed, auto-reverted. 'blocked' = could not merge (conflicts, CI failure, etc.)."
+      },
+      "pr": {
+        "type": "object",
+        "description": "The PR that was merged (or attempted).",
+        "required": ["number", "base_branch"],
+        "properties": {
+          "number": { "type": "integer" },
+          "url": { "type": "string", "format": "uri" },
+          "base_branch": { "type": "string" },
+          "merge_sha": {
+            "type": "string",
+            "description": "Merge commit SHA on the target branch. Null if merge failed."
+          },
+          "revert_sha": {
+            "type": "string",
+            "description": "Revert commit SHA if smoke tests failed and the merge was reverted."
+          }
+        }
+      },
+      "health_check": {
+        "type": "object",
+        "description": "Post-deploy health check results.",
+        "properties": {
+          "backend_status": {
+            "type": "integer",
+            "description": "HTTP status code from /health endpoint."
+          },
+          "frontend_status": {
+            "type": "integer",
+            "description": "HTTP status code from the production frontend URL."
+          },
+          "backend_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "frontend_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "smoke_test": {
+        "type": "object",
+        "description": "Production smoke test results.",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "skipped"],
+            "description": "Overall smoke test result."
+          },
+          "command": {
+            "type": "string",
+            "description": "The smoke test command that was run."
+          },
+          "details": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/test_result_entry" },
+            "description": "Per-test smoke results."
+          }
+        }
+      },
+      "staging_rebase": {
+        "type": "object",
+        "description": "Staging branch rebase result (only for staging-required issues).",
+        "properties": {
+          "performed": {
+            "type": "boolean",
+            "description": "Whether staging was rebased onto main after this merge."
+          },
+          "success": {
+            "type": "boolean",
+            "description": "Whether the rebase completed without conflicts."
+          }
+        }
+      },
+      "labels_applied": { "$ref": "#/definitions/label_set" },
+      "linear_state": {
+        "type": "string",
+        "enum": ["Done", "In Progress", "Todo"],
+        "description": "The Linear issue state after this merge report. 'Done' for shipped, 'In Progress' for reverted (needs fix), 'Todo' for blocked."
+      },
+      "wave_progress": {
+        "type": "object",
+        "description": "Updated wave progress after this merge.",
+        "properties": {
+          "wave_number": { "type": "integer" },
+          "shipped_in_wave": { "type": "integer" },
+          "total_in_wave": { "type": "integer" },
+          "wave_complete": {
+            "type": "boolean",
+            "description": "True when all issues in the wave are now In-Production."
+          },
+          "next_wave_ready": {
+            "type": "boolean",
+            "description": "True when wave_complete is true and there is a next wave queued."
+          }
+        }
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the merge report."
+      }
+    }
+  },
+
+  "ota_manifest": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "OTA (Over-The-Air) Manifest",
+    "description": "Snapshot of the entire MAW pipeline state for a project, produced by '/tpm sync' or '/tpm status'. Used for dashboard rendering, wave advancement decisions, and audit trail. This is not a point-to-point handoff but a broadcast state document.",
+    "type": "object",
+    "required": [
+      "handoff_type",
+      "project",
+      "issues",
+      "waves",
+      "sync_actions",
+      "timestamp"
+    ],
+    "properties": {
+      "handoff_type": {
+        "const": "ota_manifest",
+        "description": "Discriminator for schema routing."
+      },
+      "project": {
+        "type": "object",
+        "description": "Project-level metadata.",
+        "required": ["name", "team"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Project name or epic group identifier."
+          },
+          "team": {
+            "type": "string",
+            "default": "AgentDash",
+            "description": "Linear team name."
+          },
+          "maw_mode": {
+            "type": "string",
+            "enum": ["pre-real-users", "production"],
+            "description": "'pre-real-users' auto-verifies all sizes. 'production' enforces human gates for M+."
+          }
+        }
+      },
+      "issues": {
+        "type": "array",
+        "description": "All active issues in the project, each annotated with pipeline state.",
+        "items": {
+          "type": "object",
+          "required": ["issue", "state", "size", "wave"],
+          "properties": {
+            "issue": { "$ref": "#/definitions/issue_ref" },
+            "state": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "building",
+                "testing",
+                "awaiting-human",
+                "verified",
+                "shipping",
+                "shipped",
+                "blocked"
+              ],
+              "description": "TPM-derived pipeline state based on Linear labels."
+            },
+            "size": { "$ref": "#/definitions/t_shirt_size" },
+            "wave": {
+              "type": "integer",
+              "description": "Wave number this issue belongs to (1-indexed)."
+            },
+            "labels": { "$ref": "#/definitions/label_set" },
+            "pr_number": {
+              "type": "integer",
+              "description": "GitHub PR number if one exists."
+            },
+            "deployment_path": { "$ref": "#/definitions/deployment_path" },
+            "fix_attempts": {
+              "type": "integer",
+              "description": "Number of Builder fix iterations so far."
+            },
+            "blocked_by": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Issue IDs that block this issue (dependency DAG)."
+            },
+            "action_needed": {
+              "type": "string",
+              "description": "Human-readable description of what action is needed, if any. Null when no action required."
+            }
+          }
+        }
+      },
+      "waves": {
+        "type": "array",
+        "description": "Wave-level progress summary.",
+        "items": {
+          "type": "object",
+          "required": ["number", "total", "shipped"],
+          "properties": {
+            "number": {
+              "type": "integer",
+              "description": "Wave number (1-indexed)."
+            },
+            "total": {
+              "type": "integer",
+              "description": "Total issues in this wave."
+            },
+            "shipped": {
+              "type": "integer",
+              "description": "Issues with In-Production label."
+            },
+            "in_progress": {
+              "type": "integer",
+              "description": "Issues actively being built, tested, or verified."
+            },
+            "blocked": {
+              "type": "integer",
+              "description": "Issues stuck after max retries."
+            },
+            "complete": {
+              "type": "boolean",
+              "description": "True when shipped == total."
+            }
+          }
+        }
+      },
+      "current_wave": {
+        "type": "integer",
+        "description": "The active wave number (lowest incomplete wave)."
+      },
+      "sync_actions": {
+        "type": "array",
+        "description": "Actions taken during this sync cycle.",
+        "items": {
+          "type": "object",
+          "required": ["action", "issue_id"],
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "shipped",
+                "reverted",
+                "advanced-wave",
+                "auto-verified",
+                "escalated-to-human",
+                "created-workspace",
+                "none"
+              ],
+              "description": "What the TPM did for this issue during sync."
+            },
+            "issue_id": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        }
+      },
+      "human_attention_required": {
+        "type": "array",
+        "description": "Issues that need human action, ordered by priority.",
+        "items": {
+          "type": "object",
+          "required": ["issue_id", "reason"],
+          "properties": {
+            "issue_id": { "type": "string" },
+            "reason": {
+              "type": "string",
+              "description": "Why human attention is needed, e.g. 'Verify external-system items', 'Tests-Failed 2x, auto-fix exhausted'."
+            },
+            "priority": {
+              "type": "string",
+              "enum": ["critical", "high", "medium"],
+              "description": "Urgency of the human action."
+            }
+          }
+        }
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp of the manifest generation."
+      }
+    }
+  }
+}
