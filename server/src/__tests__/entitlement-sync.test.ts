@@ -161,6 +161,65 @@ describe("entitlementSync.dispatch", () => {
     );
   });
 
+  // AgentDash (P0.3): current_period_end source — Stripe API >= 2025-03-31
+  // moved current_period_end onto the subscription item. We must read from
+  // the item first so the quota billing window is not corrupted to epoch-1970.
+  it("derives planPeriodEnd from sub.items.data[0].current_period_end when present", async () => {
+    const companies = makeCompanies();
+    const ledger = makeLedger();
+    const sync = entitlementSync({ companies, ledger });
+
+    const itemPeriodEnd = Math.floor(new Date("2026-09-15").getTime() / 1000);
+    const sub = makeSubscription("active", {
+      // New API: top-level current_period_end absent; lives on the item.
+      current_period_end: undefined,
+      items: { data: [{ quantity: 4, current_period_end: itemPeriodEnd }] },
+    });
+    await sync.dispatch(makeEvent("customer.subscription.updated", sub));
+
+    expect(companies.update).toHaveBeenCalledWith(
+      "co-1",
+      expect.objectContaining({ planPeriodEnd: new Date(itemPeriodEnd * 1000) }),
+    );
+  });
+
+  it("prefers the item current_period_end over the legacy top-level field", async () => {
+    const companies = makeCompanies();
+    const ledger = makeLedger();
+    const sync = entitlementSync({ companies, ledger });
+
+    const itemPeriodEnd = Math.floor(new Date("2026-09-15").getTime() / 1000);
+    const legacyPeriodEnd = Math.floor(new Date("2026-06-01").getTime() / 1000);
+    const sub = makeSubscription("active", {
+      current_period_end: legacyPeriodEnd,
+      items: { data: [{ quantity: 4, current_period_end: itemPeriodEnd }] },
+    });
+    await sync.dispatch(makeEvent("customer.subscription.updated", sub));
+
+    expect(companies.update).toHaveBeenCalledWith(
+      "co-1",
+      expect.objectContaining({ planPeriodEnd: new Date(itemPeriodEnd * 1000) }),
+    );
+  });
+
+  it("falls back to the legacy top-level current_period_end when the item lacks it", async () => {
+    const companies = makeCompanies();
+    const ledger = makeLedger();
+    const sync = entitlementSync({ companies, ledger });
+
+    const legacyPeriodEnd = Math.floor(new Date("2026-06-01").getTime() / 1000);
+    const sub = makeSubscription("active", {
+      current_period_end: legacyPeriodEnd,
+      items: { data: [{ quantity: 4 }] },
+    });
+    await sync.dispatch(makeEvent("customer.subscription.updated", sub));
+
+    expect(companies.update).toHaveBeenCalledWith(
+      "co-1",
+      expect.objectContaining({ planPeriodEnd: new Date(legacyPeriodEnd * 1000) }),
+    );
+  });
+
   // AgentDash (#157): past_due tier mapping
   it("sets plan_tier=pro_past_due (NOT pro_active) when subscription status is past_due", async () => {
     const companies = makeCompanies();
