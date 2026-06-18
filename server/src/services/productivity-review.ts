@@ -10,6 +10,7 @@ import {
   issues,
   projects,
 } from "@paperclipai/db";
+import { isUniqueViolation, pgConstraintName, unwrapPgError } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { budgetService } from "./budgets.js";
@@ -693,11 +694,11 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
         requestDepth: clampIssueRequestDepth(evidence.sourceIssue.requestDepth + 1),
       });
     } catch (error) {
-      const maybe = error as { code?: string; constraint?: string; message?: string };
-      const uniqueConflict = maybe.code === "23505" &&
+      const pg = unwrapPgError(error);
+      const uniqueConflict = isUniqueViolation(error) &&
         (
-          maybe.constraint === "issues_active_productivity_review_uq" ||
-          typeof maybe.message === "string" && maybe.message.includes("issues_active_productivity_review_uq")
+          pgConstraintName(error) === "issues_active_productivity_review_uq" ||
+          (typeof pg.message === "string" && pg.message.includes("issues_active_productivity_review_uq"))
         );
       if (!uniqueConflict) throw error;
       const raced = await findOpenProductivityReview(evidence.sourceIssue.companyId, evidence.sourceIssue.id);
