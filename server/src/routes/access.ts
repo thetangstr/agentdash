@@ -1080,6 +1080,30 @@ async function resolveActorHumanRole(
   return normalizeHumanRole(membership.membershipRole, "operator");
 }
 
+// AgentDash: invite-role-ceiling (P0.5) — prevent privilege escalation. A
+// human actor may only invite or approve a role at or below their own company
+// role. Board owners, local-implicit actors, and instance admins resolve to
+// "owner" via resolveActorHumanRole and so retain full ability. Agent actors
+// are gated by permission grants (users:invite / joins:approve), not human
+// role ranks, so they are exempt here — assertCompanyPermission already
+// authorized them.
+async function assertInviteRoleCeiling(
+  req: Request,
+  access: ReturnType<typeof accessService>,
+  companyId: string,
+  requestedRole: HumanCompanyMembershipRole | null,
+): Promise<void> {
+  if (!requestedRole) return;
+  if (req.actor.type === "agent") return;
+  const actorRole = await resolveActorHumanRole(req, access, companyId);
+  if (!actorRole) {
+    throw forbidden("Only active company members can invite users.");
+  }
+  if (humanRoleRank[requestedRole] > humanRoleRank[actorRole]) {
+    throw forbidden("You cannot invite a role above your own company role.");
+  }
+}
+
 async function getProtectedMemberReason(
   req: Request,
   access: ReturnType<typeof accessService>,
@@ -2982,6 +3006,15 @@ export function accessRoutes(
       const companyId = req.params.companyId as string;
       await assertCompanyPermission(req, companyId, "users:invite");
       const allowedJoinTypes = req.body.allowedJoinTypes as TierInviteJoinType;
+      // AgentDash: invite-role-ceiling (P0.5) — an admin must not be able to
+      // invite/auto-approve an owner. The effective human role mirrors
+      // createCompanyInviteForCompany: agent-only invites carry no human role,
+      // otherwise null defaults to "operator".
+      const requestedHumanRole: HumanCompanyMembershipRole | null =
+        allowedJoinTypes === "agent"
+          ? null
+          : normalizeHumanRole(req.body.humanRole ?? "operator", "operator");
+      await assertInviteRoleCeiling(req, access, companyId, requestedHumanRole);
       const inviteResult = await withTierCapacityForInviteWrite(
         companyId,
         allowedJoinTypes,
@@ -4001,6 +4034,9 @@ export function accessRoutes(
             const membershipRole = resolveHumanInviteRole(
               lockedInvite.defaultsPayload as Record<string, unknown> | null,
             );
+            // AgentDash: invite-role-ceiling (P0.5) — approving a join request
+            // must not grant a role above the approver's own company role.
+            await assertInviteRoleCeiling(req, txAccess, companyId, membershipRole);
             await txAccess.ensureMembership(
               companyId,
               "user",
