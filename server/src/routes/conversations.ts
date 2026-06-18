@@ -48,6 +48,7 @@ export function conversationRoutes(db: Db) {
     replier: cosReplier({
       conversations: svc,
       llm: dispatchLLM,
+      db, // AgentDash (Cloud SKU, G3): enables usage metering of CoS replies
       cosState: cosOnboardingStateService(db),
       deepInterviewSpecs: deepInterviewSpecsLoader(db),
     } as any),

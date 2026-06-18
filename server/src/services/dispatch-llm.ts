@@ -1,8 +1,12 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { anthropicLLM } from "./anthropic-llm.js";
+import { minimaxLLM } from "./minimax-llm.js";
+import { openaiCompatLLMDetailed, type OpenAICompatUsage } from "./openai-compat-llm.js";
+import { costService } from "./costs.js";
 import { logger } from "../middleware/logger.js";
 import { HttpError } from "../errors.js";
+import type { Db } from "@paperclipai/db";
 
 // Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
@@ -23,7 +27,7 @@ const DEFAULT_HERMES_COMMAND = "hermes";
 
 const TOKEN_BUDGET_LOG_ENABLED = Boolean(process.env.AGENTDASH_TOKEN_BUDGET_LOG);
 const TOKEN_BUDGET_FILE = process.env.AGENTDASH_TOKEN_BUDGET_FILE ?? "/tmp/agentdash-token-budget.json";
-const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "hermes_local", "claude_local"] as const;
+const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "minimax", "openai_compat", "hermes_local", "claude_local"] as const;
 
 function emitTokenBudget(adapterName: string, input: LLMInput): void {
   if (!TOKEN_BUDGET_LOG_ENABLED) return;
@@ -47,6 +51,54 @@ const ADAPTER_TIMEOUT_MS = 45_000;
 interface LLMInput {
   system: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+/**
+ * Optional metering context for the CoS-chat dispatch. When provided AND the
+ * selected adapter surfaces token/cost usage (currently `openai_compat`), a
+ * `cost_events` row is written for usage-based billing (Cloud SKU, G3/G4).
+ * Recording is best-effort and never blocks or fails the chat reply.
+ */
+export interface DispatchMeter {
+  db: Db;
+  companyId: string;
+  agentId: string;
+}
+
+/**
+ * Best-effort write of a `cost_events` row for an OpenAI-compatible call.
+ * Exact token counts are recorded; `costCents` is best-effort (sub-cent calls
+ * round down) — usage billing (G4) prices from aggregated token counts, not
+ * per-event cents, so rounding here does not lose billable signal.
+ */
+async function recordOpenAICompatUsage(
+  meter: DispatchMeter,
+  usage: OpenAICompatUsage,
+): Promise<void> {
+  try {
+    let biller = "openrouter.ai";
+    try {
+      biller = new URL(process.env.OPENAI_COMPAT_BASE_URL ?? "https://openrouter.ai").hostname;
+    } catch {
+      /* keep default */
+    }
+    await costService(meter.db).createEvent(meter.companyId, {
+      agentId: meter.agentId,
+      provider: "openai_compat",
+      biller,
+      billingType: "usage",
+      model: usage.model,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.completionTokens,
+      costCents: usage.costUsd != null ? Math.round(usage.costUsd * 100) : 0,
+      occurredAt: new Date(),
+    });
+  } catch (err) {
+    logger.warn(
+      { err, adapter: "openai_compat" },
+      "[dispatch-llm] cost metering failed (non-fatal)",
+    );
+  }
 }
 
 /**
@@ -221,7 +273,7 @@ function e2eStubResponse(callIndex: number): string {
  *  - "claude_local": spawns `claude --print -` with prompt on stdin
  *  - everything else: throws 501 so unsupported adapters do not silently misroute
  */
-export async function dispatchLLM(input: LLMInput): Promise<string> {
+export async function dispatchLLM(input: LLMInput, meter?: DispatchMeter): Promise<string> {
   const adapter = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim();
 
   // AgentDash (Phase G): E2E deterministic stub — bypass ALL real LLM calls
@@ -239,6 +291,48 @@ export async function dispatchLLM(input: LLMInput): Promise<string> {
 
   if (adapter === "claude_api" || adapter === "") {
     return anthropicLLM(input);
+  }
+
+  if (adapter === "minimax") {
+    // MiniMax via its Anthropic-compatible Messages API (see minimax-llm.ts).
+    logger.info({ adapter }, "[dispatch-llm] routing CoS reply through minimax");
+    try {
+      const reply = await minimaxLLM(input);
+      if (!reply) {
+        logger.warn({ adapter }, "[dispatch-llm] minimax returned empty reply, using fallback");
+        return anthropicLLM(input);
+      }
+      return reply;
+    } catch (err) {
+      logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back to claude_api");
+      return anthropicLLM(input);
+    }
+  }
+
+  if (adapter === "openai_compat") {
+    // Any OpenAI-compatible provider (OpenRouter, Fireworks, Together, Groq…).
+    logger.info({ adapter }, "[dispatch-llm] routing CoS reply through openai_compat");
+    try {
+      const { text, usage } = await openaiCompatLLMDetailed(input);
+      // Meter usage for the Cloud SKU (best-effort; never blocks the reply).
+      if (meter && usage) {
+        await recordOpenAICompatUsage(meter, usage);
+      }
+      if (!text) {
+        logger.warn(
+          { adapter },
+          "[dispatch-llm] openai_compat returned empty reply, using fallback",
+        );
+        return anthropicLLM(input);
+      }
+      return text;
+    } catch (err) {
+      logger.error(
+        { err, adapter },
+        "[dispatch-llm] openai_compat failed, falling back to claude_api",
+      );
+      return anthropicLLM(input);
+    }
   }
 
   if (adapter === "hermes_local") {

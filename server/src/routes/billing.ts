@@ -6,6 +6,7 @@ import {
   companyMemberships,
 } from "@paperclipai/db";
 import { billingService } from "../services/billing.js";
+import { usageBillingService } from "../services/usage-billing.js";
 import { entitlementSync } from "../services/entitlement-sync.js";
 import { stripeWebhookLedger } from "../services/stripe-webhook-ledger.js";
 import { companyService } from "../services/companies.js";
@@ -31,6 +32,8 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     companies,
     config: { proPriceId: cfg.proPriceId, trialDays: cfg.trialDays, publicBaseUrl: cfg.publicBaseUrl },
   });
+  // AgentDash (Cloud SKU, G4): usage-based billing aggregator over cost_events.
+  const usage = usageBillingService(db);
   // AgentDash (#249): downgrade notifier — when a company drops from
   // pro_active/pro_trial to pro_canceled/pro_past_due, post a CoS chat
   // message into the company's primary conversation explaining what
@@ -175,6 +178,19 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     }
     const r = await svc.getStatus(companyId);
     res.json(r);
+  });
+
+  // AgentDash (Cloud SKU, G4): current calendar-month usage bill for a company.
+  // Aggregates metered inference (cost_events) and applies the configured markup.
+  router.get("/usage", async (req, res) => {
+    const companyId = String(req.query.companyId ?? "");
+    if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
+      throw forbidden("Not a member of this company");
+    }
+    const now = new Date();
+    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const bill = await usage.currentBill(companyId, { from });
+    res.json(bill);
   });
 
   router.post("/webhook", async (req, res) => {
