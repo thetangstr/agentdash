@@ -9,6 +9,11 @@ const notifyHireApprovedMock = vi.fn().mockResolvedValue(undefined);
 const seatSyncMock = vi.fn().mockResolvedValue(undefined);
 const ensureMembershipMock = vi.fn().mockResolvedValue(undefined);
 const setPrincipalGrantsMock = vi.fn().mockResolvedValue(undefined);
+// AgentDash: invite-role-ceiling (P0.5) — resolves the approver's company role.
+const getMembershipMock = vi.fn(
+  async (_companyId: string, _type: string, _userId: string) =>
+    null as { status: string; membershipRole: string } | null,
+);
 const agentCreateMock = vi.fn();
 const agentListMock = vi.fn();
 const tierDepsMock = {
@@ -23,10 +28,11 @@ function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     accessService: () => ({
       isInstanceAdmin: vi.fn(),
-      canUser: vi.fn(),
+      canUser: vi.fn(async () => true),
       hasPermission: vi.fn(),
       ensureMembership: ensureMembershipMock,
       setPrincipalGrants: setPrincipalGrantsMock,
+      getMembership: (...args: [string, string, string]) => getMembershipMock(...args),
     }),
     agentService: () => ({
       list: agentListMock,
@@ -84,25 +90,25 @@ function joinRequestRow(overrides: Partial<JoinRequestRow>): JoinRequestRow {
   };
 }
 
-function inviteRow() {
+function inviteRow(defaultsPayload: Record<string, unknown> | null = null) {
   return {
     id: "invite-1",
     companyId: "company-1",
     inviteType: "company_join",
     allowedJoinTypes: "both",
-    defaultsPayload: null,
+    defaultsPayload,
   };
 }
 
 function createDbStub(
   joinRequest: JoinRequestRow,
-  options: { lockedJoinRequest?: JoinRequestRow } = {},
+  options: { lockedJoinRequest?: JoinRequestRow; inviteDefaultsPayload?: Record<string, unknown> | null } = {},
 ) {
   const selectQueue: unknown[][] = [
     [joinRequest],
-    [inviteRow()],
+    [inviteRow(options.inviteDefaultsPayload)],
     [options.lockedJoinRequest ?? joinRequest],
-    [inviteRow()],
+    [inviteRow(options.inviteDefaultsPayload)],
   ];
   const db: any = {
     execute: vi.fn().mockResolvedValue([]),
@@ -128,7 +134,7 @@ function createDbStub(
   return db;
 }
 
-async function createApp(db: unknown) {
+async function createApp(db: unknown, actor?: Record<string, unknown>) {
   const [{ accessRoutes }, { errorHandler }] = await Promise.all([
     import("../routes/access.js"),
     import("../middleware/error-handler.js"),
@@ -136,7 +142,7 @@ async function createApp(db: unknown) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
+    (req as any).actor = actor ?? {
       type: "board",
       source: "local_implicit",
       userId: "owner-1",
@@ -178,7 +184,19 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
       role: "general",
       status: "idle",
     });
+    getMembershipMock.mockReset();
+    getMembershipMock.mockResolvedValue(null);
   });
+
+  // A non-local board actor whose company role is resolved via getMembership.
+  function boardUserActor(userId = "approver-user") {
+    return {
+      type: "board",
+      source: "board_api_key",
+      userId,
+      companyIds: ["company-1"],
+    } as Record<string, unknown>;
+  }
 
   afterEach(() => {
     if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
@@ -272,5 +290,49 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
     expect(tierDepsMock.counts.humans).not.toHaveBeenCalled();
     expect(ensureMembershipMock).not.toHaveBeenCalled();
     expect(db.update).not.toHaveBeenCalled();
+  });
+
+  // AgentDash: invite-role-ceiling (P0.5) — privilege-escalation guard.
+  it("rejects an admin approving a join request that would grant owner with 403", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+    const db = createDbStub(
+      joinRequestRow({ requestType: "human" }),
+      { inviteDefaultsPayload: { human: { role: "owner" } } },
+    );
+    const app = await createApp(db, boardUserActor());
+
+    const res = await request(app)
+      .post("/api/companies/company-1/join-requests/join-1/approve")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/role above your own/i);
+    expect(ensureMembershipMock).not.toHaveBeenCalled();
+  });
+
+  it("allows an admin approving a join request that grants operator", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    process.env.AGENTDASH_BILLING_DISABLED = "true";
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+    const db = createDbStub(
+      joinRequestRow({ requestType: "human" }),
+      { inviteDefaultsPayload: { human: { role: "operator" } } },
+    );
+    const app = await createApp(db, boardUserActor());
+
+    const res = await request(app)
+      .post("/api/companies/company-1/join-requests/join-1/approve")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(ensureMembershipMock).toHaveBeenCalledWith(
+      "company-1",
+      "user",
+      "user-2",
+      "operator",
+      "active",
+    );
   });
 });
