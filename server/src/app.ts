@@ -302,7 +302,11 @@ export async function createApp(
   let stripeSdk: any = stripeStubForDev();
   if (stripeKey) {
     const { default: Stripe } = await import("stripe");
-    stripeSdk = new Stripe(stripeKey);
+    // AgentDash (P0.3): pin the API version so a stripe-package upgrade can't
+    // silently shift webhook payload shapes underneath us (e.g. the
+    // current_period_end relocation in 2025-03-31). Matches the installed
+    // stripe@22 LatestApiVersion.
+    stripeSdk = new Stripe(stripeKey, { apiVersion: "2026-04-22.dahlia" });
   }
   // AgentDash (#160): tighter rate limit on /billing/* (abuse vector). The
   // /billing/webhook subpath is hit by Stripe's servers, not users, and must
