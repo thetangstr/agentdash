@@ -665,7 +665,7 @@ export function ExecutionWorkspaceDetail() {
   if (workspaceId && activeTab === null) {
     let cachedTab: ExecutionWorkspaceTab = "configuration";
     try {
-      const storedTab = localStorage.getItem(`paperclip:execution-workspace-tab:${workspaceId}`);
+      const storedTab = localStorage.getItem(`agentdash.execution-workspace-tab:${workspaceId}`);
       if (
         storedTab === "issues" ||
         storedTab === "routines" ||
@@ -680,7 +680,7 @@ export function ExecutionWorkspaceDetail() {
 
   const handleTabChange = (tab: ExecutionWorkspaceTab) => {
     try {
-      localStorage.setItem(`paperclip:execution-workspace-tab:${workspace.id}`, tab);
+      localStorage.setItem(`agentdash.execution-workspace-tab:${workspace.id}`, tab);
     } catch {}
     navigate(executionWorkspaceTabPath(workspace.id, tab));
   };
