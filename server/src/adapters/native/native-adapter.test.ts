@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { PaperclipApi } from "./paperclip-api.js";
 import { buildTools, findTool } from "./tools.js";
-import { runAgentLoop, type LoopMessage } from "./loop.js";
+import { runAgentLoop } from "./loop.js";
+import { openaiProtocol } from "./protocols.js";
 
 // ---- helpers -------------------------------------------------------------
 function jsonResponse(body: unknown, init?: { ok?: boolean; status?: number }): Response {
@@ -143,6 +144,7 @@ describe("runAgentLoop", () => {
     const fetchImpl = vi.fn(async () => jsonResponse(responses[i++])) as unknown as typeof fetch;
 
     const result = await runAgentLoop({
+      protocol: openaiProtocol,
       baseUrl: "http://gw.test/v1",
       apiKey: "k",
       model: "m",
@@ -166,6 +168,7 @@ describe("runAgentLoop", () => {
   it("stops with max_turns if the model never stops calling tools", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(assistantWithToolCall("noop", {}))) as unknown as typeof fetch;
     const result = await runAgentLoop({
+      protocol: openaiProtocol,
       baseUrl: "http://gw.test/v1",
       apiKey: "k",
       model: "m",
@@ -183,6 +186,7 @@ describe("runAgentLoop", () => {
   it("returns error stopReason on a non-ok gateway response", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: { message: "bad key" } }, { ok: false, status: 401 })) as unknown as typeof fetch;
     const result = await runAgentLoop({
+      protocol: openaiProtocol,
       baseUrl: "http://gw.test/v1",
       apiKey: "k",
       model: "m",
@@ -198,7 +202,7 @@ describe("runAgentLoop", () => {
   });
 
   it("feeds a tool result back as a role:tool message", async () => {
-    const sentBodies: LoopMessage[][] = [];
+    const sentBodies: Array<Array<Record<string, unknown>>> = [];
     const responses = [assistantWithToolCall("noop", {}), assistantFinal("ok")];
     let i = 0;
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
@@ -207,6 +211,7 @@ describe("runAgentLoop", () => {
     }) as unknown as typeof fetch;
 
     await runAgentLoop({
+      protocol: openaiProtocol,
       baseUrl: "http://gw.test/v1",
       apiKey: "k",
       model: "m",

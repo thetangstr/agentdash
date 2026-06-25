@@ -11,6 +11,7 @@
 // Design: doc/plans/2026-06-24-gateway-and-native-adapter-design.md (Part B).
 
 import type {
+  AdapterConfigSchema,
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
   AdapterExecutionContext,
@@ -21,6 +22,7 @@ import type {
 import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
 import {
   GatewayConfigError,
+  type GatewayModelAccess,
   computeGatewayCostUsd,
   isGatewayConfigured,
   listGatewayModels,
@@ -29,6 +31,7 @@ import {
 import { PaperclipApi } from "./paperclip-api.js";
 import { buildTools } from "./tools.js";
 import { runAgentLoop } from "./loop.js";
+import { getProtocol, type ProtocolName } from "./protocols.js";
 
 const DEFAULT_MAX_TURNS = 30;
 const DEFAULT_TIMEOUT_SEC = 600; // 10 min — well under the 1800s that caused runaway timeouts
@@ -54,6 +57,67 @@ function buildSystemPrompt(agentName: string): string {
   ].join(" ");
 }
 
+/**
+ * Resolve where/how to call the model. Two modes, like Hermes' provider config:
+ *  - BYO provider: adapterConfig has { baseUrl, apiKey | keyEnv } -> use it
+ *    directly with the given model/provider/protocol (any LLM, e.g. MiniMax via
+ *    the Anthropic endpoint, or any OpenAI-compatible endpoint).
+ *  - Managed gateway (default): resolve through the gateway (OpenRouter etc.),
+ *    no customer token needed.
+ */
+function resolveNativeAccess(config: Record<string, unknown>, companyId: string): GatewayModelAccess {
+  const baseUrl = asString(config.baseUrl);
+  const inlineKey = asString(config.apiKey);
+  const keyEnv = asString(config.keyEnv);
+  const byoKey = inlineKey ?? (keyEnv ? asString(process.env[keyEnv]) : undefined);
+
+  if (baseUrl && byoKey) {
+    const protocol: ProtocolName = config.protocol === "anthropic" ? "anthropic" : "openai";
+    const model = asString(config.model);
+    if (!model) throw new GatewayConfigError("BYO provider requires adapterConfig.model.");
+    return {
+      baseUrl,
+      apiKey: byoKey,
+      model,
+      canonicalModel: model,
+      provider: asString(config.provider) ?? "custom",
+      protocol,
+    };
+  }
+  if (baseUrl && (inlineKey === undefined && keyEnv)) {
+    throw new GatewayConfigError(`BYO provider keyEnv "${keyEnv}" is not set in the environment.`);
+  }
+  // Managed gateway default.
+  return resolveGatewayAccess({ companyId, requestedModel: asString(config.model) ?? null });
+}
+
+const CONFIG_SCHEMA: AdapterConfigSchema = {
+  fields: [
+    {
+      key: "model",
+      label: "Model",
+      type: "combobox",
+      hint: "Gateway model id (e.g. claude-sonnet, gpt-4o-mini) or a BYO provider model (e.g. MiniMax-M3, anthropic/claude-sonnet-4).",
+      options: listGatewayModels().map((m) => ({ value: m.id, label: m.label })),
+    },
+    { key: "provider", label: "Provider label", type: "text", hint: "BYO only — for reporting (e.g. minimax-cn)." },
+    { key: "baseUrl", label: "BYO base URL", type: "text", hint: "Use a custom provider instead of the managed gateway." },
+    { key: "keyEnv", label: "BYO key env var", type: "text", hint: "Name of the env var holding the BYO API key." },
+    {
+      key: "protocol",
+      label: "BYO protocol",
+      type: "select",
+      default: "openai",
+      options: [
+        { value: "openai", label: "OpenAI-compatible (OpenRouter, OpenAI, …)" },
+        { value: "anthropic", label: "Anthropic (Anthropic, MiniMax /anthropic, …)" },
+      ],
+    },
+    { key: "maxTurns", label: "Max tool turns", type: "number", default: 30 },
+    { key: "timeoutSec", label: "Timeout (seconds)", type: "number", default: 600 },
+  ],
+};
+
 export const agentDashNativeAdapter: ServerAdapterModule = {
   type: "agentdash_native",
   supportsLocalAgentJwt: true,
@@ -61,6 +125,8 @@ export const agentDashNativeAdapter: ServerAdapterModule = {
   requiresMaterializedRuntimeSkills: false,
 
   models: listGatewayModels() as AdapterModel[],
+
+  getConfigSchema: () => CONFIG_SCHEMA,
 
   async testEnvironment(ctx: AdapterEnvironmentTestContext): Promise<AdapterEnvironmentTestResult> {
     const configured = isGatewayConfigured();
@@ -89,12 +155,12 @@ export const agentDashNativeAdapter: ServerAdapterModule = {
     const config = (ctx.config ?? {}) as Record<string, unknown>;
     const companyId = ctx.agent.companyId;
 
-    // Resolve model access through the gateway — no customer token needed.
-    let access;
+    // Resolve model access: BYO provider config, else the managed gateway.
+    let access: GatewayModelAccess;
     try {
-      access = resolveGatewayAccess({ companyId, requestedModel: asString(config.model) ?? null });
+      access = resolveNativeAccess(config, companyId);
     } catch (err) {
-      const message = err instanceof GatewayConfigError ? err.message : `gateway resolution failed: ${String(err)}`;
+      const message = err instanceof GatewayConfigError ? err.message : `model access resolution failed: ${String(err)}`;
       return { exitCode: 1, signal: null, timedOut: false, errorCode: "gateway_not_configured", errorMessage: message };
     }
 
@@ -125,6 +191,7 @@ export const agentDashNativeAdapter: ServerAdapterModule = {
     });
 
     const loop = await runAgentLoop({
+      protocol: getProtocol(access.protocol),
       baseUrl: access.baseUrl,
       apiKey: access.apiKey,
       model: access.model,

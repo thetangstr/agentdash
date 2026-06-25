@@ -18,10 +18,12 @@
 
 import { runAgentLoop } from "../../server/src/adapters/native/loop.js";
 import type { Tool } from "../../server/src/adapters/native/tools.js";
+import { getProtocol, type ProtocolName } from "../../server/src/adapters/native/protocols.js";
 
 const baseUrl = process.env.AGENTDASH_GATEWAY_BASE_URL;
 const apiKey = process.env.AGENTDASH_GATEWAY_API_KEY;
 const model = process.env.GATEWAY_MODEL ?? "openai/gpt-4o-mini";
+const protocol: ProtocolName = process.env.GATEWAY_PROTOCOL === "anthropic" ? "anthropic" : "openai";
 
 if (!baseUrl || !apiKey) {
   console.error("Set AGENTDASH_GATEWAY_BASE_URL and AGENTDASH_GATEWAY_API_KEY to run the live smoke.");
@@ -44,7 +46,9 @@ const getTimeTool: Tool = {
   },
 };
 
+console.log(`[smoke] protocol=${protocol} model=${model} base=${baseUrl}`);
 const result = await runAgentLoop({
+  protocol: getProtocol(protocol),
   baseUrl,
   apiKey,
   model,
