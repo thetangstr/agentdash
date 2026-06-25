@@ -68,7 +68,7 @@ jobs:
     # 35 (was 20): once tests pass, the full lane (install + test:run + build +
     # release canary dry-run) runs to completion and exceeds 20m. The 20m cap
     # was only "passing" because verify used to fail fast at a broken test.
-    timeout-minutes: 35
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
