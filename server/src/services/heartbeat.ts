@@ -39,7 +39,7 @@ import {
 import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
-import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
+import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
@@ -4625,6 +4625,23 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (staleThresholdMs > 0) {
         const refTime = run.updatedAt ? new Date(run.updatedAt).getTime() : 0;
         if (now.getTime() - refTime < staleThresholdMs) continue;
+      }
+
+      // AgentDash run-fix: a stale `updatedAt` does NOT mean the process is dead.
+      // hermes_local streams output to the log FILE (not the DB row) and often
+      // records a null processPid, so the PID-alive check below cannot rescue an
+      // actively-working run — the reaper then falsely marks it `process_lost`.
+      // If the run's log file was written very recently, the child is alive and
+      // producing output right now; skip reaping it this pass.
+      if (run.logStore === "local_file" && run.logRef) {
+        try {
+          const logPath = path.join(runLogBasePath(), run.logRef);
+          const st = await fs.stat(logPath);
+          const liveWindowMs = Math.max(staleThresholdMs, 120_000);
+          if (now.getTime() - st.mtimeMs < liveWindowMs) continue;
+        } catch {
+          // No readable log file — fall through to the normal reaping path.
+        }
       }
 
       const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
