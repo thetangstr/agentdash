@@ -146,6 +146,10 @@ export const agentDashNativeAdapter: ServerAdapterModule = {
       usage,
       costUsd,
       provider: access.provider,
+      biller: access.provider,
+      // Gateway inference is pay-per-use -> metered_api so it lands in costEvents
+      // for the usage-based SKU (heartbeat reads result.billingType + costUsd).
+      billingType: "metered_api",
       model: access.canonicalModel,
       signal: null,
       summary: loop.finalText ? loop.finalText.slice(0, 1000) : null,
