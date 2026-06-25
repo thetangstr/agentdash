@@ -122,6 +122,7 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 import { agentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
+import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 
 // AgentDash: opt-in managed per-agent Hermes profiles. When enabled, each agent
 // is hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
@@ -369,7 +370,27 @@ function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): A
   return "pass";
 }
 
+// AgentDash: opt-in real round-trip probe appended to the static Hermes checks,
+// so harness-preflight catches an installed-but-broken Hermes. Off by default
+// (it spawns a real process); enable with AGENTDASH_HERMES_ROUNDTRIP_PROBE=true.
 async function testHermesEnvironment(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
+  const base = await testHermesEnvironmentStatic(ctx);
+  if (process.env.AGENTDASH_HERMES_ROUNDTRIP_PROBE !== "true") return base;
+  const normalizedCtx = normalizeHermesConfig(ctx);
+  const cfg =
+    normalizedCtx.config && typeof normalizedCtx.config === "object" && !Array.isArray(normalizedCtx.config)
+      ? (normalizedCtx.config as Record<string, unknown>)
+      : {};
+  const probe = await hermesRoundTripProbeCheck({
+    command: getHermesCommandFromContext(normalizedCtx),
+    model: readNonEmptyString(cfg.model) ?? undefined,
+    provider: readNonEmptyString(cfg.provider) ?? undefined,
+  });
+  const checks = [...(Array.isArray(base.checks) ? base.checks : []), probe];
+  return { ...base, checks, status: summarizeAdapterEnvironmentChecks(checks) };
+}
+
+async function testHermesEnvironmentStatic(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
   const normalizedCtx = normalizeHermesConfig(ctx);
   const result = await hermesTestEnvironment(normalizedCtx as never);
   const checks = Array.isArray(result.checks) ? result.checks : [];
