@@ -11,7 +11,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile as fsWriteFile, cp as fsCp } from "node:fs/promises";
+import { writeFile as fsWriteFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -29,8 +29,6 @@ export interface HermesProfileDeps {
   run?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   /** write a file (the gateway-pointed .env) */
   writeFile?: (path: string, content: string) => Promise<void>;
-  /** copy a managed template file into the profile */
-  copyFile?: (src: string, dst: string) => Promise<void>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -44,7 +42,6 @@ function resolved(deps: HermesProfileDeps = {}) {
     binDir: deps.binDir ?? join(homedir(), ".local", "bin"),
     run: deps.run ?? (async (args: string[]) => execFileAsync(hermesBin, args)),
     writeFile: deps.writeFile ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o600 })),
-    copyFile: deps.copyFile ?? ((s: string, d: string) => fsCp(s, d).then(() => undefined)),
   };
 }
 
@@ -81,27 +78,33 @@ export async function provisionAgentProfile(
   const profileName = agentProfileName(agentId);
   const template = opts.template ?? r.env.AGENTDASH_HERMES_PROFILE_TEMPLATE ?? "agentdash";
 
-  await r.run(["profile", "create", profileName, "--description", `AgentDash agent ${agentId}`]);
+  // Clone from a managed template via Hermes' native `--clone-from` so the
+  // working provider auth carries over. A bare `create` + manually copying
+  // .env/config.yaml/auth.json yields `HTTP 401: invalid api key` (verified on
+  // the mini 2026-06-25) — the provider credentials are NOT fully captured by
+  // copying those files; only `--clone-from` clones a working provider.
+  await r.run([
+    "profile",
+    "create",
+    profileName,
+    "--clone-from",
+    template,
+    "--no-alias",
+    "--description",
+    `AgentDash agent ${agentId}`,
+  ]);
 
-  const dst = join(r.profilesDir, profileName);
   const gwBase = r.env.AGENTDASH_GATEWAY_BASE_URL?.trim();
   const gwKey = r.env.AGENTDASH_GATEWAY_API_KEY?.trim();
   let providerSource: "gateway" | "template";
   if (gwBase && gwKey) {
+    // Overlay the managed gateway provider on the cloned base.
     await r.writeFile(
-      join(dst, ".env"),
+      join(r.profilesDir, profileName, ".env"),
       `HERMES_GATEWAY_BASE_URL=${gwBase}\nHERMES_GATEWAY_API_KEY=${gwKey}\n`,
     );
     providerSource = "gateway";
   } else {
-    const src = join(r.profilesDir, template);
-    for (const f of [".env", "config.yaml", "auth.json"]) {
-      try {
-        await r.copyFile(join(src, f), join(dst, f));
-      } catch {
-        // optional file; the template may not have all of them
-      }
-    }
     providerSource = "template";
   }
 
