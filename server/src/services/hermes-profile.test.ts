@@ -10,7 +10,6 @@ import {
 function harness(env: NodeJS.ProcessEnv = {}) {
   const runs: string[][] = [];
   const writes: Array<{ path: string; content: string }> = [];
-  const copies: Array<{ src: string; dst: string }> = [];
   const deps: HermesProfileDeps = {
     hermesBin: "hermes",
     profilesDir: "/profiles",
@@ -23,11 +22,8 @@ function harness(env: NodeJS.ProcessEnv = {}) {
     writeFile: vi.fn(async (path: string, content: string) => {
       writes.push({ path, content });
     }),
-    copyFile: vi.fn(async (src: string, dst: string) => {
-      copies.push({ src, dst });
-    }),
   };
-  return { deps, runs, writes, copies };
+  return { deps, runs, writes };
 }
 
 describe("agentProfileName", () => {
@@ -44,8 +40,8 @@ describe("agentProfileCommand", () => {
 });
 
 describe("provisionAgentProfile", () => {
-  it("gateway-points the provider when AGENTDASH_GATEWAY_* is set", async () => {
-    const { deps, runs, writes, copies } = harness({
+  it("clones the template via --clone-from, then overlays the gateway .env", async () => {
+    const { deps, runs, writes } = harness({
       AGENTDASH_GATEWAY_BASE_URL: "https://gw/v1",
       AGENTDASH_GATEWAY_API_KEY: "sk-gw",
     });
@@ -54,30 +50,41 @@ describe("provisionAgentProfile", () => {
     expect(res.profileName).toBe("agentdash-agent1");
     expect(res.providerSource).toBe("gateway");
     expect(res.command).toBe("/bin/agentdash-agent1");
-    // create + alias were run
-    expect(runs[0].slice(0, 3)).toEqual(["profile", "create", "agentdash-agent1"]);
+    // create CLONES from the template (the cp approach yields HTTP 401)
+    expect(runs[0]).toEqual([
+      "profile",
+      "create",
+      "agentdash-agent1",
+      "--clone-from",
+      "agentdash",
+      "--no-alias",
+      "--description",
+      "AgentDash agent agent-1",
+    ]);
     expect(runs.at(-1)).toEqual(["profile", "alias", "agentdash-agent1"]);
-    // wrote a gateway-pointed .env into the profile dir, no template copy
+    // overlays a gateway-pointed .env onto the cloned base
     expect(writes).toHaveLength(1);
     expect(writes[0].path).toBe("/profiles/agentdash-agent1/.env");
     expect(writes[0].content).toContain("https://gw/v1");
     expect(writes[0].content).toContain("sk-gw");
-    expect(copies).toHaveLength(0);
   });
 
-  it("copies managed provider config from the template when no gateway env", async () => {
-    const { deps, writes, copies } = harness({});
+  it("clones the template (no gateway env) and writes nothing extra", async () => {
+    const { deps, runs, writes } = harness({});
     const res = await provisionAgentProfile("agent-2", { template: "agentdash" }, deps);
 
     expect(res.providerSource).toBe("template");
-    expect(writes).toHaveLength(0);
-    // copies .env/config.yaml/auth.json from the template into the profile
-    expect(copies.map((c) => c.src)).toEqual([
-      "/profiles/agentdash/.env",
-      "/profiles/agentdash/config.yaml",
-      "/profiles/agentdash/auth.json",
+    expect(runs[0]).toEqual([
+      "profile",
+      "create",
+      "agentdash-agent2",
+      "--clone-from",
+      "agentdash",
+      "--no-alias",
+      "--description",
+      "AgentDash agent agent-2",
     ]);
-    expect(copies.every((c) => c.dst.startsWith("/profiles/agentdash-agent2/"))).toBe(true);
+    expect(writes).toHaveLength(0);
   });
 });
 

@@ -34,23 +34,22 @@ profile="agentdash-${agent}"   # namespaced so we never collide with operator pr
 case "$cmd" in
   create)
     template="${3:-agentdash}"
-    "$HERMES" profile create "$profile" --description "AgentDash agent ${agent}" >/dev/null
+    # Clone via Hermes' native --clone-from so the working provider auth carries
+    # over. Copying .env/config.yaml/auth.json instead yields `HTTP 401: invalid
+    # api key` (verified on the mini 2026-06-25); only --clone-from clones a
+    # working provider.
+    "$HERMES" profile create "$profile" --clone-from "$template" --no-alias \
+      --description "AgentDash agent ${agent}" >/dev/null
     dst="$PROFILES_DIR/$profile"
     if [ -n "${AGENTDASH_GATEWAY_BASE_URL:-}" ] && [ -n "${AGENTDASH_GATEWAY_API_KEY:-}" ]; then
-      # Gateway-pointed provider: token-independent, AgentDash-held key.
+      # Overlay the managed gateway provider on the cloned base (token-independent).
       cat > "$dst/.env" <<ENV
 HERMES_GATEWAY_BASE_URL=${AGENTDASH_GATEWAY_BASE_URL}
 HERMES_GATEWAY_API_KEY=${AGENTDASH_GATEWAY_API_KEY}
 ENV
-      echo "provisioned $profile -> managed gateway provider"
+      echo "provisioned $profile (clone of '$template') -> managed gateway provider"
     else
-      # Fall back to copying the managed provider config from a template profile
-      # (the key lives in the template's managed .env, not per agent).
-      src="$PROFILES_DIR/$template"
-      for f in .env config.yaml auth.json; do
-        [ -f "$src/$f" ] && cp "$src/$f" "$dst/$f"
-      done
-      echo "provisioned $profile <- template '$template'"
+      echo "provisioned $profile <- clone of template '$template'"
     fi
     ;;
   delete)
