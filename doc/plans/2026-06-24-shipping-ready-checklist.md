@@ -17,11 +17,11 @@ Legend: `[x]` done/verified this cycle · `[~]` partial · `[ ]` pending.
 - [x] Inference gateway MVP (resolve + price/metering) — PR #411.
 - [x] Reaper false-positive fixed (live on mini; main mitigates via pid-recording).
 - [x] `x-agent-key` auth header fix on main.
-- [ ] **Wire profile lifecycle into `hermes_local`**: create on hire (`onHireApproved`), `-p <profileId>` per run, delete on terminate.
-- [ ] **Gateway-point** the profile provider (`AGENTDASH_GATEWAY_*`) → no per-agent token; **retire cc-switch**.
-- [ ] **Sandbox `cwd`** to a per-run workspace (agents cannot edit live source — the Laura fix).
-- [ ] **EPIPE guard** on adapter spawn (a dead child can never crash-loop the server).
-- [ ] Commit the live reaper + preflight-probe fixes to the deploy branch / main (durability).
+- [x] **Wire profile lifecycle into `hermes_local`** — `onHireApproved` provisions the profile; `execute` scopes runs via the alias wrapper (`hermes -p <profile>`). Gated by `AGENTDASH_HERMES_MANAGED_PROFILES` (default off). `services/hermes-profile.ts` (+6 tests). *(deprovision-on-terminate: TODO when an agent-terminated hook lands.)*
+- [x] **Gateway-point** — `provisionAgentProfile` writes the profile's provider from `AGENTDASH_GATEWAY_*` (token-independent), else copies a managed template. *(cc-switch retires once the gateway is deployed + keyed on the mini.)*
+- [x] **Sandbox `cwd`** — already handled on `main` (`resolveManagedProjectWorkspaceDir` + `workspaceDir`); the mini's Laura incident was a stale checkout → resolved by the cutover (D). No new code.
+- [ ] **EPIPE guard** on adapter spawn (lives in the external `hermes-paperclip-adapter` spawn path — patch upstream or guard at the heartbeat).
+- [ ] Commit the live reaper + preflight-probe fixes to main (port against main's diverged `registry.ts`).
 - [ ] **Bundle + pin Hermes** in the installer (Python 3.11 + `pip install hermes-agent==<pinned>`).
 - [ ] Verify default-agent `adapter_failed` < 5% on a controlled mini run (instance B).
 
@@ -29,7 +29,7 @@ Legend: `[x]` done/verified this cycle · `[~]` partial · `[ ]` pending.
 - [x] No-card signup → CoS chat → first agent hire is ungated (scaffolding exists).
 - [x] 14-day no-card Stripe trial + Free tier implemented.
 - [ ] **Demo seed data** — a populated MSP starter company (paused/idle agents, seeded issues + DoD/verdicts), via the company-creator skill.
-- [ ] **Richer Free tier** (e.g. 2 humans + 3 agents) in `tier-policy.ts` so value is felt pre-wall.
+- [x] **Richer Free tier** — `tier-policy.ts` caps now operator-tunable via `AGENTDASH_FREE_HUMAN_CAP` / `AGENTDASH_FREE_AGENT_CAP` (launch sets 2 + 3); default 1+1 unchanged (+4 tests). *(Set the env at launch.)*
 - [ ] TTFV measured **< 10 min** from a clean account to a successful first agent run.
 - [ ] Free → trial → Pro cap-boundary flow E2E-tested (Playwright).
 
