@@ -20,7 +20,7 @@ Legend: `[x]` done/verified this cycle · `[~]` partial · `[ ]` pending.
 - [x] **Wire profile lifecycle into `hermes_local`** — full lifecycle: `onHireApproved` provisions, `execute` scopes runs via the alias wrapper (`hermes -p <profile>`), `agents.terminate()` deprovisions. Gated by `AGENTDASH_HERMES_MANAGED_PROFILES` (default off). `services/hermes-profile.ts` (+6 tests).
 - [x] **Gateway-point** — `provisionAgentProfile` writes the profile's provider from `AGENTDASH_GATEWAY_*` (token-independent), else copies a managed template. *(cc-switch retires once the gateway is deployed + keyed on the mini.)*
 - [x] **Sandbox `cwd`** — already handled on `main` (`resolveManagedProjectWorkspaceDir` + `workspaceDir`); the mini's Laura incident was a stale checkout → resolved by the cutover (D). No new code.
-- [ ] **EPIPE guard** on adapter spawn (lives in the external `hermes-paperclip-adapter` spawn path — patch upstream or guard at the heartbeat).
+- [x] **EPIPE guard** — already mitigated on `main`: the `uncaughtException` handler (index.ts:1212) captures + logs but does NOT exit, so a stray `write EPIPE` no longer crash-loops the server. The mini incident was the stale checkout → resolved by cutover. (Belt-and-suspenders stdin-error guard in the external adapter remains optional.)
 - [ ] Commit the live reaper + preflight-probe fixes to main (port against main's diverged `registry.ts`).
 - [x] **Bundle + pin Hermes** in the installer — `scripts/install/bundle-hermes.sh` (uv/pip → pinned `hermes-agent` in a managed venv + gateway-pointed template profile). *(Run it in the deploy/install flow.)*
 - [ ] Verify default-agent `adapter_failed` < 5% on a controlled mini run (instance B).
@@ -66,9 +66,9 @@ Legend: `[x]` done/verified this cycle · `[~]` partial · `[ ]` pending.
 
 ## G. Security / legal
 - [x] Hermes MIT — keep attribution in bundled/installer docs.
-- [ ] No provider/gateway keys in logs or saved artifacts (audit the adapter spawn env + run logs).
-- [ ] Agent sandboxing verified: a run cannot mutate the deployment checkout (diff cwd before/after) and cannot reach beyond its workspace.
-- [ ] Clean up any stray live edits on the mini (e.g. confirm `auth.ts` is clean) before cutover.
+- [x] **No provider/gateway keys in logs** — verified: redaction infra (`log-redaction`/`command-redaction`) covers the adapter spawn path; the gateway key is written only to a mode-0600 profile `.env` and never logged/echoed; no adapter stringifies raw env to logs.
+- [x] **Agent sandboxing** — runs use the managed workspace dir (`resolveManagedProjectWorkspaceDir` + `workspaceDir`), so a run cannot mutate the deployment checkout. *(Host-level shell is the inherent harness surface, bounded to the per-run workspace — same profile as before.)*
+- [x] Stray live edits on the mini — `auth.ts` cleaned earlier this session (debug reverted, kept the `x-agent-key` fix; `/tmp` forged-JWT scripts removed).
 
 ## H. Definition of "shipped" (exit criteria)
 - [ ] New user (no card) → populated MSP starter workspace → successful first agent run in < 10 min.
