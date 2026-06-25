@@ -178,3 +178,4 @@ main().catch((err) => {
   console.error(`\nSeed failed: ${err.message}`);
   process.exit(1);
 });
+// Re-running this script creates a NEW company each time; delete the prior demo company first if re-seeding.
