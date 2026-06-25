@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import { and, eq, or, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -393,6 +396,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     includeIssue?: boolean;
     runErrorCode?: string | null;
     runError?: string | null;
+    logStore?: string | null;
+    logRef?: string | null;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -448,6 +453,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       processLossRetryCount: input?.processLossRetryCount ?? 0,
       errorCode: input?.runErrorCode ?? null,
       error: input?.runError ?? null,
+      logStore: input?.logStore ?? null,
+      logRef: input?.logRef ?? null,
       startedAt: now,
       updatedAt: new Date("2026-03-19T00:00:00.000Z"),
     });
@@ -883,6 +890,39 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .where(eq(agentWakeupRequests.id, wakeupRequestId))
       .then((rows) => rows[0] ?? null);
     expect(wakeup?.status).toBe("claimed");
+  });
+
+  it("does not reap a dead-pid run whose log file was written recently (live child)", async () => {
+    // Same dead-pid setup as the process_lost test below, but hermes_local-style
+    // runs stream to their log FILE and often record no live pid — a fresh log
+    // mtime means the child is still producing output, so the reaper must skip it
+    // rather than false-positive into process_lost (the 2026-06-11 crash-loop).
+    const tmpLogDir = await fs.mkdtemp(path.join(os.tmpdir(), "reaper-log-"));
+    const prevBase = process.env.RUN_LOG_BASE_PATH;
+    process.env.RUN_LOG_BASE_PATH = tmpLogDir;
+    try {
+      const logRef = "live-run.log";
+      const { runId } = await seedRunFixture({
+        processPid: 999_999_999,
+        logStore: "local_file",
+        logRef,
+      });
+      await fs.writeFile(path.join(tmpLogDir, logRef), "streaming output");
+
+      const heartbeat = heartbeatService(db);
+      const result = await heartbeat.reapOrphanedRuns();
+
+      expect(result.reaped).toBe(0);
+      const run = (
+        await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId))
+      )[0];
+      expect(run?.status).toBe("running");
+      expect(run?.errorCode).toBeNull();
+    } finally {
+      if (prevBase === undefined) delete process.env.RUN_LOG_BASE_PATH;
+      else process.env.RUN_LOG_BASE_PATH = prevBase;
+      await fs.rm(tmpLogDir, { recursive: true, force: true });
+    }
   });
 
   it("queues exactly one retry when the recorded local pid is dead", async () => {
