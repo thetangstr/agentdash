@@ -17,12 +17,12 @@ Legend: `[x]` done/verified this cycle · `[~]` partial · `[ ]` pending.
 - [x] Inference gateway MVP (resolve + price/metering) — PR #411.
 - [x] Reaper false-positive fixed (live on mini; main mitigates via pid-recording).
 - [x] `x-agent-key` auth header fix on main.
-- [x] **Wire profile lifecycle into `hermes_local`** — `onHireApproved` provisions the profile; `execute` scopes runs via the alias wrapper (`hermes -p <profile>`). Gated by `AGENTDASH_HERMES_MANAGED_PROFILES` (default off). `services/hermes-profile.ts` (+6 tests). *(deprovision-on-terminate: TODO when an agent-terminated hook lands.)*
+- [x] **Wire profile lifecycle into `hermes_local`** — full lifecycle: `onHireApproved` provisions, `execute` scopes runs via the alias wrapper (`hermes -p <profile>`), `agents.terminate()` deprovisions. Gated by `AGENTDASH_HERMES_MANAGED_PROFILES` (default off). `services/hermes-profile.ts` (+6 tests).
 - [x] **Gateway-point** — `provisionAgentProfile` writes the profile's provider from `AGENTDASH_GATEWAY_*` (token-independent), else copies a managed template. *(cc-switch retires once the gateway is deployed + keyed on the mini.)*
 - [x] **Sandbox `cwd`** — already handled on `main` (`resolveManagedProjectWorkspaceDir` + `workspaceDir`); the mini's Laura incident was a stale checkout → resolved by the cutover (D). No new code.
 - [ ] **EPIPE guard** on adapter spawn (lives in the external `hermes-paperclip-adapter` spawn path — patch upstream or guard at the heartbeat).
 - [ ] Commit the live reaper + preflight-probe fixes to main (port against main's diverged `registry.ts`).
-- [ ] **Bundle + pin Hermes** in the installer (Python 3.11 + `pip install hermes-agent==<pinned>`).
+- [x] **Bundle + pin Hermes** in the installer — `scripts/install/bundle-hermes.sh` (uv/pip → pinned `hermes-agent` in a managed venv + gateway-pointed template profile). *(Run it in the deploy/install flow.)*
 - [ ] Verify default-agent `adapter_failed` < 5% on a controlled mini run (instance B).
 
 ## B. Trial / onboarding (the funnel)
