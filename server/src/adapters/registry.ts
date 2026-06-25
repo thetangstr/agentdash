@@ -120,6 +120,7 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+import { agentDashNativeAdapter } from "./native/index.js";
 
 const DEFAULT_HERMES_COMMAND = "hermes";
 
@@ -675,6 +676,7 @@ const pausedOverrides = new Set<string>();
 
 function registerBuiltInAdapters() {
   for (const adapter of [
+    agentDashNativeAdapter,
     acpxLocalAdapter,
     claudeLocalAdapter,
     codexLocalAdapter,
