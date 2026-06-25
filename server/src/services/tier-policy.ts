@@ -22,6 +22,18 @@ export interface TierCapacityAdds {
 // customers do not get Pro features until they resolve the payment issue.
 const PRO_LIVE = new Set(["pro_trial", "pro_active"]);
 
+// AgentDash: Free-tier capacity is operator-tunable so a launch can give trial
+// users room to feel the multi-human + agent-roster value before the upgrade
+// wall (recommended launch setting: AGENTDASH_FREE_HUMAN_CAP=2,
+// AGENTDASH_FREE_AGENT_CAP=3). Default stays 1+1 so behavior is unchanged unless
+// the operator opts in.
+function readCap(envVar: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[envVar] ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+}
+export const FREE_HUMAN_CAP = readCap("AGENTDASH_FREE_HUMAN_CAP", 1);
+export const FREE_AGENT_CAP = readCap("AGENTDASH_FREE_AGENT_CAP", 1);
+
 export function isProLivePlanTier(planTier: string | null | undefined): boolean {
   return PRO_LIVE.has(planTier ?? "free");
 }
@@ -41,12 +53,18 @@ export function freeTierCapExceededPayload(action: TierCapAction) {
   if (action === "invite") {
     return {
       code: "seat_cap_exceeded",
-      message: "Free workspaces are limited to 1 user. Upgrade to Pro to invite teammates.",
+      message:
+        FREE_HUMAN_CAP === 1
+          ? "Free workspaces are limited to 1 user. Upgrade to Pro to invite teammates."
+          : `Free workspaces are limited to ${FREE_HUMAN_CAP} users. Upgrade to Pro to invite more teammates.`,
     } as const;
   }
   return {
     code: "agent_cap_exceeded",
-    message: "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents.",
+    message:
+      FREE_AGENT_CAP === 1
+        ? "Free workspaces include only the Chief of Staff. Upgrade to Pro to hire more agents."
+        : `Free workspaces include up to ${FREE_AGENT_CAP} agents (incl. the Chief of Staff). Upgrade to Pro to hire more.`,
   } as const;
 }
 
@@ -63,13 +81,13 @@ export async function exceededFreeTierCapacityAction(
   const humansToAdd = adds.humans ?? 0;
   if (humansToAdd > 0) {
     const humans = await deps.counts.humans(companyId);
-    if (humans + humansToAdd > 1) return "invite";
+    if (humans + humansToAdd > FREE_HUMAN_CAP) return "invite";
   }
 
   const agentsToAdd = adds.agents ?? 0;
   if (agentsToAdd > 0) {
     const agents = await deps.counts.agents(companyId);
-    if (agents + agentsToAdd > 1) return "hire";
+    if (agents + agentsToAdd > FREE_AGENT_CAP) return "hire";
   }
 
   return null;
