@@ -17,3 +17,4 @@ export {
   type AgentActionInput,
   type AgentAttestationReceipt,
 } from "./agent-attestation.js";
+// (ci: re-triggered after a flaky verify hang; no functional change)
