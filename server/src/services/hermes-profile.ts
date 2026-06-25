@@ -11,7 +11,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile as fsWriteFile } from "node:fs/promises";
+import { writeFile as fsWriteFile, rm as fsRm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,10 @@ export interface HermesProfileDeps {
   run?: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   /** write a file (the gateway-pointed .env) */
   writeFile?: (path: string, content: string) => Promise<void>;
+  /** write the executable per-run alias wrapper (mode 0755) */
+  writeWrapper?: (path: string, content: string) => Promise<void>;
+  /** remove the alias wrapper file */
+  removeFile?: (path: string) => Promise<void>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -42,6 +46,8 @@ function resolved(deps: HermesProfileDeps = {}) {
     binDir: deps.binDir ?? join(homedir(), ".local", "bin"),
     run: deps.run ?? (async (args: string[]) => execFileAsync(hermesBin, args)),
     writeFile: deps.writeFile ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o600 })),
+    writeWrapper: deps.writeWrapper ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o755 })),
+    removeFile: deps.removeFile ?? ((p: string) => fsRm(p, { force: true })),
   };
 }
 
@@ -108,7 +114,17 @@ export async function provisionAgentProfile(
     providerSource = "template";
   }
 
-  await r.run(["profile", "alias", profileName]);
+  // Write the per-run alias wrapper directly with an absolute-resolving hermes
+  // path. `hermes profile alias` emits `exec hermes -p ...` (bare), which fails
+  // with exit 127 when the agent adapter spawns it from a PATH that omits the
+  // hermes install dir (verified on the live box 2026-06-25). Prepending the
+  // common install dirs makes the wrapper self-sufficient regardless of caller PATH.
+  await r.writeWrapper(
+    join(r.binDir, profileName),
+    `#!/bin/sh\n` +
+      `export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"\n` +
+      `exec ${r.hermesBin} -p ${profileName} "$@"\n`,
+  );
   return { profileName, command: agentProfileCommand(agentId, deps), providerSource };
 }
 
@@ -117,9 +133,9 @@ export async function deprovisionAgentProfile(agentId: string, deps: HermesProfi
   const r = resolved(deps);
   const profileName = agentProfileName(agentId);
   try {
-    await r.run(["profile", "alias", profileName, "--remove"]);
+    await r.removeFile(join(r.binDir, profileName));
   } catch {
-    /* alias may not exist */
+    /* wrapper may not exist */
   }
   try {
     await r.run(["profile", "delete", profileName, "-y"]);

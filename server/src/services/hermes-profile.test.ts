@@ -10,6 +10,8 @@ import {
 function harness(env: NodeJS.ProcessEnv = {}) {
   const runs: string[][] = [];
   const writes: Array<{ path: string; content: string }> = [];
+  const wrappers: Array<{ path: string; content: string }> = [];
+  const removed: string[] = [];
   const deps: HermesProfileDeps = {
     hermesBin: "hermes",
     profilesDir: "/profiles",
@@ -22,8 +24,14 @@ function harness(env: NodeJS.ProcessEnv = {}) {
     writeFile: vi.fn(async (path: string, content: string) => {
       writes.push({ path, content });
     }),
+    writeWrapper: vi.fn(async (path: string, content: string) => {
+      wrappers.push({ path, content });
+    }),
+    removeFile: vi.fn(async (path: string) => {
+      removed.push(path);
+    }),
   };
-  return { deps, runs, writes };
+  return { deps, runs, writes, wrappers, removed };
 }
 
 describe("agentProfileName", () => {
@@ -41,7 +49,7 @@ describe("agentProfileCommand", () => {
 
 describe("provisionAgentProfile", () => {
   it("clones the template via --clone-from, then overlays the gateway .env", async () => {
-    const { deps, runs, writes } = harness({
+    const { deps, runs, writes, wrappers } = harness({
       AGENTDASH_GATEWAY_BASE_URL: "https://gw/v1",
       AGENTDASH_GATEWAY_API_KEY: "sk-gw",
     });
@@ -61,7 +69,13 @@ describe("provisionAgentProfile", () => {
       "--description",
       "AgentDash agent agent-1",
     ]);
-    expect(runs.at(-1)).toEqual(["profile", "alias", "agentdash-agent1"]);
+    // no `profile alias` run — the wrapper is written directly (bare-hermes alias
+    // fails with exit 127 under the adapter PATH)
+    expect(runs).not.toContainEqual(["profile", "alias", "agentdash-agent1"]);
+    expect(wrappers).toHaveLength(1);
+    expect(wrappers[0].path).toBe("/bin/agentdash-agent1");
+    expect(wrappers[0].content).toContain("exec hermes -p agentdash-agent1");
+    expect(wrappers[0].content).toContain("PATH=");
     // overlays a gateway-pointed .env onto the cloned base
     expect(writes).toHaveLength(1);
     expect(writes[0].path).toBe("/profiles/agentdash-agent1/.env");
@@ -69,8 +83,8 @@ describe("provisionAgentProfile", () => {
     expect(writes[0].content).toContain("sk-gw");
   });
 
-  it("clones the template (no gateway env) and writes nothing extra", async () => {
-    const { deps, runs, writes } = harness({});
+  it("clones the template (no gateway env) and writes the wrapper", async () => {
+    const { deps, runs, writes, wrappers } = harness({});
     const res = await provisionAgentProfile("agent-2", { template: "agentdash" }, deps);
 
     expect(res.providerSource).toBe("template");
@@ -85,26 +99,30 @@ describe("provisionAgentProfile", () => {
       "AgentDash agent agent-2",
     ]);
     expect(writes).toHaveLength(0);
+    expect(wrappers).toHaveLength(1);
+    expect(wrappers[0].path).toBe("/bin/agentdash-agent2");
+    expect(wrappers[0].content).toContain("exec hermes -p agentdash-agent2");
   });
 });
 
 describe("deprovisionAgentProfile", () => {
-  it("removes the alias and deletes the profile", async () => {
-    const { deps, runs } = harness({});
+  it("removes the wrapper file and deletes the profile", async () => {
+    const { deps, runs, removed } = harness({});
     await deprovisionAgentProfile("agent-3", deps);
-    expect(runs).toEqual([
-      ["profile", "alias", "agentdash-agent3", "--remove"],
-      ["profile", "delete", "agentdash-agent3", "-y"],
-    ]);
+    expect(removed).toEqual(["/bin/agentdash-agent3"]);
+    expect(runs).toEqual([["profile", "delete", "agentdash-agent3", "-y"]]);
   });
 
-  it("never throws when hermes errors (best-effort cleanup)", async () => {
+  it("never throws when hermes/fs errors (best-effort cleanup)", async () => {
     const deps: HermesProfileDeps = {
       binDir: "/bin",
       profilesDir: "/profiles",
       env: {},
       run: vi.fn(async () => {
         throw new Error("profile not found");
+      }),
+      removeFile: vi.fn(async () => {
+        throw new Error("wrapper missing");
       }),
     };
     await expect(deprovisionAgentProfile("agent-4", deps)).resolves.toBeUndefined();
