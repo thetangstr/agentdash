@@ -109,9 +109,6 @@ jobs:
       - name: Verify release registry test coverage
         run: pnpm run test:release-registry
 
-      - name: Verify MSP launch signoff checks
-        run: pnpm run test:launch-signoff
-
       - name: Build
         run: pnpm build
 
@@ -120,6 +117,30 @@ jobs:
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
+
+  # MSP launch sign-off — its own required-check job. The launch-signoff policy
+  # (scripts/ci/check-launch-signoff.mjs) lists `launch-signoff` as a required
+  # context and requires a dedicated job depending on `policy`; previously the
+  # suite ran as a verify step, so the policy self-check failed on every PR.
+  launch-signoff:
+    runs-on: ubuntu-latest
+    needs: [policy]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify MSP launch signoff checks
+        run: pnpm run test:launch-signoff
 
   # Dependency vulnerability audit.
   #
