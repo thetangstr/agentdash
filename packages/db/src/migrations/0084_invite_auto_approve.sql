@@ -2,4 +2,4 @@
 -- auto_approve = true and a human accepts it, membership is granted
 -- immediately (join request created already-approved) instead of waiting
 -- for admin approval. Defaults to false so existing invites are unchanged.
-ALTER TABLE "invites" ADD COLUMN "auto_approve" boolean DEFAULT false NOT NULL;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "auto_approve" boolean DEFAULT false NOT NULL;
