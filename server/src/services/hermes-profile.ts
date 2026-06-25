@@ -11,6 +11,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import { writeFile as fsWriteFile, rm as fsRm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +34,8 @@ export interface HermesProfileDeps {
   writeWrapper?: (path: string, content: string) => Promise<void>;
   /** remove the alias wrapper file */
   removeFile?: (path: string) => Promise<void>;
+  /** does a path exist (the wrapper) */
+  exists?: (path: string) => boolean;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -42,12 +45,13 @@ function resolved(deps: HermesProfileDeps = {}) {
   return {
     env,
     hermesBin,
-    profilesDir: deps.profilesDir ?? join(homedir(), ".hermes", "profiles"),
-    binDir: deps.binDir ?? join(homedir(), ".local", "bin"),
+    profilesDir: deps.profilesDir ?? env.HERMES_PROFILES_DIR ?? join(homedir(), ".hermes", "profiles"),
+    binDir: deps.binDir ?? env.AGENTDASH_HERMES_BIN_DIR ?? join(homedir(), ".local", "bin"),
     run: deps.run ?? (async (args: string[]) => execFileAsync(hermesBin, args)),
     writeFile: deps.writeFile ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o600 })),
     writeWrapper: deps.writeWrapper ?? ((p: string, c: string) => fsWriteFile(p, c, { mode: 0o755 })),
     removeFile: deps.removeFile ?? ((p: string) => fsRm(p, { force: true })),
+    exists: deps.exists ?? ((p: string) => existsSync(p)),
   };
 }
 
@@ -126,6 +130,30 @@ export async function provisionAgentProfile(
       `exec ${r.hermesBin} -p ${profileName} "$@"\n`,
   );
   return { profileName, command: agentProfileCommand(agentId, deps), providerSource };
+}
+
+/**
+ * Return the per-agent managed-profile wrapper command, provisioning the profile
+ * first if it is missing. This makes managed Hermes work for an agent created by
+ * ANY path (direct API create, seed, import) — not only the hire-approval flow
+ * that fires onHireApproved. Returns undefined when there is no agentId or when
+ * provisioning could not produce a usable wrapper, so callers fall back to the
+ * default hermes command. Non-fatal: provisioning errors are swallowed.
+ */
+export async function ensureAgentProfileCommand(
+  agentId: string | undefined | null,
+  deps: HermesProfileDeps = {},
+): Promise<string | undefined> {
+  if (!agentId) return undefined;
+  const r = resolved(deps);
+  const command = join(r.binDir, agentProfileName(agentId));
+  if (r.exists(command)) return command;
+  try {
+    await provisionAgentProfile(agentId, {}, deps);
+  } catch {
+    /* non-fatal — fall through to the existence re-check */
+  }
+  return r.exists(command) ? command : undefined;
 }
 
 /** Remove the alias wrapper and delete the profile. Best-effort; never throws. */
