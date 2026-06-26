@@ -1,6 +1,9 @@
-/* AgentDash: Claude typography — serif headings + Inter body */
+/* AgentDash: "Porcelain" typography — Manrope does all the type work.
+ * Weights and size carry the hierarchy; there is no second display face.
+ * --font-serif is kept as an alias to Manrope so existing serif-heading
+ * usages pick up the single family without per-component churn. */
 :root {
-  --font-serif:  "Source Serif 4", Georgia, serif;
-  --font-sans:   "Inter", "SF Pro Text", system-ui, -apple-system, sans-serif;
+  --font-serif:  "Manrope", system-ui, -apple-system, sans-serif;
+  --font-sans:   "Manrope", "SF Pro Text", system-ui, -apple-system, sans-serif;
   --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
