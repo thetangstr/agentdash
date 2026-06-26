@@ -3,6 +3,7 @@ import {
   agentProfileCommand,
   agentProfileName,
   deprovisionAgentProfile,
+  ensureAgentProfileCommand,
   provisionAgentProfile,
   type HermesProfileDeps,
 } from "./hermes-profile.js";
@@ -12,6 +13,8 @@ function harness(env: NodeJS.ProcessEnv = {}) {
   const writes: Array<{ path: string; content: string }> = [];
   const wrappers: Array<{ path: string; content: string }> = [];
   const removed: string[] = [];
+  // models the real filesystem: writing a wrapper makes it exist; removing clears it.
+  const existing = new Set<string>();
   const deps: HermesProfileDeps = {
     hermesBin: "hermes",
     profilesDir: "/profiles",
@@ -26,12 +29,15 @@ function harness(env: NodeJS.ProcessEnv = {}) {
     }),
     writeWrapper: vi.fn(async (path: string, content: string) => {
       wrappers.push({ path, content });
+      existing.add(path);
     }),
     removeFile: vi.fn(async (path: string) => {
       removed.push(path);
+      existing.delete(path);
     }),
+    exists: (path: string) => existing.has(path),
   };
-  return { deps, runs, writes, wrappers, removed };
+  return { deps, runs, writes, wrappers, removed, existing };
 }
 
 describe("agentProfileName", () => {
@@ -102,6 +108,48 @@ describe("provisionAgentProfile", () => {
     expect(wrappers).toHaveLength(1);
     expect(wrappers[0].path).toBe("/bin/agentdash-agent2");
     expect(wrappers[0].content).toContain("exec hermes -p agentdash-agent2");
+  });
+});
+
+describe("ensureAgentProfileCommand", () => {
+  it("provisions the profile when missing and returns the wrapper command", async () => {
+    const { deps, runs, wrappers } = harness({});
+    const cmd = await ensureAgentProfileCommand("agent-9", deps);
+    expect(cmd).toBe("/bin/agentdash-agent9");
+    // it ran a clone-from create and wrote the wrapper
+    expect(runs[0].slice(0, 5)).toEqual([
+      "profile",
+      "create",
+      "agentdash-agent9",
+      "--clone-from",
+      "agentdash",
+    ]);
+    expect(wrappers).toHaveLength(1);
+    expect(wrappers[0].path).toBe("/bin/agentdash-agent9");
+  });
+
+  it("does not re-provision when the wrapper already exists", async () => {
+    const { deps, runs } = harness({});
+    await ensureAgentProfileCommand("agent-9", deps);
+    const callsAfterFirst = runs.length;
+    const cmd = await ensureAgentProfileCommand("agent-9", deps);
+    expect(cmd).toBe("/bin/agentdash-agent9");
+    expect(runs.length).toBe(callsAfterFirst); // no new hermes calls
+  });
+
+  it("returns undefined when there is no agentId", async () => {
+    const { deps, runs } = harness({});
+    expect(await ensureAgentProfileCommand(undefined, deps)).toBeUndefined();
+    expect(await ensureAgentProfileCommand(null, deps)).toBeUndefined();
+    expect(runs).toHaveLength(0);
+  });
+
+  it("is non-fatal: returns undefined when provisioning fails", async () => {
+    const { deps } = harness({});
+    deps.run = vi.fn(async () => {
+      throw new Error("hermes not found");
+    });
+    expect(await ensureAgentProfileCommand("agent-9", deps)).toBeUndefined();
   });
 });
 

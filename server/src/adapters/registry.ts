@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
 import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
@@ -121,7 +120,7 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
-import { agentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
+import { ensureAgentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
 import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
 
 // AgentDash: opt-in managed per-agent Hermes profiles. When enabled, each agent
@@ -664,10 +663,12 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     // AgentDash: when managed profiles are enabled, scope this run to the agent's
     // own Hermes profile by invoking its alias wrapper (`hermes -p <profile>`).
-    // Falls back to the default command if the profile was not provisioned.
-    if (hermesManagedProfilesEnabled() && taskPatchedCtx.agent?.id) {
-      const profileCmd = agentProfileCommand(taskPatchedCtx.agent.id);
-      if (existsSync(profileCmd)) patchedConfig.hermesCommand = profileCmd;
+    // Provisions the profile if it is missing (covers agents created by any path,
+    // not just the hire-approval flow); falls back to the default command if it
+    // could not be provisioned.
+    if (hermesManagedProfilesEnabled()) {
+      const profileCmd = await ensureAgentProfileCommand(taskPatchedCtx.agent?.id);
+      if (profileCmd) patchedConfig.hermesCommand = profileCmd;
     }
 
     // Hermes' package default prompt predates authenticated mode and shows bare curl examples.
@@ -688,7 +689,23 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
   },
-  testEnvironment: testHermesEnvironment,
+  // AgentDash: ensure the agent's managed profile exists before the env check so
+  // harness-preflight passes for an agent created by any path, and run the check
+  // against that profile's wrapper command.
+  testEnvironment: async (ctx) => {
+    if (hermesManagedProfilesEnabled()) {
+      const agentId = (ctx as { agent?: { id?: string | null } }).agent?.id;
+      const profileCmd = await ensureAgentProfileCommand(agentId);
+      if (profileCmd) {
+        const cfg =
+          ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
+            ? (ctx.config as Record<string, unknown>)
+            : {};
+        return testHermesEnvironment({ ...ctx, config: { ...cfg, hermesCommand: profileCmd } } as typeof ctx);
+      }
+    }
+    return testHermesEnvironment(ctx);
+  },
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
   syncSkills: hermesSyncSkills,
