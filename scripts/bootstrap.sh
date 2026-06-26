@@ -75,6 +75,21 @@ pnpm install --silent
 echo "agentdash bootstrap: linking the CLI onto your PATH…"
 pnpm install-cli
 
+# ---------- build ----------
+# The server runs via tsx but imports workspace packages (e.g.
+# @paperclipai/plugin-sdk) from their built dist/, so the packages must be
+# built before `pnpm dev` / the setup wizard can boot the server — without
+# this the first start dies with ERR_MODULE_NOT_FOUND on plugin-sdk/dist.
+echo "agentdash bootstrap: building workspace packages + dashboard (a few minutes)…"
+pnpm build
+
+# ---------- agent runtime ----------
+# Install the managed Hermes runtime so hermes_local agents work out of the
+# box. Non-fatal: claude_local and other adapters don't need it.
+echo "agentdash bootstrap: installing the Hermes agent runtime…"
+sh scripts/install/bundle-hermes.sh \
+  || echo "agentdash bootstrap: Hermes runtime had warnings — re-run scripts/install/bundle-hermes.sh later."
+
 # ---------- chain into setup ----------
 # Call the wrapper by absolute path so we don't depend on the symlink
 # we just created being on PATH in this exact shell session.
@@ -113,26 +128,44 @@ if [ "$setup_via_tty" = "true" ]; then
     "$TARGET_DIR/bin/agentdash" setup </dev/tty
   fi
 else
+  # No usable TTY (CI, Docker without -it, scripted curl|bash): instead of
+  # leaving a half-install, write safe defaults non-interactively and start
+  # the server so the one command still lands on a running app.
   echo ""
-  echo "agentdash bootstrap: non-interactive shell detected — skipping the setup wizard."
-  echo "agentdash bootstrap: run \`agentdash setup\` from a real terminal to finish."
+  echo "agentdash bootstrap: non-interactive shell — writing defaults + starting AgentDash…"
 
-  # Non-interactive ship hint. Only printed in CI / curl|bash-without-tty
-  # paths; the interactive branch above lets `agentdash setup` do this.
-  cat <<EOF
+  ADAPTER="${AGENTDASH_ADAPTER:-claude_local}"
+  PORT="${AGENTDASH_PORT:-3100}"
+
+  "$TARGET_DIR/bin/agentdash" setup --adapter "$ADAPTER" -y >/dev/null 2>&1 || true
+
+  mkdir -p "$HOME/.agentdash"
+  ( PORT="$PORT" nohup pnpm --filter @paperclipai/server exec tsx src/index.ts \
+      > "$HOME/.agentdash/server.log" 2>&1 & )
+
+  i=0
+  until curl -fsS "http://localhost:$PORT/api/health" >/dev/null 2>&1 || [ "$i" -ge 90 ]; do
+    sleep 2
+    i=$((i + 1))
+  done
+
+  if curl -fsS "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+    cat <<EOF
 
 ──────────────────────────────────────────────────
-✓ AgentDash installed at $TARGET_DIR
+✓ AgentDash is running → http://localhost:$PORT/cos
 
-Finish setup:
-  cd $TARGET_DIR && agentdash setup
-
-Then start the server:
-  pnpm dev
-
-…and open http://localhost:3100/cos.
+  Add an LLM key so agents can think (e.g. export ANTHROPIC_API_KEY=sk-… for $ADAPTER), then restart.
+  Logs:    ~/.agentdash/server.log
+  Stop:    pkill -f "tsx src/index.ts"
+  Update:  re-run this installer.
 
 Docs: $REPO_URL
 ──────────────────────────────────────────────────
 EOF
+  else
+    echo "agentdash bootstrap: server did not become healthy — see ~/.agentdash/server.log" >&2
+    echo "agentdash bootstrap: finish manually: cd $TARGET_DIR && agentdash setup && pnpm dev" >&2
+    exit 1
+  fi
 fi
