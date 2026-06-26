@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
-import { Dashboard } from "./pages/Dashboard";
+// Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
+import { Overview } from "./pages/Overview";
 import { DashboardLive } from "./pages/DashboardLive";
 import { Companies } from "./pages/Companies";
 import { Agents } from "./pages/Agents";
@@ -84,7 +85,7 @@ function boardRoutes() {
   return (
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
-      <Route path="dashboard" element={<Dashboard />} />
+      <Route path="dashboard" element={<Overview />} />
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
