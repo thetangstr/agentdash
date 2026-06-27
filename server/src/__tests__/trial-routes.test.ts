@@ -20,9 +20,13 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { createDb, trialSessions, trialArtifacts } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
-import { trialService, TrialCreditExhaustedError } from "../services/trial.ts";
+import { createDb, trialSessions, trialArtifacts, companies, companyMemberships } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
+import {
+  trialService,
+  TrialCreditExhaustedError,
+  TrialAlreadyClaimedError,
+} from "../services/trial.ts";
 import { trialRoutes } from "../routes/trial.ts";
 import { errorHandler } from "../middleware/index.js";
 
@@ -156,6 +160,20 @@ describeEmbeddedPostgres("Test Drive trial (integration)", () => {
     return app;
   }
 
+  // Like makeApp but injects req.actor before the trial routes so the
+  // AUTHENTICATED claim route can read it (mirrors actorMiddleware in prod).
+  function makeAuthedApp(actor: Record<string, unknown>) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = actor;
+      next();
+    });
+    app.use("/api/trial", trialRoutes(db));
+    app.use(errorHandler);
+    return app;
+  }
+
   it("POST /session -> POST /:token/run -> GET /:token shows the artifact + reduced credit", async () => {
     const app = makeApp();
 
@@ -218,6 +236,167 @@ describeEmbeddedPostgres("Test Drive trial (integration)", () => {
     const app = makeApp();
     const res = await request(app).get("/api/trial/does-not-exist");
     expect(res.status).toBe(404);
+  });
+
+  // -------------------------------------------------------------------------
+  // Slice 3 — Share loop
+  // -------------------------------------------------------------------------
+
+  it("shareArtifact generates + persists a token and is idempotent", async () => {
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify(SAMPLE_PAYLOAD));
+    const svc = trialService(db, { dispatch });
+    const session = await svc.createSession();
+    const run = await svc.runTask(session.token, {
+      useCase: "sales_outreach",
+      input: { icp: "VPs of Ops" },
+    });
+    const artifactId = run.artifact.id;
+
+    const first = await svc.shareArtifact(session.token, artifactId);
+    expect(first.shareToken).toBeTruthy();
+    expect(first.shareUrl).toBe(`/share/${first.shareToken}`);
+
+    // Persisted.
+    const row = await db
+      .select()
+      .from(trialArtifacts)
+      .where(eq(trialArtifacts.id, artifactId))
+      .then((rows) => rows[0]);
+    expect(row?.shareToken).toBe(first.shareToken);
+
+    // Idempotent — same token on a second call.
+    const second = await svc.shareArtifact(session.token, artifactId);
+    expect(second.shareToken).toBe(first.shareToken);
+  });
+
+  it("shareArtifact throws 404 for an artifact not owned by the trial", async () => {
+    const svc = trialService(db, { dispatch: vi.fn() });
+    const session = await svc.createSession();
+    await expect(
+      svc.shareArtifact(session.token, "00000000-0000-0000-0000-000000000000"),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("GET /api/trial/share/:shareToken returns the artifact (200) and 404 for unknown", async () => {
+    const app = makeApp();
+    const created = await request(app).post("/api/trial/session").send({});
+    const token = created.body.token as string;
+    const run = await request(app)
+      .post(`/api/trial/${token}/run`)
+      .send({ useCase: "sales_outreach", input: { icp: "RevOps leaders" } });
+    const artifactId = run.body.artifact.id as string;
+
+    const shared = await request(app).post(
+      `/api/trial/${token}/artifacts/${artifactId}/share`,
+    );
+    expect(shared.status).toBe(201);
+    expect(shared.body.shareToken).toBeTruthy();
+    expect(shared.body.shareUrl).toBe(`/share/${shared.body.shareToken}`);
+
+    const got = await request(app).get(`/api/trial/share/${shared.body.shareToken}`);
+    expect(got.status).toBe(200);
+    expect(got.body.title).toContain("3-touch outreach sequence");
+    expect(got.body.content.touches).toHaveLength(3);
+    expect(got.body.agentName).toBeTruthy();
+
+    const missing = await request(app).get("/api/trial/share/nope-unknown-token");
+    expect(missing.status).toBe(404);
+  });
+
+  // -------------------------------------------------------------------------
+  // Slice 4 — Claim on signup
+  // -------------------------------------------------------------------------
+
+  it("claimSession creates the owner membership, flips planTier to free, stamps the user, and bumps credit", async () => {
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify(SAMPLE_PAYLOAD));
+    const svc = trialService(db, { dispatch });
+    const session = await svc.createSession();
+    await svc.runTask(session.token, {
+      useCase: "sales_outreach",
+      input: { icp: "founders" },
+    });
+
+    const userId = `user-${Math.random().toString(36).slice(2)}`;
+    const claimed = await svc.claimSession(session.token, userId);
+    expect(claimed.companyId).toBe(session.companyId);
+    expect(claimed.companyPrefix).toBeTruthy();
+
+    // Owner membership created.
+    const membership = await db
+      .select()
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.companyId, session.companyId),
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, userId),
+        ),
+      )
+      .then((rows) => rows[0]);
+    expect(membership?.status).toBe("active");
+    expect(membership?.membershipRole).toBe("owner");
+
+    // planTier flipped trial -> free.
+    const company = await db
+      .select({ planTier: companies.planTier })
+      .from(companies)
+      .where(eq(companies.id, session.companyId))
+      .then((rows) => rows[0]);
+    expect(company?.planTier).toBe("free");
+
+    // Session stamped + credit bumped.
+    const row = await fetchSessionRow(db, session.token);
+    expect(row.claimedByUserId).toBe(userId);
+    expect(row.creditCents).toBeGreaterThan(session.creditCents);
+  });
+
+  it("claimSession is idempotent for the same user and rejects a different user (409)", async () => {
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify(SAMPLE_PAYLOAD));
+    const svc = trialService(db, { dispatch });
+    const session = await svc.createSession();
+
+    const userId = `user-${Math.random().toString(36).slice(2)}`;
+    const first = await svc.claimSession(session.token, userId);
+    const creditAfterFirst = (await fetchSessionRow(db, session.token)).creditCents;
+
+    // Same user again — no extra credit, same result.
+    const second = await svc.claimSession(session.token, userId);
+    expect(second.companyId).toBe(first.companyId);
+    const creditAfterSecond = (await fetchSessionRow(db, session.token)).creditCents;
+    expect(creditAfterSecond).toBe(creditAfterFirst);
+
+    // Different user — 409.
+    await expect(
+      svc.claimSession(session.token, "someone-else"),
+    ).rejects.toBeInstanceOf(TrialAlreadyClaimedError);
+  });
+
+  it("POST /:token/claim binds a board actor (200) and 409s a second, different claimant", async () => {
+    const created = await request(makeApp()).post("/api/trial/session").send({});
+    const token = created.body.token as string;
+
+    const appA = makeAuthedApp({ type: "board", source: "session", userId: "claimer-a" });
+    const claimA = await request(appA).post(`/api/trial/${token}/claim`).send({});
+    expect(claimA.status).toBe(200);
+    expect(claimA.body.companyPrefix).toBeTruthy();
+
+    // Idempotent for the same user.
+    const claimAagain = await request(appA).post(`/api/trial/${token}/claim`).send({});
+    expect(claimAagain.status).toBe(200);
+
+    // Different user — 409.
+    const appB = makeAuthedApp({ type: "board", source: "session", userId: "claimer-b" });
+    const claimB = await request(appB).post(`/api/trial/${token}/claim`).send({});
+    expect(claimB.status).toBe(409);
+    expect(claimB.body.details?.code).toBe("trial_already_claimed");
+  });
+
+  it("POST /:token/claim rejects an unauthenticated (none) actor", async () => {
+    const created = await request(makeApp()).post("/api/trial/session").send({});
+    const token = created.body.token as string;
+    const app = makeAuthedApp({ type: "none", source: "none" });
+    const res = await request(app).post(`/api/trial/${token}/claim`).send({});
+    expect(res.status).toBe(403);
   });
 });
 
