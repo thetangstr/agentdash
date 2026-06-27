@@ -273,8 +273,24 @@ function e2eStubResponse(callIndex: number): string {
  *  - "claude_local": spawns `claude --print -` with prompt on stdin
  *  - everything else: throws 501 so unsupported adapters do not silently misroute
  */
-export async function dispatchLLM(input: LLMInput, meter?: DispatchMeter): Promise<string> {
-  const adapter = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim();
+/**
+ * Optional per-call dispatch options.
+ *
+ * `adapter` forces a specific adapter for this call regardless of
+ * AGENTDASH_DEFAULT_ADAPTER. The Test Drive trial uses this to pin every
+ * anonymous run to the cheap `minimax` adapter while preserving metering.
+ * Backward compatible: omit it to keep the env-driven default.
+ */
+export interface DispatchOptions {
+  adapter?: string;
+}
+
+export async function dispatchLLM(
+  input: LLMInput,
+  meter?: DispatchMeter,
+  options?: DispatchOptions,
+): Promise<string> {
+  const adapter = (options?.adapter ?? process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim();
 
   // AgentDash (Phase G): E2E deterministic stub — bypass ALL real LLM calls
   // when PAPERCLIP_E2E_SKIP_LLM=true. The deep-interview engine and CoS
