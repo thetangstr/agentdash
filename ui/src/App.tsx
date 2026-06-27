@@ -61,6 +61,9 @@ import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
+import { TrialLandingPage } from "./pages/TrialLanding";
+import { SharedArtifactPage } from "./pages/SharedArtifact";
+import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSConversation } from "./pages/CoSConversation";
@@ -294,6 +297,12 @@ export function App() {
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
+        {/* AgentDash (Test Drive): public no-signup trial — rendered outside
+            CloudAccessGate, no Layout/sidebar, token is the only credential. */}
+        <Route path="trial" element={<TrialLandingPage />} />
+        {/* AgentDash (Test Drive, Slice 3): PUBLIC read-only shared artifact —
+            same tier as /trial, no auth, no company context. */}
+        <Route path="share/:shareToken" element={<SharedArtifactPage />} />
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
         {/* AgentDash: marketing routes — render outside CloudAccessGate so the
             cream/light surface isn't fighting the dashboard's html.dark theme.
@@ -309,6 +318,11 @@ export function App() {
               The user has no company yet, so this lives outside the
               :companyPrefix boardRoutes block. */}
           <Route path="company-create" element={<CompanyCreatePage />} />
+          {/* AgentDash (Test Drive, Slice 4): post-signup claim handoff. Inside
+              CloudAccessGate (auth required) but the gate special-cases this
+              path so a brand-new, company-less account can reach it to bind the
+              trial workspace. */}
+          <Route path="trial/claim" element={<TrialClaimPage />} />
           {/* AgentDash: CoS onboarding v2 conversation */}
           <Route path="cos" element={<CoSConversation />} />
           <Route path="onboarding" element={<OnboardingRoutePage />} />

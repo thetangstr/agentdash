@@ -21,6 +21,8 @@ export { instanceSettingsRoutes } from "./instance-settings.js";
 export { instanceDatabaseBackupRoutes } from "./instance-database-backups.js";
 // AgentDash: Agent-run quota (AGE-120)
 export { quotaRoutes } from "./quota.js";
+// AgentDash: Test Drive — no-signup anonymous trial (public, token-based)
+export { trialRoutes } from "./trial.js";
 // AgentDash: Connectors (AGE-106)
 export { connectorRoutes } from "./connectors.js";
 // AgentDash: Slack Connector (AGE-108)

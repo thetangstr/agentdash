@@ -1,4 +1,13 @@
 export { companyService } from "./companies.js";
+// AgentDash: Test Drive — no-signup anonymous trial
+export {
+  trialService,
+  estimateRunCostCents,
+  TrialNotFoundError,
+  TrialExpiredError,
+  TrialCreditExhaustedError,
+  type TrialService,
+} from "./trial.js";
 export { inviteService } from "./invites.js";
 export { feedbackService } from "./feedback.js";
 export { companySkillService } from "./company-skills.js";

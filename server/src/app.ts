@@ -57,6 +57,8 @@ import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
 // AgentDash: Agent-run quota (AGE-120)
 import { quotaRoutes } from "./routes/quota.js";
+// AgentDash: Test Drive — no-signup anonymous trial (public, token-based)
+import { trialRoutes } from "./routes/trial.js";
 // AgentDash: Connectors (AGE-106)
 import { connectorRoutes } from "./routes/connectors.js";
 // AgentDash: Slack Connector (AGE-108)
@@ -283,6 +285,12 @@ export async function createApp(
   api.use(agentResearchRoutes(db));
   // AgentDash: Agent-run quota (AGE-120)
   api.use(quotaRoutes(db));
+  // AgentDash: Test Drive — no-signup anonymous trial. PUBLIC + token-based:
+  // these routes validate the trial token themselves and never require
+  // req.actor, so they are reachable without auth even in authenticated mode
+  // (boardMutationGuard only gates board-session actors). Covered by the
+  // default-tier API rate limiter mounted above.
+  api.use("/trial", trialRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
   // AgentDash: Slack Connector (AGE-108)
