@@ -10,9 +10,9 @@
 // See docs/superpowers/specs/2026-06-27-test-drive-no-signup-trial.md (§4, §9, §11).
 
 import { randomBytes } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { trialSessions, trialArtifacts, companies } from "@paperclipai/db";
+import { trialSessions, trialArtifacts, companies, companyMemberships } from "@paperclipai/db";
 import { HttpError, badRequest } from "../errors.js";
 import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
@@ -27,6 +27,8 @@ import { getHeroTask, TRIAL_DEFAULT_HERO_TASK } from "./trial-hero-tasks.js";
 const TRIAL_ADAPTER = "minimax";
 /** Default starting trial credit (cents) when env is unset. */
 const DEFAULT_TRIAL_CREDIT_CENTS = 50;
+/** Default credit bump (cents) granted when a trial is claimed on signup. */
+const DEFAULT_TRIAL_SIGNUP_CREDIT_CENTS = 500;
 /** Anonymous trial session lifetime. */
 const TRIAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -34,6 +36,14 @@ function trialCreditCents(): number {
   const raw = process.env.AGENTDASH_TRIAL_CREDIT_CENTS;
   const parsed = raw != null ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_TRIAL_CREDIT_CENTS;
+}
+
+function trialSignupCreditCents(): number {
+  const raw = process.env.AGENTDASH_TRIAL_SIGNUP_CREDIT_CENTS;
+  const parsed = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : DEFAULT_TRIAL_SIGNUP_CREDIT_CENTS;
 }
 
 /**
@@ -69,6 +79,17 @@ export class TrialCreditExhaustedError extends HttpError {
       "Trial credit exhausted. Sign up to keep going.",
       { code: "trial_credit_exhausted" },
       "trial_credit_exhausted",
+    );
+  }
+}
+
+export class TrialAlreadyClaimedError extends HttpError {
+  constructor() {
+    super(
+      409,
+      "This trial has already been claimed by another account.",
+      { code: "trial_already_claimed" },
+      "trial_already_claimed",
     );
   }
 }
@@ -274,6 +295,150 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
         spentCents: nextSpent,
         creditCents: row.creditCents,
       };
+    },
+
+    // -----------------------------------------------------------------------
+    // Slice 3 — Share loop
+    // -----------------------------------------------------------------------
+
+    /**
+     * Mint (or return the existing) public share token for one of the trial's
+     * artifacts. Idempotent: a second call returns the same token. Scoped to the
+     * trial — the artifact must belong to the session behind `trialToken`.
+     *
+     * Throws TrialNotFoundError (404) for an unknown trial token, or when the
+     * artifact is missing / not owned by this trial.
+     */
+    shareArtifact: async (trialToken: string, artifactId: string) => {
+      const row = await findByToken(trialToken);
+      if (!row) throw new TrialNotFoundError();
+
+      const artifact = await db
+        .select()
+        .from(trialArtifacts)
+        .where(
+          and(eq(trialArtifacts.id, artifactId), eq(trialArtifacts.trialSessionId, row.id)),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (!artifact) throw new TrialNotFoundError();
+
+      let shareToken = artifact.shareToken;
+      if (!shareToken) {
+        shareToken = generateToken();
+        await db
+          .update(trialArtifacts)
+          .set({ shareToken })
+          .where(eq(trialArtifacts.id, artifact.id));
+      }
+
+      return { shareToken, shareUrl: `/share/${shareToken}` };
+    },
+
+    /**
+     * PUBLIC, read-only resolve of a shared artifact by its share token. No
+     * trial token required. Returns null when the token is unknown.
+     */
+    getSharedArtifact: async (shareToken: string) => {
+      const t = shareToken?.trim();
+      if (!t) return null;
+      const artifact = await db
+        .select()
+        .from(trialArtifacts)
+        .where(eq(trialArtifacts.shareToken, t))
+        .then((rows) => rows[0] ?? null);
+      if (!artifact) return null;
+      return {
+        title: artifact.title,
+        content: artifact.content,
+        useCase: artifact.useCase,
+        createdAt: artifact.createdAt,
+        agentName: TRIAL_DEFAULT_HERO_TASK.agentName,
+      };
+    },
+
+    // -----------------------------------------------------------------------
+    // Slice 4 — Claim on signup
+    // -----------------------------------------------------------------------
+
+    /**
+     * Bind an anonymous trial workspace to a freshly-signed-up user: create an
+     * owner company_membership, flip the company from the `trial` tier to
+     * `free`, stamp claimedByUserId, and grant a signup credit bump.
+     *
+     * Idempotent for the SAME user (re-binds nothing, no double credit). Throws
+     * TrialAlreadyClaimedError (409) if a DIFFERENT user already claimed it, and
+     * TrialNotFoundError (404) for an unknown token.
+     */
+    claimSession: async (trialToken: string, userId: string) => {
+      const uid = userId?.trim();
+      if (!uid) throw badRequest("userId is required", { code: "missing_user_id" });
+
+      const row = await findByToken(trialToken);
+      if (!row) throw new TrialNotFoundError();
+
+      const company = await db
+        .select({ id: companies.id, issuePrefix: companies.issuePrefix })
+        .from(companies)
+        .where(eq(companies.id, row.companyId))
+        .then((rows) => rows[0] ?? null);
+      if (!company) throw new TrialNotFoundError();
+
+      // Already claimed?
+      if (row.claimedByUserId) {
+        if (row.claimedByUserId !== uid) throw new TrialAlreadyClaimedError();
+        // Idempotent for the same user: ensure membership exists, no re-credit.
+        await db
+          .insert(companyMemberships)
+          .values({
+            companyId: company.id,
+            principalType: "user",
+            principalId: uid,
+            status: "active",
+            membershipRole: "owner",
+          })
+          .onConflictDoNothing({
+            target: [
+              companyMemberships.companyId,
+              companyMemberships.principalType,
+              companyMemberships.principalId,
+            ],
+          });
+        return { companyId: company.id, companyPrefix: company.issuePrefix };
+      }
+
+      // First claim by this user: bind membership, flip tier, credit, stamp.
+      await db
+        .insert(companyMemberships)
+        .values({
+          companyId: company.id,
+          principalType: "user",
+          principalId: uid,
+          status: "active",
+          membershipRole: "owner",
+        })
+        .onConflictDoNothing({
+          target: [
+            companyMemberships.companyId,
+            companyMemberships.principalType,
+            companyMemberships.principalId,
+          ],
+        });
+
+      await db
+        .update(companies)
+        .set({ planTier: "free", updatedAt: new Date() })
+        .where(eq(companies.id, company.id));
+
+      await db
+        .update(trialSessions)
+        .set({
+          claimedByUserId: uid,
+          creditCents: row.creditCents + trialSignupCreditCents(),
+          updatedAt: new Date(),
+        })
+        .where(eq(trialSessions.id, row.id));
+
+      return { companyId: company.id, companyPrefix: company.issuePrefix };
     },
   };
 }

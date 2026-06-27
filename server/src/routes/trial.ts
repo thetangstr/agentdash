@@ -17,6 +17,8 @@ import { createHash } from "node:crypto";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { trialService } from "../services/trial.js";
+import { assertBoard } from "./authz.js";
+import { badRequest } from "../errors.js";
 
 /**
  * Hash the client IP for abuse metering. We never store the raw IP. A static
@@ -80,6 +82,51 @@ export function trialRoutes(db: Db) {
       spentCents: result.spentCents,
       creditCents: result.creditCents,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Slice 3 — Share loop (PUBLIC, token-based)
+  // -------------------------------------------------------------------------
+
+  // GET /api/trial/share/:shareToken — PUBLIC, read-only shared artifact.
+  // No trial token, no auth. 404 when the share token is unknown. Registered
+  // before /:token so the two-segment path can never be shadowed.
+  router.get("/share/:shareToken", async (req, res) => {
+    const shared = await svc.getSharedArtifact(req.params.shareToken);
+    if (!shared) {
+      res
+        .status(404)
+        .json({ error: "Shared artifact not found", details: { code: "share_not_found" } });
+      return;
+    }
+    res.json(shared);
+  });
+
+  // POST /api/trial/:token/artifacts/:artifactId/share — mint/return the public
+  // share token for one of the trial's artifacts. PUBLIC (trial token only).
+  router.post("/:token/artifacts/:artifactId/share", async (req, res) => {
+    const result = await svc.shareArtifact(req.params.token, req.params.artifactId);
+    res.status(201).json({ shareUrl: result.shareUrl, shareToken: result.shareToken });
+  });
+
+  // -------------------------------------------------------------------------
+  // Slice 4 — Claim on signup (AUTHENTICATED)
+  // -------------------------------------------------------------------------
+
+  // POST /api/trial/:token/claim — bind the trial workspace to the logged-in
+  // user. Requires a board actor with a userId. Security: whoever holds the
+  // trial token AND is signed in can claim, unless someone else already did
+  // (then 409). Idempotent for the same user.
+  router.post("/:token/claim", async (req, res) => {
+    assertBoard(req);
+    const userId = req.actor.type === "board" ? req.actor.userId : undefined;
+    if (!userId) {
+      throw badRequest("A signed-in user is required to claim a trial", {
+        code: "missing_user_id",
+      });
+    }
+    const result = await svc.claimSession(req.params.token, userId);
+    res.status(200).json({ companyId: result.companyId, companyPrefix: result.companyPrefix });
   });
 
   return router;
