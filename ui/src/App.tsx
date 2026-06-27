@@ -61,6 +61,7 @@ import { ResetPasswordPage } from "./pages/ResetPassword";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
+import { TrialLandingPage } from "./pages/TrialLanding";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
 import { NotFoundPage } from "./pages/NotFound";
 import { CoSConversation } from "./pages/CoSConversation";
@@ -294,6 +295,9 @@ export function App() {
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
+        {/* AgentDash (Test Drive): public no-signup trial — rendered outside
+            CloudAccessGate, no Layout/sidebar, token is the only credential. */}
+        <Route path="trial" element={<TrialLandingPage />} />
         <Route path="tests/perf/long-thread" element={<IssueChatLongThreadPerf />} />
         {/* AgentDash: marketing routes — render outside CloudAccessGate so the
             cream/light surface isn't fighting the dashboard's html.dark theme.
