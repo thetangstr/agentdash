@@ -7,7 +7,7 @@
 //
 // See docs/superpowers/specs/2026-06-27-test-drive-no-signup-trial.md (§4, §10).
 
-import { pgTable, uuid, text, integer, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
@@ -30,6 +30,11 @@ export const trialSessions = pgTable(
     ipHash: text("ip_hash"),
     // Set when an anonymous workspace is claimed on signup (Slice 3). Nullable.
     claimedByUserId: text("claimed_by_user_id"),
+    // AgentDash (Test Drive): the designed autonomous-company plan — company
+    // name, mission, and the agent roster (with provisioned ids, charters, and
+    // first tasks). Null until the user designs a company. See the company
+    // designer for the shape.
+    companyPlan: jsonb("company_plan").$type<Record<string, unknown>>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
