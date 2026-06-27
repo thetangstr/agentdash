@@ -104,3 +104,6 @@ export type { HealAttempt, HealEvent } from "./heal_attempts.js";
 export { reengagementEmails } from "./reengagement-emails.js";
 // AgentDash: Connectors (AGE-106)
 export { connections, connectorWorkspaceDefaults, agentConnectorOverrides } from "./connections.js";
+// AgentDash: Test Drive — no-signup anonymous trial
+export { trialSessions } from "./trial_sessions.js";
+export { trialArtifacts } from "./trial_artifacts.js";
