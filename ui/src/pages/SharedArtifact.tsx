@@ -24,7 +24,9 @@ export function SharedArtifactPage() {
   });
 
   return (
-    <div className="min-h-screen bg-background px-6 py-12 text-foreground">
+    // Own scroll region — the app shell's `body { overflow: hidden }` would
+    // otherwise clip a long shared artifact.
+    <div className="h-screen overflow-y-auto bg-background px-6 py-12 text-foreground">
       <div className="mx-auto w-full max-w-2xl">
         {query.isLoading ? (
           <p className="py-16 text-center text-sm text-muted-foreground">loading…</p>
