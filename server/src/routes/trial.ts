@@ -85,6 +85,61 @@ export function trialRoutes(db: Db) {
   });
 
   // -------------------------------------------------------------------------
+  // Autonomous company — multi-agent flow (PUBLIC, token-based)
+  // -------------------------------------------------------------------------
+
+  // POST /api/trial/:token/design — Chief of Staff designs + provisions a
+  // tailored team from a 2-3 field intake. Returns the plan with agent ids.
+  // 402 credit exhausted · 410 expired · 404 bad token · 400 bad intake.
+  router.post("/:token/design", async (req, res) => {
+    const body = (req.body ?? {}) as { intake?: unknown };
+    const result = await svc.designCompany(req.params.token, body.intake);
+    res.status(201).json({
+      company: result.company,
+      agents: result.agents,
+      creditRemainingCents: result.creditRemainingCents,
+      spentCents: result.spentCents,
+      creditCents: result.creditCents,
+    });
+  });
+
+  // POST /api/trial/:token/agents/:agentId/run — one designed agent runs its
+  // first task and produces a real deliverable. 402/410/404 as above; 404 when
+  // the agent does not belong to this trial.
+  router.post("/:token/agents/:agentId/run", async (req, res) => {
+    const result = await svc.runAgentFirstTask(req.params.token, req.params.agentId);
+    res.status(201).json({
+      artifact: result.artifact,
+      creditRemainingCents: result.creditRemainingCents,
+      spentCents: result.spentCents,
+      creditCents: result.creditCents,
+    });
+  });
+
+  // GET /api/trial/:token/company — the fleet state: designed company + agents
+  // (live status + deliverable flags) + artifacts. 404 for unknown/expired.
+  router.get("/:token/company", async (req, res) => {
+    const result = await svc.getCompany(req.params.token);
+    if (!result) {
+      res
+        .status(404)
+        .json({ error: "Trial session not found", details: { code: "trial_not_found" } });
+      return;
+    }
+    res.json({
+      company: result.company,
+      agents: result.agents,
+      artifacts: result.artifacts,
+      session: {
+        creditCents: result.session.creditCents,
+        spentCents: result.session.spentCents,
+        creditRemainingCents: result.session.creditRemainingCents,
+        expiresAt: result.session.expiresAt,
+      },
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Slice 3 — Share loop (PUBLIC, token-based)
   // -------------------------------------------------------------------------
 

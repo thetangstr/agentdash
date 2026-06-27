@@ -631,6 +631,13 @@
       "when": 1781020800000,
       "tag": "0089_trial_artifact_share_token",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1781107200000,
+      "tag": "0090_trial_company_plan",
+      "breakpoints": true
     }
   ]
 }

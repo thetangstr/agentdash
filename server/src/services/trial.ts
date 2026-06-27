@@ -18,6 +18,14 @@ import { companyService } from "./companies.js";
 import { agentService } from "./agents.js";
 import { dispatchLLM, type DispatchMeter, type DispatchOptions } from "./dispatch-llm.js";
 import { getHeroTask, TRIAL_DEFAULT_HERO_TASK } from "./trial-hero-tasks.js";
+import {
+  buildCompanyDesignPrompt,
+  parseCompanyDesign,
+  buildAgentTaskPrompt,
+  parseAgentArtifact,
+  type CompanyIntake,
+  type DesignedAgent,
+} from "./trial-company-designer.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -25,8 +33,14 @@ import { getHeroTask, TRIAL_DEFAULT_HERO_TASK } from "./trial-hero-tasks.js";
 
 /** All trial runs are pinned to MiniMax (cheap, already wired) per the spec. */
 const TRIAL_ADAPTER = "minimax";
-/** Default starting trial credit (cents) when env is unset. */
-const DEFAULT_TRIAL_CREDIT_CENTS = 50;
+/**
+ * Default starting trial credit (cents) when env is unset. The autonomous-
+ * company flow makes ~5-6 MiniMax calls (1 design + 3-4 first-task runs), so the
+ * default is sized to fit a full company + first deliverables comfortably.
+ */
+const DEFAULT_TRIAL_CREDIT_CENTS = 150;
+/** Use-case id for per-agent deliverables produced by the multi-agent flow. */
+const AGENT_DELIVERABLE_USE_CASE = "agent_deliverable";
 /** Default credit bump (cents) granted when a trial is claimed on signup. */
 const DEFAULT_TRIAL_SIGNUP_CREDIT_CENTS = 500;
 /** Anonymous trial session lifetime. */
@@ -94,6 +108,17 @@ export class TrialAlreadyClaimedError extends HttpError {
   }
 }
 
+export class TrialAgentNotFoundError extends HttpError {
+  constructor() {
+    super(
+      404,
+      "Agent not found in this trial",
+      { code: "trial_agent_not_found" },
+      "trial_agent_not_found",
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -111,6 +136,55 @@ type TrialSessionRow = typeof trialSessions.$inferSelect;
 
 function isExpired(row: Pick<TrialSessionRow, "expiresAt">, now = new Date()): boolean {
   return row.expiresAt.getTime() <= now.getTime();
+}
+
+// ---------------------------------------------------------------------------
+// Autonomous-company plan storage (persisted on trial_sessions.company_plan)
+// ---------------------------------------------------------------------------
+
+/** A designed agent after it has been provisioned in the DB (has an id). */
+export interface ProvisionedAgent extends DesignedAgent {
+  id: string;
+}
+
+/** The plan persisted on the session: company identity + the provisioned roster. */
+export interface StoredCompanyPlan {
+  company: { name: string; mission: string };
+  agents: ProvisionedAgent[];
+}
+
+/** Read + lightly validate the stored company plan, or null if absent/malformed. */
+function readPlan(row: Pick<TrialSessionRow, "companyPlan">): StoredCompanyPlan | null {
+  const raw = row.companyPlan;
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const company = obj.company as { name?: unknown; mission?: unknown } | undefined;
+  const agents = Array.isArray(obj.agents) ? (obj.agents as ProvisionedAgent[]) : [];
+  if (!company || typeof company.name !== "string" || agents.length === 0) return null;
+  return {
+    company: {
+      name: company.name,
+      mission: typeof company.mission === "string" ? company.mission : "",
+    },
+    agents,
+  };
+}
+
+/** Validate + normalize the design intake; throws a 400 on bad input. */
+function validateIntake(raw: unknown): CompanyIntake {
+  if (!raw || typeof raw !== "object") {
+    throw badRequest("intake is required", { code: "invalid_intake" });
+  }
+  const obj = raw as Record<string, unknown>;
+  const whatYouDo = typeof obj.whatYouDo === "string" ? obj.whatYouDo.trim() : "";
+  const goal = typeof obj.goal === "string" ? obj.goal.trim() : "";
+  if (!whatYouDo) throw badRequest("intake.whatYouDo is required", { code: "missing_what_you_do" });
+  if (!goal) throw badRequest("intake.goal is required", { code: "missing_goal" });
+  const blockerRaw = typeof obj.blocker === "string" ? obj.blocker.trim() : "";
+  const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s);
+  const intake: CompanyIntake = { whatYouDo: cap(whatYouDo, 1000), goal: cap(goal, 1000) };
+  if (blockerRaw) intake.blocker = cap(blockerRaw, 1000);
+  return intake;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +368,219 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
         creditRemainingCents,
         spentCents: nextSpent,
         creditCents: row.creditCents,
+      };
+    },
+
+    // -----------------------------------------------------------------------
+    // Autonomous company — multi-agent flow
+    // -----------------------------------------------------------------------
+
+    /**
+     * DESIGN a tailored autonomous company from a 2-3 field intake. A "Chief of
+     * Staff" LLM call (forced MiniMax) designs a team of 3-4 agents; each is
+     * provisioned in the DB under the trial company (idle, MiniMax, with the
+     * category/charter/first-task carried in runtimeConfig). The full plan
+     * (company name/mission + provisioned agent roster) is persisted on the
+     * session's company_plan column. A small design cost is deducted.
+     *
+     * Throws (typed): TrialNotFound (404), TrialExpired (410),
+     * TrialCreditExhausted (402), badRequest (400) on invalid intake.
+     */
+    designCompany: async (token: string, intakeRaw: unknown) => {
+      const row = await findByToken(token);
+      if (!row) throw new TrialNotFoundError();
+      if (isExpired(row)) throw new TrialExpiredError();
+      if (row.creditCents - row.spentCents <= 0) throw new TrialCreditExhaustedError();
+
+      const intake = validateIntake(intakeRaw);
+
+      const prompt = buildCompanyDesignPrompt(intake);
+      const meter: DispatchMeter = { db, companyId: row.companyId, agentId: row.agentId };
+      const raw = await dispatch(prompt, meter, { adapter: TRIAL_ADAPTER });
+      const design = parseCompanyDesign(raw, intake);
+
+      // Rename the ephemeral company to the designed name (best-effort).
+      await db
+        .update(companies)
+        .set({ name: design.companyName, updatedAt: new Date() })
+        .where(eq(companies.id, row.companyId));
+
+      // Provision each designed agent under the trial company.
+      const provisioned: ProvisionedAgent[] = [];
+      for (const agent of design.agents) {
+        const created = await agents_.create(row.companyId, {
+          name: agent.name,
+          role: agent.role,
+          status: "idle",
+          adapterType: TRIAL_ADAPTER,
+          runtimeConfig: {
+            trial: true,
+            category: agent.category,
+            charter: agent.charter,
+            ref: agent.ref,
+            firstTaskTitle: agent.firstTaskTitle,
+            firstTaskBrief: agent.firstTaskBrief,
+          },
+        });
+        provisioned.push({
+          id: created.id,
+          ref: agent.ref,
+          name: created.name,
+          role: agent.role,
+          category: agent.category,
+          charter: agent.charter,
+          firstTaskTitle: agent.firstTaskTitle,
+          firstTaskBrief: agent.firstTaskBrief,
+        });
+      }
+
+      const plan: StoredCompanyPlan = {
+        company: { name: design.companyName, mission: design.mission },
+        agents: provisioned,
+      };
+
+      // Deduct a small design cost + persist the plan.
+      const estCents = estimateRunCostCents(raw);
+      const nextSpent = row.spentCents + estCents;
+      await db
+        .update(trialSessions)
+        .set({
+          companyPlan: plan as unknown as Record<string, unknown>,
+          spentCents: nextSpent,
+          updatedAt: new Date(),
+        })
+        .where(eq(trialSessions.id, row.id));
+      await db
+        .update(companies)
+        .set({ spentMonthlyCents: nextSpent, updatedAt: new Date() })
+        .where(eq(companies.id, row.companyId));
+
+      return {
+        company: { name: design.companyName, mission: design.mission },
+        agents: provisioned.map((a) => ({ ...a, status: "idle" as const })),
+        creditRemainingCents: Math.max(0, row.creditCents - nextSpent),
+        spentCents: nextSpent,
+        creditCents: row.creditCents,
+      };
+    },
+
+    /**
+     * RUN one designed agent's first task draft-only on MiniMax, persist the
+     * deliverable as a trial_artifact (agentId set, useCase "agent_deliverable"),
+     * and deduct credit.
+     *
+     * Throws (typed): TrialNotFound (404), TrialExpired (410),
+     * TrialCreditExhausted (402), TrialAgentNotFound (404) when the agent does
+     * not belong to this trial's designed company.
+     */
+    runAgentFirstTask: async (token: string, agentId: string) => {
+      const row = await findByToken(token);
+      if (!row) throw new TrialNotFoundError();
+      if (isExpired(row)) throw new TrialExpiredError();
+      if (row.creditCents - row.spentCents <= 0) throw new TrialCreditExhaustedError();
+
+      const plan = readPlan(row);
+      const planned = plan?.agents.find((a) => a.id === agentId) ?? null;
+      // Confirm the agent really belongs to this trial's company.
+      const agentRow = await agents_.getById(agentId);
+      if (!planned || !agentRow || agentRow.companyId !== row.companyId) {
+        throw new TrialAgentNotFoundError();
+      }
+
+      const prompt = buildAgentTaskPrompt(plan!.company, planned);
+      const meter: DispatchMeter = { db, companyId: row.companyId, agentId };
+      const raw = await dispatch(prompt, meter, { adapter: TRIAL_ADAPTER });
+      const { title, content } = parseAgentArtifact(raw, planned);
+
+      const artifact = await db
+        .insert(trialArtifacts)
+        .values({
+          trialSessionId: row.id,
+          companyId: row.companyId,
+          agentId,
+          useCase: AGENT_DELIVERABLE_USE_CASE,
+          title,
+          content: content as unknown as Record<string, unknown>,
+          inputSummary: planned.firstTaskTitle,
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      const estCents = estimateRunCostCents(raw);
+      const nextSpent = row.spentCents + estCents;
+      await db
+        .update(trialSessions)
+        .set({ spentCents: nextSpent, updatedAt: new Date() })
+        .where(eq(trialSessions.id, row.id));
+      await db
+        .update(companies)
+        .set({ spentMonthlyCents: nextSpent, updatedAt: new Date() })
+        .where(eq(companies.id, row.companyId));
+
+      return {
+        artifact: { title: artifact.title, content: artifact.content, id: artifact.id },
+        creditRemainingCents: Math.max(0, row.creditCents - nextSpent),
+        spentCents: nextSpent,
+        creditCents: row.creditCents,
+      };
+    },
+
+    /**
+     * Fleet view: the designed company + its agents (with live status + whether
+     * each has produced a deliverable yet) + all artifacts. Returns null when the
+     * token is unknown or the session has expired; returns a company of null when
+     * no company has been designed yet.
+     */
+    getCompany: async (token: string) => {
+      const row = await findByToken(token);
+      if (!row) return null;
+      if (isExpired(row)) return null;
+
+      const plan = readPlan(row);
+      const artifacts = await listArtifacts(row.id);
+
+      if (!plan) {
+        return {
+          company: null,
+          agents: [],
+          artifacts,
+          session: publicSession(row),
+        };
+      }
+
+      // Live agent statuses keyed by id.
+      const liveAgents = await agents_.list(row.companyId, { includeTerminated: true });
+      const statusById = new Map(liveAgents.map((a) => [a.id, a.status]));
+      // Latest deliverable per agent.
+      const artifactByAgent = new Map<string, (typeof artifacts)[number]>();
+      for (const art of artifacts) {
+        if (art.agentId && !artifactByAgent.has(art.agentId)) {
+          artifactByAgent.set(art.agentId, art);
+        }
+      }
+
+      const agentsView = plan.agents.map((a) => {
+        const art = artifactByAgent.get(a.id);
+        return {
+          id: a.id,
+          ref: a.ref,
+          name: a.name,
+          role: a.role,
+          category: a.category,
+          charter: a.charter,
+          firstTaskTitle: a.firstTaskTitle,
+          firstTaskBrief: a.firstTaskBrief,
+          status: statusById.get(a.id) ?? "idle",
+          hasArtifact: Boolean(art),
+          artifactId: art?.id,
+        };
+      });
+
+      return {
+        company: plan.company,
+        agents: agentsView,
+        artifacts,
+        session: publicSession(row),
       };
     },
 

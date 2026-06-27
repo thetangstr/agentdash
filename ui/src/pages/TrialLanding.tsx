@@ -1,46 +1,106 @@
-// AgentDash (Test Drive, Slice 2): the PUBLIC no-signup trial experience.
+// AgentDash (Test Drive v2): the PUBLIC no-signup "autonomous company" trial.
 //
-// A single full-screen page with three visual states — LAND (hero + form),
-// WORKING (watch Scout draft), and ARTIFACT (the outreach sequence) — plus a
-// friendly credit-exhausted state. Routed at /trial OUTSIDE CloudAccessGate
-// (see ui/src/App.tsx), so there is no sidebar, no auth, no company context.
+// The whole story: the user describes their company in one line, a Chief of
+// Staff asks 2-3 quick questions, then an autonomous company assembles itself —
+// a tailored team of 3-4 agents appears on a live dashboard and each does a real
+// first task, producing a real markdown deliverable. The wow is "an AI built my
+// whole team and they're already working."
 //
-// Backend: server/src/routes/trial.ts (Slice 1). The trial token is the only
-// credential; we persist it in sessionStorage so a refresh resumes the run.
+// States: LAND -> INTAKE (CoS questions) -> DESIGNING (POST /design) -> FLEET
+// (assemble + run each agent) -> DELIVERABLE (modal). Plus a friendly EXHAUSTED
+// takeover when the build itself runs out of credit.
+//
+// Routed at /trial OUTSIDE CloudAccessGate (see ui/src/App.tsx) — no sidebar, no
+// auth, no company context. The trial token is the only credential; it lives in
+// sessionStorage so a refresh resumes the built company + deliverables.
+//
+// The app shell sets `body { overflow: hidden }`, so this full-screen public
+// page owns its OWN scroll region: the top-level wrapper is `h-screen
+// overflow-y-auto` so every state (especially the long fleet + deliverables)
+// scrolls properly.
 
-import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   ArrowRight,
+  ArrowLeft,
+  BadgeDollarSign,
+  BarChart3,
+  Bot,
+  Calendar,
   Check,
+  Code2,
   Copy,
+  LifeBuoy,
   Loader2,
+  Mail,
+  Megaphone,
+  Package,
+  PenLine,
+  Receipt,
+  Scale,
+  Search,
+  Send,
   Share2,
   Sparkles,
-  Target,
+  Users,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 import { Link } from "@/lib/router";
 import { ApiError } from "../api/client";
-import { trialApi, type TrialArtifact } from "../api/trial";
-import { ArtifactView, buildPlainText } from "../components/trial/ArtifactView";
+import {
+  trialApi,
+  type TrialCompanyMeta,
+  type TrialIntake,
+} from "../api/trial";
+import { MarkdownBody } from "../components/MarkdownBody";
 
-type View = "land" | "working" | "artifact" | "exhausted";
+type View = "land" | "intake" | "designing" | "fleet" | "exhausted";
+
+// Per-agent run lifecycle on the live fleet board.
+type RunStatus = "queued" | "working" | "done" | "error";
+
+type FleetAgent = {
+  id: string;
+  ref?: string;
+  name: string;
+  role: string;
+  category: string;
+  charter: string;
+  firstTaskTitle: string;
+  firstTaskBrief?: string;
+  runStatus: RunStatus;
+  artifactTitle?: string;
+  artifactMarkdown?: string;
+};
 
 const TRIAL_TOKEN_KEY = "agentdash.trial.token";
+const EASE = "cubic-bezier(0.22,1,0.36,1)";
+const CLAY = "var(--accent-500)";
+const GREEN = "var(--success-500)";
 
 // The conversion CTA carries the trial token (already in sessionStorage) through
 // signup: /auth signs the user in/up, then routes to /trial/claim which binds
-// the trial workspace to the new account. See Auth.tsx + TrialClaim.tsx.
+// the trial workspace to the new account.
 const CLAIM_AUTH_HREF = "/auth?mode=sign_up&next=%2Ftrial%2Fclaim";
 
-const WORKING_STATUS_LINES = [
-  "reading your market…",
-  "researching the angle…",
-  "drafting touch 1 of 3…",
-  "drafting touch 2 of 3…",
-  "drafting touch 3 of 3…",
-  "polishing the copy…",
+const DESIGNING_LINES = [
+  "sizing the problem…",
+  "choosing the right roles…",
+  "writing each charter…",
+  "assembling the team…",
 ];
+
+// ---------------------------------------------------------------------------
+// storage + format helpers
+// ---------------------------------------------------------------------------
 
 function readStoredToken(): string | null {
   try {
@@ -78,73 +138,107 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+// Map a designed agent's category/role to a fleet icon (mirrors Overview's
+// icon-chip language). Keyword match, generous fallbacks, Bot as default.
+function iconForAgent(category: string, role: string): LucideIcon {
+  const s = `${category} ${role}`.toLowerCase();
+  const has = (...keys: string[]) => keys.some((k) => s.includes(k));
+  if (has("email", "inbox")) return Mail;
+  if (has("sales", "outbound", "gtm", "bizdev", "revenue", "pipeline", "lead")) return Send;
+  if (has("finance", "account", "invoice", "billing", "payroll", "bookkeep")) return Receipt;
+  if (has("support", "success", "customer", "service", "help")) return LifeBuoy;
+  if (has("content", "writ", "copy", "blog", "editor", "social")) return PenLine;
+  if (has("market", "brand", "growth", "demand", "seo", "ads", "campaign")) return Megaphone;
+  if (has("research", "insight", "discover", "intel")) return Search;
+  if (has("analy", "data", "metric", "report", "bi")) return BarChart3;
+  if (has("recruit", "people", "hr", "talent", "hiring")) return Users;
+  if (has("legal", "compliance", "contract", "policy", "risk")) return Scale;
+  if (has("eng", "dev", "product", "tech", "build", "code")) return Code2;
+  if (has("ops", "operation", "logistics", "supply", "fulfil", "inventory")) return Package;
+  if (has("schedul", "calendar", "admin", "exec", "coordinat", "project")) return Calendar;
+  if (has("pay", "spend", "budget")) return BadgeDollarSign;
+  return Bot;
+}
+
 // ---------------------------------------------------------------------------
-// Sub-views
+// small primitives
 // ---------------------------------------------------------------------------
 
-function ScoutChip() {
+// Fade-in + rise on mount, staggered by index. Steady state is driven by React
+// state (not CSS fill-mode) so it can never stall hidden. Same pattern as
+// Overview.tsx's Reveal.
+function Reveal({
+  index,
+  reduced,
+  children,
+  className,
+  style,
+}: {
+  index: number;
+  reduced: boolean;
+  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const [shown, setShown] = useState(reduced);
+  useEffect(() => {
+    if (reduced) {
+      setShown(true);
+      return;
+    }
+    const t = window.setTimeout(() => setShown(true), index * 110);
+    return () => window.clearTimeout(t);
+  }, [reduced, index]);
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground">
-      <span className="flex size-6 items-center justify-center rounded-full bg-[var(--accent-500)] text-white">
-        <Target className="size-3.5" />
-      </span>
-      Scout
-    </span>
+    <div
+      className={className}
+      style={{
+        ...style,
+        opacity: shown ? 1 : 0,
+        transform: shown ? "translateY(0)" : "translateY(14px)",
+        transition: reduced ? undefined : `opacity 520ms ${EASE}, transform 520ms ${EASE}`,
+        willChange: reduced ? undefined : "opacity, transform",
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
-function WorkingState({ reducedMotion }: { reducedMotion: boolean }) {
-  const [step, setStep] = useState(0);
-
-  useEffect(() => {
-    if (reducedMotion) return;
-    const id = window.setInterval(() => {
-      setStep((s) => Math.min(s + 1, WORKING_STATUS_LINES.length - 1));
-    }, 2600);
-    return () => window.clearInterval(id);
-  }, [reducedMotion]);
-
-  if (reducedMotion) {
-    return (
-      <div className="mx-auto flex max-w-md flex-col items-center gap-5 py-16 text-center">
-        <ScoutChip />
-        <div className="flex items-center gap-3 text-base text-foreground">
-          <Loader2 className="size-5 animate-spin text-[var(--accent-500)]" />
-          Scout is drafting your sequence…
-        </div>
-      </div>
-    );
-  }
-
-  const progress = Math.round(((step + 1) / WORKING_STATUS_LINES.length) * 90);
-
+function StatusDot({
+  color,
+  pulse,
+  reduced,
+  size = 8,
+}: {
+  color: string;
+  pulse: boolean;
+  reduced: boolean;
+  size?: number;
+}) {
   return (
-    <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-16 text-center">
-      <div className="relative">
-        <span className="absolute inset-0 animate-ping rounded-full bg-[var(--accent-500)]/25" />
-        <span className="relative flex size-16 items-center justify-center rounded-full bg-[var(--accent-500)] text-white">
-          <Target className="size-7" />
-        </span>
-      </div>
-      <div>
-        <p className="text-lg font-semibold text-foreground">Scout is on it</p>
-        <p
-          key={step}
-          className="mt-1 text-base text-muted-foreground transition-opacity duration-500"
-        >
-          {WORKING_STATUS_LINES[step]}
-        </p>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
-        <div
-          className="h-full rounded-full bg-[var(--accent-500)] transition-all duration-700 ease-out"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        a real agent is doing a real piece of work — give it a few seconds
-      </p>
-    </div>
+    <span
+      className={pulse && !reduced ? "tdl-pulse-dot" : undefined}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 999,
+        background: color,
+        display: "inline-block",
+        flex: "none",
+      }}
+    />
+  );
+}
+
+function CoSAvatar({ size = 32 }: { size?: number }) {
+  return (
+    <span
+      className="flex items-center justify-center rounded-full text-white"
+      style={{ width: size, height: size, background: CLAY, flex: "none" }}
+    >
+      <Sparkles style={{ width: size * 0.5, height: size * 0.5 }} />
+    </span>
   );
 }
 
@@ -173,43 +267,475 @@ function CreditMeter({
 }
 
 // ---------------------------------------------------------------------------
-// Page
+// fleet tile — reuses Overview.tsx's tile visual language (icon-chip + name +
+// category + status dot + a status line + progress meter + footer).
+// ---------------------------------------------------------------------------
+
+function statusMeta(s: RunStatus): { word: string; color: string; dot: string; pulse: boolean; pct: number } {
+  switch (s) {
+    case "working":
+      return { word: "working…", color: CLAY, dot: CLAY, pulse: true, pct: 70 };
+    case "done":
+      return { word: "done", color: GREEN, dot: GREEN, pulse: false, pct: 100 };
+    case "error":
+      return { word: "hit a snag", color: "var(--warn-500)", dot: "var(--warn-500)", pulse: false, pct: 100 };
+    default:
+      return { word: "queued", color: "var(--muted-foreground)", dot: "var(--muted-foreground)", pulse: false, pct: 8 };
+  }
+}
+
+function FleetTile({
+  agent,
+  reduced,
+  onOpen,
+  onRetry,
+}: {
+  agent: FleetAgent;
+  reduced: boolean;
+  onOpen: (a: FleetAgent) => void;
+  onRetry: (a: FleetAgent) => void;
+}) {
+  const Icon = iconForAgent(agent.category, agent.role);
+  const meta = statusMeta(agent.runStatus);
+  const clickable = agent.runStatus === "done";
+  const isError = agent.runStatus === "error";
+
+  return (
+    <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? () => onOpen(agent) : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(agent);
+              }
+            }
+          : undefined
+      }
+      className="bg-card border border-border rounded-2xl"
+      style={{
+        padding: 16,
+        cursor: clickable ? "pointer" : "default",
+        transition: reduced
+          ? undefined
+          : `transform 200ms ${EASE}, box-shadow 200ms ${EASE}, border-color 200ms ${EASE}`,
+      }}
+      onMouseEnter={(e) => {
+        if (reduced || !clickable) return;
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = "0 6px 16px -8px rgba(0,0,0,0.13)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "none";
+      }}
+    >
+      {/* header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          className="bg-secondary"
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flex: "none",
+          }}
+        >
+          <Icon size={18} className="text-foreground" />
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="text-foreground" style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.2 }}>
+            {agent.name}
+          </div>
+          <div className="text-muted-foreground" style={{ fontSize: 11.5 }}>
+            {agent.category || agent.role}
+          </div>
+        </div>
+        <StatusDot color={meta.dot} pulse={meta.pulse} reduced={reduced} />
+      </div>
+
+      {/* charter as the status line */}
+      <div
+        className="text-muted-foreground"
+        style={{ fontSize: 13, lineHeight: 1.35, minHeight: 38, marginTop: 12 }}
+      >
+        {agent.charter}
+      </div>
+
+      {/* progress */}
+      <div style={{ marginTop: 10 }}>
+        <div className="bg-secondary" style={{ height: 4, borderRadius: 999, overflow: "hidden", width: "100%" }}>
+          <div
+            className={agent.runStatus === "working" && !reduced ? "tdl-indeterminate" : undefined}
+            style={{
+              width: `${meta.pct}%`,
+              height: "100%",
+              background: meta.color,
+              borderRadius: 999,
+              transition: reduced ? undefined : `width 900ms ${EASE}`,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* footer */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, gap: 8 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: meta.color }}>{meta.word}</span>
+        {agent.runStatus === "done" ? (
+          <span style={{ fontSize: 12, fontWeight: 600, color: CLAY }}>view deliverable →</span>
+        ) : isError ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry(agent);
+            }}
+            className="hover:underline"
+            style={{ fontSize: 12, fontWeight: 600, color: CLAY }}
+          >
+            retry
+          </button>
+        ) : (
+          <span className="text-muted-foreground" style={{ fontSize: 12 }}>
+            {agent.firstTaskTitle}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// designing state — "your Chief of Staff is designing your company…"
+// ---------------------------------------------------------------------------
+
+function DesigningState({ reduced }: { reduced: boolean }) {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    if (reduced) return;
+    const id = window.setInterval(() => {
+      setStep((s) => Math.min(s + 1, DESIGNING_LINES.length - 1));
+    }, 2200);
+    return () => window.clearInterval(id);
+  }, [reduced]);
+
+  const progress = reduced ? 60 : Math.round(((step + 1) / DESIGNING_LINES.length) * 88);
+
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-20 text-center">
+      <div className="relative">
+        {!reduced ? (
+          <span className="absolute inset-0 animate-ping rounded-full bg-[var(--accent-500)]/25" />
+        ) : null}
+        <span className="relative flex size-16 items-center justify-center rounded-full bg-[var(--accent-500)] text-white">
+          <Sparkles className="size-7" />
+        </span>
+      </div>
+      <div>
+        <p className="text-lg font-semibold text-foreground">
+          your chief of staff is designing your company
+        </p>
+        {reduced ? (
+          <p className="mt-1 flex items-center justify-center gap-2 text-base text-muted-foreground">
+            <Loader2 className="size-4 animate-spin text-[var(--accent-500)]" />
+            assembling the team…
+          </p>
+        ) : (
+          <p
+            key={step}
+            className="mt-1 text-base text-muted-foreground transition-opacity duration-500"
+          >
+            {DESIGNING_LINES[step]}
+          </p>
+        )}
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
+        <div
+          className="h-full rounded-full bg-[var(--accent-500)] transition-all duration-700 ease-out"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        this is a real team being staffed — give it a few seconds
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// deliverable modal — renders the agent's real markdown deliverable.
+// ---------------------------------------------------------------------------
+
+function DeliverableModal({
+  agent,
+  onClose,
+}: {
+  agent: FleetAgent;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    };
+  }, [onClose]);
+
+  const markdown = agent.artifactMarkdown ?? "";
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setCopied(true);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — user can select text manually */
+    }
+  }
+
+  const Icon = iconForAgent(agent.category, agent.role);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-10"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="w-full max-w-3xl rounded-2xl border border-border bg-card shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* header */}
+        <div className="flex items-start justify-between gap-4 border-b border-border p-5">
+          <div className="flex items-start gap-3">
+            <span
+              className="bg-secondary flex size-10 items-center justify-center rounded-xl"
+              style={{ flex: "none" }}
+            >
+              <Icon size={18} className="text-foreground" />
+            </span>
+            <div>
+              <h2 className="text-lg font-bold tracking-[-0.02em] text-foreground">
+                {agent.artifactTitle || agent.firstTaskTitle}
+              </h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {agent.name} delivered this on its own — no human wrote it
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-[var(--accent-500)]"
+            >
+              {copied ? (
+                <>
+                  <Check className="size-3.5 text-[var(--success-500)]" />
+                  copied
+                </>
+              ) : (
+                <>
+                  <Copy className="size-3.5" />
+                  copy
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="close"
+              className="inline-flex size-8 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* body */}
+        <div className="max-h-[70vh] overflow-y-auto p-6">
+          {markdown ? (
+            <MarkdownBody linkIssueReferences={false}>{markdown}</MarkdownBody>
+          ) : (
+            <p className="text-sm text-muted-foreground">this deliverable is empty — try re-running this agent.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// page
 // ---------------------------------------------------------------------------
 
 export function TrialLandingPage() {
-  const reducedMotion = usePrefersReducedMotion();
+  const reduced = usePrefersReducedMotion();
 
   const [view, setView] = useState<View>("land");
   const [token, setToken] = useState<string | null>(null);
-  const [icp, setIcp] = useState("");
-  const [senderContext, setSenderContext] = useState("");
-  const [artifact, setArtifact] = useState<TrialArtifact | null>(null);
-  const [artifactId, setArtifactId] = useState<string | null>(null);
+
+  // intake
+  const [whatYouDo, setWhatYouDo] = useState("");
+  const [goal, setGoal] = useState("");
+  const [blocker, setBlocker] = useState("");
+
+  // company + fleet
+  const [company, setCompany] = useState<TrialCompanyMeta | null>(null);
+  const [agents, setAgents] = useState<FleetAgent[]>([]);
+  const [openAgent, setOpenAgent] = useState<FleetAgent | null>(null);
+
+  // credit
   const [creditCents, setCreditCents] = useState(0);
   const [creditRemainingCents, setCreditRemainingCents] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [shared, setShared] = useState(false);
-  const copyTimer = useRef<number | null>(null);
-  const shareTimer = useRef<number | null>(null);
+  const [midBuildExhausted, setMidBuildExhausted] = useState(false);
 
-  // Resume from a prior session on refresh (best-effort).
+  const [error, setError] = useState<string | null>(null);
+  const [shared, setShared] = useState(false);
+  const shareTimer = useRef<number | null>(null);
+  const runningRef = useRef(false);
+  const resumedRef = useRef(false);
+
+  const setAgentStatus = useCallback((id: string, runStatus: RunStatus) => {
+    setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, runStatus } : a)));
+  }, []);
+
+  const resetToLand = useCallback((message: string) => {
+    writeStoredToken(null);
+    setToken(null);
+    setCompany(null);
+    setAgents([]);
+    setOpenAgent(null);
+    setMidBuildExhausted(false);
+    setError(message);
+    setView("land");
+  }, []);
+
+  // Run the fleet: each agent does its first task, with small concurrency, so
+  // the board comes alive (working… -> done) one tile at a time.
+  const runFleet = useCallback(
+    async (activeToken: string, ids: string[]) => {
+      if (runningRef.current || ids.length === 0) return;
+      runningRef.current = true;
+      const queue = [...ids];
+      let stop = false;
+
+      const worker = async () => {
+        while (queue.length > 0 && !stop) {
+          const id = queue.shift()!;
+          setAgentStatus(id, "working");
+          try {
+            const res = await trialApi.runAgent(activeToken, id);
+            setCreditCents(res.creditCents);
+            setCreditRemainingCents(res.creditRemainingCents);
+            setAgents((prev) =>
+              prev.map((a) =>
+                a.id === id
+                  ? {
+                      ...a,
+                      runStatus: "done",
+                      artifactTitle: res.artifact.title,
+                      artifactMarkdown: res.artifact.content.markdown,
+                    }
+                  : a,
+              ),
+            );
+          } catch (err) {
+            if (err instanceof ApiError) {
+              if (err.status === 402) {
+                stop = true;
+                setMidBuildExhausted(true);
+                setAgentStatus(id, "queued");
+                break;
+              }
+              if (err.status === 410) {
+                stop = true;
+                resetToLand("your trial session expired — start a fresh one below.");
+                break;
+              }
+              if (err.status === 404) {
+                stop = true;
+                resetToLand("we lost track of that session — start a fresh one below.");
+                break;
+              }
+            }
+            setAgentStatus(id, "error");
+          }
+        }
+      };
+
+      const lanes = Math.min(2, queue.length);
+      await Promise.all(Array.from({ length: lanes }, () => worker()));
+      runningRef.current = false;
+    },
+    [resetToLand, setAgentStatus],
+  );
+
+  // Resume a prior session on refresh (best-effort): restore the built company,
+  // each agent's status + its deliverable, and resume any unfinished runs.
   useEffect(() => {
+    if (resumedRef.current) return;
+    resumedRef.current = true;
     const stored = readStoredToken();
     if (!stored) return;
     setToken(stored);
     let cancelled = false;
+
     trialApi
-      .getSnapshot(stored)
+      .getCompany(stored)
       .then((snap) => {
         if (cancelled) return;
         setCreditCents(snap.session.creditCents);
         setCreditRemainingCents(snap.session.creditRemainingCents);
-        const latest = snap.artifacts[snap.artifacts.length - 1];
-        if (latest) {
-          setArtifact({ title: latest.title, content: latest.content });
-          setArtifactId(latest.id);
-          setView("artifact");
+        if (!snap.company) return; // session exists but no company designed yet
+
+        setCompany(snap.company);
+        const artifactByAgent = new Map<string, { title: string; markdown: string }>();
+        for (const art of snap.artifacts) {
+          if (art.agentId && typeof art.content?.markdown === "string" && !artifactByAgent.has(art.agentId)) {
+            artifactByAgent.set(art.agentId, { title: art.title, markdown: art.content.markdown });
+          }
+        }
+
+        const restored: FleetAgent[] = snap.agents.map((a) => {
+          const art = artifactByAgent.get(a.id);
+          return {
+            id: a.id,
+            ref: a.ref,
+            name: a.name,
+            role: a.role,
+            category: a.category,
+            charter: a.charter,
+            firstTaskTitle: a.firstTaskTitle,
+            firstTaskBrief: a.firstTaskBrief,
+            runStatus: a.hasArtifact ? "done" : "queued",
+            artifactTitle: art?.title,
+            artifactMarkdown: art?.markdown,
+          };
+        });
+        setAgents(restored);
+        setView("fleet");
+
+        // Resume any agents that never produced a deliverable, if credit remains.
+        const pending = restored.filter((a) => a.runStatus !== "done").map((a) => a.id);
+        if (pending.length > 0 && snap.session.creditRemainingCents > 0) {
+          void runFleet(stored, pending);
+        } else if (pending.length > 0) {
+          setMidBuildExhausted(true);
         }
       })
       .catch(() => {
@@ -217,21 +743,35 @@ export function TrialLandingPage() {
         writeStoredToken(null);
         setToken(null);
       });
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [runFleet]);
 
   useEffect(
     () => () => {
-      if (copyTimer.current) window.clearTimeout(copyTimer.current);
       if (shareTimer.current) window.clearTimeout(shareTimer.current);
     },
     [],
   );
 
-  const runMutation = useMutation({
-    mutationFn: async () => {
+  // LAND -> INTAKE
+  function handleStart(e: React.FormEvent) {
+    e.preventDefault();
+    if (whatYouDo.trim().length === 0) return;
+    setError(null);
+    setView("intake");
+  }
+
+  // INTAKE -> DESIGNING -> FLEET
+  async function handleBuild(e: React.FormEvent) {
+    e.preventDefault();
+    if (goal.trim().length === 0) return;
+    setError(null);
+    setView("designing");
+
+    try {
       let activeToken = token;
       if (!activeToken) {
         const session = await trialApi.createSession();
@@ -241,41 +781,50 @@ export function TrialLandingPage() {
         setCreditRemainingCents(session.creditCents);
         writeStoredToken(activeToken);
       }
-      return trialApi.run(activeToken, "sales_outreach", {
-        icp: icp.trim(),
-        senderContext: senderContext.trim() || undefined,
-      });
-    },
-    onMutate: () => {
-      setError(null);
-      setView("working");
-    },
-    onSuccess: (result) => {
-      setArtifact(result.artifact);
-      setArtifactId(result.artifact.id);
-      setShared(false);
+
+      const intake: TrialIntake = {
+        whatYouDo: whatYouDo.trim(),
+        goal: goal.trim(),
+        blocker: blocker.trim() || undefined,
+      };
+      const result = await trialApi.design(activeToken, intake);
+
+      setCompany(result.company);
       setCreditCents(result.creditCents);
       setCreditRemainingCents(result.creditRemainingCents);
-      setView("artifact");
-    },
-    onError: (err) => {
+      const fleet: FleetAgent[] = result.agents.map((a) => ({
+        id: a.id,
+        ref: a.ref,
+        name: a.name,
+        role: a.role,
+        category: a.category,
+        charter: a.charter,
+        firstTaskTitle: a.firstTaskTitle,
+        firstTaskBrief: a.firstTaskBrief,
+        runStatus: "queued",
+      }));
+      setAgents(fleet);
+      setMidBuildExhausted(false);
+      setView("fleet");
+
+      // Let the tiles "assemble" (staggered reveal) before they go to work.
+      const ids = fleet.map((a) => a.id);
+      const delay = reduced ? 0 : fleet.length * 110 + 500;
+      window.setTimeout(() => {
+        void runFleet(activeToken!, ids);
+      }, delay);
+    } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 402) {
           setView("exhausted");
           return;
         }
         if (err.status === 410) {
-          writeStoredToken(null);
-          setToken(null);
-          setError("your trial session expired — start a fresh one below.");
-          setView("land");
+          resetToLand("your trial session expired — start a fresh one below.");
           return;
         }
         if (err.status === 404) {
-          writeStoredToken(null);
-          setToken(null);
-          setError("we lost track of that session — try running it again.");
-          setView("land");
+          resetToLand("we lost track of that session — try again below.");
           return;
         }
         setError(
@@ -286,182 +835,316 @@ export function TrialLandingPage() {
       } else {
         setError("something went wrong — give it another go.");
       }
-      setView("land");
-    },
-  });
-
-  const canSubmit = icp.trim().length > 0 && !runMutation.isPending;
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!canSubmit) return;
-    runMutation.mutate();
+      setView("intake");
+    }
   }
 
-  function handleRunAnother() {
-    setArtifact(null);
-    setArtifactId(null);
-    setShared(false);
+  function handleStartOver() {
+    writeStoredToken(null);
+    setToken(null);
+    setCompany(null);
+    setAgents([]);
+    setOpenAgent(null);
+    setMidBuildExhausted(false);
+    setWhatYouDo("");
+    setGoal("");
+    setBlocker("");
     setError(null);
     setView("land");
   }
 
-  async function handleCopy() {
-    if (!artifact) return;
-    try {
-      await navigator.clipboard.writeText(buildPlainText(artifact));
-      setCopied(true);
-      if (copyTimer.current) window.clearTimeout(copyTimer.current);
-      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setError("couldn't copy to your clipboard — select the text manually.");
-    }
-  }
-
   async function handleShare() {
-    if (!token || !artifactId) return;
+    const url = `${window.location.origin}/trial`;
     try {
-      const { shareUrl } = await trialApi.share(token, artifactId);
-      const absolute = `${window.location.origin}${shareUrl}`;
-      try {
-        await navigator.clipboard.writeText(absolute);
-      } catch {
-        /* clipboard blocked — the link still resolves; surface it below */
-      }
-      setShared(true);
-      if (shareTimer.current) window.clearTimeout(shareTimer.current);
-      shareTimer.current = window.setTimeout(() => setShared(false), 1500);
+      await navigator.clipboard.writeText(url);
     } catch {
-      setError("couldn't create a share link — give it another go.");
+      /* clipboard blocked — nothing else to do */
     }
+    setShared(true);
+    if (shareTimer.current) window.clearTimeout(shareTimer.current);
+    shareTimer.current = window.setTimeout(() => setShared(false), 1500);
   }
 
   const heroTitleClass =
     "text-4xl font-bold leading-[1.05] tracking-[-0.04em] text-foreground sm:text-5xl";
 
+  const allDone = agents.length > 0 && agents.every((a) => a.runStatus === "done");
+  const anyDone = agents.some((a) => a.runStatus === "done");
+
   return (
-    <div className="min-h-screen bg-background px-6 py-12 text-foreground">
-      <div className="mx-auto w-full max-w-2xl">
-        {/* LAND ---------------------------------------------------------- */}
-        {view === "land" ? (
-          <div className="flex flex-col items-center text-center">
-            <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              <Sparkles className="size-3.5 text-[var(--accent-500)]" />
-              no signup · 90 seconds
-            </span>
-            <h1 className={`mt-6 ${heroTitleClass}`}>
-              watch an AI agent do a real piece of your job
-            </h1>
-            <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">
-              tell Scout who you&apos;re selling to. it&apos;ll draft a
-              personalized 3-touch cold-outreach sequence — the kind of thing your
-              SDR would spend an afternoon on. no account, no card.
-            </p>
+    // OWN scroll region — the app shell's `body { overflow: hidden }` would
+    // otherwise clip the long fleet + deliverable states.
+    <div className="h-screen overflow-y-auto bg-background text-foreground">
+      <style>{`
+        @keyframes tdl-dot-pulse {
+          0%   { box-shadow: 0 0 0 0 rgba(0,0,0,0.18); }
+          70%  { box-shadow: 0 0 0 5px rgba(0,0,0,0); }
+          100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+        }
+        .tdl-pulse-dot { animation: tdl-dot-pulse 1.6s ${EASE} infinite; }
+        @keyframes tdl-shimmer { 0% { opacity: .55; } 50% { opacity: 1; } 100% { opacity: .55; } }
+        .tdl-indeterminate { animation: tdl-shimmer 1.2s ${EASE} infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .tdl-pulse-dot, .tdl-indeterminate { animation: none !important; }
+        }
+      `}</style>
 
-            <form
-              onSubmit={handleSubmit}
-              className="mt-8 w-full max-w-xl space-y-4 text-left"
-            >
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-medium text-foreground">
-                  who are you selling to?
-                </span>
-                <textarea
-                  value={icp}
-                  onChange={(e) => setIcp(e.target.value)}
-                  rows={3}
-                  required
-                  autoFocus
-                  placeholder="heads of ops at 50-200 person freight brokerages"
-                  className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[var(--accent-500)]"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-medium text-foreground">
-                  what do you sell?{" "}
-                  <span className="font-normal text-muted-foreground">(optional)</span>
-                </span>
-                <input
-                  value={senderContext}
-                  onChange={(e) => setSenderContext(e.target.value)}
-                  placeholder="a TMS that cuts back-office hours in half"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[var(--accent-500)]"
-                />
-              </label>
+      {/* ===================================================== LAND / INTAKE / DESIGNING / EXHAUSTED */}
+      {view === "land" || view === "intake" || view === "designing" || view === "exhausted" ? (
+        <div className="mx-auto w-full max-w-2xl px-6 py-12">
+          {/* LAND */}
+          {view === "land" ? (
+            <div className="flex flex-col items-center text-center">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                <Sparkles className="size-3.5 text-[var(--accent-500)]" />
+                no signup · 60 seconds
+              </span>
+              <h1 className={`mt-6 ${heroTitleClass}`}>
+                describe your company.
+                <br />
+                watch it build itself.
+              </h1>
+              <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">
+                a chief of staff will design and staff an autonomous team for you —
+                and they&apos;ll get to work right away. no account, no card.
+              </p>
 
-              {error ? (
-                <p className="text-sm text-destructive" role="alert">
-                  {error}
-                </p>
-              ) : null}
+              <form onSubmit={handleStart} className="mt-8 w-full max-w-xl space-y-4 text-left">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-foreground">
+                    what does your company do?
+                  </span>
+                  <textarea
+                    value={whatYouDo}
+                    onChange={(e) => setWhatYouDo(e.target.value)}
+                    rows={3}
+                    required
+                    autoFocus
+                    placeholder="we run a 30-person freight brokerage moving full-truckload freight across the midwest"
+                    className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[var(--accent-500)]"
+                  />
+                </label>
 
+                {error ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+
+                <button
+                  type="submit"
+                  disabled={whatYouDo.trim().length === 0}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3.5 text-base font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  start
+                  <ArrowRight className="size-5" />
+                </button>
+              </form>
+
+              <p className="mt-10 text-xs text-muted-foreground">
+                already have an account?{" "}
+                <Link
+                  to="/auth"
+                  className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
+                >
+                  sign in
+                </Link>
+              </p>
+            </div>
+          ) : null}
+
+          {/* INTAKE — the CoS's quick questions */}
+          {view === "intake" ? (
+            <div className="flex flex-col gap-6 py-4">
               <button
-                type="submit"
-                disabled={!canSubmit}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3.5 text-base font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                onClick={() => setView("land")}
+                className="inline-flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
-                Run it
-                <ArrowRight className="size-5" />
+                <ArrowLeft className="size-4" />
+                back
               </button>
-            </form>
 
-            <p className="mt-10 text-xs text-muted-foreground">
-              already have an account?{" "}
-              <Link
-                to="/auth"
-                className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
-              >
-                sign in
-              </Link>
-            </p>
-          </div>
-        ) : null}
-
-        {/* WORKING ------------------------------------------------------- */}
-        {view === "working" ? <WorkingState reducedMotion={reducedMotion} /> : null}
-
-        {/* ARTIFACT ------------------------------------------------------ */}
-        {view === "artifact" && artifact ? (
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h1 className="text-2xl font-bold tracking-[-0.02em] text-foreground">
-                    {artifact.title}
-                  </h1>
-                  <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <Target className="size-3.5 text-[var(--accent-500)]" />
-                    drafted autonomously by Scout
+              {/* CoS intro bubble */}
+              <div className="flex items-start gap-3">
+                <CoSAvatar />
+                <div className="rounded-2xl rounded-tl-sm border border-border bg-card px-4 py-3 text-sm leading-6 text-foreground">
+                  <p className="font-medium">hey — i&apos;m your chief of staff.</p>
+                  <p className="mt-1 text-muted-foreground">
+                    got it: <span className="text-foreground">{whatYouDo.trim()}</span>. two
+                    quick questions and i&apos;ll assemble your team.
                   </p>
                 </div>
-                <CreditMeter
-                  remainingCents={creditRemainingCents}
-                  totalCents={creditCents}
-                />
+              </div>
+
+              <form onSubmit={handleBuild} className="space-y-5">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-foreground">
+                    what&apos;s the #1 thing you want to get done right now?
+                  </span>
+                  <textarea
+                    value={goal}
+                    onChange={(e) => setGoal(e.target.value)}
+                    rows={2}
+                    required
+                    autoFocus
+                    placeholder="book more loaded miles with new shippers this quarter"
+                    className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[var(--accent-500)]"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-foreground">
+                    what&apos;s slowing you down most?{" "}
+                    <span className="font-normal text-muted-foreground">(optional)</span>
+                  </span>
+                  <input
+                    value={blocker}
+                    onChange={(e) => setBlocker(e.target.value)}
+                    placeholder="too much time on manual carrier follow-ups"
+                    className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[var(--accent-500)]"
+                  />
+                </label>
+
+                {error ? (
+                  <p className="text-sm text-destructive" role="alert">
+                    {error}
+                  </p>
+                ) : null}
+
+                <button
+                  type="submit"
+                  disabled={goal.trim().length === 0}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3.5 text-base font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  build my company
+                  <ArrowRight className="size-5" />
+                </button>
+              </form>
+            </div>
+          ) : null}
+
+          {/* DESIGNING */}
+          {view === "designing" ? <DesigningState reduced={reduced} /> : null}
+
+          {/* EXHAUSTED (build itself ran out of credit, no company yet) */}
+          {view === "exhausted" ? (
+            <div className="mx-auto flex max-w-md flex-col items-center gap-5 py-16 text-center">
+              <span className="flex size-14 items-center justify-center rounded-full bg-[var(--accent-500)] text-white">
+                <Sparkles className="size-6" />
+              </span>
+              <div>
+                <h1 className="text-2xl font-bold tracking-[-0.02em] text-foreground">
+                  you&apos;ve used your free build
+                </h1>
+                <p className="mt-2 text-base leading-7 text-muted-foreground">
+                  sign up to keep your company, get more credit, and put your team to
+                  work on your real business.
+                </p>
+              </div>
+              <Link
+                to={CLAIM_AUTH_HREF}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3 text-base font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                sign up to keep your company
+                <ArrowRight className="size-5" />
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* ===================================================== FLEET */}
+      {view === "fleet" ? (
+        <div className="mx-auto w-full max-w-[1080px] px-6 py-10 sm:px-7">
+          {/* company header */}
+          <Reveal index={0} reduced={reduced}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
+                  <CoSAvatar size={20} />
+                  your chief of staff built this
+                </div>
+                <h1 className="mt-3 text-3xl font-extrabold leading-[1.05] tracking-[-0.04em] text-foreground sm:text-4xl">
+                  {company?.name ?? "your company"}
+                </h1>
+                {company?.mission ? (
+                  <p className="mt-2 max-w-2xl text-base leading-7 text-muted-foreground">
+                    {company.mission}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
+                  <StatusDot color={GREEN} pulse={!allDone} reduced={reduced} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: GREEN }}>
+                    {allDone ? "all delivered" : "team is working"}
+                  </span>
+                </div>
+                <CreditMeter remainingCents={creditRemainingCents} totalCents={creditCents} />
               </div>
             </div>
+          </Reveal>
 
-            <ArtifactView content={artifact.content} />
+          {/* fleet heading */}
+          <Reveal index={1} reduced={reduced}>
+            <h2
+              className="text-foreground"
+              style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 32, marginBottom: 12 }}
+            >
+              your team{agents.length ? ` · ${agents.length} agents` : ""}
+            </h2>
+          </Reveal>
 
-            {error ? (
-              <p className="text-sm text-destructive" role="alert">
-                {error}
+          {/* fleet grid — tiles assemble in one-by-one, then go to work */}
+          <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 12 }}>
+            {agents.map((agent, i) => (
+              <Reveal key={agent.id} index={i + 2} reduced={reduced}>
+                <FleetTile
+                  agent={agent}
+                  reduced={reduced}
+                  onOpen={setOpenAgent}
+                  onRetry={(a) => {
+                    if (token) void runFleet(token, [a.id]);
+                  }}
+                />
+              </Reveal>
+            ))}
+          </div>
+
+          {/* mid-build credit-exhausted banner (company already built) */}
+          {midBuildExhausted ? (
+            <div className="mt-8 rounded-2xl border border-[var(--accent-500)]/40 bg-card p-5">
+              <p className="text-base font-semibold text-foreground">
+                you&apos;ve used your free build
               </p>
-            ) : null}
+              <p className="mt-1 text-sm text-muted-foreground">
+                your company is built and {anyDone ? "your first deliverables are ready" : "ready"} —
+                sign up to finish staffing it and get more credit.
+              </p>
+            </div>
+          ) : null}
 
-            <div className="flex flex-wrap items-center gap-3 border-t border-border pt-6">
+          {error ? (
+            <p className="mt-6 text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          {/* CTAs */}
+          <Reveal index={agents.length + 3} reduced={reduced}>
+            <div className="mt-10 flex flex-wrap items-center gap-3 border-t border-border pt-6">
               <Link
                 to={CLAIM_AUTH_HREF}
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
               >
                 <Sparkles className="size-4" />
-                keep this + get free credit
+                keep this company + get free credit
               </Link>
               <button
                 type="button"
                 onClick={handleShare}
-                disabled={!token || !artifactId}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-[var(--accent-500)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-[var(--accent-500)]"
               >
                 {shared ? (
                   <>
@@ -477,66 +1160,22 @@ export function TrialLandingPage() {
               </button>
               <button
                 type="button"
-                onClick={handleRunAnother}
+                onClick={handleStartOver}
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-[var(--accent-500)]"
               >
-                run another
-              </button>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-[var(--accent-500)]"
-              >
-                {copied ? (
-                  <>
-                    <Check className="size-4 text-[var(--success-500)]" />
-                    copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="size-4" />
-                    copy
-                  </>
-                )}
+                build another
               </button>
             </div>
-          </div>
-        ) : null}
+          </Reveal>
+        </div>
+      ) : null}
 
-        {/* EXHAUSTED ----------------------------------------------------- */}
-        {view === "exhausted" ? (
-          <div className="mx-auto flex max-w-md flex-col items-center gap-5 py-16 text-center">
-            <span className="flex size-14 items-center justify-center rounded-full bg-[var(--accent-500)] text-white">
-              <Sparkles className="size-6" />
-            </span>
-            <div>
-              <h1 className="text-2xl font-bold tracking-[-0.02em] text-foreground">
-                you&apos;ve used your free taste
-              </h1>
-              <p className="mt-2 text-base leading-7 text-muted-foreground">
-                sign up to keep Scout, get more credit, and put it to work on your
-                real pipeline.
-              </p>
-            </div>
-            <Link
-              to={CLAIM_AUTH_HREF}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3 text-base font-semibold text-white transition-opacity hover:opacity-90"
-            >
-              sign up to keep Scout
-              <ArrowRight className="size-5" />
-            </Link>
-            {artifact ? (
-              <button
-                type="button"
-                onClick={() => setView("artifact")}
-                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              >
-                back to your draft
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      {/* DELIVERABLE modal */}
+      {openAgent ? (
+        <DeliverableModal agent={openAgent} onClose={() => setOpenAgent(null)} />
+      ) : null}
     </div>
   );
 }
+
+export default TrialLandingPage;
