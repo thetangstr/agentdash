@@ -26,6 +26,7 @@ export type TrialArtifact = {
 
 /** Artifact as persisted + returned by GET /:token. */
 export type TrialStoredArtifact = TrialArtifact & {
+  id: string;
   useCase: string;
   createdAt: string;
 };
@@ -37,7 +38,7 @@ export type TrialSessionCreated = {
 };
 
 export type TrialRunResult = {
-  artifact: TrialArtifact;
+  artifact: TrialStoredArtifact;
   creditRemainingCents: number;
   spentCents: number;
   creditCents: number;
@@ -60,6 +61,27 @@ export type TrialRunInput = {
   senderContext?: string;
 };
 
+/** Result of sharing an artifact (Slice 3). */
+export type TrialShareResult = {
+  shareUrl: string;
+  shareToken: string;
+};
+
+/** PUBLIC, read-only shared artifact resolved by share token (Slice 3). */
+export type TrialSharedArtifact = {
+  title: string;
+  content: TrialOutreachContent;
+  useCase: string;
+  createdAt: string;
+  agentName?: string;
+};
+
+/** Result of claiming a trial on signup (Slice 4). */
+export type TrialClaimResult = {
+  companyId: string;
+  companyPrefix?: string;
+};
+
 export const trialApi = {
   createSession: () => api.post<TrialSessionCreated>("/trial/session", {}),
 
@@ -67,4 +89,14 @@ export const trialApi = {
 
   run: (token: string, useCase: TrialUseCase, input: TrialRunInput) =>
     api.post<TrialRunResult>(`/trial/${token}/run`, { useCase, input }),
+
+  // Slice 3 — share loop.
+  share: (token: string, artifactId: string) =>
+    api.post<TrialShareResult>(`/trial/${token}/artifacts/${artifactId}/share`, {}),
+
+  getShared: (shareToken: string) =>
+    api.get<TrialSharedArtifact>(`/trial/share/${shareToken}`),
+
+  // Slice 4 — claim on signup (authenticated).
+  claim: (token: string) => api.post<TrialClaimResult>(`/trial/${token}/claim`, {}),
 };

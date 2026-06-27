@@ -8,30 +8,30 @@
 // Backend: server/src/routes/trial.ts (Slice 1). The trial token is the only
 // credential; we persist it in sessionStorage so a refresh resumes the run.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   ArrowRight,
   Check,
   Copy,
   Loader2,
-  Mail,
-  Linkedin,
-  Lightbulb,
+  Share2,
   Sparkles,
   Target,
 } from "lucide-react";
 import { Link } from "@/lib/router";
 import { ApiError } from "../api/client";
-import {
-  trialApi,
-  type TrialArtifact,
-  type TrialOutreachContent,
-} from "../api/trial";
+import { trialApi, type TrialArtifact } from "../api/trial";
+import { ArtifactView, buildPlainText } from "../components/trial/ArtifactView";
 
 type View = "land" | "working" | "artifact" | "exhausted";
 
 const TRIAL_TOKEN_KEY = "agentdash.trial.token";
+
+// The conversion CTA carries the trial token (already in sessionStorage) through
+// signup: /auth signs the user in/up, then routes to /trial/claim which binds
+// the trial workspace to the new account. See Auth.tsx + TrialClaim.tsx.
+const CLAIM_AUTH_HREF = "/auth?mode=sign_up&next=%2Ftrial%2Fclaim";
 
 const WORKING_STATUS_LINES = [
   "reading your market…",
@@ -76,27 +76,6 @@ function usePrefersReducedMotion(): boolean {
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
   return reduced;
-}
-
-function buildPlainText(artifact: TrialArtifact): string {
-  const { title, content } = artifact;
-  const lines: string[] = [title, "", content.summary, ""];
-  for (const touch of content.touches) {
-    lines.push(`— Day ${touch.day} · ${touch.channel} —`);
-    if (touch.subject) lines.push(`Subject: ${touch.subject}`);
-    lines.push(touch.body, "");
-  }
-  if (content.tips.length > 0) {
-    lines.push("Tips:");
-    for (const tip of content.tips) lines.push(`• ${tip}`);
-  }
-  return lines.join("\n").trim();
-}
-
-function channelIcon(channel: string) {
-  const c = channel.toLowerCase();
-  if (c.includes("linkedin")) return <Linkedin className="size-3.5" />;
-  return <Mail className="size-3.5" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,27 +172,6 @@ function CreditMeter({
   );
 }
 
-function TouchCard({
-  touch,
-}: {
-  touch: TrialOutreachContent["touches"][number];
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-50,rgba(0,0,0,0.04))] px-2.5 py-1 text-xs font-medium text-[var(--accent-600,var(--accent-500))]">
-        {channelIcon(touch.channel)}
-        Day {touch.day} · {touch.channel}
-      </span>
-      {touch.subject ? (
-        <p className="mt-3 font-semibold text-foreground">{touch.subject}</p>
-      ) : null}
-      <p className="mt-2 whitespace-pre-line text-sm leading-6 text-foreground">
-        {touch.body}
-      </p>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -226,11 +184,14 @@ export function TrialLandingPage() {
   const [icp, setIcp] = useState("");
   const [senderContext, setSenderContext] = useState("");
   const [artifact, setArtifact] = useState<TrialArtifact | null>(null);
+  const [artifactId, setArtifactId] = useState<string | null>(null);
   const [creditCents, setCreditCents] = useState(0);
   const [creditRemainingCents, setCreditRemainingCents] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState(false);
   const copyTimer = useRef<number | null>(null);
+  const shareTimer = useRef<number | null>(null);
 
   // Resume from a prior session on refresh (best-effort).
   useEffect(() => {
@@ -247,6 +208,7 @@ export function TrialLandingPage() {
         const latest = snap.artifacts[snap.artifacts.length - 1];
         if (latest) {
           setArtifact({ title: latest.title, content: latest.content });
+          setArtifactId(latest.id);
           setView("artifact");
         }
       })
@@ -263,6 +225,7 @@ export function TrialLandingPage() {
   useEffect(
     () => () => {
       if (copyTimer.current) window.clearTimeout(copyTimer.current);
+      if (shareTimer.current) window.clearTimeout(shareTimer.current);
     },
     [],
   );
@@ -289,6 +252,8 @@ export function TrialLandingPage() {
     },
     onSuccess: (result) => {
       setArtifact(result.artifact);
+      setArtifactId(result.artifact.id);
+      setShared(false);
       setCreditCents(result.creditCents);
       setCreditRemainingCents(result.creditRemainingCents);
       setView("artifact");
@@ -335,6 +300,8 @@ export function TrialLandingPage() {
 
   function handleRunAnother() {
     setArtifact(null);
+    setArtifactId(null);
+    setShared(false);
     setError(null);
     setView("land");
   }
@@ -348,6 +315,24 @@ export function TrialLandingPage() {
       copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setError("couldn't copy to your clipboard — select the text manually.");
+    }
+  }
+
+  async function handleShare() {
+    if (!token || !artifactId) return;
+    try {
+      const { shareUrl } = await trialApi.share(token, artifactId);
+      const absolute = `${window.location.origin}${shareUrl}`;
+      try {
+        await navigator.clipboard.writeText(absolute);
+      } catch {
+        /* clipboard blocked — the link still resolves; surface it below */
+      }
+      setShared(true);
+      if (shareTimer.current) window.clearTimeout(shareTimer.current);
+      shareTimer.current = window.setTimeout(() => setShared(false), 1500);
+    } catch {
+      setError("couldn't create a share link — give it another go.");
     }
   }
 
@@ -456,40 +441,7 @@ export function TrialLandingPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-border bg-card p-5">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                the angle
-              </p>
-              <p className="mt-2 text-sm leading-6 text-foreground">
-                {artifact.content.summary}
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              {artifact.content.touches.map((touch, i) => (
-                <TouchCard key={i} touch={touch} />
-              ))}
-            </div>
-
-            {artifact.content.tips.length > 0 ? (
-              <div className="rounded-2xl border border-border bg-card p-5">
-                <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  <Lightbulb className="size-3.5 text-[var(--accent-500)]" />
-                  tips before you send
-                </p>
-                <ul className="mt-3 space-y-2">
-                  {artifact.content.tips.map((tip, i) => (
-                    <li
-                      key={i}
-                      className="flex gap-2 text-sm leading-6 text-muted-foreground"
-                    >
-                      <span className="mt-2 size-1.5 shrink-0 rounded-full bg-[var(--accent-500)]" />
-                      {tip}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <ArtifactView content={artifact.content} />
 
             {error ? (
               <p className="text-sm text-destructive" role="alert">
@@ -499,12 +451,30 @@ export function TrialLandingPage() {
 
             <div className="flex flex-wrap items-center gap-3 border-t border-border pt-6">
               <Link
-                to="/auth"
+                to={CLAIM_AUTH_HREF}
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
               >
                 <Sparkles className="size-4" />
                 keep this + get free credit
               </Link>
+              <button
+                type="button"
+                onClick={handleShare}
+                disabled={!token || !artifactId}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-[var(--accent-500)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {shared ? (
+                  <>
+                    <Check className="size-4 text-[var(--success-500)]" />
+                    link copied
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="size-4" />
+                    share
+                  </>
+                )}
+              </button>
               <button
                 type="button"
                 onClick={handleRunAnother}
@@ -549,7 +519,7 @@ export function TrialLandingPage() {
               </p>
             </div>
             <Link
-              to="/auth"
+              to={CLAIM_AUTH_HREF}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--accent-500)] px-6 py-3 text-base font-semibold text-white transition-opacity hover:opacity-90"
             >
               sign up to keep Scout
