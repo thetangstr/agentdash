@@ -66,7 +66,14 @@ export function AuthPage() {
       // user explicitly names their workspace before the assess + CoS flow.
       // Sign-ins go to wherever they were already heading (preserves
       // ?next=… deep links and the remembered invite path).
-      const destination = mode === "sign_up" ? "/company-create" : nextPath;
+      //
+      // AgentDash (Test Drive, Slice 4): the trial conversion CTA signs the
+      // user up with ?next=/trial/claim. Those users already HAVE a workspace
+      // (the trial company they're about to claim), so honor the explicit next
+      // and skip /company-create.
+      const rawNext = searchParams.get("next");
+      const isTrialClaim = !!rawNext && rawNext.startsWith("/trial/claim");
+      const destination = mode === "sign_up" ? (isTrialClaim ? rawNext : "/company-create") : nextPath;
       navigate(destination, { replace: true });
     },
     onError: (err) => {
