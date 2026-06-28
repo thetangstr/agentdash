@@ -113,6 +113,44 @@ export const authApi = {
     await authPost("/sign-up/email", input);
   },
 
+  // AgentDash: SSO — which social providers the server has credentials for.
+  // Returns booleans only; the Auth page hides a button when its provider is
+  // false. Never throws on a missing/failed probe — SSO is purely additive, so
+  // we degrade to "no providers" and the email/password form stays usable.
+  getSocialProviders: async (): Promise<{ google: boolean; microsoft: boolean }> => {
+    try {
+      const res = await fetch("/api/auth/social-providers", {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return { google: false, microsoft: false };
+      const payload = (await res.json().catch(() => null)) as
+        | { google?: unknown; microsoft?: unknown }
+        | null;
+      return {
+        google: payload?.google === true,
+        microsoft: payload?.microsoft === true,
+      };
+    } catch {
+      return { google: false, microsoft: false };
+    }
+  },
+
+  // AgentDash: SSO — kick off a social sign-in. Better Auth responds with the
+  // provider's authorization URL; we hand the browser off to it. `callbackURL`
+  // is where Better Auth lands the user after the OAuth round-trip (used to
+  // preserve the trial-claim `next` deep link).
+  signInSocial: async (input: { provider: "google" | "microsoft"; callbackURL: string }) => {
+    const payload = (await authPost("/sign-in/social", input)) as
+      | { url?: string; redirect?: boolean }
+      | null;
+    if (payload?.url) {
+      window.location.href = payload.url;
+      return;
+    }
+    throw new Error("Social sign-in is unavailable right now. Please try email instead.");
+  },
+
   getProfile: async (): Promise<CurrentUserProfile> => {
     const res = await fetch("/api/auth/profile", {
       credentials: "include",

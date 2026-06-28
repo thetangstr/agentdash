@@ -45,6 +45,40 @@ Without `BETTER_AUTH_SECRET` the server crashes on first start in authenticated 
 
 ---
 
+## 2b. SSO — Continue with Google / Microsoft (optional)
+
+Social sign-in is **off by default and ships dark**: the buttons on `/auth`
+only appear once the matching credentials are set. Leave these unset to launch
+with email/password only; add them later (and redeploy) to turn SSO on — no
+code change required.
+
+Each provider needs BOTH its id and secret to switch on. Setting only one half
+keeps the provider hidden.
+
+| Env var | Provider | Notes |
+| --- | --- | --- |
+| `GOOGLE_CLIENT_ID` | Google | OAuth 2.0 Web client id |
+| `GOOGLE_CLIENT_SECRET` | Google | OAuth 2.0 Web client secret |
+| `MICROSOFT_CLIENT_ID` | Microsoft | Azure app registration (Application/client) id |
+| `MICROSOFT_CLIENT_SECRET` | Microsoft | Azure client secret **value** |
+| `MICROSOFT_TENANT_ID` | Microsoft | Optional. Defaults to `common` (any Microsoft account). Set a tenant id/domain to restrict to one org. |
+
+**Redirect / callback URIs to register** (replace the host with your
+`PAPERCLIP_AUTH_PUBLIC_BASE_URL`):
+
+- Google Cloud Console -> APIs and Services -> Credentials -> your OAuth 2.0
+  Web client -> Authorized redirect URIs:
+  - `https://your-domain.com/api/auth/callback/google`
+- Azure Portal -> App registrations -> your app -> Authentication -> Web ->
+  Redirect URIs:
+  - `https://your-domain.com/api/auth/callback/microsoft`
+
+For local testing, also register the `http://localhost:3100/...` equivalents.
+`PAPERCLIP_AUTH_PUBLIC_BASE_URL` must be set correctly in authenticated mode so
+Better Auth builds the callback against the right origin.
+
+---
+
 ## 3. Set up Stripe (Pro tier)
 
 The billing code already lives at [server/src/routes/billing.ts](../server/src/routes/billing.ts) and mounts at `/api/billing/*`. You need to provision the Stripe side and hand the keys to the server.
@@ -206,6 +240,14 @@ PAPERCLIP_PUBLIC_URL=https://your-domain.com  # e.g. http://100.83.171.56:3100 f
 
 # Optional: re-enable the corp-email signup gate (off by default since 2026-05-03)
 # AGENTDASH_REQUIRE_CORP_EMAIL=true
+
+# Optional SSO — buttons stay hidden until BOTH halves of a provider are set.
+# Callback URIs to register: https://your-domain.com/api/auth/callback/{google,microsoft}
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+# MICROSOFT_CLIENT_ID=
+# MICROSOFT_CLIENT_SECRET=
+# MICROSOFT_TENANT_ID=common  # optional; defaults to common (any Microsoft account)
 
 # LLM (CoS chat dispatch)
 ANTHROPIC_API_KEY=sk-ant-…

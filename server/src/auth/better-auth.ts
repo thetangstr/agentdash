@@ -13,6 +13,7 @@ import {
 import type { Config } from "../config.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import { sendEmail, resetPasswordEmailTemplate, welcomeEmailTemplate } from "./email.js";
+import { buildSocialProviders } from "./social-providers.js";
 import { logger } from "../middleware/logger.js";
 
 export type BetterAuthSessionUser = {
@@ -120,6 +121,7 @@ export function createBetterAuthInstance(
   }
   const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
+  const socialProviders = buildSocialProviders();
 
   const authConfig = {
     baseURL: baseUrl,
@@ -198,6 +200,11 @@ export function createBetterAuthInstance(
       },
     },
     advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies: isHttpOnly }),
+    // AgentDash: SSO — enable Google/Microsoft only when their credentials are
+    // present. Omitting `socialProviders` entirely (rather than passing an empty
+    // object) keeps Better Auth from advertising callback routes for providers
+    // that can't actually complete a sign-in.
+    ...(Object.keys(socialProviders).length > 0 ? { socialProviders } : {}),
   };
 
   if (!baseUrl) {
