@@ -10,7 +10,7 @@
 // See docs/superpowers/specs/2026-06-27-test-drive-no-signup-trial.md (§4, §9, §11).
 
 import { randomBytes } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { trialSessions, trialArtifacts, companies, companyMemberships } from "@paperclipai/db";
 import { HttpError, badRequest } from "../errors.js";
@@ -45,6 +45,38 @@ const AGENT_DELIVERABLE_USE_CASE = "agent_deliverable";
 const DEFAULT_TRIAL_SIGNUP_CREDIT_CENTS = 500;
 /** Anonymous trial session lifetime. */
 const TRIAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Abuse / DDoS protection (AGE: trial-abuse-hardening)
+// ---------------------------------------------------------------------------
+// The anonymous trial is public + token-based: anyone can mint a session, each
+// gets a fresh credit and runs a multi-agent MiniMax build. Two cost bounds:
+//  1. Per-IP/day cap — stops a single source minting unlimited free sessions.
+//  2. Global daily anonymous spend circuit-breaker — bounds total daily cost
+//     regardless of how IPs rotate (the real DDoS-cost protection).
+
+/** Rolling abuse window for both the per-IP cap and the global spend breaker. */
+const ABUSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Max free sessions a single hashed IP may mint per 24h when env is unset. */
+const DEFAULT_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY = 5;
+/** Global daily anonymous-spend ceiling (cents) when env is unset ($20). */
+const DEFAULT_TRIAL_GLOBAL_DAILY_CAP_CENTS = 2000;
+
+function trialMaxSessionsPerIpPerDay(): number {
+  const raw = process.env.AGENTDASH_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY;
+  const parsed = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : DEFAULT_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY;
+}
+
+function trialGlobalDailyCapCents(): number {
+  const raw = process.env.AGENTDASH_TRIAL_GLOBAL_DAILY_CAP_CENTS;
+  const parsed = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : DEFAULT_TRIAL_GLOBAL_DAILY_CAP_CENTS;
+}
 
 function trialCreditCents(): number {
   const raw = process.env.AGENTDASH_TRIAL_CREDIT_CENTS;
@@ -105,6 +137,17 @@ export class TrialAlreadyClaimedError extends HttpError {
       { code: "trial_already_claimed" },
       "trial_already_claimed",
     );
+  }
+}
+
+/**
+ * Anonymous trial abuse guard tripped (HTTP 429). Covers both the per-IP/day
+ * session cap and the global daily anonymous-spend circuit-breaker. The message
+ * + code differ by which limit fired; the route maps the 429 automatically.
+ */
+export class TrialRateLimitedError extends HttpError {
+  constructor(message: string, code = "trial_rate_limited") {
+    super(429, message, { code }, code);
   }
 }
 
@@ -228,6 +271,53 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
       .orderBy(desc(trialArtifacts.createdAt));
   }
 
+  /**
+   * Per-IP free-session cap. Counts trial_sessions minted by the same hashed IP
+   * within the rolling abuse window and throws TrialRateLimitedError (429) once
+   * the cap is reached. A null/absent ipHash is skipped (never hard-fails) — we
+   * never want a missing hash to lock a real user out.
+   */
+  async function assertPerIpSessionCap(ipHash: string | null | undefined): Promise<void> {
+    if (!ipHash) return;
+    const max = trialMaxSessionsPerIpPerDay();
+    if (max <= 0) return; // 0 = unlimited (cap disabled)
+    const since = new Date(Date.now() - ABUSE_WINDOW_MS);
+    const recent = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(trialSessions)
+      .where(and(eq(trialSessions.ipHash, ipHash), gte(trialSessions.createdAt, since)))
+      .then((rows) => Number(rows[0]?.count ?? 0));
+    if (recent >= max) {
+      throw new TrialRateLimitedError(
+        "you've reached the free-trial limit for today — sign up to keep going",
+        "trial_rate_limited_ip",
+      );
+    }
+  }
+
+  /**
+   * Global daily anonymous-spend circuit-breaker. Sums spentCents across all
+   * trial_sessions created within the rolling abuse window; throws
+   * TrialRateLimitedError (429) once the global cap is reached. Enforced before
+   * minting AND before every spend so a flood can't blow past the cap mid-build.
+   * This bounds total daily cost regardless of how IPs rotate.
+   */
+  async function assertGlobalDailySpendCap(): Promise<void> {
+    const cap = trialGlobalDailyCapCents();
+    const since = new Date(Date.now() - ABUSE_WINDOW_MS);
+    const spent = await db
+      .select({ total: sql<number>`coalesce(sum(${trialSessions.spentCents}), 0)::int` })
+      .from(trialSessions)
+      .where(gte(trialSessions.createdAt, since))
+      .then((rows) => Number(rows[0]?.total ?? 0));
+    if (spent >= cap) {
+      throw new TrialRateLimitedError(
+        "the free trial is at capacity right now — try again later or sign up",
+        "trial_rate_limited_global",
+      );
+    }
+  }
+
   function publicSession(row: TrialSessionRow) {
     const creditRemainingCents = Math.max(0, row.creditCents - row.spentCents);
     return {
@@ -250,6 +340,11 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
      * the trial_sessions row. Returns the public session view (incl. token).
      */
     createSession: async (opts: { ipHash?: string } = {}) => {
+      // Abuse guards before provisioning anything: global spend breaker first
+      // (cheapest, protects total cost), then the per-IP/day session cap.
+      await assertGlobalDailySpendCap();
+      await assertPerIpSessionCap(opts.ipHash);
+
       const hero = TRIAL_DEFAULT_HERO_TASK;
       const company = await companies_.create({
         name: `Test Drive ${shortSuffix()}`,
@@ -315,6 +410,8 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
       if (!row) throw new TrialNotFoundError();
       if (isExpired(row)) throw new TrialExpiredError();
       if (row.creditCents - row.spentCents <= 0) throw new TrialCreditExhaustedError();
+      // Global anonymous-spend breaker: refuse to spend once the daily cap is hit.
+      await assertGlobalDailySpendCap();
 
       const useCase = typeof args.useCase === "string" ? args.useCase.trim() : "";
       if (!useCase) throw badRequest("useCase is required", { code: "missing_use_case" });
@@ -391,6 +488,8 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
       if (!row) throw new TrialNotFoundError();
       if (isExpired(row)) throw new TrialExpiredError();
       if (row.creditCents - row.spentCents <= 0) throw new TrialCreditExhaustedError();
+      // Global anonymous-spend breaker: refuse to spend once the daily cap is hit.
+      await assertGlobalDailySpendCap();
 
       const intake = validateIntake(intakeRaw);
 
@@ -478,6 +577,8 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
       if (!row) throw new TrialNotFoundError();
       if (isExpired(row)) throw new TrialExpiredError();
       if (row.creditCents - row.spentCents <= 0) throw new TrialCreditExhaustedError();
+      // Global anonymous-spend breaker: refuse to spend once the daily cap is hit.
+      await assertGlobalDailySpendCap();
 
       const plan = readPlan(row);
       const planned = plan?.agents.find((a) => a.id === agentId) ?? null;
