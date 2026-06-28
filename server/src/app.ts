@@ -16,6 +16,7 @@ import {
   createBillingRateLimiter,
   createDefaultApiRateLimiter,
   createInviteRateLimiter,
+  createTrialRateLimiter,
 } from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -170,6 +171,21 @@ export async function createApp(
 ) {
   const app = express();
 
+  // AgentDash (trial-abuse-hardening): trust the single upstream proxy when the
+  // deployment is internet-facing (Railway/Fly/etc. terminate TLS and forward
+  // X-Forwarded-For). Without this, req.ip is the proxy's address for everyone,
+  // collapsing the per-IP API rate limiter into one bucket and making the trial's
+  // ipHash identical for all visitors. We set the hop count to 1 (the single
+  // known proxy) rather than `true` — `true` trusts the whole XFF chain, lets
+  // clients spoof their IP, AND trips express-rate-limit's permissive-trust-proxy
+  // validation (ERR_ERL_PERMISSIVE_TRUST_PROXY). local_trusted (private dev /
+  // loopback) keeps Express's default (off) so local tests are unaffected.
+  const internetFacing =
+    opts.deploymentMode === "authenticated" || opts.deploymentExposure === "public";
+  if (internetFacing) {
+    app.set("trust proxy", 1);
+  }
+
   // AgentDash: capture the raw request body so downstream webhook/connector
   // routes (Stripe, Slack) can verify HMAC signatures. Shared by both the JSON
   // and urlencoded parsers so the captured bytes are identical regardless of
@@ -288,9 +304,11 @@ export async function createApp(
   // AgentDash: Test Drive — no-signup anonymous trial. PUBLIC + token-based:
   // these routes validate the trial token themselves and never require
   // req.actor, so they are reachable without auth even in authenticated mode
-  // (boardMutationGuard only gates board-session actors). Covered by the
-  // default-tier API rate limiter mounted above.
-  api.use("/trial", trialRoutes(db));
+  // (boardMutationGuard only gates board-session actors). A tighter per-IP
+  // request limiter sits in front of the cost-amplifying entry points (session
+  // mint + multi-agent design) on top of the default-tier API limiter; the
+  // kill-switch + per-IP/day + global-spend caps live in trialRoutes/trialService.
+  api.use("/trial", createTrialRateLimiter({ deploymentMode: opts.deploymentMode }), trialRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
   // AgentDash: Slack Connector (AGE-108)

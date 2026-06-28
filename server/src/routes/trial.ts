@@ -39,6 +39,20 @@ export function trialRoutes(db: Db) {
   const router = Router();
   const svc = trialService(db);
 
+  // Kill-switch: when AGENTDASH_TRIAL_ANONYMOUS is explicitly "false", the
+  // anonymous trial is disabled and every route returns 503. Read at request
+  // time (not module load) so it can be flipped via an env change + restart with
+  // no code redeploy — the instant lever to pull when under attack. Default is
+  // "true" (enabled). The shared-public /share/:shareToken read is still gated
+  // here too: disabling the trial disables the whole surface.
+  router.use((_req, res, next) => {
+    if ((process.env.AGENTDASH_TRIAL_ANONYMOUS ?? "true").toLowerCase() === "false") {
+      res.status(503).json({ error: "trial_disabled" });
+      return;
+    }
+    next();
+  });
+
   // POST /api/trial/session — mint a fresh anonymous trial workspace + agent.
   router.post("/session", async (req, res) => {
     const ipHash = hashClientIp(req);
