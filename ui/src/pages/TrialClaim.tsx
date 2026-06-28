@@ -2,7 +2,7 @@
 //
 // Reached at /trial/claim AFTER the user has authenticated (the conversion CTA
 // on /trial routes here via /auth?next=/trial/claim). On mount it reads the
-// trial token stashed in sessionStorage, calls POST /api/trial/:token/claim to
+// trial token stashed in localStorage, calls POST /api/trial/:token/claim to
 // bind the ephemeral trial workspace to the now-signed-in account (owner
 // membership + free tier + signup credit), then redirects into the claimed
 // company's dashboard. No token / a failed claim shows a friendly fallback.
@@ -13,25 +13,8 @@ import { Loader2, Sparkles } from "lucide-react";
 import { Link, useNavigate } from "@/lib/router";
 import { ApiError } from "../api/client";
 import { trialApi } from "../api/trial";
+import { clearTrialStorage, readStoredToken } from "../lib/trial-storage";
 import { queryKeys } from "../lib/queryKeys";
-
-const TRIAL_TOKEN_KEY = "agentdash.trial.token";
-
-function readStoredToken(): string | null {
-  try {
-    return window.sessionStorage.getItem(TRIAL_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function clearStoredToken() {
-  try {
-    window.sessionStorage.removeItem(TRIAL_TOKEN_KEY);
-  } catch {
-    /* sessionStorage unavailable — nothing to clear */
-  }
-}
 
 export function TrialClaimPage() {
   const navigate = useNavigate();
@@ -46,7 +29,7 @@ export function TrialClaimPage() {
       return trialApi.claim(token);
     },
     onSuccess: async (result) => {
-      clearStoredToken();
+      clearTrialStorage();
       // Make the freshly-bound company visible to the gate + company context
       // before we route into it.
       await Promise.all([
@@ -66,7 +49,7 @@ export function TrialClaimPage() {
         return;
       }
       if (err instanceof ApiError && err.status === 409) {
-        clearStoredToken();
+        clearTrialStorage();
         setError("this trial has already been claimed by another account.");
         return;
       }
