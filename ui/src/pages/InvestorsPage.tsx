@@ -112,25 +112,52 @@ function Reveal({
       return;
     }
     const node = ref.current;
-    if (!node) return;
-    if (typeof IntersectionObserver === "undefined") {
+    if (!node) {
       setShown(true);
       return;
     }
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            window.setTimeout(() => setShown(true), delay);
-            io.disconnect();
-            break;
+
+    let revealed = false;
+    const reveal = () => {
+      if (revealed) return;
+      revealed = true;
+      window.setTimeout(() => setShown(true), delay);
+    };
+
+    // Reveal immediately if the element is already within (or near) the viewport
+    // on mount — above-the-fold content must never depend on a scroll event.
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (node.getBoundingClientRect().top < vh * 0.95) {
+      reveal();
+    }
+
+    // Observe for the scroll-reveal choreography where it works.
+    let io: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== "undefined") {
+      io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              reveal();
+              io?.disconnect();
+              break;
+            }
           }
-        }
-      },
-      { rootMargin: "0px 0px -10% 0px", threshold: 0.08 },
-    );
-    io.observe(node);
-    return () => io.disconnect();
+        },
+        { rootMargin: "0px 0px -10% 0px", threshold: 0.08 },
+      );
+      io.observe(node);
+    }
+
+    // Safety net: this page owns a nested `overflow-y-auto` scroll region, where
+    // a viewport-rooted observer can fail to report intersections — never leave
+    // content stranded at opacity 0 if the observer never fires.
+    const fallback = window.setTimeout(() => reveal(), 700 + delay);
+
+    return () => {
+      io?.disconnect();
+      window.clearTimeout(fallback);
+    };
   }, [reduced, delay]);
 
   return (
