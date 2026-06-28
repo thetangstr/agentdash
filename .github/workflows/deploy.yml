@@ -1,0 +1,86 @@
+name: Deploy
+
+# Auto-deploy production on merge to main, closing the MAW loop:
+# Builder PR -> CI (pr.yml) -> Tester -> TPM merges to main -> THIS workflow
+# builds + releases on Railway and smoke-tests the live URL.
+#
+# SAFE BY DEFAULT: the deploy is gated on a `RAILWAY_TOKEN` repo secret. Until
+# you add that secret (a Railway *project token*: Railway -> project -> Settings
+# -> Tokens), this workflow is inert — it runs, reports "not configured", and
+# exits green without deploying. Add the secret to turn auto-deploy on.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Railway (production)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      # The canonical public URL to smoke-test. Update this when a custom domain
+      # is attached (launch checklist B2/B3).
+      PUBLIC_URL: https://web-production-33a3b6.up.railway.app
+      SERVICE: web
+    steps:
+      - name: Guard — deploy only when RAILWAY_TOKEN is configured
+        id: guard
+        run: |
+          if [ -z "${RAILWAY_TOKEN}" ]; then
+            echo "::notice::RAILWAY_TOKEN secret is not set — deploy workflow is INERT (no deploy)."
+            echo "Add a Railway project token as the RAILWAY_TOKEN repo secret to enable auto-deploy."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.guard.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        if: steps.guard.outputs.enabled == 'true'
+        run: npm install -g @railway/cli
+
+      - name: Deploy (build + release)
+        if: steps.guard.outputs.enabled == 'true'
+        # `railway up` streams the build and blocks until the deployment
+        # finishes, exiting non-zero on a failed build/release. `--ci` disables
+        # interactive log rendering for a clean CI log.
+        run: railway up --service "$SERVICE" --ci
+
+      - name: Smoke test the live deployment
+        if: steps.guard.outputs.enabled == 'true'
+        run: |
+          set -u
+          ok=0
+          for i in $(seq 1 18); do
+            root=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/" || true)
+            sp=$(curl -s -o /dev/null -w "%{http_code}" "$PUBLIC_URL/api/auth/social-providers" || true)
+            echo "smoke attempt $i: / -> $root, /api/auth/social-providers -> $sp"
+            if [ "$root" = "200" ] && [ "$sp" = "200" ]; then ok=1; break; fi
+            sleep 10
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::Smoke test failed — the live deployment did not return healthy responses."
+            exit 1
+          fi
+          echo "Smoke test passed."
+
+      - name: Deploy summary
+        if: always() && steps.guard.outputs.enabled == 'true'
+        run: |
+          {
+            echo "### Production deploy"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Service: \`${SERVICE}\`"
+            echo "- URL: ${PUBLIC_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
