@@ -1222,6 +1222,13 @@ export function TrialLandingPage() {
                 >
                   sign in
                 </Link>
+                <span className="px-2 text-border">·</span>
+                <a
+                  href="/investors"
+                  className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
+                >
+                  for investors
+                </a>
               </p>
             </div>
           ) : null}

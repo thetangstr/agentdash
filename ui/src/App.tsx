@@ -62,6 +62,7 @@ import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
 import { TrialLandingPage } from "./pages/TrialLanding";
+import { InvestorsPage } from "./pages/InvestorsPage";
 import { SharedArtifactPage } from "./pages/SharedArtifact";
 import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
@@ -300,6 +301,10 @@ export function App() {
         {/* AgentDash (Test Drive): public no-signup trial — rendered outside
             CloudAccessGate, no Layout/sidebar, token is the only credential. */}
         <Route path="trial" element={<TrialLandingPage />} />
+        {/* AgentDash: PUBLIC investor + partner brief (Google for Startups /
+            investor outreach) — same public tier as /trial, no auth, no company
+            context, owns its own scroll region. */}
+        <Route path="investors" element={<InvestorsPage />} />
         {/* AgentDash (Test Drive, Slice 3): PUBLIC read-only shared artifact —
             same tier as /trial, no auth, no company context. */}
         <Route path="share/:shareToken" element={<SharedArtifactPage />} />
