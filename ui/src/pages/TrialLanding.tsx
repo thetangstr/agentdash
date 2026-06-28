@@ -33,6 +33,7 @@ import {
   BadgeDollarSign,
   BarChart3,
   Bot,
+  Briefcase,
   Calendar,
   Check,
   Code2,
@@ -48,12 +49,102 @@ import {
   Search,
   Send,
   Share2,
+  Rocket,
+  ShoppingBag,
   Sparkles,
+  Store,
   Users,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "@/lib/router";
+
+// Starting-point templates: one click pre-fills the intake (what you do + goal +
+// blocker) and jumps to the CoS questions, where the visitor can tweak before
+// building. Each is written to produce a distinctly different company.
+type TrialTemplate = {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  blurb: string;
+  intake: { whatYouDo: string; goal: string; blocker: string };
+};
+
+const TRIAL_TEMPLATES: TrialTemplate[] = [
+  {
+    id: "b2b_saas",
+    label: "B2B SaaS startup",
+    icon: Rocket,
+    blurb: "fintech platform for mid-market finance teams",
+    intake: {
+      whatYouDo:
+        "we're a 20-person B2B SaaS company selling a fintech reconciliation platform to mid-market finance teams",
+      goal: "book 30 qualified demos and close 8 new logos this quarter",
+      blocker: "our 2 SDRs can't cover the list and the founders are still running every demo",
+    },
+  },
+  {
+    id: "dtc_ecom",
+    label: "DTC e-commerce brand",
+    icon: ShoppingBag,
+    blurb: "$2M/yr skincare brand on Shopify + Meta",
+    intake: {
+      whatYouDo:
+        "we're a direct-to-consumer skincare brand doing about $2M a year, mostly through Shopify and Meta ads",
+      goal: "reach $3.5M this year by lifting repeat-purchase rate and lowering blended CAC",
+      blocker: "ad costs keep climbing and we have no real retention, email, or SMS program",
+    },
+  },
+  {
+    id: "agency",
+    label: "Marketing agency",
+    icon: Megaphone,
+    blurb: "12-person performance agency for consumer brands",
+    intake: {
+      whatYouDo: "we run a 12-person performance-marketing agency for DTC and consumer brands",
+      goal: "sign 5 new retainer clients at $10k+/mo this quarter without hurting delivery",
+      blocker: "the founders do all the sales and the team is already maxed on client work",
+    },
+  },
+  {
+    id: "recruiting",
+    label: "Recruiting firm",
+    icon: Users,
+    blurb: "boutique tech recruiting for Series A-C startups",
+    intake: {
+      whatYouDo:
+        "we're a boutique recruiting firm placing engineers and product managers at Series A-C startups",
+      goal: "fill 12 open roles and win 4 new client accounts this quarter",
+      blocker:
+        "sourcing is all manual, candidate follow-up slips, and new-business outreach is inconsistent",
+    },
+  },
+  {
+    id: "advisory",
+    label: "Accounting / advisory",
+    icon: Briefcase,
+    blurb: "15-person accounting + fractional-CFO firm",
+    intake: {
+      whatYouDo:
+        "we're a 15-person accounting and fractional-CFO firm serving small businesses and startups",
+      goal: "add 20 monthly-retainer clients before tax season and cut churn",
+      blocker:
+        "the partners spend all their time on delivery, so marketing and client onboarding fall through the cracks",
+    },
+  },
+  {
+    id: "local_services",
+    label: "Local services",
+    icon: Store,
+    blurb: "3-location med spa (injectables, facials, laser)",
+    intake: {
+      whatYouDo: "we own three med spa locations offering injectables, facials, and laser treatments",
+      goal: "book the calendar out three weeks ahead and grow membership signups 40%",
+      blocker:
+        "the front desk can't keep up with leads, and no-shows and lapsed clients eat into revenue",
+    },
+  },
+];
 import { ApiError } from "../api/client";
 import {
   trialApi,
@@ -940,6 +1031,41 @@ export function TrialLandingPage() {
                   <ArrowRight className="size-5" />
                 </button>
               </form>
+
+              <div className="mt-10 w-full max-w-xl">
+                <div className="mb-3 flex items-center gap-3 text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  or start from a template
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {TRIAL_TEMPLATES.map((t) => {
+                    const Icon = t.icon;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          setWhatYouDo(t.intake.whatYouDo);
+                          setGoal(t.intake.goal);
+                          setBlocker(t.intake.blocker);
+                          setError(null);
+                          setView("intake");
+                        }}
+                        className="group flex items-start gap-3 rounded-xl border border-border bg-card p-3 text-left transition-colors hover:border-[var(--accent-500)]"
+                      >
+                        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-foreground transition-colors group-hover:text-[var(--accent-500)]">
+                          <Icon className="size-[18px]" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-foreground">{t.label}</span>
+                          <span className="block text-xs leading-snug text-muted-foreground">{t.blurb}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               <p className="mt-10 text-xs text-muted-foreground">
                 already have an account?{" "}
