@@ -26,6 +26,7 @@ import {
   trialService,
   TrialCreditExhaustedError,
   TrialAlreadyClaimedError,
+  TrialRateLimitedError,
 } from "../services/trial.ts";
 import { trialRoutes } from "../routes/trial.ts";
 import { errorHandler } from "../middleware/index.js";
@@ -65,6 +66,13 @@ describeEmbeddedPostgres("Test Drive trial (integration)", () => {
   beforeEach(() => {
     mockDispatch.mockReset();
     mockDispatch.mockResolvedValue(JSON.stringify(SAMPLE_PAYLOAD));
+    // Keep the abuse guards effectively disabled by default: every route test in
+    // this file shares the loopback IP and the embedded DB persists across tests,
+    // so a real default per-IP/global cap would accumulate and trip unrelated
+    // tests. Each guard test below overrides these to small values explicitly.
+    process.env.AGENTDASH_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY = "1000000";
+    process.env.AGENTDASH_TRIAL_GLOBAL_DAILY_CAP_CENTS = "100000000";
+    delete process.env.AGENTDASH_TRIAL_ANONYMOUS;
   });
 
   // -------------------------------------------------------------------------
@@ -397,6 +405,90 @@ describeEmbeddedPostgres("Test Drive trial (integration)", () => {
     const app = makeAuthedApp({ type: "none", source: "none" });
     const res = await request(app).post(`/api/trial/${token}/claim`).send({});
     expect(res.status).toBe(403);
+  });
+
+  // -------------------------------------------------------------------------
+  // Abuse / DDoS hardening
+  // -------------------------------------------------------------------------
+
+  it("per-IP cap allows sessions under the limit and 429s at the limit (same ipHash)", async () => {
+    process.env.AGENTDASH_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY = "2";
+    const svc = trialService(db, { dispatch: vi.fn() });
+    // Unique hash so the count is isolated from sessions minted by other tests.
+    const ipHash = `cap-test-${Math.random().toString(36).slice(2)}`;
+
+    // Under the limit: the first two mints succeed.
+    await expect(svc.createSession({ ipHash })).resolves.toMatchObject({ token: expect.any(String) });
+    await expect(svc.createSession({ ipHash })).resolves.toMatchObject({ token: expect.any(String) });
+
+    // At the limit (2 existing >= 2): the third is rejected with 429.
+    await expect(svc.createSession({ ipHash })).rejects.toBeInstanceOf(TrialRateLimitedError);
+    await expect(svc.createSession({ ipHash })).rejects.toMatchObject({ status: 429 });
+
+    // A different IP is unaffected, and a null ipHash skips the cap entirely.
+    await expect(
+      svc.createSession({ ipHash: `other-${Math.random().toString(36).slice(2)}` }),
+    ).resolves.toMatchObject({ token: expect.any(String) });
+    await expect(svc.createSession()).resolves.toMatchObject({ token: expect.any(String) });
+  });
+
+  it("per-IP cap returns 429 at the route layer with a friendly code", async () => {
+    process.env.AGENTDASH_TRIAL_MAX_SESSIONS_PER_IP_PER_DAY = "1";
+    const app = makeApp();
+    // Drive the ipHash via X-Forwarded-For (hashClientIp reads it first) so this
+    // bucket is isolated from the loopback sessions other tests mint.
+    const xff = `203.0.113.${Math.floor(Math.random() * 250) + 1}`;
+    const first = await request(app)
+      .post("/api/trial/session")
+      .set("X-Forwarded-For", xff)
+      .send({});
+    expect(first.status).toBe(201);
+    const second = await request(app)
+      .post("/api/trial/session")
+      .set("X-Forwarded-For", xff)
+      .send({});
+    expect(second.status).toBe(429);
+    expect(second.body.details?.code).toBe("trial_rate_limited_ip");
+  });
+
+  it("global daily spend cap 429s once anonymous spend exceeds the cap", async () => {
+    const dispatch = vi.fn().mockResolvedValue(JSON.stringify(SAMPLE_PAYLOAD));
+    const svc = trialService(db, { dispatch });
+
+    // Incur at least 1c of spend in the rolling window first.
+    const session = await svc.createSession();
+    await svc.runTask(session.token, { useCase: "sales_outreach", input: { icp: "x" } });
+
+    // Now slam the cap to 1c: existing spend (>=1) >= cap, so the breaker trips.
+    process.env.AGENTDASH_TRIAL_GLOBAL_DAILY_CAP_CENTS = "1";
+
+    // Minting a new session is refused.
+    await expect(svc.createSession()).rejects.toBeInstanceOf(TrialRateLimitedError);
+    // Spending on an existing session is refused mid-build too.
+    await expect(
+      svc.runTask(session.token, { useCase: "sales_outreach", input: { icp: "x" } }),
+    ).rejects.toMatchObject({ status: 429, code: "trial_rate_limited_global" });
+    await expect(svc.designCompany(session.token, { whatYouDo: "a", goal: "b" })).rejects.toMatchObject({
+      status: 429,
+    });
+  });
+
+  it("kill-switch (AGENTDASH_TRIAL_ANONYMOUS=false) makes the routes 503", async () => {
+    process.env.AGENTDASH_TRIAL_ANONYMOUS = "false";
+    const app = makeApp();
+
+    const minted = await request(app).post("/api/trial/session").send({});
+    expect(minted.status).toBe(503);
+    expect(minted.body.error).toBe("trial_disabled");
+
+    const got = await request(app).get("/api/trial/anything");
+    expect(got.status).toBe(503);
+    expect(got.body.error).toBe("trial_disabled");
+
+    // Flipping it back re-enables the surface.
+    process.env.AGENTDASH_TRIAL_ANONYMOUS = "true";
+    const reMinted = await request(app).post("/api/trial/session").send({});
+    expect(reMinted.status).toBe(201);
   });
 });
 
