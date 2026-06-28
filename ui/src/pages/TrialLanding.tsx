@@ -151,6 +151,13 @@ import {
   type TrialCompanyMeta,
   type TrialIntake,
 } from "../api/trial";
+import {
+  clearTrialStorage,
+  readPersistedState,
+  readStoredToken,
+  writePersistedState,
+  writeStoredToken,
+} from "../lib/trial-storage";
 import { MarkdownBody } from "../components/MarkdownBody";
 
 type View = "land" | "intake" | "designing" | "fleet" | "exhausted";
@@ -172,7 +179,6 @@ type FleetAgent = {
   artifactMarkdown?: string;
 };
 
-const TRIAL_TOKEN_KEY = "agentdash.trial.token";
 const EASE = "cubic-bezier(0.22,1,0.36,1)";
 const CLAY = "var(--accent-500)";
 const GREEN = "var(--success-500)";
@@ -190,24 +196,26 @@ const DESIGNING_LINES = [
 ];
 
 // ---------------------------------------------------------------------------
-// storage + format helpers
+// history + format helpers
 // ---------------------------------------------------------------------------
 
-function readStoredToken(): string | null {
-  try {
-    return window.sessionStorage.getItem(TRIAL_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+// The trial is a single-route (/trial) state machine. We reflect the view in a
+// `?step=` query param and push one history entry per forward transition so the
+// browser Back/Forward buttons move WITHIN the flow instead of exiting /trial.
+// Views collapse to three history "steps": land, intake, and building (the whole
+// designing -> fleet -> exhausted build phase shares one entry).
+export type HistoryStep = "land" | "intake" | "building";
+
+export function stepForView(view: View): HistoryStep {
+  if (view === "intake") return "intake";
+  if (view === "designing" || view === "fleet" || view === "exhausted") return "building";
+  return "land";
 }
 
-function writeStoredToken(token: string | null) {
-  try {
-    if (token) window.sessionStorage.setItem(TRIAL_TOKEN_KEY, token);
-    else window.sessionStorage.removeItem(TRIAL_TOKEN_KEY);
-  } catch {
-    /* sessionStorage unavailable (private mode) — token still lives in state */
-  }
+export function urlForView(view: View): string {
+  const step = stepForView(view);
+  const base = typeof window !== "undefined" ? window.location.pathname : "/trial";
+  return step === "land" ? base : `${base}?step=${step}`;
 }
 
 function formatDollars(cents: number): string {
@@ -289,6 +297,10 @@ function Reveal({
         transform: shown ? "translateY(0)" : "translateY(14px)",
         transition: reduced ? undefined : `opacity 520ms ${EASE}, transform 520ms ${EASE}`,
         willChange: reduced ? undefined : "opacity, transform",
+        // While still faded-in (opacity 0 + translated down) the block can overlap
+        // the element below it and silently eat the first click. Disable hit-testing
+        // until it is actually visible so primary CTAs register on the first click.
+        pointerEvents: shown ? undefined : "none",
       }}
     >
       {children}
@@ -700,21 +712,62 @@ export function TrialLandingPage() {
   const shareTimer = useRef<number | null>(null);
   const runningRef = useRef(false);
   const resumedRef = useRef(false);
+  const submittingRef = useRef(false);
+
+  // History integration: refs the popstate handler reads (it closes over the
+  // mount-time render, so it must read live values through refs).
+  const viewRef = useRef<View>(view);
+  const companyRef = useRef<TrialCompanyMeta | null>(company);
+  // First Back out of a built/in-progress fleet is "absorbed" (we keep the team
+  // visible) so a single Back press never strands the user on a blank page or
+  // hard-exits /trial. A second consecutive Back is allowed through.
+  const backLeaveArmedRef = useRef(false);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  useEffect(() => {
+    companyRef.current = company;
+  }, [company]);
+
+  // Forward transition: push a new browser-history entry so Back returns here.
+  const pushView = useCallback((next: View) => {
+    backLeaveArmedRef.current = false;
+    try {
+      window.history.pushState({ trialView: next }, "", urlForView(next));
+    } catch {
+      /* history unavailable — view still changes via React state */
+    }
+    setView(next);
+  }, []);
+
+  // In-place transition: update the current entry without growing the stack
+  // (e.g. designing -> fleet, both live in the "building" step).
+  const replaceView = useCallback((next: View) => {
+    try {
+      window.history.replaceState({ trialView: next }, "", urlForView(next));
+    } catch {
+      /* history unavailable — view still changes via React state */
+    }
+    setView(next);
+  }, []);
 
   const setAgentStatus = useCallback((id: string, runStatus: RunStatus) => {
     setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, runStatus } : a)));
   }, []);
 
-  const resetToLand = useCallback((message: string) => {
-    writeStoredToken(null);
-    setToken(null);
-    setCompany(null);
-    setAgents([]);
-    setOpenAgent(null);
-    setMidBuildExhausted(false);
-    setError(message);
-    setView("land");
-  }, []);
+  const resetToLand = useCallback(
+    (message: string) => {
+      clearTrialStorage();
+      setToken(null);
+      setCompany(null);
+      setAgents([]);
+      setOpenAgent(null);
+      setMidBuildExhausted(false);
+      setError(message);
+      replaceView("land");
+    },
+    [replaceView],
+  );
 
   // Run the fleet: each agent does its first task, with small concurrency, so
   // the board comes alive (working… -> done) one tile at a time.
@@ -776,6 +829,87 @@ export function TrialLandingPage() {
     [resetToLand, setAgentStatus],
   );
 
+  // Initialize browser history + restore an in-progress intake on mount. Runs
+  // before the token-resume effect so the history base entry exists first.
+  useEffect(() => {
+    // Tag the current entry as the "land" base so Back always has a defined
+    // target inside /trial (never an immediate hard-exit on the first press).
+    try {
+      window.history.replaceState({ trialView: "land" }, "", urlForView("land"));
+    } catch {
+      /* history unavailable */
+    }
+
+    const persisted = readPersistedState();
+    if (!persisted) return;
+    if (persisted.whatYouDo) setWhatYouDo(persisted.whatYouDo);
+    if (persisted.goal) setGoal(persisted.goal);
+    if (persisted.blocker) setBlocker(persisted.blocker);
+    // A refresh mid-intake/mid-designing returns the visitor to the intake form
+    // with their text intact (the design request itself did not survive reload).
+    if (persisted.view === "intake" || persisted.view === "designing") {
+      pushView("intake");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the in-progress intake + current view so a refresh never wipes what
+  // the visitor typed. The company itself is server-side (resumed via the token).
+  useEffect(() => {
+    writePersistedState({ view, whatYouDo, goal, blocker });
+  }, [view, whatYouDo, goal, blocker]);
+
+  // Browser Back/Forward: step WITHIN the flow instead of leaving /trial.
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const current = viewRef.current;
+      const raw = (event.state as { trialView?: View } | null)?.trialView ?? "land";
+      // The build phase collapses to a single history step; normalize to fleet.
+      const target: View = raw === "designing" || raw === "exhausted" ? "fleet" : raw;
+
+      const inBuild =
+        current === "fleet" || current === "designing" || current === "exhausted";
+      const leavingBuild = inBuild && target !== "fleet";
+
+      // Absorb the FIRST Back out of a built/in-progress build: keep it visible
+      // and re-push the current entry so the company is never lost and the page
+      // never blanks or hard-exits. A second consecutive Back is allowed through.
+      if (leavingBuild && !backLeaveArmedRef.current) {
+        backLeaveArmedRef.current = true;
+        setError(null);
+        try {
+          window.history.pushState({ trialView: current }, "", urlForView(current));
+        } catch {
+          /* history unavailable */
+        }
+        return;
+      }
+
+      backLeaveArmedRef.current = false;
+      setOpenAgent(null);
+      setError(null);
+      setView(target);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // Warn before leaving ONLY while a build is actually in flight. Removed the
+  // moment the work is idle/complete so it never nags after delivery.
+  useEffect(() => {
+    const buildInFlight =
+      view === "designing" ||
+      (view === "fleet" &&
+        agents.some((a) => a.runStatus === "working" || a.runStatus === "queued"));
+    if (!buildInFlight) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [view, agents]);
+
   // Resume a prior session on refresh (best-effort): restore the built company,
   // each agent's status + its deliverable, and resume any unfinished runs.
   useEffect(() => {
@@ -819,7 +953,9 @@ export function TrialLandingPage() {
           };
         });
         setAgents(restored);
-        setView("fleet");
+        // Push a history entry so the first Back press has somewhere to land and
+        // the restored team is never lost on a single Back. popView absorbs it.
+        pushView("fleet");
 
         // Resume any agents that never produced a deliverable, if credit remains.
         const pending = restored.filter((a) => a.runStatus !== "done").map((a) => a.id);
@@ -838,7 +974,7 @@ export function TrialLandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [runFleet]);
+  }, [runFleet, pushView]);
 
   useEffect(
     () => () => {
@@ -852,15 +988,18 @@ export function TrialLandingPage() {
     e.preventDefault();
     if (whatYouDo.trim().length === 0) return;
     setError(null);
-    setView("intake");
+    pushView("intake");
   }
 
   // INTAKE -> DESIGNING -> FLEET
   async function handleBuild(e: React.FormEvent) {
     e.preventDefault();
     if (goal.trim().length === 0) return;
+    // Guard against a double-submit racing two designs onto one session.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError(null);
-    setView("designing");
+    pushView("designing");
 
     try {
       let activeToken = token;
@@ -896,7 +1035,8 @@ export function TrialLandingPage() {
       }));
       setAgents(fleet);
       setMidBuildExhausted(false);
-      setView("fleet");
+      // designing -> fleet share the "building" history step, so replace in place.
+      replaceView("fleet");
 
       // Let the tiles "assemble" (staggered reveal) before they go to work.
       const ids = fleet.map((a) => a.id);
@@ -907,7 +1047,9 @@ export function TrialLandingPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 402) {
-          setView("exhausted");
+          // build itself ran out of credit, no company yet — stays in the
+          // "building" step so Back behaves consistently.
+          replaceView("exhausted");
           return;
         }
         if (err.status === 410) {
@@ -926,12 +1068,17 @@ export function TrialLandingPage() {
       } else {
         setError("something went wrong — give it another go.");
       }
-      setView("intake");
+      // Return to the intake form (in place) so the visitor can retry; their
+      // typed answers are preserved and the inline error explains what happened.
+      replaceView("intake");
+    } finally {
+      submittingRef.current = false;
     }
   }
 
   function handleStartOver() {
-    writeStoredToken(null);
+    clearTrialStorage();
+    backLeaveArmedRef.current = false;
     setToken(null);
     setCompany(null);
     setAgents([]);
@@ -941,7 +1088,7 @@ export function TrialLandingPage() {
     setGoal("");
     setBlocker("");
     setError(null);
-    setView("land");
+    replaceView("land");
   }
 
   async function handleShare() {
@@ -1050,7 +1197,7 @@ export function TrialLandingPage() {
                           setGoal(t.intake.goal);
                           setBlocker(t.intake.blocker);
                           setError(null);
-                          setView("intake");
+                          pushView("intake");
                         }}
                         className="group flex items-start gap-3 rounded-xl border border-border bg-card p-3 text-left transition-colors hover:border-[var(--accent-500)]"
                       >
@@ -1084,7 +1231,7 @@ export function TrialLandingPage() {
             <div className="flex flex-col gap-6 py-4">
               <button
                 type="button"
-                onClick={() => setView("land")}
+                onClick={() => window.history.back()}
                 className="inline-flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ArrowLeft className="size-4" />
