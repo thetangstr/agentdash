@@ -118,10 +118,11 @@ function Reveal({
     }
 
     let revealed = false;
+    let showTimer = 0;
     const reveal = () => {
       if (revealed) return;
       revealed = true;
-      window.setTimeout(() => setShown(true), delay);
+      showTimer = window.setTimeout(() => setShown(true), delay);
     };
 
     // Reveal immediately if the element is already within (or near) the viewport
@@ -157,6 +158,7 @@ function Reveal({
     return () => {
       io?.disconnect();
       window.clearTimeout(fallback);
+      window.clearTimeout(showTimer);
     };
   }, [reduced, delay]);
 
