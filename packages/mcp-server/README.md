@@ -14,6 +14,31 @@ The server reads its configuration from environment variables:
 - `PAPERCLIP_COMPANY_ID` - optional default company for company-scoped tools
 - `PAPERCLIP_AGENT_ID` - optional default agent for checkout helpers
 - `PAPERCLIP_RUN_ID` - optional run id forwarded on mutating requests
+- `PAPERCLIP_PROVISION_KEY` - optional high-privilege key required only by
+  `agentdashOnboardUser` (creates new users). Sent as `x-provision-key`; must
+  match the server's `AGENTDASH_PROVISION_KEY`. Omit it and onboarding is simply
+  unavailable from this client.
+
+## How users & agents find this server
+
+This is a published npm package (STDIO transport). There is no auto-discovery —
+add it to your MCP client config (Claude Code, Cursor, etc.) pointed at your
+AgentDash instance:
+
+```jsonc
+{
+  "command": "npx",
+  "args": ["-y", "@paperclipai/mcp-server"],
+  "env": {
+    "PAPERCLIP_API_URL": "https://your-agentdash.example",
+    "PAPERCLIP_API_KEY": "<board api key>",
+    "PAPERCLIP_PROVISION_KEY": "<only for agentdashOnboardUser>"
+  }
+}
+```
+
+The server runs locally as a subprocess and talks to your instance's REST API.
+"Finding it" = the package name + your instance URL + a key.
 
 ## Usage
 
@@ -93,6 +118,12 @@ to stay distinct from the inherited `paperclip*` tools.
   back with `agentdashReadConversation`.
 - `agentdashReadConversation` — read recent messages in a conversation.
 - `agentdashHireAgent` — hire an agent (e.g. one the Chief of Staff proposes).
+- `agentdashOnboardUser` — **create a NEW user** + their company + a Chief of
+  Staff in one call, and email them a set-password link. Requires
+  `PAPERCLIP_PROVISION_KEY` (high-privilege; gated by `x-provision-key`). The
+  new user then hires specialists via `agentdashCosChat`. Use this to onboard
+  customers programmatically; the other `agentdash*` tools act for the
+  already-authenticated actor.
 
 A typical zero-to-working-workspace flow: `agentdashBootstrapWorkspace` →
 `agentdashCosChat` (answer the CoS interview) → `agentdashReadConversation`

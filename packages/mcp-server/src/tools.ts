@@ -697,5 +697,32 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
           { body },
         ),
     ),
+    // ---- AgentDash: programmatic user onboarding ----
+    // Creates a new user + company + Chief-of-Staff in one call, then emails
+    // the user a set-password link. Requires PAPERCLIP_PROVISION_KEY to be
+    // set in the MCP server environment (matches AGENTDASH_PROVISION_KEY on
+    // the server). High-privilege — never expose this key to end users.
+    makeTool(
+      "agentdashOnboardUser",
+      "AgentDash: provision a new user account, company workspace, and Chief-of-Staff agent in one call. Emails the user a set-password link. Requires PAPERCLIP_PROVISION_KEY to be configured. Returns userId, companyId, and cosAgentId.",
+      z.object({
+        email: z.string().email("email must be a valid email address"),
+        name: z.string().min(1, "name is required"),
+        companyName: z.string().min(1, "companyName is required"),
+      }),
+      async ({ email, name, companyName }) => {
+        const provisionKey = client.defaults.provisionKey;
+        if (!provisionKey) {
+          throw new Error(
+            "PAPERCLIP_PROVISION_KEY is not set in the MCP server environment. " +
+            "Set it to the same value as AGENTDASH_PROVISION_KEY on the AgentDash server.",
+          );
+        }
+        return client.requestJson("POST", "/onboarding/provision-user", {
+          body: { email, name, companyName },
+          extraHeaders: { "x-provision-key": provisionKey },
+        });
+      },
+    ),
   ];
 }
