@@ -944,6 +944,7 @@ export function InvestorsPage() {
             <Wordmark />
             <nav className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
               <a href="/trial" className="transition-colors hover:text-foreground">Test drive</a>
+              <a href="/pricing" className="transition-colors hover:text-foreground">Pricing</a>
               <a href="/" className="transition-colors hover:text-foreground">Home</a>
               <a href="/about" className="transition-colors hover:text-foreground">About</a>
               <a href="/auth" className="transition-colors hover:text-foreground">Sign in</a>

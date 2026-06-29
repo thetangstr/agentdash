@@ -1224,6 +1224,13 @@ export function TrialLandingPage() {
                 </Link>
                 <span className="px-2 text-border">·</span>
                 <a
+                  href="/pricing"
+                  className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
+                >
+                  pricing
+                </a>
+                <span className="px-2 text-border">·</span>
+                <a
                   href="/investors"
                   className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
                 >
