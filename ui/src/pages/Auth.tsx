@@ -302,6 +302,17 @@ export function AuthPage() {
               {mode === "sign_in" ? "Create one" : "Sign in"}
             </button>
           </div>
+
+          {/* AgentDash: discreet legal links */}
+          <div className="mt-6 text-xs text-text-secondary">
+            <a href="/terms" className="underline underline-offset-2 hover:text-accent-500 transition-colors">
+              Terms
+            </a>
+            <span className="px-2">·</span>
+            <a href="/privacy" className="underline underline-offset-2 hover:text-accent-500 transition-colors">
+              Privacy
+            </a>
+          </div>
         </div>
       </div>
 

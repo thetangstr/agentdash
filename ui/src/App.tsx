@@ -64,6 +64,8 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { TrialLandingPage } from "./pages/TrialLanding";
 import { InvestorsPage } from "./pages/InvestorsPage";
 import { PricingPage } from "./pages/PricingPage";
+import { TermsPage } from "./pages/TermsPage";
+import { PrivacyPage } from "./pages/PrivacyPage";
 import { SharedArtifactPage } from "./pages/SharedArtifact";
 import { TrialClaimPage } from "./pages/TrialClaim";
 import { JoinRequestQueue } from "./pages/JoinRequestQueue";
@@ -310,6 +312,11 @@ export function App() {
             as /trial and /investors, no auth, no company context, owns its own
             h-screen overflow-y-auto scroll region. */}
         <Route path="pricing" element={<PricingPage />} />
+        {/* AgentDash: PUBLIC legal pages (Terms / Privacy) — same public tier as
+            /trial, /pricing, and /investors, no auth, no company context, each
+            owns its own h-screen overflow-y-auto scroll region. */}
+        <Route path="terms" element={<TermsPage />} />
+        <Route path="privacy" element={<PrivacyPage />} />
         {/* AgentDash (Test Drive, Slice 3): PUBLIC read-only shared artifact —
             same tier as /trial, no auth, no company context. */}
         <Route path="share/:shareToken" element={<SharedArtifactPage />} />
