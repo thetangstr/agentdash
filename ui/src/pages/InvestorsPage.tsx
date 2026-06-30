@@ -9,31 +9,9 @@
 // hairline borders, generous radii, near-zero shadows, scroll-reveal motion that
 // no-ops under prefers-reduced-motion. Mirrors Overview.tsx / TrialLanding.tsx.
 //
-// ⚠️ PLACEHOLDERS YOU MUST FILL IN BEFORE SENDING ⚠️
-// Every data point below that could be fabricated is rendered as an OBVIOUS
-// dashed "PLACEHOLDER" card, never as an invented number. Find them by searching
-// this file for `data-placeholder=` or the <PlaceholderCard> component. The full
-// list (also surfaced visually on the page):
-//
-//   TRACTION  (data-placeholder="traction-*")
-//     • traction-signups   — signups / active users / waitlist
-//     • traction-usage     — usage (agents run, tasks completed, deliverables)
-//     • traction-revenue   — revenue / MRR / ARR / trial conversions
-//     • traction-pipeline  — pipeline / design partners / LOIs
-//     • traction-proof     — (optional) customer logo strip or operator quote
-//   TEAM  (data-placeholder="team-*")
-//     • team-member-1 / team-member-2 / team-member-3 — name, role, one-line bio
-//     • team-advisors      — (optional) advisors / backers
-//   THE ASK  (data-placeholder="ask-*")
-//     • ask-stage          — round stage (pre-seed / seed / …)
-//     • ask-amount         — amount you're raising
-//     • ask-use            — use of funds
-//   CONTACT  (data-placeholder="contact-*")
-//     • contact-email      — outreach email
-//     • contact-deck       — (optional) deck / data-room link
-//
-// Everything NOT in a PlaceholderCard (vision, problem, product, market, moat)
-// is defensible narrative drawn from the product + launch/loop strategy docs.
+// All content is real, founder-provided, and intentionally honest for an
+// early-stage company: a live product, a public test drive, and a clear path to
+// first customers — no invented numbers, logos, or metrics.
 
 import {
   useEffect,
@@ -304,61 +282,17 @@ function PointCard({
   );
 }
 
-// The OBVIOUS, consistently-styled empty slot the user must replace before
-// sending the page out. Dashed clay border + a loud "PLACEHOLDER" tag so it can
-// never be mistaken for real, shipped content.
-function PlaceholderCard({
-  slot,
-  label,
-  hint,
-  minHeight = 120,
-}: {
-  slot: string;
-  label: string;
-  hint: string;
-  minHeight?: number;
-}) {
+// A real, defensible "stat/claim" card with a title + body — same Porcelain
+// styling as PointCard, without the icon chrome. Used for traction and the ask.
+function StatCard({ title, body }: { title: string; body: ReactNode }) {
   return (
-    <div
-      data-placeholder={slot}
-      className="rounded-2xl h-full"
-      style={{
-        border: `2px dashed color-mix(in oklab, ${CLAY} 55%, transparent)`,
-        background: `color-mix(in oklab, ${CLAY} 6%, var(--card))`,
-        padding: 20,
-        minHeight,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      <span
-        style={{
-          alignSelf: "flex-start",
-          fontSize: 9.5,
-          fontWeight: 800,
-          textTransform: "uppercase",
-          letterSpacing: "0.12em",
-          color: "#fff",
-          background: CLAY,
-          borderRadius: 999,
-          padding: "3px 8px",
-        }}
-      >
-        placeholder · fill in
-      </span>
-      <div className="text-foreground" style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>
-        {label}
+    <div className="bg-card border border-border rounded-2xl h-full" style={{ padding: 20 }}>
+      <div className="text-foreground" style={{ fontSize: 15.5, fontWeight: 700 }}>
+        {title}
       </div>
-      <p className="text-muted-foreground" style={{ fontSize: 13, lineHeight: 1.5 }}>
-        {hint}
+      <p className="text-muted-foreground" style={{ fontSize: 13.5, lineHeight: 1.5, marginTop: 7 }}>
+        {body}
       </p>
-      <code
-        className="text-muted-foreground"
-        style={{ fontSize: 11, marginTop: "auto", opacity: 0.8, fontFamily: "var(--font-mono)" }}
-      >
-        {slot}
-      </code>
     </div>
   );
 }
@@ -752,120 +686,117 @@ export function InvestorsPage() {
         </Reveal>
       </SectionShell>
 
-      {/* ====================================================== TRACTION (placeholders) */}
+      {/* ====================================================== TRACTION */}
       <SectionShell
         id="traction"
         reduced={reduced}
         eyebrow="Traction"
         title={<>Where we are today.</>}
-        lede="These cards are intentionally empty. Drop in your real numbers before sending — never invented ones."
+        lede="Early and honest — a live product, a public trial, and a clear path to first customers. No vanity metrics."
       >
-        <div className="mt-12 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-12 grid grid-cols-1 gap-3 md:grid-cols-3">
           <Reveal reduced={reduced} delay={0}>
-            <PlaceholderCard
-              slot="traction-signups"
-              label="Signups / active users"
-              hint="e.g. total signups, weekly actives, or waitlist size with a growth rate."
+            <StatCard
+              title="Live in production"
+              body="The full flow ships today — describe your company, an AI Chief of Staff staffs a tailored team, and the agents produce real deliverables."
             />
           </Reveal>
-          <Reveal reduced={reduced} delay={60}>
-            <PlaceholderCard
-              slot="traction-usage"
-              label="Usage"
-              hint="e.g. agents run, tasks completed, or deliverables produced per week."
+          <Reveal reduced={reduced} delay={70}>
+            <StatCard
+              title="Public Test Drive"
+              body="Anyone can watch a company assemble itself in about 60 seconds — no signup, no card."
             />
           </Reveal>
-          <Reveal reduced={reduced} delay={120}>
-            <PlaceholderCard
-              slot="traction-revenue"
-              label="Revenue"
-              hint="e.g. MRR / ARR, paying accounts, or Free→Pro trial conversions."
-            />
-          </Reveal>
-          <Reveal reduced={reduced} delay={180}>
-            <PlaceholderCard
-              slot="traction-pipeline"
-              label="Pipeline"
-              hint="e.g. design partners, LOIs, or qualified opportunities in flight."
+          <Reveal reduced={reduced} delay={140}>
+            <StatCard
+              title="Stage: early"
+              body="Pre-revenue and pre-launch. Building toward the first design partners (initial wedge: managed service providers)."
             />
           </Reveal>
         </div>
-        <Reveal reduced={reduced} delay={120}>
-          <div style={{ marginTop: 14 }}>
-            <PlaceholderCard
-              slot="traction-proof"
-              label="Proof (optional)"
-              hint="A customer logo strip, a design-partner quote, or a milestone timeline. Leave out entirely if you don't have it yet — do not fabricate."
-              minHeight={96}
-            />
-          </div>
-        </Reveal>
       </SectionShell>
 
-      {/* ====================================================== TEAM (placeholders) */}
+      {/* ====================================================== TEAM */}
       <SectionShell
         id="team"
         reduced={reduced}
         tinted
         eyebrow="Team"
         title={<>Who's building it.</>}
-        lede="Add each founder / team member below — name, role, and a one-line bio. Replace before sending."
+        lede="AgentDash is founder-led today — solo, full-stack, and shipping in public."
       >
-        <div className="mt-12 grid grid-cols-1 gap-3 md:grid-cols-3">
-          {["team-member-1", "team-member-2", "team-member-3"].map((slot, i) => (
-            <Reveal key={slot} reduced={reduced} delay={i * 70}>
-              <PlaceholderCard
-                slot={slot}
-                label={`Team member ${i + 1}`}
-                hint="Name · role · one line on the relevant experience that makes them the right person for this."
-                minHeight={150}
-              />
-            </Reveal>
-          ))}
-        </div>
-        <Reveal reduced={reduced} delay={120}>
-          <div style={{ marginTop: 14 }}>
-            <PlaceholderCard
-              slot="team-advisors"
-              label="Advisors / backers (optional)"
-              hint="Notable advisors, angels, or existing investors — only if real and you have permission to list them."
-              minHeight={96}
-            />
+        <Reveal reduced={reduced}>
+          <div
+            className="bg-card border border-border rounded-2xl"
+            style={{ marginTop: 48, padding: 24, maxWidth: 560 }}
+          >
+            <div className="flex items-center gap-4">
+              <span
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 16,
+                  background: CLAY,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 18,
+                  fontWeight: 800,
+                  letterSpacing: "-0.02em",
+                  flex: "none",
+                }}
+              >
+                ET
+              </span>
+              <div>
+                <div className="text-foreground" style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em" }}>
+                  Edward Yang Tang
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: CLAY, marginTop: 2 }}>Founder</div>
+              </div>
+            </div>
+            <p className="text-muted-foreground" style={{ fontSize: 14, lineHeight: 1.55, marginTop: 16 }}>
+              Ex-Google and management consulting. He also founded Yarda (yarda.ai), where
+              AI agents qualify leads, generate build-ready designs, and close deals for
+              residential landscaping — built on Google Gemini. AgentDash generalizes that
+              bet beyond one vertical: autonomous agent teams that do real work for any
+              company. Shipping in public.
+            </p>
           </div>
+        </Reveal>
+        <Reveal reduced={reduced} delay={80}>
+          <p className="text-muted-foreground" style={{ fontSize: 13.5, lineHeight: 1.6, marginTop: 16 }}>
+            Assembling a founding team — get in touch.
+          </p>
         </Reveal>
       </SectionShell>
 
-      {/* ====================================================== THE ASK (placeholders) */}
+      {/* ====================================================== THE ASK */}
       <SectionShell
         id="ask"
         reduced={reduced}
         eyebrow="The ask"
         title={<>What we're raising — and why now.</>}
-        lede="Fill in the round details. These drive investor conversations, so they must be your real numbers."
+        lede="Early-stage and building in the open — here's where this is going."
       >
         <div className="mt-12 grid grid-cols-1 gap-3 md:grid-cols-3">
           <Reveal reduced={reduced} delay={0}>
-            <PlaceholderCard
-              slot="ask-stage"
-              label="Stage"
-              hint="e.g. pre-seed / seed / bridge — and current status (raising / first close)."
-              minHeight={140}
+            <StatCard
+              title="Stage"
+              body="Pre-seed. Early — building toward the first design partners."
             />
           </Reveal>
           <Reveal reduced={reduced} delay={70}>
-            <PlaceholderCard
-              slot="ask-amount"
-              label="Amount"
-              hint="Target raise (and instrument — SAFE / priced), plus any committed."
-              minHeight={140}
+            <StatCard
+              title="Raise"
+              body="In conversation. Open to pre-seed conversations with operator-investors who understand AI labor."
             />
           </Reveal>
           <Reveal reduced={reduced} delay={140}>
-            <PlaceholderCard
-              slot="ask-use"
-              label="Use of funds"
-              hint="How the capital converts to milestones — e.g. runtime, GTM hires, design partners."
-              minHeight={140}
+            <StatCard
+              title="Use of funds"
+              body="Managed runtime + LLM inference for design-partner pilots, and the first go-to-market motion."
             />
           </Reveal>
         </div>
@@ -920,19 +851,28 @@ export function InvestorsPage() {
                   </a>
                 </div>
 
-                <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <PlaceholderCard
-                    slot="contact-email"
-                    label="Contact email"
-                    hint="Where investors and the program should reach you. Replace with a real address."
-                    minHeight={96}
-                  />
-                  <PlaceholderCard
-                    slot="contact-deck"
-                    label="Deck / data room (optional)"
-                    hint="Link to your pitch deck or data room, if you want it on this page."
-                    minHeight={96}
-                  />
+                <div className="mt-8 grid grid-cols-1 gap-3 sm:max-w-sm">
+                  <div className="bg-card border border-border rounded-2xl" style={{ padding: 20 }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.14em",
+                        color: "var(--muted-foreground)",
+                      }}
+                    >
+                      Contact
+                    </div>
+                    <a
+                      href="mailto:edward@agentdash.cloud"
+                      className="inline-flex items-center gap-2 font-semibold transition-opacity hover:opacity-80"
+                      style={{ fontSize: 16, color: CLAY, marginTop: 8 }}
+                    >
+                      edward@agentdash.cloud
+                      <ArrowRight className="size-4" />
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>
