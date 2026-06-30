@@ -889,6 +889,8 @@ export function InvestorsPage() {
               <a href="/pricing" className="transition-colors hover:text-foreground">Pricing</a>
               <a href="/" className="transition-colors hover:text-foreground">Home</a>
               <a href="/about" className="transition-colors hover:text-foreground">About</a>
+              <a href="/terms" className="transition-colors hover:text-foreground">Terms</a>
+              <a href="/privacy" className="transition-colors hover:text-foreground">Privacy</a>
               <a href="/auth" className="transition-colors hover:text-foreground">Sign in</a>
             </nav>
           </div>

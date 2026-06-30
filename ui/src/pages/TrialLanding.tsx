@@ -1236,6 +1236,20 @@ export function TrialLandingPage() {
                 >
                   for investors
                 </a>
+                <span className="px-2 text-border">·</span>
+                <a
+                  href="/terms"
+                  className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
+                >
+                  terms
+                </a>
+                <span className="px-2 text-border">·</span>
+                <a
+                  href="/privacy"
+                  className="text-foreground underline underline-offset-2 hover:text-[var(--accent-500)]"
+                >
+                  privacy
+                </a>
               </p>
             </div>
           ) : null}
