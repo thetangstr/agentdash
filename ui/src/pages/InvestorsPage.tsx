@@ -757,9 +757,11 @@ export function InvestorsPage() {
               </div>
             </div>
             <p className="text-muted-foreground" style={{ fontSize: 14, lineHeight: 1.55, marginTop: 16 }}>
-              Building the autonomous-company platform he wanted as an operator — an AI
-              Chief of Staff that designs, staffs, and runs a real team. Solo founder
-              across product, engineering, and go-to-market, shipping in public.
+              Ex-Google and management consulting. He also founded Yarda (yarda.ai), where
+              AI agents qualify leads, generate build-ready designs, and close deals for
+              residential landscaping — built on Google Gemini. AgentDash generalizes that
+              bet beyond one vertical: autonomous agent teams that do real work for any
+              company. Shipping in public.
             </p>
           </div>
         </Reveal>
