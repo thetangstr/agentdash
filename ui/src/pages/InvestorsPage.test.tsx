@@ -55,33 +55,25 @@ describe("InvestorsPage", () => {
     expect(container.querySelector('a[href="/auth"]')).not.toBeNull();
   });
 
-  it("renders every placeholder slot the user must fill in (no fabricated data)", () => {
+  it("renders real founder-provided content, with no placeholder slots left", () => {
     render();
-    const expectedSlots = [
-      "traction-signups",
-      "traction-usage",
-      "traction-revenue",
-      "traction-pipeline",
-      "traction-proof",
-      "team-member-1",
-      "team-member-2",
-      "team-member-3",
-      "team-advisors",
-      "ask-stage",
-      "ask-amount",
-      "ask-use",
-      "contact-email",
-      "contact-deck",
-    ];
-    for (const slot of expectedSlots) {
-      expect(
-        container.querySelector(`[data-placeholder="${slot}"]`),
-        `missing placeholder slot: ${slot}`,
-      ).not.toBeNull();
-    }
-    // every placeholder is loudly labelled so it can't ship as real content
-    const placeholders = container.querySelectorAll("[data-placeholder]");
-    expect(placeholders.length).toBe(expectedSlots.length);
+    // the founder card
+    expect(container.textContent).toContain("Edward Yang Tang");
+    expect(container.textContent).toContain("Founder");
+    expect(container.textContent).toContain("Assembling a founding team");
+    // real traction cards (no fabricated metrics)
+    expect(container.textContent).toContain("Live in production");
+    expect(container.textContent).toContain("Public Test Drive");
+    expect(container.textContent).toContain("Stage: early");
+    // the ask
+    expect(container.textContent).toContain("Use of funds");
+    // a real, clickable contact email
+    const mailto = container.querySelector('a[href="mailto:edward@agentdash.cloud"]');
+    expect(mailto).not.toBeNull();
+    expect(mailto?.textContent).toContain("edward@agentdash.cloud");
+    // nothing placeholder-shaped survives
+    expect(container.querySelectorAll("[data-placeholder]").length).toBe(0);
+    expect(container.textContent ?? "").not.toMatch(/placeholder/i);
   });
 
   it("includes the Google for Startups framing and a contact anchor", () => {
