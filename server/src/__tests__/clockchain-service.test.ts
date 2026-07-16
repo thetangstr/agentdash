@@ -85,3 +85,57 @@ describe("identity wrappers", () => {
     expect(res).toEqual({ minted: false });
   });
 });
+
+describe("KYA + attest wrappers", () => {
+  it("degrades gracefully when the flag is off", async () => {
+    delete process.env.AGENTDASH_ATTESTATION_ENABLED;
+    const svc = clockchainService();
+    const verdict = await svc.verifyIdentityAt({ did: "did:x", at: "2026-07-16T00:00:00Z" });
+    expect(verdict).toEqual({ status: "unavailable" });
+    const attested = await svc.attestAction({ agentDid: "did:a", action: "x" });
+    expect(attested).toEqual({ attested: false });
+  });
+
+  it("reports valid when the gateway confirms identity validity at the timestamp", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ valid: true }) }] } }),
+      { status: 200 },
+    ) as any);
+    const verdict = await clockchainService().verifyIdentityAt({ did: "did:x", at: "2026-07-16T00:00:00Z" });
+    expect(verdict).toEqual({ status: "valid" });
+  });
+
+  it("reports invalid when the gateway says the identity is not valid", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ valid: false }) }] } }),
+      { status: 200 },
+    ) as any);
+    const verdict = await clockchainService().verifyIdentityAt({ did: "did:x", at: "2026-07-16T00:00:00Z" });
+    expect(verdict).toEqual({ status: "invalid" });
+  });
+
+  it("attests and maps ledgerId/blockHeight/status from an attest_action result", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_a", blockHeight: 9, status: "anchored" }) }] } }),
+      { status: 200 },
+    ) as any);
+    const res = await clockchainService().attestAction({ agentDid: "did:a", action: "x" });
+    expect(res).toEqual({ attested: true, ledgerId: "led_a", blockHeight: 9, status: "anchored" });
+  });
+
+  it("degrades to unavailable/attested:false when the gateway errors", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network"));
+    const verdict = await clockchainService().verifyIdentityAt({ did: "did:x", at: "2026-07-16T00:00:00Z" });
+    expect(verdict).toEqual({ status: "unavailable" });
+    const attested = await clockchainService().attestAction({ agentDid: "did:a", action: "x" });
+    expect(attested).toEqual({ attested: false });
+  });
+});

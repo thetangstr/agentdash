@@ -98,5 +98,25 @@ export function clockchainService() {
     } catch { return { found: false }; }
   }
 
-  return { delegateAuthority, verifyDelegationAt, mintIdentity, resolveAgent };
+  async function verifyIdentityAt(input: { did: string; at: string }): Promise<{ status: "valid" | "invalid" | "unavailable" }> {
+    if (!clockchainEnabled()) return { status: "unavailable" };
+    try {
+      const r = await callTool("verify_identity_at", { did: input.did, at: input.at });
+      const valid = r.valid ?? r.authorized ?? (r.status === "valid");
+      return { status: valid ? "valid" : "invalid" };
+    } catch { return { status: "unavailable" }; }
+  }
+
+  async function attestAction(input: { agentDid: string; action: string; inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }): Promise<{ attested: boolean; ledgerId?: string; blockHeight?: number; status?: "anchored" | "pending" | "degraded" }> {
+    if (!clockchainEnabled()) return { attested: false };
+    try {
+      const r = await callTool("attest_action", { agentId: input.agentDid, action: input.action, inputs: input.inputs ?? {}, outputs: input.outputs ?? {} });
+      const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
+      if (!ledgerId && !r.eventHash) return { attested: false };
+      const status = (r.status ?? r.anchor?.status) as ("anchored" | "pending" | "degraded" | undefined);
+      return { attested: true, ledgerId, blockHeight: r.blockHeight ?? r.anchor?.blockHeight, status: status ?? (ledgerId ? "anchored" : "pending") };
+    } catch { return { attested: false }; }
+  }
+
+  return { delegateAuthority, verifyDelegationAt, mintIdentity, resolveAgent, verifyIdentityAt, attestAction };
 }
