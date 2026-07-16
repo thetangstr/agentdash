@@ -20,17 +20,21 @@ function fakeDb(insertedRow: any, selectRows: any[] = [insertedRow]) {
 
 const baseInput = {
   companyId: "co1", grantorAgentId: "a1", granteeAgentId: "a2",
-  grantorDid: "did:atlas", granteeDid: "did:vega",
   scope: { actions: ["attest"] }, permissionKey: "clockchain:attest",
   spendCapCents: 5000, expiresAt: new Date("2030-01-01T00:00:00Z"),
 };
+
+function fakeIdentity() {
+  return { resolveAgentDid: vi.fn(async (id: string) => (id === "a1" ? "did:atlas" : "did:vega")) };
+}
 
 describe("mandatesService.createMandate", () => {
   it("anchors and writes back cc fields when the clock anchors", async () => {
     const row = { id: "m1", ...baseInput, status: "active", ccLedgerId: null };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(async () => ({ anchored: true, ledgerId: "led_9", blockHeight: 7, scheme: "salted-v1" })), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const out = await svc.createMandate(baseInput);
     expect(clock.delegateAuthority).toHaveBeenCalledWith({ parentDid: "did:atlas", childDid: "did:vega", scope: { actions: ["attest"] }, until: "2030-01-01T00:00:00.000Z" });
     expect(db.update).toHaveBeenCalled(); // wrote back cc fields
@@ -43,7 +47,8 @@ describe("mandatesService.createMandate", () => {
     const row = { id: "m2", ...baseInput, status: "active", ccLedgerId: null };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(async () => ({ anchored: false })), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const out = await svc.createMandate(baseInput);
     expect(out.id).toBe("m2");
     expect(db.update).not.toHaveBeenCalled(); // nothing to write back
@@ -53,53 +58,75 @@ describe("mandatesService.createMandate", () => {
     const row = { id: "m2b", ...baseInput, status: "active", ccLedgerId: null };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(async () => { throw new Error("boom"); }), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const out = await svc.createMandate(baseInput);
     expect(out.id).toBe("m2b");
     expect(db.update).not.toHaveBeenCalled(); // nothing to write back on a throw
+  });
+
+  it("returns the row without anchoring when a DID fails to resolve — grant still created", async () => {
+    const row = { id: "m2c", ...baseInput, status: "active", ccLedgerId: null };
+    const db = fakeDb(row);
+    const clock = { delegateAuthority: vi.fn(async () => ({ anchored: true, ledgerId: "led_9" })), verifyDelegationAt: vi.fn() };
+    const identity = { resolveAgentDid: vi.fn(async (id: string) => (id === "a1" ? "did:atlas" : undefined)) };
+    const svc = mandatesService(db as any, clock as any, identity as any);
+    const out = await svc.createMandate(baseInput);
+    expect(out.id).toBe("m2c");
+    expect(clock.delegateAuthority).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
   });
 });
 
 describe("mandatesService.verifyMandate", () => {
   it("returns unauthorized 'expired' for a past expiry without calling the chain", async () => {
-    const row = { id: "m3", ...baseInput, expiresAt: new Date("2020-01-01T00:00:00Z"), status: "active", grantorDid: "did:atlas", granteeDid: "did:vega", ccLedgerId: "led_9", ccBlockHeight: 7 };
+    const row = { id: "m3", ...baseInput, expiresAt: new Date("2020-01-01T00:00:00Z"), status: "active", ccLedgerId: "led_9", ccBlockHeight: 7 };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const v = await svc.verifyMandate("m3", new Date("2026-07-15T00:00:00Z"));
     expect(v.status).toBe("unauthorized");
     expect(v.reason).toBe("expired");
     expect(clock.verifyDelegationAt).not.toHaveBeenCalled();
+    expect(identity.resolveAgentDid).not.toHaveBeenCalled();
   });
 
   it("returns unauthorized 'revoked' for a revoked mandate without calling the chain", async () => {
-    const row = { id: "m5", ...baseInput, status: "revoked", grantorDid: "did:atlas", granteeDid: "did:vega", ccLedgerId: "led_9", ccBlockHeight: 7 };
+    const row = { id: "m5", ...baseInput, status: "revoked", ccLedgerId: "led_9", ccBlockHeight: 7 };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const v = await svc.verifyMandate("m5", new Date("2026-07-15T00:00:00Z"));
     expect(v.status).toBe("unauthorized");
     expect(v.reason).toBe("revoked");
     expect(clock.verifyDelegationAt).not.toHaveBeenCalled();
+    expect(identity.resolveAgentDid).not.toHaveBeenCalled();
   });
 
   it("returns unauthorized 'not_found' for a missing mandate without calling the chain", async () => {
     const db = fakeDb(null, []); // select resolves to []
     const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn() };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const v = await svc.verifyMandate("missing", new Date("2026-07-15T00:00:00Z"));
     expect(v.status).toBe("unauthorized");
     expect(v.reason).toBe("not_found");
     expect(clock.verifyDelegationAt).not.toHaveBeenCalled();
+    expect(identity.resolveAgentDid).not.toHaveBeenCalled();
   });
 
   it("delegates to the chain for an active, unexpired mandate", async () => {
-    const row = { id: "m4", ...baseInput, status: "active", grantorDid: "did:atlas", granteeDid: "did:vega", ccLedgerId: "led_9", ccBlockHeight: 7 };
+    const row = { id: "m4", ...baseInput, status: "active", ccLedgerId: "led_9", ccBlockHeight: 7 };
     const db = fakeDb(row);
     const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn(async () => ({ status: "authorized", ledgerId: "led_9" })) };
-    const svc = mandatesService(db as any, clock as any);
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
     const v = await svc.verifyMandate("m4", new Date("2026-07-15T00:00:00Z"));
     expect(v.status).toBe("authorized");
     expect(clock.verifyDelegationAt).toHaveBeenCalled();
+    expect(identity.resolveAgentDid).toHaveBeenCalledWith("a1");
+    expect(identity.resolveAgentDid).toHaveBeenCalledWith("a2");
   });
 });
