@@ -115,3 +115,5 @@ export {
   verdictApprovalBridge,
   type VerdictApprovalBridgeService,
 } from "./verdict-approval-bridge.js";
+
+export { mandatedActionService } from "./mandated-action.js";

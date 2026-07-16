@@ -803,6 +803,8 @@ export {
   type RequestApprovalRevision,
   type ResubmitApproval,
   type AddApprovalComment,
+  performMandatedActionSchema,
+  type PerformMandatedActionRequest,
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,
