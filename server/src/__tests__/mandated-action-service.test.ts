@@ -4,11 +4,20 @@ import { mandatedActionService } from "../services/mandated-action.ts";
 const baseInput = { granteeAgentId: "a2", mandateId: "m1", counterpartyDid: "did:billie", action: "verify_invoice", payload: { amount: 100 } };
 const NOW = new Date("2026-07-16T00:00:00Z");
 
-function svc(over: { mandates?: any; clock?: any; identity?: any } = {}) {
+function svc(over: { mandates?: any; clock?: any; identity?: any; approvals?: any; agents?: any } = {}) {
   const mandates = over.mandates ?? { verifyMandate: vi.fn(async () => ({ status: "authorized" })) };
   const clock = over.clock ?? { verifyIdentityAt: vi.fn(async () => ({ status: "valid" })), attestAction: vi.fn(async () => ({ attested: true, ledgerId: "led_x", blockHeight: 5, status: "anchored" })) };
   const identity = over.identity ?? { resolveAgentDid: vi.fn(async () => "did:vega") };
-  return { s: mandatedActionService({} as any, clock, identity, mandates), mandates, clock, identity };
+  const approvals = over.approvals ?? { create: vi.fn(async () => ({ id: "ap1" })) };
+  const agents = over.agents ?? { pause: vi.fn(async () => {}) };
+  return {
+    s: mandatedActionService({} as any, clock, identity, mandates, approvals, agents),
+    mandates,
+    clock,
+    identity,
+    approvals,
+    agents,
+  };
 }
 
 describe("performMandatedAction", () => {
@@ -67,5 +76,33 @@ describe("performMandatedAction", () => {
     const r = await s.performMandatedAction(baseInput, NOW);
     expect(r).toEqual({ authorized: false, reason: "actor_unresolved" });
     expect(clock.attestAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("enforceMandatedAction", () => {
+  const enforceInput = { ...baseInput, companyId: "co1" };
+
+  it("escalates a qualifying denial: creates a mandate_violation approval + pauses the grantee", async () => {
+    const { s, approvals, agents } = svc({ mandates: { verifyMandate: vi.fn(async () => ({ status: "unauthorized", reason: "expired" })) } });
+    const r = await s.enforceMandatedAction(enforceInput, NOW);
+    expect(r).toMatchObject({ authorized: false, reason: "expired", escalated: true, approvalId: "ap1" });
+    expect(approvals.create).toHaveBeenCalledWith("co1", expect.objectContaining({ type: "mandate_violation", requestedByAgentId: "a2" }));
+    expect(agents.pause).toHaveBeenCalledWith("a2", "mandate");
+  });
+
+  it("does NOT escalate a non-widening denial (counterparty_invalid)", async () => {
+    const { s, approvals, agents } = svc({ clock: { verifyIdentityAt: vi.fn(async () => ({ status: "invalid" })), attestAction: vi.fn() } });
+    const r = await s.enforceMandatedAction(enforceInput, NOW);
+    expect(r).toMatchObject({ authorized: false, reason: "counterparty_invalid", escalated: false });
+    expect(approvals.create).not.toHaveBeenCalled();
+    expect(agents.pause).not.toHaveBeenCalled();
+  });
+
+  it("does NOT escalate an authorized action", async () => {
+    const { s, approvals, agents } = svc();
+    const r = await s.enforceMandatedAction(enforceInput, NOW);
+    expect(r).toMatchObject({ authorized: true, escalated: false });
+    expect(approvals.create).not.toHaveBeenCalled();
+    expect(agents.pause).not.toHaveBeenCalled();
   });
 });

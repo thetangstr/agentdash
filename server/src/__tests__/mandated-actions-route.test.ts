@@ -74,7 +74,7 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
       });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ authorized: false, reason: "not_found" });
+    expect(res.body).toMatchObject({ authorized: false, reason: "not_found" });
   });
 
   it("returns 400 when mandateId is missing (validate())", async () => {
@@ -139,6 +139,6 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
       });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ authorized: false, reason: "not_grantee" });
+    expect(res.body).toMatchObject({ authorized: false, reason: "not_grantee" });
   });
 });

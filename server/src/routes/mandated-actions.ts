@@ -18,7 +18,8 @@ export function mandatedActionRoutes(db: Db) {
       res.status(400).json({ error: "granteeAgentId is required when the caller is not an agent" });
       return;
     }
-    const result = await svc.performMandatedAction({
+    const result = await svc.enforceMandatedAction({
+      companyId,
       granteeAgentId,
       mandateId: req.body.mandateId,
       counterpartyDid: req.body.counterpartyDid,

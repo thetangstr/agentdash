@@ -2,8 +2,11 @@ import type { Db } from "@paperclipai/db";
 import { clockchainService } from "./clockchain.js";
 import { agentIdentityService } from "./agent-identity.js";
 import { mandatesService } from "./mandates.js";
+import { approvalService } from "./approvals.js";
+import { agentService } from "./agents.js";
 
 export type MandatedActionInput = {
+  companyId: string;
   granteeAgentId: string;
   mandateId: string;
   counterpartyDid: string;
@@ -16,11 +19,15 @@ export type MandatedActionResult = {
   receipt?: { ledgerId?: string; blockHeight?: number; status: "anchored" | "pending"; flagged?: boolean };
 };
 
+const BOUNCE_BACK_REASONS = new Set(["expired", "over_cap", "out_of_scope"]);
+
 export function mandatedActionService(
   db: Db,
   clock = clockchainService(),
   identity = agentIdentityService(db, clock),
   mandates = mandatesService(db, clock, identity),
+  approvals = approvalService(db),
+  agents = agentService(db),
 ) {
   async function performMandatedAction(input: MandatedActionInput, now: Date = new Date()): Promise<MandatedActionResult> {
     // 1. Mandate — fail-closed.
@@ -50,5 +57,28 @@ export function mandatedActionService(
     // Degraded-but-anchored keeps its ledgerId (honest); missing anchor has none.
     return { authorized: true, receipt: { ledgerId: att.ledgerId, blockHeight: att.blockHeight, status: "pending", flagged: true } };
   }
-  return { performMandatedAction };
+
+  async function enforceMandatedAction(
+    input: MandatedActionInput,
+    now: Date = new Date(),
+  ): Promise<MandatedActionResult & { escalated: boolean; approvalId?: string }> {
+    const result = await performMandatedAction(input, now);
+    if (!result.authorized && result.reason && BOUNCE_BACK_REASONS.has(result.reason)) {
+      const approval = await approvals.create(input.companyId, {
+        type: "mandate_violation",
+        requestedByAgentId: input.granteeAgentId,
+        payload: {
+          mandateId: input.mandateId,
+          action: input.action,
+          counterpartyDid: input.counterpartyDid,
+          reason: result.reason,
+        },
+      });
+      await agents.pause(input.granteeAgentId, "mandate");
+      return { ...result, escalated: true, approvalId: (approval as { id: string }).id };
+    }
+    return { ...result, escalated: false };
+  }
+
+  return { performMandatedAction, enforceMandatedAction };
 }
