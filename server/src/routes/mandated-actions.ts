@@ -13,7 +13,7 @@ export function mandatedActionRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
-    const granteeAgentId = (req.body.granteeAgentId as string | undefined) ?? actor.agentId ?? undefined;
+    const granteeAgentId = actor.agentId ?? (req.body.granteeAgentId as string | undefined);
     if (!granteeAgentId) {
       res.status(400).json({ error: "granteeAgentId is required when the caller is not an agent" });
       return;

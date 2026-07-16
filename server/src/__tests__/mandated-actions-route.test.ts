@@ -7,6 +7,7 @@ import {
   companies,
   createDb,
   getEmbeddedPostgresTestSupport,
+  mandates,
   startEmbeddedPostgresTestDatabase,
 } from "@paperclipai/db";
 import { errorHandler } from "../middleware/index.js";
@@ -25,6 +26,7 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
   }, 30_000);
 
   afterEach(async () => {
+    await db.delete(mandates);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -103,5 +105,40 @@ describeEmbeddedPostgres("POST /companies/:companyId/mandated-actions (integrati
       });
 
     expect(res.status).toBe(403);
+  });
+
+  it("ignores a body-supplied granteeAgentId for an agent actor and rejects the actor as a non-grantee", async () => {
+    const { companyId, agentId: agentAId } = await seedCompanyAndAgent();
+    const [agentB] = await db
+      .insert(agents)
+      .values({ companyId, name: "Other Agent" })
+      .returning();
+
+    const [mandate] = await db
+      .insert(mandates)
+      .values({
+        companyId,
+        grantorAgentId: agentAId,
+        granteeAgentId: agentAId,
+        scope: {},
+        permissionKey: "clockchain:attest",
+        spendCapCents: 1000,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      })
+      .returning();
+
+    const app = appFor({ type: "agent", agentId: agentB.id, companyId });
+
+    const res = await request(app)
+      .post(`/companies/${companyId}/mandated-actions`)
+      .send({
+        mandateId: mandate.id,
+        counterpartyDid: "did:x",
+        action: "verify",
+        granteeAgentId: agentAId,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ authorized: false, reason: "not_grantee" });
   });
 });
