@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { mandates } from "@paperclipai/db";
 import { clockchainService, type DelegationVerdict } from "./clockchain.js";
@@ -84,5 +84,12 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
     });
   }
 
-  return { createMandate, verifyMandate };
+  async function listMandates(companyId: string, granteeAgentId?: string): Promise<MandateRow[]> {
+    const where = granteeAgentId
+      ? and(eq(mandates.companyId, companyId), eq(mandates.granteeAgentId, granteeAgentId))
+      : eq(mandates.companyId, companyId);
+    return db.select().from(mandates).where(where).orderBy(desc(mandates.createdAt));
+  }
+
+  return { createMandate, verifyMandate, listMandates };
 }

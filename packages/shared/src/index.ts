@@ -805,6 +805,8 @@ export {
   type AddApprovalComment,
   performMandatedActionSchema,
   type PerformMandatedActionRequest,
+  createMandateSchema,
+  type CreateMandateRequest,
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,
