@@ -617,6 +617,13 @@
       "when": 1779494400000,
       "tag": "0087_mandates",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1779580800000,
+      "tag": "0088_agent_clockchain_did",
+      "breakpoints": true
     }
   ]
 }
