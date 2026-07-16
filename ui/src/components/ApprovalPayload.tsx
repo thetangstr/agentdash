@@ -6,6 +6,7 @@ export const typeLabel: Record<string, string> = {
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
   request_board_approval: "Board Approval",
+  mandate_violation: "Mandate escalation",
 };
 
 function firstNonEmptyString(...values: unknown[]): string | null {
@@ -41,6 +42,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   approve_ceo_strategy: Lightbulb,
   budget_override_required: ShieldAlert,
   request_board_approval: ShieldCheck,
+  mandate_violation: ShieldAlert,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -148,6 +150,49 @@ export function BudgetOverridePayload({ payload }: { payload: Record<string, unk
   );
 }
 
+const mandateViolationReasonLabels: Record<string, string> = {
+  expired: "The mandate had expired.",
+  over_cap: "The action would exceed the mandate's spend cap.",
+  out_of_scope: "The action was outside the mandate's scope.",
+};
+
+export function MandateViolationPayload({
+  payload,
+}: {
+  payload: Record<string, unknown>;
+  hidePrimaryTitle?: boolean;
+}) {
+  const action = firstNonEmptyString(payload.action);
+  const reason = firstNonEmptyString(payload.reason);
+  const counterpartyDid = firstNonEmptyString(payload.counterpartyDid);
+  const mandateId = firstNonEmptyString(payload.mandateId);
+  const reasonText = reason ? (mandateViolationReasonLabels[reason] ?? reason) : null;
+
+  return (
+    <div className="mt-3 space-y-1.5 text-sm">
+      <PayloadField label="Action" value={action} />
+      {reasonText && (
+        <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {reasonText}
+        </div>
+      )}
+      {!!counterpartyDid && (
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Counterparty</span>
+          <span className="font-mono text-xs text-tertiary">{counterpartyDid}</span>
+        </div>
+      )}
+      {!!mandateId && (
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground w-20 sm:w-24 shrink-0 text-xs">Mandate</span>
+          <span className="font-mono text-xs text-tertiary">{mandateId}</span>
+        </div>
+      )}
+      <p className="text-secondary">Approve to resume the agent.</p>
+    </div>
+  );
+}
+
 export function BoardApprovalPayload({
   payload,
   hideTitle = false,
@@ -240,6 +285,9 @@ export function ApprovalPayloadRenderer({
 }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
+  if (type === "mandate_violation") {
+    return <MandateViolationPayload payload={payload} hidePrimaryTitle={hidePrimaryTitle} />;
+  }
   if (type === "request_board_approval") {
     return <BoardApprovalPayload payload={payload} hideTitle={hidePrimaryTitle} />;
   }
