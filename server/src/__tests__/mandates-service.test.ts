@@ -123,10 +123,22 @@ describe("mandatesService.verifyMandate", () => {
     const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn(async () => ({ status: "authorized", ledgerId: "led_9" })) };
     const identity = fakeIdentity();
     const svc = mandatesService(db as any, clock as any, identity as any);
-    const v = await svc.verifyMandate("m4", new Date("2026-07-15T00:00:00Z"));
+    const v = await svc.verifyMandate("m4", new Date("2026-07-15T00:00:00Z"), "a2");
     expect(v.status).toBe("authorized");
     expect(clock.verifyDelegationAt).toHaveBeenCalled();
     expect(identity.resolveAgentDid).toHaveBeenCalledWith("a1");
     expect(identity.resolveAgentDid).toHaveBeenCalledWith("a2");
+  });
+
+  it("returns unauthorized 'not_grantee' when the caller doesn't match the mandate's grantee, without calling the chain", async () => {
+    const row = { id: "m6", ...baseInput, granteeAgentId: "a2", status: "active", ccLedgerId: "led_9", ccBlockHeight: 7 };
+    const db = fakeDb(row);
+    const clock = { delegateAuthority: vi.fn(), verifyDelegationAt: vi.fn() };
+    const identity = fakeIdentity();
+    const svc = mandatesService(db as any, clock as any, identity as any);
+    const v = await svc.verifyMandate("m6", new Date("2026-07-15T00:00:00Z"), "someone-else");
+    expect(v).toEqual({ status: "unauthorized", reason: "not_grantee" });
+    expect(clock.verifyDelegationAt).not.toHaveBeenCalled();
+    expect(identity.resolveAgentDid).not.toHaveBeenCalled();
   });
 });

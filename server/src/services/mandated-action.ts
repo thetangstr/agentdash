@@ -24,7 +24,7 @@ export function mandatedActionService(
 ) {
   async function performMandatedAction(input: MandatedActionInput, now: Date = new Date()): Promise<MandatedActionResult> {
     // 1. Mandate — fail-closed.
-    const verdict = await mandates.verifyMandate(input.mandateId, now);
+    const verdict = await mandates.verifyMandate(input.mandateId, now, input.granteeAgentId);
     if (verdict.status !== "authorized") {
       return { authorized: false, reason: verdict.reason ?? verdict.status };
     }

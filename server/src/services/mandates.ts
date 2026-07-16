@@ -61,12 +61,15 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
     return row;
   }
 
-  async function verifyMandate(id: string, at: Date): Promise<DelegationVerdict> {
+  async function verifyMandate(id: string, at: Date, expectedGranteeAgentId?: string): Promise<DelegationVerdict> {
     const [row] = await db.select().from(mandates).where(eq(mandates.id, id));
     if (!row) return { status: "unauthorized", reason: "not_found" };
     // Cheap local pre-checks before spending a chain call.
     if (row.status === "revoked") return { status: "unauthorized", reason: "revoked" };
     if (row.expiresAt.getTime() <= at.getTime()) return { status: "unauthorized", reason: "expired" };
+    if (expectedGranteeAgentId && row.granteeAgentId !== expectedGranteeAgentId) {
+      return { status: "unauthorized", reason: "not_grantee" };
+    }
     // DIDs are resolved from agent ids via the identity service (agent-identity.ts).
     const parentDid = (await identity.resolveAgentDid(row.grantorAgentId)) ?? "";
     const childDid = (await identity.resolveAgentDid(row.granteeAgentId)) ?? "";
