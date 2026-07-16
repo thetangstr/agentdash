@@ -4,6 +4,7 @@
 
 const MCP_URL = () => process.env.CLOCKCHAIN_MCP_URL || "https://mcp.clockchain.network/mcp";
 const MCP_KEY = () => process.env.CLOCKCHAIN_MCP_KEY || "";
+const TIMEOUT_MS = () => Number(process.env.CLOCKCHAIN_MCP_TIMEOUT_MS ?? 10000);
 
 export function clockchainEnabled(): boolean {
   return process.env.AGENTDASH_ATTESTATION_ENABLED === "true" && MCP_KEY().length > 0;
@@ -18,16 +19,25 @@ export type DelegationVerdict = { status: "authorized" | "unauthorized" | "unava
 // clockchain-research/src/lib/mcp-client.ts). Returns the parsed tool result
 // object, or throws — callers wrap so nothing propagates to a critical path.
 async function callTool(name: string, args: Record<string, unknown>): Promise<any> {
-  const res = await fetch(MCP_URL(), {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "x-api-key": MCP_KEY() },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-  });
-  const raw = await res.text();
-  const json = parseRpc(raw);
-  const text = json?.result?.content?.[0]?.text;
-  if (typeof text === "string") { try { return JSON.parse(text); } catch { return { text }; } }
-  return json?.result ?? {};
+  // Timeout/abort so a hanging gateway can never stall a caller. On abort,
+  // fetch rejects -> the caller's try/catch returns the safe degraded value.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS());
+  try {
+    const res = await fetch(MCP_URL(), {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "x-api-key": MCP_KEY() },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+      signal: controller.signal,
+    });
+    const raw = await res.text();
+    const json = parseRpc(raw);
+    const text = json?.result?.content?.[0]?.text;
+    if (typeof text === "string") { try { return JSON.parse(text); } catch { return { text }; } }
+    return json?.result ?? {};
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseRpc(raw: string): any {

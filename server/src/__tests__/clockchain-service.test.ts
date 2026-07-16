@@ -38,4 +38,20 @@ describe("clockchainService — flag on (mocked fetch)", () => {
     const v = await clockchainService().verifyDelegationAt({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z", at: "2026-07-15T00:00:00Z" });
     expect(v.status).toBe("unavailable");
   });
+
+  it("parses an SSE-framed (text/event-stream) delegate_authority result", async () => {
+    const payload = { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_sse", blockHeight: 42, scheme: "salted-v1" }) }] } };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      `data: ${JSON.stringify(payload)}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    ) as any);
+    const res = await clockchainService().delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: { x: 1 }, until: "2030-01-01T00:00:00Z" });
+    expect(res).toEqual({ anchored: true, ledgerId: "led_sse", blockHeight: 42, scheme: "salted-v1" });
+  });
+
+  it("degrades to unavailable when fetch aborts (timeout)", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("aborted", "AbortError"));
+    const v = await clockchainService().verifyDelegationAt({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z", at: "2026-07-15T00:00:00Z" });
+    expect(v.status).toBe("unavailable");
+  });
 });
