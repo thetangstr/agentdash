@@ -41,13 +41,17 @@ export function mandatesService(db: Db, clock = clockchainService()) {
       until: input.expiresAt.toISOString(),
     }).catch(() => ({ anchored: false as const }));
     if (anchor.anchored && anchor.ledgerId) {
-      await db.update(mandates).set({
+      // Build the cc* fields once, use for both the DB write-back and the return
+      // so the caller sees the live anchor (not the stale pre-insert null) — the
+      // honesty surface: a "not anchored" render despite a real anchor would lie.
+      const cc = {
         ccLedgerId: anchor.ledgerId,
         ccBlockHeight: anchor.blockHeight ?? null,
         ccScheme: anchor.scheme ?? null,
         ccAnchoredAt: new Date(),
-        updatedAt: new Date(),
-      }).where(eq(mandates.id, row.id));
+      };
+      await db.update(mandates).set({ ...cc, updatedAt: new Date() }).where(eq(mandates.id, row.id));
+      return { ...row, ...cc };
     }
     return row;
   }

@@ -35,6 +35,8 @@ describe("mandatesService.createMandate", () => {
     expect(clock.delegateAuthority).toHaveBeenCalledWith({ parentDid: "did:atlas", childDid: "did:vega", scope: { actions: ["attest"] }, until: "2030-01-01T00:00:00.000Z" });
     expect(db.update).toHaveBeenCalled(); // wrote back cc fields
     expect(out.id).toBe("m1");
+    expect(out.ccLedgerId).toBe("led_9"); // returned value carries the live anchor
+    expect(out.ccBlockHeight).toBe(7);
   });
 
   it("still creates the row (cc null) when anchoring is unavailable — never throws", async () => {
