@@ -55,3 +55,33 @@ describe("clockchainService — flag on (mocked fetch)", () => {
     expect(v.status).toBe("unavailable");
   });
 });
+
+describe("identity wrappers", () => {
+  it("degrades gracefully when the flag is off", async () => {
+    delete process.env.AGENTDASH_ATTESTATION_ENABLED;
+    const svc = clockchainService();
+    const minted = await svc.mintIdentity({ agentId: "a" });
+    expect(minted).toEqual({ minted: false });
+    const resolved = await svc.resolveAgent("did:x");
+    expect(resolved).toEqual({ found: false });
+  });
+
+  it("mints and maps did/ledgerId from a mint_identity result", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ did: "did:cc:vega", ledgerId: "led_1" }) }] } }),
+      { status: 200 },
+    ) as any);
+    const res = await clockchainService().mintIdentity({ agentId: "a" });
+    expect(res).toEqual({ minted: true, did: "did:cc:vega", ledgerId: "led_1" });
+  });
+
+  it("degrades to minted:false when the gateway errors", async () => {
+    process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+    process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network"));
+    const res = await clockchainService().mintIdentity({ agentId: "a" });
+    expect(res).toEqual({ minted: false });
+  });
+});

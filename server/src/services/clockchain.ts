@@ -79,5 +79,24 @@ export function clockchainService() {
     } catch { return { status: "unavailable" }; }
   }
 
-  return { delegateAuthority, verifyDelegationAt };
+  async function mintIdentity(input: { agentId: string; name?: string; metadata?: Record<string, unknown> }): Promise<{ minted: boolean; did?: string; ledgerId?: string }> {
+    if (!clockchainEnabled()) return { minted: false };
+    try {
+      const r = await callTool("mint_identity", { agentId: input.agentId, name: input.name, metadata: input.metadata });
+      const did = r.did ?? r.identity?.did ?? r.agentDid;
+      if (!did) return { minted: false };
+      return { minted: true, did, ledgerId: r.ledgerId ?? r.anchor?.ledgerId };
+    } catch { return { minted: false }; }
+  }
+
+  async function resolveAgent(did: string): Promise<{ found: boolean; did?: string }> {
+    if (!clockchainEnabled()) return { found: false };
+    try {
+      const r = await callTool("resolve_agent", { did });
+      const resolved = r.did ?? r.identity?.did;
+      return resolved ? { found: true, did: resolved } : { found: false };
+    } catch { return { found: false }; }
+  }
+
+  return { delegateAuthority, verifyDelegationAt, mintIdentity, resolveAgent };
 }
