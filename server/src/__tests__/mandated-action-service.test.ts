@@ -5,7 +5,7 @@ const baseInput = { granteeAgentId: "a2", mandateId: "m1", counterpartyDid: "did
 const NOW = new Date("2026-07-16T00:00:00Z");
 
 function svc(over: { mandates?: any; clock?: any; identity?: any; approvals?: any; agents?: any } = {}) {
-  const mandates = over.mandates ?? { verifyMandate: vi.fn(async () => ({ status: "authorized" })) };
+  const mandates = over.mandates ?? { verifyMandate: vi.fn(async () => ({ status: "authorized", scope: ["verify_invoice"], spendCapCents: 5000 })) };
   const clock = over.clock ?? { verifyIdentityAt: vi.fn(async () => ({ status: "valid" })), attestAction: vi.fn(async () => ({ attested: true, ledgerId: "led_x", blockHeight: 5, status: "anchored" })) };
   const identity = over.identity ?? { resolveAgentDid: vi.fn(async () => "did:vega") };
   const approvals = over.approvals ?? { create: vi.fn(async () => ({ id: "ap1" })) };
@@ -75,6 +75,20 @@ describe("performMandatedAction", () => {
     const { s, clock } = svc({ identity: { resolveAgentDid: vi.fn(async () => undefined) } });
     const r = await s.performMandatedAction(baseInput, NOW);
     expect(r).toEqual({ authorized: false, reason: "actor_unresolved" });
+    expect(clock.attestAction).not.toHaveBeenCalled();
+  });
+
+  it("denies out_of_scope when the action is not in the mandate's scope; no attest", async () => {
+    const { s, clock } = svc({ mandates: { verifyMandate: vi.fn(async () => ({ status: "authorized", scope: ["other_action"], spendCapCents: 5000 })) } });
+    const r = await s.performMandatedAction(baseInput, NOW);
+    expect(r).toEqual({ authorized: false, reason: "out_of_scope" });
+    expect(clock.attestAction).not.toHaveBeenCalled();
+  });
+
+  it("denies over_cap when the payload amountCents exceeds the mandate's spend cap; no attest", async () => {
+    const { s, clock } = svc({ mandates: { verifyMandate: vi.fn(async () => ({ status: "authorized", scope: ["verify_invoice"], spendCapCents: 100 })) } });
+    const r = await s.performMandatedAction({ ...baseInput, payload: { amountCents: 999999 } }, NOW);
+    expect(r).toEqual({ authorized: false, reason: "over_cap" });
     expect(clock.attestAction).not.toHaveBeenCalled();
   });
 });

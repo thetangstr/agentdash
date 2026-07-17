@@ -10,11 +10,11 @@ describe("clockchainService — flag gating", () => {
     delete process.env.AGENTDASH_ATTESTATION_ENABLED;
     expect(clockchainEnabled()).toBe(false);
     const svc = clockchainService();
-    const res = await svc.delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z" });
+    const res = await svc.delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: [], until: "2030-01-01T00:00:00Z" });
     expect(res.anchored).toBe(false);
     expect(res.ledgerId).toBeUndefined();
-    const verdict = await svc.verifyDelegationAt({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z", at: "2026-07-15T00:00:00Z" });
-    expect(verdict.status).toBe("unavailable");
+    const entry = await svc.getLogEntry("led_x");
+    expect(entry).toEqual({ found: false, anchored: false });
   });
 });
 
@@ -26,33 +26,33 @@ describe("clockchainService — flag on (mocked fetch)", () => {
 
   it("anchors and maps ledgerId/blockHeight from a delegate_authority result", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_123", blockHeight: 314159, scheme: "salted-v1" }) }] } }),
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_123", blockHeight: 314159 }) }] } }),
       { status: 200 },
     ) as any);
-    const res = await clockchainService().delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: { x: 1 }, until: "2030-01-01T00:00:00Z" });
-    expect(res).toEqual({ anchored: true, ledgerId: "led_123", blockHeight: 314159, scheme: "salted-v1" });
+    const res = await clockchainService().delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: ["x"], until: "2030-01-01T00:00:00Z" });
+    expect(res).toEqual({ anchored: true, ledgerId: "led_123", blockHeight: 314159 });
   });
 
-  it("degrades to unavailable when the gateway errors", async () => {
+  it("degrades to not-found when the gateway errors", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network"));
-    const v = await clockchainService().verifyDelegationAt({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z", at: "2026-07-15T00:00:00Z" });
-    expect(v.status).toBe("unavailable");
+    const v = await clockchainService().getLogEntry("led_err");
+    expect(v).toEqual({ found: false, anchored: false });
   });
 
   it("parses an SSE-framed (text/event-stream) delegate_authority result", async () => {
-    const payload = { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_sse", blockHeight: 42, scheme: "salted-v1" }) }] } };
+    const payload = { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_sse", blockHeight: 42 }) }] } };
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
       `data: ${JSON.stringify(payload)}\n\n`,
       { status: 200, headers: { "content-type": "text/event-stream" } },
     ) as any);
-    const res = await clockchainService().delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: { x: 1 }, until: "2030-01-01T00:00:00Z" });
-    expect(res).toEqual({ anchored: true, ledgerId: "led_sse", blockHeight: 42, scheme: "salted-v1" });
+    const res = await clockchainService().delegateAuthority({ parentDid: "did:a", childDid: "did:b", scope: ["x"], until: "2030-01-01T00:00:00Z" });
+    expect(res).toEqual({ anchored: true, ledgerId: "led_sse", blockHeight: 42 });
   });
 
-  it("degrades to unavailable when fetch aborts (timeout)", async () => {
+  it("degrades to not-found when fetch aborts (timeout)", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("aborted", "AbortError"));
-    const v = await clockchainService().verifyDelegationAt({ parentDid: "did:a", childDid: "did:b", scope: {}, until: "2030-01-01T00:00:00Z", at: "2026-07-15T00:00:00Z" });
-    expect(v.status).toBe("unavailable");
+    const v = await clockchainService().getLogEntry("led_abort");
+    expect(v).toEqual({ found: false, anchored: false });
   });
 });
 
