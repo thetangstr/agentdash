@@ -31,6 +31,7 @@ import { goalRoutes } from "./routes/goals.js";
 import { approvalRoutes } from "./routes/approvals.js";
 import { mandatedActionRoutes } from "./routes/mandated-actions.js";
 import { mandateRoutes } from "./routes/mandates.js";
+import { mandateAttestationRoutes } from "./routes/mandate-attestations.js";
 import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
@@ -253,6 +254,7 @@ export async function createApp(
   api.use(approvalRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(mandatedActionRoutes(db));
   api.use(mandateRoutes(db));
+  api.use(mandateAttestationRoutes(db));
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
