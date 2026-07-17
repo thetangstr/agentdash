@@ -5,6 +5,11 @@
 const MCP_URL = () => process.env.CLOCKCHAIN_MCP_URL || "https://mcp.clockchain.network/mcp";
 const MCP_KEY = () => process.env.CLOCKCHAIN_MCP_KEY || "";
 const TIMEOUT_MS = () => Number(process.env.CLOCKCHAIN_MCP_TIMEOUT_MS ?? 10000);
+// Proceed with writes while the validator pool is degraded (testnet/demo policy).
+// Off by default — mainnet leaves this false so degraded writes are refused,
+// never silently reported as anchored.
+const ALLOW_DEGRADED = () => process.env.CLOCKCHAIN_ALLOW_DEGRADED === "true";
+const degradedWrite = (): Record<string, unknown> => (ALLOW_DEGRADED() ? { allow_degraded: true } : {});
 
 export function clockchainEnabled(): boolean {
   return process.env.AGENTDASH_ATTESTATION_ENABLED === "true" && MCP_KEY().length > 0;
@@ -54,7 +59,7 @@ export function clockchainService() {
     if (!clockchainEnabled()) return { anchored: false };
     try {
       const r = await callTool("delegate_authority", {
-        parent: input.parentDid, child: input.childDid, scope: input.scope, until: input.until,
+        parent: input.parentDid, child: input.childDid, scope: input.scope, until: input.until, ...degradedWrite(),
       });
       const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
       if (!ledgerId) return { anchored: false };
@@ -82,7 +87,7 @@ export function clockchainService() {
   async function mintIdentity(input: { agentId: string; name?: string; metadata?: Record<string, unknown> }): Promise<{ minted: boolean; did?: string; ledgerId?: string }> {
     if (!clockchainEnabled()) return { minted: false };
     try {
-      const r = await callTool("mint_identity", { agentId: input.agentId, name: input.name, metadata: input.metadata });
+      const r = await callTool("mint_identity", { agentId: input.agentId, name: input.name, metadata: input.metadata, ...degradedWrite() });
       const did = r.did ?? r.identity?.did ?? r.agentDid;
       if (!did) return { minted: false };
       return { minted: true, did, ledgerId: r.ledgerId ?? r.anchor?.ledgerId };
@@ -110,7 +115,7 @@ export function clockchainService() {
   async function attestAction(input: { agentDid: string; action: string; inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }): Promise<{ attested: boolean; ledgerId?: string; blockHeight?: number; status?: "anchored" | "pending" | "degraded" }> {
     if (!clockchainEnabled()) return { attested: false };
     try {
-      const r = await callTool("attest_action", { agentId: input.agentDid, action: input.action, inputs: input.inputs ?? {}, outputs: input.outputs ?? {} });
+      const r = await callTool("attest_action", { agentId: input.agentDid, action: input.action, inputs: input.inputs ?? {}, outputs: input.outputs ?? {}, ...degradedWrite() });
       const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
       if (!ledgerId && !r.eventHash) return { attested: false };
       const status = (r.status ?? r.anchor?.status) as ("anchored" | "pending" | "degraded" | undefined);

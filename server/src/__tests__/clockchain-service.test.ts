@@ -129,6 +129,24 @@ describe("KYA + attest wrappers", () => {
     expect(res).toEqual({ attested: true, ledgerId: "led_a", blockHeight: 9, status: "anchored" });
   });
 
+  it("sends allow_degraded on writes only when CLOCKCHAIN_ALLOW_DEGRADED=true", async () => {
+    const argsOf = async (allow: string) => {
+      process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
+      process.env.CLOCKCHAIN_MCP_KEY = "test-key";
+      process.env.CLOCKCHAIN_ALLOW_DEGRADED = allow;
+      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ledgerId: "led_a", blockHeight: 1, status: "anchored" }) }] } }),
+        { status: 200 },
+      ) as any);
+      await clockchainService().attestAction({ agentDid: "did:a", action: "x" });
+      const body = JSON.parse((spy.mock.calls[0][1] as any).body);
+      return body.params.arguments;
+    };
+    expect((await argsOf("true")).allow_degraded).toBe(true);
+    expect((await argsOf("false")).allow_degraded).toBeUndefined();
+  });
+
+
   it("degrades to unavailable/attested:false when the gateway errors", async () => {
     process.env.AGENTDASH_ATTESTATION_ENABLED = "true";
     process.env.CLOCKCHAIN_MCP_KEY = "test-key";
