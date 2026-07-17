@@ -35,6 +35,17 @@ export function mandatedActionService(
     if (verdict.status !== "authorized") {
       return { authorized: false, reason: verdict.reason ?? verdict.status };
     }
+    // 1b. Scope + cap — the gateway has no verify_delegation_at, so the gate enforces
+    // the mandate's action scope and spend cap locally. (No accumulation yet for the
+    // demo: a single action whose amount exceeds the cap is over_cap.)
+    const scope = verdict.scope ?? [];
+    if (!scope.includes(input.action)) {
+      return { authorized: false, reason: "out_of_scope" };
+    }
+    const amountCents = typeof input.payload?.amountCents === "number" ? input.payload.amountCents : 0;
+    if (amountCents > (verdict.spendCapCents ?? 0)) {
+      return { authorized: false, reason: "over_cap" };
+    }
     // 2. KYA the counterparty — fail-closed on anything but valid.
     const kya = await clock.verifyIdentityAt({ did: input.counterpartyDid, at: now.toISOString() });
     if (kya.status !== "valid") {

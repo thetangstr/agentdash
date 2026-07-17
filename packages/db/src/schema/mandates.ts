@@ -10,7 +10,7 @@ export const mandates = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     grantorAgentId: uuid("grantor_agent_id").notNull().references(() => agents.id),
     granteeAgentId: uuid("grantee_agent_id").notNull().references(() => agents.id),
-    scope: jsonb("scope").$type<Record<string, unknown>>().notNull(),
+    scope: jsonb("scope").$type<string[]>().notNull(),
     permissionKey: text("permission_key").notNull(),
     spendCapCents: integer("spend_cap_cents").notNull().default(0),
     budgetPolicyId: uuid("budget_policy_id").references(() => budgetPolicies.id),

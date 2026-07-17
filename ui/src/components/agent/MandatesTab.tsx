@@ -61,7 +61,7 @@ export function MandatesTab({
     eligibleGrantors.find((a) => a.role === "ceo")?.id ?? eligibleGrantors[0]?.id ?? "";
 
   const [grantorAgentId, setGrantorAgentId] = useState(defaultGrantorId);
-  const [description, setDescription] = useState("");
+  const [actions, setActions] = useState("");
   const [dollars, setDollars] = useState("");
   const [expiry, setExpiry] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -81,18 +81,18 @@ export function MandatesTab({
   });
 
   const createMutation = useMutation({
-    mutationFn: (vars: { spendCapCents: number; expiresAt: string }) =>
+    mutationFn: (vars: { scope: string[]; spendCapCents: number; expiresAt: string }) =>
       mandatesApi.create(companyId, {
         grantorAgentId,
         granteeAgentId: agentId,
-        scope: { description },
+        scope: vars.scope,
         permissionKey: PERMISSION_KEY,
         spendCapCents: vars.spendCapCents,
         expiresAt: vars.expiresAt,
       }),
     onSuccess: () => {
       setFormError(null);
-      setDescription("");
+      setActions("");
       setDollars("");
       setExpiry("");
       queryClient.invalidateQueries({ queryKey: queryKeys.mandates.list(companyId, agentId) });
@@ -109,8 +109,9 @@ export function MandatesTab({
       setFormError("Choose a grantor.");
       return;
     }
-    if (!description.trim()) {
-      setFormError("Enter a scope description.");
+    const scope = actions.split(",").map((s) => s.trim()).filter(Boolean);
+    if (scope.length === 0) {
+      setFormError("Add at least one allowed action.");
       return;
     }
     const spendCapCents = parseDollarsToCents(dollars);
@@ -125,7 +126,7 @@ export function MandatesTab({
     }
 
     setFormError(null);
-    createMutation.mutate({ spendCapCents, expiresAt });
+    createMutation.mutate({ scope, spendCapCents, expiresAt });
   }
 
   return (
@@ -169,12 +170,12 @@ export function MandatesTab({
               </div>
 
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="mandate-description">Scope description</Label>
+                <Label htmlFor="mandate-actions">Allowed actions (comma-separated)</Label>
                 <Input
-                  id="mandate-description"
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder="e.g. Attest invoice reconciliation actions"
+                  id="mandate-actions"
+                  value={actions}
+                  onChange={(event) => setActions(event.target.value)}
+                  placeholder="e.g. release_payment, attest_invoice"
                 />
               </div>
 
@@ -238,9 +239,9 @@ export function MandatesTab({
                 </div>
               </div>
               <p className="text-sm text-muted-foreground">
-                {typeof mandate.scope.description === "string" && mandate.scope.description.length > 0
-                  ? mandate.scope.description
-                  : "No scope description"}
+                {Array.isArray(mandate.scope) && mandate.scope.length > 0
+                  ? mandate.scope.join(", ")
+                  : "No actions in scope"}
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>Cap {formatCents(mandate.spendCapCents)}</span>

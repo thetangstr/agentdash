@@ -1,6 +1,7 @@
 // First real Clockchain MCP client in AgentDash. Server-side only.
 // Flag-gated; NEVER on an agent run's critical path (spec §B, §B2).
 // NOTE: authorization is AgentDash-enforced, not Clockchain-enforced.
+// Field mappings verified live against mcp.clockchain.network tools/list (2026-07-17).
 
 const MCP_URL = () => process.env.CLOCKCHAIN_MCP_URL || "https://mcp.clockchain.network/mcp";
 const MCP_KEY = () => process.env.CLOCKCHAIN_MCP_KEY || "";
@@ -15,10 +16,17 @@ export function clockchainEnabled(): boolean {
   return process.env.AGENTDASH_ATTESTATION_ENABLED === "true" && MCP_KEY().length > 0;
 }
 
-export type DelegateAuthorityInput = { parentDid: string; childDid: string; scope: Record<string, unknown>; until: string };
-export type DelegateAuthorityResult = { anchored: boolean; ledgerId?: string; blockHeight?: number; scheme?: string };
-export type VerifyDelegationInput = DelegateAuthorityInput & { at: string; ledgerId?: string; blockHeight?: number };
-export type DelegationVerdict = { status: "authorized" | "unauthorized" | "unavailable"; reason?: string; grantedAt?: string; expiresAt?: string; revokedAt?: string; ledgerId?: string };
+export type DelegateAuthorityInput = { parentDid: string; childDid: string; scope: string[]; until: string };
+export type DelegateAuthorityResult = { anchored: boolean; ledgerId?: string; blockHeight?: number };
+export type DelegationVerdict = { status: "authorized" | "unauthorized" | "unavailable"; reason?: string; ledgerId?: string; scope?: string[]; spendCapCents?: number };
+
+export type AttestResult = {
+  attested: boolean;
+  ledgerId?: string;
+  blockHeight?: number;
+  eventHash?: string;
+  status?: "anchored" | "pending" | "degraded";
+};
 
 // Minimal StreamableHTTP JSON-RPC tools/call, SSE-frame tolerant (mirrors
 // clockchain-research/src/lib/mcp-client.ts). Returns the parsed tool result
@@ -37,7 +45,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<an
     });
     const raw = await res.text();
     const json = parseRpc(raw);
+    // Gateway signals tool errors as HTTP 200 + { isError: true } content — surface as a thrown
+    // so callers' catch returns the safe degraded value (never a silent false-positive).
     const text = json?.result?.content?.[0]?.text;
+    if (json?.result?.isError) throw new Error(typeof text === "string" ? text : "clockchain tool error");
     if (typeof text === "string") { try { return JSON.parse(text); } catch { return { text }; } }
     return json?.result ?? {};
   } finally {
@@ -55,73 +66,77 @@ function parseRpc(raw: string): any {
 }
 
 export function clockchainService() {
+  // Mandate grant: anchor {parent_did, child_did, scope[], until}.
   async function delegateAuthority(input: DelegateAuthorityInput): Promise<DelegateAuthorityResult> {
     if (!clockchainEnabled()) return { anchored: false };
     try {
       const r = await callTool("delegate_authority", {
-        parent: input.parentDid, child: input.childDid, scope: input.scope, until: input.until, ...degradedWrite(),
+        parent_did: input.parentDid, child_did: input.childDid, scope: input.scope, until: input.until, ...degradedWrite(),
       });
       const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
       if (!ledgerId) return { anchored: false };
-      return { anchored: true, ledgerId, blockHeight: r.blockHeight ?? r.anchor?.blockHeight, scheme: r.scheme ?? r.anchor?.scheme };
+      return { anchored: true, ledgerId, blockHeight: r.blockHeight ?? r.anchor?.blockHeight };
     } catch { return { anchored: false }; }
   }
 
-  async function verifyDelegationAt(input: VerifyDelegationInput): Promise<DelegationVerdict> {
-    if (!clockchainEnabled()) return { status: "unavailable" };
+  // Confirm a ledger entry is real + anchored on-chain (used to verify a mandate's grant anchor).
+  async function getLogEntry(ledgerId: string): Promise<{ found: boolean; anchored: boolean; blockHeight?: number; status?: string }> {
+    if (!clockchainEnabled()) return { found: false, anchored: false };
     try {
-      const r = await callTool("verify_delegation_at", {
-        parent_did: input.parentDid, child_did: input.childDid, scope: input.scope,
-        until: input.until, at: input.at, ledger_id: input.ledgerId, block_height: input.blockHeight,
-      });
-      const authorized = r.authorized ?? r.valid;
-      return {
-        status: authorized ? "authorized" : "unauthorized",
-        reason: r.reason,
-        grantedAt: r.grantedAt, expiresAt: r.expiresAt, revokedAt: r.revokedAt,
-        ledgerId: r.evidence?.delegationLedgerId ?? input.ledgerId,
-      };
-    } catch { return { status: "unavailable" }; }
+      const r = await callTool("get_log_entry", { ledger_id: ledgerId });
+      if (!r || !r.ledgerId) return { found: false, anchored: false };
+      const status = r.status ?? r.anchorStatus;
+      return { found: true, anchored: status === "anchored" || Boolean(r.blockHeight), blockHeight: r.blockHeight, status };
+    } catch { return { found: false, anchored: false }; }
   }
 
+  // Provision an agent identity. The gateway requires the caller to supply the did + document.
+  // We derive a stable did from the agentId so re-grants are idempotent per agent.
   async function mintIdentity(input: { agentId: string; name?: string; metadata?: Record<string, unknown> }): Promise<{ minted: boolean; did?: string; ledgerId?: string }> {
     if (!clockchainEnabled()) return { minted: false };
     try {
-      const r = await callTool("mint_identity", { agentId: input.agentId, name: input.name, metadata: input.metadata, ...degradedWrite() });
-      const did = r.did ?? r.identity?.did ?? r.agentDid;
-      if (!did) return { minted: false };
-      return { minted: true, did, ledgerId: r.ledgerId ?? r.anchor?.ledgerId };
+      const did = `did:clockchain:agentdash:${input.agentId}`;
+      const document = { kind: "agent", name: input.name ?? "agent", agentId: input.agentId, ...(input.metadata ?? {}) };
+      const r = await callTool("mint_identity", { did, document, ...degradedWrite() });
+      const ok = Boolean(r.did ?? r.docHash ?? r.ledgerId);
+      if (!ok) return { minted: false };
+      return { minted: true, did: r.did ?? did, ledgerId: r.ledgerId ?? r.anchor?.ledgerId };
     } catch { return { minted: false }; }
   }
 
   async function resolveAgent(did: string): Promise<{ found: boolean; did?: string }> {
     if (!clockchainEnabled()) return { found: false };
     try {
-      const r = await callTool("resolve_agent", { did });
+      const r = await callTool("resolve_agent", { agent_id: did });
       const resolved = r.did ?? r.identity?.did;
       return resolved ? { found: true, did: resolved } : { found: false };
     } catch { return { found: false }; }
   }
 
+  // KYA: is this counterparty identity valid right now (valid-at-T)?
   async function verifyIdentityAt(input: { did: string; at: string }): Promise<{ status: "valid" | "invalid" | "unavailable" }> {
     if (!clockchainEnabled()) return { status: "unavailable" };
     try {
       const r = await callTool("verify_identity_at", { did: input.did, at: input.at });
-      const valid = r.valid ?? r.authorized ?? (r.status === "valid");
+      const valid = r.authorized ?? r.valid;
       return { status: valid ? "valid" : "invalid" };
     } catch { return { status: "unavailable" }; }
   }
 
-  async function attestAction(input: { agentDid: string; action: string; inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }): Promise<{ attested: boolean; ledgerId?: string; blockHeight?: number; status?: "anchored" | "pending" | "degraded" }> {
+  // Attest an action as the agent — returns a self-verifying receipt.
+  async function attestAction(input: { agentDid: string; action: string; inputs?: Record<string, unknown>; outputs?: Record<string, unknown> }): Promise<AttestResult> {
     if (!clockchainEnabled()) return { attested: false };
     try {
-      const r = await callTool("attest_action", { agentId: input.agentDid, action: input.action, inputs: input.inputs ?? {}, outputs: input.outputs ?? {}, ...degradedWrite() });
+      const r = await callTool("attest_action", {
+        agent_id: input.agentDid, action: input.action, inputs: input.inputs ?? {}, outputs: input.outputs ?? {}, ...degradedWrite(),
+      });
       const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
-      if (!ledgerId && !r.eventHash) return { attested: false };
+      const eventHash = r.eventHash;
+      if (!ledgerId && !eventHash) return { attested: false };
       const status = (r.status ?? r.anchor?.status) as ("anchored" | "pending" | "degraded" | undefined);
-      return { attested: true, ledgerId, blockHeight: r.blockHeight ?? r.anchor?.blockHeight, status: status ?? (ledgerId ? "anchored" : "pending") };
+      return { attested: true, ledgerId, eventHash, blockHeight: r.blockHeight ?? r.anchor?.blockHeight, status: status ?? (ledgerId ? "anchored" : "pending") };
     } catch { return { attested: false }; }
   }
 
-  return { delegateAuthority, verifyDelegationAt, mintIdentity, resolveAgent, verifyIdentityAt, attestAction };
+  return { delegateAuthority, getLogEntry, mintIdentity, resolveAgent, verifyIdentityAt, attestAction };
 }

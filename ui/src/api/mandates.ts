@@ -5,7 +5,7 @@ export type Mandate = {
   companyId: string;
   grantorAgentId: string;
   granteeAgentId: string;
-  scope: Record<string, unknown>;
+  scope: string[];
   permissionKey: string;
   spendCapCents: number;
   expiresAt: string;
@@ -21,7 +21,7 @@ export type Mandate = {
 export type CreateMandateBody = {
   grantorAgentId: string;
   granteeAgentId: string;
-  scope: Record<string, unknown>;
+  scope: string[];
   permissionKey: string;
   spendCapCents: number;
   expiresAt: string;

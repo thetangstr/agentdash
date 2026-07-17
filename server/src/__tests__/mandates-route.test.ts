@@ -78,7 +78,7 @@ describeEmbeddedPostgres("mandates routes (integration)", () => {
       .send({
         grantorAgentId,
         granteeAgentId,
-        scope: { description: "x" },
+        scope: ["release_payment"],
         permissionKey: "clockchain:attest",
         spendCapCents: 5000,
         expiresAt,
@@ -103,7 +103,7 @@ describeEmbeddedPostgres("mandates routes (integration)", () => {
       .send({
         grantorAgentId,
         granteeAgentId,
-        scope: { description: "x" },
+        scope: ["release_payment"],
         permissionKey: "clockchain:attest",
         spendCapCents: 5000,
         expiresAt,
@@ -126,7 +126,7 @@ describeEmbeddedPostgres("mandates routes (integration)", () => {
       .send({
         grantorAgentId,
         granteeAgentId,
-        scope: { description: "x" },
+        scope: ["release_payment"],
         permissionKey: "clockchain:attest",
         spendCapCents: 5000,
       });

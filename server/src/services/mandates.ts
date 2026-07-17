@@ -10,7 +10,7 @@ export type CreateMandateInput = {
   companyId: string;
   grantorAgentId: string;
   granteeAgentId: string;
-  scope: Record<string, unknown>;
+  scope: string[];
   permissionKey: string;
   spendCapCents: number;
   expiresAt: Date;
@@ -51,7 +51,6 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
         const cc = {
           ccLedgerId: anchor.ledgerId,
           ccBlockHeight: anchor.blockHeight ?? null,
-          ccScheme: anchor.scheme ?? null,
           ccAnchoredAt: new Date(),
         };
         await db.update(mandates).set({ ...cc, updatedAt: new Date() }).where(eq(mandates.id, row.id));
@@ -70,18 +69,14 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
     if (expectedGranteeAgentId && row.granteeAgentId !== expectedGranteeAgentId) {
       return { status: "unauthorized", reason: "not_grantee" };
     }
-    // DIDs are resolved from agent ids via the identity service (agent-identity.ts).
-    const parentDid = (await identity.resolveAgentDid(row.grantorAgentId)) ?? "";
-    const childDid = (await identity.resolveAgentDid(row.granteeAgentId)) ?? "";
-    return clock.verifyDelegationAt({
-      parentDid,
-      childDid,
-      scope: row.scope as Record<string, unknown>,
-      until: row.expiresAt.toISOString(),
-      at: at.toISOString(),
-      ledgerId: row.ccLedgerId ?? undefined,
-      blockHeight: row.ccBlockHeight ?? undefined,
-    });
+    // The gateway has no verify_delegation_at tool, so the mandate's validity is proven
+    // by its real on-chain grant anchor: confirm the delegate_authority ledgerId is real
+    // and anchored. The local window/cap/scope (checked by the gate) govern the rest.
+    if (!row.ccLedgerId) return { status: "unauthorized", reason: "not_anchored" };
+    const entry = await clock.getLogEntry(row.ccLedgerId);
+    if (!entry.found) return { status: "unauthorized", reason: "not_anchored" };
+    if (!entry.anchored) return { status: "unauthorized", reason: "pending_anchor" };
+    return { status: "authorized", ledgerId: row.ccLedgerId, scope: row.scope, spendCapCents: row.spendCapCents };
   }
 
   async function listMandates(companyId: string, granteeAgentId?: string): Promise<MandateRow[]> {
