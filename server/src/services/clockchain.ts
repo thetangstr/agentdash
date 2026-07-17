@@ -3,6 +3,8 @@
 // NOTE: authorization is AgentDash-enforced, not Clockchain-enforced.
 // Field mappings verified live against mcp.clockchain.network tools/list (2026-07-17).
 
+import { createHash } from "node:crypto";
+
 const MCP_URL = () => process.env.CLOCKCHAIN_MCP_URL || "https://mcp.clockchain.network/mcp";
 const MCP_KEY = () => process.env.CLOCKCHAIN_MCP_KEY || "";
 const TIMEOUT_MS = () => Number(process.env.CLOCKCHAIN_MCP_TIMEOUT_MS ?? 10000);
@@ -95,7 +97,9 @@ export function clockchainService() {
   async function mintIdentity(input: { agentId: string; name?: string; metadata?: Record<string, unknown> }): Promise<{ minted: boolean; did?: string; ledgerId?: string }> {
     if (!clockchainEnabled()) return { minted: false };
     try {
-      const did = `did:clockchain:agentdash:${input.agentId}`;
+      // Derive a stable, did-safe did from the agentId. The gateway rejects long/UUID-form
+      // did segments in delegate_authority (verified live), so use a short dash-free hash.
+      const did = `did:clockchain:agentdash:${createHash("sha256").update(input.agentId).digest("hex").slice(0, 16)}`;
       const document = { kind: "agent", name: input.name ?? "agent", agentId: input.agentId, ...(input.metadata ?? {}) };
       const r = await callTool("mint_identity", { did, document, ...degradedWrite() });
       const ok = Boolean(r.did ?? r.docHash ?? r.ledgerId);
