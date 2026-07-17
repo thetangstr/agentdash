@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { mandatesApi, type Mandate } from "@/api/mandates";
+import { mandatesApi, type Attestation, type Mandate } from "@/api/mandates";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn, formatCents, formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,37 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   return "secondary";
 }
 
+function mandateAction(mandate: Mandate): string | null {
+  if (!Array.isArray(mandate.scope) || mandate.scope.length === 0) return null;
+  return mandate.scope.includes("release_payment") ? "release_payment" : mandate.scope[0];
+}
+
+function shortId(id: string): string {
+  return id.length > 10 ? `${id.slice(0, 8)}…` : id;
+}
+
+function attestationBadge(att: Attestation): {
+  label: string;
+  variant: "default" | "secondary" | "destructive" | "outline";
+} {
+  if (att.authorized && att.ledgerId) {
+    return {
+      label: att.blockHeight != null ? `Anchored · block ${att.blockHeight}` : "Anchored",
+      variant: "secondary",
+    };
+  }
+  if (att.receiptStatus === "denied") {
+    return {
+      label: att.reason ? `Denied — ${att.reason}` : "Denied",
+      variant: "destructive",
+    };
+  }
+  if (att.receiptStatus === "pending") {
+    return { label: "Pending", variant: "outline" };
+  }
+  return { label: att.receiptStatus, variant: "outline" };
+}
+
 export function MandatesTab({
   companyId,
   agentId,
@@ -78,6 +109,24 @@ export function MandatesTab({
     queryKey: queryKeys.mandates.list(companyId, agentId),
     queryFn: () => mandatesApi.list(companyId, agentId),
     enabled: !!companyId && !!agentId,
+  });
+
+  const {
+    data: attestations,
+    isLoading: attestationsLoading,
+    error: attestationsError,
+  } = useQuery({
+    queryKey: queryKeys.mandates.attestations(companyId),
+    queryFn: () => mandatesApi.listAttestations(companyId),
+    enabled: !!companyId,
+  });
+
+  const runAttestationMutation = useMutation({
+    mutationFn: (vars: { mandateId: string; action: string }) =>
+      mandatesApi.runAttestation(companyId, vars),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mandates.attestations(companyId) });
+    },
   });
 
   const createMutation = useMutation({
@@ -222,34 +271,101 @@ export function MandatesTab({
           <p className="text-sm text-muted-foreground">No mandates granted to this agent yet.</p>
         )}
 
-        {(mandates ?? []).map((mandate: Mandate) => (
-          <Card key={mandate.id}>
-            <CardContent className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium text-text-primary">
-                  {agentName(agents, mandate.grantorAgentId)} → {agentName(agents, mandate.granteeAgentId)}
+        {(mandates ?? []).map((mandate: Mandate) => {
+          const action = mandateAction(mandate);
+          const runningThis =
+            runAttestationMutation.isPending &&
+            runAttestationMutation.variables?.mandateId === mandate.id;
+          return (
+            <Card key={mandate.id}>
+              <CardContent className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-text-primary">
+                    {agentName(agents, mandate.grantorAgentId)} → {agentName(agents, mandate.granteeAgentId)}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusVariant(mandate.status)}>{mandate.status}</Badge>
+                    {mandate.ccLedgerId ? (
+                      <Badge variant="secondary">Anchored</Badge>
+                    ) : (
+                      <Badge variant="outline">Not anchored</Badge>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={statusVariant(mandate.status)}>{mandate.status}</Badge>
-                  {mandate.ccLedgerId ? (
-                    <Badge variant="secondary">Anchored</Badge>
-                  ) : (
-                    <Badge variant="outline">Not anchored</Badge>
-                  )}
+                <p className="text-sm text-muted-foreground">
+                  {Array.isArray(mandate.scope) && mandate.scope.length > 0
+                    ? mandate.scope.join(", ")
+                    : "No actions in scope"}
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>Cap {formatCents(mandate.spendCapCents)}</span>
+                  <span>Expires {formatDate(mandate.expiresAt)}</span>
                 </div>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {Array.isArray(mandate.scope) && mandate.scope.length > 0
-                  ? mandate.scope.join(", ")
-                  : "No actions in scope"}
-              </p>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>Cap {formatCents(mandate.spendCapCents)}</span>
-                <span>Expires {formatDate(mandate.expiresAt)}</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                {action && (
+                  <div className="pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="default"
+                      disabled={runningThis || runAttestationMutation.isPending}
+                      onClick={() =>
+                        runAttestationMutation.mutate({ mandateId: mandate.id, action })
+                      }
+                    >
+                      {runningThis ? `Running ${action}…` : `Run ${action}`}
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold text-text-primary">Attested actions</h3>
+
+        {attestationsError && (
+          <p className="text-sm text-destructive">
+            {attestationsError instanceof Error
+              ? attestationsError.message
+              : "Failed to load attested actions"}
+          </p>
+        )}
+
+        {attestationsLoading && (
+          <p className="text-sm text-muted-foreground">Loading attested actions…</p>
+        )}
+
+        {!attestationsLoading && (attestations ?? []).length === 0 && !attestationsError && (
+          <p className="text-sm text-muted-foreground">
+            No attested actions yet — run one above.
+          </p>
+        )}
+
+        {(attestations ?? []).map((att: Attestation) => {
+          const badge = attestationBadge(att);
+          return (
+            <Card key={att.id}>
+              <CardContent className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-text-primary">{att.action}</div>
+                  <Badge variant={badge.variant}>{badge.label}</Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span className="font-mono">{att.counterpartyDid}</span>
+                  <span>mandate {shortId(att.mandateId)}</span>
+                  <span>{formatDate(att.createdAt)}</span>
+                </div>
+                {att.ledgerId && (
+                  <div className="font-mono text-xs text-muted-foreground">
+                    ledger {att.ledgerId}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );

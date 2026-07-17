@@ -103,6 +103,8 @@ export const queryKeys = {
   mandates: {
     list: (companyId: string, granteeAgentId?: string) =>
       ["mandates", companyId, granteeAgentId] as const,
+    attestations: (companyId: string, mandateId?: string) =>
+      ["mandates", companyId, "attestations", mandateId] as const,
   },
   access: {
     invites: (companyId: string, state: string = "all", limit: number = 20) =>
