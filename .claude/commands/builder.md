@@ -35,6 +35,19 @@ You are the **Builder Agent** -- responsible for picking up Linear issues, plann
 
 ## Phase 1: Issue Pickup
 
+### 1.0 Read the loop log (compounding context)
+
+Before touching the issue, read the last few entries of the shared work log so you inherit
+cross-issue context (what just shipped, known frictions, in-flight decisions):
+
+```bash
+tail -r loops/LOG.md | awk '{print} /^## 20/{c++; if(c==8) exit}' | tail -r
+```
+
+Also skim open signals relevant to this area (`ls loops/signals/` then read any that match the
+issue's domain). This is what makes the pipeline compound instead of starting cold each run. See
+`loops/README.md`.
+
 ### 1.1 Fetch the Issue
 
 If a specific issue was provided (e.g., `/builder AGE-123`):
@@ -283,6 +296,16 @@ Run the mandatory regression suite. This is non-negotiable -- do NOT create a PR
 pnpm -r typecheck && pnpm test:run && pnpm build
 ```
 
+Also run the architectural golden-rule check (fast, pure-node; same gate CI enforces):
+
+```bash
+pnpm check:architecture
+```
+
+`error`-severity findings block the PR -- fix them (each message includes the remediation).
+`warn`-severity findings (e.g. legacy `paperclip:*` localStorage keys) don't block, but don't
+add new ones.
+
 ### 3.4 Auto-Fix Loop (Local Failures)
 
 If verification fails, fix iteratively:
@@ -414,6 +437,27 @@ Use mcp__linear__save_comment with:
 - issueId: <issue_id>
 - body: "## PR Created\n\n**PR:** <pr_url>\n**Branch:** feat/AGE-<number>-<slug>\n**Files changed:** <count>\n**Local verification:** typecheck pass, tests pass, build pass\n\nStructured handoff stored as attachment `handoff:builder_to_ci`.\nWaiting for CI."
 ```
+
+### 4.5 Update the loop log + file signals (compounding output)
+
+Append ONE entry to the shared work log so the next loop inherits what you did. Commit it on the
+feature branch (it ships with the PR):
+
+```bash
+cat >> loops/LOG.md <<'EOF'
+
+## <YYYY-MM-DD> · AGE-<number>: <short title> · #maw #feature
+What: <one line, outcome first — what now works>.
+Refs: AGE-<number>, PR #<number>.
+EOF
+git add loops/LOG.md && git commit --amend --no-edit   # or a fresh commit; keep it on the branch
+```
+
+If during the build you noticed anything that wasn't this issue -- a recurring bug, a confusing
+flow, a missed opportunity, a flaky test -- **file or bump a signal** under `loops/signals/`
+(see its README for the schema) and link `AGE-<number>`. Don't drop it; that friction is exactly
+what lets the product/SEO/support loops cross-pollinate. A run that found nothing worth filing is
+a valid run -- only create a signal if there's a real one.
 
 ---
 

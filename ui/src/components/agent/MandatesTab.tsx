@@ -58,7 +58,7 @@ function attestationBadge(att: Attestation): {
   label: string;
   variant: "default" | "secondary" | "destructive" | "outline";
 } {
-  if (att.authorized && att.ledgerId) {
+  if (att.receiptStatus === "anchored") {
     return {
       label: att.blockHeight != null ? `Anchored · block ${att.blockHeight}` : "Anchored",
       variant: "secondary",
@@ -285,8 +285,10 @@ export function MandatesTab({
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant={statusVariant(mandate.status)}>{mandate.status}</Badge>
-                    {mandate.ccLedgerId ? (
-                      <Badge variant="secondary">Anchored</Badge>
+                    {mandate.ccLedgerId && mandate.ccBlockHeight != null ? (
+                      <Badge variant="secondary">Anchored · block {mandate.ccBlockHeight}</Badge>
+                    ) : mandate.ccLedgerId ? (
+                      <Badge variant="outline">Pending anchor</Badge>
                     ) : (
                       <Badge variant="outline">Not anchored</Badge>
                     )}

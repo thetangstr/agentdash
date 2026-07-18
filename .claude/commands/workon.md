@@ -137,6 +137,12 @@ if tick >= max_ticks:
 
 ### `intake` -- Triage and Route
 
+Read the last few shared work-log entries first, so the run inherits cross-issue context:
+
+```bash
+tail -r loops/LOG.md | awk '{print} /^## 20/{c++; if(c==8) exit}' | tail -r
+```
+
 Check whether the issue has acceptance criteria in its description.
 
 **If acceptance criteria exist:**
@@ -333,7 +339,7 @@ Dispatch Tester agent:
 
     OMC execution engine (per tester.md):
       - Phase 2.2: run mandatory regression gates first:
-        pnpm -r typecheck && pnpm test:run && pnpm build
+        pnpm -r typecheck && pnpm test:run && pnpm build && pnpm check:architecture
       - Phase 2.3: wrap issue-specific E2E in
         /oh-my-claudecode:ultraqa --custom "<test command>"
       - Phase 3.0 (M+): delegate browser CUJ to qa-tester subagent

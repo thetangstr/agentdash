@@ -137,8 +137,11 @@ export function clockchainService() {
       const ledgerId = r.ledgerId ?? r.anchor?.ledgerId;
       const eventHash = r.eventHash;
       if (!ledgerId && !eventHash) return { attested: false };
+      const blockHeight = r.blockHeight ?? r.anchor?.blockHeight;
       const status = (r.status ?? r.anchor?.status) as ("anchored" | "pending" | "degraded" | undefined);
-      return { attested: true, ledgerId, eventHash, blockHeight: r.blockHeight ?? r.anchor?.blockHeight, status: status ?? (ledgerId ? "anchored" : "pending") };
+      // Default from blockHeight, NOT ledgerId: a ledgerId without a confirmed block is "pending"
+      // (submitted but not anchored). Defaulting it to "anchored" would be a false positive.
+      return { attested: true, ledgerId, eventHash, blockHeight, status: status ?? (blockHeight != null ? "anchored" : "pending") };
     } catch { return { attested: false }; }
   }
 

@@ -30,6 +30,7 @@ Before making changes, read in this order:
 - `packages/adapter-utils/`: shared adapter utilities
 - `packages/plugins/`: plugin system packages
 - `doc/`: operational and product docs
+- `loops/`: the loop-engineering substrate — shared signals/docs/domains + `LOG.md` that MAW agents read and append so runs compound (see `loops/README.md`)
 
 ## 4. Dev Setup (Auto DB)
 

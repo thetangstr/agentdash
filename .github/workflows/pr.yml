@@ -54,6 +54,13 @@ jobs:
       - name: Validate Dockerfile deps stage
         run: node ./scripts/check-docker-deps-stage.mjs
 
+      - name: Enforce architectural golden rules
+        # Mechanical enforcement of the invariants documented in CLAUDE.md /
+        # AGENTS.md (schema exports, localStorage branding, …). Errors fail the
+        # PR; warnings are surfaced with remediation but do not block. See
+        # loops/ARCHITECTURE.md.
+        run: node ./scripts/check-architecture.mjs
+
       - name: Validate dependency resolution when manifests change
         run: |
           changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")"

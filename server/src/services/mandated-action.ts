@@ -18,7 +18,7 @@ export type MandatedActionInput = {
 export type MandatedActionResult = {
   authorized: boolean;
   reason?: string;
-  receipt?: { ledgerId?: string; blockHeight?: number; status: "anchored" | "pending"; flagged?: boolean };
+  receipt?: { ledgerId?: string; blockHeight?: number; eventHash?: string; status: "anchored" | "pending"; flagged?: boolean };
 };
 
 const BOUNCE_BACK_REASONS = new Set(["expired", "over_cap", "out_of_scope"]);
@@ -40,7 +40,7 @@ export function mandatedActionService(
     // 1b. Scope + cap — the gateway has no verify_delegation_at, so the gate enforces
     // the mandate's action scope and spend cap locally. (No accumulation yet for the
     // demo: a single action whose amount exceeds the cap is over_cap.)
-    const scope = verdict.scope ?? [];
+    const scope = Array.isArray(verdict.scope) ? verdict.scope : [];
     if (!scope.includes(input.action)) {
       return { authorized: false, reason: "out_of_scope" };
     }
@@ -63,12 +63,13 @@ export function mandatedActionService(
       inputs: { ...(input.payload ?? {}), counterpartyDid: input.counterpartyDid, mandateId: input.mandateId },
       outputs: {},
     });
-    // Only a truthful, non-degraded anchor earns the clean "anchored" receipt.
-    if (att.attested && att.ledgerId && att.status !== "degraded") {
-      return { authorized: true, receipt: { ledgerId: att.ledgerId, blockHeight: att.blockHeight, status: "anchored" } };
+    // Only a CONFIRMED anchor (status === "anchored") earns the clean "anchored" receipt.
+    // A pending/degraded result is honest about being unconfirmed — never labeled "anchored".
+    if (att.attested && att.ledgerId && att.status === "anchored") {
+      return { authorized: true, receipt: { ledgerId: att.ledgerId, blockHeight: att.blockHeight, eventHash: att.eventHash, status: "anchored" } };
     }
-    // Degraded-but-anchored keeps its ledgerId (honest); missing anchor has none.
-    return { authorized: true, receipt: { ledgerId: att.ledgerId, blockHeight: att.blockHeight, status: "pending", flagged: true } };
+    // Pending/degraded: authorized, but the proof is not confirmed — flag it honestly.
+    return { authorized: true, receipt: { ledgerId: att.ledgerId, blockHeight: att.blockHeight, eventHash: att.eventHash, status: "pending", flagged: true } };
   }
 
   async function enforceMandatedAction(
@@ -129,6 +130,7 @@ export function mandatedActionService(
       reason: result.reason ?? null,
       ledgerId: result.receipt?.ledgerId ?? null,
       blockHeight: result.receipt?.blockHeight ?? null,
+      eventHash: result.receipt?.eventHash ?? null,
       receiptStatus: result.receipt?.status ?? (result.authorized ? "pending" : "denied"),
       escalated: result.escalated,
       approvalId: result.approvalId ?? null,

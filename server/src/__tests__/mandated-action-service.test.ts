@@ -71,6 +71,15 @@ describe("performMandatedAction", () => {
     expect(r).toEqual({ authorized: true, receipt: { ledgerId: "led_d", blockHeight: 3, status: "pending", flagged: true } });
   });
 
+  it("does NOT label a submitted-but-unconfirmed (pending, no blockHeight) attest as anchored", async () => {
+    const { s } = svc({ clock: { verifyIdentityAt: vi.fn(async () => ({ status: "valid" })), attestAction: vi.fn(async () => ({ attested: true, ledgerId: "led_p", blockHeight: undefined, status: "pending" })) } });
+    const r = await s.performMandatedAction(baseInput, NOW);
+    expect(r.authorized).toBe(true);
+    expect(r.receipt?.status).toBe("pending");
+    expect(r.receipt?.flagged).toBe(true);
+    expect(r.receipt?.ledgerId).toBe("led_p");
+  });
+
   it("denies (fail-closed) when the actor DID cannot be resolved; no attest", async () => {
     const { s, clock } = svc({ identity: { resolveAgentDid: vi.fn(async () => undefined) } });
     const r = await s.performMandatedAction(baseInput, NOW);
