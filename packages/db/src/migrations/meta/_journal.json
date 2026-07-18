@@ -659,6 +659,13 @@
       "when": 1781366400000,
       "tag": "0093_mandate_attestations",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1781452800000,
+      "tag": "0094_mandate_publishing",
+      "breakpoints": true
     }
   ]
 }

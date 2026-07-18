@@ -86,5 +86,38 @@ export function mandatesService(db: Db, clock = clockchainService(), identity = 
     return db.select().from(mandates).where(where).orderBy(desc(mandates.createdAt));
   }
 
-  return { createMandate, verifyMandate, listMandates };
+  // Publish a mandate's terms to a counterparty company (the payee side of the
+  // handshake). Only an active, on-chain-anchored mandate may be published —
+  // the counterparty must be able to verify the anchor keylessly.
+  async function publishMandate(companyId: string, mandateId: string, counterpartyCompanyId: string): Promise<MandateRow> {
+    const [row] = await db.select().from(mandates).where(eq(mandates.id, mandateId));
+    if (!row || row.companyId !== companyId) throw new Error("mandate_not_found");
+    if (row.status !== "active") throw new Error("mandate_not_active");
+    if (!row.ccLedgerId) throw new Error("mandate_not_anchored");
+    const [updated] = await db.update(mandates)
+      .set({ published: true, counterpartyCompanyId, updatedAt: new Date() })
+      .where(eq(mandates.id, mandateId))
+      .returning();
+    return updated;
+  }
+
+  // Mandates other companies have published TO this company.
+  async function listIncomingMandates(companyId: string): Promise<MandateRow[]> {
+    return db.select().from(mandates)
+      .where(and(eq(mandates.counterpartyCompanyId, companyId), eq(mandates.published, true)))
+      .orderBy(desc(mandates.createdAt));
+  }
+
+  // Counterparty acceptance — their human approving "we can transact".
+  async function acceptMandate(counterpartyCompanyId: string, mandateId: string): Promise<MandateRow> {
+    const [row] = await db.select().from(mandates).where(eq(mandates.id, mandateId));
+    if (!row || row.counterpartyCompanyId !== counterpartyCompanyId || !row.published) throw new Error("mandate_not_found");
+    const [updated] = await db.update(mandates)
+      .set({ acceptedAt: new Date(), updatedAt: new Date() })
+      .where(eq(mandates.id, mandateId))
+      .returning();
+    return updated;
+  }
+
+  return { createMandate, verifyMandate, listMandates, publishMandate, listIncomingMandates, acceptMandate };
 }

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, jsonb, boolean, timestamp, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { budgetPolicies } from "./budget_policies.js";
@@ -17,6 +17,12 @@ export const mandates = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     // active | expired | revoked
     status: text("status").notNull().default("active"),
+    // Cross-company publishing: a published mandate's terms are visible to the
+    // counterparty company (the payee side of the handshake). Acceptance is the
+    // counterparty's human approving — recorded in acceptedAt.
+    published: boolean("published").notNull().default(false),
+    counterpartyCompanyId: uuid("counterparty_company_id").references(() => companies.id),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     // Clockchain anchor — set only when delegate_authority actually returns a ledgerId
     ccLedgerId: text("cc_ledger_id"),
     ccBlockHeight: integer("cc_block_height"),
