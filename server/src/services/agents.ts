@@ -19,6 +19,7 @@ import {
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
+import { deprovisionAgentProfile } from "./hermes-profile.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
 
 function hashToken(token: string) {
@@ -494,6 +495,15 @@ export function agentService(db: Db) {
         .update(agentApiKeys)
         .set({ revokedAt: new Date() })
         .where(eq(agentApiKeys.agentId, id));
+
+      // AgentDash: tear down the agent's managed Hermes profile (best-effort,
+      // non-fatal; gated off by default).
+      if (
+        existing.adapterType === "hermes_local" &&
+        process.env.AGENTDASH_HERMES_MANAGED_PROFILES === "true"
+      ) {
+        await deprovisionAgentProfile(id).catch(() => undefined);
+      }
 
       return getById(id);
     },

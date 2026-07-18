@@ -5,12 +5,14 @@
  *  - Auth  (/api/auth/* mutations): 10 req / 15 min  — brute-force / credential-stuffing
  *  - Billing mutations:             20 req / 15 min  — abuse / billing-fraud
  *  - Onboarding invites:            20 req / 15 min  — Resend cost amplification
+ *  - Anonymous trial entry points:  30 req / 15 min  — inference cost amplification
  *  - Default (/api/* mutations):   200 req / 15 min  — abuse ceiling for state-changing calls
  *
  * Env-var overrides:
  *  AGENTDASH_RATE_LIMIT_AUTH_MAX    (default 10)
  *  AGENTDASH_RATE_LIMIT_BILLING_MAX (default 20)
  *  AGENTDASH_RATE_LIMIT_INVITE_MAX  (default 20)
+ *  AGENTDASH_RATE_LIMIT_TRIAL_MAX   (default 30)
  *  AGENTDASH_RATE_LIMIT_API_MAX     (default 200)
  *  AGENTDASH_RATE_LIMIT_DISABLED=true  — no-op middleware (tests / dev)
  *
@@ -133,4 +135,18 @@ export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}
 export function createInviteRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_INVITE_MAX", 20));
+}
+
+/**
+ * Tighter request-layer cap for the anonymous Test Drive trial. Each POST
+ * /trial/session mints a fresh credit and each /trial/:token/design kicks off a
+ * multi-agent MiniMax build, so these are cost-amplifying entry points. The
+ * trial is anonymous (no actor), so keyGenerator falls back to req.ip — which is
+ * the real client IP only when `trust proxy` is set (see app.ts). This bounds
+ * rapid session/build creation per IP at the request layer, complementing the
+ * per-IP/day and global-spend caps enforced in trialService.
+ */
+export function createTrialRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_TRIAL_MAX", 30));
 }

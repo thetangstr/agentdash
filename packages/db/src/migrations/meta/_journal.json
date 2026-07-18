@@ -614,22 +614,50 @@
     {
       "idx": 87,
       "version": "7",
-      "when": 1779494400000,
-      "tag": "0087_mandates",
+      "when": 1780502400000,
+      "tag": "0087_agent_runs_is_overage",
       "breakpoints": true
     },
     {
       "idx": 88,
       "version": "7",
-      "when": 1779580800000,
-      "tag": "0088_agent_clockchain_did",
+      "when": 1780934400000,
+      "tag": "0088_trial_sessions",
       "breakpoints": true
     },
     {
       "idx": 89,
       "version": "7",
-      "when": 1779667200000,
-      "tag": "0089_mandate_attestations",
+      "when": 1781020800000,
+      "tag": "0089_trial_artifact_share_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1781107200000,
+      "tag": "0090_trial_company_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1781193600000,
+      "tag": "0091_mandates",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1781280000000,
+      "tag": "0092_agent_clockchain_did",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1781366400000,
+      "tag": "0093_mandate_attestations",
       "breakpoints": true
     }
   ]

@@ -110,14 +110,32 @@ function formatEmbeddedPostgresError(error: unknown): string {
   return "embedded Postgres startup failed";
 }
 
+// AgentDash: bound each embedded-Postgres phase. Without this, a wedged
+// `start()` or migration replay on a slow CI runner never resolves, the catch
+// that would call `stop()` never runs, the postgres child process leaks, and
+// vitest can never exit — surfacing as the whole job hanging to the CI timeout.
+// On timeout we reject so the caller's cleanup force-stops the instance.
+async function withTimeout<T>(label: string, ms: number, work: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSupport> {
   const { dataDir, instance } = await createEmbeddedPostgresTestInstance(
     "paperclip-embedded-postgres-probe-",
   );
 
   try {
-    await instance.initialise();
-    await instance.start();
+    await withTimeout("embedded Postgres initialise", 60_000, () => instance.initialise());
+    await withTimeout("embedded Postgres start", 60_000, () => instance.start());
     return { supported: true };
   } catch (error) {
     return {
@@ -125,7 +143,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
       reason: formatEmbeddedPostgresError(error),
     };
   } finally {
-    await instance.stop().catch(() => {});
+    await withTimeout("embedded Postgres stop", 30_000, () => instance.stop()).catch(() => {});
     cleanupEmbeddedPostgresTestDirs(dataDir);
   }
 }
@@ -143,23 +161,23 @@ export async function startEmbeddedPostgresTestDatabase(
   const { dataDir, port, instance } = await createEmbeddedPostgresTestInstance(tempDirPrefix);
 
   try {
-    await instance.initialise();
-    await instance.start();
+    await withTimeout("embedded Postgres initialise", 60_000, () => instance.initialise());
+    await withTimeout("embedded Postgres start", 60_000, () => instance.start());
 
     const adminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
     await ensurePostgresDatabase(adminConnectionString, "paperclip");
     const connectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
-    await applyPendingMigrations(connectionString);
+    await withTimeout("apply pending migrations", 120_000, () => applyPendingMigrations(connectionString));
 
     return {
       connectionString,
       cleanup: async () => {
-        await instance.stop().catch(() => {});
+        await withTimeout("embedded Postgres stop", 30_000, () => instance.stop()).catch(() => {});
         cleanupEmbeddedPostgresTestDirs(dataDir);
       },
     };
   } catch (error) {
-    await instance.stop().catch(() => {});
+    await withTimeout("embedded Postgres stop", 30_000, () => instance.stop()).catch(() => {});
     cleanupEmbeddedPostgresTestDirs(dataDir);
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,

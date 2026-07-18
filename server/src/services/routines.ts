@@ -39,6 +39,7 @@ import {
 } from "@paperclipai/shared";
 import { trackRoutineRun } from "@paperclipai/shared/telemetry";
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { issueService } from "./issues.js";
@@ -952,12 +953,8 @@ export function routineService(
           });
         } catch (error) {
           const isOpenExecutionConflict =
-            !!error &&
-            typeof error === "object" &&
-            "code" in error &&
-            (error as { code?: string }).code === "23505" &&
-            "constraint" in error &&
-            (error as { constraint?: string }).constraint === "issues_open_routine_execution_uq";
+            isUniqueViolation(error) &&
+            pgConstraintName(error) === "issues_open_routine_execution_uq";
           if (!isOpenExecutionConflict || input.routine.concurrencyPolicy === "always_enqueue") {
             throw error;
           }

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { isUniqueViolation, pgConstraintName, unwrapPgError } from "./pg-error.js";
 
 export const INVITE_TOKEN_PREFIX = "pcp_invite_";
 export const INVITE_TOKEN_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -35,27 +36,10 @@ export function createInviteToken(): string {
 }
 
 export function isInviteTokenHashCollisionError(error: unknown): boolean {
-  const candidates = [
-    error,
-    (error as { cause?: unknown } | null)?.cause ?? null,
-  ];
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const code =
-      "code" in candidate && typeof candidate.code === "string"
-        ? candidate.code
-        : null;
-    const message =
-      "message" in candidate && typeof candidate.message === "string"
-        ? candidate.message
-        : "";
-    const constraint =
-      "constraint" in candidate && typeof candidate.constraint === "string"
-        ? candidate.constraint
-        : null;
-    if (code !== "23505") continue;
-    if (constraint === "invites_token_hash_unique_idx") return true;
-    if (message.includes("invites_token_hash_unique_idx")) return true;
-  }
-  return false;
+  // drizzle-orm >=0.45 wraps the pg error in DrizzleQueryError; unwrap the
+  // cause chain before inspecting the SQLSTATE code / constraint name.
+  if (!isUniqueViolation(error)) return false;
+  if (pgConstraintName(error) === "invites_token_hash_unique_idx") return true;
+  const message = unwrapPgError(error).message ?? "";
+  return message.includes("invites_token_hash_unique_idx");
 }

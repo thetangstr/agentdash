@@ -13,14 +13,22 @@ const tierDepsMock = {
   },
 };
 
+// AgentDash: invite-role-ceiling (P0.5) — lets individual tests stub the
+// inviting actor's resolved company role for the role-ceiling checks.
+const getMembershipMock = vi.fn(
+  async (_companyId: string, _type: string, _userId: string) =>
+    null as { status: string; membershipRole: string } | null,
+);
+
 function registerModuleMocks() {
   vi.doMock("../services/index.js", () => ({
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
     accessService: () => ({
       isInstanceAdmin: vi.fn(),
-      canUser: vi.fn(),
+      canUser: vi.fn(async () => true),
       hasPermission: vi.fn(),
+      getMembership: (...args: [string, string, string]) => getMembershipMock(...args),
     }),
     agentService: () => ({
       getById: vi.fn(),
@@ -93,7 +101,7 @@ function createDbStub() {
   return db;
 }
 
-async function createApp() {
+async function createApp(actor?: Record<string, unknown>) {
   const [{ accessRoutes }, { errorHandler }] = await Promise.all([
     import("../routes/access.js"),
     import("../middleware/index.js"),
@@ -101,7 +109,7 @@ async function createApp() {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
+    (req as any).actor = actor ?? {
       type: "board",
       source: "local_implicit",
       userId: null,
@@ -136,7 +144,19 @@ describe("POST /companies/:companyId/invites", () => {
     tierDepsMock.getCompany.mockResolvedValue({ planTier: "pro_active" });
     tierDepsMock.counts.humans.mockResolvedValue(0);
     tierDepsMock.counts.agents.mockResolvedValue(0);
+    getMembershipMock.mockReset();
+    getMembershipMock.mockResolvedValue(null);
   });
+
+  // A non-local board actor whose company role is resolved via getMembership.
+  function boardUserActor(userId = "actor-user") {
+    return {
+      type: "board",
+      source: "board_api_key",
+      userId,
+      companyIds: ["company-1"],
+    } as Record<string, unknown>;
+  }
 
   afterEach(() => {
     if (originalStripeSecretKey === undefined) delete process.env.STRIPE_SECRET_KEY;
@@ -222,5 +242,74 @@ describe("POST /companies/:companyId/invites", () => {
 
     expect(res.status).toBe(402);
     expect(res.body.code).toBe("seat_cap_exceeded");
+  });
+
+  // AgentDash: invite-role-ceiling (P0.5) — privilege-escalation guard.
+  describe("invite role ceiling", () => {
+    it("rejects an admin inviting an owner with 403", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "owner" });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/role above your own/i);
+    });
+
+    it("allows an admin inviting an operator", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "operator" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("allows an admin inviting a viewer", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "viewer" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("allows an owner inviting an owner", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "owner" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "owner" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("allows an owner inviting an admin", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "owner" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "admin" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("still allows the local-implicit founding board owner to invite an owner", async () => {
+      const app = await createApp();
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "owner" });
+
+      expect(res.status).toBe(201);
+    });
   });
 });

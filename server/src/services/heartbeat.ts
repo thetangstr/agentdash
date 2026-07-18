@@ -39,7 +39,7 @@ import {
 import { conflict, HttpError, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
-import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
+import { getRunLogStore, runLogBasePath, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, listAdapterModelProfiles, runningProcesses } from "../adapters/index.js";
 import type {
   AdapterExecutionResult,
@@ -52,6 +52,7 @@ import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
 import { agentRunService } from "./agent-runs.js";
+import { quotaEnforcementService, quotaExceededPayload } from "./quota-enforcement.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
@@ -2179,6 +2180,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     cancelWorkForScope: cancelBudgetScopeWork,
   };
   const budgets = budgetService(db, budgetHooks);
+  // AgentDash (AGE-121): quota enforcement gate — checks run quota before
+  // claiming a queued run. Free workspaces are hard-blocked; Pro soft-allows
+  // with overage tagging.
+  const quotaEnforcement = quotaEnforcementService(db);
   const recovery = recoveryService(db, { enqueueWakeup });
   const productivityReviews = productivityReviewService(db, { enqueueWakeup });
   let unsafeTextProjectionPromise: Promise<boolean> | null = null;
@@ -3990,6 +3995,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return null;
     }
 
+    // AgentDash (AGE-121): quota enforcement gate. Free workspaces that have
+    // exhausted their monthly allotment are hard-blocked. Pro workspaces are
+    // soft-allowed with overage tagging (the isOverage flag is stored on the
+    // run's context snapshot so recordRun can persist it later).
+    const quotaDecision = await quotaEnforcement.checkRunQuota(run.companyId);
+    if (!quotaDecision.allowed) {
+      const payload = quotaExceededPayload(quotaDecision.snapshot);
+      await cancelRunInternal(
+        run.id,
+        `Run quota exceeded: ${payload.used}/${payload.included} runs used this billing period. Upgrade at ${payload.upgrade_url}`,
+      );
+      logger.info(
+        { runId: run.id, companyId: run.companyId, agentId: run.agentId, ...payload },
+        "claimQueuedRun: cancelled — free-tier run quota exceeded",
+      );
+      return null;
+    }
+    if (quotaDecision.isOverage) {
+      context.__quotaOverage = true;
+    }
+
     const issueId = readNonEmptyString(context.issueId);
     if (issueId) {
       const activePauseHold = await treeControlSvc.getActivePauseHoldGate(run.companyId, issueId);
@@ -4599,6 +4625,23 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (staleThresholdMs > 0) {
         const refTime = run.updatedAt ? new Date(run.updatedAt).getTime() : 0;
         if (now.getTime() - refTime < staleThresholdMs) continue;
+      }
+
+      // AgentDash run-fix: a stale `updatedAt` does NOT mean the process is dead.
+      // hermes_local streams output to the log FILE (not the DB row) and often
+      // records a null processPid, so the PID-alive check below cannot rescue an
+      // actively-working run — the reaper then falsely marks it `process_lost`.
+      // If the run's log file was written very recently, the child is alive and
+      // producing output right now; skip reaping it this pass.
+      if (run.logStore === "local_file" && run.logRef) {
+        try {
+          const logPath = path.join(runLogBasePath(), run.logRef);
+          const st = await fs.stat(logPath);
+          const liveWindowMs = Math.max(staleThresholdMs, 120_000);
+          if (now.getTime() - st.mtimeMs < liveWindowMs) continue;
+        } catch {
+          // No readable log file — fall through to the normal reaping path.
+        }
       }
 
       const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
@@ -6187,6 +6230,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               projectId: ledgerScope.projectId,
               startedAt: latestRun.startedAt,
               finishedAt: latestRun.finishedAt ?? new Date(),
+              // AGE-121: propagate overage flag from the quota gate decision
+              // stored on the context snapshot at claim time.
+              isOverage: runContext.__quotaOverage === true,
             }).catch((err) => {
               logger.warn({ err, runId: run.id }, "[agent-runs] failed to record agent run in finally block");
             });

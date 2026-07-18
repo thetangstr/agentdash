@@ -149,9 +149,16 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
 
 let cachedStore: RunLogStore | null = null;
 
+// AgentDash run-fix: expose the resolved run-log base dir so the orphan reaper
+// can stat a run's log-file mtime to detect a still-live (actively writing) run.
+export function runLogBasePath() {
+  return process.env.RUN_LOG_BASE_PATH ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "run-logs");
+}
+
 export function getRunLogStore() {
   if (cachedStore) return cachedStore;
-  const basePath = process.env.RUN_LOG_BASE_PATH ?? path.resolve(resolvePaperclipInstanceRoot(), "data", "run-logs");
-  cachedStore = createLocalFileRunLogStore(basePath);
+  cachedStore = createLocalFileRunLogStore(runLogBasePath());
   return cachedStore;
 }
+
+// (ci: re-triggered after a flaky verify hang; no functional change)

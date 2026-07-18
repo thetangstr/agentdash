@@ -120,6 +120,15 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+import { ensureAgentProfileCommand, provisionAgentProfile } from "../services/hermes-profile.js";
+import { hermesRoundTripProbeCheck } from "./hermes-roundtrip-probe.js";
+
+// AgentDash: opt-in managed per-agent Hermes profiles. When enabled, each agent
+// is hired into its own Hermes profile (isolated model/MCP/skills/state) and runs
+// are scoped via the profile's alias wrapper. Off by default — no behavior change.
+function hermesManagedProfilesEnabled(): boolean {
+  return process.env.AGENTDASH_HERMES_MANAGED_PROFILES === "true";
+}
 
 const DEFAULT_HERMES_COMMAND = "hermes";
 
@@ -360,7 +369,27 @@ function summarizeAdapterEnvironmentChecks(checks: AdapterEnvironmentCheck[]): A
   return "pass";
 }
 
+// AgentDash: opt-in real round-trip probe appended to the static Hermes checks,
+// so harness-preflight catches an installed-but-broken Hermes. Off by default
+// (it spawns a real process); enable with AGENTDASH_HERMES_ROUNDTRIP_PROBE=true.
 async function testHermesEnvironment(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
+  const base = await testHermesEnvironmentStatic(ctx);
+  if (process.env.AGENTDASH_HERMES_ROUNDTRIP_PROBE !== "true") return base;
+  const normalizedCtx = normalizeHermesConfig(ctx);
+  const cfg =
+    normalizedCtx.config && typeof normalizedCtx.config === "object" && !Array.isArray(normalizedCtx.config)
+      ? (normalizedCtx.config as Record<string, unknown>)
+      : {};
+  const probe = await hermesRoundTripProbeCheck({
+    command: getHermesCommandFromContext(normalizedCtx),
+    model: readNonEmptyString(cfg.model) ?? undefined,
+    provider: readNonEmptyString(cfg.provider) ?? undefined,
+  });
+  const checks = [...(Array.isArray(base.checks) ? base.checks : []), probe];
+  return { ...base, checks, status: summarizeAdapterEnvironmentChecks(checks) };
+}
+
+async function testHermesEnvironmentStatic(ctx: Parameters<ServerAdapterModule["testEnvironment"]>[0]) {
   const normalizedCtx = normalizeHermesConfig(ctx);
   const result = await hermesTestEnvironment(normalizedCtx as never);
   const checks = Array.isArray(result.checks) ? result.checks : [];
@@ -632,6 +661,16 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
+    // AgentDash: when managed profiles are enabled, scope this run to the agent's
+    // own Hermes profile by invoking its alias wrapper (`hermes -p <profile>`).
+    // Provisions the profile if it is missing (covers agents created by any path,
+    // not just the hire-approval flow); falls back to the default command if it
+    // could not be provisioned.
+    if (hermesManagedProfilesEnabled()) {
+      const profileCmd = await ensureAgentProfileCommand(taskPatchedCtx.agent?.id);
+      if (profileCmd) patchedConfig.hermesCommand = profileCmd;
+    }
+
     // Hermes' package default prompt predates authenticated mode and shows bare curl examples.
     // In authenticated mode, replace it with an equivalent auth-aware template.
     if (promptTemplate) {
@@ -650,7 +689,23 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
   },
-  testEnvironment: testHermesEnvironment,
+  // AgentDash: ensure the agent's managed profile exists before the env check so
+  // harness-preflight passes for an agent created by any path, and run the check
+  // against that profile's wrapper command.
+  testEnvironment: async (ctx) => {
+    if (hermesManagedProfilesEnabled()) {
+      const agentId = (ctx as { agent?: { id?: string | null } }).agent?.id;
+      const profileCmd = await ensureAgentProfileCommand(agentId);
+      if (profileCmd) {
+        const cfg =
+          ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
+            ? (ctx.config as Record<string, unknown>)
+            : {};
+        return testHermesEnvironment({ ...ctx, config: { ...cfg, hermesCommand: profileCmd } } as typeof ctx);
+      }
+    }
+    return testHermesEnvironment(ctx);
+  },
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
   syncSkills: hermesSyncSkills,
@@ -660,6 +715,17 @@ const hermesLocalAdapter: ServerAdapterModule = {
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: hermesAgentConfigurationDoc,
   detectModel: () => detectModelFromHermes(),
+  // AgentDash: provision a distinct Hermes profile for each agent on hire
+  // (isolated model/MCP/skills/state, gateway-pointed). Opt-in; non-fatal.
+  onHireApproved: async (payload) => {
+    if (!hermesManagedProfilesEnabled()) return { ok: true };
+    try {
+      const { profileName, providerSource } = await provisionAgentProfile(payload.agentId);
+      return { ok: true, detail: { profileName, providerSource } };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
 };
 
 const adaptersByType = new Map<string, ServerAdapterModule>();

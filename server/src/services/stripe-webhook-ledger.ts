@@ -1,4 +1,5 @@
 import { stripeWebhookEvents } from "@paperclipai/db";
+import { isUniqueViolation } from "../lib/pg-error.js";
 
 export function stripeWebhookLedger(db: any) {
   return {
@@ -7,7 +8,7 @@ export function stripeWebhookLedger(db: any) {
         await db.insert(stripeWebhookEvents).values({ eventId, eventType, payload });
         return { inserted: true };
       } catch (err: any) {
-        if (err?.code === "23505") return { inserted: false }; // duplicate
+        if (isUniqueViolation(err)) return { inserted: false }; // duplicate
         throw err;
       }
     },

@@ -118,6 +118,14 @@ export function CloudAccessGate() {
     !boardAccessQuery.data?.isInstanceAdmin &&
     (boardAccessQuery.data?.companyIds.length ?? 0) === 0
   ) {
+    // AgentDash (Test Drive, Slice 4): a just-signed-up user has no company
+    // membership YET — the trial claim handoff is exactly what creates it.
+    // Let an authenticated session through to /trial/claim (auth is still
+    // enforced above) so it can bind the trial workspace, instead of bouncing
+    // to the dead-end "No company access" page.
+    if (location.pathname === "/trial/claim") {
+      return <Outlet />;
+    }
     // AgentDash: self-serve-bootstrap — on a fresh instance (flag on, no
     // company yet) route the first user to the onboarding wizard instead of a
     // dead-end. Once any company exists, keep invite-only "No company access".

@@ -1,4 +1,13 @@
 export { companyService } from "./companies.js";
+// AgentDash: Test Drive — no-signup anonymous trial
+export {
+  trialService,
+  estimateRunCostCents,
+  TrialNotFoundError,
+  TrialExpiredError,
+  TrialCreditExhaustedError,
+  type TrialService,
+} from "./trial.js";
 export { inviteService } from "./invites.js";
 export { feedbackService } from "./feedback.js";
 export { companySkillService } from "./company-skills.js";
@@ -95,6 +104,9 @@ export { connectorService } from "./connectors.js";
 
 // AgentDash (AGE-119): agent-run metering
 export { agentRunService, classifyComplexity } from "./agent-runs.js";
+
+// AgentDash (AGE-121): run-quota enforcement gate
+export { quotaEnforcementService, decideQuota, quotaExceededPayload } from "./quota-enforcement.js";
 
 // AgentDash: goals-eval-hitl
 export { verdictsService, type VerdictsService } from "./verdicts.js";

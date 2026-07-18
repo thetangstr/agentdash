@@ -69,7 +69,14 @@ export function entitlementSync(deps: Deps) {
     if (!company) throw new Error(`No company for subscription ${sub.id}`);
     const planTier = STATUS_TO_TIER[sub.status] ?? "free";
     const planSeatsPaid = sub.items?.data?.[0]?.quantity ?? 0;
-    const planPeriodEnd = new Date((sub.current_period_end ?? 0) * 1000);
+    // AgentDash (P0.3): on Stripe API >= 2025-03-31, current_period_end moved
+    // OFF the subscription and ONTO the subscription item. Read from the item
+    // first, falling back to the legacy top-level field for older API versions
+    // / fixtures. Reading the wrong source yields epoch-1970 and corrupts the
+    // quota billing window (see server/src/services/quota.ts).
+    const periodEndSec =
+      sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end ?? 0;
+    const planPeriodEnd = new Date(periodEndSec * 1000);
 
     // AgentDash (#249): read prior tier so we can fire the downgrade
     // notifier if this transition crosses pro-live → downgraded. Only if

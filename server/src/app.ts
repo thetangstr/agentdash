@@ -16,6 +16,7 @@ import {
   createBillingRateLimiter,
   createDefaultApiRateLimiter,
   createInviteRateLimiter,
+  createTrialRateLimiter,
 } from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
@@ -60,6 +61,8 @@ import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
 // AgentDash: Agent-run quota (AGE-120)
 import { quotaRoutes } from "./routes/quota.js";
+// AgentDash: Test Drive — no-signup anonymous trial (public, token-based)
+import { trialRoutes } from "./routes/trial.js";
 // AgentDash: Connectors (AGE-106)
 import { connectorRoutes } from "./routes/connectors.js";
 // AgentDash: Slack Connector (AGE-108)
@@ -171,12 +174,41 @@ export async function createApp(
 ) {
   const app = express();
 
+  // AgentDash (trial-abuse-hardening): trust the single upstream proxy when the
+  // deployment is internet-facing (Railway/Fly/etc. terminate TLS and forward
+  // X-Forwarded-For). Without this, req.ip is the proxy's address for everyone,
+  // collapsing the per-IP API rate limiter into one bucket and making the trial's
+  // ipHash identical for all visitors. We set the hop count to 1 (the single
+  // known proxy) rather than `true` — `true` trusts the whole XFF chain, lets
+  // clients spoof their IP, AND trips express-rate-limit's permissive-trust-proxy
+  // validation (ERR_ERL_PERMISSIVE_TRUST_PROXY). local_trusted (private dev /
+  // loopback) keeps Express's default (off) so local tests are unaffected.
+  const internetFacing =
+    opts.deploymentMode === "authenticated" || opts.deploymentExposure === "public";
+  if (internetFacing) {
+    app.set("trust proxy", 1);
+  }
+
+  // AgentDash: capture the raw request body so downstream webhook/connector
+  // routes (Stripe, Slack) can verify HMAC signatures. Shared by both the JSON
+  // and urlencoded parsers so the captured bytes are identical regardless of
+  // content-type. Each parser only handles its own content-type, so registering
+  // both is safe and non-overlapping.
+  const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+    (req as unknown as { rawBody: Buffer }).rawBody = buf;
+  };
   app.use(express.json({
     // Company import/export payloads can inline full portable packages.
     limit: "10mb",
-    verify: (req, _res, buf) => {
-      (req as unknown as { rawBody: Buffer }).rawBody = buf;
-    },
+    verify: captureRawBody,
+  }));
+  // AgentDash: Slack sends interactive-component callbacks as
+  // application/x-www-form-urlencoded with a `payload` JSON field. Without this
+  // parser req.body.payload and rawBody are undefined and every interaction 401s.
+  app.use(express.urlencoded({
+    extended: true,
+    limit: "10mb",
+    verify: captureRawBody,
   }));
   app.use(httpLogger);
   const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
@@ -275,6 +307,14 @@ export async function createApp(
   api.use(agentResearchRoutes(db));
   // AgentDash: Agent-run quota (AGE-120)
   api.use(quotaRoutes(db));
+  // AgentDash: Test Drive — no-signup anonymous trial. PUBLIC + token-based:
+  // these routes validate the trial token themselves and never require
+  // req.actor, so they are reachable without auth even in authenticated mode
+  // (boardMutationGuard only gates board-session actors). A tighter per-IP
+  // request limiter sits in front of the cost-amplifying entry points (session
+  // mint + multi-agent design) on top of the default-tier API limiter; the
+  // kill-switch + per-IP/day + global-spend caps live in trialRoutes/trialService.
+  api.use("/trial", createTrialRateLimiter({ deploymentMode: opts.deploymentMode }), trialRoutes(db));
   // AgentDash: Connectors (AGE-106)
   api.use(connectorRoutes(db));
   // AgentDash: Slack Connector (AGE-108)
@@ -308,7 +348,11 @@ export async function createApp(
   let stripeSdk: any = stripeStubForDev();
   if (stripeKey) {
     const { default: Stripe } = await import("stripe");
-    stripeSdk = new Stripe(stripeKey);
+    // AgentDash (P0.3): pin the API version so a stripe-package upgrade can't
+    // silently shift webhook payload shapes underneath us (e.g. the
+    // current_period_end relocation in 2025-03-31). Matches the installed
+    // stripe@22 LatestApiVersion.
+    stripeSdk = new Stripe(stripeKey, { apiVersion: "2026-04-22.dahlia" });
   }
   // AgentDash (#160): tighter rate limit on /billing/* (abuse vector). The
   // /billing/webhook subpath is hit by Stripe's servers, not users, and must

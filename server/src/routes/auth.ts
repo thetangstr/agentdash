@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { unauthorized } from "../errors.js";
 import { validate } from "../middleware/validate.js";
+import { getConfiguredSocialProviders } from "../auth/social-providers.js";
 
 async function loadCurrentUserProfile(db: Db, userId: string) {
   const user = await db
@@ -36,6 +37,16 @@ async function loadCurrentUserProfile(db: Db, userId: string) {
 
 export function authRoutes(db: Db) {
   const router = Router();
+
+  // AgentDash: SSO — public, unauthenticated probe so the sign-in page knows
+  // which social providers to render. Returns booleans only (never the OAuth
+  // client ids/secrets). Mounted ahead of the Better Auth catch-all so this
+  // exact path resolves here. The UI hides a button whenever its provider is
+  // false, which lets us ship the feature dark and flip it on by adding env
+  // vars later.
+  router.get("/social-providers", (_req, res) => {
+    res.json(getConfiguredSocialProviders());
+  });
 
   router.get("/get-session", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {

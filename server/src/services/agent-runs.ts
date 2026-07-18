@@ -70,6 +70,9 @@ export function agentRunService(db: Db) {
       projectId?: string | null;
       startedAt?: Date | null;
       finishedAt: Date;
+      // AgentDash (AGE-121): true when this run executed beyond the
+      // workspace's included monthly allotment (Pro overage).
+      isOverage?: boolean;
     }) => {
       // 1. Aggregate tokens + cost from cost_events for this run.
       const [agg] = await db
@@ -111,6 +114,7 @@ export function agentRunService(db: Db) {
             durationMs,
             tokenCount,
             costCents: totalCostCents,
+            isOverage: input.isOverage ?? false,
             completedAt: input.finishedAt,
           })
           .onConflictDoNothing({ target: agentRuns.heartbeatRunId })

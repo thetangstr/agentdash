@@ -36,6 +36,7 @@ import {
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { issueService } from "./issues.js";
 
 type InteractionActor = {
@@ -71,10 +72,10 @@ type IssueResolutionContext = {
 };
 
 function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const err = error as { code?: string; constraint?: string; constraint_name?: string };
-  const constraint = err.constraint ?? err.constraint_name;
-  return err.code === "23505" && constraint === ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT;
+  return (
+    isUniqueViolation(error) &&
+    pgConstraintName(error) === ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT
+  );
 }
 
 function isEquivalentCreateRequest(

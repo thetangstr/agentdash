@@ -1,44 +1,48 @@
-/* AgentDash: Claude design tokens — warm coral accent, off-cream surface */
+/* AgentDash: "Porcelain" design tokens — light-first, near-monochrome, warm
+ * clay accent. Ink on warm-white; clay is the only chromatic accent on chrome;
+ * green/amber/red are reserved for status. Generous radii, almost no shadow.
+ * The existing token NAMES are kept and remapped to Porcelain values so the
+ * whole app reskins through the tokens components already consume. */
 :root {
   /* Surface */
-  --surface-page:       #FAF9F6;
-  --surface-raised:     #FFFFFF;
-  --surface-sunken:     #F1EFEA;
-  --border-soft:        #E8E5DD;
-  --border-strong:      #C7C2B5;
+  --surface-page:       #FBFBFA;  /* porcelain — warm off-white, never pure white */
+  --surface-raised:     #FFFFFF;  /* card */
+  --surface-sunken:     #F4F4F3;  /* stone — recessed fill: chips, active nav, tracks, hover */
+  --border-soft:        #ECECEA;  /* hairline — the universal 1px divider */
+  --border-strong:      #DCDCDA;  /* hairline hover — border on card/tile hover */
 
   /* Text */
-  --text-primary:       #1F1B16;
-  --text-secondary:     #5A544A;
-  --text-tertiary:      #8C8678;
-  --text-inverse:       #FAF9F6;
+  --text-primary:       #18181B;  /* ink */
+  --text-secondary:     #52525B;  /* ink-2 — body / secondary */
+  --text-tertiary:      #A1A1A1;  /* ink-3 — labels, metadata, placeholders, idle */
+  --text-inverse:       #FBFBFA;  /* text on dark fills */
 
-  /* Brand accent — Claude coral */
-  --accent-50:          #FFF4F0;
-  --accent-100:         #FFE0D5;
-  --accent-200:         #FFC2AA;
-  --accent-300:         #FF9E82;
-  --accent-400:         #F46F4D;
-  --accent-500:         #DD523A;
-  --accent-600:         #C24332;
-  --accent-700:         #9D3527;
+  /* Brand accent — clay (THE accent: links, draft-state, badges, focus ring) */
+  --accent-50:          #F8ECE1;  /* clay-soft — accent tint surface; ::selection */
+  --accent-100:         #F2DBC8;
+  --accent-200:         #E4BB97;
+  --accent-300:         #D69A66;
+  --accent-400:         #CB7E3F;
+  --accent-500:         #C2682E;  /* CLAY — primary accent */
+  --accent-600:         #A85423;  /* clay-hover */
+  --accent-700:         #8A4419;
 
-  /* Semantic */
-  --success-500:        #4D8A6A;
-  --warn-500:           #C99237;
-  --danger-500:         #B5453E;
-  --info-500:           #4D6F8A;
+  /* Semantic status (never on chrome — status only) */
+  --success-500:        #16A34A;  /* live — running, positive deltas, sent */
+  --warn-500:           #D97706;  /* needs-you — paused / waiting on user */
+  --danger-500:         #DC2626;  /* alert — destructive / error */
+  --info-500:           #52525B;  /* neutral (Porcelain adds no extra hue) */
 
-  /* Shadow */
-  --shadow-sm:          0 1px 2px rgba(31, 27, 22, 0.05);
-  --shadow-md:          0 4px 12px rgba(31, 27, 22, 0.08);
-  --shadow-lg:          0 16px 40px rgba(31, 27, 22, 0.12);
+  /* Shadow — almost none; surfaces lift by tone, not shadow */
+  --shadow-sm:          0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md:          0 6px 16px -8px rgba(0, 0, 0, 0.13);   /* tile hover */
+  --shadow-lg:          0 8px 24px -8px rgba(0, 0, 0, 0.35);   /* floating dark chip */
 
-  /* Radius */
-  --radius-sm:          6px;
-  --radius-md:          10px;
-  --radius-lg:          16px;
-  --radius-pill:        999px;
+  /* Radius — generous & soft (opposite of the old square corners) */
+  --radius-sm:          10px;  /* icon chips, nav items, small controls */
+  --radius-md:          12px;
+  --radius-lg:          16px;  /* stat cards, agent tiles, primary surfaces */
+  --radius-pill:        999px; /* all buttons, badges, chips, dots, tracks, search */
 
   /* Spacing scale (4-px grid) */
   --space-1:            4px;
@@ -57,25 +61,26 @@
   --text-lg:            18px;
   --text-xl:            22px;
   --text-2xl:           28px;
-  --text-3xl:           36px;
-  --text-display:       48px;
+  --text-3xl:           32px;
+  --text-display:       32px;
 
   /* Line heights */
-  --leading-tight:      1.2;
-  --leading-snug:       1.4;
-  --leading-normal:     1.6;
+  --leading-tight:      1.05;
+  --leading-snug:       1.3;
+  --leading-normal:     1.5;
 }
 
-/* Dark mode overrides via class (existing app uses .dark class toggled by JS) */
+/* Dark mode — Porcelain is light-first; keep a neutral monochrome dark so the
+ * app still works in dark mode without introducing the old warm-brown palette.
+ * Clay accent + status colors carry over unchanged. */
 .dark {
-  --surface-page:     #1A1814;
-  --surface-raised:   #232017;
-  --surface-sunken:   #15130F;
-  --border-soft:      #2D2920;
-  --border-strong:    #4A4536;
-  --text-primary:     #F6F3EC;
-  --text-secondary:   #B8B0A0;
-  --text-tertiary:    #807868;
-  --text-inverse:     #1A1814;
-  /* accent stays the same in dark mode */
+  --surface-page:     #161618;
+  --surface-raised:   #1C1C1F;
+  --surface-sunken:   #232326;
+  --border-soft:      #2A2A2E;
+  --border-strong:    #3A3A40;
+  --text-primary:     #FBFBFA;
+  --text-secondary:   #A1A1AA;
+  --text-tertiary:    #71717A;
+  --text-inverse:     #161618;
 }
