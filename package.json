@@ -89,7 +89,9 @@
       "fast-uri": ">=3.1.2 <4",
       "tmp": ">=0.2.6",
       "multer": ">=2.2.0",
-      "ws": ">=8.21.0"
+      "ws": ">=8.21.0",
+      "underscore": ">=1.13.8",
+      "snarkjs": ">=0.7.5"
     },
     "auditConfig": {
       "_comment": "Allowlist for the BLOCKING `pnpm run audit:deps` gate (.github/workflows/pr.yml dependency-audit). Every entry is a dev/test-tooling advisory that surfaces under --prod ONLY because better-auth declares `vitest` in its optionalDependencies; pnpm walks optionalDependencies as part of the production tree even though vitest (the test runner) and its bundled vite/picomatch are never imported by better-auth's runtime code. None is reachable in the deployed server/UI/CLI. Re-audit and remove entries when better-auth drops the optional vitest dep or ships patched transitives. Do NOT add genuinely production-reachable advisories here. GHSA-5xrq-8626-4rwp=vitest UI arbitrary file read; GHSA-c2c7-rcm5-vvqj=picomatch ReDoS; GHSA-v2wj-q39q-566r / GHSA-p9ff-h696-f583 / GHSA-fx2h-pf6j-xcff=vite dev-server server.fs.deny bypass / arbitrary file read.",
