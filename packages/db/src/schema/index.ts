@@ -15,6 +15,7 @@ export { joinRequests } from "./join_requests.js";
 export { budgetPolicies } from "./budget_policies.js";
 export { mandates } from "./mandates.js";
 export { mandateAttestations } from "./mandate_attestations.js";
+export { zkPermissionProofs } from "./zk_permission_proofs.js";
 export { budgetIncidents } from "./budget_incidents.js";
 export { agentConfigRevisions } from "./agent_config_revisions.js";
 export { agentApiKeys } from "./agent_api_keys.js";

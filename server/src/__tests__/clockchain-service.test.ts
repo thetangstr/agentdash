@@ -126,7 +126,15 @@ describe("KYA + attest wrappers", () => {
       { status: 200 },
     ) as any);
     const res = await clockchainService().attestAction({ agentDid: "did:a", action: "x" });
-    expect(res).toEqual({ attested: true, ledgerId: "led_a", blockHeight: 9, status: "anchored" });
+    // CLO-137: attestAction also returns the raw gateway `receipt` so callers can
+    // re-verify it off-chain (verifyReceipt / the ZK permission-proof flow).
+    expect(res).toEqual({
+      attested: true,
+      ledgerId: "led_a",
+      blockHeight: 9,
+      status: "anchored",
+      receipt: { ledgerId: "led_a", blockHeight: 9, status: "anchored" },
+    });
   });
 
   it("sends allow_degraded on writes only when CLOCKCHAIN_ALLOW_DEGRADED=true", async () => {

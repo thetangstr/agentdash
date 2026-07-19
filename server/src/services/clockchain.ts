@@ -28,6 +28,9 @@ export type AttestResult = {
   blockHeight?: number;
   eventHash?: string;
   status?: "anchored" | "pending" | "degraded";
+  // Raw receipt (clockchain.receipt/v1) — kept so a relying party can later re-run
+  // verify_receipt against the immutable on-chain block (CLO-137 verifier flow).
+  receipt?: Record<string, unknown>;
 };
 
 // Minimal StreamableHTTP JSON-RPC tools/call, SSE-frame tolerant (mirrors
@@ -141,9 +144,21 @@ export function clockchainService() {
       const status = (r.status ?? r.anchor?.status) as ("anchored" | "pending" | "degraded" | undefined);
       // Default from blockHeight, NOT ledgerId: a ledgerId without a confirmed block is "pending"
       // (submitted but not anchored). Defaulting it to "anchored" would be a false positive.
-      return { attested: true, ledgerId, eventHash, blockHeight, status: status ?? (blockHeight != null ? "anchored" : "pending") };
+      return { attested: true, ledgerId, eventHash, blockHeight, status: status ?? (blockHeight != null ? "anchored" : "pending"), receipt: r as Record<string, unknown> };
     } catch { return { attested: false }; }
   }
 
-  return { delegateAuthority, getLogEntry, mintIdentity, resolveAgent, verifyIdentityAt, attestAction };
+  // Keyless, third-party re-check: does this receipt still match the immutable on-chain block?
+  // The gateway re-derives the event hash and matches it against the anchored block; a tampered
+  // record cache cannot redirect it. Returns verified=false on any error (never a false positive).
+  async function verifyReceipt(receipt: Record<string, unknown>): Promise<{ verified: boolean; verifiedAgainst?: string }> {
+    if (!clockchainEnabled()) return { verified: false };
+    try {
+      const r = await callTool("verify_receipt", { receipt });
+      const match = r.match ?? r.verified ?? r.isValid;
+      return { verified: match === true, verifiedAgainst: r.verifiedAgainst };
+    } catch { return { verified: false }; }
+  }
+
+  return { delegateAuthority, getLogEntry, mintIdentity, resolveAgent, verifyIdentityAt, attestAction, verifyReceipt };
 }

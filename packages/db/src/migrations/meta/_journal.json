@@ -666,6 +666,13 @@
       "when": 1781452800000,
       "tag": "0094_mandate_publishing",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1781539200000,
+      "tag": "0095_zk_permission_proofs",
+      "breakpoints": true
     }
   ]
 }

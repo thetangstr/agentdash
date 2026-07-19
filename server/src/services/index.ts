@@ -129,3 +129,13 @@ export {
 } from "./verdict-approval-bridge.js";
 
 export { mandatedActionService } from "./mandated-action.js";
+export {
+  zkPermissionService,
+  generatePermissionProof,
+  verifyPermissionProof,
+  proveMandatePermission,
+  deriveAuthorityGroup,
+  buildAuthoritySet,
+  zkProofEnabled,
+  ZK_SCHEME,
+} from "./zk-permission.js";
