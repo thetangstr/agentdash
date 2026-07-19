@@ -6,6 +6,7 @@ import { agentIdentityService } from "./agent-identity.js";
 import { mandatesService } from "./mandates.js";
 import { mandatedActionService } from "./mandated-action.js";
 import { approvalService } from "./approvals.js";
+import { handshakeAgentRunner, type HandshakeAgentRunner } from "./handshake-agent-runner.js";
 
 // Turnkey two-company Agent Trust Handshake demo (scripted-real).
 // One "Go" steps the real flow: discover → approve (payer human) → publish
@@ -16,6 +17,13 @@ import { approvalService } from "./approvals.js";
 // State is derived, not stored: each step's completion is read from the DB
 // (companies/agents/approvals/mandates/attestations), so "Go" is resumable
 // and idempotent.
+//
+// AGENT-DRIVEN mode (flag AGENTDASH_HANDSHAKE_AGENT_DRIVEN, default OFF): when
+// ON, two of the transitions are additionally gated by a REAL Hermes agent
+// decision layered ON TOP of the existing human approval gates — Atlas (CEO)
+// reasons about whether to grant the mandate, and Iris reasons about whether to
+// release the payment. When OFF the behavior below is byte-for-byte the
+// scripted-real flow. See handshake-agent-runner.ts.
 
 const PAYER_NAME = "Meridian Pay";
 const PAYEE_NAME = "Trellis Freight";
@@ -24,6 +32,23 @@ const PAYEE_AGENT = "Billie";
 const DEMO_ADAPTER = "hermes_local";
 const DEMO_SCOPE = ["release_payment"];
 const DEMO_CAP_CENTS = 100000;
+
+// Role AGENTS.md for the two decision-making agents (inline; mirrors the driver).
+// Atlas grants least authority; Iris acts only within its mandate's scope+cap.
+const ATLAS_AGENTS_MD =
+  "You are Atlas, CEO of Meridian Pay. You authorize your agents by granting scoped, " +
+  "capped, time-bound mandates that are anchored on Clockchain. You grant only what the " +
+  "business needs and never more.";
+const IRIS_AGENTS_MD =
+  "You are Iris, the payments agent at Meridian Pay. You operate strictly under mandates " +
+  "granted by your CEO. Every payment you release is anchored on Clockchain. You act only " +
+  "within your mandate's scope and cap.";
+
+/** Read the agent-driven flag at call time so it can be toggled per-request/test. */
+function agentDriven(): boolean {
+  const v = process.env.AGENTDASH_HANDSHAKE_AGENT_DRIVEN;
+  return v === "1" || v === "true";
+}
 
 export type HandshakeStep = {
   key: string;
@@ -41,6 +66,7 @@ export function handshakeDemoService(
   mandatesSvc = mandatesService(db, clock, identity),
   approvals = approvalService(db),
   actions = mandatedActionService(db, clock, identity, mandatesSvc),
+  agentRunner: HandshakeAgentRunner = handshakeAgentRunner(),
 ) {
   async function findCompany(name: string) {
     const [row] = await db.select().from(companies).where(eq(companies.name, name));
@@ -117,7 +143,38 @@ export function handshakeDemoService(
 
     // 3. Grant + publish the mandate (Atlas → Iris, published to Trellis). Real on-chain anchor.
     let mandate = await demoMandate(payer.id);
+    let grantorReasoning: string | undefined;
     if (!mandate) {
+      // AGENT-DRIVEN: Atlas (CEO) makes a real decision before we create the
+      // mandate. This runs ONLY when no mandate row exists yet, so a re-run of
+      // "Go" never re-invokes hermes once the mandate is created (the row is the
+      // idempotency signal). NOTE: a DECLINE creates no row, so a repeated Go
+      // will re-run Atlas — acceptable for the demo.
+      if (agentDriven()) {
+        const cap = DEMO_CAP_CENTS / 100;
+        const grant = await agentRunner.runDecision({
+          agentId: atlas.id,
+          name: "Atlas",
+          companyId: payer.id,
+          role: "ceo",
+          agentsMd: ATLAS_AGENTS_MD,
+          task:
+            `Iris, your payments agent, needs to pay vendor ${PAYEE_NAME} up to $${cap} over the next week for freight services.\n` +
+            `Decide whether to grant Iris a mandate: scope=release_payment, spend cap $${cap}, expires in 7 days.\n` +
+            `Reply with EXACTLY one line: "APPROVE: <why>" or "DECLINE: <why>".`,
+        });
+        if (!grant.approved) {
+          steps.push({
+            key: "mandate",
+            title: "Atlas (CEO) declined to grant the mandate",
+            status: "blocked",
+            detail: grant.decision,
+            evidence: { grantorAgent: "Atlas", decision: grant.decision, reasoning: grant.reasoning },
+          });
+          return { steps, done: false };
+        }
+        grantorReasoning = grant.reasoning;
+      }
       mandate = await mandatesSvc.createMandate({
         companyId: payer.id,
         grantorAgentId: atlas.id,
@@ -135,7 +192,7 @@ export function handshakeDemoService(
     if (!mandate.published) {
       mandate = await mandatesSvc.publishMandate(payer.id, mandate.id, payee.id);
     }
-    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight } });
+    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight, ...(grantorReasoning ? { grantorAgent: "Atlas", grantorReasoning } : {}) } });
 
     // 4. Payee sees it + payee human accepts.
     if (!mandate.acceptedAt) {
@@ -159,12 +216,44 @@ export function handshakeDemoService(
     const existing = await actions.listAttestations(payer.id, mandate.id);
     const receipt = existing.find((a) => a.authorized && a.receiptStatus === "anchored");
     if (!receipt) {
+      // AGENT-DRIVEN: Iris (the grantee) makes a real decision before we attest.
+      // Runs ONLY when no anchored attestation exists yet, so a re-run never
+      // re-invokes hermes once the receipt row exists. NOTE: a DECLINE creates
+      // no anchored attestation, so a repeated Go will re-run Iris — acceptable
+      // for the demo.
+      let granteeReasoning: string | undefined;
+      if (agentDriven()) {
+        const cap = DEMO_CAP_CENTS / 100;
+        const release = await agentRunner.runDecision({
+          agentId: iris.id,
+          name: PAYER_AGENT,
+          companyId: payer.id,
+          role: "payments",
+          agentsMd: IRIS_AGENTS_MD,
+          task:
+            `You hold an accepted mandate: scope=release_payment, cap $${cap}, counterparty ${PAYEE_NAME} (cleared to transact). ` +
+            `A $100.00 freight invoice from ${PAYEE_NAME} is due now — within scope and cap.\n` +
+            `Decide whether to release this $100.00 payment.\n` +
+            `Reply with EXACTLY one line: "APPROVE: <why>" or "DECLINE: <why>".`,
+        });
+        if (!release.approved) {
+          steps.push({
+            key: "transact",
+            title: "Iris declined to release the payment",
+            status: "blocked",
+            detail: release.decision,
+            evidence: { granteeAgent: PAYER_AGENT, decision: release.decision, reasoning: release.reasoning, counterpartyDid: billieDid },
+          });
+          return { steps, done: false };
+        }
+        granteeReasoning = release.reasoning;
+      }
       const result = await actions.runDemoAttestation({ companyId: payer.id, mandateId: mandate.id, action: DEMO_SCOPE[0] });
       steps.push({
         key: "transact",
         title: result.authorized ? "Transaction attested — receipt anchored" : `Transaction denied (${result.reason})`,
         status: result.authorized ? "done" : "blocked",
-        evidence: { ledgerId: result.ledgerId, blockHeight: result.blockHeight, eventHash: result.eventHash, counterpartyDid: billieDid },
+        evidence: { ledgerId: result.ledgerId, blockHeight: result.blockHeight, eventHash: result.eventHash, counterpartyDid: billieDid, ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning } : {}) },
       });
       return { steps, done: Boolean(result.authorized) };
     }
