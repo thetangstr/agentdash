@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from "express";
 import type { IncomingHttpHeaders } from "node:http";
-import { betterAuth } from "better-auth";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
 import type { Db } from "@paperclipai/db";
@@ -123,7 +123,7 @@ export function createBetterAuthInstance(
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
   const socialProviders = buildSocialProviders();
 
-  const authConfig = {
+  const authConfig: BetterAuthOptions = {
     baseURL: baseUrl,
     secret,
     trustedOrigins,
@@ -204,7 +204,9 @@ export function createBetterAuthInstance(
     // present. Omitting `socialProviders` entirely (rather than passing an empty
     // object) keeps Better Auth from advertising callback routes for providers
     // that can't actually complete a sign-in.
-    ...(Object.keys(socialProviders).length > 0 ? { socialProviders } : {}),
+    ...(Object.keys(socialProviders).length > 0
+      ? { socialProviders: socialProviders as BetterAuthOptions["socialProviders"] }
+      : {}),
   };
 
   if (!baseUrl) {
