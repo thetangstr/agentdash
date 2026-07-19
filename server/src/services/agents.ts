@@ -47,14 +47,14 @@ const CONFIG_REVISION_FIELDS = [
 type ConfigRevisionField = (typeof CONFIG_REVISION_FIELDS)[number];
 type AgentConfigSnapshot = Pick<typeof agents.$inferSelect, ConfigRevisionField>;
 
-interface RevisionMetadata {
+export interface RevisionMetadata {
   createdByAgentId?: string | null;
   createdByUserId?: string | null;
   source?: string;
   rolledBackFromRevisionId?: string | null;
 }
 
-interface UpdateAgentOptions {
+export interface UpdateAgentOptions {
   recordRevision?: RevisionMetadata;
 }
 
@@ -436,7 +436,7 @@ export function agentService(db: Db) {
 
     update: updateAgent,
 
-    pause: async (id: string, reason: "manual" | "budget" | "system" = "manual") => {
+    pause: async (id: string, reason: "manual" | "budget" | "system" | "mandate" = "manual") => {
       const existing = await getById(id);
       if (!existing) return null;
       if (existing.status === "terminated") throw conflict("Cannot pause terminated agent");

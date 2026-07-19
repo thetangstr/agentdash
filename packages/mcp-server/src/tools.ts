@@ -447,6 +447,20 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
+      "paperclipMandatedAttest",
+      "Perform a mandated action: verify the agent's mandate (in-scope, under-cap, unexpired), KYA the counterparty (valid-at-T), then attest the action. Returns { authorized, reason?, receipt? }. Denied when out-of-scope/over-cap/expired or the counterparty can't be verified.",
+      z.object({
+        companyId: companyIdOptional,
+        granteeAgentId: z.string().uuid().optional(),
+        mandateId: z.string().uuid(),
+        counterpartyDid: z.string().min(1),
+        action: z.string().min(1),
+        payload: z.record(z.unknown()).optional(),
+      }),
+      async ({ companyId, ...body }) =>
+        client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/mandated-actions`, { body }),
+    ),
+    makeTool(
       "paperclipGetApproval",
       "Get an approval by id",
       z.object({ approvalId: approvalIdSchema }),

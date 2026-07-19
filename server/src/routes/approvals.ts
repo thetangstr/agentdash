@@ -10,6 +10,7 @@ import {
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
+  agentService,
   approvalService,
   heartbeatService,
   issueApprovalService,
@@ -228,6 +229,14 @@ export function approvalRoutes(
           linkedIssueIds,
         },
       });
+
+      if (approval.type === "mandate_violation" && approval.requestedByAgentId) {
+        try {
+          await agentService(db).resume(approval.requestedByAgentId);
+        } catch {
+          /* already resumed/terminated — non-fatal */
+        }
+      }
 
       if (approval.requestedByAgentId) {
         try {

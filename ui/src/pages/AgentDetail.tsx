@@ -40,6 +40,7 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
+import { MandatesTab } from "../components/agent/MandatesTab";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
@@ -245,13 +246,14 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget";
+type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget" | "mandates";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return "skills";
   if (value === "budget") return "budget";
+  if (value === "mandates") return "mandates";
   if (value === "runs") return value;
   return "dashboard";
 }
@@ -654,6 +656,7 @@ export function AgentDetail() {
   const needsDashboardData = activeView === "dashboard";
   const needsRunData = activeView === "runs" || Boolean(urlRunId);
   const shouldLoadHeartbeats = needsDashboardData || needsRunData;
+  const needsAgentsList = needsDashboardData || activeView === "mandates";
   const [configDirty, setConfigDirty] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const saveConfigActionRef = useRef<(() => void) | null>(null);
@@ -701,7 +704,7 @@ export function AgentDetail() {
   const { data: allAgents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId!),
     queryFn: () => agentsApi.list(resolvedCompanyId!),
-    enabled: !!resolvedCompanyId && needsDashboardData,
+    enabled: !!resolvedCompanyId && needsAgentsList,
   });
 
   const { data: budgetOverview } = useQuery({
@@ -775,6 +778,8 @@ export function AgentDetail() {
               ? "runs"
               : activeView === "budget"
                 ? "budget"
+              : activeView === "mandates"
+                ? "mandates"
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
       navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
@@ -1053,6 +1058,7 @@ export function AgentDetail() {
               { value: "configuration", label: "Configuration" },
               { value: "runs", label: "Runs" },
               { value: "budget", label: "Budget" },
+              { value: "mandates", label: "Mandates" },
             ]}
             value={activeView}
             onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
@@ -1204,6 +1210,10 @@ export function AgentDetail() {
             variant="plain"
           />
         </div>
+      ) : null}
+
+      {activeView === "mandates" && resolvedCompanyId ? (
+        <MandatesTab companyId={resolvedCompanyId} agentId={agent.id} agents={allAgents ?? []} />
       ) : null}
     </div>
   );

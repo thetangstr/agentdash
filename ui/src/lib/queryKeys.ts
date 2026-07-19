@@ -100,6 +100,12 @@ export const queryKeys = {
     comments: (approvalId: string) => ["approvals", "comments", approvalId] as const,
     issues: (approvalId: string) => ["approvals", "issues", approvalId] as const,
   },
+  mandates: {
+    list: (companyId: string, granteeAgentId?: string) =>
+      ["mandates", companyId, granteeAgentId] as const,
+    attestations: (companyId: string, mandateId?: string) =>
+      ["mandates", companyId, "attestations", mandateId] as const,
+  },
   access: {
     invites: (companyId: string, state: string = "all", limit: number = 20) =>
       ["access", "invites", "paginated-v1", companyId, state, limit] as const,

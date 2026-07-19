@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1280" />
+<title>Clockchain — Agent Trust Handshake</title>
+<style>
+  :root{
+    --bg:#F7F6F1; --surface:#FFFFFF; --ink:#11161D; --muted:#5C6675;
+    --line:#E5E1D7; --accent:#00B849; --accent-ink:#007A30; --accent-soft:#E8F7EE;
+    --amber:#B7791F; --amber-soft:#FBF1DD; --slate:#3E4654;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{background:var(--bg)}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink); -webkit-font-smoothing:antialiased;
+  }
+  .slide{
+    width:1280px; height:720px; margin:24px auto; background:var(--bg);
+    padding:40px 56px 30px; display:flex; flex-direction:column; gap:16px;
+    position:relative; overflow:hidden;
+  }
+  /* header */
+  .eyebrow{display:flex; align-items:center; gap:10px; font-size:12.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent-ink); font-weight:600}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  h1{font-size:34px; line-height:1.12; letter-spacing:-.02em; font-weight:700; max-width:1000px}
+  h1 em{font-style:normal; color:var(--accent-ink)}
+  .sub{font-size:15.5px; color:var(--muted); max-width:920px; line-height:1.45}
+
+  /* flow */
+  .flow{
+    display:flex; align-items:stretch; gap:0; margin-top:6px;
+  }
+  .zone{
+    flex:1; border-radius:18px; padding:16px 16px 18px; position:relative;
+    border:1.5px dashed transparent;
+  }
+  .zone.you{background:#FFFDF7; border-color:#DED8C6;}
+  .zone.cc {background:var(--accent-soft); border-color:#BFE9CF;}
+  .zone-label{font-size:11px; letter-spacing:.16em; text-transform:uppercase; font-weight:700; color:var(--muted); margin-bottom:10px; display:flex; align-items:center; gap:8px}
+  .zone.cc .zone-label{color:var(--accent-ink)}
+  .zone-tag{font-size:11px; color:var(--muted); font-weight:500}
+  .steps{display:flex; align-items:stretch; gap:8px}
+  .step{
+    flex:1; background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:12px 12px 11px; display:flex; flex-direction:column; gap:6px; min-width:0;
+  }
+  .step .ico{font-size:20px; line-height:1}
+  .step .t{font-size:14px; font-weight:700; letter-spacing:-.01em}
+  .step .d{font-size:11.5px; color:var(--muted); line-height:1.35}
+  .arrow{
+    align-self:center; color:var(--slate); font-size:18px; font-weight:700;
+    width:16px; text-align:center; flex:none;
+  }
+  .handoff{
+    width:46px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:var(--accent-ink); gap:4px; flex:none;
+  }
+  .handoff .gate{
+    font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; text-align:center; line-height:1.2;
+  }
+  .handoff .ar{font-size:22px}
+
+  /* bounce strip */
+  .bounce{
+    margin-top:2px; display:flex; align-items:center; gap:12px;
+    background:var(--amber-soft); border:1px solid #EBD7A6; border-radius:12px; padding:10px 14px;
+  }
+  .bounce .b-ico{font-size:16px}
+  .bounce .b-txt{font-size:13px; color:#6B4F12; line-height:1.4}
+  .bounce .b-txt b{color:#5A3F08}
+
+  /* pillars */
+  .pillars{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:2px}
+  .pillar{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:11px 13px}
+  .pillar .ph{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700}
+  .pillar .pd{font-size:11.5px; color:var(--muted); line-height:1.4; margin-top:4px}
+
+  .foot{margin-top:auto; display:flex; justify-content:space-between; align-items:flex-end; gap:24px; padding-top:8px; border-top:1px solid var(--line)}
+  .foot .honest{font-size:11px; color:var(--muted); line-height:1.45; max-width:820px}
+  .foot .brand{font-size:12px; font-weight:700; letter-spacing:.04em; white-space:nowrap}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:10.5px; color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="slide">
+
+  <div class="eyebrow"><span class="dot"></span> Clockchain · Agent Trust Handshake</div>
+  <h1>Your agents act on their own. <em>The proof is independent.</em></h1>
+  <div class="sub">A human grants scoped, time-boxed authority to an AI agent. Every consequential action is independently verified and attested — <b>who</b> it was and <b>when</b> it happened — producing a receipt anyone can check, with no custody and no trusted intermediary.</div>
+
+  <!-- FLOW -->
+  <div class="flow">
+
+    <div class="zone you">
+      <div class="zone-label">Your platform <span class="zone-tag">· you stay in control</span></div>
+      <div class="steps">
+        <div class="step">
+          <div class="ico">👤</div>
+          <div class="t">Human grants</div>
+          <div class="d">A standing mandate: what the agent may do, a spend cap, and an expiry.</div>
+        </div>
+        <div class="arrow">›</div>
+        <div class="step">
+          <div class="ico">🤝</div>
+          <div class="t">Mandate anchored</div>
+          <div class="d">The grant is committed on-chain — revocable, and provably lapses on time.</div>
+        </div>
+        <div class="arrow">›</div>
+        <div class="step">
+          <div class="ico">🤖</div>
+          <div class="t">Agent acts</div>
+          <div class="d">Runs autonomously against the mandate — verifies each counterparty, then transacts.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="handoff">
+      <div class="ar">↘</div>
+      <div class="gate">verify<br/>+ attest</div>
+    </div>
+
+    <div class="zone cc">
+      <div class="zone-label">Clockchain <span class="zone-tag">· neutral, un-backdatable</span></div>
+      <div class="steps">
+        <div class="step">
+          <div class="ico">🛡️</div>
+          <div class="t">Verify &amp; attest</div>
+          <div class="d">Confirms the counterparty is valid right now, then anchors the action at an independent time.</div>
+        </div>
+        <div class="arrow">›</div>
+        <div class="step">
+          <div class="ico">🧾</div>
+          <div class="t">Self-verifying receipt</div>
+          <div class="d">A tamper-evident record of <span class="mono">who · when · what</span> — held by the parties, never the payload.</div>
+        </div>
+        <div class="arrow">›</div>
+        <div class="step">
+          <div class="ico">🔍</div>
+          <div class="t">Anyone checks it</div>
+          <div class="d">Keyless verification — no account, no login, no trusting us.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- BOUNCE BACK -->
+  <div class="bounce">
+    <div class="b-ico">↩️</div>
+    <div class="b-txt"><b>Out of scope or over cap?</b> The action is blocked and escalated to a human for approval — automatically. Approve, and the agent resumes. Disputes never need a person unless authority itself is the question.</div>
+  </div>
+
+  <!-- PILLARS -->
+  <div class="pillars">
+    <div class="pillar">
+      <div class="ph">🔒 No custody</div>
+      <div class="pd">Only a fingerprint of each action is ever anchored. We never hold your data, your amounts, or your keys.</div>
+    </div>
+    <div class="pillar">
+      <div class="ph">⏱️ Provable time</div>
+      <div class="pd">When something happened is established by an independent clock — not self-asserted by an interested party.</div>
+    </div>
+    <div class="pillar">
+      <div class="ph">👤 Know Your Agent</div>
+      <div class="pd">Verify a counterparty's identity was valid at the exact instant it mattered — keyless, point-in-time.</div>
+    </div>
+    <div class="pillar">
+      <div class="ph">🤝 Human-in-the-loop</div>
+      <div class="pd">Authority is scoped, capped, and time-boxed — and anything beyond it comes straight back to you.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="honest">
+      Live today on testnet (single-validator; multi-validator brings the court-grade evidentiary upgrade). Authorization is enforced by your platform; Clockchain attests and times — it never moves funds. Built into the AgentDash agent platform; verifiable by anyone.
+    </div>
+    <div class="brand">clockchain.network</div>
+  </div>
+
+</div>
+</body>
+</html>

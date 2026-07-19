@@ -260,6 +260,16 @@ export {
 } from "./approval.js";
 
 export {
+  performMandatedActionSchema,
+  type PerformMandatedActionRequest,
+} from "./mandated-action.js";
+
+export {
+  createMandateSchema,
+  type CreateMandateRequest,
+} from "./mandate.js";
+
+export {
   envBindingPlainSchema,
   envBindingSecretRefSchema,
   envBindingSchema,

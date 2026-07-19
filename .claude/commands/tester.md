@@ -18,6 +18,15 @@ The Tester Agent is part of a 4-agent workflow:
 
 ## Phase 1: Test Pickup
 
+### 1.0 Read the loop log
+
+Read the last few work-log entries for cross-issue context before testing (known frictions,
+related changes that just shipped):
+
+```bash
+tail -r loops/LOG.md | awk '{print} /^## 20/{c++; if(c==8) exit}' | tail -r
+```
+
 ### 1.1 Fetch Issue from Linear
 
 If a specific issue was provided (e.g., `/tester AGE-5`):
@@ -129,6 +138,28 @@ pnpm exec playwright test <spec_file_path>
 pnpm exec playwright test
 ```
 
+**Capture video proof.** Run the UI specs with video recording on so there's a watchable artifact
+of the feature working (the recording is the proof, far faster for a human to review than reading
+a pass log):
+
+```bash
+PWVIDEO=on pnpm exec playwright test --grep @<epic>   # or set `video: 'on'` in the e2e config's `use`
+```
+
+Then publish the clip to a stable, reviewable URL and capture the link for the handoff. GitHub
+can't play video inline from an automated PR body, so upload it to the dedicated `pr-evidence`
+prerelease:
+
+```bash
+# one-time: gh release create pr-evidence --prerelease --title "PR evidence" --notes "CUJ/e2e proof clips"
+VIDEO=$(ls -t tests/e2e/test-results/**/video.webm | head -1)
+gh release upload pr-evidence "$VIDEO" --clobber \
+  && PROOF_URL="https://github.com/thetangstr/agentdash/releases/download/pr-evidence/$(basename "$VIDEO")"
+```
+
+Record `PROOF_URL` for the handoff (§5.1) and the PR. (GIFs from Chrome CUJ verification in
+Phase 4 are still fine for quick visual checks; the e2e video is the durable proof.)
+
 ### 2.4 Collect Structured Results
 
 After all gates complete, assemble the test summary:
@@ -207,17 +238,60 @@ If any `critical` findings exist, skip Phase 4 and go to Phase 5 (failure path).
 
 ---
 
-## Phase 4: Chrome CUJ Verification
+## Phase 4: Independent Feature Verification
 
-### 4.0 Gate Check: Should CUJs Run?
+This phase answers the subjective question the regression gates can't: **does the feature actually
+do what was intended?** The verdict principle: *the feature is the verdict — a green regression
+suite with an unverified feature is NOT a pass.*
+
+**You (the Tester) orchestrate; you do NOT drive the app yourself.** Verification is delegated to a
+**fresh, read-only, blind verifier sub-agent** (it didn't write the code, it can't edit code, and
+app-driving is verbose — so isolating it keeps your context clean and the judgment independent).
+This mirrors the loop-engineering `/pr` pattern. The verifier drives the app per the playbook in
+4.2; you spawn it, judge its verdict, and route fixes.
+
+### 4.0 Gate Check: Should feature verification run?
 
 **Skip this phase entirely if:**
 - `files_changed` contains NO paths under `ui/`, `frontend/`, and no `*.tsx`, `*.css`, `*.html` files
 - Issue size is XS (no CUJs defined)
 
-**Run scoped CUJs only:** Do NOT walk every CUJ in the product. Only verify CUJs listed in the Builder handoff or the issue's `## Test Plan` section.
+**Scope:** verify ONLY the CUJs listed in the Builder handoff or the issue's `## Test Plan` — do
+NOT walk every CUJ in the product.
 
-### 4.1 Set Up Browser Session
+### 4.1 Spawn a fresh read-only verifier (per attempt)
+
+Dispatch a **`qa-tester` sub-agent** (read-only — it must not edit code). Give it the structured
+brief below, filled from the issue's acceptance criteria / `## Test Plan` and the Builder handoff
+CUJs. Spawn a **new** verifier on every attempt — never reuse one across a fix.
+
+```
+You are a READ-ONLY verifier. Do NOT edit code. Independently confirm THIS feature works by
+driving the running app. It likely has no automated spec — verify it agentically.
+
+FEATURE (what a user should now be able to do, and the observable success state):
+  <acceptance criteria / Test Plan — the intended outcome>
+HOW TO EXERCISE IT:
+  <UI route + exact steps / API call / CLI — from the Builder handoff CUJs>
+AUTH (if the feature is behind login):
+  sign in via the real flow / mint a session first, then load it before driving
+ENVIRONMENT:
+  Drive against the AgentDash Mac mini install — NOT localhost (project directive: never use the
+  claude/claude_local adapter on localhost; it burns API credits). Use the mini's base URL.
+
+Drive it (Chrome automation per the playbook below, or the API/CLI). Walk the EXACT steps, record
+the success state (GIF/video + screenshots), check console + network, and judge observed vs
+expected. Return ONLY:
+
+FEATURE: works | broken
+  expected: <criteria>
+  observed: <what actually happened>
+  evidence: <gif/video/screenshot paths, console errors, non-2xx requests>
+```
+
+### 4.2 Verifier playbook (the sub-agent runs these; you do not)
+
+**Set up browser session**
 
 ```
 Use mcp__Claude_in_Chrome__tabs_context_mcp with:
@@ -229,14 +303,15 @@ Create a fresh tab for testing:
 Use mcp__Claude_in_Chrome__tabs_create_mcp
 ```
 
-Navigate to the test environment:
+Navigate to the test environment (the Mac mini install base URL — NOT localhost, per the directive
+in the verifier brief):
 ```
 Use mcp__Claude_in_Chrome__navigate with:
-- url: "http://localhost:3000"
+- url: "<mac-mini-base-url>"
 - tabId: <tab_id>
 ```
 
-### 4.2 Walk Each Affected CUJ
+### 4.3 Walk Each Affected CUJ
 
 For each CUJ from the Builder handoff:
 
@@ -349,17 +424,34 @@ Use mcp__Claude_in_Chrome__resize_window with:
 }
 ```
 
-### 4.3 CUJ Verification Summary
+### 4.4 Collect the verdict → fix → re-verify (bounded loop)
 
-After all CUJs complete:
+The verifier returns `FEATURE: works | broken` per CUJ plus evidence. You judge and route:
+
+- **works (all CUJs):** record the verdict + evidence and continue to Phase 5 (pass path). Keep the
+  GIF/video paths for the proof link.
+- **broken (any CUJ):** this is a real defect, not a retry. Route it to the Builder fix path —
+  set `Tests-Failed`, document the verifier's `expected/observed/evidence` (Phase 5 failure path).
+  When the Builder fixes and the issue re-enters the test phase, **spawn a brand-new verifier**
+  (4.1) — never reuse the prior one. Cap at ~3 verify→fix cycles for one issue; if still broken,
+  escalate to a human with the latest verdict rather than looping forever.
+
+**Independence rules (non-negotiable):**
+- The verifier is read-only — it never edits code. You never let the agent that wrote the code
+  declare its own feature working.
+- A fresh verifier per attempt — context-isolated and blind to prior runs.
+- Proof, not claims: no `works` verdict is accepted without evidence (GIF/video + console/network).
+
+Aggregate for the handoff:
 
 ```
-cuj_verification:
+feature_verification:
   completed: true|false
   cuj_count: N
-  pass_count: N
-  fail_count: N
-  results: [ <per-CUJ records from Step 8> ]
+  works_count: N
+  broken_count: N
+  attempt: <n>/3
+  results: [ <per-CUJ verifier verdicts: cuj_id, status, evidence, expected, observed> ]
 ```
 
 ---
@@ -367,6 +459,18 @@ cuj_verification:
 ## Phase 5: Results & Handoff
 
 ### 5.1 If ALL Pass: Structured Handoff to Reviewer
+
+Append ONE line to the shared work log (commit on the PR branch) so the next loop inherits the
+verification outcome:
+
+```bash
+cat >> loops/LOG.md <<'EOF'
+
+## <YYYY-MM-DD> · AGE-<number> verified · #maw #test
+What: Tester PASS — typecheck/unit/build/e2e green, CUJs verified.
+Refs: AGE-<number>, PR #<number>, proof: <PROOF_URL>.
+EOF
+```
 
 Update Linear labels: add `Tests-Passed`, remove `Testing`.
 
@@ -390,7 +494,7 @@ Use mcp__linear__save_comment with:
     | Typecheck | PASS | 0 errors |
     | Unit Tests | PASS | <pass>/<total> passed, <skip> skipped |
     | Build | PASS | Clean |
-    | Playwright | PASS (or SKIPPED) | <pass>/<total> passed |
+    | Playwright | PASS (or SKIPPED) | <pass>/<total> passed · 📹 [proof](<PROOF_URL>) |
 
     ### Code Review Findings
     | Severity | Count |
