@@ -159,13 +159,13 @@ describe("agent local JWT", () => {
     });
   });
 
-  it("defaults TTL to 1h when PAPERCLIP_AGENT_JWT_TTL_SECONDS is unset", () => {
+  it("defaults TTL to 48h when PAPERCLIP_AGENT_JWT_TTL_SECONDS is unset (AgentDash: runs exceed 1h)", () => {
     delete process.env[ttlEnv];
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     const token = createLocalAgentJwt("agent-1", "company-1", "claude_local", "run-1");
     const claims = verifyLocalAgentJwt(token!);
     expect(claims).not.toBeNull();
-    expect(claims!.exp - claims!.iat).toBe(60 * 60);
+    expect(claims!.exp - claims!.iat).toBe(60 * 60 * 48);
   });
 
   // Helper: hand-craft a token signed with the raw master secret (legacy path).

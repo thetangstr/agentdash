@@ -37,7 +37,13 @@ function jwtConfig() {
 
   return {
     secret,
-    ttlSeconds: parseNumber(process.env.PAPERCLIP_AGENT_JWT_TTL_SECONDS, 60 * 60),
+    // AgentDash: keep the pre-cherry-pick 48h default (upstream 70357b961f lowered
+    // this to 1h). The token is minted once per run at dispatch (heartbeat.ts) and
+    // held for the whole run; AgentDash agent runs routinely exceed 1h, so a 1h TTL
+    // would expire mid-run and break the agent's auth callbacks. The security fix in
+    // that commit is the per-company signing key, not the TTL reduction. Still
+    // env-overridable via PAPERCLIP_AGENT_JWT_TTL_SECONDS.
+    ttlSeconds: parseNumber(process.env.PAPERCLIP_AGENT_JWT_TTL_SECONDS, 60 * 60 * 48),
     issuer: process.env.PAPERCLIP_AGENT_JWT_ISSUER ?? "paperclip",
     audience: process.env.PAPERCLIP_AGENT_JWT_AUDIENCE ?? "paperclip-api",
     disableLegacyFallback: parseBooleanEnv(process.env.PAPERCLIP_AGENT_JWT_DISABLE_LEGACY_FALLBACK),
