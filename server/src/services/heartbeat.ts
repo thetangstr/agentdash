@@ -1580,6 +1580,20 @@ function describeSessionResetReason(
   return null;
 }
 
+export function shouldDeferFollowupWakeForSameIssue(input: {
+  activeRunStatus: string | null | undefined;
+  isSameExecutionAgent: boolean;
+  wakeCommentId: string | null | undefined;
+  forceFreshSession: boolean;
+}) {
+  // A comment follow-up or explicit fresh-session wake needs a new run boundary.
+  if (!input.isSameExecutionAgent) return false;
+  if (input.activeRunStatus !== "running") return false;
+  if (input.wakeCommentId) return true;
+  if (input.forceFreshSession) return true;
+  return false;
+}
+
 function shouldAutoCheckoutIssueForWake(input: {
   contextSnapshot: Record<string, unknown> | null | undefined;
   issueStatus: string | null;
@@ -1745,6 +1759,9 @@ export function mergeCoalescedContextSnapshot(
     ...existing,
     ...incoming,
   };
+  if (existing.forceFreshSession === true || incoming.forceFreshSession === true) {
+    merged.forceFreshSession = true;
+  }
   const mergedCommentIds = mergeWakeCommentIds(existing, incoming);
   if (mergedCommentIds.length > 0) {
     const latestCommentId = mergedCommentIds[mergedCommentIds.length - 1];
@@ -7082,12 +7099,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             normalizeAgentNameKey(executionAgent?.name);
           const isSameExecutionAgent =
             Boolean(executionAgentNameKey) && executionAgentNameKey === agentNameKey;
+          const shouldDeferFollowupWake = shouldDeferFollowupWakeForSameIssue({
+            activeRunStatus: activeExecutionRun.status,
+            isSameExecutionAgent,
+            wakeCommentId,
+            forceFreshSession: enrichedContextSnapshot.forceFreshSession === true,
+          });
           const shouldQueueFollowupForRunningWake =
             shouldQueueFollowupForRunningIssueWake({ contextSnapshot: enrichedContextSnapshot, wakeCommentId }) &&
             activeExecutionRun.status === "running" &&
             isSameExecutionAgent;
 
-          if (isSameExecutionAgent && !shouldQueueFollowupForRunningWake) {
+          if (isSameExecutionAgent && !shouldDeferFollowupWake && !shouldQueueFollowupForRunningWake) {
             const mergedContextSnapshot = mergeCoalescedContextSnapshot(
               activeExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
