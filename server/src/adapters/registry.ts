@@ -192,7 +192,7 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   return ctx;
 }
 
-function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
+export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
   const config =
     ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
       ? (ctx.config as Record<string, unknown>)
@@ -207,7 +207,10 @@ function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown })
       : null;
   return readNonEmptyString(config?.hermesCommand)
     ?? readNonEmptyString(agentConfig?.hermesCommand)
-    ?? "/Users/maxiaoer/.local/bin/hermes";
+    // Portable fallback: honor AGENTDASH_HERMES_COMMAND, else "hermes" on PATH.
+    // (Was a hardcoded developer-specific absolute path, which broke on any other
+    // machine when an agent had no config — the round-trip probe would ENOENT.)
+    ?? defaultHermesCommand();
 }
 
 function readNonEmptyString(value: unknown): string | null {
