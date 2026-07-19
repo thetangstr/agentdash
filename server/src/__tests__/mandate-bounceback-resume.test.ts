@@ -10,6 +10,7 @@ import {
   agents,
   approvals,
   companies,
+  companySkills,
   createDb,
   getEmbeddedPostgresTestSupport,
   heartbeatRunEvents,
@@ -47,6 +48,7 @@ describeEmbeddedPostgres(
       await db.delete(agentRuntimeState);
       await db.delete(approvals);
       await db.delete(agents);
+      await db.delete(companySkills);
       await db.delete(companies);
     });
 
