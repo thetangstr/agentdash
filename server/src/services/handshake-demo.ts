@@ -7,6 +7,7 @@ import { mandatesService } from "./mandates.js";
 import { mandatedActionService } from "./mandated-action.js";
 import { approvalService } from "./approvals.js";
 import { handshakeAgentRunner, type HandshakeAgentRunner } from "./handshake-agent-runner.js";
+import { agentService } from "./agents.js";
 
 // Turnkey two-company Agent Trust Handshake demo (scripted-real).
 // One "Go" steps the real flow: discover → approve (payer human) → publish
@@ -68,6 +69,7 @@ export function handshakeDemoService(
   actions = mandatedActionService(db, clock, identity, mandatesSvc),
   agentRunner: HandshakeAgentRunner = handshakeAgentRunner(),
 ) {
+  const agentSvc = agentService(db);
   async function findCompany(name: string) {
     const [row] = await db.select().from(companies).where(eq(companies.name, name));
     return row ?? null;
@@ -288,7 +290,10 @@ export function handshakeDemoService(
       await db.delete(approvalsTable).where(eq(approvalsTable.companyId, co.id));
       await db.delete(activityLog).where(eq(activityLog.companyId, co.id));
       await db.delete(companySkills).where(eq(companySkills.companyId, co.id));
-      await db.delete(agents).where(eq(agents.companyId, co.id));
+      // Remove agents via the service so their cascade (api keys, runtime state,
+      // wakeups, etc.) is handled — a raw delete FK-fails on agent_api_keys.
+      const companyAgents = await db.select().from(agents).where(eq(agents.companyId, co.id));
+      for (const a of companyAgents) await agentSvc.remove(a.id);
       await db.delete(companies).where(eq(companies.id, co.id));
       removed += 1;
     }

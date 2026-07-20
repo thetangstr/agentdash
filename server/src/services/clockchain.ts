@@ -54,7 +54,8 @@ export type ClockchainCall = {
 // (control chars). Collapse control chars/whitespace and cap length so the captured
 // raw response is safe to embed in JSON and legible in the demo transparency panel.
 function sanitizeRaw(raw: string): string {
-  return raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 1000);}
+  return raw.replace(/[\u0000-\u001f\u007f\\]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 800);
+}
 let activeRecorder: ((c: ClockchainCall) => void) | null = null;
 export async function withClockchainCallRecorder<T>(rec: (c: ClockchainCall) => void, fn: () => Promise<T>): Promise<T> {
   const prev = activeRecorder;
@@ -84,6 +85,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<an
     const text = json?.result?.content?.[0]?.text;
     if (json?.result?.isError) throw new Error(typeof text === "string" ? text : "clockchain tool error");
     const parsed = typeof text === "string" ? (() => { try { return JSON.parse(text); } catch { return { text }; } })() : (json?.result ?? {});
+    // `response` is the parsed gateway result — the meaningful, JSON-safe payload we
+    // show. `rawResponse` is a control-char-stripped snippet of the SSE frame for the
+    // "raw payload" toggle (kept short + sanitized so it can never break the JSON).
     if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "ok", latencyMs: Date.now() - startedAt, response: parsed, rawResponse: sanitizeRaw(raw) });
     return parsed;
   } catch (err) {
