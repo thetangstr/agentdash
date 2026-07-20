@@ -1,13 +1,12 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals as approvalsTable, companies, mandates, mandateAttestations, zkPermissionProofs, approvalComments, activityLog, companySkills } from "@paperclipai/db";
+import { agents, approvals as approvalsTable, companies, mandates, mandateAttestations, zkPermissionProofs, approvalComments } from "@paperclipai/db";
 import { clockchainService, clockchainEnabled } from "./clockchain.js";
 import { agentIdentityService } from "./agent-identity.js";
 import { mandatesService } from "./mandates.js";
 import { mandatedActionService } from "./mandated-action.js";
 import { approvalService } from "./approvals.js";
 import { handshakeAgentRunner, type HandshakeAgentRunner } from "./handshake-agent-runner.js";
-import { agentService } from "./agents.js";
 
 // Turnkey two-company Agent Trust Handshake demo (scripted-real).
 // One "Go" steps the real flow: discover → approve (payer human) → publish
@@ -69,7 +68,6 @@ export function handshakeDemoService(
   actions = mandatedActionService(db, clock, identity, mandatesSvc),
   agentRunner: HandshakeAgentRunner = handshakeAgentRunner(),
 ) {
-  const agentSvc = agentService(db);
   async function findCompany(name: string) {
     const [row] = await db.select().from(companies).where(eq(companies.name, name));
     return row ?? null;
@@ -275,11 +273,12 @@ export function handshakeDemoService(
     return { steps, done: true };
   }
 
-  // Reset the demo to a clean slate so "Run" starts fresh (agents re-reason, new
-  // mandate anchored, new ZK proof). Deletes the two demo companies + their demo
-  // footprint in FK-safe order. Scoped strictly to the demo company names.
+  // Reset the demo FLOW so "Run" starts fresh (agents re-reason, a new mandate is
+  // anchored, a new ZK proof is generated). Clears only the per-run artifacts
+  // (proofs, attestations, mandates, approvals) — the companies + agents PERSIST so
+  // the board user's /handshake URL stays valid and re-runs are repeatable.
   async function reset(): Promise<{ reset: boolean; companies: number }> {
-    let removed = 0;
+    let cleared = 0;
     for (const name of [PAYER_NAME, PAYEE_NAME]) {
       const co = await findCompany(name);
       if (!co) continue;
@@ -288,16 +287,9 @@ export function handshakeDemoService(
       await db.delete(mandates).where(eq(mandates.companyId, co.id));
       await db.delete(approvalComments).where(eq(approvalComments.companyId, co.id));
       await db.delete(approvalsTable).where(eq(approvalsTable.companyId, co.id));
-      await db.delete(activityLog).where(eq(activityLog.companyId, co.id));
-      await db.delete(companySkills).where(eq(companySkills.companyId, co.id));
-      // Remove agents via the service so their cascade (api keys, runtime state,
-      // wakeups, etc.) is handled — a raw delete FK-fails on agent_api_keys.
-      const companyAgents = await db.select().from(agents).where(eq(agents.companyId, co.id));
-      for (const a of companyAgents) await agentSvc.remove(a.id);
-      await db.delete(companies).where(eq(companies.id, co.id));
-      removed += 1;
+      cleared += 1;
     }
-    return { reset: true, companies: removed };
+    return { reset: true, companies: cleared };
   }
 
   return { advance, reset };
