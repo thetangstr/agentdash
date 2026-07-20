@@ -240,7 +240,9 @@ export function mandatedActionService(
       escalated: result.escalated,
       approvalId: result.approvalId ?? null,
     }).returning();
-    return row;
+    // Surface the ZK permission proof (present only when AGENTDASH_ZK_PROOF_ENABLED)
+    // so the handshake demo can show "prove-permission-without-revealing-the-credential".
+    return { ...row, permissionProof: result.permissionProof };
   }
 
   async function listAttestations(companyId: string, mandateId?: string) {

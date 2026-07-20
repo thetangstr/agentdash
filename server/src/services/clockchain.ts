@@ -36,11 +36,35 @@ export type AttestResult = {
 // Minimal StreamableHTTP JSON-RPC tools/call, SSE-frame tolerant (mirrors
 // clockchain-research/src/lib/mcp-client.ts). Returns the parsed tool result
 // object, or throws — callers wrap so nothing propagates to a critical path.
+// Transparency recorder — captures each live Clockchain MCP call (tool, args, raw
+// response, latency) so a demo/inspection surface can show exactly what the gateway
+// returned. Scoped via withClockchainCallRecorder (save/restore); off by default so
+// production paths pay nothing. Single sequential flows only (not concurrency-isolated).
+export type ClockchainCall = {
+  tool: string;
+  endpoint: string;
+  requestArgs: Record<string, unknown>;
+  status: "ok" | "error";
+  latencyMs: number;
+  response?: unknown;
+  rawResponse?: string;
+  error?: string;
+};
+let activeRecorder: ((c: ClockchainCall) => void) | null = null;
+export async function withClockchainCallRecorder<T>(rec: (c: ClockchainCall) => void, fn: () => Promise<T>): Promise<T> {
+  const prev = activeRecorder;
+  activeRecorder = rec;
+  try { return await fn(); } finally { activeRecorder = prev; }
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<any> {
   // Timeout/abort so a hanging gateway can never stall a caller. On abort,
   // fetch rejects -> the caller's try/catch returns the safe degraded value.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS());
+  const startedAt = Date.now();
+  const rec = activeRecorder;
+  let raw = "";
   try {
     const res = await fetch(MCP_URL(), {
       method: "POST",
@@ -48,14 +72,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<an
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
       signal: controller.signal,
     });
-    const raw = await res.text();
+    raw = await res.text();
     const json = parseRpc(raw);
     // Gateway signals tool errors as HTTP 200 + { isError: true } content — surface as a thrown
     // so callers' catch returns the safe degraded value (never a silent false-positive).
     const text = json?.result?.content?.[0]?.text;
     if (json?.result?.isError) throw new Error(typeof text === "string" ? text : "clockchain tool error");
-    if (typeof text === "string") { try { return JSON.parse(text); } catch { return { text }; } }
-    return json?.result ?? {};
+    const parsed = typeof text === "string" ? (() => { try { return JSON.parse(text); } catch { return { text }; } })() : (json?.result ?? {});
+    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "ok", latencyMs: Date.now() - startedAt, response: parsed, rawResponse: raw.slice(0, 4000) });
+    return parsed;
+  } catch (err) {
+    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "error", latencyMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err), rawResponse: raw.slice(0, 4000) });
+    throw err;
   } finally {
     clearTimeout(timer);
   }

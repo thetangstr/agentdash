@@ -249,11 +249,22 @@ export function handshakeDemoService(
         granteeReasoning = release.reasoning;
       }
       const result = await actions.runDemoAttestation({ companyId: payer.id, mandateId: mandate.id, action: DEMO_SCOPE[0] });
+      // ZK permission proof (present only when AGENTDASH_ZK_PROOF_ENABLED): prove Iris
+      // holds the release_payment permission without revealing the underlying credential;
+      // only the 32-byte proof hash is anchored on-chain.
+      const zk = result.permissionProof;
       steps.push({
         key: "transact",
         title: result.authorized ? "Transaction attested — receipt anchored" : `Transaction denied (${result.reason})`,
         status: result.authorized ? "done" : "blocked",
-        evidence: { ledgerId: result.ledgerId, blockHeight: result.blockHeight, eventHash: result.eventHash, counterpartyDid: billieDid, ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning } : {}) },
+        evidence: {
+          ledgerId: result.ledgerId,
+          blockHeight: result.blockHeight,
+          eventHash: result.eventHash,
+          counterpartyDid: billieDid,
+          ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning } : {}),
+          ...(zk ? { zkPermissionProof: { scheme: zk.scheme, proofHash: zk.proofHash, publicSignals: zk.publicSignals, anchored: zk.anchored, ...(zk.note ? { note: zk.note } : {}) } } : {}),
+        },
       });
       return { steps, done: Boolean(result.authorized) };
     }
