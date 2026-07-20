@@ -65,7 +65,14 @@ describeEmbeddedPostgres(
         (req as unknown as { actor: unknown }).actor = actor;
         next();
       });
-      app.use(approvalRoutes(db));
+      // autoDispatchQueuedRuns:false — this test asserts only that approving a
+      // mandate_violation RESUMES the grantee. Approving also fires a real
+      // heartbeat wakeup whose fire-and-forget executeRun (env-lease acquisition,
+      // adapter dispatch) would outlive the request and race with afterEach —
+      // the source of this file's historical flakiness (environment_leases FK,
+      // dropped connections). Disabling dispatch keeps the resume behavior under
+      // test while removing the incidental background work.
+      app.use(approvalRoutes(db, { autoDispatchQueuedRuns: false }));
       app.use(errorHandler);
       return app;
     }

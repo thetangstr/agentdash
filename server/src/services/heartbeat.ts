@@ -2168,9 +2168,18 @@ export type HeartbeatEnvironmentRuntime = ReturnType<typeof environmentRuntimeSe
 export interface HeartbeatServiceOptions {
   pluginWorkerManager?: PluginWorkerManager;
   environmentRuntime?: HeartbeatEnvironmentRuntime;
+  /**
+   * When false, `startNextQueuedRunForAgent` claims runs but does NOT fire the
+   * fire-and-forget `executeRun` dispatch. Defaults true (production behavior).
+   * Integration tests that only exercise the wakeup/enqueue path (e.g. the
+   * approval-resume route) set this false so no background agent execution
+   * outlives the request and races with test teardown.
+   */
+  autoDispatchQueuedRuns?: boolean;
 }
 
 export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) {
+  const autoDispatchQueuedRuns = options.autoDispatchQueuedRuns ?? true;
   const instanceSettings = instanceSettingsService(db);
   const getCurrentUserRedactionOptions = async () => ({
     enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
@@ -4942,10 +4951,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       if (claimedRuns.length === 0) return [];
 
-      for (const claimedRun of claimedRuns) {
-        void executeRun(claimedRun.id).catch((err) => {
-          logger.error({ err, runId: claimedRun.id }, "queued heartbeat execution failed");
-        });
+      // Fire-and-forget dispatch. Disabled (via autoDispatchQueuedRuns:false) in
+      // integration tests that only assert the enqueue/resume path, so no
+      // background execution outlives the request to race with test teardown
+      // (the FK on environment_leases → heartbeat_run_id, dropped connections).
+      if (autoDispatchQueuedRuns) {
+        for (const claimedRun of claimedRuns) {
+          void executeRun(claimedRun.id).catch((err) => {
+            logger.error({ err, runId: claimedRun.id }, "queued heartbeat execution failed");
+          });
+        }
       }
       return claimedRuns;
     });

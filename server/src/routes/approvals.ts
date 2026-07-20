@@ -37,12 +37,13 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
 
 export function approvalRoutes(
   db: Db,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: { pluginWorkerManager?: PluginWorkerManager; autoDispatchQueuedRuns?: boolean } = {},
 ) {
   const router = Router();
   const svc = approvalService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
+    autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
