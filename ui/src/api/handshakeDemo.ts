@@ -61,6 +61,15 @@ export type HandshakeEvidence = {
   anchoring?: AnchoringEvidence; // on the mandate step
   reasoningSeconds?: number; // seconds the real model took to decide
   decision?: string; // clean one-line verdict, e.g. "APPROVE: within cap and scope"
+  // Drill-down / native-link fields. Company route prefixes + agent IDs are
+  // published on the SEED step (read once) and re-published on the agent steps.
+  payerPrefix?: string; // e.g. "MER" (Meridian Pay) — company route prefix
+  payeePrefix?: string; // e.g. "TRE" (Trellis Freight)
+  grantorAgentId?: string; // Atlas (CEO)
+  granteeAgentId?: string; // Iris (payments agent)
+  payeeAgentId?: string; // Billie (payee, Trellis)
+  grantorFullReasoning?: string; // full cleaned Atlas transcript (mandate step)
+  granteeFullReasoning?: string; // full cleaned Iris transcript (transact step)
   // Other keys (payer/payee/reachable/…) can appear too.
   [key: string]: unknown;
 };
@@ -83,6 +92,9 @@ export type ClockchainCall = {
   response?: unknown;
   rawResponse?: string;
   error?: string;
+  // Client-attached: the step key(s) whose /go batch produced this call.
+  // Not returned by the server — the UI tags calls in its drive() loop.
+  stepKeys?: string[];
 };
 
 export type HandshakeAdvanceResult = {

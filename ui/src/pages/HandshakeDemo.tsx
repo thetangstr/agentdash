@@ -23,6 +23,8 @@ import {
   FlaskConical,
   ListChecks,
   HelpCircle,
+  ExternalLink,
+  ScrollText,
 } from "lucide-react";
 import {
   handshakeDemoApi,
@@ -34,8 +36,27 @@ import {
   type AnchoringEvidence,
 } from "../api/handshakeDemo";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { Link } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
+
+// Link context sourced once from the SEED step's evidence: company route
+// prefixes + agent IDs, used to build native AgentDash links for every step.
+type StepLinkCtx = {
+  payerPrefix?: string;
+  payeePrefix?: string;
+  grantorAgentId?: string;
+  granteeAgentId?: string;
+  payeeAgentId?: string;
+};
+
+// Build an AgentDash agent-detail path with an EXPLICIT company prefix. The
+// app's <Link> (from @/lib/router) runs applyCompanyPrefix, which leaves an
+// already-prefixed path untouched — so this works cross-company (payee lives in
+// a different company than the payer) exactly like the app's own agent links.
+function agentDashPath(prefix: string, agentId: string, tab?: string): string {
+  return `/${prefix}/agents/${agentId}${tab ? `/${tab}` : ""}`;
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Agent Trust Handshake — live demo surface.
@@ -389,6 +410,36 @@ function ZkProofPanel({ proof }: { proof: ZkPermissionProof }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────── drill-down bits
+
+// "View in AgentDash ↗" — routed through the app's prefix-aware <Link>.
+function AgentDashLink({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="inline-flex items-center gap-1.5 rounded-md border border-accent-500/30 bg-accent-500/[0.06] px-2.5 py-1 text-[11px] font-medium text-accent-700 transition-colors hover:bg-accent-500/12"
+    >
+      {label}
+      <ExternalLink className="h-3 w-3" />
+    </Link>
+  );
+}
+
+// The complete cleaned model transcript — scrollable, monospace.
+function TranscriptBlock({ agent, transcript }: { agent: string; transcript: string }) {
+  const text = useMemo(() => cleanReasoning(transcript), [transcript]);
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <ScrollText className="h-3 w-3" /> Full transcript — {agent}
+      </div>
+      <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-soft bg-surface-sunken p-3 font-mono text-[11px] leading-relaxed text-text-secondary">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────── step card
 
 function StepCard({
@@ -398,6 +449,8 @@ function StepCard({
   stepMeta,
   running,
   elapsedSec,
+  linkCtx,
+  stepCalls,
   pendingApprovalId,
   onApprove,
   approving,
@@ -409,11 +462,14 @@ function StepCard({
   stepMeta?: StepMeta;
   running: boolean;
   elapsedSec: number;
+  linkCtx: StepLinkCtx;
+  stepCalls: ClockchainCall[];
   pendingApprovalId: string | null;
   onApprove: () => void;
   approving: boolean;
   busy: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const status: HandshakeStepStatus | "pending" = live?.status ?? "pending";
   const meta = status === "pending" ? null : STATUS_META[status];
   const ev = live?.evidence;
@@ -431,6 +487,46 @@ function StepCard({
       ev.grantorReasoning != null ||
       ev.granteeReasoning != null ||
       ev.zkPermissionProof != null);
+
+  // Records produced by this step (recapped in the drill-down for legibility).
+  const hasRecords =
+    !!ev &&
+    (ev.mandateId != null ||
+      ev.ledgerId != null ||
+      ev.eventHash != null ||
+      ev.blockHeight != null ||
+      ev.zkPermissionProof != null);
+
+  // Native AgentDash links for this step. Agent IDs prefer this step's own
+  // evidence, falling back to the once-read seed context. Prefixes are explicit
+  // so the payee link (a different company) resolves the same way.
+  const grantorAgentId = ev?.grantorAgentId ?? linkCtx.grantorAgentId;
+  const granteeAgentId = ev?.granteeAgentId ?? linkCtx.granteeAgentId;
+  const payeeAgentId = ev?.payeeAgentId ?? linkCtx.payeeAgentId;
+  const grantorName = ev?.grantorAgent ?? "grantor agent";
+  const granteeName = ev?.granteeAgent ?? "payments agent";
+
+  const stepLinks: { to: string; label: string }[] = [];
+  if (order.key === "mandate") {
+    if (linkCtx.payerPrefix && grantorAgentId)
+      stepLinks.push({ to: agentDashPath(linkCtx.payerPrefix, grantorAgentId), label: `${grantorName} in AgentDash` });
+    if (linkCtx.payerPrefix && granteeAgentId)
+      stepLinks.push({ to: agentDashPath(linkCtx.payerPrefix, granteeAgentId, "mandates"), label: "Mandate & receipts" });
+  } else if (order.key === "transact") {
+    if (linkCtx.payerPrefix && granteeAgentId)
+      stepLinks.push({ to: agentDashPath(linkCtx.payerPrefix, granteeAgentId), label: `${granteeName} in AgentDash` });
+    if (linkCtx.payerPrefix && granteeAgentId)
+      stepLinks.push({ to: agentDashPath(linkCtx.payerPrefix, granteeAgentId, "mandates"), label: "Mandate & receipts" });
+  } else if (order.key === "accept") {
+    if (linkCtx.payeePrefix && payeeAgentId)
+      stepLinks.push({ to: agentDashPath(linkCtx.payeePrefix, payeeAgentId), label: "Payee agent in AgentDash" });
+  }
+
+  const fullTranscripts: { agent: string; transcript: string }[] = [];
+  if (ev?.grantorFullReasoning) fullTranscripts.push({ agent: grantorName, transcript: ev.grantorFullReasoning });
+  if (ev?.granteeFullReasoning) fullTranscripts.push({ agent: granteeName, transcript: ev.granteeFullReasoning });
+
+  const hasDrilldown = fullTranscripts.length > 0 || stepCalls.length > 0 || hasRecords || stepLinks.length > 0;
 
   return (
     <div
@@ -546,6 +642,78 @@ function StepCard({
               ) : null}
 
               {ev?.zkPermissionProof ? <ZkProofPanel proof={ev.zkPermissionProof} /> : null}
+            </div>
+          ) : null}
+
+          {/* Drill-down: what ACTUALLY happened in this step. */}
+          {hasDrilldown ? (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent-600 hover:underline"
+                aria-expanded={expanded}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")} />
+                {expanded ? "Hide step detail" : "See what actually happened"}
+              </button>
+
+              {expanded ? (
+                <div className="mt-2.5 space-y-3 rounded-md border border-border-soft bg-surface-sunken/40 p-3">
+                  {/* Full model transcript(s) */}
+                  {fullTranscripts.map((t, i) => (
+                    <TranscriptBlock key={i} agent={t.agent} transcript={t.transcript} />
+                  ))}
+
+                  {/* Records produced */}
+                  {hasRecords ? (
+                    <div>
+                      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        <Fingerprint className="h-3 w-3" /> Records produced
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-md border border-border-soft bg-surface-raised p-3">
+                        {ev?.mandateId != null ? <EvidenceField label="Mandate ID" value={ev.mandateId} mono copy /> : null}
+                        {ev?.ledgerId != null ? <EvidenceField label="Ledger ID" value={ev.ledgerId} mono copy /> : null}
+                        {ev?.blockHeight != null ? <EvidenceField label="Block height" value={ev.blockHeight} mono /> : null}
+                        {ev?.eventHash != null ? <EvidenceField label="Event hash" value={ev.eventHash} mono copy /> : null}
+                        {ev?.zkPermissionProof != null ? (
+                          <div className="col-span-2">
+                            <EvidenceField label="ZK proof hash" value={ev.zkPermissionProof.proofHash} mono copy />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* The Clockchain calls made during this step */}
+                  {stepCalls.length > 0 ? (
+                    <div>
+                      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        <Activity className="h-3 w-3" /> Clockchain calls in this step ({stepCalls.length})
+                      </div>
+                      <div className="space-y-2">
+                        {stepCalls.map((c, i) => (
+                          <CallRow key={`${c.tool}-${i}`} call={c} index={i} />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Native links into the real AgentDash records */}
+                  {stepLinks.length > 0 ? (
+                    <div>
+                      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Open in AgentDash
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {stepLinks.map((l, i) => (
+                          <AgentDashLink key={i} to={l.to} label={l.label} />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -863,7 +1031,8 @@ export function HandshakeDemo() {
     let known = initialKnown;
     for (let i = 0; i < MAX_ADVANCES; i++) {
       // The step this /go will process — start its live counter before awaiting.
-      startTimer(computeRunningStepKey(known));
+      const runningKey = computeRunningStepKey(known);
+      startTimer(runningKey);
       let res;
       try {
         res = await handshakeDemoApi.go();
@@ -876,7 +1045,17 @@ export function HandshakeDemo() {
       stopTimer();
       setSteps(res.steps);
       if (res.stepMeta) setStepMeta(res.stepMeta);
-      if (res.clockchainCalls?.length) setCalls((prev) => [...prev, ...res.clockchainCalls]);
+
+      // Attribute this batch's Clockchain calls to the step(s) it completed:
+      // any step that flipped to "done" in this response. If none flipped (e.g.
+      // an anchor-pending interim), fall back to the step this batch was running.
+      if (res.clockchainCalls?.length) {
+        const prevDone = new Set(known.filter((s) => s.status === "done").map((s) => s.key));
+        const newlyDone = res.steps.filter((s) => s.status === "done" && !prevDone.has(s.key)).map((s) => s.key);
+        const stepKeys = newlyDone.length > 0 ? newlyDone : runningKey ? [runningKey] : [];
+        const tagged = res.clockchainCalls.map((c) => ({ ...c, stepKeys }));
+        setCalls((prev) => [...prev, ...tagged]);
+      }
       known = res.steps;
 
       const last = res.steps[res.steps.length - 1];
@@ -951,6 +1130,31 @@ export function HandshakeDemo() {
 
   const started = steps.length > 0 || phase !== "idle";
   const okCalls = calls.filter((c) => c.status === "ok").length;
+
+  // Read the link context (company prefixes + agent IDs) once from the seed step.
+  const linkCtx = useMemo<StepLinkCtx>(() => {
+    const seedEv = liveByKey.get("seed")?.evidence;
+    return {
+      payerPrefix: seedEv?.payerPrefix,
+      payeePrefix: seedEv?.payeePrefix,
+      grantorAgentId: seedEv?.grantorAgentId,
+      granteeAgentId: seedEv?.granteeAgentId,
+      payeeAgentId: seedEv?.payeeAgentId,
+    };
+  }, [liveByKey]);
+
+  // Group Clockchain calls by the step key(s) they were attributed to in drive().
+  const callsByStep = useMemo(() => {
+    const map = new Map<string, ClockchainCall[]>();
+    for (const c of calls) {
+      for (const k of c.stepKeys ?? []) {
+        const arr = map.get(k) ?? [];
+        arr.push(c);
+        map.set(k, arr);
+      }
+    }
+    return map;
+  }, [calls]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -1051,6 +1255,8 @@ export function HandshakeDemo() {
               stepMeta={stepMeta[order.key]}
               running={busy && inFlightStep === order.key}
               elapsedSec={elapsedSec}
+              linkCtx={linkCtx}
+              stepCalls={callsByStep.get(order.key) ?? []}
               pendingApprovalId={pendingApprovalId}
               onApprove={handleApprove}
               approving={busy && phase === "running"}
