@@ -74,15 +74,31 @@ export function extractDecision(raw: string): { decision: string; approved: bool
   return { decision, approved };
 }
 
-/** A trimmed, display-friendly excerpt of the agent's reasoning. */
+/**
+ * A clean, display-friendly excerpt of the agent's reasoning. The raw hermes
+ * output is terminal-formatted (box-drawing frame, ANSI codes, CRs) and often
+ * prints the reasoning twice (boxed, then inline) — strip the decoration and
+ * de-duplicate so the demo shows readable prose.
+ */
 export function extractReasoning(raw: string): string {
   const idx = raw.indexOf("Reasoning");
-  const chunk = idx >= 0 ? raw.slice(idx) : raw;
-  return chunk
-    .replace(/\[hermes\][^\n]*\n/g, "")
-    .replace(/session_id:.*$/ms, "")
-    .trim()
-    .slice(0, 700);
+  let chunk = (idx >= 0 ? raw.slice(idx) : raw)
+    .replace(/\[hermes\][^\n]*\n?/g, "")       // hermes log lines
+    .replace(/session_id:[\s\S]*$/m, "")        // trailing session id + anything after
+    .replace(/\[[0-9;]*m/g, "")           // ANSI color codes
+    .replace(/[\u2500-\u257f]/g, "")            // box-drawing characters
+    .replace(/^Reasoning\s*/i, "")              // the "Reasoning" header word
+    .replace(/\r/g, "")                          // carriage returns
+    .replace(/[ \t]{2,}/g, " ")                 // collapse runs of spaces
+    .replace(/\n{2,}/g, "\n")                   // collapse blank lines
+    .trim();
+  // Hermes echoes the reasoning twice — cut at the start of the repeat.
+  const probe = chunk.slice(0, 48).trim();
+  if (probe.length > 20) {
+    const repeat = chunk.indexOf(probe, 48);
+    if (repeat > 0) chunk = chunk.slice(0, repeat).trim();
+  }
+  return chunk.slice(0, 600).trim();
 }
 
 export function handshakeAgentRunner(deps: HandshakeAgentRunnerDeps = {}) {

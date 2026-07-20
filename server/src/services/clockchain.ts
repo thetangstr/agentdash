@@ -50,6 +50,11 @@ export type ClockchainCall = {
   rawResponse?: string;
   error?: string;
 };
+// The gateway is SSE-framed; the raw text carries newlines + keep-alive padding
+// (control chars). Collapse control chars/whitespace and cap length so the captured
+// raw response is safe to embed in JSON and legible in the demo transparency panel.
+function sanitizeRaw(raw: string): string {
+  return raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 1000);}
 let activeRecorder: ((c: ClockchainCall) => void) | null = null;
 export async function withClockchainCallRecorder<T>(rec: (c: ClockchainCall) => void, fn: () => Promise<T>): Promise<T> {
   const prev = activeRecorder;
@@ -79,10 +84,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<an
     const text = json?.result?.content?.[0]?.text;
     if (json?.result?.isError) throw new Error(typeof text === "string" ? text : "clockchain tool error");
     const parsed = typeof text === "string" ? (() => { try { return JSON.parse(text); } catch { return { text }; } })() : (json?.result ?? {});
-    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "ok", latencyMs: Date.now() - startedAt, response: parsed, rawResponse: raw.slice(0, 4000) });
+    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "ok", latencyMs: Date.now() - startedAt, response: parsed, rawResponse: sanitizeRaw(raw) });
     return parsed;
   } catch (err) {
-    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "error", latencyMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err), rawResponse: raw.slice(0, 4000) });
+    if (rec) rec({ tool: name, endpoint: MCP_URL(), requestArgs: args, status: "error", latencyMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err), rawResponse: sanitizeRaw(raw) });
     throw err;
   } finally {
     clearTimeout(timer);
@@ -110,6 +115,17 @@ export function clockchainService() {
       if (!ledgerId) return { anchored: false };
       return { anchored: true, ledgerId, blockHeight: r.blockHeight ?? r.anchor?.blockHeight };
     } catch { return { anchored: false }; }
+  }
+
+  // Lightweight reachability + live-time probe (clean success response, unlike a
+  // get_log_entry on an unknown id which the gateway answers with a 500). Used by
+  // the demo's "discover" step so the first captured MCP call reads as a real OK.
+  async function getTime(): Promise<{ reachable: boolean; blockHeight?: number; time?: string }> {
+    if (!clockchainEnabled()) return { reachable: false };
+    try {
+      const r = await callTool("get_time", {});
+      return { reachable: true, blockHeight: r.blockHeight ?? r.block_height ?? r.anchor?.blockHeight, time: r.time ?? r.timestamp ?? r.iso };
+    } catch { return { reachable: false }; }
   }
 
   // Confirm a ledger entry is real + anchored on-chain (used to verify a mandate's grant anchor).
@@ -188,5 +204,5 @@ export function clockchainService() {
     } catch { return { verified: false }; }
   }
 
-  return { delegateAuthority, getLogEntry, mintIdentity, resolveAgent, verifyIdentityAt, attestAction, verifyReceipt };
+  return { delegateAuthority, getTime, getLogEntry, mintIdentity, resolveAgent, verifyIdentityAt, attestAction, verifyReceipt };
 }

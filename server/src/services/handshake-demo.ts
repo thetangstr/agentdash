@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals as approvalsTable, companies, mandates } from "@paperclipai/db";
+import { agents, approvals as approvalsTable, companies, mandates, mandateAttestations, zkPermissionProofs, approvalComments, activityLog, companySkills } from "@paperclipai/db";
 import { clockchainService, clockchainEnabled } from "./clockchain.js";
 import { agentIdentityService } from "./agent-identity.js";
 import { mandatesService } from "./mandates.js";
@@ -123,8 +123,9 @@ export function handshakeDemoService(
       steps.push({ key: "discover", title: "Discover Clockchain MCP", status: "blocked", detail: "AGENTDASH_ATTESTATION_ENABLED/key not set" });
       return { steps, done: false };
     }
-    const probe = await clock.getLogEntry("00000000-0000-0000-0000-000000000000"); // any call proves reachability; found:false is fine
-    steps.push({ key: "discover", title: "Clockchain MCP discovered (gateway reachable)", status: "done", evidence: { reachable: true, probed: !probe.found } });
+    const probe = await clock.getTime(); // clean live-time probe (real OK response)
+    steps.push({ key: "discover", title: "Clockchain MCP discovered (gateway reachable)", status: probe.reachable ? "done" : "blocked", evidence: { reachable: probe.reachable, ...(probe.blockHeight != null ? { blockHeight: probe.blockHeight } : {}), ...(probe.time ? { time: probe.time } : {}) } });
+    if (!probe.reachable) return { steps, done: false };
 
     // 2. Payer human approves Clockchain use (once).
     let onboarding = await findApproval(payer.id, "clockchain_onboarding");
@@ -272,5 +273,27 @@ export function handshakeDemoService(
     return { steps, done: true };
   }
 
-  return { advance };
+  // Reset the demo to a clean slate so "Run" starts fresh (agents re-reason, new
+  // mandate anchored, new ZK proof). Deletes the two demo companies + their demo
+  // footprint in FK-safe order. Scoped strictly to the demo company names.
+  async function reset(): Promise<{ reset: boolean; companies: number }> {
+    let removed = 0;
+    for (const name of [PAYER_NAME, PAYEE_NAME]) {
+      const co = await findCompany(name);
+      if (!co) continue;
+      await db.delete(zkPermissionProofs).where(eq(zkPermissionProofs.companyId, co.id));
+      await db.delete(mandateAttestations).where(eq(mandateAttestations.companyId, co.id));
+      await db.delete(mandates).where(eq(mandates.companyId, co.id));
+      await db.delete(approvalComments).where(eq(approvalComments.companyId, co.id));
+      await db.delete(approvalsTable).where(eq(approvalsTable.companyId, co.id));
+      await db.delete(activityLog).where(eq(activityLog.companyId, co.id));
+      await db.delete(companySkills).where(eq(companySkills.companyId, co.id));
+      await db.delete(agents).where(eq(agents.companyId, co.id));
+      await db.delete(companies).where(eq(companies.id, co.id));
+      removed += 1;
+    }
+    return { reset: true, companies: removed };
+  }
+
+  return { advance, reset };
 }

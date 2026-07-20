@@ -29,5 +29,16 @@ export function handshakeDemoRoutes(db: Db) {
     }
   });
 
+  // Reset the demo to a clean slate so "Run" starts fresh (repeatable live demos).
+  router.post("/handshake-demo/reset", async (req, res) => {
+    assertBoard(req);
+    try {
+      res.json(await svc.reset());
+    } catch (err) {
+      console.error("[handshake-demo] reset failed:", err);
+      res.status(400).json({ error: "handshake_demo_reset_failed" });
+    }
+  });
+
   return router;
 }
