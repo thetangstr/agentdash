@@ -17,6 +17,12 @@ import {
   Copy,
   Check,
   AlertTriangle,
+  Timer,
+  Users,
+  Sparkles,
+  FlaskConical,
+  ListChecks,
+  HelpCircle,
 } from "lucide-react";
 import {
   handshakeDemoApi,
@@ -24,6 +30,8 @@ import {
   type HandshakeStepStatus,
   type ClockchainCall,
   type ZkPermissionProof,
+  type StepMeta,
+  type AnchoringEvidence,
 } from "../api/handshakeDemo";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { Button } from "@/components/ui/button";
@@ -52,6 +60,29 @@ const STEP_ORDER: { key: string; title: string; human?: boolean }[] = [
   { key: "accept", title: "Payee accepts the mandate", human: true },
   { key: "transact", title: "Agent attests the payment on-chain" },
 ];
+
+// While a /go request is in flight, the step being processed is the first
+// pending, non-human step after the last completed one. (Human steps resolve
+// at the approval gate, so the flow is never in-flight on one.)
+function computeRunningStepKey(known: HandshakeStep[]): string | null {
+  const byKey = new Map(known.map((s) => [s.key, s]));
+  for (const order of STEP_ORDER) {
+    if (order.human) continue;
+    const st = byKey.get(order.key);
+    if (!st || st.status !== "done") return order.key;
+  }
+  return null;
+}
+
+// One-line "what this step demonstrates" blurbs for the About legend.
+const STEP_LEGEND: Record<string, string> = {
+  seed: "Two companies and their agents come into being, each with an on-chain identity.",
+  discover: "The payer's agent finds the Clockchain MCP and its verifiable-trust tools.",
+  onboard: "A human at the payer approves using Clockchain — the first consent gate.",
+  mandate: "Atlas reasons, then grants a scoped, spend-capped, time-bound mandate, anchored on-chain.",
+  accept: "Billie verifies the mandate + counterparty identity (KYA), then accepts — the second gate.",
+  transact: "Iris releases the payment and anchors a tamper-evident receipt to a block.",
+};
 
 const STATUS_META: Record<
   HandshakeStepStatus,
@@ -176,15 +207,140 @@ function EvidenceField({
 
 // ─────────────────────────────────────────────────────────── reasoning block
 
-function ReasoningBlock({ agent, reasoning }: { agent: string; reasoning: string }) {
+// Fuller (sometimes rambly) model reasoning — collapsed by default when a clean
+// one-line decision already leads the card, expanded when there's no headline.
+function ReasoningDisclosure({
+  agent,
+  reasoning,
+  defaultOpen,
+}: {
+  agent: string;
+  reasoning: string;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const text = useMemo(() => cleanReasoning(reasoning), [reasoning]);
   return (
-    <div className="rounded-md border border-border-soft bg-surface-sunken/60 p-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-accent-600">
-        <Quote className="h-3.5 w-3.5" />
-        Why {agent} decided this
+    <div className="overflow-hidden rounded-md border border-border-soft bg-surface-sunken/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-medium text-accent-600 hover:bg-surface-sunken"
+      >
+        <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <Quote className="h-3.5 w-3.5 shrink-0" />
+        Full reasoning — why {agent} decided this
+      </button>
+      {open ? (
+        <p className="whitespace-pre-wrap border-t border-border-soft px-3 py-2.5 text-xs leading-relaxed text-text-secondary">
+          {text}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────── timing helpers
+
+// The clean one-line verdict, led prominently: green for APPROVE, red for DECLINE.
+function DecisionHeadline({ decision }: { decision: string }) {
+  const isDecline = /^\s*DECLINE/i.test(decision);
+  const isApprove = /^\s*APPROVE/i.test(decision);
+  const color = isDecline ? "var(--danger-500)" : isApprove ? "var(--success-500)" : "var(--accent-600)";
+  const Icon = isDecline ? XCircle : CheckCircle2;
+  return (
+    <div
+      className="flex items-start gap-2 rounded-md border px-3 py-2"
+      style={{ borderColor: tint(color, 35), backgroundColor: tint(color, 8) }}
+    >
+      <Icon className="mt-px h-4 w-4 shrink-0" style={{ color }} />
+      <span className="text-sm font-semibold leading-snug" style={{ color }}>
+        {decision}
+      </span>
+    </div>
+  );
+}
+
+// Subtle "expected time" chip on a pending, agent-driven step.
+function EstimateChip({ meta }: { meta?: StepMeta }) {
+  const secs = meta?.estimateSeconds;
+  const label = meta?.label;
+  if (secs == null && !label) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-border-soft bg-surface-sunken px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+      <Timer className="h-3 w-3" />
+      {secs != null ? <span className="tabular-nums">~{secs}s</span> : null}
+      {secs != null && label ? <span aria-hidden>·</span> : null}
+      {label ? <span>{label}</span> : null}
+    </span>
+  );
+}
+
+// Live "not stuck" counter for the step a /go request is currently running.
+function LiveStepIndicator({ meta, elapsed }: { meta?: StepMeta; elapsed: number }) {
+  const est = meta?.estimateSeconds;
+  const over = est != null && elapsed > est;
+  const pct = est != null ? Math.min(100, (elapsed / est) * 100) : null;
+  return (
+    <div className="mt-2 rounded-md border border-accent-500/30 bg-accent-500/[0.06] px-2.5 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-accent-700">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        <span className="tabular-nums">
+          {over
+            ? `still working… ${elapsed}s (real model + on-chain, can run long)`
+            : `reasoning… ${elapsed}s${est != null ? ` / ~${est}s` : ""}`}
+        </span>
       </div>
-      <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{text}</p>
+      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-accent-500/15">
+        {pct != null ? (
+          <div
+            className={cn("h-full rounded-full bg-accent-500 transition-all duration-500", over && "animate-pulse")}
+            style={{ width: `${over ? 100 : pct}%` }}
+          />
+        ) : (
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-accent-500" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The on-chain anchoring lifecycle as a legible 3-item checklist.
+function AnchoringPanel({ anchoring }: { anchoring: AnchoringEvidence }) {
+  return (
+    <div className="rounded-md border border-border-soft bg-surface-sunken/60 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-accent-600">
+        <Link2 className="h-3.5 w-3.5" />
+        Anchoring on the Clockchain
+        {anchoring.confirmed ? (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-success-500/12 px-2 py-0.5 text-[10px] font-medium text-success-500">
+            <CheckCircle2 className="h-3 w-3" /> confirmed
+            {anchoring.blockHeight != null ? ` · block ${anchoring.blockHeight}` : ""}
+          </span>
+        ) : (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-warn-500/12 px-2 py-0.5 text-[10px] font-medium text-warn-500">
+            <Loader2 className="h-3 w-3 animate-spin" /> anchoring…
+          </span>
+        )}
+      </div>
+      <ol className="space-y-1.5">
+        {anchoring.lifecycle.map((item, i) => (
+          <li key={i} className="flex items-start gap-2 text-xs">
+            {item.done ? (
+              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-500" />
+            ) : (
+              <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-warn-500" />
+            )}
+            <span className="min-w-0">
+              <span className={item.done ? "text-text-primary" : "text-text-secondary"}>{item.label}</span>
+              {item.detail ? (
+                <span className="ml-1 break-all font-mono text-[10px] text-muted-foreground">{item.detail}</span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {anchoring.note ? <p className="mt-2 text-[11px] italic leading-relaxed text-muted-foreground">{anchoring.note}</p> : null}
     </div>
   );
 }
@@ -239,6 +395,9 @@ function StepCard({
   index,
   order,
   live,
+  stepMeta,
+  running,
+  elapsedSec,
   pendingApprovalId,
   onApprove,
   approving,
@@ -247,6 +406,9 @@ function StepCard({
   index: number;
   order: { key: string; title: string; human?: boolean };
   live?: HandshakeStep;
+  stepMeta?: StepMeta;
+  running: boolean;
+  elapsedSec: number;
   pendingApprovalId: string | null;
   onApprove: () => void;
   approving: boolean;
@@ -256,6 +418,7 @@ function StepCard({
   const meta = status === "pending" ? null : STATUS_META[status];
   const ev = live?.evidence;
   const gateActive = status === "waiting_approval" && !!live?.approvalId && live.approvalId === pendingApprovalId;
+  const isHuman = !!order.human || !!stepMeta?.human;
 
   const hasEvidenceBody =
     !!ev &&
@@ -263,6 +426,8 @@ function StepCard({
       ev.ledgerId != null ||
       ev.eventHash != null ||
       ev.counterpartyDid != null ||
+      ev.decision != null ||
+      ev.anchoring != null ||
       ev.grantorReasoning != null ||
       ev.granteeReasoning != null ||
       ev.zkPermissionProof != null);
@@ -298,6 +463,11 @@ function StepCard({
                 <ShieldCheck className="h-3 w-3" /> human consent
               </span>
             ) : null}
+            {status === "done" && ev?.reasoningSeconds != null ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-success-500/30 bg-success-500/10 px-1.5 py-0.5 text-[10px] font-medium text-success-500">
+                <Timer className="h-3 w-3" /> decided in <span className="tabular-nums">{ev.reasoningSeconds}s</span>
+              </span>
+            ) : null}
             <span className="ml-auto">
               {status === "pending" ? (
                 <span className="rounded-full border border-border-soft px-2 py-0.5 text-[11px] text-muted-foreground">Pending</span>
@@ -306,6 +476,21 @@ function StepCard({
               )}
             </span>
           </div>
+
+          {/* Timing: live "not stuck" counter while running, else the estimate. */}
+          {running ? (
+            <LiveStepIndicator meta={stepMeta} elapsed={elapsedSec} />
+          ) : status === "pending" ? (
+            <div className="mt-2">
+              {isHuman ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-warn-500/30 bg-warn-500/10 px-2 py-0.5 text-[10px] font-medium text-warn-500">
+                  <Clock className="h-3 w-3" /> waiting for you
+                </span>
+              ) : (
+                <EstimateChip meta={stepMeta} />
+              )}
+            </div>
+          ) : null}
 
           {live?.detail ? <p className="mt-1 text-xs text-muted-foreground">{live.detail}</p> : null}
 
@@ -325,10 +510,14 @@ function StepCard({
           {/* Evidence */}
           {hasEvidenceBody ? (
             <div className="mt-3 space-y-3">
+              {/* Lead with the clean one-line verdict. */}
+              {ev?.decision ? <DecisionHeadline decision={ev.decision} /> : null}
+
               <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
                 {ev?.mandateId != null ? <EvidenceField label="Mandate ID" value={ev.mandateId} mono copy /> : null}
                 {ev?.ledgerId != null ? <EvidenceField label="Ledger ID" value={ev.ledgerId} mono copy /> : null}
-                {"blockHeight" in (ev ?? {}) ? (
+                {/* When the anchoring lifecycle is present it owns the block height. */}
+                {"blockHeight" in (ev ?? {}) && !ev?.anchoring ? (
                   <EvidenceField label="Block height" value={ev?.blockHeight ?? null} mono pending />
                 ) : null}
                 {ev?.eventHash != null ? <EvidenceField label="Event hash" value={ev.eventHash} mono copy /> : null}
@@ -339,11 +528,21 @@ function StepCard({
                 ) : null}
               </div>
 
+              {ev?.anchoring ? <AnchoringPanel anchoring={ev.anchoring} /> : null}
+
               {ev?.grantorReasoning ? (
-                <ReasoningBlock agent={ev.grantorAgent ?? "the CEO agent"} reasoning={ev.grantorReasoning} />
+                <ReasoningDisclosure
+                  agent={ev.grantorAgent ?? "the CEO agent"}
+                  reasoning={ev.grantorReasoning}
+                  defaultOpen={!ev.decision}
+                />
               ) : null}
               {ev?.granteeReasoning ? (
-                <ReasoningBlock agent={ev.granteeAgent ?? "the payments agent"} reasoning={ev.granteeReasoning} />
+                <ReasoningDisclosure
+                  agent={ev.granteeAgent ?? "the payments agent"}
+                  reasoning={ev.granteeReasoning}
+                  defaultOpen={!ev.decision}
+                />
               ) : null}
 
               {ev?.zkPermissionProof ? <ZkProofPanel proof={ev.zkPermissionProof} /> : null}
@@ -449,11 +648,157 @@ function CallRow({ call, index }: { call: ClockchainCall; index: number }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────── about / context
+
+function CastMember({ name, role }: { name: string; role: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="font-medium text-text-primary">{name}</span>
+      <span className="text-[11px] text-muted-foreground">{role}</span>
+    </span>
+  );
+}
+
+// Collapsible narrative: what this demo is, the idea, the cast, and what's real.
+function AboutDemo() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-lg border border-border-soft bg-surface-raised shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-surface-sunken/50"
+        aria-expanded={open}
+      >
+        <HelpCircle className="h-4 w-4 shrink-0 text-accent-600" />
+        <span className="text-sm font-semibold text-text-primary">What this demo is</span>
+        <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">
+          the problem, the idea, the cast, and what's real vs simulated
+        </span>
+        <ChevronRight className={cn("ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+      </button>
+
+      {open ? (
+        <div className="space-y-4 border-t border-border-soft px-4 py-4">
+          {/* Problem */}
+          <section>
+            <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+              <AlertTriangle className="h-3.5 w-3.5 text-warn-500" /> The problem
+            </h3>
+            <p className="text-xs leading-relaxed text-text-secondary">
+              When an AI agent at one company needs to transact with an AI agent at another, how does either side{" "}
+              <span className="font-medium text-text-primary">trust</span> the other — that the paying agent is actually
+              authorized, that the counterparty is who it claims to be, and that what happened can't be denied later?
+              Today that trust simply doesn't exist between autonomous agents.
+            </p>
+          </section>
+
+          {/* Idea */}
+          <section>
+            <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+              <Sparkles className="h-3.5 w-3.5 text-accent-600" /> The idea
+            </h3>
+            <p className="text-xs leading-relaxed text-text-secondary">
+              Clockchain is the neutral, verifiable record. Authority is granted as a{" "}
+              <span className="font-medium text-text-primary">scoped, spend-capped, time-bound mandate</span> that's
+              cryptographically anchored; the counterparty is checked with{" "}
+              <span className="font-medium text-text-primary">Know-Your-Agent (KYA)</span> identity verification valid at
+              that instant; and every action produces a{" "}
+              <span className="font-medium text-text-primary">tamper-evident, independently-verifiable receipt</span>{" "}
+              anchored to a block. No one has to take anyone's word.
+            </p>
+          </section>
+
+          {/* Cast */}
+          <section>
+            <h3 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+              <Users className="h-3.5 w-3.5 text-accent-600" /> The cast
+            </h3>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="rounded-md border border-border-soft bg-surface-sunken/50 p-2.5">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-secondary">
+                  Meridian Pay <span className="font-normal normal-case text-muted-foreground">· payer</span>
+                </div>
+                <ul className="space-y-0.5 text-xs text-text-secondary">
+                  <li><CastMember name="Atlas" role="— CEO, grants the mandate" /></li>
+                  <li><CastMember name="Iris" role="— payments agent, releases funds" /></li>
+                </ul>
+              </div>
+              <div className="rounded-md border border-border-soft bg-surface-sunken/50 p-2.5">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-secondary">
+                  Trellis Freight <span className="font-normal normal-case text-muted-foreground">· payee</span>
+                </div>
+                <ul className="space-y-0.5 text-xs text-text-secondary">
+                  <li><CastMember name="Billie" role="— accepts the mandate" /></li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* Real vs demo */}
+          <section>
+            <h3 className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+              <FlaskConical className="h-3.5 w-3.5 text-accent-600" /> What's real here vs simulated
+            </h3>
+            <ul className="space-y-1 text-xs leading-relaxed text-text-secondary">
+              <li className="flex items-start gap-1.5">
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-500" />
+                <span>
+                  The agents' decisions are <span className="font-medium text-text-primary">real, live-model reasoning</span> — not scripted.
+                </span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-500" />
+                <span>
+                  The mandate anchor, KYA, attestation, receipt, and the zero-knowledge permission proof are all{" "}
+                  <span className="font-medium text-text-primary">real Clockchain calls</span> — shown live in the calls panel.
+                </span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-500" />
+                <span>
+                  It runs on a <span className="font-medium text-text-primary">single-validator testnet</span> (every receipt
+                  self-discloses this) — a demonstration of the trust flow, not a mainnet or court-grade attestation.
+                </span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-500" />
+                <span>Money movement (x402) is <span className="font-medium text-text-primary">simulated</span>.</span>
+              </li>
+            </ul>
+          </section>
+
+          {/* Step legend */}
+          <section>
+            <h3 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+              <ListChecks className="h-3.5 w-3.5 text-accent-600" /> What each step demonstrates
+            </h3>
+            <ol className="space-y-1">
+              {STEP_ORDER.map((order, i) => (
+                <li key={order.key} className="flex items-start gap-2 text-xs text-text-secondary">
+                  <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-[10px] font-semibold text-text-tertiary">
+                    {i + 1}
+                  </span>
+                  <span>
+                    <span className="font-medium text-text-primary">{order.title}</span>
+                    {STEP_LEGEND[order.key] ? <span className="text-muted-foreground"> — {STEP_LEGEND[order.key]}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────── main page
 
 export function HandshakeDemo() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const [steps, setSteps] = useState<HandshakeStep[]>([]);
+  const [stepMeta, setStepMeta] = useState<Record<string, StepMeta>>({});
   const [calls, setCalls] = useState<ClockchainCall[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
@@ -461,14 +806,49 @@ export function HandshakeDemo() {
   const busyRef = useRef(false);
   const [busy, setBusyState] = useState(false);
 
+  // Live "not stuck" counter for the step a /go request is currently running.
+  const [inFlightStep, setInFlightStep] = useState<string | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     setBreadcrumbs([{ label: "Agent Trust Handshake" }]);
   }, [setBreadcrumbs]);
+
+  // Never leak the ticking interval across unmount.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const setBusy = (v: boolean) => {
     busyRef.current = v;
     setBusyState(v);
   };
+
+  function startTimer(key: string | null) {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    if (!key) {
+      setInFlightStep(null);
+      setElapsedSec(0);
+      return;
+    }
+    setInFlightStep(key);
+    setElapsedSec(0);
+    const start = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsedSec(Math.max(0, Math.round((Date.now() - start) / 1000)));
+    }, 500);
+  }
+
+  function stopTimer() {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    setInFlightStep(null);
+    setElapsedSec(0);
+  }
 
   const liveByKey = useMemo(() => {
     const map = new Map<string, HandshakeStep>();
@@ -477,18 +857,27 @@ export function HandshakeDemo() {
   }, [steps]);
 
   // Advance repeatedly until the flow pauses (gate), finishes, blocks, or errors.
-  async function drive(): Promise<void> {
+  // `initialKnown` seeds the "which step is running" computation (steps state
+  // lags a render behind the loop's local view).
+  async function drive(initialKnown: HandshakeStep[]): Promise<void> {
+    let known = initialKnown;
     for (let i = 0; i < MAX_ADVANCES; i++) {
+      // The step this /go will process — start its live counter before awaiting.
+      startTimer(computeRunningStepKey(known));
       let res;
       try {
         res = await handshakeDemoApi.go();
       } catch (e) {
+        stopTimer();
         setErrorMsg(e instanceof Error ? e.message : "Advance failed");
         setPhase("error");
         return;
       }
+      stopTimer();
       setSteps(res.steps);
+      if (res.stepMeta) setStepMeta(res.stepMeta);
       if (res.clockchainCalls?.length) setCalls((prev) => [...prev, ...res.clockchainCalls]);
+      known = res.steps;
 
       const last = res.steps[res.steps.length - 1];
       if (res.done) {
@@ -516,12 +905,29 @@ export function HandshakeDemo() {
     setBusy(true);
     setErrorMsg(null);
     setPendingApprovalId(null);
+    let known = steps;
     if (reset) {
+      // Snap the timeline back to the 6-step Pending skeleton immediately,
+      // before the (possibly slow) server reset + fresh run begin.
       setSteps([]);
       setCalls([]);
+      setStepMeta({});
+      known = [];
+      setPhase("running");
+      // Clear the server's prior run so /go re-derives from step 1 rather than
+      // replaying an already-completed handshake. Companies + agents persist.
+      try {
+        await handshakeDemoApi.reset();
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : "Could not reset the demo");
+        setPhase("error");
+        setBusy(false);
+        return;
+      }
+    } else {
+      setPhase("running");
     }
-    setPhase("running");
-    await drive();
+    await drive(known);
     setBusy(false);
   }
 
@@ -538,7 +944,8 @@ export function HandshakeDemo() {
       return;
     }
     setPendingApprovalId(null);
-    await drive();
+    // steps still reflects the just-approved gate; drive() skips human steps.
+    await drive(steps);
     setBusy(false);
   }
 
@@ -569,6 +976,9 @@ export function HandshakeDemo() {
           </span>
         </div>
       </header>
+
+      {/* Context / narrative — what this demo actually is */}
+      <AboutDemo />
 
       {/* Control bar */}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border-soft bg-surface-raised p-4 shadow-sm">
@@ -638,6 +1048,9 @@ export function HandshakeDemo() {
               index={i}
               order={order}
               live={liveByKey.get(order.key)}
+              stepMeta={stepMeta[order.key]}
+              running={busy && inFlightStep === order.key}
+              elapsedSec={elapsedSec}
               pendingApprovalId={pendingApprovalId}
               onApprove={handleApprove}
               approving={busy && phase === "running"}

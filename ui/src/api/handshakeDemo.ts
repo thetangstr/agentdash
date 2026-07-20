@@ -22,6 +22,30 @@ export type ZkPermissionProof = {
   note?: string;
 };
 
+// Per-step metadata the server returns alongside a run (optional — older
+// responses omit it, so treat every field as best-effort).
+export type StepMeta = {
+  estimateSeconds?: number;
+  label?: string;
+  human?: boolean;
+};
+
+// One line of the on-chain anchoring lifecycle (mandate step).
+export type AnchoringLifecycleItem = {
+  label: string;
+  done: boolean;
+  detail?: string;
+};
+
+export type AnchoringEvidence = {
+  ledgerId: string;
+  blockHeight: number | null;
+  confirmed: boolean;
+  lifecycle: AnchoringLifecycleItem[];
+  // Present only while NOT confirmed — explains the single-validator lag.
+  note?: string;
+};
+
 export type HandshakeEvidence = {
   mandateId?: string;
   ledgerId?: string;
@@ -33,7 +57,11 @@ export type HandshakeEvidence = {
   granteeAgent?: string;
   granteeReasoning?: string;
   zkPermissionProof?: ZkPermissionProof;
-  // Other keys (payer/payee/reachable/decision/…) can appear too.
+  // Newer contract fields (all optional):
+  anchoring?: AnchoringEvidence; // on the mandate step
+  reasoningSeconds?: number; // seconds the real model took to decide
+  decision?: string; // clean one-line verdict, e.g. "APPROVE: within cap and scope"
+  // Other keys (payer/payee/reachable/…) can appear too.
   [key: string]: unknown;
 };
 
@@ -61,6 +89,14 @@ export type HandshakeAdvanceResult = {
   steps: HandshakeStep[];
   done: boolean;
   clockchainCalls: ClockchainCall[];
+  // Per-step timing/labels, keyed by step key (seed, discover, onboard, …).
+  // Optional so the UI degrades gracefully on older responses.
+  stepMeta?: Record<string, StepMeta>;
+};
+
+export type HandshakeResetResult = {
+  reset: boolean;
+  companies: number;
 };
 
 export const handshakeDemoApi = {
@@ -68,4 +104,8 @@ export const handshakeDemoApi = {
   go: () => api.post<HandshakeAdvanceResult>("/handshake-demo/go", {}),
   // Resolve a human-in-the-loop approval gate. Body {} — board-authed.
   approve: (approvalId: string) => api.post<unknown>(`/approvals/${approvalId}/approve`, {}),
+  // Clear the prior run's server state (mandate/attestations/approvals/ZK
+  // proofs) so a new run genuinely starts from step 1. Companies + agents
+  // persist, so the /:company/handshake URL stays valid.
+  reset: () => api.post<HandshakeResetResult>("/handshake-demo/reset", {}),
 };
