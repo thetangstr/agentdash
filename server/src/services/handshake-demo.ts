@@ -131,7 +131,14 @@ export function handshakeDemoService(
     const iris = await ensureAgent(payer.id, PAYER_AGENT, "general");
     const billie = await ensureAgent(payee.id, PAYEE_AGENT, "general");
     const atlas = await ensureAgent(payer.id, "Atlas", "ceo");
-    steps.push({ key: "seed", title: "Two companies + agents ready", status: "done", evidence: { payer: payer.id, payee: payee.id } });
+    steps.push({ key: "seed", title: "Two companies + agents ready", status: "done", evidence: {
+      payer: payer.id, payee: payee.id,
+      // IDs/prefixes so the UI can deep-link each step to the real AgentDash records
+      // (agent detail pages + the grantee's Mandates tab, where the anchored mandate
+      // and attested receipts actually live).
+      payerPrefix: payer.issuePrefix, payeePrefix: payee.issuePrefix,
+      grantorAgentId: atlas.id, granteeAgentId: iris.id, payeeAgentId: billie.id,
+    } });
 
     // 1. Discover — is the Clockchain MCP reachable (real check)?
     if (!clockchainEnabled()) {
@@ -160,6 +167,7 @@ export function handshakeDemoService(
     // 3. Grant + publish the mandate (Atlas → Iris, published to Trellis). Real on-chain anchor.
     let mandate = await demoMandate(payer.id);
     let grantorReasoning: string | undefined;
+    let grantorFullReasoning: string | undefined;
     let grantorReasoningSeconds: number | undefined;
     if (!mandate) {
       // AGENT-DRIVEN: Atlas (CEO) makes a real decision before we create the
@@ -193,6 +201,7 @@ export function handshakeDemoService(
           return { steps, done: false };
         }
         grantorReasoning = grant.reasoning;
+        grantorFullReasoning = grant.fullReasoning;
       }
       mandate = await mandatesSvc.createMandate({
         companyId: payer.id,
@@ -227,7 +236,7 @@ export function handshakeDemoService(
       ],
       ...(mandateConfirmed ? {} : { note: "Single-validator testnet: the ledger entry above is already real and immutable; the block height backfills once the validator pool finalizes, and can stay pending on the degraded testnet pool." }),
     };
-    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight, anchoring, ...(grantorReasoning ? { grantorAgent: "Atlas", grantorReasoning, ...(grantorReasoningSeconds != null ? { reasoningSeconds: grantorReasoningSeconds } : {}) } : {}) } });
+    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight, anchoring, grantorAgentId: atlas.id, granteeAgentId: iris.id, ...(grantorReasoning ? { grantorAgent: "Atlas", grantorReasoning, ...(grantorFullReasoning ? { grantorFullReasoning } : {}), ...(grantorReasoningSeconds != null ? { reasoningSeconds: grantorReasoningSeconds } : {}) } : {}) } });
 
     // 4. Payee sees it + payee human accepts.
     if (!mandate.acceptedAt) {
@@ -257,6 +266,7 @@ export function handshakeDemoService(
       // no anchored attestation, so a repeated Go will re-run Iris — acceptable
       // for the demo.
       let granteeReasoning: string | undefined;
+      let granteeFullReasoning: string | undefined;
       let granteeReasoningSeconds: number | undefined;
       if (agentDriven()) {
         const cap = DEMO_CAP_CENTS / 100;
@@ -291,6 +301,7 @@ export function handshakeDemoService(
           return { steps, done: false };
         }
         granteeReasoning = release.reasoning;
+        granteeFullReasoning = release.fullReasoning;
       }
       const result = await actions.runDemoAttestation({ companyId: payer.id, mandateId: mandate.id, action: DEMO_SCOPE[0] });
       // ZK permission proof (present only when AGENTDASH_ZK_PROOF_ENABLED): prove Iris
@@ -306,7 +317,8 @@ export function handshakeDemoService(
           blockHeight: result.blockHeight,
           eventHash: result.eventHash,
           counterpartyDid: billieDid,
-          ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning, ...(granteeReasoningSeconds != null ? { reasoningSeconds: granteeReasoningSeconds } : {}) } : {}),
+          granteeAgentId: iris.id,
+          ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning, ...(granteeFullReasoning ? { granteeFullReasoning } : {}), ...(granteeReasoningSeconds != null ? { reasoningSeconds: granteeReasoningSeconds } : {}) } : {}),
           ...(zk ? { zkPermissionProof: { scheme: zk.scheme, proofHash: zk.proofHash, publicSignals: zk.publicSignals, anchored: zk.anchored, ...(zk.note ? { note: zk.note } : {}) } } : {}),
         },
       });

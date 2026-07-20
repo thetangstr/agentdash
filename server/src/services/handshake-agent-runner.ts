@@ -35,6 +35,8 @@ export interface HandshakeAgentDecision {
   approved: boolean;
   /** A trimmed, human-readable excerpt of the agent's reasoning. */
   reasoning: string;
+  /** The fuller cleaned transcript (for a drill-down "what actually happened" view). */
+  fullReasoning: string;
   /** The full concatenated adapter log output (for evidence/debugging). */
   raw: string;
 }
@@ -80,7 +82,7 @@ export function extractDecision(raw: string): { decision: string; approved: bool
  * prints the reasoning twice (boxed, then inline) — strip the decoration and
  * de-duplicate so the demo shows readable prose.
  */
-export function extractReasoning(raw: string): string {
+export function extractReasoning(raw: string, maxLen = 600): string {
   const idx = raw.indexOf("Reasoning");
   let chunk = (idx >= 0 ? raw.slice(idx) : raw)
     .replace(/\[hermes\][^\n]*\n?/g, "")       // hermes log lines
@@ -98,7 +100,7 @@ export function extractReasoning(raw: string): string {
     const repeat = chunk.indexOf(probe, 48);
     if (repeat > 0) chunk = chunk.slice(0, repeat).trim();
   }
-  return chunk.slice(0, 600).trim();
+  return chunk.slice(0, maxLen).trim();
 }
 
 export function handshakeAgentRunner(deps: HandshakeAgentRunnerDeps = {}) {
@@ -144,7 +146,7 @@ export function handshakeAgentRunner(deps: HandshakeAgentRunnerDeps = {}) {
 
     const raw = logs.join("");
     const { decision, approved } = extractDecision(raw);
-    return { decision, approved, reasoning: extractReasoning(raw), raw };
+    return { decision, approved, reasoning: extractReasoning(raw), fullReasoning: extractReasoning(raw, 4000), raw };
   }
 
   return { runDecision };
