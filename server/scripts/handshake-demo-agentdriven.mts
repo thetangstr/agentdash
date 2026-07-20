@@ -10,7 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import EmbeddedPostgres from "embedded-postgres";
-import { createDb, applyPendingMigrations, ensurePostgresDatabase, agents, companies, mandates } from "@paperclipai/db";
+import { createDb, applyPendingMigrations, ensurePostgresDatabase, agents, companies, mandates, zkPermissionProofs } from "@paperclipai/db";
+import { desc } from "drizzle-orm";
 import { handshakeAgentRunner } from "../src/services/handshake-agent-runner.js";
 import { clockchainService } from "../src/services/clockchain.js";
 import { agentIdentityService } from "../src/services/agent-identity.js";
@@ -56,7 +57,11 @@ function reasoningTail(raw: string): string {
 
 async function main() {
   loadEnv();
-  console.log(`clockchain: enabled=${process.env.AGENTDASH_ATTESTATION_ENABLED} key=${process.env.CLOCKCHAIN_MCP_KEY ? "set" : "MISSING"} degraded=${process.env.CLOCKCHAIN_ALLOW_DEGRADED}\n`);
+  // Turn ON the ZK permission-proof path so Iris's release generates a real
+  // Semaphore v4 proof ("I hold this permission, without revealing the credential"),
+  // anchors its hash via attest_action, and stores it for display below.
+  process.env.AGENTDASH_ZK_PROOF_ENABLED = "true";
+  console.log(`clockchain: enabled=${process.env.AGENTDASH_ATTESTATION_ENABLED} key=${process.env.CLOCKCHAIN_MCP_KEY ? "set" : "MISSING"} degraded=${process.env.CLOCKCHAIN_ALLOW_DEGRADED} zk=${process.env.AGENTDASH_ZK_PROOF_ENABLED}\n`);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "handshake-ad-"));
   const port = await freePort();
@@ -137,7 +142,22 @@ async function main() {
     console.log(`  ledgerId:   ${result.ledgerId}`);
     console.log(`  blockHeight:${result.blockHeight}`);
     console.log(`  eventHash:  ${result.eventHash}`);
-    console.log(`\n=== RESULT: ${result.authorized ? "✅ COMPLETED — 3 real agent decisions, real on-chain receipt" : "❌ denied: " + (result as any).reason} ===`);
+
+    // Surface the ZK permission proof Iris generated as part of the attestation.
+    const [proof] = await db.select().from(zkPermissionProofs).orderBy(desc(zkPermissionProofs.createdAt)).limit(1);
+    if (proof) {
+      console.log("\n=== ZK PERMISSION PROOF (prove-permission-without-revealing-the-credential) ===");
+      console.log(`  scheme:        ${proof.scheme}`);
+      console.log(`  scope:         ${proof.scope} (valid-at ${proof.validAt})`);
+      console.log(`  authority root:${proof.authority}`);
+      console.log(`  nullifier:     ${proof.nullifier}   (UNIQUE — double-use detectable)`);
+      console.log(`  proof_hash:    ${proof.proofHash}   (the 32-byte digest anchored on-chain)`);
+      console.log(`  anchor status: ${proof.receiptStatus}`);
+      console.log(`  → the credential itself is never sent; only this hash rides the attest_action anchor.`);
+    } else {
+      console.log("\n(⚠️  no ZK permission proof row found — check AGENTDASH_ZK_PROOF_ENABLED)");
+    }
+    console.log(`\n=== RESULT: ${result.authorized ? "✅ COMPLETED — 3 real agent decisions + real ZK permission proof + real on-chain receipt" : "❌ denied: " + (result as any).reason} ===`);
   } finally {
     await pg.stop();
     fs.rmSync(dir, { recursive: true, force: true });
