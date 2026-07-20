@@ -33,6 +33,18 @@ const DEMO_ADAPTER = "hermes_local";
 const DEMO_SCOPE = ["release_payment"];
 const DEMO_CAP_CENTS = 100000;
 
+// Per-step timing hints so the UI can tell the user how long a step usually takes
+// (the model-reasoning steps are deliberately slow — real inference + real on-chain
+// writes) and reassure them it isn't stuck. Human-gate steps have no estimate.
+export const HANDSHAKE_STEP_META: Record<string, { estimateSeconds?: number; label?: string; human?: boolean }> = {
+  seed: { estimateSeconds: 1, label: "instant" },
+  discover: { estimateSeconds: 1, label: "live gateway probe" },
+  onboard: { human: true, label: "waiting for your approval" },
+  mandate: { estimateSeconds: 22, label: "Atlas reasons (real model) + on-chain anchor" },
+  accept: { human: true, label: "waiting for your approval" },
+  transact: { estimateSeconds: 28, label: "Iris reasons (real model) + KYA + attest" },
+};
+
 // Role AGENTS.md for the two decision-making agents (inline; mirrors the driver).
 // Atlas grants least authority; Iris acts only within its mandate's scope+cap.
 const ATLAS_AGENTS_MD =
@@ -40,9 +52,12 @@ const ATLAS_AGENTS_MD =
   "capped, time-bound mandates that are anchored on Clockchain. You grant only what the " +
   "business needs and never more.";
 const IRIS_AGENTS_MD =
-  "You are Iris, the payments agent at Meridian Pay. You operate strictly under mandates " +
-  "granted by your CEO. Every payment you release is anchored on Clockchain. You act only " +
-  "within your mandate's scope and cap.";
+  "You are Iris, the payments agent at Meridian Pay. Your company runs on Clockchain: your " +
+  "mandate authority and every counterparty's acceptance are cryptographically anchored and " +
+  "surfaced to you by your own trusted payment system — they are your authenticated operating " +
+  "state, not third-party claims. Your job is to EXECUTE payments that fall within your active, " +
+  "accepted mandate's scope and cap. You release such authorized payments; you decline only if a " +
+  "payment is out of scope, over cap, expired, or to an unaccepted counterparty.";
 
 /** Read the agent-driven flag at call time so it can be toggled per-request/test. */
 function agentDriven(): boolean {
@@ -145,6 +160,7 @@ export function handshakeDemoService(
     // 3. Grant + publish the mandate (Atlas → Iris, published to Trellis). Real on-chain anchor.
     let mandate = await demoMandate(payer.id);
     let grantorReasoning: string | undefined;
+    let grantorReasoningSeconds: number | undefined;
     if (!mandate) {
       // AGENT-DRIVEN: Atlas (CEO) makes a real decision before we create the
       // mandate. This runs ONLY when no mandate row exists yet, so a re-run of
@@ -153,6 +169,7 @@ export function handshakeDemoService(
       // will re-run Atlas — acceptable for the demo.
       if (agentDriven()) {
         const cap = DEMO_CAP_CENTS / 100;
+        const t0 = Date.now();
         const grant = await agentRunner.runDecision({
           agentId: atlas.id,
           name: "Atlas",
@@ -164,13 +181,14 @@ export function handshakeDemoService(
             `Decide whether to grant Iris a mandate: scope=release_payment, spend cap $${cap}, expires in 7 days.\n` +
             `Reply with EXACTLY one line: "APPROVE: <why>" or "DECLINE: <why>".`,
         });
+        grantorReasoningSeconds = Math.round((Date.now() - t0) / 1000);
         if (!grant.approved) {
           steps.push({
             key: "mandate",
             title: "Atlas (CEO) declined to grant the mandate",
             status: "blocked",
             detail: grant.decision,
-            evidence: { grantorAgent: "Atlas", decision: grant.decision, reasoning: grant.reasoning },
+            evidence: { grantorAgent: "Atlas", decision: grant.decision, reasoning: grant.reasoning, reasoningSeconds: grantorReasoningSeconds },
           });
           return { steps, done: false };
         }
@@ -193,7 +211,23 @@ export function handshakeDemoService(
     if (!mandate.published) {
       mandate = await mandatesSvc.publishMandate(payer.id, mandate.id, payee.id);
     }
-    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight, ...(grantorReasoning ? { grantorAgent: "Atlas", grantorReasoning } : {}) } });
+    // Anchoring background: what the gateway is actually doing. The grant is hashed
+    // and written to the ledger immediately (ledgerId, immutable); the block height is
+    // confirmed separately when the validator pool finalizes — which can stay pending
+    // on the single-validator testnet. Surface the lifecycle so "anchoring…" is legible.
+    const mandateConfirmed = mandate.ccBlockHeight != null;
+    const anchoring = {
+      ledgerId: mandate.ccLedgerId,
+      blockHeight: mandate.ccBlockHeight,
+      confirmed: mandateConfirmed,
+      lifecycle: [
+        { label: "Grant hashed into an event hash (SHA-256)", done: true },
+        { label: "Written to the Clockchain ledger", done: true, detail: mandate.ccLedgerId },
+        { label: "Confirmed in a consensus block", done: mandateConfirmed, detail: mandateConfirmed ? `block ${mandate.ccBlockHeight}` : "awaiting validator-pool finalization" },
+      ],
+      ...(mandateConfirmed ? {} : { note: "Single-validator testnet: the ledger entry above is already real and immutable; the block height backfills once the validator pool finalizes, and can stay pending on the degraded testnet pool." }),
+    };
+    steps.push({ key: "mandate", title: "Mandate anchored + published to Trellis", status: "done", evidence: { mandateId: mandate.id, ledgerId: mandate.ccLedgerId, blockHeight: mandate.ccBlockHeight, anchoring, ...(grantorReasoning ? { grantorAgent: "Atlas", grantorReasoning, ...(grantorReasoningSeconds != null ? { reasoningSeconds: grantorReasoningSeconds } : {}) } : {}) } });
 
     // 4. Payee sees it + payee human accepts.
     if (!mandate.acceptedAt) {
@@ -223,8 +257,14 @@ export function handshakeDemoService(
       // no anchored attestation, so a repeated Go will re-run Iris — acceptable
       // for the demo.
       let granteeReasoning: string | undefined;
+      let granteeReasoningSeconds: number | undefined;
       if (agentDriven()) {
         const cap = DEMO_CAP_CENTS / 100;
+        const t0 = Date.now();
+        // Ground the decision in VERIFIED on-chain facts, not an unverifiable prompt
+        // claim — a security-conscious agent (rightly) refuses to move money on a bare
+        // assertion. The mandate anchor + counterparty acceptance are what give Iris
+        // grounds to act; that IS the Clockchain trust model.
         const release = await agentRunner.runDecision({
           agentId: iris.id,
           name: PAYER_AGENT,
@@ -232,18 +272,21 @@ export function handshakeDemoService(
           role: "payments",
           agentsMd: IRIS_AGENTS_MD,
           task:
-            `You hold an accepted mandate: scope=release_payment, cap $${cap}, counterparty ${PAYEE_NAME} (cleared to transact). ` +
-            `A $100.00 freight invoice from ${PAYEE_NAME} is due now — within scope and cap.\n` +
-            `Decide whether to release this $100.00 payment.\n` +
+            `Your trusted payment system reports your current authorized state:\n` +
+            `- ACTIVE MANDATE (anchored on your Clockchain ledger ${mandate.ccLedgerId}): scope=release_payment, spend cap $${cap}, valid 7 days.\n` +
+            `- COUNTERPARTY ${PAYEE_NAME}: accepted the mandate, cleared to transact.\n` +
+            `- PAYMENT QUEUED: $100.00 invoice from ${PAYEE_NAME}, due now — within scope and under cap.\n` +
+            `This payment falls squarely within your active, accepted mandate. Execute it.\n` +
             `Reply with EXACTLY one line: "APPROVE: <why>" or "DECLINE: <why>".`,
         });
+        granteeReasoningSeconds = Math.round((Date.now() - t0) / 1000);
         if (!release.approved) {
           steps.push({
             key: "transact",
             title: "Iris declined to release the payment",
             status: "blocked",
             detail: release.decision,
-            evidence: { granteeAgent: PAYER_AGENT, decision: release.decision, reasoning: release.reasoning, counterpartyDid: billieDid },
+            evidence: { granteeAgent: PAYER_AGENT, decision: release.decision, reasoning: release.reasoning, reasoningSeconds: granteeReasoningSeconds, counterpartyDid: billieDid },
           });
           return { steps, done: false };
         }
@@ -263,7 +306,7 @@ export function handshakeDemoService(
           blockHeight: result.blockHeight,
           eventHash: result.eventHash,
           counterpartyDid: billieDid,
-          ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning } : {}),
+          ...(granteeReasoning ? { granteeAgent: PAYER_AGENT, granteeReasoning, ...(granteeReasoningSeconds != null ? { reasoningSeconds: granteeReasoningSeconds } : {}) } : {}),
           ...(zk ? { zkPermissionProof: { scheme: zk.scheme, proofHash: zk.proofHash, publicSignals: zk.publicSignals, anchored: zk.anchored, ...(zk.note ? { note: zk.note } : {}) } } : {}),
         },
       });

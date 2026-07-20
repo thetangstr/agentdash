@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { handshakeDemoService } from "../services/handshake-demo.js";
+import { handshakeDemoService, HANDSHAKE_STEP_META } from "../services/handshake-demo.js";
 import { withClockchainCallRecorder, type ClockchainCall } from "../services/clockchain.js";
 import { assertBoard } from "./authz.js";
 
@@ -22,7 +22,7 @@ export function handshakeDemoRoutes(db: Db) {
         (c) => clockchainCalls.push(c),
         () => svc.advance(),
       );
-      res.json({ ...result, clockchainCalls });
+      res.json({ ...result, clockchainCalls, stepMeta: HANDSHAKE_STEP_META });
     } catch (err) {
       console.error("[handshake-demo] advance failed:", err);
       res.status(400).json({ error: "handshake_demo_failed" });
