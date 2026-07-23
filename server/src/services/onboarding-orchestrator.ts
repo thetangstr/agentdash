@@ -206,9 +206,16 @@ export function onboardingOrchestrator(deps: Deps) {
   }
 
   return {
-    bootstrap: async (userId: string): Promise<BootstrapResult> => {
-      // Try the real auth_users lookup first; fall back to local-trusted sentinel.
-      const user = (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
+    bootstrap: async (
+      userId: string,
+      // Caller-supplied identity to skip the auth_users lookup. Needed when the
+      // user was JUST created programmatically (e.g. provision-user) and isn't
+      // yet visible to deps.users.getById; the orchestrator only needs id + name.
+      userOverride?: { id: string; name: string },
+    ): Promise<BootstrapResult> => {
+      // Caller override first, then the real auth_users lookup, then the
+      // local-trusted sentinel.
+      const user = userOverride ?? (await deps.users.getById(userId)) ?? resolveLocalUser(userId);
       if (!user) throw new Error(`User ${userId} not found`);
 
       // Step 1: ensure a company.

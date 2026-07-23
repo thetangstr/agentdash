@@ -58,6 +58,8 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes, parsePluginUiAllowedOrigins } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
+// AgentDash: programmatic user provisioning (MCP-driven onboarding)
+import { provisionUserRoutes } from "./routes/provision-user.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
@@ -169,6 +171,14 @@ export async function createApp(
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
+    // AgentDash: provision-user route needs auth.api.signUpEmail + requestPasswordReset.
+    // Only present in authenticated deployment mode.
+    betterAuth?: {
+      api: {
+        signUpEmail: (input: { body: { email: string; name: string; password: string } }) => Promise<{ user: { id: string } }>;
+        requestPasswordReset: (input: { body: { email: string; redirectTo?: string } }) => Promise<unknown>;
+      };
+    };
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
     // AgentDash (AGE-60): when true, reject free-mail signups at the auth endpoint.
     requireCorpEmail?: boolean;
@@ -307,6 +317,17 @@ export async function createApp(
   // Default API limiter still covers the rest of /onboarding.
   api.use("/onboarding/invites", createInviteRateLimiter({ deploymentMode: opts.deploymentMode }));
   api.use("/onboarding", onboardingV2Routes(db));
+  // AgentDash: programmatic user provisioning — gated by x-provision-key, not board/agent auth.
+  // betterAuth is only present in authenticated deployment mode; provision endpoint rejects
+  // gracefully when undefined.
+  if (opts.betterAuth) {
+    api.use(
+      "/onboarding",
+      provisionUserRoutes(db, opts.betterAuth, {
+        provisionKey: process.env.AGENTDASH_PROVISION_KEY,
+      }),
+    );
+  }
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));
   // AgentDash: Agent-run quota (AGE-120)
