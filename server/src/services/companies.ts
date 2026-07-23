@@ -28,6 +28,8 @@ import {
   companyMemberships,
   companySkills,
   documents,
+  budgetIncidents,
+  budgetPolicies,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -371,6 +373,10 @@ export function companyService(db: Db) {
         await tx.delete(costEvents).where(eq(costEvents.companyId, id));
         await tx.delete(financeEvents).where(eq(financeEvents.companyId, id));
         await tx.delete(approvalComments).where(eq(approvalComments.companyId, id));
+        // Delete budget incidents before approvals — incidents have an FK
+        // to approvals via approval_id (AGE-3: company delete FK violation).
+        await tx.delete(budgetIncidents).where(eq(budgetIncidents.companyId, id));
+        await tx.delete(budgetPolicies).where(eq(budgetPolicies.companyId, id));
         await tx.delete(approvals).where(eq(approvals.companyId, id));
         await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
         await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
