@@ -49,6 +49,16 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_ROLLOUT_NOISE_RE =
   /^\d{4}-\d{2}-\d{2}T[^\s]+\s+ERROR\s+codex_core::rollout::list:\s+state db missing rollout path for thread\s+[a-z0-9-]+$/i;
 
+// Portable codex command fallback. Honors AGENTDASH_CODEX_COMMAND, else
+// defaults to `codex-acp` on PATH. (Was a hardcoded developer-specific
+// absolute path — ENOENT on any other machine.)
+function defaultCodexCommand(): string {
+  const configured = process.env.AGENTDASH_CODEX_COMMAND;
+  return typeof configured === "string" && configured.trim().length > 0
+    ? configured.trim()
+    : "codex-acp";
+}
+
 function stripCodexRolloutNoise(text: string): string {
   const parts = text.split(/\r?\n/);
   const kept: string[] = [];
@@ -285,7 +295,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
-  const command = asString(config.command, "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp");
+  const command = asString(config.command, defaultCodexCommand());
   const model = asString(config.model, "");
 
   const workspaceContext = parseObject(context.paperclipWorkspace);

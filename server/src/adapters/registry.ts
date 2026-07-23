@@ -131,6 +131,7 @@ function hermesManagedProfilesEnabled(): boolean {
 }
 
 const DEFAULT_HERMES_COMMAND = "hermes";
+const DEFAULT_CODEX_COMMAND = "codex-acp";
 
 function defaultHermesCommand(): string {
   const configured = process.env.AGENTDASH_HERMES_COMMAND;
@@ -139,9 +140,16 @@ function defaultHermesCommand(): string {
     : DEFAULT_HERMES_COMMAND;
 }
 
+function defaultCodexCommand(): string {
+  const configured = process.env.AGENTDASH_CODEX_COMMAND;
+  return typeof configured === "string" && configured.trim().length > 0
+    ? configured.trim()
+    : DEFAULT_CODEX_COMMAND;
+}
+
 const execFileAsync = promisify(execFile);
 
-function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
+export function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
       ? (ctx.config as Record<string, unknown>)
@@ -162,6 +170,7 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
       ? agentAdapterConfig.command
       : undefined;
   const fallbackHermesCommand = defaultHermesCommand();
+  const fallbackCodexCommand = defaultCodexCommand();
 
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
@@ -180,13 +189,13 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
     config.command = configCommand;
   }
   if (config && !config.command) {
-    config.command = "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp";
+    config.command = fallbackCodexCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.command && agentCommand) {
     agentAdapterConfig.command = agentCommand;
   }
   if (agentAdapterConfig && !agentAdapterConfig.command) {
-    agentAdapterConfig.command = "/Users/maxiaoer/agentdash/node_modules/.pnpm/node_modules/.bin/codex-acp";
+    agentAdapterConfig.command = fallbackCodexCommand;
   }
 
   return ctx;
