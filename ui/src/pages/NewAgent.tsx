@@ -259,8 +259,16 @@ export function NewAgent() {
       <div>
         <h1 className="text-lg font-semibold">New Agent</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Advanced agent configuration
+          Advanced agent configuration. Need help? Ask your CoS to create one —
+          just describe the role you need.
         </p>
+      </div>
+
+      <div className="bg-muted/50 border border-border rounded-lg p-3 text-sm text-muted-foreground">
+        <strong className="text-foreground">Quick start:</strong> Enter the agent
+        name and pick an adapter below. Click <em>Test Agent</em> to verify it
+        works, then <em>Create agent</em>. Most settings have sensible defaults —
+        only change the advanced options if you know what you need.
       </div>
 
       <div className="border border-border">

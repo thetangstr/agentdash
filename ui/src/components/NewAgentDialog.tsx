@@ -143,9 +143,9 @@ export function NewAgentDialog() {
                   <Bot className="h-6 w-6 text-foreground" />
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  We recommend letting your CEO handle agent setup — they know the
-                  org structure and can configure reporting, permissions, and
-                  adapters.
+                  The easiest way to add a new agent is to ask your Chief of Staff
+                  (CoS) — just tell it what role you need and it handles setup,
+                  reporting, and permissions.
                 </p>
               </div>
 

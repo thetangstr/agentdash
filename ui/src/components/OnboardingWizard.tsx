@@ -429,6 +429,11 @@ export function OnboardingWizard() {
         queryClient.invalidateQueries({
           queryKey: queryKeys.goals.list(company.id)
         });
+        // AgentDash: also set the company description so it shows up in Settings
+        await companiesApi.update(company.id, {
+          description: parsedGoal.description ?? parsedGoal.title
+        });
+        queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
       } else {
         setCreatedCompanyGoalId(null);
       }

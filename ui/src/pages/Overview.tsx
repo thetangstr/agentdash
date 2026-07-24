@@ -737,7 +737,12 @@ export function Overview() {
   }, [rawApprovals]);
 
   // Dashboard stats (read before early returns so hooks stay unconditional)
-  const agentsActive = dashboard?.agents?.active ?? 0;
+  // AgentDash: use the actual agent list as source of truth for count when
+  // the dashboard API hasn't caught up yet (race after agent creation).
+  const agentsActive = Math.max(
+    dashboard?.agents?.active ?? 0,
+    rawAgents?.length ?? 0
+  );
   const agentsRunning = dashboard?.agents?.running ?? 0;
   const tasksDone = dashboard?.tasks?.done ?? 0;
   const tasksOpen = dashboard?.tasks?.open ?? 0;
