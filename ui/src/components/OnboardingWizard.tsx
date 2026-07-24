@@ -9,6 +9,7 @@ import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
+import { ApiError } from "../api/client";
 import { projectsApi } from "../api/projects";
 import { queryKeys } from "../lib/queryKeys";
 import { Dialog, DialogPortal } from "@/components/ui/dialog";
@@ -376,6 +377,25 @@ export function OnboardingWizard() {
       setAdapterEnvResult(result);
       return result;
     } catch (err) {
+      // AgentDash: membership propagation race — the company was just created
+      // but the actor's companyIds cache may not include it yet. Retry once
+      // after a short delay to let the membership propagate.
+      if (err instanceof ApiError && err.status === 403) {
+        try {
+          await new Promise((r) => setTimeout(r, 1000));
+          const result = await agentsApi.testEnvironment(
+            createdCompanyId,
+            adapterType,
+            {
+              adapterConfig: adapterConfigOverride ?? buildAdapterConfig()
+            }
+          );
+          setAdapterEnvResult(result);
+          return result;
+        } catch {
+          // fall through to original error
+        }
+      }
       setAdapterEnvError(
         err instanceof Error ? err.message : "Adapter environment test failed"
       );
@@ -470,6 +490,19 @@ export function OnboardingWizard() {
         adapterType,
         adapterConfig: buildAdapterConfig(),
         runtimeConfig: buildNewAgentRuntimeConfig()
+      }).catch(async (err: unknown) => {
+        // AgentDash: membership propagation race — retry once after 1s
+        if (err instanceof ApiError && err.status === 403) {
+          await new Promise((r) => setTimeout(r, 1000));
+          return agentsApi.hire(createdCompanyId, {
+            name: agentName.trim(),
+            role: "chief_of_staff",
+            adapterType,
+            adapterConfig: buildAdapterConfig(),
+            runtimeConfig: buildNewAgentRuntimeConfig()
+          });
+        }
+        throw err;
       });
       if (hire.approval) {
         await approvalsApi.approve(
