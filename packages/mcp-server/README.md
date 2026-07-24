@@ -1,106 +1,100 @@
 # AgentDash MCP Server
 
-Model Context Protocol server for AgentDash.
+Run the AgentDash onboarding interview and manage your AI company from any MCP-compatible tool (Claude Desktop, Cursor, Codex, the agent, Windsurf, etc.).
 
-This package is a thin MCP wrapper over the existing Paperclip REST API. It does
-not talk to the database directly and it does not reimplement business logic.
+## Quick Start
 
-## Authentication
+### Claude Desktop
 
-The server reads its configuration from environment variables:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
-- `PAPERCLIP_API_URL` - Paperclip base URL, for example `http://localhost:3100`
-- `PAPERCLIP_API_KEY` - bearer token used for `/api` requests
-- `PAPERCLIP_COMPANY_ID` - optional default company for company-scoped tools
-- `PAPERCLIP_AGENT_ID` - optional default agent for checkout helpers
-- `PAPERCLIP_RUN_ID` - optional run id forwarded on mutating requests
-
-## Usage
-
-```sh
-npx -y @agentdash/mcp-server
+```json
+{
+  "mcpServers": {
+    "agentdash": {
+      "command": "npx",
+      "args": ["-y", "@agentdash/mcp-server"],
+      "env": {
+        "AGENTDASH_API_URL": "http://localhost:3100/api",
+        "AGENTDASH_API_KEY": "your-agent-api-key"
+      }
+    }
+  }
+}
 ```
 
-Or locally in this repo:
+Restart Claude Desktop. You can now say:
 
-```sh
-pnpm --filter @agentdash/mcp-server build
-node packages/mcp-server/dist/stdio.js
+> "Start onboarding my company in AgentDash. We're called MKThink and we do strategy consulting."
+
+Claude will run the deep interview, propose an agent team, and provision it — all in conversation.
+
+### the agent Agent
+
+Add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  agentdash:
+    command: "npx"
+    args: ["-y", "@agentdash/mcp-server"]
+    env:
+      AGENTDASH_API_URL: "http://localhost:3100/api"
+      AGENTDASH_API_KEY: "your-agent-api-key"
 ```
 
-## Tool Surface
+### Cursor / Windsurf
 
-Read tools:
+Add via Settings → MCP Servers with the same config.
 
-- `paperclipMe`
-- `paperclipInboxLite`
-- `paperclipListAgents`
-- `paperclipGetAgent`
-- `paperclipListIssues`
-- `paperclipGetIssue`
-- `paperclipGetHeartbeatContext`
-- `paperclipListComments`
-- `paperclipGetComment`
-- `paperclipListIssueApprovals`
-- `paperclipListDocuments`
-- `paperclipGetDocument`
-- `paperclipListDocumentRevisions`
-- `paperclipListProjects`
-- `paperclipGetProject`
-- `paperclipGetIssueWorkspaceRuntime`
-- `paperclipWaitForIssueWorkspaceService`
-- `paperclipListGoals`
-- `paperclipGetGoal`
-- `paperclipListApprovals`
-- `paperclipGetApproval`
-- `paperclipGetApprovalIssues`
-- `paperclipListApprovalComments`
+## Tools Exposed
 
-Write tools:
+| Tool | Description |
+|------|-------------|
+| `agentdash_start_interview` | Begin the onboarding deep interview |
+| `agentdash_interview_turn` | Submit an answer, get next question |
+| `agentdash_get_plan` | Get the proposed agent team plan |
+| `agentdash_confirm_plan` | Approve and create the agents |
+| `agentdash_revise_plan` | Request changes to the plan |
+| `agentdash_list_agents` | List all agents and their status |
+| `agentdash_list_tasks` | List tasks, optionally filtered by status |
+| `agentdash_create_task` | Create a new task and optionally assign it |
+| `agentdash_get_dashboard` | Get dashboard summary (counts, spend, approvals) |
+| `agentdash_pause_agent` | Pause an agent |
+| `agentdash_resume_agent` | Resume a paused agent |
+| `agentdash_install_local` | Get on-prem installation instructions |
 
-- `paperclipCreateIssue`
-- `paperclipUpdateIssue`
-- `paperclipCheckoutIssue`
-- `paperclipReleaseIssue`
-- `paperclipAddComment`
-- `paperclipSuggestTasks`
-- `paperclipAskUserQuestions`
-- `paperclipRequestConfirmation`
-- `paperclipUpsertIssueDocument`
-- `paperclipRestoreIssueDocumentRevision`
-- `paperclipControlIssueWorkspaceServices`
-- `paperclipCreateApproval`
-- `paperclipLinkIssueApproval`
-- `paperclipUnlinkIssueApproval`
-- `paperclipApprovalDecision`
-- `paperclipAddApprovalComment`
+## Environment Variables
 
-AgentDash onboarding / provisioning tools:
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `AGENTDASH_API_URL` | `http://localhost:3100/api` | AgentDash API endpoint |
+| `AGENTDASH_API_KEY` | (none) | Agent API key for authentication |
 
-These let an agent or human create and set up a workspace through the LLM-led
-Chief of Staff, reducing onboarding friction. They use the `agentdash*` prefix
-to stay distinct from the inherited `paperclip*` tools.
+## How the Onboarding Flow Works via MCP
 
-- `agentdashBootstrapWorkspace` — provision a workspace for the authenticated
-  user (company + Chief of Staff agent + opening conversation). Lowest-friction
-  start; takes no input.
-- `agentdashListCompanies` — list accessible workspaces.
-- `agentdashGetCompany` — get a workspace by id.
-- `agentdashCreateCompany` — explicitly create a workspace (prefer
-  `agentdashBootstrapWorkspace` for full onboarding).
-- `agentdashCosChat` — send a message to a workspace's Chief of Staff (drives
-  the onboarding interview). The reply is generated asynchronously — read it
-  back with `agentdashReadConversation`.
-- `agentdashReadConversation` — read recent messages in a conversation.
-- `agentdashHireAgent` — hire an agent (e.g. one the Chief of Staff proposes).
+```
+User: "Set up my company in AgentDash"
+  ↓
+AI tool calls: agentdash_start_interview({ companyName: "MKThink" })
+  ← Returns: conversationId
+  ↓
+AI tool calls: agentdash_interview_turn({ userMessage: "We do strategy consulting" })
+  ← Returns: next question
+  ↓
+... 3-5 rounds of interview ...
+  ↓
+AI tool calls: agentdash_get_plan({ conversationId })
+  ← Returns: proposed agent team
+  ↓
+User: "Looks great, set them up"
+  ↓
+AI tool calls: agentdash_confirm_plan({ conversationId })
+  ← Returns: agents created, dashboard URL
+  ↓
+User: "Create a task to research our competitors"
+  ↓
+AI tool calls: agentdash_create_task({ title: "...", assigneeAgentId: "..." })
+```
 
-A typical zero-to-working-workspace flow: `agentdashBootstrapWorkspace` →
-`agentdashCosChat` (answer the CoS interview) → `agentdashReadConversation`
-(read the proposed plan) → `agentdashHireAgent` for each proposed agent.
-
-Escape hatch:
-
-- `paperclipApiRequest`
-
-`paperclipApiRequest` is limited to paths under `/api` and JSON bodies. It is
-meant for endpoints that do not yet have a dedicated MCP tool.
+The entire onboarding — from "I want to try AgentDash" to a working agent team — happens in conversation. No browser, no dashboard, no terminal. Just chat.

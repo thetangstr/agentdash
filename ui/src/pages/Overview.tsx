@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Send,
   Receipt,
@@ -9,12 +10,22 @@ import {
   BadgeDollarSign,
   Copy,
   Check,
+  Bot,
+  CircleAlert,
+  CirclePause,
+  CircleCheck,
   type LucideIcon,
 } from "lucide-react";
+import { Link } from "@/lib/router";
+import { useCompany } from "../context/CompanyContext";
+import { dashboardApi } from "../api/dashboard";
+import { agentsApi } from "../api/agents";
+import { approvalsApi } from "../api/approvals";
+import { queryKeys } from "../lib/queryKeys";
+import { ApiError } from "../api/client";
 
 // AgentDash: "Porcelain" Overview — the agent control-plane home screen.
-// Founder-to-founder voice (all lowercase). Motion is CSS-only (no framer-motion)
-// and every animation no-ops under prefers-reduced-motion. Demo data is inline.
+// Live data version: fetches real company dashboard, agents, and approvals.
 
 const EASE = "cubic-bezier(0.22,1,0.36,1)";
 const GREEN = "var(--success-500)";
@@ -41,7 +52,6 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-// Count-up for the STATIC stat numbers (constant targets).
 function useCountUp(target: number, delay: number, reduced: boolean): number {
   const [value, setValue] = useState<number>(reduced ? target : 0);
   useEffect(() => {
@@ -75,8 +85,6 @@ function useCountUp(target: number, delay: number, reduced: boolean): number {
 
 /* ------------------------------------------------------- motion primitives */
 
-// Fade-in + rise on mount, staggered by index. Steady state is opacity:1 via
-// React state (not CSS fill-mode), so it can never stall hidden.
 function Reveal({
   index,
   reduced,
@@ -115,7 +123,6 @@ function Reveal({
   );
 }
 
-// A number that scale-pops (1.4 -> 1) whenever its value changes.
 function PopNumber({ value, reduced }: { value: number; reduced: boolean }) {
   const [popKey, setPopKey] = useState(0);
   const prev = useRef(value);
@@ -141,15 +148,12 @@ function PopNumber({ value, reduced }: { value: number; reduced: boolean }) {
   );
 }
 
-// "awaiting you" stat: counts up 0->target on mount, then scale-pops on each
-// later change (so the entrance tween and the resolve-pop don't fight).
 function AwaitingNumber({ count, reduced }: { count: number; reduced: boolean }) {
   const [display, setDisplay] = useState<number>(reduced ? count : 0);
   const [popKey, setPopKey] = useState(0);
   const entranceDone = useRef(false);
   const prev = useRef(count);
 
-  // entrance count-up (mount only)
   useEffect(() => {
     if (reduced) {
       setDisplay(count);
@@ -183,7 +187,6 @@ function AwaitingNumber({ count, reduced }: { count: number; reduced: boolean })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // later changes -> snap + pop
   useEffect(() => {
     if (prev.current === count) return;
     prev.current = count;
@@ -203,7 +206,6 @@ function AwaitingNumber({ count, reduced }: { count: number; reduced: boolean })
   );
 }
 
-// A progress / meter bar that animates width 0 -> pct.
 function Meter({
   pct,
   color,
@@ -272,14 +274,14 @@ function StatusDot({
 
 /* --------------------------------------------------------------- data types */
 
-type Agent = {
+type LiveAgent = {
   id: string;
   name: string;
   icon: LucideIcon;
   category: string;
   statusLine: string;
   statusWord: string;
-  statusColor: string; // word color
+  statusColor: string;
   dotColor: string;
   pulse: boolean;
   pct: number;
@@ -291,119 +293,107 @@ type ApprovalStatus = "pending" | "resolving" | "collapsing";
 
 type Resolution = { label: string; tone: "success" | "muted" };
 
-type Approval = {
+type LiveApproval = {
   id: string;
   card: boolean;
   status: ApprovalStatus;
-  // card-only fields
   eyebrowIcon?: LucideIcon;
   eyebrowText?: string;
   eyebrowClay?: boolean;
   clayBorder?: boolean;
   title?: string;
   body?: ReactNode;
-  voiceMatch?: number;
   primaryLabel?: string;
   secondaryLabel?: string;
   primaryResolution?: Resolution;
   resolution?: Resolution;
 };
 
-const INITIAL_AGENTS: Agent[] = [
-  {
-    id: "scout",
-    name: "scout",
-    icon: Send,
-    category: "outbound · gtm",
-    statusLine: "drafting outreach to 12 logistics saas leads",
-    statusWord: "running",
-    statusColor: GREEN,
-    dotColor: GREEN,
-    pulse: true,
-    pct: 70,
-    fillColor: GREEN,
-    timing: "ready in 3 min",
-  },
-  {
-    id: "ledger",
-    name: "ledger",
-    icon: Receipt,
-    category: "finance · ops",
-    statusLine: "reconciling 48 stripe payouts against open invoices",
-    statusWord: "running",
-    statusColor: GREEN,
-    dotColor: GREEN,
-    pulse: true,
-    pct: 62,
-    fillColor: GREEN,
-    timing: "62% done",
-  },
-  {
-    id: "harbor",
-    name: "harbor",
-    icon: LifeBuoy,
-    category: "support",
-    statusLine: "paused — waiting on your reply to the refund policy question",
-    statusWord: "needs you",
-    statusColor: AMBER,
-    dotColor: AMBER,
-    pulse: false,
-    pct: 45,
-    fillColor: AMBER,
-    timing: "idle 12 min",
-  },
-  {
-    id: "quill",
-    name: "quill",
-    icon: PenLine,
-    category: "content",
-    statusLine: "writing the q1 logistics trends post — 2nd draft",
-    statusWord: "running",
-    statusColor: GREEN,
-    dotColor: GREEN,
-    pulse: true,
-    pct: 35,
-    fillColor: GREEN,
-    timing: "ready in 8 min",
-  },
-];
+/* ----------------------------------------------------------------- helpers */
 
-const INITIAL_APPROVALS: Approval[] = [
-  {
-    id: "scout-draft",
-    card: true,
-    status: "pending",
-    eyebrowIcon: Mail,
-    eyebrowText: "draft reply · scout",
-    eyebrowClay: true,
-    clayBorder: true,
-    title: "reply to acme corp re: pricing",
-    body:
-      "“thanks for the proposal — can you clarify the per-seat pricing for the 50+ tier before we move forward?”",
-    voiceMatch: 94,
-    primaryLabel: "approve & send",
-    secondaryLabel: "edit",
-    primaryResolution: { label: "sent", tone: "success" },
-  },
-  {
-    id: "ledger-approval",
-    card: true,
-    status: "pending",
-    eyebrowIcon: BadgeDollarSign,
-    eyebrowText: "approval · ledger",
-    eyebrowClay: false,
-    clayBorder: false,
-    title: "refund — globex, $1,240",
-    body: "over the $1,000 auto-approve limit.",
-    primaryLabel: "approve",
-    secondaryLabel: "deny",
-    primaryResolution: { label: "approved", tone: "success" },
-  },
-  // a third pending item that isn't surfaced as a card (the "+1 more" link).
-  { id: "extra", card: false, status: "pending" },
-];
+const AGENT_ICONS: Record<string, LucideIcon> = {
+  engineer: PenLine,
+  engineering_lead: PenLine,
+  cmo: Send,
+  marketing: Send,
+  sales: BadgeDollarSign,
+  general: Bot,
+  support: LifeBuoy,
+  chief_of_staff: Bot,
+  ceo: Bot,
+  default: Bot,
+};
 
-const DEMO_URL = "northwind.agentdash.app";
+function agentIcon(role: string): LucideIcon {
+  return AGENT_ICONS[role] ?? AGENT_ICONS.default;
+}
+
+function agentStatusDisplay(status: string): {
+  word: string;
+  color: string;
+  pulse: boolean;
+} {
+  switch (status) {
+    case "running":
+      return { word: "running", color: GREEN, pulse: true };
+    case "error":
+      return { word: "error", color: AMBER, pulse: false };
+    case "paused":
+      return { word: "paused", color: AMBER, pulse: false };
+    case "idle":
+      return { word: "idle", color: "var(--muted-foreground)", pulse: false };
+    default:
+      return { word: status, color: "var(--muted-foreground)", pulse: false };
+  }
+}
+
+const APPROVAL_ICONS: Record<string, LucideIcon> = {
+  hire_agent: Bot,
+  approve_ceo_strategy: TrendingUp,
+  budget_override_required: BadgeDollarSign,
+  request_board_approval: Mail,
+};
+
+function approvalIcon(type: string): LucideIcon {
+  return APPROVAL_ICONS[type] ?? Mail;
+}
+
+function approvalTypeLabel(type: string): string {
+  switch (type) {
+    case "hire_agent":
+      return "hire request";
+    case "approve_ceo_strategy":
+      return "strategy review";
+    case "budget_override_required":
+      return "budget override";
+    case "request_board_approval":
+      return "board approval";
+    default:
+      return type;
+  }
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "good morning";
+  if (h < 18) return "good afternoon";
+  return "good evening";
+}
+
+function todayLabel(): string {
+  return new Date()
+    .toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+    })
+    .toLowerCase();
+}
+
+function budgetPct(budgetCents: number, spendCents: number): number {
+  if (budgetCents <= 0) return 0;
+  return Math.min(100, Math.round((spendCents / budgetCents) * 100));
+}
 
 /* --------------------------------------------------------------- subviews */
 
@@ -435,11 +425,12 @@ function StatCard({
   );
 }
 
-function AgentTile({ agent, meterDelay, reduced }: { agent: Agent; meterDelay: number; reduced: boolean }) {
+function AgentTile({ agent, meterDelay, reduced }: { agent: LiveAgent; meterDelay: number; reduced: boolean }) {
   const Icon = agent.icon;
   return (
-    <div
-      className={`bg-card border border-border rounded-2xl hover:border-border-strong ease-[${"cubic-bezier(0.22,1,0.36,1)"}]`}
+    <Link
+      to={`/agents/${agent.id}`}
+      className="bg-card border border-border rounded-2xl hover:border-border-strong block"
       style={{
         padding: 16,
         transition: reduced
@@ -503,7 +494,7 @@ function AgentTile({ agent, meterDelay, reduced }: { agent: Agent; meterDelay: n
           {agent.timing}
         </span>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -548,7 +539,7 @@ function ApprovalCard({
   reduced,
   onResolve,
 }: {
-  approval: Approval;
+  approval: LiveApproval;
   reduced: boolean;
   onResolve: (id: string, resolution: Resolution) => void;
 }) {
@@ -609,28 +600,6 @@ function ApprovalCard({
           </div>
         ) : null}
 
-        {/* voice match meter (card 1 only) */}
-        {typeof approval.voiceMatch === "number" ? (
-          <div style={{ marginTop: 12 }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 6,
-              }}
-            >
-              <span className="text-muted-foreground" style={{ fontSize: 11.5, fontWeight: 600 }}>
-                voice match
-              </span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: GREEN }}>
-                {approval.voiceMatch}%
-              </span>
-            </div>
-            <Meter pct={approval.voiceMatch} color={GREEN} delay={320} height={5} reduced={reduced} />
-          </div>
-        ) : null}
-
         {/* action row OR confirmation */}
         <div style={{ marginTop: 14 }}>
           {resolved && approval.resolution ? (
@@ -674,8 +643,7 @@ function ApprovalCard({
               <PressButton
                 variant="hairline"
                 onClick={() => {
-                  // "edit" is a no-op in the demo; "deny" resolves as declined.
-                  if (approval.secondaryLabel === "deny") {
+                  if (approval.secondaryLabel === "deny" || approval.secondaryLabel === "reject") {
                     onResolve(approval.id, { label: "declined", tone: "muted" });
                   }
                 }}
@@ -690,72 +658,184 @@ function ApprovalCard({
   );
 }
 
+/* ----------------------------------------------------------------- loading / empty */
+
+function LoadingDashboard() {
+  return (
+    <div className="flex items-center justify-center" style={{ minHeight: 300 }}>
+      <div className="text-muted-foreground text-sm">Loading dashboard…</div>
+    </div>
+  );
+}
+
+function ErrorDashboard({ message }: { message: string }) {
+  return (
+    <div className="flex items-center justify-center" style={{ minHeight: 300 }}>
+      <div className="text-destructive text-sm">{message}</div>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- page */
 
 export function Overview() {
   const reduced = usePrefersReducedMotion();
-  const [approvals, setApprovals] = useState<Approval[]>(INITIAL_APPROVALS);
-  const [copied, setCopied] = useState(false);
+  const { selectedCompany, selectedCompanyId } = useCompany();
+  const [approvals, setApprovals] = useState<LiveApproval[]>([]);
   const resolvingIds = useRef<Set<string>>(new Set());
-  const copyTimer = useRef<number | null>(null);
 
-  // Single source of truth: pending approvals drive BOTH the "needs your call"
-  // badge and the "awaiting you" stat, so they always agree.
-  const awaitingCount = approvals.filter((a) => a.status === "pending").length;
-  const visibleCards = approvals.filter((a) => a.card);
-  const extraPending = approvals.filter((a) => a.status === "pending" && !a.card).length;
+  // Fetch real dashboard data
+  const { data: dashboard, isLoading: dashLoading, error: dashError } = useQuery({
+    queryKey: queryKeys.dashboard(selectedCompanyId!),
+    queryFn: () => dashboardApi.summary(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
 
-  // static stat count-ups
-  const agentsActive = useCountUp(8, 0, reduced);
-  const tasksDone = useCountUp(214, 70, reduced);
-  const hoursSaved = useCountUp(47, 210, reduced);
+  // Fetch real agents
+  const { data: rawAgents } = useQuery({
+    queryKey: queryKeys.agents.list(selectedCompanyId!),
+    queryFn: () => agentsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
 
+  // Fetch pending approvals
+  const { data: rawApprovals } = useQuery({
+    queryKey: queryKeys.approvals.list(selectedCompanyId!, "pending"),
+    queryFn: () => approvalsApi.list(selectedCompanyId!, "pending"),
+    enabled: !!selectedCompanyId,
+  });
+
+  // Sync approvals from API → local state (for resolve animations)
   useEffect(() => {
-    return () => {
-      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    if (!rawApprovals) return;
+    const next: LiveApproval[] = rawApprovals.slice(0, 3).map((a) => {
+      const Icon = approvalIcon(a.type);
+      const payload = a.payload as Record<string, unknown> | null;
+      const agentName =
+        typeof payload?.name === "string" ? payload.name :
+        typeof payload?.role === "string" ? String(payload.role) : "";
+      return {
+        id: a.id,
+        card: true,
+        status: "pending" as ApprovalStatus,
+        eyebrowIcon: Icon,
+        eyebrowText: `${approvalTypeLabel(a.type)}${agentName ? ` · ${agentName}` : ""}`,
+        eyebrowClay: a.type === "hire_agent",
+        clayBorder: a.type === "hire_agent",
+        title: a.type === "hire_agent" && agentName
+          ? `hire ${agentName}`
+          : a.type === "approve_ceo_strategy"
+            ? "CEO strategy proposal"
+            : approvalTypeLabel(a.type),
+        body: a.decisionNote ?? undefined,
+        primaryLabel: "approve",
+        secondaryLabel: "reject",
+        primaryResolution: { label: "approved", tone: "success" as const },
+      };
+    });
+    setApprovals(next);
+  }, [rawApprovals]);
+
+  // Dashboard stats (read before early returns so hooks stay unconditional)
+  // AgentDash: use the actual agent list as source of truth for count when
+  // the dashboard API hasn't caught up yet (race after agent creation).
+  const agentsActive = Math.max(
+    dashboard?.agents?.active ?? 0,
+    rawAgents?.length ?? 0
+  );
+  const agentsRunning = dashboard?.agents?.running ?? 0;
+  const tasksDone = dashboard?.tasks?.done ?? 0;
+  const tasksOpen = dashboard?.tasks?.open ?? 0;
+  const tasksInProgress = dashboard?.tasks?.inProgress ?? 0;
+  const pendingApprovals = dashboard?.pendingApprovals ?? 0;
+  const monthSpend = dashboard?.costs?.monthSpendCents ?? 0;
+  const monthBudget = dashboard?.costs?.monthBudgetCents ?? 0;
+  const utilPct = budgetPct(monthBudget, monthSpend);
+
+  // Hooks MUST be called before any early return
+  const animatedAgents = useCountUp(agentsActive, 0, reduced);
+  const animatedTasks = useCountUp(tasksOpen + tasksInProgress + tasksDone, 70, reduced);
+
+  if (!selectedCompanyId) {
+    return (
+      <div className="flex items-center justify-center" style={{ minHeight: 300 }}>
+        <div className="text-muted-foreground text-sm">Select a company to view its dashboard.</div>
+      </div>
+    );
+  }
+
+  if (dashLoading && !dashboard) return <LoadingDashboard />;
+  if (dashError) {
+    const msg = dashError instanceof ApiError ? `Error ${dashError.status}: ${dashError.message}` : "Failed to load dashboard data.";
+    return <ErrorDashboard message={msg} />;
+  }
+
+  // Build live agent tiles
+  const agentList = (rawAgents ?? []).filter(
+    (a) => a.status !== "terminated",
+  );
+  const liveAgents: LiveAgent[] = agentList.slice(0, 6).map((a) => {
+    const st = agentStatusDisplay(a.status);
+    return {
+      id: a.id,
+      name: a.name,
+      icon: agentIcon(a.role),
+      category: a.role?.replace(/_/g, " ") ?? "agent",
+      statusLine: a.status === "running" ? "working on a task…" : a.status === "idle" ? "idle — waiting for work" : `${a.status}`,
+      statusWord: st.word,
+      statusColor: st.color,
+      dotColor: st.color,
+      pulse: st.pulse,
+      pct: a.status === "running" ? 50 : a.status === "idle" ? 0 : 30,
+      fillColor: st.color,
+      timing: a.lastHeartbeatAt
+        ? `${new Date(a.lastHeartbeatAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+        : "—",
     };
-  }, []);
+  });
+
+  const awaitingCount = pendingApprovals;
+  const visibleCards = approvals.filter((a) => a.card && a.status === "pending");
+  const extraPending = Math.max(0, pendingApprovals - visibleCards.length);
 
   function resolveApproval(id: string, resolution: Resolution) {
-    if (resolvingIds.current.has(id)) return; // guard double-resolve
+    if (resolvingIds.current.has(id)) return;
     resolvingIds.current.add(id);
 
+    // Optimistic UI update
     setApprovals((prev) =>
       prev.map((a) => (a.id === id ? { ...a, status: "resolving", resolution } : a)),
     );
-    // collapse after the confirmation has been seen
     window.setTimeout(
       () => {
         setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status: "collapsing" } : a)));
       },
       reduced ? 400 : 720,
     );
-    // remove after the collapse animation completes
     window.setTimeout(
       () => {
         setApprovals((prev) => prev.filter((a) => a.id !== id));
       },
       reduced ? 440 : 720 + 440,
     );
-  }
 
-  function handleCopy() {
-    const url = `https://${DEMO_URL}`;
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(url).catch(() => {});
+    // Fire real API call
+    if (resolution.tone === "success") {
+      approvalsApi.approve(id).catch(() => {});
+    } else {
+      approvalsApi.reject(id).catch(() => {});
     }
-    setCopied(true);
-    if (copyTimer.current) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1600);
   }
 
-  // reveal index counter for staggered entrance
+  // reveal index counter
   let idx = 0;
   const next = () => idx++;
 
+  const companyName = selectedCompany?.name ?? "your company";
+
   return (
     <div className="mx-auto w-full max-w-[1080px]" style={{ padding: "32px 28px 80px" }}>
-      {/* scoped keyframes — all guarded under prefers-reduced-motion */}
+      {/* scoped keyframes */}
       <style>{`
         @keyframes pcl-pop { from { transform: scale(1.4); } to { transform: scale(1); } }
         @keyframes pcl-dot-pulse {
@@ -780,16 +860,17 @@ export function Overview() {
               className="text-muted-foreground"
               style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}
             >
-              tuesday · march 18
+              {todayLabel()}
             </div>
             <h1
               className="text-foreground"
               style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.04em", lineHeight: 1.05, marginTop: 8 }}
             >
-              good morning, maya
+              {greeting()}, board
             </h1>
             <p className="text-muted-foreground" style={{ fontSize: 15, marginTop: 8 }}>
-              your fleet handled 214 tasks overnight. 3 things need a look.
+              {companyName} · {agentsActive} agent{agentsActive !== 1 ? "s" : ""} · {tasksOpen} open task{tasksOpen !== 1 ? "s" : ""}
+              {pendingApprovals > 0 ? ` · ${pendingApprovals} awaiting your call` : ""}
             </p>
           </div>
           <div
@@ -804,7 +885,9 @@ export function Overview() {
             }}
           >
             <StatusDot color={GREEN} pulse reduced={reduced} />
-            <span style={{ fontSize: 12, fontWeight: 700, color: GREEN }}>all systems live</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: GREEN }}>
+              {agentsRunning > 0 ? `${agentsRunning} running` : "all idle"}
+            </span>
           </div>
         </div>
       </Reveal>
@@ -813,21 +896,24 @@ export function Overview() {
       <div className="grid grid-cols-2 md:grid-cols-4" style={{ gap: 12, marginTop: 28 }}>
         <Reveal index={next()} reduced={reduced}>
           <StatCard
-            eyebrow="agents active"
-            big={<PopNumber value={agentsActive} reduced={reduced} />}
+            eyebrow="agents"
+            big={<PopNumber value={animatedAgents} reduced={reduced} />}
             delta={
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: GREEN, fontWeight: 600 }}>
-                <TrendingUp size={13} />
-                +2 this week
+              <span className="text-muted-foreground">
+                {agentsRunning} running · {dashboard?.agents?.paused ?? 0} paused
               </span>
             }
           />
         </Reveal>
         <Reveal index={next()} reduced={reduced}>
           <StatCard
-            eyebrow="tasks done"
-            big={<PopNumber value={tasksDone} reduced={reduced} />}
-            delta={<span className="text-muted-foreground">past 24 hours</span>}
+            eyebrow="open tasks"
+            big={<PopNumber value={animatedTasks} reduced={reduced} />}
+            delta={
+              <span className="text-muted-foreground">
+                {tasksInProgress} in progress · {tasksDone} done
+              </span>
+            }
           />
         </Reveal>
         <Reveal index={next()} reduced={reduced}>
@@ -835,25 +921,39 @@ export function Overview() {
             eyebrow="awaiting you"
             big={<AwaitingNumber count={awaitingCount} reduced={reduced} />}
             delta={
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: CLAY, fontWeight: 600 }}>
-                <StatusDot color={CLAY} pulse={false} reduced={reduced} size={7} />
-                needs review
-              </span>
+              pendingApprovals > 0 ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: CLAY, fontWeight: 600 }}>
+                  <StatusDot color={CLAY} pulse={false} reduced={reduced} size={7} />
+                  needs review
+                </span>
+              ) : (
+                <span className="text-muted-foreground">all clear</span>
+              )
             }
           />
         </Reveal>
         <Reveal index={next()} reduced={reduced}>
           <StatCard
-            eyebrow="hours saved"
+            eyebrow="spend this month"
             big={
-              <span>
-                <PopNumber value={hoursSaved} reduced={reduced} />
-                <span className="text-muted-foreground" style={{ fontSize: 18, fontWeight: 700 }}>
-                  h
+              monthBudget > 0 ? (
+                <span>
+                  ${(monthSpend / 100).toFixed(2)}
+                  <span className="text-muted-foreground" style={{ fontSize: 18, fontWeight: 700 }}>
+                    {" "}/ ${(monthBudget / 100).toFixed(0)}
+                  </span>
                 </span>
-              </span>
+              ) : (
+                <span>${(monthSpend / 100).toFixed(2)}</span>
+              )
             }
-            delta={<span className="text-muted-foreground">this week</span>}
+            delta={
+              monthBudget > 0 ? (
+                <span className="text-muted-foreground">{utilPct}% of budget</span>
+              ) : (
+                <span className="text-muted-foreground">unlimited budget</span>
+              )
+            }
           />
         </Reveal>
       </div>
@@ -870,22 +970,38 @@ export function Overview() {
               <h2 className="text-foreground" style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em" }}>
                 agent fleet
               </h2>
-              <button
-                type="button"
-                style={{ fontSize: 12.5, fontWeight: 600, color: CLAY }}
-                className="hover:underline"
-              >
-                view all 8 →
-              </button>
+              {agentList.length > 0 && (
+                <Link
+                  to="/agents/all"
+                  style={{ fontSize: 12.5, fontWeight: 600, color: CLAY }}
+                  className="hover:underline"
+                >
+                  view all {agentList.length} →
+                </Link>
+              )}
             </div>
           </Reveal>
-          <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 12 }}>
-            {INITIAL_AGENTS.map((agent, i) => (
-              <Reveal key={agent.id} index={next()} reduced={reduced}>
-                <AgentTile agent={agent} meterDelay={i * 80} reduced={reduced} />
-              </Reveal>
-            ))}
-          </div>
+
+          {liveAgents.length === 0 ? (
+            <Reveal index={next()} reduced={reduced}>
+              <div className="bg-card border border-border rounded-2xl" style={{ padding: 32, textAlign: "center" }}>
+                <p className="text-muted-foreground text-sm">
+                  No agents yet.{" "}
+                  <Link to="/agents/new" style={{ color: CLAY, fontWeight: 600 }}>
+                    Hire your first agent →
+                  </Link>
+                </p>
+              </div>
+            </Reveal>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 12 }}>
+              {liveAgents.map((agent, i) => (
+                <Reveal key={agent.id} index={next()} reduced={reduced}>
+                  <AgentTile agent={agent} meterDelay={i * 80} reduced={reduced} />
+                </Reveal>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* RIGHT — needs your call */}
@@ -895,23 +1011,25 @@ export function Overview() {
               <h2 className="text-foreground" style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em" }}>
                 needs your call
               </h2>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: 22,
-                  height: 22,
-                  padding: "0 7px",
-                  borderRadius: 999,
-                  background: CLAY,
-                  color: "var(--text-inverse)",
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                <PopNumber value={awaitingCount} reduced={reduced} />
-              </span>
+              {pendingApprovals > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    minWidth: 22,
+                    height: 22,
+                    padding: "0 7px",
+                    borderRadius: 999,
+                    background: CLAY,
+                    color: "var(--text-inverse)",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  <PopNumber value={awaitingCount} reduced={reduced} />
+                </span>
+              )}
             </div>
           </Reveal>
 
@@ -922,70 +1040,30 @@ export function Overview() {
               </Reveal>
             ))}
 
+            {visibleCards.length === 0 && pendingApprovals === 0 ? (
+              <Reveal index={next()} reduced={reduced}>
+                <div className="bg-card border border-border rounded-2xl" style={{ padding: 24, textAlign: "center" }}>
+                  <CircleCheck size={24} style={{ color: GREEN, margin: "0 auto 8px" }} />
+                  <p className="text-muted-foreground text-sm">Nothing waiting on you.</p>
+                </div>
+              </Reveal>
+            ) : null}
+
             {extraPending > 0 ? (
               <Reveal index={next()} reduced={reduced}>
                 <div style={{ textAlign: "center" }}>
-                  <button
-                    type="button"
+                  <Link
+                    to="/approvals"
                     className="text-muted-foreground hover:text-foreground"
                     style={{ fontSize: 12.5, transition: `color 120ms ${EASE}` }}
                   >
                     + {extraPending} more in approvals
-                  </button>
+                  </Link>
                 </div>
               </Reveal>
             ) : null}
           </div>
         </div>
-      </div>
-
-      {/* 4. FLOATING DEMO CHIP */}
-      <div
-        className="bg-foreground"
-        style={{
-          position: "fixed",
-          bottom: 22,
-          right: 26,
-          zIndex: 50,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          borderRadius: 999,
-          padding: "9px 9px 9px 15px",
-          boxShadow: "0 8px 24px -8px rgba(0,0,0,0.35)",
-        }}
-      >
-        <StatusDot color={GREEN} pulse reduced={reduced} />
-        <span className="text-background" style={{ fontSize: 12.5, fontWeight: 600 }}>
-          {DEMO_URL}
-        </span>
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="bg-background text-foreground active:scale-[0.96]"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            borderRadius: 999,
-            padding: "4px 9px",
-            fontSize: 11.5,
-            fontWeight: 600,
-            transition: `transform 120ms ${EASE}`,
-          }}
-        >
-          {copied ? (
-            <>
-              <Check size={12} style={{ color: GREEN }} />
-              <span style={{ color: GREEN }}>copied</span>
-            </>
-          ) : (
-            <>
-              <Copy size={12} />
-              copy
-            </>
-          )}
-        </button>
       </div>
     </div>
   );

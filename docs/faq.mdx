@@ -1,0 +1,165 @@
+---
+title: FAQ
+description: Frequently asked questions from early users — based on real friction points from first sessions.
+---
+
+# Frequently Asked Questions
+
+Answers to common questions from early AgentDash users. These entries come from real
+issues filed during first sessions (issues #448–#451).
+
+---
+
+## Why does the dashboard show fake names like "maya" and "scout"?
+
+**Short answer:** This is a known bug (#448). The dashboard displayed hardcoded demo
+data instead of real company data.
+
+**What happened:**
+
+The dashboard page (`/{prefix}/dashboard`) rendered a static marketing mockup:
+- Greeting said "good morning, maya" — no user named Maya exists
+- Stats showed fabricated numbers ("214 tasks overnight", "8 agents active")
+- Agent tiles showed fictional agents ("scout", "ledger", "harbor", "quill") from a
+  hardcoded `INITIAL_AGENTS` array in `Overview.tsx`
+
+**Fix:**
+
+The dashboard now pulls from the real `/api/dashboard` and `/api/companies/{id}/agents`
+endpoints. Greeting uses the signed-in user's name, stats reflect actual task counts,
+and agent tiles show your real fleet.
+
+**If you still see demo data:**
+
+1. Hard-refresh the page (Cmd+Shift+R / Ctrl+Shift+R)
+2. Verify you have agents and issues created for the selected company
+3. Check the browser console for API errors on `/api/dashboard`
+
+---
+
+## Why is the assignee column blank (showing "—") on the Issues page?
+
+**Short answer:** This was a known bug (#451). Issues assigned to agents showed a dash
+instead of the agent's name.
+
+**What happened:**
+
+The Issues list page did not properly join or populate the `assigneeAgent` relation.
+Even though `assigneeAgentId` was set on the issue, the UI had no agent name to display,
+so it fell back to "—".
+
+**Fix:**
+
+The issues list API response now includes the populated `assigneeAgent` object. The UI
+reads `issue.assigneeAgent.name` to show the correct name (e.g., "Marco", "Sasha").
+
+**If assignees are still blank:**
+
+1. Confirm the agent exists and is active for your company
+2. Check that `assigneeAgentId` on the issue matches a valid agent UUID
+3. Verify the API response includes the `assigneeAgent` field (check Network tab)
+
+---
+
+## Why does the Chief of Staff (/cos) show a generic onboarding message every time?
+
+**Short answer:** This is a known bug (#449). The CoS chat was not scoped to the
+selected company and re-ran first-run onboarding regardless of existing setup.
+
+**What happened:**
+
+The `/cos` route showed "Hi Board! I'm your Chief of Staff at AgentDash..." every time,
+ignoring:
+- Which company was currently selected
+- Whether the company already had agents and tasks
+- The actual company name
+
+**Fix in progress:**
+
+The CoS is being updated to:
+- Scope to the currently selected company context
+- Detect whether the company already has agents/tasks and skip the first-run interview
+- Use the real company name in the greeting
+
+**Workaround until fixed:**
+
+The CoS still functions — you can issue tasks and it will route them. The greeting text
+is cosmetic; delegation logic works correctly once agents are configured.
+
+---
+
+## Why can I see all companies in the sidebar, not just mine?
+
+**Short answer:** This is expected behavior in `local_trusted` mode (#450). In
+production with authenticated mode, companies are properly isolated.
+
+**What happened:**
+
+In `local_trusted` deployment mode (the default for local development), a single
+synthetic `local-board` actor has unrestricted access to all companies' data. The
+sidebar shows every company, and switching between them exposes all agents and issues.
+
+**Is this a security issue?**
+
+Not for local development — `local_trusted` is designed for a single user on a
+loopback-only connection. The concern is whether this behavior persists in
+multi-tenant `authenticated` mode.
+
+**Fix path:**
+
+- In `authenticated` mode: companies are scoped to the authenticated user's membership.
+  You will only see companies you belong to.
+- The `local_trusted` behavior is intentional but will be documented with a visible
+  warning that it is not suitable for multi-user deployments.
+
+**To test proper company isolation:**
+
+1. Set `PAPERCLIP_DEPLOYMENT_MODE=authenticated`
+2. Set `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`
+3. Sign in with a real user account
+4. You should only see companies where your user is a member
+
+---
+
+## My dashboard shows 0 tasks / 0 agents but I created them. What's wrong?
+
+This is typically a company-scoping issue:
+
+1. **Check which company is selected** — the dashboard shows data for the active company
+   in the sidebar. If you created agents under company A but company B is selected, the
+   dashboard will be empty.
+2. **Verify via API** — run:
+   ```bash
+   curl http://localhost:3100/api/companies/{companyId}/agents
+   curl http://localhost:3100/api/companies/{companyId}/issues
+   ```
+3. **Refresh after creating data** — the dashboard does not auto-poll. Refresh the page
+   after creating agents or issues.
+
+---
+
+## How do I assign a task to an agent?
+
+1. Navigate to the Issues page for your company
+2. Click on the issue you want to assign
+3. Use the assignee selector to pick an agent
+4. The agent will pick up the task on its next execution cycle
+
+You can also assign via API:
+
+```bash
+curl -X PATCH http://localhost:3100/api/issues/{issueId} \
+  -H "Content-Type: application/json" \
+  -d '{"assigneeAgentId": "{agentUuid}"}'
+```
+
+---
+
+## Related Issues
+
+| Issue | Title | Status |
+|-------|-------|--------|
+| [#448](https://github.com/thetangstr/agentdash/issues/448) | Dashboard shows hardcoded demo data instead of real company data | Fixed |
+| [#449](https://github.com/thetangstr/agentdash/issues/449) | CoS onboarding (/cos) doesn't scope to selected company | In Progress |
+| [#450](https://github.com/thetangstr/agentdash/issues/450) | Unauthenticated user can access all companies' data (local_trusted) | Open |
+| [#451](https://github.com/thetangstr/agentdash/issues/451) | Issues page shows assignee as blank dash instead of agent name | Fixed |
