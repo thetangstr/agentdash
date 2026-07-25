@@ -80,9 +80,10 @@ describe("readConfigFromEnv aliases", () => {
     );
   });
 
-  it("throws when neither canonical nor alias key is set", () => {
-    expect(() =>
-      readConfigFromEnv({ ...base, PAPERCLIP_API_URL: "http://localhost:3100" }),
-    ).toThrow(/PAPERCLIP_API_KEY/);
+  // AgentDash (MCP-native signup): the key is optional — a fresh install has
+  // none yet; agentdash_sign_up mints one and upgrades the session in place.
+  it("returns an empty apiKey when neither canonical nor alias key is set", () => {
+    const config = readConfigFromEnv({ ...base, PAPERCLIP_API_URL: "http://localhost:3100" });
+    expect(config.apiKey).toBe("");
   });
 });

@@ -67,6 +67,8 @@ beforeEach(() => {
 describe("computeNextAction", () => {
   const base: SetupStatusSnapshot = {
     serverHealthy: true,
+    bootstrapStatus: null,
+    apiKeyConfigured: true,
     companyId: COMPANY_ID,
     agentCount: 1,
     nonCosAgentCount: 0,
@@ -88,6 +90,43 @@ describe("computeNextAction", () => {
       { ...base, serverHealthy: false, companyId: null, agentCount: 0 },
       "install",
       "agentdash_install_checklist",
+    ],
+    [
+      "server unreachable trumps sign_up too",
+      {
+        ...base,
+        serverHealthy: false,
+        bootstrapStatus: "bootstrap_pending",
+        apiKeyConfigured: false,
+        companyId: null,
+        agentCount: 0,
+      },
+      "install",
+      "agentdash_install_checklist",
+    ],
+    [
+      "fresh authenticated install (bootstrap_pending) + no API key → sign up",
+      {
+        ...base,
+        bootstrapStatus: "bootstrap_pending",
+        apiKeyConfigured: false,
+        companyId: null,
+        agentCount: 0,
+      },
+      "sign_up",
+      "agentdash_sign_up",
+    ],
+    [
+      "bootstrap_pending but a key is already configured → normal bootstrap",
+      { ...base, bootstrapStatus: "bootstrap_pending", companyId: null, agentCount: 0 },
+      "bootstrap",
+      "agentdash_start_interview",
+    ],
+    [
+      "no API key but the instance is already claimed (ready) → not sign_up",
+      { ...base, bootstrapStatus: "ready", apiKeyConfigured: false, companyId: null, agentCount: 0 },
+      "bootstrap",
+      "agentdash_start_interview",
     ],
     [
       "healthy + no company → start interview",
@@ -150,6 +189,17 @@ describe("computeNextAction", () => {
     expect(result.phase).toBe(phase);
     expect(result.nextAction).toBe(action);
     expect(result.nextActionReason.length).toBeGreaterThan(0);
+  });
+
+  it("sign-up reason forbids inventing an email", () => {
+    const result = computeNextAction({
+      ...base,
+      bootstrapStatus: "bootstrap_pending",
+      apiKeyConfigured: false,
+      companyId: null,
+      agentCount: 0,
+    });
+    expect(result.nextActionReason).toMatch(/NEVER invent an email/i);
   });
 
   it("confirm-plan reason mentions the human-approval gate", () => {
@@ -313,6 +363,42 @@ describe("agentdash_setup_status", () => {
     expect(result.phase).toBe("interview");
     expect(result.nextAction).toBe("agentdash_interview_turn");
   });
+
+  // AgentDash (MCP-native signup): setup_status must work UNAUTHENTICATED —
+  // /health is public, and with no key configured the authed sub-fetches are
+  // skipped entirely (they would only 401 on an authenticated server).
+  it("works without an API key: only /health is fetched, no Authorization header, routes to sign_up", async () => {
+    const client = makeClient({ apiKey: "", companyId: null });
+    const fetchMock = routeFetch([
+      [/\/api\/health$/, { status: "ok", deploymentMode: "authenticated", bootstrapStatus: "bootstrap_pending" }],
+    ]);
+
+    const result = parseText(await getTool("agentdash_setup_status", client).execute({}));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("http://localhost:3100/api/health");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBeUndefined();
+
+    expect(result.phase).toBe("sign_up");
+    expect(result.nextAction).toBe("agentdash_sign_up");
+    expect(result.serverHealthy).toBe(true);
+    expect(result.bootstrapStatus).toBe("bootstrap_pending");
+    expect(result.apiKeyConfigured).toBe(false);
+  });
+
+  it("without an API key on a claimed instance (ready), skips authed fetches and reports bootstrap", async () => {
+    const client = makeClient({ apiKey: "", companyId: null });
+    const fetchMock = routeFetch([
+      [/\/api\/health$/, { status: "ok", bootstrapStatus: "ready" }],
+    ]);
+
+    const result = parseText(await getTool("agentdash_setup_status", client).execute({}));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.phase).toBe("bootstrap");
+    expect(result.apiKeyConfigured).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -337,6 +423,87 @@ describe("agentdash_install_checklist", () => {
     const stepIds = (result.steps as Array<{ id: string }>).map((step) => step.id);
     expect(stepIds).toContain("clone");
     expect(stepIds).toContain("health-check");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// agentdash_sign_up — founding-user signup endpoint contract
+// ---------------------------------------------------------------------------
+
+describe("agentdash_sign_up", () => {
+  const SIGNUP_RESPONSE = {
+    userId: "99999999-9999-4999-8999-999999999999",
+    email: "founder@example.com",
+    name: "Founder",
+    apiKey: "pcp_board_deadbeef",
+    apiKeyExpiresAt: "2026-08-24T00:00:00.000Z",
+    passwordSetup:
+      "Use 'Forgot password' on the web UI with this email to set a browser password later.",
+  };
+
+  it("POSTs to /onboarding/mcp-signup WITHOUT an Authorization header when no key is configured", async () => {
+    const client = makeClient({ apiKey: "" });
+    const fetchMock = routeFetch([[/\/onboarding\/mcp-signup$/, SIGNUP_RESPONSE]]);
+
+    const result = parseText(
+      await getTool("agentdash_sign_up", client).execute({
+        email: "founder@example.com",
+        name: "Founder",
+      }),
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://localhost:3100/api/onboarding/mcp-signup");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Authorization"]).toBeUndefined();
+    expect(JSON.parse(String(init.body))).toEqual({
+      email: "founder@example.com",
+      name: "Founder",
+    });
+
+    expect(result.userId).toBe(SIGNUP_RESPONSE.userId);
+    expect(result.apiKey).toBe(SIGNUP_RESPONSE.apiKey);
+    expect(String(result.apiKeyPersistInstructions)).toContain(
+      `PAPERCLIP_API_KEY=${SIGNUP_RESPONSE.apiKey}`,
+    );
+    expect(result.passwordSetup).toBe(SIGNUP_RESPONSE.passwordSetup);
+  });
+
+  it("upgrades the SAME session: subsequent calls carry the minted key as Bearer", async () => {
+    const client = makeClient({ apiKey: "" });
+    expect(client.hasApiKey).toBe(false);
+    routeFetch([[/\/onboarding\/mcp-signup$/, SIGNUP_RESPONSE]]);
+
+    await getTool("agentdash_sign_up", client).execute({
+      email: "founder@example.com",
+      name: "Founder",
+    });
+    expect(client.hasApiKey).toBe(true);
+
+    // Next call on the same client now authenticates with the new key.
+    const fetchMock = routeFetch([[/./, []]]);
+    await getTool("agentdash_list_agents", client).execute({});
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe(
+      `Bearer ${SIGNUP_RESPONSE.apiKey}`,
+    );
+  });
+
+  it("is documented as founding-only, no-password, and never inventing an email", () => {
+    const tool = getTool("agentdash_sign_up");
+    expect(tool.description).toMatch(/fresh/i);
+    expect(tool.description).toMatch(/no password/i);
+    expect(tool.description).toMatch(/NEVER invent an email/i);
+  });
+
+  it("surfaces the server's gate errors (e.g. 409 instance_already_claimed) instead of swallowing them", async () => {
+    routeFetch([[/\/onboarding\/mcp-signup$/, { code: "instance_already_claimed", error: "This instance already has a user." }, 409]]);
+
+    const response = await getTool("agentdash_sign_up").execute({
+      email: "founder@example.com",
+      name: "Founder",
+    });
+    expect(response.content[0]!.text).toMatch(/409/);
   });
 });
 
