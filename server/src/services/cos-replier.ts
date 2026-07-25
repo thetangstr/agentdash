@@ -15,16 +15,31 @@ import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipa
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
 
-const AGENT_PLAN_ADAPTER_TYPES =
-  '"claude_local", "codex_local", "gemini_local", "hermes_local", "opencode_local", "pi_local"';
+const AGENT_PLAN_ADAPTER_TYPE_LIST = [
+  "claude_local",
+  "codex_local",
+  "gemini_local",
+  "hermes_local",
+  "opencode_local",
+  "pi_local",
+] as const;
+
+// Prompt-facing rendering of the adapter list — byte-identical to the previous
+// hand-written string: `"claude_local", "codex_local", ...`.
+const AGENT_PLAN_ADAPTER_TYPES = AGENT_PLAN_ADAPTER_TYPE_LIST
+  .map((adapterType) => `"${adapterType}"`)
+  .join(", ");
 
 // AgentDash: respect the configured default adapter when proposing agent teams.
 // Falls back to hermes_local for backwards compatibility, but if the operator
 // set AGENTDASH_DEFAULT_ADAPTER (e.g. claude_local for a customer install),
 // proposed agents use that adapter type.
-function defaultAgentPlanAdapterType(): string {
+export function defaultAgentPlanAdapterType(): string {
   const configured = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "").trim();
-  if (configured && AGENT_PLAN_ADAPTER_TYPES.includes(`"${configured}"`)) {
+  if (
+    configured &&
+    (AGENT_PLAN_ADAPTER_TYPE_LIST as readonly string[]).includes(configured)
+  ) {
     return configured;
   }
   return "hermes_local";

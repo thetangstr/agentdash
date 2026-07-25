@@ -442,16 +442,29 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         adminCount === 0 && !hasExistingCompany;
     }
 
+    // AgentDash (#448/#449/#451): the creator's "owner" membership is inserted
+    // in the SAME transaction as the company row (see companyService.create).
+    // Auth reads memberships fresh per request, so any request racing between
+    // "company created" and "membership inserted" used to get a 403.
+    const ownerPrincipalId = req.actor.userId ?? "local-board";
     let company: Awaited<ReturnType<typeof svc.create>>;
     try {
-      company = await svc.create({
-        ...req.body,
-        // When the flag is ON we still persist the domain (so the historical
-        // record reflects who created it) but we skip the uniqueness check.
-        // When the partial unique index would fire, the catch below converts
-        // it to a 409.
-        emailDomain,
-      }, allowMultiTenantPerDomain);
+      company = await svc.create(
+        {
+          ...req.body,
+          // When the flag is ON we still persist the domain (so the historical
+          // record reflects who created it) but we skip the uniqueness check.
+          // When the partial unique index would fire, the catch below converts
+          // it to a 409.
+          emailDomain,
+        },
+        allowMultiTenantPerDomain,
+        {
+          principalType: "user",
+          principalId: ownerPrincipalId,
+          membershipRole: "owner",
+        },
+      );
     } catch (err) {
       if (err instanceof DomainAlreadyClaimedError) {
         res.status(409).json({
@@ -465,15 +478,14 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       throw err;
     }
 
-    // AgentDash (AGE-55): existing behavior already promotes the creator to a
-    // board ("owner") membership. We rely on that here so the at-least-one-
-    // admin invariant holds from the moment the company exists.
+    // AgentDash (AGE-55): the creator's "owner" membership already exists — it
+    // was inserted atomically with the company above, so the at-least-one-admin
+    // invariant holds from the moment the company exists.
     //
     // GH #72: owners need `agents:create` to hit the agent-hires endpoint and
     // configuration reads. setPrincipalPermission internally upserts membership
-    // as "member", so it must run BEFORE the "owner" promotion below — otherwise
-    // the second ensureMembership demotes the creator back to "member".
-    const ownerPrincipalId = req.actor.userId ?? "local-board";
+    // as "member", so it must run BEFORE the "owner" re-assert below — otherwise
+    // its internal ensureMembership would leave the creator demoted to "member".
     await access.setPrincipalPermission(
       company.id,
       "user",

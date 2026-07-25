@@ -69,6 +69,16 @@ export class SingleCompanyInstallationError extends Error {
   }
 }
 
+// AgentDash (#448/#449/#451): optional creator membership inserted in the SAME
+// transaction as the company row, closing the create→membership 403 race
+// (auth reads memberships fresh per request — see middleware/auth.ts).
+export interface CompanyCreatorMembership {
+  principalType: "user" | "agent";
+  principalId: string;
+  /** Defaults to "owner". */
+  membershipRole?: string;
+}
+
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
   const environmentsSvc = environmentService(db);
@@ -184,20 +194,44 @@ export function companyService(db: Db) {
     return pgUniqueConstraintName(error) === "companies_email_domain_unique_idx";
   }
 
+  // AgentDash (#448/#449/#451): creator membership inserted atomically with the
+  // company row. Auth reads memberships fresh per request, so a request landing
+  // between "company created" and "membership inserted" used to 403. Creating
+  // both in one transaction removes that window entirely.
+  async function insertCompanyWithMembership(
+    values: typeof companies.$inferInsert,
+    creatorMembership?: CompanyCreatorMembership,
+  ) {
+    return db.transaction(async (tx) => {
+      const rows = await tx.insert(companies).values(values).returning();
+      const company = rows[0];
+      if (creatorMembership) {
+        await tx.insert(companyMemberships).values({
+          companyId: company.id,
+          principalType: creatorMembership.principalType,
+          principalId: creatorMembership.principalId,
+          status: "active",
+          membershipRole: creatorMembership.membershipRole ?? "owner",
+        });
+      }
+      return company;
+    });
+  }
+
   async function createCompanyWithUniquePrefix(
     data: typeof companies.$inferInsert,
     allowMultiTenantPerDomain = false,
+    creatorMembership?: CompanyCreatorMembership,
   ) {
     const base = deriveIssuePrefixBase(data.name);
     let suffix = 1;
     while (suffix < 10000) {
       const candidate = `${base}${suffixForAttempt(suffix)}`;
       try {
-        const rows = await db
-          .insert(companies)
-          .values({ ...data, issuePrefix: candidate })
-          .returning();
-        return rows[0];
+        return await insertCompanyWithMembership(
+          { ...data, issuePrefix: candidate },
+          creatorMembership,
+        );
       } catch (error) {
         // AgentDash (AGE-55): if the email_domain unique constraint fires,
         // bubble up as a typed error so the route can return the FRE 409.
@@ -206,11 +240,10 @@ export function companyService(db: Db) {
         // users sharing a free-mail domain.
         if (isEmailDomainConflict(error)) {
           if (allowMultiTenantPerDomain && data.emailDomain) {
-            const rows = await db
-              .insert(companies)
-              .values({ ...data, issuePrefix: candidate, emailDomain: null })
-              .returning();
-            return rows[0];
+            return await insertCompanyWithMembership(
+              { ...data, issuePrefix: candidate, emailDomain: null },
+              creatorMembership,
+            );
           }
           const claimedDomain = data.emailDomain ?? "";
           const existing = claimedDomain
@@ -269,8 +302,16 @@ export function companyService(db: Db) {
       return enrichCompany(hydrated);
     },
 
-    create: async (data: typeof companies.$inferInsert, allowMultiTenantPerDomain = false) => {
-      const created = await createCompanyWithUniquePrefix(data, allowMultiTenantPerDomain);
+    create: async (
+      data: typeof companies.$inferInsert,
+      allowMultiTenantPerDomain = false,
+      creatorMembership?: CompanyCreatorMembership,
+    ) => {
+      const created = await createCompanyWithUniquePrefix(
+        data,
+        allowMultiTenantPerDomain,
+        creatorMembership,
+      );
       await environmentsSvc.ensureLocalEnvironment(created.id);
       const row = await getCompanyQuery(db)
         .where(eq(companies.id, created.id))
