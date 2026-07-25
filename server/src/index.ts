@@ -488,6 +488,12 @@ export async function startServer(): Promise<StartedServer> {
   let resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
+  // AgentDash: MCP-native signup — server-side user creation for
+  // POST /api/onboarding/mcp-signup. Only wired in authenticated mode where
+  // a Better Auth instance exists; without it the route answers 503.
+  let mcpSignupCreateUser:
+    | ((input: { name: string; email: string; password: string }) => Promise<{ userId: string | null }>)
+    | undefined;
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
   }
@@ -596,6 +602,15 @@ export async function startServer(): Promise<StartedServer> {
     );
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
+    // AgentDash: MCP-native signup — expose Better Auth's server-side
+    // sign-up so the founding user can be created without a browser form.
+    // The password never leaves the route handler that generated it.
+    mcpSignupCreateUser = async (input) => {
+      const result = (await auth.api.signUpEmail({
+        body: { name: input.name, email: input.email, password: input.password },
+      })) as { user?: { id?: string } } | null | undefined;
+      return { userId: result?.user?.id ?? null };
+    };
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
@@ -698,6 +713,8 @@ export async function startServer(): Promise<StartedServer> {
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,
+    // AgentDash: MCP-native signup (POST /api/onboarding/mcp-signup)
+    mcpSignupCreateUser,
     pluginWorkerManager,
     // AgentDash: corp-email requirement removed at user request
     // (2026-05-03) — applies to both Free and Pro tiers, so gmail/yahoo/

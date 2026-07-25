@@ -58,6 +58,12 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes, parsePluginUiAllowedOrigins } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
+// AgentDash: MCP-native signup — founding-user signup over the MCP journey,
+// no browser form. Unauthenticated but hard-gated (see the route file).
+import {
+  onboardingMcpSignupRoutes,
+  type McpSignupCreateUser,
+} from "./routes/onboarding-mcp-signup.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
@@ -170,6 +176,11 @@ export async function createApp(
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    // AgentDash: MCP-native signup — server-side user creation backed by the
+    // Better Auth instance (auth.api.signUpEmail), threaded from index.ts.
+    // Optional so buildApp stays backward-compatible for tests and
+    // local_trusted deployments; without it the route answers 503.
+    mcpSignupCreateUser?: McpSignupCreateUser;
     // AgentDash (AGE-60): when true, reject free-mail signups at the auth endpoint.
     requireCorpEmail?: boolean;
   },
@@ -306,6 +317,18 @@ export async function createApp(
   // out to Resend (cost amplification + sender-domain reputation risk).
   // Default API limiter still covers the rest of /onboarding.
   api.use("/onboarding/invites", createInviteRateLimiter({ deploymentMode: opts.deploymentMode }));
+  // AgentDash: MCP-native signup — POST /onboarding/mcp-signup. PUBLIC
+  // (no actor) but hard-gated: authenticated mode + self-serve bootstrap
+  // flag + strictly-fresh instance; the route mounts the tight auth-tier
+  // rate limiter itself. Mounted before onboardingV2Routes so the signup
+  // path never depends on that router's auth assumptions.
+  api.use(
+    "/onboarding",
+    onboardingMcpSignupRoutes(db, {
+      deploymentMode: opts.deploymentMode,
+      createUser: opts.mcpSignupCreateUser,
+    }),
+  );
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));

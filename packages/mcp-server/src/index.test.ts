@@ -23,6 +23,7 @@ describe("unified server composition", () => {
     expect(names.some((name) => name.startsWith("paperclip"))).toBe(true);
     expect(names).toContain("agentdash_setup_status");
     expect(names).toContain("agentdash_install_checklist");
+    expect(names).toContain("agentdash_sign_up");
     expect(names).toContain("agentdash_start_interview");
     expect(names).toContain("agentdash_interview_turn");
     expect(names).toContain("agentdash_get_plan");

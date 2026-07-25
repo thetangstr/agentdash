@@ -48,29 +48,36 @@ claude mcp add agentdash \
   -- pnpm --dir ~/agentdash exec tsx packages/mcp-server/src/stdio.ts
 ```
 
-### Bootstrap chicken-and-egg
+### Fresh install: MCP-native signup (no browser form)
 
-On a fresh machine there is no server and therefore no API key yet. That is
-expected:
+On a fresh machine there is no server, no user, and no API key yet. That is
+expected — `PAPERCLIP_API_KEY` is **optional** and the whole claim happens
+through the MCP server:
 
-1. First run, add the MCP server **without** a real key (any placeholder value
-   satisfies the env check). The unauthenticated tools —
+1. First run, add the MCP server **without** a key (just omit the
+   `PAPERCLIP_API_KEY` env line). The unauthenticated tools —
    `agentdash_install_checklist` and `agentdash_setup_status` — work
    immediately and walk the agent through install and first boot.
-2. Once the server is up and a key exists, the authenticated tools
-   (`agentdash_start_interview`, `agentdash_interview_turn`,
-   `agentdash_confirm_plan`, `agentdash_request_approval`, …) come alive.
-   The output of `agentdash_start_interview` / the bootstrap step includes
-   what's needed (company id, agent key) — update the MCP config with the real
-   key when it appears:
+2. Once the server is healthy, `agentdash_setup_status` reports phase
+   `sign_up` on a fresh authenticated-mode instance (requires
+   `AGENTDASH_SELF_SERVE_BOOTSTRAP=true` in the server env). The agent asks
+   the customer for their email **in conversation** and runs
+   `agentdash_sign_up` — the server creates the founding user, promotes them
+   to instance admin, and returns a board API key. No browser signup form,
+   no password (set one later via "Forgot password" on the web UI). The
+   session continues authenticated immediately.
+3. Persist the returned key so future sessions stay signed in:
 
 ```sh
 claude mcp remove agentdash
 claude mcp add agentdash \
   --env PAPERCLIP_API_URL=http://localhost:3100 \
-  --env PAPERCLIP_API_KEY=<real-agent-key> \
+  --env PAPERCLIP_API_KEY=<key-returned-by-agentdash_sign_up> \
   -- node ~/agentdash/packages/mcp-server/dist/stdio.js
 ```
+
+`agentdash_sign_up` only works while the instance has ZERO users — the moment
+anyone exists it answers `409 instance_already_claimed`, forever.
 
 ## 3. The kickoff prompt
 
@@ -83,7 +90,9 @@ agentdash://playbook resource first.
 Operating loop: call agentdash_setup_status, execute its nextAction, verify
 the result, and repeat until the customer's company is provisioned and its
 agents are running. If the server is not installed yet, follow
-agentdash_install_checklist step by step.
+agentdash_install_checklist step by step. On a fresh install, sign the
+customer up first with agentdash_sign_up — ask them for their email; never
+invent one.
 
 Interview the customer conversationally (deep-interview) to understand their
 business, goals, and constraints before confirming any plan. Use

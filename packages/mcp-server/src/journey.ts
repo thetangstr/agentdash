@@ -24,6 +24,15 @@ const companyIdOptional = z.string().uuid().optional().nullable();
 export interface SetupStatusSnapshot {
   /** GET /health succeeded. */
   serverHealthy: boolean;
+  /**
+   * bootstrapStatus from the (unauthenticated) /health payload —
+   * "bootstrap_pending" means an authenticated-mode instance with no
+   * instance admin yet, i.e. a fresh install nobody has claimed. Null when
+   * the server doesn't report one (local_trusted / older servers).
+   */
+  bootstrapStatus: string | null;
+  /** A bearer API key is configured on this MCP session. */
+  apiKeyConfigured: boolean;
   /** Company id from config or the first listed company; null when none. */
   companyId: string | null;
   /** Total agents in the company (incl. the Chief of Staff). */
@@ -42,6 +51,7 @@ export interface SetupStatusSnapshot {
 
 export type SetupPhase =
   | "install"
+  | "sign_up"
   | "bootstrap"
   | "interview"
   | "plan_review"
@@ -67,6 +77,21 @@ export function computeNextAction(snapshot: SetupStatusSnapshot): NextAction {
       nextActionReason:
         "The AgentDash server is unreachable. Run the install checklist / start the server "
         + "(steps run in your shell with the human's consent), then re-check agentdash_setup_status.",
+    };
+  }
+  // AgentDash (MCP-native signup): a healthy authenticated-mode server that
+  // reports bootstrap_pending has no founding user yet. With no API key on
+  // this session, the ONLY forward path is signing the human up — every
+  // authenticated tool would 401. Sign-up mints the board key in-session.
+  if (snapshot.bootstrapStatus === "bootstrap_pending" && !snapshot.apiKeyConfigured) {
+    return {
+      phase: "sign_up",
+      nextAction: "agentdash_sign_up",
+      nextActionReason:
+        "The server is a fresh authenticated-mode install with no founding user, and this "
+        + "session has no API key. Ask the human for their email and name (NEVER invent an "
+        + "email), then call agentdash_sign_up — it creates the founding user, returns a board "
+        + "API key, and signs this session in.",
     };
   }
   if (!snapshot.companyId || snapshot.agentCount === 0) {
@@ -231,16 +256,26 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         + "provisioned and operating.",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId: inputCompanyId }) => {
+        // /health is unauthenticated even in authenticated deployments, so
+        // setup_status works with no API key configured — that is exactly
+        // the state where it must route to agentdash_sign_up.
         let serverHealthy = false;
+        let bootstrapStatus: string | null = null;
         try {
-          await client.requestJson("GET", "/health");
+          const health = await client.requestJson<Record<string, unknown>>("GET", "/health");
           serverHealthy = true;
+          bootstrapStatus =
+            health && typeof health.bootstrapStatus === "string" ? health.bootstrapStatus : null;
         } catch {
           serverHealthy = false;
         }
 
+        // Every fetch below requires a bearer credential — skip them all
+        // when the session has no key (they would only 401).
+        const apiKeyConfigured = client.hasApiKey;
+
         let companyId = inputCompanyId?.trim() || client.defaults.companyId || null;
-        if (serverHealthy && !companyId) {
+        if (serverHealthy && apiKeyConfigured && !companyId) {
           try {
             const companies = asArray(await client.requestJson("GET", "/companies"));
             companyId = readString(companies[0] ?? {}, "id");
@@ -252,7 +287,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         let agents: Array<Record<string, unknown>> = [];
         let dashboard: Record<string, unknown> | null = null;
         let pendingApprovals = 0;
-        if (serverHealthy && companyId) {
+        if (serverHealthy && apiKeyConfigured && companyId) {
           try {
             agents = asArray(await client.requestJson("GET", `/companies/${companyId}/agents`));
           } catch {
@@ -281,7 +316,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         // Only pay for the plan-card lookup while the team is unmaterialized —
         // that's the only window where interview-vs-plan_review is ambiguous.
         let planReady = false;
-        if (serverHealthy && companyId && agents.length > 0 && nonCosAgents.length === 0) {
+        if (serverHealthy && apiKeyConfigured && companyId && agents.length > 0 && nonCosAgents.length === 0) {
           try {
             const inbox = await client.requestJson<{ id: string }>(
               "GET",
@@ -299,6 +334,8 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
 
         const snapshot: SetupStatusSnapshot = {
           serverHealthy,
+          bootstrapStatus,
+          apiKeyConfigured,
           companyId,
           agentCount: agents.length,
           nonCosAgentCount: nonCosAgents.length,
@@ -312,6 +349,8 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         return {
           phase: next.phase,
           serverHealthy,
+          bootstrapStatus,
+          apiKeyConfigured,
           companyId,
           agentCount: agents.length,
           runningAgents: agents.length - pausedAgentCount,
@@ -335,8 +374,45 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         steps: INSTALL_STEPS,
         afterInstall:
           "When the health check passes, call agentdash_setup_status — it will route you to "
-          + "agentdash_start_interview.",
+          + "agentdash_sign_up (fresh authenticated install) or agentdash_start_interview.",
       }),
+    ),
+    makeTool(
+      "agentdash_sign_up",
+      "Founding-user signup for a FRESH authenticated-mode install — works ONLY while the "
+        + "instance has zero users (bootstrapStatus \"bootstrap_pending\"). No password needed: "
+        + "collect the human's email and name in conversation (NEVER invent an email), and the "
+        + "server creates the founding user, returns a board API key, and this session continues "
+        + "authenticated immediately. Persist the key so future sessions stay signed in.",
+      z.object({
+        email: z.string().email(),
+        name: z.string().min(1).max(120),
+      }),
+      async ({ email, name }) => {
+        const result = await client.requestJson<{
+          userId: string;
+          email: string;
+          name: string;
+          apiKey: string;
+          apiKeyExpiresAt: string;
+          passwordSetup: string;
+        }>("POST", "/onboarding/mcp-signup", { body: { email, name } });
+
+        // Upgrade THIS session in place: every subsequent tool call carries
+        // the new board key without an MCP server restart.
+        client.setApiKey(result.apiKey);
+
+        return {
+          userId: result.userId,
+          email: result.email,
+          apiKey: result.apiKey,
+          apiKeyExpiresAt: result.apiKeyExpiresAt,
+          apiKeyPersistInstructions:
+            `Add PAPERCLIP_API_KEY=${result.apiKey} to the MCP server env so future sessions `
+            + "stay signed in",
+          passwordSetup: result.passwordSetup,
+        };
+      },
     ),
     makeTool(
       "agentdash_start_interview",

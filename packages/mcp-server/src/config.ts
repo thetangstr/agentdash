@@ -39,10 +39,11 @@ export function readConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Papercl
   if (!apiUrl) {
     throw new Error("Missing PAPERCLIP_API_URL (or AGENTDASH_API_URL)");
   }
-  const apiKey = firstNonEmpty(env.PAPERCLIP_API_KEY, env.AGENTDASH_API_KEY);
-  if (!apiKey) {
-    throw new Error("Missing PAPERCLIP_API_KEY (or AGENTDASH_API_KEY)");
-  }
+  // AgentDash (MCP-native signup): the API key is OPTIONAL. On a fresh
+  // authenticated-mode install there is no key yet — the unauthenticated
+  // tools (setup_status via /health, sign_up) bootstrap one, and
+  // client.setApiKey() upgrades the running session in place.
+  const apiKey = firstNonEmpty(env.PAPERCLIP_API_KEY, env.AGENTDASH_API_KEY) ?? "";
 
   return {
     apiUrl: normalizeApiUrl(apiUrl),

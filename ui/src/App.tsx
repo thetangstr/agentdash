@@ -64,6 +64,7 @@ import { InviteLandingPage } from "./pages/InviteLanding";
 import { TrialLandingPage } from "./pages/TrialLanding";
 import { InvestorsPage } from "./pages/InvestorsPage";
 import { PricingPage } from "./pages/PricingPage";
+import { McpPage } from "./pages/McpPage";
 import { TermsPage } from "./pages/TermsPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { SharedArtifactPage } from "./pages/SharedArtifact";
@@ -312,6 +313,10 @@ export function App() {
             as /trial and /investors, no auth, no company context, owns its own
             h-screen overflow-y-auto scroll region. */}
         <Route path="pricing" element={<PricingPage />} />
+        {/* AgentDash: PUBLIC MCP setup page — same public tier as /trial and
+            /pricing, no auth, no company context. Renders on the marketing
+            surface (MarketingShell), so it scrolls like / and /consulting. */}
+        <Route path="mcp" element={<McpPage />} />
         {/* AgentDash: PUBLIC legal pages (Terms / Privacy) — same public tier as
             /trial, /pricing, and /investors, no auth, no company context, each
             owns its own h-screen overflow-y-auto scroll region. */}
