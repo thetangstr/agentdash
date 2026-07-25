@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MKThink × AgentDash — Your AI Company</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d28;
+      --border: #2a2d3a;
+      --accent: #14b8a6;
+      --text: #e4e4e7;
+      --muted: #71717a;
+      --success: #22c55e;
+      --warn: #f59e0b;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 0;
+    }
+    .hero {
+      background: linear-gradient(135deg, #0f1117 0%, #1a1d28 50%, #0d2b28 100%);
+      padding: 60px 20px 40px;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .hero h1 {
+      font-size: 2.4em;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p {
+      color: var(--muted);
+      font-size: 1.15em;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .dashboard-link {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 14px 32px;
+      background: var(--accent);
+      color: #000;
+      font-weight: 700;
+      border-radius: 12px;
+      text-decoration: none;
+      font-size: 1.1em;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .dashboard-link:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px -8px rgba(20, 184, 166, 0.4);
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px 80px;
+    }
+    .section {
+      margin-bottom: 48px;
+    }
+    .section h2 {
+      font-size: 1.5em;
+      font-weight: 700;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--border);
+    }
+    .section h3 {
+      font-size: 1.15em;
+      font-weight: 600;
+      margin: 24px 0 8px;
+      color: var(--accent);
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card .icon { font-size: 2em; margin-bottom: 8px; }
+    .card h4 { font-size: 1.1em; margin-bottom: 4px; }
+    .card p { color: var(--muted); font-size: 0.95em; }
+    .card .link {
+      display: inline-block;
+      margin-top: 8px;
+      color: var(--accent);
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.9em;
+    }
+    .timeline {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 0 16px;
+      margin: 16px 0;
+    }
+    .timeline-item {
+      display: contents;
+    }
+    .timeline-time {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 0.9em;
+      padding-top: 4px;
+    }
+    .timeline-content {
+      border-left: 2px solid var(--border);
+      padding: 0 0 24px 16px;
+    }
+    .timeline-content:last-child { border-left: none; }
+    .timeline-content h4 { margin-bottom: 4px; }
+    .timeline-content p { color: var(--muted); font-size: 0.95em; }
+    .alert {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 10px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+    .alert strong { color: var(--warn); }
+    .alert p { color: var(--text); font-size: 0.95em; margin-top: 4px; }
+    .info {
+      background: rgba(20, 184, 166, 0.08);
+      border: 1px solid rgba(20, 184, 166, 0.2);
+      border-radius: 10px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+    .info strong { color: var(--accent); }
+    .info p { color: var(--text); font-size: 0.95em; margin-top: 4px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.95em;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .code {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: rgba(255,255,255,0.05);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .footer {
+      text-align: center;
+      padding: 40px 20px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9em;
+    }
+    .footer a { color: var(--accent); text-decoration: none; }
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .quick-action {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .quick-action:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .quick-action .label { font-weight: 600; font-size: 0.95em; }
+    .quick-action .desc { color: var(--muted); font-size: 0.85em; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>MKThink <span class="accent">×</span> AgentDash</h1>
+  <p>Your autonomous AI workforce is live. This is your operations hub — everything you need to manage your agent team, track work, and get results.</p>
+  <a href="http://MKTHINK-MAC-MINI-IP:3100/dashboard" class="dashboard-link">Open Dashboard →</a>
+</div>
+
+<div class="container">
+
+  <!-- Quick Actions -->
+  <div class="section">
+    <h2>Quick Actions</h2>
+    <div class="quick-actions">
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/dashboard" class="quick-action">
+        <div class="label">📊 Dashboard</div>
+        <div class="desc">See what your agents are doing right now</div>
+      </a>
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/issues" class="quick-action">
+        <div class="label">📋 Tasks</div>
+        <div class="desc">Create, assign, and track work</div>
+      </a>
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/agents/all" class="quick-action">
+        <div class="label">🤖 Agents</div>
+        <div class="desc">View your agent fleet and their status</div>
+      </a>
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/cos" class="quick-action">
+        <div class="label">💬 Chief of Staff</div>
+        <div class="desc">Chat with your CoS to plan and delegate</div>
+      </a>
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/activity" class="quick-action">
+        <div class="label">📝 Activity Log</div>
+        <div class="desc">Full audit trail of everything that's happened</div>
+      </a>
+      <a href="http://MKTHINK-MAC-MINI-IP:3100/costs" class="quick-action">
+        <div class="label">💰 Costs</div>
+        <div class="desc">Token spend and budget tracking</div>
+      </a>
+    </div>
+  </div>
+
+  <!-- What AgentDash Does -->
+  <div class="section">
+    <h2>What AgentDash Does</h2>
+    <p>AgentDash is your company's AI control plane. Think of it as the operating system for a team of AI agents that work for you 24/7. Here's how it works:</p>
+
+    <div class="card-grid">
+      <div class="card">
+        <div class="icon">🎯</div>
+        <h4>You Define the Work</h4>
+        <p>Create tasks in the dashboard or text your CEO agent. Describe what needs to be done — research, writing, analysis, coding.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🤖</div>
+        <h4>Agents Pick It Up</h4>
+        <p>Your AI agents check for new work every 30 minutes. When a task is assigned, they pick it up automatically and start working.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📊</div>
+        <h4>You See Everything</h4>
+        <p>The dashboard shows real-time status: who's working, what's done, what needs your review. Full transparency.</p>
+      </div>
+      <div class="card">
+        <div class="icon">💰</div>
+        <h4>You Control Costs</h4>
+        <p>Set a monthly budget. Agents auto-pause when they hit the cap. No surprise bills. Token-level cost tracking.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- What to Expect -->
+  <div class="section">
+    <h2>What to Expect in Your First Week</h2>
+
+    <div class="timeline">
+      <div class="timeline-item">
+        <div class="timeline-time">Day 1</div>
+        <div class="timeline-content">
+          <h4>Setup & First Task</h4>
+          <p>Your agent team is created. You'll create your first task and watch an agent complete it. Expect ~5 minutes for the first task to be picked up.</p>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">Day 2-3</div>
+        <div class="timeline-content">
+          <h4>Learning the Rhythm</h4>
+          <p>Create 3-5 tasks per day. See how agents handle them. Some will complete quickly (research, summaries); others take longer (analysis, multi-step work). Check the dashboard 2-3 times per day.</p>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">Day 4-5</div>
+        <div class="timeline-content">
+          <h4>Refining Tasks</h4>
+          <p>You'll learn what works. Be specific in task descriptions — agents perform better with clear instructions. Use the CoS chat to delegate higher-level work.</p>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div class="timeline-time">Week 2+</div>
+        <div class="timeline-content">
+          <h4>Routine</h4>
+          <p>Check the dashboard morning and evening. Create tasks as needed. Review completed work. Text your CEO agent for quick requests. The system runs itself.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- How Often to Interact -->
+  <div class="section">
+    <h2>How Often Should You Interact?</h2>
+
+    <div class="info">
+      <strong>💡 Key Insight:</strong>
+      <p>Agents are not ChatGPT. They don't respond instantly. Think of them as employees who check their inbox every 30 minutes. Here's the recommended interaction pattern:</p>
+    </div>
+
+    <table>
+      <tr>
+        <th>When</th>
+        <th>What to Do</th>
+        <th>Time</th>
+      </tr>
+      <tr>
+        <td><strong>Morning</strong> (9 AM)</td>
+        <td>Check dashboard. Review overnight results. Create tasks for the day. Text CEO agent if you have requests.</td>
+        <td>5-10 min</td>
+      </tr>
+      <tr>
+        <td><strong>Midday</strong> (optional)</td>
+        <td>Quick dashboard check. See if any tasks need your review or approval.</td>
+        <td>2-3 min</td>
+      </tr>
+      <tr>
+        <td><strong>Evening</strong> (5 PM)</td>
+        <td>Review completed work. Check costs. Create tasks for tomorrow. Respond to any agent questions.</td>
+        <td>5-10 min</td>
+      </tr>
+    </table>
+
+    <p style="margin-top: 12px; color: var(--muted);">Total daily commitment: <strong style="color: var(--text);">15-20 minutes</strong>. The agents do the rest.</p>
+  </div>
+
+  <!-- Texting the CEO Agent -->
+  <div class="section">
+    <h2>Texting Your CEO Agent 📱</h2>
+
+    <div class="info">
+      <strong>If iMessage is set up:</strong>
+      <p>You can text your CEO agent from your iPhone. It reads your message, takes action in AgentDash, and replies — all through Messages.app.</p>
+    </div>
+
+    <table>
+      <tr>
+        <th>You text...</th>
+        <th>What happens</th>
+      </tr>
+      <tr>
+        <td><em>"Status"</em></td>
+        <td>Agent reports what everyone is working on</td>
+      </tr>
+      <tr>
+        <td><em>"Create task: research 5 competitors"</em></td>
+        <td>New task created and assigned to the best agent</td>
+      </tr>
+      <tr>
+        <td><em>"What's the Research Agent working on?"</em></td>
+        <td>Specific agent status and recent activity</td>
+      </tr>
+      <tr>
+        <td><em>"Pause all agents"</em></td>
+        <td>All agents stop picking up new work</td>
+      </tr>
+      <tr>
+        <td><em>"How much have we spent?"</em></td>
+        <td>Monthly spend and budget remaining</td>
+      </tr>
+      <tr>
+        <td><em>"Remind me to follow up with Acme on Friday"</em></td>
+        <td>Creates a scheduled reminder</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Watch Out For -->
+  <div class="section">
+    <h2>What to Watch Out For</h2>
+
+    <div class="alert">
+      <strong>⚠️ Budget Limits</strong>
+      <p>If you're using API billing, agents will pause when they hit the monthly budget cap. Check the Costs page regularly. If agents pause unexpectedly, it's likely the budget — just raise it or wait for the next billing cycle.</p>
+    </div>
+
+    <div class="alert">
+      <strong>⚠️ Task Quality</strong>
+      <p>Agents perform best with specific, detailed instructions. "Research our competitors" is vague. "Research our top 5 competitors in the consulting space and create a 2-page summary with strengths, weaknesses, and market position" is excellent.</p>
+    </div>
+
+    <div class="alert">
+      <strong>⚠️ Agent Availability</strong>
+      <p>Agents check for work every 30 minutes. They don't work instantly. If you need something fast, mark it as "critical" priority — the agent will pick it up on the next heartbeat cycle.</p>
+    </div>
+
+    <div class="alert">
+      <strong>⚠️ Mac Mini Must Stay On</strong>
+      <p>AgentDash runs on your Mac mini. If it sleeps, restarts, or loses network, agents stop working. Ensure the Mac mini is set to never sleep (System Settings → Energy → "Prevent automatic sleeping").</p>
+    </div>
+  </div>
+
+  <!-- Resources -->
+  <div class="section">
+    <h2>Resources & Documentation</h2>
+
+    <div class="card-grid">
+      <div class="card">
+        <div class="icon">📖</div>
+        <h4>Daily Usage Guide</h4>
+        <p>How to create tasks, manage agents, review work, and control costs.</p>
+        <a href="#" class="link">Read →</a>
+      </div>
+      <div class="card">
+        <div class="icon">🔧</div>
+        <h4>Troubleshooting</h4>
+        <p>Common issues and how to fix them without calling support.</p>
+        <a href="#" class="link">Read →</a>
+      </div>
+      <div class="card">
+        <div class="icon">📱</div>
+        <h4>iMessage Setup</h4>
+        <p>How to text your CEO agent from your iPhone.</p>
+        <a href="#" class="link">Read →</a>
+      </div>
+      <div class="card">
+        <div class="icon">🛠️</div>
+        <h4>Admin Reference</h4>
+        <p>Technical commands for managing the AgentDash server.</p>
+        <a href="#" class="link">Read →</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Support -->
+  <div class="section">
+    <h2>Support</h2>
+
+    <div class="card-grid">
+      <div class="card">
+        <div class="icon">🐛</div>
+        <h4>Report a Bug</h4>
+        <p>File an issue on GitHub. Our team monitors issues every 30 minutes during business hours.</p>
+        <a href="https://github.com/thetangstr/agentdash/issues" class="link">File Issue →</a>
+      </div>
+      <div class="card">
+        <div class="icon">📞</div>
+        <h4>Emergency Support</h4>
+        <p>For critical issues (agents down, data loss), contact us directly.</p>
+        <p style="margin-top: 8px; font-weight: 600;">Eddy: [your-phone]</p>
+      </div>
+      <div class="card">
+        <div class="icon">💬</div>
+        <h4>Questions</h4>
+        <p>Not sure how to do something? File a GitHub issue with the "question" label.</p>
+        <a href="https://github.com/thetangstr/agentdash/issues" class="link">Ask →</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <p>Powered by <a href="https://github.com/thetangstr/agentdash">AgentDash</a> — The autonomous AI company platform.</p>
+  <p style="margin-top: 8px; font-size: 0.8em;">MKThink Pilot · Installed July 2026 · 6-month free trial</p>
+</div>
+
+</body>
+</html>

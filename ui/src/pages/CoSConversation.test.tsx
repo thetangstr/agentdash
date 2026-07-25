@@ -28,7 +28,18 @@ vi.mock("../api/conversations", () => ({
     post: vi.fn(),
     read: vi.fn(),
     participants: vi.fn(),
+    companyInbox: vi.fn().mockResolvedValue(null),
   },
+}));
+
+// Mock useCompany so CoSConversation can read the company context.
+// Tests expect bootstrap path (no company selected), matching original behavior.
+vi.mock("../context/CompanyContext", () => ({
+  useCompany: () => ({
+    selectedCompanyId: null,
+    selectedCompany: null,
+    loading: false,
+  }),
 }));
 
 vi.mock("../realtime/useMessages", () => ({

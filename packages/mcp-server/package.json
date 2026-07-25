@@ -1,47 +1,20 @@
 {
   "name": "@agentdash/mcp-server",
   "version": "0.1.0",
-  "license": "MIT",
-  "description": "AgentDash MCP server — Model Context Protocol tools for AgentDash workspaces, agents, and onboarding.",
-  "homepage": "https://github.com/thetangstr/agentdash",
-  "bugs": {
-    "url": "https://github.com/thetangstr/agentdash/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thetangstr/agentdash.git",
-    "directory": "packages/mcp-server"
-  },
+  "description": "AgentDash MCP Server — onboarding, provisioning, and management via Model Context Protocol",
   "type": "module",
+  "main": "./dist/index.js",
   "bin": {
-    "agentdash-mcp-server": "./dist/stdio.js"
-  },
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "publishConfig": {
-    "access": "public",
-    "bin": {
-      "agentdash-mcp-server": "./dist/stdio.js"
-    },
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
-      }
-    },
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts"
+    "agentdash-mcp": "./dist/stdio.js"
   },
   "files": [
-    "dist",
-    "README.md"
+    "dist"
   ],
   "scripts": {
-    "build": "tsc && node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config);\" && chmod +x dist/stdio.js",
-    "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "build": "esbuild src/stdio.ts src/index.ts --outdir=dist --bundle --platform=node --format=esm --target=node20 --sourcemap --banner:js=\"#!/usr/bin/env node\" --external:@modelcontextprotocol/sdk --external:zod",
+    "start": "node dist/stdio.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

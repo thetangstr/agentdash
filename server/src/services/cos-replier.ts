@@ -15,9 +15,35 @@ import { isAgentPlanPayload, type AgentPlanProposalV1Payload } from "@paperclipa
 import type { Db } from "@paperclipai/db";
 import type { DispatchMeter } from "./dispatch-llm.js";
 
-const AGENT_PLAN_ADAPTER_TYPES =
-  '"claude_local", "codex_local", "gemini_local", "hermes_local", "opencode_local", "pi_local"';
-const DEFAULT_AGENT_PLAN_ADAPTER_TYPE = "hermes_local";
+const AGENT_PLAN_ADAPTER_TYPE_LIST = [
+  "claude_local",
+  "codex_local",
+  "gemini_local",
+  "hermes_local",
+  "opencode_local",
+  "pi_local",
+] as const;
+
+// Prompt-facing rendering of the adapter list — byte-identical to the previous
+// hand-written string: `"claude_local", "codex_local", ...`.
+const AGENT_PLAN_ADAPTER_TYPES = AGENT_PLAN_ADAPTER_TYPE_LIST
+  .map((adapterType) => `"${adapterType}"`)
+  .join(", ");
+
+// AgentDash: respect the configured default adapter when proposing agent teams.
+// Falls back to hermes_local for backwards compatibility, but if the operator
+// set AGENTDASH_DEFAULT_ADAPTER (e.g. claude_local for a customer install),
+// proposed agents use that adapter type.
+export function defaultAgentPlanAdapterType(): string {
+  const configured = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "").trim();
+  if (
+    configured &&
+    (AGENT_PLAN_ADAPTER_TYPE_LIST as readonly string[]).includes(configured)
+  ) {
+    return configured;
+  }
+  return "hermes_local";
+}
 
 interface CosStateRow {
   conversationId: string;
@@ -118,7 +144,7 @@ Goal: ${spec.goal}
 Constraints: ${constraintsJson}
 Success criteria: ${criteriaJson}
 
-Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${DEFAULT_AGENT_PLAN_ADAPTER_TYPE}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
+Propose a concrete agent team that hits this goal under the listed constraints and meets the success criteria. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
 
 In the visible body (before the JSON), give the user a short paragraph of rationale that references at least one constraint and one success criterion verbatim from the captured context, then a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
 
@@ -130,7 +156,7 @@ Your reply MUST end with a fenced JSON block emitting an agent_plan_proposal_v1 
   "plan": {
     "rationale": "...",
     "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${DEFAULT_AGENT_PLAN_ADAPTER_TYPE}", "responsibilities": ["..."], "kpis": ["..."] }
+      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
     ],
     "alignmentToShortTerm": "...",
     "alignmentToLongTerm": "..."
@@ -147,7 +173,7 @@ function planPrompt(state: CosStateRow): string {
   return `You are the Chief of Staff for AgentDash. Goals captured:
 ${JSON.stringify(state.goals, null, 2)}
 
-Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${DEFAULT_AGENT_PLAN_ADAPTER_TYPE}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
+Propose a concrete agent team that hits the short-term goal AND seeds the long-term one. Use 2-5 agents. Each agent gets a role, a short human name, an adapterType (one of: ${AGENT_PLAN_ADAPTER_TYPES}), 2-4 responsibilities, and 1-3 KPIs. Prefer "${defaultAgentPlanAdapterType()}" for local/self-hosted deployments unless the user explicitly asks for another adapter.
 
 In the visible body (before the JSON), give the user a short paragraph of rationale and a one-line tour of each agent. End with the question "Want me to set them up, or revise?"
 
@@ -159,7 +185,7 @@ Your reply MUST end with a fenced JSON block:
   "plan": {
     "rationale": "...",
     "agents": [
-      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${DEFAULT_AGENT_PLAN_ADAPTER_TYPE}", "responsibilities": ["..."], "kpis": ["..."] }
+      { "role": "engineering_lead", "name": "Ellie", "adapterType": "${defaultAgentPlanAdapterType()}", "responsibilities": ["..."], "kpis": ["..."] }
     ],
     "alignmentToShortTerm": "...",
     "alignmentToLongTerm": "..."

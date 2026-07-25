@@ -1,0 +1,4 @@
+Scope: 23 of 24 workspace projects
+packages/adapter-utils typecheck$ tsc --noEmit
+packages/shared typecheck$ tsc --noEmit
+packages/adapter-utils typecheck: Done

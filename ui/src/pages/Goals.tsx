@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Target, Plus } from "lucide-react";
 
 export function Goals() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, loading: companiesLoading } = useCompany();
   const { openNewGoal } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
 
@@ -25,6 +25,12 @@ export function Goals() {
     queryFn: () => goalsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+
+  // AgentDash: don't render content until company context has loaded —
+  // otherwise the page renders blank before selectedCompanyId is set.
+  if (companiesLoading) {
+    return <PageSkeleton variant="list" />;
+  }
 
   if (!selectedCompanyId) {
     return <EmptyState icon={Target} message="Select a company to view goals." />;

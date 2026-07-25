@@ -161,11 +161,13 @@ describe("POST /api/companies — Pro free-mail block (AGE-60 + AGE-104)", () =>
       const res = await request(app).post("/api/companies").send({ name: "Personal" });
 
       expect(res.status).toBe(201);
-      // companies.create is invoked with (input, allowProSeed) — match by
-      // the first arg only via expect.anything() for the trailing flag.
+      // companies.create is invoked with (input, allowMultiTenantPerDomain,
+      // creatorMembership) — the creator membership is inserted in the same
+      // transaction as the company (onboarding 403 root-cause fix).
       expect(createMock).toHaveBeenCalledWith(
         expect.objectContaining({ emailDomain: `alice@${domain}` }),
         expect.anything(),
+        expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
       );
     },
   );

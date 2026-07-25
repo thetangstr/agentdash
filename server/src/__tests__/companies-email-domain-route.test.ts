@@ -117,6 +117,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Acme", emailDomain: "acme.com" }),
       expect.anything(),
+      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
     expect(ensureMembershipMock).toHaveBeenCalledWith(
       "company-1",
@@ -142,6 +143,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "alice@gmail.com" }),
       expect.anything(),
+      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
   });
 
@@ -221,6 +223,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "acme.com" }),
       expect.anything(),
+      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
   });
 
@@ -313,6 +316,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "alice@gmail.com" }),
       expect.anything(),
+      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
   });
 
@@ -375,6 +379,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: null }),
       expect.anything(),
+      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
   });
 });

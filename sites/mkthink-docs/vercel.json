@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd sites/mkthink-docs && npm install && npm run build",
+  "outputDirectory": "sites/mkthink-docs/out",
+  "framework": "nextjs"
+}

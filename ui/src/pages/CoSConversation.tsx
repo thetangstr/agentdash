@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import ChatPanel from "./ChatPanel";
 import { onboardingApi } from "../api/onboarding";
 import { agentsApi } from "../api/agents";
+import { conversationsApi } from "../api/conversations";
+import { useCompany } from "../context/CompanyContext";
 import type { CardContext } from "../components/cards";
 
 interface BootstrapState {
@@ -13,29 +15,66 @@ interface BootstrapState {
 }
 
 export function CoSConversation() {
+  const { selectedCompanyId, loading: companiesLoading } = useCompany();
   const [bootstrapped, setBootstrapped] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    onboardingApi
-      .bootstrap()
-      .then((r) => {
+
+    // Wait for the company list to load before deciding which path to take.
+    // On a direct /cos navigation, selectedCompanyId starts null until the
+    // company query resolves. Without this guard, we'd fall through to
+    // bootstrap and create/reuse the wrong company.
+    if (companiesLoading) return;
+
+    // If a company is already selected in the sidebar, try to load its existing
+    // CoS conversation first. Only fall back to bootstrap (which creates a
+    // company + CoS + conversation) if there's no selected company.
+    async function resolve() {
+      if (selectedCompanyId) {
+        try {
+          const conv = await conversationsApi.companyInbox(selectedCompanyId);
+          if (cancelled) return;
+          // Find the CoS agent for this company
+          const agents = await agentsApi.list(selectedCompanyId);
+          if (cancelled) return;
+          const cos = agents.find((a) => a.role === "chief_of_staff") ?? agents[0];
+          if (conv && cos) {
+            setBootstrapped({
+              companyId: selectedCompanyId,
+              cosAgentId: cos.id,
+              conversationId: conv.id,
+            });
+            return;
+          }
+          // No conversation exists yet — bootstrap will create it
+        } catch {
+          // Fall through to bootstrap
+        }
+      }
+
+      // First-time onboarding path: bootstrap creates company + CoS + conversation
+      try {
+        const r = await onboardingApi.bootstrap();
         if (cancelled) return;
         setBootstrapped({
           companyId: r.companyId,
           cosAgentId: r.cosAgentId,
           conversationId: r.conversationId,
         });
-      })
-      .catch((err) => {
+      } catch (err: unknown) {
         if (cancelled) return;
-        setError(err?.message ?? "Failed to bootstrap workspace");
-      });
+        const msg = err instanceof Error ? err.message : "Failed to bootstrap workspace";
+        setError(msg);
+      }
+    }
+
+    resolve();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedCompanyId, companiesLoading]);
 
   if (error) {
     return (

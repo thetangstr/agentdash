@@ -424,7 +424,7 @@ function ExecutionWorkspaceRoutinesList({
       ]);
       pushToast({
         title: "Routine started",
-        body: "Paperclip created a run using this execution workspace.",
+        body: "AgentDash created a run using this execution workspace.",
         tone: "success",
       });
     },
@@ -434,7 +434,7 @@ function ExecutionWorkspaceRoutinesList({
     onError: (mutationError) => {
       pushToast({
         title: "Routine run failed",
-        body: mutationError instanceof Error ? mutationError.message : "Paperclip could not start the routine run.",
+        body: mutationError instanceof Error ? mutationError.message : "AgentDash could not start the routine run.",
         tone: "error",
       });
     },
@@ -727,7 +727,7 @@ export function ExecutionWorkspaceDetail() {
           </div>
           <h1 className="truncate text-xl font-semibold sm:text-2xl">{workspace.name}</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Configure the concrete runtime workspace that Paperclip reuses for this issue flow.
+            Configure the concrete runtime workspace that AgentDash reuses for this issue flow.
             <span className="hidden sm:inline"> These settings stay attached to the execution workspace so future runs can keep local paths, repo refs, provisioning, teardown, and runtime-service behavior in sync with the actual workspace being reused.</span>
           </p>
         </div>
@@ -875,7 +875,7 @@ export function ExecutionWorkspaceDetail() {
 
                 <div className="space-y-4">
                   <div className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Lifecycle commands</div>
-                  <Field label="Provision command" hint="Runs when Paperclip prepares this execution workspace">
+                  <Field label="Provision command" hint="Runs when AgentDash prepares this execution workspace">
                     <Textarea
                       className="min-h-20 font-mono"
                       value={form.provisionCommand}

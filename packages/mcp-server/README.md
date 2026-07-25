@@ -1,106 +1,88 @@
-# AgentDash MCP Server
+# @agentdash/mcp-server
 
-Model Context Protocol server for AgentDash.
+The AgentDash MCP server: plug an AI coding agent (Claude Code, Claude Desktop, Cursor, Codex) into an AgentDash workspace over the Model Context Protocol.
 
-This package is a thin MCP wrapper over the existing Paperclip REST API. It does
-not talk to the database directly and it does not reimplement business logic.
+It powers the full launch journey — an agent on a fresh machine installs AgentDash, runs the deep-interview onboarding to capture your intent, provisions the company + agent team, and keeps operating **goal-oriented and self-driving**, while risky actions stay gated behind **human approval in the AgentDash UI**.
 
-## Authentication
+## Two toolsets, one server
 
-The server reads its configuration from environment variables:
+| Toolset | Prefix | What it covers |
+|---|---|---|
+| Journey | `agentdash_*` | Install checklist → onboarding interview → plan review → provisioning → self-driving operation with approval gates. Anchored by `agentdash_setup_status`, which always returns the single deterministic `nextAction`. |
+| Control plane | `paperclip*` | The full zod-validated API surface: issues, comments, documents, agents, projects, goals, workspace runtime services, and the complete approvals flow (list / create / get / decide / comment / link). |
 
-- `PAPERCLIP_API_URL` - Paperclip base URL, for example `http://localhost:3100`
-- `PAPERCLIP_API_KEY` - bearer token used for `/api` requests
-- `PAPERCLIP_COMPANY_ID` - optional default company for company-scoped tools
-- `PAPERCLIP_AGENT_ID` - optional default agent for checkout helpers
-- `PAPERCLIP_RUN_ID` - optional run id forwarded on mutating requests
+The server also exposes MCP resources, most importantly **`agentdash://playbook`** — the operating contract the calling agent follows (operating loop, boundaries, approval discipline). The same text is served as the MCP `instructions` string, so compliant clients pick it up automatically.
 
-## Usage
+## Setup — Claude Code
 
 ```sh
-npx -y @agentdash/mcp-server
+claude mcp add agentdash \
+  --env PAPERCLIP_API_URL=http://localhost:3100 \
+  --env PAPERCLIP_API_KEY=<your-board-or-agent-key> \
+  -- node <path-to-repo>/packages/mcp-server/dist/stdio.js
 ```
 
-Or locally in this repo:
+Dev variant (no build step, runs TypeScript directly):
 
 ```sh
-pnpm --filter @agentdash/mcp-server build
-node packages/mcp-server/dist/stdio.js
+claude mcp add agentdash \
+  --env PAPERCLIP_API_URL=http://localhost:3100 \
+  --env PAPERCLIP_API_KEY=<your-key> \
+  -- npx tsx <path-to-repo>/packages/mcp-server/src/stdio.ts
 ```
 
-## Tool Surface
+## Setup — Claude Desktop
 
-Read tools:
+`claude_desktop_config.json`:
 
-- `paperclipMe`
-- `paperclipInboxLite`
-- `paperclipListAgents`
-- `paperclipGetAgent`
-- `paperclipListIssues`
-- `paperclipGetIssue`
-- `paperclipGetHeartbeatContext`
-- `paperclipListComments`
-- `paperclipGetComment`
-- `paperclipListIssueApprovals`
-- `paperclipListDocuments`
-- `paperclipGetDocument`
-- `paperclipListDocumentRevisions`
-- `paperclipListProjects`
-- `paperclipGetProject`
-- `paperclipGetIssueWorkspaceRuntime`
-- `paperclipWaitForIssueWorkspaceService`
-- `paperclipListGoals`
-- `paperclipGetGoal`
-- `paperclipListApprovals`
-- `paperclipGetApproval`
-- `paperclipGetApprovalIssues`
-- `paperclipListApprovalComments`
+```json
+{
+  "mcpServers": {
+    "agentdash": {
+      "command": "node",
+      "args": ["<path-to-repo>/packages/mcp-server/dist/stdio.js"],
+      "env": {
+        "PAPERCLIP_API_URL": "http://localhost:3100",
+        "PAPERCLIP_API_KEY": "<your-key>"
+      }
+    }
+  }
+}
+```
 
-Write tools:
+## Kickoff prompt
 
-- `paperclipCreateIssue`
-- `paperclipUpdateIssue`
-- `paperclipCheckoutIssue`
-- `paperclipReleaseIssue`
-- `paperclipAddComment`
-- `paperclipSuggestTasks`
-- `paperclipAskUserQuestions`
-- `paperclipRequestConfirmation`
-- `paperclipUpsertIssueDocument`
-- `paperclipRestoreIssueDocumentRevision`
-- `paperclipControlIssueWorkspaceServices`
-- `paperclipCreateApproval`
-- `paperclipLinkIssueApproval`
-- `paperclipUnlinkIssueApproval`
-- `paperclipApprovalDecision`
-- `paperclipAddApprovalComment`
+Point the agent at the playbook and let the state machine drive:
 
-AgentDash onboarding / provisioning tools:
+> Read the `agentdash://playbook` resource and follow it. Call `agentdash_setup_status`, do the `nextAction` it returns, verify, and repeat — from install (if needed) through the onboarding interview to a provisioned, operating agent team. Anything the playbook marks as gated goes through `agentdash_request_approval` first; never proceed until `agentdash_check_approval` returns approved.
 
-These let an agent or human create and set up a workspace through the LLM-led
-Chief of Staff, reducing onboarding friction. They use the `agentdash*` prefix
-to stay distinct from the inherited `paperclip*` tools.
+## The approval flow
 
-- `agentdashBootstrapWorkspace` — provision a workspace for the authenticated
-  user (company + Chief of Staff agent + opening conversation). Lowest-friction
-  start; takes no input.
-- `agentdashListCompanies` — list accessible workspaces.
-- `agentdashGetCompany` — get a workspace by id.
-- `agentdashCreateCompany` — explicitly create a workspace (prefer
-  `agentdashBootstrapWorkspace` for full onboarding).
-- `agentdashCosChat` — send a message to a workspace's Chief of Staff (drives
-  the onboarding interview). The reply is generated asynchronously — read it
-  back with `agentdashReadConversation`.
-- `agentdashReadConversation` — read recent messages in a conversation.
-- `agentdashHireAgent` — hire an agent (e.g. one the Chief of Staff proposes).
+1. The agent hits a gated action (hiring beyond the confirmed plan, deletions, budget changes, pausing/resuming the fleet, anything outside the confirmed goals).
+2. It calls `agentdash_request_approval` → creates a `request_board_approval` and returns an `approveUrl`.
+3. **A human decides at `/approvals` in the AgentDash UI** (approve / reject / request revision, with comments).
+4. The agent polls `agentdash_check_approval` and proceeds **only** on `status: "approved"`. On rejection or revision requests it reads the comments (`paperclipListApprovalComments`) and revises or drops the action. Blocked for more than 2 polls → it creates a task for the human instead.
 
-A typical zero-to-working-workspace flow: `agentdashBootstrapWorkspace` →
-`agentdashCosChat` (answer the CoS interview) → `agentdashReadConversation`
-(read the proposed plan) → `agentdashHireAgent` for each proposed agent.
+`agentdash_start_interview` additionally sets `requireBoardApprovalForNewAgents=true` on the freshly bootstrapped company, so agent hires are gated server-side from day one (if the PATCH is not permitted for your key, the tool returns the required manual step instead of silently skipping it).
 
-Escape hatch:
+## Environment variables
 
-- `paperclipApiRequest`
+| Variable | Alias | Required | Purpose |
+|---|---|---|---|
+| `PAPERCLIP_API_URL` | `AGENTDASH_API_URL` | yes | AgentDash server URL, e.g. `http://localhost:3100` (`/api` is appended automatically) |
+| `PAPERCLIP_API_KEY` | `AGENTDASH_API_KEY` | yes | Bearer key (board key for onboarding; agent key for operating) |
+| `PAPERCLIP_COMPANY_ID` | `AGENTDASH_COMPANY_ID` | no | Default company; when unset, tools take a `companyId` input and `agentdash_setup_status` discovers the first listed company |
+| `PAPERCLIP_AGENT_ID` | — | no | Default agent id; stamped as `requestedByAgentId` on approval requests |
+| `PAPERCLIP_RUN_ID` | — | no | Run id attached to mutating requests (`X-Paperclip-Run-Id`) |
 
-`paperclipApiRequest` is limited to paths under `/api` and JSON bodies. It is
-meant for endpoints that do not yet have a dedicated MCP tool.
+Aliases follow first-non-empty-wins with the `PAPERCLIP_*` name checked first.
+
+## Development
+
+```sh
+pnpm --filter @agentdash/mcp-server build   # tsc → dist/
+npx vitest run                              # unit tests (mocked fetch, no server needed)
+npx tsc --noEmit                            # typecheck
+```
+
+Key modules: `src/index.ts` (composition + resources), `src/journey.ts` (journey tools + `computeNextAction` state machine), `src/tools.ts` (control-plane tools), `src/playbook.ts` (operating contract), `src/schema.ts` (zod → JSON Schema), `src/client.ts` / `src/config.ts` (API client + env config), `src/stdio.ts` (entry point).

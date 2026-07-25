@@ -61,7 +61,7 @@ export function CompanyInbox() {
         agentDirectory={agentDirectory}
         headerProps={{
           agentName: "Company Inbox",
-          agentRole: `Chat with ${selectedCompany.name}'s CoS and route work into Paperclip objects.`,
+          agentRole: `Chat with ${selectedCompany.name}'s CoS and route work into AgentDash objects.`,
         }}
       />
     </div>

@@ -85,7 +85,7 @@ describe("CompanyInbox", () => {
     expect(mockCompanyInbox).toHaveBeenCalledWith("company-1");
     expect(container.querySelector(".chat-panel")?.getAttribute("data-conversation-id")).toBe("conversation-1");
     expect(container.textContent).toContain("Company Inbox");
-    expect(container.textContent).toContain("Chat with Acme's CoS and route work into Paperclip objects.");
+    expect(container.textContent).toContain("Chat with Acme's CoS and route work into AgentDash objects.");
   });
 
   it("asks the user to select a company when none is selected", async () => {
