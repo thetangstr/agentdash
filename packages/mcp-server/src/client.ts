@@ -59,6 +59,16 @@ export class PaperclipApiClient {
     };
   }
 
+  /** Normalized API base URL (always ends with /api). */
+  get apiUrl(): string {
+    return this.config.apiUrl;
+  }
+
+  /** The web-app origin (API base URL without the trailing /api). */
+  get appBaseUrl(): string {
+    return this.config.apiUrl.replace(/\/api$/, "");
+  }
+
   resolveCompanyId(companyId?: string | null): string {
     const resolved = companyId?.trim() || this.config.companyId;
     if (!resolved) {
