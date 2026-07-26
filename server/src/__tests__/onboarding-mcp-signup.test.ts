@@ -10,7 +10,7 @@
 
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authUsers, instanceUserRoles } from "@paperclipai/db";
 
 import {
@@ -117,6 +117,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   promoteMock = vi.fn().mockResolvedValue(true);
   process.env.AGENTDASH_SELF_SERVE_BOOTSTRAP = "true";
+  // Invite gate off for the pre-existing suites; the invite-gate describe
+  // block below flips it on per-test and mocks global fetch.
+  process.env.AGENTDASH_INVITE_VALIDATION = "off";
 });
 
 // ---------------------------------------------------------------------------
@@ -268,5 +271,85 @@ describe("POST /api/onboarding/mcp-signup", () => {
     rateLimiterMiddleware.mockClear();
     await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
     expect(rateLimiterMiddleware).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invite-code funnel gate
+// ---------------------------------------------------------------------------
+
+describe("POST /api/onboarding/mcp-signup — invite-code gate", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    delete process.env.AGENTDASH_INVITE_VALIDATION; // gate ON (default)
+    process.env.AGENTDASH_INVITE_VALIDATION_URL = "https://validator.test/api/invites/validate";
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.AGENTDASH_INVITE_VALIDATION_URL;
+  });
+
+  function appWithCreate() {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    return { ...buildApp({ createUser }), createUser };
+  }
+
+  it("403 invite_code_required when the gate is on and no code is sent", async () => {
+    const { app, createUser } = appWithCreate();
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("invite_code_required");
+    expect(createUser).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("403 invalid_invite_code when the validator says valid:false", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ valid: false }), { status: 200 }));
+    const { app, createUser } = appWithCreate();
+    const res = await request(app)
+      .post("/api/onboarding/mcp-signup")
+      .send({ ...VALID_BODY, inviteCode: "WRONG-CODE" });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("invalid_invite_code");
+    expect(createUser).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://validator.test/api/invites/validate",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("proceeds to signup when the validator says valid:true", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ valid: true }), { status: 200 }));
+    const { app } = appWithCreate();
+    const res = await request(app)
+      .post("/api/onboarding/mcp-signup")
+      .send({ ...VALID_BODY, inviteCode: "GOOD-CODE" });
+    expect(res.status).toBe(201);
+    expect(res.body.apiKey).toMatch(/^pcp_board_/);
+    const sentBody = JSON.parse((fetchMock.mock.calls[0]![1] as { body: string }).body);
+    expect(sentBody).toEqual({ code: "GOOD-CODE" });
+  });
+
+  it("503 invite_validation_unavailable (fail-closed) when the validator is unreachable", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    const { app, createUser } = appWithCreate();
+    const res = await request(app)
+      .post("/api/onboarding/mcp-signup")
+      .send({ ...VALID_BODY, inviteCode: "GOOD-CODE" });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe("invite_validation_unavailable");
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
+  it("AGENTDASH_INVITE_VALIDATION=off bypasses the gate entirely", async () => {
+    process.env.AGENTDASH_INVITE_VALIDATION = "off";
+    const { app } = appWithCreate();
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+    expect(res.status).toBe(201);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

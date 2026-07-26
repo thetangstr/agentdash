@@ -79,6 +79,24 @@ claude mcp add agentdash \
 `agentdash_sign_up` only works while the instance has ZERO users — the moment
 anyone exists it answers `409 instance_already_claimed`, forever.
 
+### Invite codes (funnel gate)
+
+Self-serve signup requires an **invite code** by default: before creating the
+founding user, the install phones home to
+`https://www.agentdash.cloud/api/invites/validate` (override with
+`AGENTDASH_INVITE_VALIDATION_URL`). The agent asks the customer for their code
+in conversation and passes it as `inviteCode`; wrong/missing codes get
+`invalid_invite_code` / `invite_code_required`, and an unreachable validator
+**fails closed** (`invite_validation_unavailable`).
+
+- **Minting codes** (us): set `AGENTDASH_INVITE_CODES` (comma-separated) on
+  the cloud instance that serves validation, e.g.
+  `AGENTDASH_INVITE_CODES=AGD-ACME-7F3K,AGD-PILOT-92QD`. Hand one code to each
+  design partner. No codes configured → every code is invalid.
+- **Dev / CI / airgapped installs**: `AGENTDASH_INVITE_VALIDATION=off` on the
+  install disables the check. The code is open source — this gate is funnel
+  control for people using our install path, not DRM.
+
 ## 3. The kickoff prompt
 
 Start `claude` in `~/agentdash` and paste this verbatim:
