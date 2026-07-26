@@ -61,6 +61,11 @@ vi.mock("../auth/email.js", () => ({
   sanitizeDisplayName: (s: string | null) => s,
 }));
 
+const mockDispatchLLM = vi.fn();
+vi.mock("../services/dispatch-llm.js", () => ({
+  dispatchLLM: (...args: unknown[]) => mockDispatchLLM(...args),
+}));
+
 vi.mock("../services/materialize-onboarding-goals.js", () => ({
   materializeOnboardingGoals: () => mockMaterializeOnboardingGoals,
 }));
@@ -942,5 +947,154 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     const app = buildApp({ type: "board", userId: "u1" });
     const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "grok" });
     expect(res.status).toBe(400);
+  });
+});
+
+// Proves the REAL-LLM parse path end-to-end without spending credits or
+// touching the mini: dispatchLLM is mocked to return a realistic hosted-LLM
+// reply (visible prose + a fenced agent_plan_proposal_v1 trailer), and the
+// route must run it through the REAL parseTrailer + isAgentPlanPayload and
+// post a plan card. The validators are NOT mocked, so this is a true parse
+// check. Mirrors what a claude_api / minimax / openai_compat model returns.
+describe("POST /api/onboarding/interview/turn — real-LLM plan parse path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Real (non-stub) path: PAPERCLIP_E2E_SKIP_LLM must be unset so
+    // generateInitialTeamPlan calls dispatchLLM (mocked) instead of the
+    // canned stub plan.
+    delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+    mockConversations.postMessage.mockResolvedValue({ id: "m1" });
+    // Empty interview history — loadInterviewState reads this via the mocked
+    // conversation service, not the db queue.
+    mockConversations.paginate.mockResolvedValue([]);
+    // generateInitialTeamPlan needs a Chief of Staff agent to author the card.
+    mockAgents.list.mockResolvedValue([{ id: "cos1", role: "chief_of_staff" }]);
+    // cosInterview is a mocked factory, so force it to flip to ready_to_propose;
+    // that is what triggers generateInitialTeamPlan in the handler.
+    mockInterview.nextTurn.mockResolvedValue({
+      state: { status: "ready_to_propose" },
+      assistantMessage: "I have enough to propose a small team.",
+    });
+  });
+
+  it("parses a realistic hosted-LLM reply (prose + fenced plan JSON) into a plan card", async () => {
+    // Realistic claude_api / minimax / openai_compat reply: a visible preamble
+    // the customer reads, then a fenced JSON trailer carrying the plan. Uses a
+    // LOCAL execution adapterType (hermes_local) — the only kind the validator
+    // accepts for agent execution.
+    mockDispatchLLM.mockResolvedValue(
+      [
+        "Based on what you told me, here's the team I'd start with:",
+        "",
+        "- **Maya** — Operations Lead: triages incoming requests.",
+        "- **Dev** — Engineering Lead: ships product fixes.",
+        "",
+        "Want me to set them up, or revise anything?",
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            plan: {
+              rationale: "A lean two-agent team covering operations and engineering to unblock onboarding.",
+              agents: [
+                { role: "operations_lead", name: "Maya", adapterType: "hermes_local", responsibilities: ["Triage incoming requests", "Draft standard replies"], kpis: ["Time-to-first-response"] },
+                { role: "engineering_lead", name: "Dev", adapterType: "hermes_local", responsibilities: ["Ship product fixes"], kpis: ["Issues closed per sprint"] },
+              ],
+              alignmentToShortTerm: "Unblocks manual onboarding within the first two weeks.",
+              alignmentToLongTerm: "Scales toward the 90-day goal.",
+            },
+          },
+          null,
+          2,
+        ),
+        "```",
+      ].join("\n"),
+    );
+
+    // db queue: [conversation-lookup row, plan-exists empty]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], []],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "we use Stripe and Notion", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(true);
+    // dispatchLLM was actually invoked — the real path ran, not the stub.
+    expect(mockDispatchLLM).toHaveBeenCalledTimes(1);
+    // The plan card was posted with the parsed, validated payload.
+    const cardCall = mockConversations.postMessage.mock.calls.find(
+      (c: any) => c[0]?.cardKind === "agent_plan_proposal_v1",
+    );
+    expect(cardCall).toBeTruthy();
+    const payload = cardCall![0].cardPayload;
+    expect(payload.agents).toHaveLength(2);
+    expect(payload.agents[0].name).toBe("Maya");
+    expect(payload.agents[0].adapterType).toBe("hermes_local");
+    expect(payload.rationale).toMatch(/two-agent/);
+  });
+
+  it("rejects a plan that smuggles a hosted adapterType and reports planError (no card posted)", async () => {
+    // A confused or prompt-injected model emits claude_api (hosted — not an
+    // agent-execution runtime). isAgentPlanPayload must reject the WHOLE plan
+    // rather than silently stripping the bad agent.
+    mockDispatchLLM.mockResolvedValue(
+      [
+        "Here's a team.",
+        "",
+        "```json",
+        JSON.stringify({
+          plan: {
+            rationale: "x",
+            agents: [
+              { role: "lead", name: "X", adapterType: "claude_api", responsibilities: [], kpis: [] },
+            ],
+            alignmentToShortTerm: "y",
+            alignmentToLongTerm: "z",
+          },
+        }),
+        "```",
+      ].join("\n"),
+    );
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], []],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "more detail", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(false);
+    expect(res.body.planError).toMatch(/unparseable/);
+    const cardCall = mockConversations.postMessage.mock.calls.find(
+      (c: any) => c[0]?.cardKind === "agent_plan_proposal_v1",
+    );
+    expect(cardCall).toBeUndefined();
+  });
+
+  it("does not regenerate a plan when one already exists (idempotent)", async () => {
+    mockDispatchLLM.mockResolvedValue("```json\n" + JSON.stringify({
+      plan: {
+        rationale: "x",
+        agents: [{ role: "lead", name: "X", adapterType: "hermes_local", responsibilities: [], kpis: [] }],
+        alignmentToShortTerm: "y",
+        alignmentToLongTerm: "z",
+      },
+    }) + "\n```");
+    // db queue: [conversation row, plan-exists NON-empty → skip generation]
+    const app = buildApp(
+      { type: "board", userId: "u1", source: "session", companyIds: ["c1"] },
+      [[{ id: "conv1", companyId: "c1" }], [{ id: "existing-plan-msg" }]],
+    );
+    const res = await request(app)
+      .post("/api/onboarding/interview/turn")
+      .send({ conversationId: "conv1", userMessage: "more", cosAgentId: "cos1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.planGenerated).toBe(false);
+    expect(mockDispatchLLM).not.toHaveBeenCalled();
   });
 });
