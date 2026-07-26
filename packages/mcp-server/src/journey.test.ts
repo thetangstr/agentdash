@@ -68,6 +68,7 @@ describe("computeNextAction", () => {
   const base: SetupStatusSnapshot = {
     serverHealthy: true,
     bootstrapStatus: null,
+    adapterReady: true,
     apiKeyConfigured: true,
     companyId: COMPANY_ID,
     agentCount: 1,
@@ -121,6 +122,24 @@ describe("computeNextAction", () => {
       { ...base, bootstrapStatus: "bootstrap_pending", companyId: null, agentCount: 0 },
       "bootstrap",
       "agentdash_start_interview",
+    ],
+    [
+      "signed up but adapter not configured → setup_adapter",
+      { ...base, adapterReady: false, companyId: null, agentCount: 0 },
+      "setup_adapter",
+      "agentdash_setup_adapter",
+    ],
+    [
+      "adapter not ready trumps company/agent bootstrap",
+      { ...base, adapterReady: false },
+      "setup_adapter",
+      "agentdash_setup_adapter",
+    ],
+    [
+      "adapter not ready trumps an existing plan card",
+      { ...base, adapterReady: false, planReady: true },
+      "setup_adapter",
+      "agentdash_setup_adapter",
     ],
     [
       "no API key but the instance is already claimed (ready) → not sign_up",
@@ -253,7 +272,7 @@ describe("agentdash_setup_status", () => {
 
   it("aggregates health + agents + dashboard + pending approvals for operate", async () => {
     const fetchMock = routeFetch([
-      [/\/api\/health$/, { status: "ok" }],
+      [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/companies\/[^/]+\/agents$/, [
         { id: AGENT_ID, role: "chief_of_staff", status: "idle" },
         { id: OTHER_AGENT_ID, role: "general", status: "paused" },
@@ -294,7 +313,7 @@ describe("agentdash_setup_status", () => {
   it("discovers the company via GET /companies when none is configured", async () => {
     const client = makeClient({ companyId: null });
     const fetchMock = routeFetch([
-      [/\/api\/health$/, { status: "ok" }],
+      [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/api\/companies$/, [{ id: COMPANY_ID }]],
       [/\/companies\/[^/]+\/agents$/, []],
       [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
@@ -315,7 +334,7 @@ describe("agentdash_setup_status", () => {
   it("reports bootstrap phase when healthy and no company exists", async () => {
     const client = makeClient({ companyId: null });
     routeFetch([
-      [/\/api\/health$/, { status: "ok" }],
+      [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/api\/companies$/, []],
     ]);
 
@@ -326,7 +345,7 @@ describe("agentdash_setup_status", () => {
 
   it("checks the inbox conversation for a plan card while the team is unmaterialized", async () => {
     const fetchMock = routeFetch([
-      [/\/api\/health$/, { status: "ok" }],
+      [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
       [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
       [/\/approvals\?status=pending$/, []],
@@ -351,7 +370,7 @@ describe("agentdash_setup_status", () => {
 
   it("reports interview phase when the CoS exists but no plan card yet", async () => {
     routeFetch([
-      [/\/api\/health$/, { status: "ok" }],
+      [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
       [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
       [/\/approvals\?status=pending$/, []],
@@ -370,7 +389,7 @@ describe("agentdash_setup_status", () => {
   it("works without an API key: only /health is fetched, no Authorization header, routes to sign_up", async () => {
     const client = makeClient({ apiKey: "", companyId: null });
     const fetchMock = routeFetch([
-      [/\/api\/health$/, { status: "ok", deploymentMode: "authenticated", bootstrapStatus: "bootstrap_pending" }],
+      [/\/api\/health$/, { status: "ok", deploymentMode: "authenticated", bootstrapStatus: "bootstrap_pending", adapterReady: true }],
     ]);
 
     const result = parseText(await getTool("agentdash_setup_status", client).execute({}));
@@ -390,7 +409,7 @@ describe("agentdash_setup_status", () => {
   it("without an API key on a claimed instance (ready), skips authed fetches and reports bootstrap", async () => {
     const client = makeClient({ apiKey: "", companyId: null });
     const fetchMock = routeFetch([
-      [/\/api\/health$/, { status: "ok", bootstrapStatus: "ready" }],
+      [/\/api\/health$/, { status: "ok", bootstrapStatus: "ready", adapterReady: true }],
     ]);
 
     const result = parseText(await getTool("agentdash_setup_status", client).execute({}));
