@@ -855,3 +855,92 @@ describe("POST /api/onboarding/invites", () => {
     expect(mockInvites.createCompanyInvite).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
+  // These routes touch real process.env + a real env file; isolate both.
+  const ENV_KEYS = [
+    "AGENTDASH_DEFAULT_ADAPTER",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "OPENAI_COMPAT_MODEL",
+    "PAPERCLIP_E2E_SKIP_LLM",
+    "AGENTDASH_ENV_FILE",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  let tmpDir: string;
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    for (const k of ENV_KEYS) delete process.env[k];
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    tmpDir = mkdtempSync(join(tmpdir(), "agentdash-route-"));
+    process.env.AGENTDASH_ENV_FILE = join(tmpDir, "agentdash.env");
+  });
+
+  afterEach(() => {
+    const { rmSync } = require("node:fs");
+    rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("rejects adapter-status without a board actor", async () => {
+    const app = buildApp({ type: "agent", userId: "a1" });
+    const res = await request(app).get("/api/onboarding/adapter-status");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns status + the preset menu to a board user", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app).get("/api/onboarding/adapter-status");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toMatchObject({ adapter: "claude_api", ready: false });
+    expect(res.body.options.map((o: { preset: string }) => o.preset).sort()).toEqual(
+      ["claude", "gemini", "openai", "stub"],
+    );
+  });
+
+  it("rejects setup-adapter without a board actor", async () => {
+    const app = buildApp({ type: "agent", userId: "a1" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(401);
+  });
+
+  it("applies the claude preset (201, ready, key persisted)", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app)
+      .post("/api/onboarding/setup-adapter")
+      .send({ preset: "claude", apiKey: "sk-ant-route-test" });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toMatchObject({ adapter: "claude_api", ready: true, preset: "claude" });
+    expect(res.body.applied).toContain("ANTHROPIC_API_KEY");
+    expect(res.body.persisted).toBe(true);
+    // The secret is never echoed in `applied` (keys only).
+    expect(JSON.stringify(res.body.applied)).not.toContain("sk-ant-route-test");
+  });
+
+  it("applies the stub preset without a key", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "stub" });
+    expect(res.status).toBe(201);
+    expect(res.body.status.ready).toBe(true);
+    expect(process.env.PAPERCLIP_E2E_SKIP_LLM).toBe("true");
+  });
+
+  it("400s on a hosted preset with no key", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "openai" });
+    expect(res.status).toBe(400);
+  });
+
+  it("400s on an unknown preset", async () => {
+    const app = buildApp({ type: "board", userId: "u1" });
+    const res = await request(app).post("/api/onboarding/setup-adapter").send({ preset: "grok" });
+    expect(res.status).toBe(400);
+  });
+});

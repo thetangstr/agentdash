@@ -31,6 +31,8 @@ export interface SetupStatusSnapshot {
    * the server doesn't report one (local_trusted / older servers).
    */
   bootstrapStatus: string | null;
+  /** A model adapter is configured (claude/openai/gemini key, or stub mode). */
+  adapterReady: boolean;
   /** A bearer API key is configured on this MCP session. */
   apiKeyConfigured: boolean;
   /** Company id from config or the first listed company; null when none. */
@@ -52,6 +54,7 @@ export interface SetupStatusSnapshot {
 export type SetupPhase =
   | "install"
   | "sign_up"
+  | "setup_adapter"
   | "bootstrap"
   | "interview"
   | "plan_review"
@@ -92,6 +95,22 @@ export function computeNextAction(snapshot: SetupStatusSnapshot): NextAction {
         + "session has no API key. Ask the human for their email and name (NEVER invent an "
         + "email), then call agentdash_sign_up — it creates the founding user, returns a board "
         + "API key, and signs this session in.",
+    };
+  }
+  // Adapter gate: the deep-interview follow-ups + the agent-team plan are
+  // driven by a real model. If no adapter is configured yet, route the human
+  // through model setup BEFORE the interview so its questions are intelligent.
+  // Uses the (unauthenticated) /health adapterReady flag, so this works even
+  // on a fresh post-signup session.
+  if (!snapshot.adapterReady) {
+    return {
+      phase: "setup_adapter",
+      nextAction: "agentdash_setup_adapter",
+      nextActionReason:
+        "A model adapter is not configured yet. Ask the human which provider to run agents on "
+        + "(Claude / OpenAI / Gemini — they'll need an API key — or 'stub' for a no-key "
+        + "placeholder), then call agentdash_setup_adapter. The interview cannot produce a real "
+        + "team plan until this is set.",
     };
   }
   if (!snapshot.companyId || snapshot.agentCount === 0) {
@@ -261,11 +280,15 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         // the state where it must route to agentdash_sign_up.
         let serverHealthy = false;
         let bootstrapStatus: string | null = null;
+        let adapterReady = false;
         try {
           const health = await client.requestJson<Record<string, unknown>>("GET", "/health");
           serverHealthy = true;
           bootstrapStatus =
             health && typeof health.bootstrapStatus === "string" ? health.bootstrapStatus : null;
+          // AgentDash: adapter readiness is on /health so it's readable
+          // unauthenticated (pre-signup) — exactly when the gate must fire.
+          adapterReady = health?.adapterReady === true;
         } catch {
           serverHealthy = false;
         }
@@ -335,6 +358,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         const snapshot: SetupStatusSnapshot = {
           serverHealthy,
           bootstrapStatus,
+          adapterReady,
           apiKeyConfigured,
           companyId,
           agentCount: agents.length,
@@ -350,6 +374,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           phase: next.phase,
           serverHealthy,
           bootstrapStatus,
+          adapterReady,
           apiKeyConfigured,
           companyId,
           agentCount: agents.length,
@@ -421,6 +446,53 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
             `Add PAPERCLIP_API_KEY=${result.apiKey} to the MCP server env so future sessions `
             + "stay signed in",
           passwordSetup: result.passwordSetup,
+        };
+      },
+    ),
+    makeTool(
+      "agentdash_setup_adapter",
+      "Configure the model adapter your agents will run on — a required onboarding step before the "
+        + "interview can produce a real team plan. Offer the human the choices from the preset menu "
+        + "(Claude / OpenAI / Gemini — each needs an API key — or 'stub' for a no-key placeholder that "
+        + "produces canned plans). Ask the human which provider and collect the key in conversation "
+        + "(NEVER invent a key). After applying, re-check agentdash_setup_status to confirm "
+        + "adapterReady before continuing the interview.",
+      z.object({
+        preset: z
+          .enum(["claude", "openai", "gemini", "stub"])
+          .describe(
+            "claude=ANTHROPIC_API_KEY; openai=OPENAI_COMPAT_API_KEY (api.openai.com); "
+              + "gemini=OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat); stub=no key, canned plans.",
+          ),
+        apiKey: z
+          .string()
+          .min(1)
+          .max(400)
+          .optional()
+          .describe(
+            "The provider API key. Required for claude/openai/gemini. Omit for stub. "
+              + "Collected from the human — NEVER invented.",
+          ),
+      }),
+      async ({ preset, apiKey }) => {
+        const result = await client.requestJson<{
+          status: { adapter: string; ready: boolean; preset: string; reason: string | null };
+          applied: string[];
+          persisted: boolean;
+          persistError: string | null;
+        }>("POST", "/onboarding/setup-adapter", {
+          body: { preset, ...(apiKey ? { apiKey } : {}) },
+        });
+        return {
+          preset,
+          adapter: result.status.adapter,
+          ready: result.status.ready,
+          applied: result.applied,
+          persisted: result.persisted,
+          ...(result.persistError ? { persistError: result.persistError } : {}),
+          next:
+            "Re-check agentdash_setup_status. If adapterReady is true, continue the interview with "
+            + "agentdash_interview_turn (the follow-ups + team plan will now use the real model).",
         };
       },
     ),

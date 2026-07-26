@@ -127,6 +127,15 @@ agentdash_install_checklist step by step. On a fresh install, sign the
 customer up first with agentdash_sign_up — ask them for their email; never
 invent one.
 
+MODEL ADAPTER: right after signup, agentdash_setup_status will route you to
+agentdash_setup_adapter — a model is required before the interview can produce
+a real team. Ask the customer which provider to run agents on (Claude / OpenAI
+/ Gemini — they'll need to paste an API key — or "stub" for a no-key
+placeholder that emits canned plans). Never invent a key. Call
+agentdash_setup_adapter with their choice; it configures the running server
+and persists the choice. Re-check agentdash_setup_status to confirm
+adapterReady before continuing.
+
 Interview the customer conversationally (deep-interview) to understand their
 business, goals, and constraints before confirming any plan. Use
 agentdash_start_interview and agentdash_interview_turn; only call
@@ -191,7 +200,7 @@ running (or wire it into launchd per `doc/LAUNCH.md`).
 |---------|-----|
 | MCP tools error "connection refused" / server not up | `cd ~/agentdash && pnpm dev` (or the launchd service); re-check `curl http://localhost:3100/api/health`. `agentdash_install_checklist` still works without the server. |
 | `401` from authenticated tools | The `PAPERCLIP_API_KEY` is missing, stale, or a placeholder. Get the real agent key (bootstrap output, or the agent's Keys panel in the UI) and re-add the MCP server with it (section 2). |
-| `503` from `agentdash_start_interview` / `agentdash_interview_turn` | No LLM adapter is configured on the server, so the interview brain can't run. Set `AGENTDASH_DEFAULT_ADAPTER=minimax` (or another configured adapter) per the environment guidance in `doc/LAUNCH.md`, restart the server, retry. |
+| `phase: setup_adapter` / `adapterReady: false` | Expected on a fresh install — no model is configured yet. Ask the customer which provider (Claude/OpenAI/Gemini + key, or stub) and call `agentdash_setup_adapter`; it hot-applies the env and persists it. No server restart needed. The interview follow-ups + team plan use the real model once `adapterReady` is true. |
 | Interview stalls mid-way | Call `agentdash_setup_status` — it reports the resumable state and `nextAction`. |
 | Agent tries a gated action and hangs | Check `/approvals`; a pending card is waiting for you. |
 

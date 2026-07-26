@@ -101,6 +101,8 @@ describe("GET /health", () => {
       bootstrapInviteActive: false,
       selfServeBootstrap: false,
       instanceHasCompany: true,
+      adapterReady: false,
+      adapterPreset: "claude",
     });
   });
 
@@ -137,6 +139,8 @@ describe("GET /health", () => {
       bootstrapInviteActive: false,
       selfServeBootstrap: false,
       instanceHasCompany: true,
+      adapterReady: false,
+      adapterPreset: "claude",
     });
   });
 

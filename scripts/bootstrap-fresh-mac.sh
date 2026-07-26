@@ -90,9 +90,17 @@ else
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 AGENTDASH_SELF_SERVE_BOOTSTRAP=true
 
-# Model adapter for agents (set the API key for the adapter you use):
-# AGENTDASH_DEFAULT_ADAPTER=claude_api
+# Model adapter. claude_api is the safe default: it returns stub replies when
+# ANTHROPIC_API_KEY is unset (no crash-loop). The customer picks a real provider
+# and adds the key during onboarding (agentdash_setup_adapter), which hot-applies
+# the env and persists it here. Uncomment + set a key to skip that onboarding step.
+AGENTDASH_DEFAULT_ADAPTER=claude_api
 # ANTHROPIC_API_KEY=sk-ant-...
+
+# Heartbeat scheduler OFF until the customer confirms their team during
+# onboarding — prevents the server from spawning adapters before a model is
+# configured. Set to "true" once the fleet should self-drive.
+HEARTBEAT_SCHEDULER_ENABLED=false
 
 # Billing is bypassed while STRIPE_SECRET_KEY is unset (dev/pilot default).
 ENVEOF

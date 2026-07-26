@@ -100,6 +100,8 @@ describe("GET /health dev-server supervisor access", () => {
         bootstrapInviteActive: false,
         selfServeBootstrap: false,
         instanceHasCompany: false,
+        adapterReady: false,
+        adapterPreset: "claude",
         devServer: {
           enabled: true,
           restartRequired: true,

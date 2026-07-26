@@ -8,6 +8,7 @@ import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-se
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { companyService } from "../services/companies.js";
+import { readAdapterStatus } from "../services/adapter-presets.js";
 import { serverVersion } from "../version.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
@@ -139,6 +140,10 @@ export function healthRoutes(
         ? await companyService(db).hasActiveCompany()
         : false;
 
+    // AgentDash: adapter readiness — the MCP onboarding journey gates plan
+    // proposal on a configured model. Read from process.env; cheap + sync.
+    const adapter = readAdapterStatus();
+
     if (!exposeFullDetails) {
       res.json({
         status: "ok",
@@ -147,6 +152,8 @@ export function healthRoutes(
         bootstrapInviteActive,
         selfServeBootstrap,
         instanceHasCompany,
+        adapterReady: adapter.ready,
+        adapterPreset: adapter.preset,
         ...(devServer ? { devServer } : {}),
       });
       return;
@@ -162,6 +169,9 @@ export function healthRoutes(
       bootstrapInviteActive,
       selfServeBootstrap,
       instanceHasCompany,
+      adapterReady: adapter.ready,
+      adapterPreset: adapter.preset,
+      adapterReason: adapter.reason,
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
