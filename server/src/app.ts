@@ -64,6 +64,9 @@ import {
   onboardingMcpSignupRoutes,
   type McpSignupCreateUser,
 } from "./routes/onboarding-mcp-signup.js";
+// AgentDash: invite-code validation — cloud side of the fresh-install funnel
+// gate (POST /api/invites/validate). Unauthenticated, rate-limited.
+import { inviteCodeRoutes } from "./routes/invite-codes.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
@@ -329,6 +332,9 @@ export async function createApp(
       createUser: opts.mcpSignupCreateUser,
     }),
   );
+  // AgentDash: invite-code validation for fresh-install signups (this
+  // instance may be the cloud validator for self-hosted installs).
+  api.use(inviteCodeRoutes({ deploymentMode: opts.deploymentMode }));
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));

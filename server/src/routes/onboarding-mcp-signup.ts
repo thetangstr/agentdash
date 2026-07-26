@@ -61,7 +61,67 @@ export interface McpSignupRoutesOptions {
 const mcpSignupBodySchema = z.object({
   email: z.string().trim().email(),
   name: z.string().trim().min(1).max(120),
+  inviteCode: z.string().trim().min(1).max(120).optional(),
 });
+
+// AgentDash: invite-code funnel gate. Self-serve signup phones home to the
+// AgentDash cloud to validate an invite code before the founding user is
+// created — handing out codes controls who can claim instances through our
+// funnel (the code is open source; this is funnel control, not DRM).
+// Escape hatch for dev / CI / airgapped installs: AGENTDASH_INVITE_VALIDATION=off.
+const DEFAULT_INVITE_VALIDATION_URL = "https://www.agentdash.cloud/api/invites/validate";
+
+function isInviteValidationEnabled(): boolean {
+  return process.env.AGENTDASH_INVITE_VALIDATION !== "off";
+}
+
+function inviteValidationUrl(): string {
+  return process.env.AGENTDASH_INVITE_VALIDATION_URL || DEFAULT_INVITE_VALIDATION_URL;
+}
+
+type InviteCheck = { ok: true } | { ok: false; status: number; code: string; error: string };
+
+async function checkInviteCode(inviteCode: string | undefined): Promise<InviteCheck> {
+  if (!isInviteValidationEnabled()) return { ok: true };
+  if (!inviteCode) {
+    return {
+      ok: false,
+      status: 403,
+      code: "invite_code_required",
+      error:
+        "This install requires an invite code to sign up. Ask the human for their "
+        + "AgentDash invite code and retry with { inviteCode }. Codes come from the "
+        + "AgentDash team (https://www.agentdash.cloud).",
+    };
+  }
+  try {
+    const resp = await fetch(inviteValidationUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: inviteCode }),
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!resp.ok) throw new Error(`validation endpoint returned ${resp.status}`);
+    const body = (await resp.json()) as { valid?: unknown };
+    if (body.valid === true) return { ok: true };
+    return {
+      ok: false,
+      status: 403,
+      code: "invalid_invite_code",
+      error: "The invite code is not valid. Check for typos or request a code from the AgentDash team.",
+    };
+  } catch (err) {
+    logger.warn({ err }, "invite-code validation unreachable — failing closed");
+    return {
+      ok: false,
+      status: 503,
+      code: "invite_validation_unavailable",
+      error:
+        "Could not reach the invite validation service; signup is blocked (fail-closed). "
+        + "Retry shortly. Airgapped/dev installs may set AGENTDASH_INVITE_VALIDATION=off.",
+    };
+  }
+}
 
 export const MCP_SIGNUP_PASSWORD_SETUP_HINT =
   "Use 'Forgot password' on the web UI with this email to set a browser password later.";
@@ -115,7 +175,15 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
         });
         return;
       }
-      const { email, name } = parsed.data;
+      const { email, name, inviteCode } = parsed.data;
+
+      // Invite-code funnel gate BEFORE any user creation. Fail-closed on
+      // transport errors; AGENTDASH_INVITE_VALIDATION=off disables entirely.
+      const invite = await checkInviteCode(inviteCode);
+      if (!invite.ok) {
+        res.status(invite.status).json({ code: invite.code, error: invite.error });
+        return;
+      }
 
       // Founding-only gate, strict on BOTH counts: the same instance_admin
       // predicate health.ts uses for bootstrapStatus, AND zero auth users —

@@ -387,8 +387,18 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       z.object({
         email: z.string().email(),
         name: z.string().min(1).max(120),
+        inviteCode: z
+          .string()
+          .min(1)
+          .max(120)
+          .optional()
+          .describe(
+            "AgentDash invite code. Most installs require one — ask the human for it "
+            + "(NEVER invent or guess a code). If signup answers invite_code_required, "
+            + "collect the code and retry.",
+          ),
       }),
-      async ({ email, name }) => {
+      async ({ email, name, inviteCode }) => {
         const result = await client.requestJson<{
           userId: string;
           email: string;
@@ -396,7 +406,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           apiKey: string;
           apiKeyExpiresAt: string;
           passwordSetup: string;
-        }>("POST", "/onboarding/mcp-signup", { body: { email, name } });
+        }>("POST", "/onboarding/mcp-signup", { body: { email, name, inviteCode } });
 
         // Upgrade THIS session in place: every subsequent tool call carries
         // the new board key without an MCP server restart.

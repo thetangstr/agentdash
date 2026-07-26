@@ -31,6 +31,7 @@ export { slackConnectorRoutes } from "./slack-connector.js";
 export { gmailRoutes } from "./gmail.js";
 // AgentDash: MCP-native signup — founding-user signup via the MCP journey
 export { onboardingMcpSignupRoutes } from "./onboarding-mcp-signup.js";
+export { inviteCodeRoutes } from "./invite-codes.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";
