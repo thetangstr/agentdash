@@ -29,17 +29,36 @@ function render() {
 }
 
 describe("McpPage", () => {
-  it("renders the terminal-setup headline and the no-signup-forms pitch", () => {
+  it("renders the MCP-access headline and the no-signup-forms pitch", () => {
     render();
-    expect(container.textContent).toContain("Set up AgentDash from your terminal");
+    expect(container.textContent).toContain("Access AgentDash from any MCP client");
     expect(container.textContent).toContain("No signup forms");
   });
 
-  it("renders the copy-paste claude mcp add command", () => {
+  it("renders the clone-and-build step", () => {
+    render();
+    expect(container.textContent).toContain("git clone https://github.com/thetangstr/agentdash.git");
+    expect(container.textContent).toContain("pnpm --filter @agentdash/mcp-server build");
+  });
+
+  it("renders both claude mcp add variants — fresh machine and existing instance", () => {
     render();
     expect(container.textContent).toContain("claude mcp add agentdash");
+    // Fresh machine: localhost, no API key.
+    expect(container.textContent).toContain("PAPERCLIP_API_URL=http://localhost:3100");
+    // Existing instance: instance URL + board API key.
     expect(container.textContent).toContain("PAPERCLIP_API_URL=https://YOUR-INSTANCE:3100");
+    expect(container.textContent).toContain("PAPERCLIP_API_KEY=YOUR-BOARD-API-KEY");
     expect(container.textContent).toContain("packages/mcp-server/dist/stdio.js");
+  });
+
+  it("renders the tool catalog groups with journey tool names", () => {
+    render();
+    expect(container.textContent).toContain("What your agent can do");
+    expect(container.textContent).toContain("agentdash_install_checklist");
+    expect(container.textContent).toContain("agentdash_get_dashboard");
+    expect(container.textContent).toContain("agentdash_request_approval");
+    expect(container.textContent).toContain("agentdash_confirm_plan");
   });
 
   it("renders the kickoff prompt with the sign-up-first and approval boundaries", () => {
