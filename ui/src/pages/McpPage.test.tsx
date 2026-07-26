@@ -35,21 +35,29 @@ describe("McpPage", () => {
     expect(container.textContent).toContain("No signup forms");
   });
 
-  it("renders the clone-and-build step", () => {
+  it("renders the one-line fresh-machine bootstrap command", () => {
     render();
-    expect(container.textContent).toContain("git clone https://github.com/thetangstr/agentdash.git");
-    expect(container.textContent).toContain("pnpm --filter @agentdash/mcp-server build");
+    expect(container.textContent).toContain(
+      "curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap-fresh-mac.sh | bash",
+    );
   });
 
-  it("renders both claude mcp add variants — fresh machine and existing instance", () => {
+  it("renders the existing-instance claude mcp add command", () => {
     render();
     expect(container.textContent).toContain("claude mcp add agentdash");
-    // Fresh machine: localhost, no API key.
-    expect(container.textContent).toContain("PAPERCLIP_API_URL=http://localhost:3100");
-    // Existing instance: instance URL + board API key.
     expect(container.textContent).toContain("PAPERCLIP_API_URL=https://YOUR-INSTANCE:3100");
     expect(container.textContent).toContain("PAPERCLIP_API_KEY=YOUR-BOARD-API-KEY");
     expect(container.textContent).toContain("packages/mcp-server/dist/stdio.js");
+  });
+
+  it("shows no kickoff prompt — the server's own instructions steer the agent", () => {
+    render();
+    expect(container.textContent).toContain("Set up AgentDash for me.");
+    expect(container.textContent).toContain("No prompt to paste");
+    // The old pasted playbook must NOT be on the customer page.
+    expect(container.textContent).not.toContain("Read the\nagentdash://playbook resource first");
+    expect(container.textContent).not.toContain("BOUNDARIES:");
+    expect(container.textContent).not.toContain("Never hire agents beyond the confirmed plan.");
   });
 
   it("renders the tool catalog groups with journey tool names", () => {
@@ -59,14 +67,6 @@ describe("McpPage", () => {
     expect(container.textContent).toContain("agentdash_get_dashboard");
     expect(container.textContent).toContain("agentdash_request_approval");
     expect(container.textContent).toContain("agentdash_confirm_plan");
-  });
-
-  it("renders the kickoff prompt with the sign-up-first and approval boundaries", () => {
-    render();
-    expect(container.textContent).toContain("agentdash_setup_status");
-    expect(container.textContent).toContain("agentdash_sign_up");
-    expect(container.textContent).toContain("never invent one");
-    expect(container.textContent).toContain("Never hire agents beyond the confirmed plan.");
   });
 
   it("renders the four how-it-works steps", () => {

@@ -9,9 +9,11 @@
 // No new CSS frameworks; everything below is the existing mkt-* system plus
 // inline styles on mkt tokens, exactly like Consulting.tsx.
 //
-// The commands, kickoff prompt, and tool names mirror doc/MCP-LAUNCH.md and
+// The commands and tool names mirror doc/MCP-LAUNCH.md and
 // packages/mcp-server/src/journey.ts (the canonical sources) — keep them in
-// sync when the flow or tool surface changes.
+// sync when the flow or tool surface changes. Deliberately NO kickoff prompt
+// here: the server's protocol-level instructions steer the agent, and the
+// operator runbook (doc/MCP-LAUNCH.md) is where the full prompt lives.
 
 import type { ReactNode } from "react";
 import { MarketingShell } from "../marketing/MarketingShell";
@@ -21,14 +23,10 @@ import { Button } from "../marketing/components/Button";
 
 const GITHUB_REPO_URL = "https://github.com/thetangstr/agentdash";
 
-const CLONE_AND_BUILD = `git clone ${GITHUB_REPO_URL}.git ~/agentdash
-cd ~/agentdash && pnpm install && pnpm --filter @agentdash/mcp-server build`;
-
-// Fresh machine: no server, no user, no key — the unauthenticated journey
-// tools (install checklist, setup status, sign-up) carry the whole claim.
-const MCP_ADD_FRESH = `claude mcp add agentdash \\
-  --env PAPERCLIP_API_URL=http://localhost:3100 \\
-  -- node ~/agentdash/packages/mcp-server/dist/stdio.js`;
+// One command on a fresh Mac: scripts/bootstrap-fresh-mac.sh does prereq
+// checks, clone, install, build, env defaults, and `claude mcp add`.
+const BOOTSTRAP_COMMAND =
+  "curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap-fresh-mac.sh | bash";
 
 // Existing instance: point at its URL and pass the board API key that
 // agentdash_sign_up returned (or one your workspace admin minted for you).
@@ -37,33 +35,11 @@ const MCP_ADD_EXISTING = `claude mcp add agentdash \\
   --env PAPERCLIP_API_KEY=YOUR-BOARD-API-KEY \\
   -- node ~/agentdash/packages/mcp-server/dist/stdio.js`;
 
-// The canonical kickoff prompt from doc/MCP-LAUNCH.md §3, with the
-// MCP-native signup step: on a fresh install the agent signs the human up
-// with their email — no browser form, no password.
-const KICKOFF_PROMPT = `You are setting up AgentDash for a new customer on this machine. Read the
-agentdash://playbook resource first.
-
-Operating loop: call agentdash_setup_status, execute its nextAction, verify
-the result, and repeat until the customer's company is provisioned and its
-agents are running. If the server is not installed yet, follow
-agentdash_install_checklist step by step. On a fresh install, sign me up
-first with agentdash_sign_up — ask me for my email; never invent one.
-
-Interview the customer conversationally (deep-interview) to understand their
-business, goals, and constraints before confirming any plan. Use
-agentdash_start_interview and agentdash_interview_turn; only call
-agentdash_confirm_plan after the customer has explicitly agreed to the
-proposed agent team.
-
-BOUNDARIES:
-- Never hire agents beyond the confirmed plan.
-- Never delete anything or change budgets.
-- Never resume agents a human has paused.
-- For any such action, call agentdash_request_approval and WAIT for the
-  approval to be granted in the AgentDash UI (/approvals). Do not proceed
-  on a pending or rejected approval.
-- If blocked for any other reason, stop and create a task for the human
-  describing exactly what you need.`;
+// No kickoff prompt on this page on purpose: the MCP server ships its own
+// operating playbook and approval boundaries as protocol-level server
+// instructions (packages/mcp-server/src/playbook.ts), so the customer just
+// talks. The full operator runbook lives in doc/MCP-LAUNCH.md.
+const FIRST_WORDS = `Set up AgentDash for me.`;
 
 const HOW_IT_WORKS: Array<{ step: string; title: string; body: string }> = [
   {
@@ -197,30 +173,29 @@ export function McpPage() {
         </h2>
         <div style={{ display: "grid", gap: "var(--mkt-space-4)", maxWidth: 760 }}>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-            The MCP server ships inside the AgentDash repo. Clone and build it
-            once (needs Node 20+, pnpm 9+, and git):
+            <strong>Setting up a brand-new machine?</strong> One command
+            handles everything — prerequisites, install, build, and MCP
+            registration (needs Node 20+ and the Claude Code CLI):
           </p>
-          <CodeBlock label="Step 1 — clone and build">{CLONE_AND_BUILD}</CodeBlock>
+          <CodeBlock label="Fresh machine — one command">{BOOTSTRAP_COMMAND}</CodeBlock>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-            <strong>Setting up a brand-new machine?</strong> Add the server
-            with no API key — the install checklist, status, and sign-up tools
-            work unauthenticated and walk your agent through first boot and
-            claiming the instance:
+            Then start your agent and just say:
           </p>
-          <CodeBlock label="Step 2 — fresh machine (no account yet)">{MCP_ADD_FRESH}</CodeBlock>
+          <CodeBlock label={"That's it — the agent does the rest"}>{FIRST_WORDS}</CodeBlock>
+          <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
+            No prompt to paste. The AgentDash MCP server carries its own
+            operating playbook and approval boundaries, so any connected agent
+            already knows the drill: install if needed, sign you up with your
+            email, interview you about your business, and propose an agent
+            team — hiring nothing until you approve the plan.
+          </p>
           <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
             <strong>Connecting to a running AgentDash?</strong> Point at your
-            instance URL and pass your board API key — the one
-            <code> agentdash_sign_up</code> returned when the instance was
-            claimed, or a key your workspace admin minted for you:
+            instance URL and pass your board API key — the one returned when
+            the instance was claimed, or a key your workspace admin minted for
+            you. Then just talk: &ldquo;show me my dashboard&rdquo; is enough.
           </p>
-          <CodeBlock label="Step 2 — existing instance">{MCP_ADD_EXISTING}</CodeBlock>
-          <p style={{ margin: 0, color: "var(--mkt-ink-soft)", maxWidth: "60ch" }}>
-            Then start your agent and paste the kickoff prompt below. On an
-            already-running workspace you can skip it and just talk —
-            &ldquo;show me my dashboard&rdquo; is enough.
-          </p>
-          <CodeBlock label="Step 3 — the kickoff prompt">{KICKOFF_PROMPT}</CodeBlock>
+          <CodeBlock label="Existing instance">{MCP_ADD_EXISTING}</CodeBlock>
         </div>
       </SectionContainer>
 
