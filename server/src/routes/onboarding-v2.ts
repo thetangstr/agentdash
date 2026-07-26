@@ -1183,7 +1183,7 @@ async function generateInitialTeamPlan(
     + '  "plan": {\n'
     + '    "rationale": "...",\n'
     + '    "agents": [\n'
-    + '      { "role": "engineering_lead", "name": "Ellie", "adapterType": "claude_api", "responsibilities": ["..."], "kpis": ["..."] }\n'
+    + '      { "role": "engineering_lead", "name": "Ellie", "adapterType": "hermes_local", "responsibilities": ["..."], "kpis": ["..."] }\n'
     + "    ],\n"
     + '    "alignmentToShortTerm": "...",\n'
     + '    "alignmentToLongTerm": "..."\n'
