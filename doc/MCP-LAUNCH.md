@@ -27,6 +27,21 @@ work.
   logged in with a subscription (`claude` → follow the login prompt)
 - The AgentDash repo cloned to `~/agentdash`
 
+### Fast path: one-line bootstrap
+
+`scripts/bootstrap-fresh-mac.sh` performs steps 1–2 of this doc in one shot —
+prereq checks, clone/pull to `~/agentdash`, `pnpm install`, MCP-server build,
+an authenticated-mode env file (`PAPERCLIP_DEPLOYMENT_MODE=authenticated` +
+`AGENTDASH_SELF_SERVE_BOOTSTRAP=true`, never overwritten if present), and the
+`claude mcp add` registration. On the fresh machine:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thetangstr/agentdash/main/scripts/bootstrap-fresh-mac.sh | bash
+```
+
+Then skip straight to §3 (the kickoff prompt). The manual steps below remain
+the reference for what the script does.
+
 ## 2. Add the MCP server to Claude Code
 
 Production shape (after `pnpm --filter @agentdash/mcp-server build` has produced
