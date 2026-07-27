@@ -141,7 +141,7 @@ function defaultHermesCommand(): string {
 
 const execFileAsync = promisify(execFile);
 
-function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
+export function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
       ? (ctx.config as Record<string, unknown>)
@@ -193,7 +193,7 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   return ctx;
 }
 
-function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
+export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
   const config =
     ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
       ? (ctx.config as Record<string, unknown>)
