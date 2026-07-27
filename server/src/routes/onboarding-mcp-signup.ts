@@ -53,9 +53,19 @@ export type McpSignupCreateUser = (input: {
   password: string;
 }) => Promise<{ userId: string | null }>;
 
+/**
+ * Captures a one-time password-reset URL for the just-created founding user,
+ * so MCP signup can return a browser-login link the agent hands the customer —
+ * no email in the critical path. Threaded in from server/src/index.ts where the
+ * Better Auth instance lives. Optional: when absent (or when it returns null)
+ * the response falls back to the text "Forgot password" hint.
+ */
+export type McpSignupCaptureResetUrl = (email: string) => Promise<string | null>;
+
 export interface McpSignupRoutesOptions {
   deploymentMode: DeploymentMode;
   createUser?: McpSignupCreateUser;
+  captureResetUrl?: McpSignupCaptureResetUrl;
 }
 
 const mcpSignupBodySchema = z.object({
@@ -273,13 +283,32 @@ export function onboardingMcpSignupRoutes(db: Db, opts: McpSignupRoutesOptions) 
         "[mcp-signup] founding user signed up via MCP",
       );
 
+      // AgentDash (MCP-native first login): capture a one-time reset URL so the
+      // founding user sets a browser password by clicking a link the agent
+      // hands them — no Resend dependency. Falls back to the text hint when
+      // capture isn't wired, times out, or throws.
+      let passwordSetupUrl: string | null = null;
+      if (opts.captureResetUrl) {
+        try {
+          passwordSetupUrl = await opts.captureResetUrl(email);
+        } catch (err) {
+          logger.warn(
+            { email, error: err instanceof Error ? err.message : String(err) },
+            "[mcp-signup] captureResetUrl failed; falling back to the text hint",
+          );
+        }
+      }
+
       res.status(201).json({
         userId,
         email,
         name,
         apiKey,
         apiKeyExpiresAt: expiresAt.toISOString(),
-        passwordSetup: MCP_SIGNUP_PASSWORD_SETUP_HINT,
+        passwordSetupUrl,
+        passwordSetup: passwordSetupUrl
+          ? "Open this one-time link to set your browser password (expires in ~1 hour):"
+          : MCP_SIGNUP_PASSWORD_SETUP_HINT,
       });
     },
   );

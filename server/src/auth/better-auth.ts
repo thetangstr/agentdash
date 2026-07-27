@@ -93,6 +93,70 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   return Array.from(trustedOrigins);
 }
 
+// AgentDash (MCP-native first login): one-shot capture registry for the
+// password-reset URL. capturePasswordResetUrl() registers a resolver here,
+// then calls auth.api.requestPasswordReset; the sendResetPassword callback
+// (configured inside createBetterAuthInstance) drains + removes the resolver
+// and SKIPS the email when a capture is pending — so the MCP signup flow
+// routes the one-time reset link straight to the agent instead of (only) to
+// email. Module-level on purpose: one server process owns one auth instance.
+const passwordResetUrlCaptures = new Map<string, Array<(url: string) => void>>();
+
+/**
+ * AgentDash (MCP-native first login): mint a one-time password-reset URL for
+ * `email` and return it directly (no email in the critical path). Used by
+ * POST /onboarding/mcp-signup so the founding user sets a browser password by
+ * clicking a link the agent hands them — independent of Resend being wired.
+ *
+ * Registers a resolver, fires Better Auth's requestPasswordReset (which
+ * generates the token + invokes sendResetPassword, which resolves the resolver
+ * with the reset URL), and awaits it with a timeout so signup can never hang.
+ * Returns null on timeout/failure so the caller falls back to the text hint.
+ */
+export async function capturePasswordResetUrl(
+  auth: BetterAuthInstance,
+  email: string,
+  timeoutMs = 5000,
+): Promise<string | null> {
+  const emailKey = email.trim().toLowerCase();
+  let resolver: (url: string) => void = () => {};
+  const urlPromise = new Promise<string>((resolve) => {
+    resolver = resolve;
+  });
+  const queue = passwordResetUrlCaptures.get(emailKey) ?? [];
+  queue.push(resolver);
+  passwordResetUrlCaptures.set(emailKey, queue);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Fire the reset flow; sendResetPassword drains the resolver. Don't await
+    // the call itself — the resolver resolves whenever the callback fires
+    // (better-auth may run sendResetPassword in the background).
+    void auth.api.requestPasswordReset({ body: { email } });
+    return await Promise.race([
+      urlPromise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } catch (err) {
+    logger.warn(
+      { email, error: err instanceof Error ? err.message : String(err) },
+      "[auth] capturePasswordResetUrl: requestPasswordReset threw",
+    );
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+    // Clean up if the resolver never fired (timeout/error path).
+    const remaining = passwordResetUrlCaptures.get(emailKey);
+    if (remaining) {
+      const filtered = remaining.filter((r) => r !== resolver);
+      if (filtered.length === 0) passwordResetUrlCaptures.delete(emailKey);
+      else passwordResetUrlCaptures.set(emailKey, filtered);
+    }
+  }
+}
+
 export interface CreateBetterAuthInstanceOptions {
   /**
    * Fires after Better Auth has fully written a new user row. Used to
@@ -154,6 +218,17 @@ export function createBetterAuthInstance(
       sendResetPassword: async ({ user, token }: { user: { email: string }; token: string }) => {
         const appUrl = derivePublicAppUrl(publicUrl) ?? "http://localhost:3100";
         const resetUrl = `${appUrl}/reset-password?token=${encodeURIComponent(token)}`;
+        // MCP-native first login: if a capture is pending for this email,
+        // route the one-time reset link to the MCP signup caller instead of
+        // emailing it. One-shot (drain + delete). Email stays the path only
+        // for the normal "Forgot password" flow (no pending capture).
+        const emailKey = user.email.trim().toLowerCase();
+        const resolvers = passwordResetUrlCaptures.get(emailKey);
+        if (resolvers && resolvers.length > 0) {
+          passwordResetUrlCaptures.delete(emailKey);
+          for (const resolve of resolvers) resolve(resetUrl);
+          return;
+        }
         const { subject, html, text } = resetPasswordEmailTemplate({ resetUrl });
         await sendEmail({ to: user.email, subject, html, text });
       },

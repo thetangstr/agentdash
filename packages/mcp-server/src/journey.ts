@@ -408,7 +408,9 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         + "instance has zero users (bootstrapStatus \"bootstrap_pending\"). No password needed: "
         + "collect the human's email and name in conversation (NEVER invent an email), and the "
         + "server creates the founding user, returns a board API key, and this session continues "
-        + "authenticated immediately. Persist the key so future sessions stay signed in.",
+        + "authenticated immediately. Persist the key so future sessions stay signed in. The "
+        + "response also returns a one-time passwordSetupUrl — hand that link to the human so "
+        + "they can set a browser password and open the web UI (no email needed).",
       z.object({
         email: z.string().email(),
         name: z.string().min(1).max(120),
@@ -431,6 +433,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           apiKey: string;
           apiKeyExpiresAt: string;
           passwordSetup: string;
+          passwordSetupUrl: string | null;
         }>("POST", "/onboarding/mcp-signup", { body: { email, name, inviteCode } });
 
         // Upgrade THIS session in place: every subsequent tool call carries
@@ -445,7 +448,16 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           apiKeyPersistInstructions:
             `Add PAPERCLIP_API_KEY=${result.apiKey} to the MCP server env so future sessions `
             + "stay signed in",
+          passwordSetupUrl: result.passwordSetupUrl,
           passwordSetup: result.passwordSetup,
+          // The agent's job is to hand the human their first-login path. When
+          // the server minted a one-time reset URL, surface it verbatim — that
+          // is the no-email browser-login link. Otherwise fall back to the
+          // "Forgot password" hint the server sent.
+          firstLoginInstructions: result.passwordSetupUrl
+            ? `Tell the human: "Open this one-time link to set your browser password and sign in `
+              + `to the AgentDash web UI (expires in ~1 hour): ${result.passwordSetupUrl}"`
+            : `Tell the human: ${result.passwordSetup}`,
         };
       },
     ),

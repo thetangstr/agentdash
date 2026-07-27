@@ -494,6 +494,12 @@ export async function startServer(): Promise<StartedServer> {
   let mcpSignupCreateUser:
     | ((input: { name: string; email: string; password: string }) => Promise<{ userId: string | null }>)
     | undefined;
+  // AgentDash: MCP-native first login — captures the one-time password-reset
+  // URL for the founding user so the MCP journey can return a browser-login
+  // link. Only wired in authenticated mode (needs the Better Auth instance).
+  let mcpSignupCaptureResetUrl:
+    | ((email: string) => Promise<string | null>)
+    | undefined;
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
   }
@@ -504,6 +510,7 @@ export async function startServer(): Promise<StartedServer> {
       deriveAuthTrustedOrigins,
       resolveBetterAuthSession,
       resolveBetterAuthSessionFromHeaders,
+      capturePasswordResetUrl,
     } = await import("./auth/better-auth.js");
     const derivedTrustedOrigins = deriveAuthTrustedOrigins(config, { listenPort });
     const envTrustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
@@ -611,6 +618,9 @@ export async function startServer(): Promise<StartedServer> {
       })) as { user?: { id?: string } } | null | undefined;
       return { userId: result?.user?.id ?? null };
     };
+    // AgentDash: MCP-native first login — wire the reset-URL capture so the
+    // MCP signup response carries a browser-login link (no email dependency).
+    mcpSignupCaptureResetUrl = (email) => capturePasswordResetUrl(auth, email);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
@@ -715,6 +725,7 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
     // AgentDash: MCP-native signup (POST /api/onboarding/mcp-signup)
     mcpSignupCreateUser,
+    mcpSignupCaptureResetUrl,
     pluginWorkerManager,
     // AgentDash: corp-email requirement removed at user request
     // (2026-05-03) — applies to both Free and Pro tiers, so gmail/yahoo/

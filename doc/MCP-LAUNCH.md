@@ -79,8 +79,11 @@ through the MCP server:
    the customer for their email **in conversation** and runs
    `agentdash_sign_up` — the server creates the founding user, promotes them
    to instance admin, and returns a board API key. No browser signup form,
-   no password (set one later via "Forgot password" on the web UI). The
-   session continues authenticated immediately.
+   no password. The response also carries a one-time `passwordSetupUrl` —
+   the agent hands that link to the customer so they can set a browser
+   password and open the web UI directly (no email needed; it expires in
+   ~1 hour). If the link is absent, the customer falls back to "Forgot
+   password" on the web UI. The session continues authenticated immediately.
 3. Persist the returned key so future sessions stay signed in:
 
 ```sh

@@ -63,6 +63,7 @@ import { onboardingV2Routes } from "./routes/onboarding-v2.js";
 import {
   onboardingMcpSignupRoutes,
   type McpSignupCreateUser,
+  type McpSignupCaptureResetUrl,
 } from "./routes/onboarding-mcp-signup.js";
 // AgentDash: invite-code validation — cloud side of the fresh-install funnel
 // gate (POST /api/invites/validate). Unauthenticated, rate-limited.
@@ -184,6 +185,10 @@ export async function createApp(
     // Optional so buildApp stays backward-compatible for tests and
     // local_trusted deployments; without it the route answers 503.
     mcpSignupCreateUser?: McpSignupCreateUser;
+    // AgentDash: MCP-native first login — captures the one-time password-reset
+    // URL for the just-created founding user so the MCP journey can return a
+    // browser-login link. Optional; without it the route returns the text hint.
+    mcpSignupCaptureResetUrl?: McpSignupCaptureResetUrl;
     // AgentDash (AGE-60): when true, reject free-mail signups at the auth endpoint.
     requireCorpEmail?: boolean;
   },
@@ -330,6 +335,7 @@ export async function createApp(
     onboardingMcpSignupRoutes(db, {
       deploymentMode: opts.deploymentMode,
       createUser: opts.mcpSignupCreateUser,
+      captureResetUrl: opts.mcpSignupCaptureResetUrl,
     }),
   );
   // AgentDash: invite-code validation for fresh-install signups (this
