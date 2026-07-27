@@ -131,20 +131,12 @@ function hermesManagedProfilesEnabled(): boolean {
 }
 
 const DEFAULT_HERMES_COMMAND = "hermes";
-const DEFAULT_CODEX_COMMAND = "codex-acp";
 
 function defaultHermesCommand(): string {
   const configured = process.env.AGENTDASH_HERMES_COMMAND;
   return typeof configured === "string" && configured.trim().length > 0
     ? configured.trim()
     : DEFAULT_HERMES_COMMAND;
-}
-
-function defaultCodexCommand(): string {
-  const configured = process.env.AGENTDASH_CODEX_COMMAND;
-  return typeof configured === "string" && configured.trim().length > 0
-    ? configured.trim()
-    : DEFAULT_CODEX_COMMAND;
 }
 
 const execFileAsync = promisify(execFile);
@@ -170,7 +162,6 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
       ? agentAdapterConfig.command
       : undefined;
   const fallbackHermesCommand = defaultHermesCommand();
-  const fallbackCodexCommand = defaultCodexCommand();
 
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
@@ -188,6 +179,7 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   if (config && !config.command && configCommand) {
     config.command = configCommand;
   }
+  const fallbackCodexCommand = process.env.AGENTDASH_CODEX_COMMAND ?? "codex-acp";
   if (config && !config.command) {
     config.command = fallbackCodexCommand;
   }
@@ -216,10 +208,8 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
       : null;
   return readNonEmptyString(config?.hermesCommand)
     ?? readNonEmptyString(agentConfig?.hermesCommand)
-    // Portable fallback: honor AGENTDASH_HERMES_COMMAND, else "hermes" on PATH.
-    // (Was a hardcoded developer-specific absolute path, which broke on any other
-    // machine when an agent had no config — the round-trip probe would ENOENT.)
-    ?? defaultHermesCommand();
+    ?? process.env.AGENTDASH_HERMES_COMMAND
+    ?? DEFAULT_HERMES_COMMAND;
 }
 
 function readNonEmptyString(value: unknown): string | null {
