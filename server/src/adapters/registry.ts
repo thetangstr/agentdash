@@ -131,7 +131,6 @@ function hermesManagedProfilesEnabled(): boolean {
 }
 
 const DEFAULT_HERMES_COMMAND = "hermes";
-const DEFAULT_CODEX_COMMAND = "codex-acp";
 
 function defaultHermesCommand(): string {
   const configured = process.env.AGENTDASH_HERMES_COMMAND;
@@ -140,16 +139,9 @@ function defaultHermesCommand(): string {
     : DEFAULT_HERMES_COMMAND;
 }
 
-function defaultCodexCommand(): string {
-  const configured = process.env.AGENTDASH_CODEX_COMMAND;
-  return typeof configured === "string" && configured.trim().length > 0
-    ? configured.trim()
-    : DEFAULT_CODEX_COMMAND;
-}
-
 const execFileAsync = promisify(execFile);
 
-export function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
+function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
       ? (ctx.config as Record<string, unknown>)
@@ -170,7 +162,6 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
       ? agentAdapterConfig.command
       : undefined;
   const fallbackHermesCommand = defaultHermesCommand();
-  const fallbackCodexCommand = defaultCodexCommand();
 
   if (config && !config.hermesCommand && configCommand) {
     config.hermesCommand = configCommand;
@@ -188,6 +179,7 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   if (config && !config.command && configCommand) {
     config.command = configCommand;
   }
+  const fallbackCodexCommand = process.env.AGENTDASH_CODEX_COMMAND ?? "codex-acp";
   if (config && !config.command) {
     config.command = fallbackCodexCommand;
   }
@@ -201,7 +193,7 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   return ctx;
 }
 
-export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
+function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unknown }): string {
   const config =
     ctx.config && typeof ctx.config === "object" && !Array.isArray(ctx.config)
       ? (ctx.config as Record<string, unknown>)
@@ -216,10 +208,8 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
       : null;
   return readNonEmptyString(config?.hermesCommand)
     ?? readNonEmptyString(agentConfig?.hermesCommand)
-    // Portable fallback: honor AGENTDASH_HERMES_COMMAND, else "hermes" on PATH.
-    // (Was a hardcoded developer-specific absolute path, which broke on any other
-    // machine when an agent had no config — the round-trip probe would ENOENT.)
-    ?? defaultHermesCommand();
+    ?? process.env.AGENTDASH_HERMES_COMMAND
+    ?? DEFAULT_HERMES_COMMAND;
 }
 
 function readNonEmptyString(value: unknown): string | null {
