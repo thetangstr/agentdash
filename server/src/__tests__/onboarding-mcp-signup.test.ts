@@ -17,6 +17,7 @@ import {
   MCP_SIGNUP_PASSWORD_SETUP_HINT,
   onboardingMcpSignupRoutes,
   type McpSignupCreateUser,
+  type McpSignupCaptureResetUrl,
 } from "../routes/onboarding-mcp-signup.js";
 import { hashBearerToken } from "../services/board-auth.js";
 import { errorHandler } from "../middleware/error-handler.js";
@@ -89,6 +90,7 @@ function makeFakeDb(state: FakeDbState) {
 function buildApp(opts: {
   deploymentMode?: "authenticated" | "local_trusted";
   createUser?: McpSignupCreateUser;
+  captureResetUrl?: McpSignupCaptureResetUrl;
   dbState?: Partial<FakeDbState>;
 }) {
   const state: FakeDbState = {
@@ -105,6 +107,7 @@ function buildApp(opts: {
     onboardingMcpSignupRoutes(db as never, {
       deploymentMode: opts.deploymentMode ?? "authenticated",
       createUser: opts.createUser,
+      captureResetUrl: opts.captureResetUrl,
     }),
   );
   app.use(errorHandler);
@@ -172,6 +175,49 @@ describe("POST /api/onboarding/mcp-signup", () => {
 
     // Founding user ends up instance admin (the /onboarding/bootstrap path
     // never promotes — see the route header comment).
+    expect(promoteMock).toHaveBeenCalledWith("user-1");
+  });
+
+  it("capture wired: returns the one-time reset URL and a link-oriented passwordSetup", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const captureResetUrl = vi.fn(async () => "https://app.example.com/reset-password?token=abc123");
+    const { app } = buildApp({ createUser, captureResetUrl });
+
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+    expect(captureResetUrl).toHaveBeenCalledWith(VALID_BODY.email);
+    expect(res.body.passwordSetupUrl).toBe("https://app.example.com/reset-password?token=abc123");
+    expect(res.body.passwordSetup).toContain("one-time link");
+    expect(res.body.passwordSetup).not.toBe(MCP_SIGNUP_PASSWORD_SETUP_HINT);
+  });
+
+  it("capture returns null: falls back to the text 'Forgot password' hint", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const captureResetUrl = vi.fn(async () => null);
+    const { app } = buildApp({ createUser, captureResetUrl });
+
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.passwordSetupUrl).toBeNull();
+    expect(res.body.passwordSetup).toBe(MCP_SIGNUP_PASSWORD_SETUP_HINT);
+  });
+
+  it("capture throws: still 201, falls back to the text hint (signup never blocked)", async () => {
+    const createUser = vi.fn(async () => ({ userId: "user-1" }));
+    const captureResetUrl = vi.fn(async () => {
+      throw new Error("auth subsystem exploded");
+    });
+    const { app } = buildApp({ createUser, captureResetUrl });
+
+    const res = await request(app).post("/api/onboarding/mcp-signup").send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.passwordSetupUrl).toBeNull();
+    expect(res.body.passwordSetup).toBe(MCP_SIGNUP_PASSWORD_SETUP_HINT);
+    // The key + promotion still happened — capture failure is non-fatal.
+    expect(res.body.apiKey).toMatch(/^pcp_board_/);
     expect(promoteMock).toHaveBeenCalledWith("user-1");
   });
 

@@ -219,6 +219,7 @@ vi.mock("../auth/better-auth.js", () => ({
   deriveAuthTrustedOrigins: deriveAuthTrustedOriginsMock,
   resolveBetterAuthSession: vi.fn(async () => null),
   resolveBetterAuthSessionFromHeaders: vi.fn(async () => null),
+  capturePasswordResetUrl: vi.fn(async () => null),
 }));
 
 import { startServer } from "../index.ts";
