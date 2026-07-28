@@ -314,14 +314,17 @@ cross-company references fail closed and generate safe audit events.
 
 ## 11. Microsoft Teams
 
-Teams is implemented as a Microsoft Teams bot/app, not an Office 365 connector.
+Teams is implemented as a Microsoft Teams bot/app using the current
+`@microsoft/teams.apps` TypeScript SDK, not an Office 365 connector or the
+archived Bot Framework SDK.
 
 - Company/instance configuration uses the supported Microsoft identity and bot
   registration flow.
 - Inbound Bot Framework activities are validated using official mechanisms.
 - The Entra/Teams actor and conversation are paired to the AgentDash user.
 - Agent replies preserve conversation references needed for proactive messages.
-- Approval requests use Adaptive Cards with approve/reject actions.
+- Approval requests use Adaptive Cards with `Action.Execute` approve/reject
+  actions; new work does not use legacy `Action.Submit`.
 - Card actions carry opaque server tokens and pass through the same shared
   decision service used by web and Telegram.
 - Proactive delivery is attempted only when the app is installed and an active
