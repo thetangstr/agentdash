@@ -4555,6 +4555,7 @@ export function accessRoutes(
 
       const result = await access.archiveMember(companyId, memberId, {
         reassignment: req.body.reassignment ?? null,
+        actorUserId: req.actor.userId ?? null,
       });
       if (!result) throw notFound("Member not found");
 

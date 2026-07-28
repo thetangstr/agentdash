@@ -88,39 +88,29 @@ async function lockTransferCompanyAgent(
   }
 }
 
-export function agentStewardshipService(db: Db) {
-  async function assertActiveUserMember(companyId: string, userId: string, database: StewardshipDb = db) {
-    const membership = await database
-      .select({ id: companyMemberships.id })
-      .from(companyMemberships)
-      .where(
-        and(
-          eq(companyMemberships.companyId, companyId),
-          eq(companyMemberships.principalType, "user"),
-          eq(companyMemberships.principalId, userId),
-          eq(companyMemberships.status, "active"),
-        ),
-      )
-      .then((rows) => rows[0] ?? null);
-    if (!membership) {
-      throw conflict("Steward user must be an active company member");
-    }
+async function lockAssignableCompanyAgent(
+  database: StewardshipDb,
+  companyId: string,
+  agentId: string,
+) {
+  const result = await database.execute(sql`
+    select ${agents.id}, ${agents.companyId}, ${agents.status}
+    from ${agents}
+    where ${agents.id} = ${agentId}
+    for update
+  `);
+  const rows = resultRows(result) as Array<{ company_id?: string; companyId?: string; status?: string }>;
+  const row = rows[0];
+  const rowCompanyId = row?.company_id ?? row?.companyId;
+  if (!row || rowCompanyId !== companyId) {
+    throw conflict("Stewardship agent must belong to the same company");
   }
+  if (row.status === "terminated") {
+    throw conflict("Stewardship agent must not be terminated");
+  }
+}
 
-  async function assertAssignableCompanyAgent(companyId: string, agentId: string, database: StewardshipDb = db) {
-    const agent = await database
-      .select({ id: agents.id, companyId: agents.companyId, status: agents.status })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .then((rows) => rows[0] ?? null);
-    if (!agent || agent.companyId !== companyId) {
-      throw conflict("Stewardship agent must belong to the same company");
-    }
-    if (agent.status === "terminated") {
-      throw conflict("Stewardship agent must not be terminated");
-    }
-    return agent;
-  }
+export function agentStewardshipService(db: Db) {
 
   async function activeByUser(companyId: string, userId: string) {
     return db
@@ -179,12 +169,13 @@ export function agentStewardshipService(db: Db) {
   }
 
   async function assign(companyId: string, input: AssignInput): Promise<AgentStewardshipRow> {
-    await assertActiveUserMember(companyId, input.userId);
-    await assertAssignableCompanyAgent(companyId, input.agentId);
     const now = new Date();
 
     try {
       return await db.transaction(async (tx) => {
+        await lockActiveUserMember(tx, companyId, input.userId);
+        await lockAssignableCompanyAgent(tx, companyId, input.agentId);
+
         const row = await tx
           .insert(agentStewardships)
           .values({

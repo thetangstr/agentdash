@@ -439,7 +439,9 @@ describeEmbeddedPostgres("agent stewardships", () => {
       assignedByUserId: owner.principalId,
     });
 
-    const result = await accessService(db).archiveMember(company.id, user.id);
+    const result = await accessService(db).archiveMember(company.id, user.id, {
+      actorUserId: owner.principalId,
+    });
     expect(result?.member.status).toBe("archived");
 
     const archivedStewardship = await db
@@ -448,7 +450,7 @@ describeEmbeddedPostgres("agent stewardships", () => {
       .where(eq(agentStewardships.id, stewardship.id))
       .then((rows) => rows[0]!);
     expect(archivedStewardship.endedAt).toBeInstanceOf(Date);
-    expect(archivedStewardship.endedByUserId).toBe(user.principalId);
+    expect(archivedStewardship.endedByUserId).toBe(owner.principalId);
 
     const preservedAgent = await db
       .select()
@@ -462,5 +464,33 @@ describeEmbeddedPostgres("agent stewardships", () => {
       .from(activityLog)
       .where(eq(activityLog.action, "agent.stewardship_transferred"));
     expect(transferEvents).toHaveLength(0);
+
+    const endedEvent = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "agent.stewardship_ended"))
+      .then((rows) => rows[0]!);
+    expect(endedEvent.actorId).toBe(owner.principalId);
+    expect(endedEvent.details).toMatchObject({
+      userId: user.principalId,
+      reason: "member_archived",
+    });
+  });
+
+  it("assign rejects when target membership is not active at transaction time", async () => {
+    const company = await createCompany(db);
+    const assigner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id, { status: "suspended" });
+    const agent = await createAgent(db, company.id);
+
+    await expect(
+      agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: user.principalId,
+        assignedByUserId: assigner.principalId,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+
+    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
   });
 });

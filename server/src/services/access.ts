@@ -23,6 +23,7 @@ type MemberArchiveInput = {
     assigneeAgentId?: string | null;
     assigneeUserId?: string | null;
   } | null;
+  actorUserId?: string | null;
 };
 
 export function accessService(db: Db) {
@@ -418,13 +419,13 @@ export function accessService(db: Db) {
       const endedStewardships = await stewardshipSvc.endActiveForUser(
         companyId,
         existing.principalId,
-        existing.principalId,
+        input.actorUserId ?? existing.principalId,
         tx,
       );
       await stewardshipSvc.createActivityForArchivedStewardships({
         companyId,
         userId: existing.principalId,
-        endedByUserId: existing.principalId,
+        endedByUserId: input.actorUserId ?? existing.principalId,
         stewardships: endedStewardships,
         database: tx,
       });
@@ -544,9 +545,10 @@ export function accessService(db: Db) {
         }
       }
       if (toArchive.length > 0) {
+        const now = new Date();
         await tx
           .update(companyMemberships)
-          .set({ status: "archived", updatedAt: new Date() })
+          .set({ status: "archived", updatedAt: now })
           .where(inArray(companyMemberships.id, toArchive.map((row) => row.id)));
         await tx
           .delete(principalPermissionGrants)
@@ -557,6 +559,23 @@ export function accessService(db: Db) {
               inArray(principalPermissionGrants.companyId, toArchive.map((row) => row.companyId)),
             ),
           );
+
+        const stewardshipSvc = agentStewardshipService(db);
+        for (const membership of toArchive.filter((row) => row.principalType === "user")) {
+          const endedStewardships = await stewardshipSvc.endActiveForUser(
+            membership.companyId,
+            membership.principalId,
+            options.actorUserId ?? membership.principalId,
+            tx,
+          );
+          await stewardshipSvc.createActivityForArchivedStewardships({
+            companyId: membership.companyId,
+            userId: membership.principalId,
+            endedByUserId: options.actorUserId ?? membership.principalId,
+            stewardships: endedStewardships,
+            database: tx,
+          });
+        }
       }
 
       for (const companyId of target) {
