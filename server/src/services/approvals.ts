@@ -206,6 +206,12 @@ export function approvalService(db: Db) {
         const payload = updated.payload as Record<string, unknown>;
         const payloadAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
         if (payloadAgentId) {
+          // The payload is caller-supplied, so confirm the named agent belongs
+          // to this approval's company before touching its lifecycle.
+          const target = await agentsSvc.getById(payloadAgentId);
+          if (!target || target.companyId !== updated.companyId) {
+            throw unprocessable("Hire approval references an agent outside this company");
+          }
           await agentsSvc.activatePendingApproval(payloadAgentId);
           hireApprovedAgentId = payloadAgentId;
         } else {
@@ -279,6 +285,10 @@ export function approvalService(db: Db) {
         const payload = updated.payload as Record<string, unknown>;
         const payloadAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
         if (payloadAgentId) {
+          const target = await agentsSvc.getById(payloadAgentId);
+          if (!target || target.companyId !== updated.companyId) {
+            throw unprocessable("Hire approval references an agent outside this company");
+          }
           await agentsSvc.terminate(payloadAgentId);
         }
       }

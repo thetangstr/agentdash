@@ -3,6 +3,10 @@ import { approvalService } from "../services/approvals.ts";
 
 const mockAgentService = vi.hoisted(() => ({
   activatePendingApproval: vi.fn(),
+  // Hire lifecycle effects now confirm the payload agent is in the approval's
+  // company before acting, so the mock must answer that lookup.
+  getById: vi.fn(),
+  terminate: vi.fn(),
   create: vi.fn(),
   terminate: vi.fn(),
 }));
@@ -59,6 +63,8 @@ describe("approvalService resolution idempotency", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAgentService.activatePendingApproval.mockResolvedValue(undefined);
+    mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1" });
+    mockAgentService.terminate.mockResolvedValue(undefined);
     mockAgentService.create.mockResolvedValue({ id: "agent-1" });
     mockAgentService.terminate.mockResolvedValue(undefined);
     mockNotifyHireApproved.mockResolvedValue(undefined);

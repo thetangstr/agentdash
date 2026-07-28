@@ -81,17 +81,24 @@ export function approvalRoutes(
    * Deliberately applies to `default` companies as well: this is a
    * pre-existing platform gap, not an AgentDash-MK one.
    */
-  async function assertCanDecideAgentCreatingApproval(
+  async function assertCanDecideAgentLifecycleApproval(
     req: Request,
     approval: { type: string; status?: string | null; payload: unknown; companyId: string },
   ) {
-    if (!hireApprovalCreatesAgent(approval)) return;
+    // Deliberately keyed on the approval TYPE, not on whether the payload
+    // creates a new agent. Every hire_agent decision drives an agent lifecycle
+    // transition: with no `payload.agentId` an approve creates an agent, and
+    // WITH one an approve activates that agent and a reject terminates it and
+    // revokes its API keys. Gating only the create case guards the exact
+    // complement of the terminate path.
+    if (approval.type !== "hire_agent") return;
+    if (approval.status !== "pending" && approval.status !== "revision_requested") return;
     if (req.actor.type !== "board") {
-      throw forbidden("Only board callers can approve an agent hire");
+      throw forbidden("Only board callers can decide an agent hire");
     }
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     if (await access.canUser(approval.companyId, req.actor.userId, "agents:create")) return;
-    throw forbidden("Approving an agent hire requires the agents:create permission");
+    throw forbidden("Deciding an agent hire requires the agents:create permission");
   }
 
   /**
@@ -220,6 +227,10 @@ export function approvalRoutes(
         : approvalInput.payload;
 
     const actor = getActorInfo(req);
+    if (actor.agentId && approvalInput.requestedByAgentId
+        && approvalInput.requestedByAgentId !== actor.agentId) {
+      throw forbidden("An agent can only request approvals on its own behalf");
+    }
     const approval = await svc.create(companyId, {
       ...approvalInput,
       payload: normalizedPayload,
@@ -279,7 +290,7 @@ export function approvalRoutes(
       req.actor,
       req.body,
     );
-    await assertCanDecideAgentCreatingApproval(req, existingApproval);
+    await assertCanDecideAgentLifecycleApproval(req, existingApproval);
     const decidedByUserId = req.actor.userId ?? "board";
     const resolution = await approveWithTierCapacity(
       id,
@@ -399,6 +410,7 @@ export function approvalRoutes(
       req.actor,
       req.body,
     );
+    await assertCanDecideAgentLifecycleApproval(req, existingApproval);
     const decidedByUserId = req.actor.userId ?? "board";
     const { approval, applied } = await svc.reject(
       id,
@@ -440,9 +452,7 @@ export function approvalRoutes(
     }
 
     const context = await authority.requireEmergencyOverride(existingApproval, req.actor, req.body);
-    if (req.body.decision === "approved") {
-      await assertCanDecideAgentCreatingApproval(req, existingApproval);
-    }
+    await assertCanDecideAgentLifecycleApproval(req, existingApproval);
     const decidedByUserId = req.actor.userId ?? "board";
     const meta = decisionMeta(context, req.body.overrideReason);
 

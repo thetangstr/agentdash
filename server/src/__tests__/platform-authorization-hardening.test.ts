@@ -165,6 +165,100 @@ describeEmbeddedPostgres("platform authorization hardening", () => {
     expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
   });
 
+  it("requires agents:create to REJECT an agent hire, which terminates the named agent", async () => {
+    const { company, operator } = await seed();
+    const victim = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Victim ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    // Rejecting a hire whose payload names an existing agent terminates it and
+    // revokes its API keys. The create-side guard does not fire here, because
+    // this payload creates nothing — which is exactly the gap.
+    const approval = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "hire_agent",
+        status: "pending",
+        payload: { agentId: victim.id },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const { approvalRoutes } = await import("../routes/approvals.js");
+    const app = await mount(
+      async () => approvalRoutes(db, { autoDispatchQueuedRuns: false }),
+      actor(company.id, operator.principalId, "operator"),
+    );
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).post(`/api/approvals/${approval.id}/reject`).send({}),
+    );
+
+    expect(res.status).toBe(403);
+    const unchanged = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, victim.id))
+      .then((rows) => rows[0]!);
+    expect(unchanged.status).toBe("idle");
+  });
+
+  it("refuses to touch an agent in another company through a hire payload", async () => {
+    const first = await seed();
+    const second = await seed();
+    const foreignAgent = await db
+      .insert(agents)
+      .values({
+        companyId: second.company.id,
+        name: `Foreign ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const approval = await db
+      .insert(approvals)
+      .values({
+        companyId: first.company.id,
+        type: "hire_agent",
+        status: "pending",
+        payload: { agentId: foreignAgent.id },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const { approvalRoutes } = await import("../routes/approvals.js");
+    const app = await mount(
+      async () => approvalRoutes(db, { autoDispatchQueuedRuns: false }),
+      actor(first.company.id, first.admin.principalId, "owner"),
+    );
+
+    // Even an administrator of the approval's own company must not reach across
+    // the tenant boundary via a caller-supplied payload id.
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).post(`/api/approvals/${approval.id}/reject`).send({}),
+    );
+
+    expect(res.status).toBe(422);
+    const unchanged = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, foreignAgent.id))
+      .then((rows) => rows[0]!);
+    expect(unchanged.status).toBe("idle");
+  });
+
   it("refuses host-executed workspace commands inside an agent hire payload", async () => {
     const { company, admin } = await seed();
     const { approvalRoutes } = await import("../routes/approvals.js");
