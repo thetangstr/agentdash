@@ -12,10 +12,38 @@ import { validate } from "../middleware/validate.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { connectorService } from "../services/connectors.js";
 import { logActivity } from "../services/activity-log.js";
+import { accessService } from "../services/access.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { forbidden } from "../errors.js";
 
 export function connectorRoutes(db: Db) {
   const router = Router();
   const svc = connectorService(db);
+  const access = accessService(db);
+  const governance = agentGovernanceService(db);
+  const stewardships = agentStewardshipService(db);
+
+  /**
+   * AgentDash-MK: per-agent connector settings are agent configuration, so in a
+   * profile company only the agent's current steward or an administrator may
+   * change them. No-op for `default`-profile companies, whose existing
+   * board-member authority is unchanged.
+   */
+  async function assertAgentConnectorAuthority(
+    req: Parameters<typeof assertCompanyAccess>[0],
+    companyId: string,
+    agentId: string,
+  ) {
+    if (!(await governance.isProfileCompany(companyId))) return;
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (await access.canUser(companyId, req.actor.userId, "agents:create")) return;
+    const active = await stewardships.activeByAgent(companyId, agentId);
+    if (active && req.actor.userId && active.userId === req.actor.userId) return;
+    throw forbidden(
+      "Only the assigned steward or an authorized administrator can configure this agent",
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Connection CRUD
@@ -191,11 +219,13 @@ export function connectorRoutes(db: Db) {
     async (req, res) => {
       assertBoard(req);
       const companyId = req.params.companyId as string;
+      const agentId = req.params.agentId as string;
       assertCompanyAccess(req, companyId);
+      await assertAgentConnectorAuthority(req, companyId, agentId);
 
       const updated = await svc.setAgentOverrides(
         companyId,
-        req.params.agentId as string,
+        agentId,
         {
           sendIdentity: req.body.sendIdentity,
           autonomy: req.body.autonomy,

@@ -141,6 +141,13 @@ export {
 } from "./agent-stewardship.js";
 
 export {
+  agentGovernancePolicySchema,
+  updateAgentGovernancePolicySchema,
+  type AgentGovernancePolicyInput,
+  type UpdateAgentGovernancePolicy,
+} from "./agent-governance.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,

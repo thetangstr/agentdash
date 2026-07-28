@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex, index, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { CompanyProductProfile } from "@paperclipai/shared";
 
 export const companies = pgTable(
   "companies",
@@ -8,7 +9,9 @@ export const companies = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     status: text("status").notNull().default("active"),
-    productProfile: text("product_profile").notNull().default("default"),
+    // `$type` is a compile-time narrowing only — the column stays `text`, so
+    // this adds no migration and lets profile checks stay type-safe.
+    productProfile: text("product_profile").$type<CompanyProductProfile>().notNull().default("default"),
     pauseReason: text("pause_reason"),
     pausedAt: timestamp("paused_at", { withTimezone: true }),
     issuePrefix: text("issue_prefix").notNull().default("PAP"),

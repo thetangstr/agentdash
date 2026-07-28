@@ -636,6 +636,39 @@ export type {
 } from "./types/agent-stewardship.js";
 
 export {
+  AGENT_DESTRUCTIVE_ACTION_MODES,
+  AGENT_MINIMUM_APPROVAL_MODES,
+  AGENT_GOVERNANCE_CHANNELS,
+  AGENT_GOVERNANCE_TARGETS,
+  AGENT_POLICY_WILDCARD,
+  AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+  AGENT_POLICY_VIOLATION_CODES,
+  AGENT_POLICY_CEILING_EXCEEDED,
+  AGENT_POLICY_REVISION_CONFLICT,
+  DEFAULT_AGENT_GOVERNANCE_POLICY,
+  AgentPolicyCeilingError,
+  computeEffectiveAgentPolicy,
+  collectCeilingViolations,
+  assertWithinCeiling,
+  normalizeAgentGovernancePolicy,
+  type AgentDestructiveActionMode,
+  type AgentMinimumApprovalMode,
+  type AgentGovernanceChannel,
+  type AgentGovernanceTarget,
+  type AgentGovernancePolicy,
+  type AgentGovernancePolicyRecord,
+  type AgentPolicyViolation,
+  type AgentPolicyViolationCode,
+} from "./types/agent-governance.js";
+
+export {
+  agentGovernancePolicySchema,
+  updateAgentGovernancePolicySchema,
+  type AgentGovernancePolicyInput,
+  type UpdateAgentGovernancePolicy,
+} from "./validators/agent-governance.js";
+
+export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
 } from "./execution-workspace-guards.js";

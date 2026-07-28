@@ -94,6 +94,16 @@ export type {
   AssignAgentStewardship,
   TransferAgentStewardship,
 } from "./agent-stewardship.js";
+export type {
+  AgentDestructiveActionMode,
+  AgentMinimumApprovalMode,
+  AgentGovernanceChannel,
+  AgentGovernanceTarget,
+  AgentGovernancePolicy,
+  AgentGovernancePolicyRecord,
+  AgentPolicyViolation,
+  AgentPolicyViolationCode,
+} from "./agent-governance.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {

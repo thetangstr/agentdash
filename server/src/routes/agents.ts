@@ -54,6 +54,8 @@ import {
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectAgentAdapterWorkspaceCommandPaths,
@@ -166,6 +168,10 @@ export function agentRoutes(
   const router = Router();
   const svc = agentService(db);
   const access = accessService(db);
+  // AgentDash-MK: steward authority + owner-ceiling enforcement for agent
+  // configuration. No-ops for `default`-profile companies.
+  const governance = agentGovernanceService(db);
+  const stewardships = agentStewardshipService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -538,6 +544,34 @@ export function agentRoutes(
     }
   }
 
+  // AgentDash-MK: the current steward of a specific agent may configure THAT
+  // agent. This is deliberately per-target and never widens to company-wide
+  // agent administration — stewardship must not silently grant that.
+  async function isCurrentStewardOfAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
+    if (req.actor.type !== "board" || !req.actor.userId) return false;
+    if (!(await governance.isProfileCompany(targetAgent.companyId))) return false;
+    const active = await stewardships.activeByAgent(targetAgent.companyId, targetAgent.id);
+    return Boolean(active && active.userId === req.actor.userId);
+  }
+
+  /**
+   * Board authority to configure one agent: an administrator with
+   * `agents:create`, or (in `agentdash_mk` companies) the agent's current
+   * steward. Returns which authority applied, for audit callers.
+   */
+  async function requireAgentConfigurationAuthority(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward"> {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (await isCurrentStewardOfAgent(req, targetAgent)) return "steward";
+    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    return "admin";
+  }
+
   async function assertCanReadConfigurations(req: Request, companyId: string) {
     return assertCanCreateAgentsForCompany(req, companyId);
   }
@@ -638,7 +672,7 @@ export function agentRoutes(
   async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+      await requireAgentConfigurationAuthority(req, targetAgent);
       return;
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
@@ -1112,7 +1146,7 @@ export function agentRoutes(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    await requireAgentConfigurationAuthority(req, targetAgent);
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -2329,8 +2363,17 @@ export function agentRoutes(
         return;
       }
     } else {
-      await assertBoardCanManageAgentsForCompany(req, existing.companyId);
+      await requireAgentConfigurationAuthority(req, existing);
     }
+
+    // AgentDash-MK: the owner ceiling binds at the service boundary, so a
+    // steward (or an admin) cannot grant an agent authority the owner withheld.
+    await governance.assertAgentMutationWithinCeiling(existing.companyId, existing.id, {
+      permissions: [
+        ...(req.body.canCreateAgents ? ["agents:create"] : []),
+        ...(req.body.canAssignTasks ? ["tasks:assign"] : []),
+      ],
+    });
 
     const agent = await svc.updatePermissions(id, req.body);
     if (!agent) {
@@ -2652,6 +2695,14 @@ export function agentRoutes(
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
+    }
+
+    // AgentDash-MK: budget is a ceiling dimension, so it is checked before
+    // persistence rather than trusted from the client.
+    if (hasOwn(req.body as object, "budgetMonthlyCents")) {
+      await governance.assertAgentMutationWithinCeiling(existing.companyId, existing.id, {
+        monthlyBudgetCents: Number((req.body as { budgetMonthlyCents: number }).budgetMonthlyCents),
+      });
     }
 
     const patchData = { ...(req.body as Record<string, unknown>) };
