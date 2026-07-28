@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  COMPANY_PRODUCT_PROFILES,
   COMPANY_STATUSES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "../constants.js";
@@ -16,6 +17,7 @@ const attachmentMaxBytesSchema = z
 export const createCompanySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().nullable(),
+  productProfile: z.enum(COMPANY_PRODUCT_PROFILES).optional(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   attachmentMaxBytes: attachmentMaxBytesSchema.optional(),
 });

@@ -673,6 +673,13 @@
       "when": 1781539200000,
       "tag": "0095_zk_permission_proofs",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1785253043198,
+      "tag": "0096_company_product_profile",
+      "breakpoints": true
     }
   ]
 }

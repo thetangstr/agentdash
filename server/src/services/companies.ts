@@ -1,5 +1,6 @@
 import { and, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import type { CompanyProductProfile } from "@paperclipai/shared";
 import {
   companies,
   companyLogos,
@@ -79,6 +80,16 @@ export interface CompanyCreatorMembership {
   membershipRole?: string;
 }
 
+export function requireProductProfile<T extends { productProfile: CompanyProductProfile }>(
+  company: T | null | undefined,
+  productProfile: CompanyProductProfile,
+) {
+  if (!company || company.productProfile !== productProfile) {
+    throw notFound("Company not found");
+  }
+  return company;
+}
+
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
   const environmentsSvc = environmentService(db);
@@ -88,6 +99,7 @@ export function companyService(db: Db) {
     name: companies.name,
     description: companies.description,
     status: companies.status,
+    productProfile: companies.productProfile,
     pauseReason: companies.pauseReason,
     pausedAt: companies.pausedAt,
     issuePrefix: companies.issuePrefix,

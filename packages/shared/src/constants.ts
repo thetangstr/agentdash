@@ -1,6 +1,9 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
+export const COMPANY_PRODUCT_PROFILES = ["default", "agentdash_mk"] as const;
+export type CompanyProductProfile = (typeof COMPANY_PRODUCT_PROFILES)[number];
+
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
 
