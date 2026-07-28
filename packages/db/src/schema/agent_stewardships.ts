@@ -9,6 +9,9 @@ export const agentStewardships = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     agentId: uuid("agent_id").notNull().references(() => agents.id),
+    // User ids intentionally mirror company_memberships.principal_id rather
+    // than auth user FKs so local/external durable principals and history
+    // survive auth-user cleanup or identity-provider changes.
     userId: text("user_id").notNull(),
     assignedByUserId: text("assigned_by_user_id"),
     endedByUserId: text("ended_by_user_id"),

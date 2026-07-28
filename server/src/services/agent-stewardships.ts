@@ -47,6 +47,47 @@ function normalizeReason(reason: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
+async function lockActiveUserMember(
+  database: StewardshipDb,
+  companyId: string,
+  userId: string,
+) {
+  const result = await database.execute(sql`
+    select ${companyMemberships.id}
+    from ${companyMemberships}
+    where ${companyMemberships.companyId} = ${companyId}
+      and ${companyMemberships.principalType} = 'user'
+      and ${companyMemberships.principalId} = ${userId}
+      and ${companyMemberships.status} = 'active'
+    for update
+  `);
+  if (resultRows(result).length === 0) {
+    throw conflict("Steward user must be an active company member");
+  }
+}
+
+async function lockTransferCompanyAgent(
+  database: StewardshipDb,
+  companyId: string,
+  agentId: string,
+) {
+  const result = await database.execute(sql`
+    select ${agents.id}, ${agents.status}
+    from ${agents}
+    where ${agents.companyId} = ${companyId}
+      and ${agents.id} = ${agentId}
+    for update
+  `);
+  const rows = resultRows(result) as Array<{ status?: string }>;
+  const row = rows[0];
+  if (!row) {
+    throw notFound("Agent not found");
+  }
+  if (row.status === "terminated") {
+    throw conflict("Stewardship agent must not be terminated");
+  }
+}
+
 export function agentStewardshipService(db: Db) {
   async function assertActiveUserMember(companyId: string, userId: string, database: StewardshipDb = db) {
     const membership = await database
@@ -74,21 +115,6 @@ export function agentStewardshipService(db: Db) {
       .then((rows) => rows[0] ?? null);
     if (!agent || agent.companyId !== companyId) {
       throw conflict("Stewardship agent must belong to the same company");
-    }
-    if (agent.status === "terminated") {
-      throw conflict("Stewardship agent must not be terminated");
-    }
-    return agent;
-  }
-
-  async function assertTransferCompanyAgent(companyId: string, agentId: string, database: StewardshipDb = db) {
-    const agent = await database
-      .select({ id: agents.id, companyId: agents.companyId, status: agents.status })
-      .from(agents)
-      .where(and(eq(agents.companyId, companyId), eq(agents.id, agentId)))
-      .then((rows) => rows[0] ?? null);
-    if (!agent) {
-      throw notFound("Agent not found");
     }
     if (agent.status === "terminated") {
       throw conflict("Stewardship agent must not be terminated");
@@ -199,8 +225,6 @@ export function agentStewardshipService(db: Db) {
 
   async function transfer(companyId: string, agentId: string, input: TransferInput): Promise<AgentStewardshipRow> {
     const transferReason = normalizeReason(input.transferReason);
-    await assertActiveUserMember(companyId, input.userId);
-    await assertTransferCompanyAgent(companyId, agentId);
     const now = new Date();
 
     try {
@@ -212,6 +236,9 @@ export function agentStewardshipService(db: Db) {
         if (lockRows[0]?.locked !== true) {
           throw conflict("Agent stewardship transfer already in progress");
         }
+
+        await lockActiveUserMember(tx, companyId, input.userId);
+        await lockTransferCompanyAgent(tx, companyId, agentId);
 
         const locked = await tx.execute(sql`
           select ${agentStewardships.id}

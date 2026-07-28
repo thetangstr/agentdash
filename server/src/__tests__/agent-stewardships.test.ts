@@ -385,6 +385,49 @@ describeEmbeddedPostgres("agent stewardships", () => {
     expect(ownerRes.body.stewardship.userId).toBe(user.principalId);
   });
 
+  it("rejects unknown keys in assignment payloads", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agent-stewardships`)
+        .send({ agentId: agent.id, userId: user.principalId, unexpected: true }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Validation error");
+    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
+  });
+
+  it("rejects unknown keys in transfer payloads", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const firstUser = await createMember(db, company.id);
+    const secondUser = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: firstUser.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId, "owner"));
+
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/transfer`)
+        .send({ userId: secondUser.principalId, transferReason: "handoff", unexpected: true }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Validation error");
+    const active = await agentStewardshipService(db).activeByAgent(company.id, agent.id);
+    expect(active?.userId).toBe(firstUser.principalId);
+  });
+
   it("member archival ends active stewardship while preserving the agent", async () => {
     const company = await createCompany(db);
     const owner = await createMember(db, company.id, { role: "owner" });
