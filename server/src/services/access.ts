@@ -196,15 +196,6 @@ export function accessService(db: Db) {
         for update
       `);
 
-      const targetLock = await tx.execute(sql`
-        select ${companyMemberships.id}
-        from ${companyMemberships}
-        where ${companyMemberships.companyId} = ${companyId}
-          and ${companyMemberships.id} = ${memberId}
-        for update
-      `);
-      if (resultRows(targetLock).length === 0) return null;
-
       const existing = await tx
         .select()
         .from(companyMemberships)
@@ -367,6 +358,15 @@ export function accessService(db: Db) {
           and ${companyMemberships.membershipRole} = 'owner'
         for update
       `);
+
+      const targetLock = await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.id} = ${memberId}
+        for update
+      `);
+      if (resultRows(targetLock).length === 0) return null;
 
       const existing = await tx
         .select()

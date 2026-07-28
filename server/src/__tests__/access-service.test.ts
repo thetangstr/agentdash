@@ -284,7 +284,7 @@ describeEmbeddedPostgres("access service", () => {
     });
   });
 
-  it("locks the archived membership row before cleanup so concurrent assignment rechecks archived status", async () => {
+  it("locks the archived membership row before stewardship cleanup so concurrent assignment rechecks archived status", async () => {
     const { company, owner } = await createCompanyWithOwner(db);
     const member = await db
       .insert(companyMemberships)
@@ -297,18 +297,35 @@ describeEmbeddedPostgres("access service", () => {
       })
       .returning()
       .then((rows) => rows[0]!);
-    const agent = await db
+    const activeAgent = await db
       .insert(agents)
       .values({
         companyId: company.id,
-        name: "Race steward",
+        name: "Existing steward",
         role: "engineer",
         status: "idle",
         adapterType: "process",
       })
       .returning()
       .then((rows) => rows[0]!);
+    const competingAgent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Competing steward",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const stewardship = await agentStewardshipService(db).assign(company.id, {
+      agentId: activeAgent.id,
+      userId: member.principalId,
+      assignedByUserId: owner.principalId,
+    });
     const secondDb = createDb(tempDb!.connectionString);
+    const thirdDb = createDb(tempDb!.connectionString);
     let releaseLock!: () => void;
     let lockAcquired!: () => void;
     const lockAcquiredPromise = new Promise<void>((resolve) => {
@@ -327,10 +344,6 @@ describeEmbeddedPostgres("access service", () => {
       `);
       lockAcquired();
       await releaseLockPromise;
-      await tx
-        .update(companyMemberships)
-        .set({ status: "archived", updatedAt: new Date() })
-        .where(eq(companyMemberships.id, member.id));
     });
     await lockAcquiredPromise;
 
@@ -343,19 +356,28 @@ describeEmbeddedPostgres("access service", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(archiveSettled).toBe(false);
+    expect(await agentStewardshipService(db).activeByUser(company.id, member.principalId))
+      .toMatchObject({ id: stewardship.id });
+
+    const assignAttempt = agentStewardshipService(thirdDb).assign(company.id, {
+      agentId: competingAgent.id,
+      userId: member.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    let assignSettled = false;
+    assignAttempt.finally(() => {
+      assignSettled = true;
+    }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(assignSettled).toBe(false);
 
     releaseLock();
     await locker;
     const result = await archiveAttempt;
     expect(result?.member.status).toBe("archived");
 
-    await expect(
-      agentStewardshipService(db).assign(company.id, {
-        agentId: agent.id,
-        userId: member.principalId,
-        assignedByUserId: owner.principalId,
-      }),
-    ).rejects.toMatchObject({ status: 409 });
-    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
+    await expect(assignAttempt).rejects.toMatchObject({ status: 409 });
+    expect(await agentStewardshipService(db).activeByUser(company.id, member.principalId)).toBeNull();
+    expect(await agentStewardshipService(db).activeByAgent(company.id, competingAgent.id)).toBeNull();
   });
 });
