@@ -26,6 +26,14 @@ type MemberArchiveInput = {
   actorUserId?: string | null;
 };
 
+function resultRows(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: unknown[] }).rows;
+  }
+  return [];
+}
+
 export function accessService(db: Db) {
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
     if (!userId) return false;
@@ -187,6 +195,15 @@ export function accessService(db: Db) {
           and ${companyMemberships.membershipRole} = 'owner'
         for update
       `);
+
+      const targetLock = await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.id} = ${memberId}
+        for update
+      `);
+      if (resultRows(targetLock).length === 0) return null;
 
       const existing = await tx
         .select()

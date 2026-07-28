@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -282,5 +282,80 @@ describeEmbeddedPostgres("access service", () => {
       userId: member.principalId,
       reason: "member_archived",
     });
+  });
+
+  it("locks the archived membership row before cleanup so concurrent assignment rechecks archived status", async () => {
+    const { company, owner } = await createCompanyWithOwner(db);
+    const member = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `operator-${randomUUID()}`,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const agent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Race steward",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const secondDb = createDb(tempDb!.connectionString);
+    let releaseLock!: () => void;
+    let lockAcquired!: () => void;
+    const lockAcquiredPromise = new Promise<void>((resolve) => {
+      lockAcquired = resolve;
+    });
+    const releaseLockPromise = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    const locker = db.transaction(async (tx) => {
+      await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.id} = ${member.id}
+        for update
+      `);
+      lockAcquired();
+      await releaseLockPromise;
+      await tx
+        .update(companyMemberships)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(eq(companyMemberships.id, member.id));
+    });
+    await lockAcquiredPromise;
+
+    const archiveAttempt = accessService(secondDb).archiveMember(company.id, member.id, {
+      actorUserId: owner.principalId,
+    });
+    let archiveSettled = false;
+    archiveAttempt.finally(() => {
+      archiveSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(archiveSettled).toBe(false);
+
+    releaseLock();
+    await locker;
+    const result = await archiveAttempt;
+    expect(result?.member.status).toBe("archived");
+
+    await expect(
+      agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: member.principalId,
+        assignedByUserId: owner.principalId,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
   });
 });
