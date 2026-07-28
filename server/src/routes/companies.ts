@@ -115,6 +115,21 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     }
   }
 
+  async function assertCanUpdateProductProfile(req: Request, companyId: string) {
+    assertBoard(req);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    const membership = req.actor.userId
+      ? await access.getMembership(companyId, "user", req.actor.userId)
+      : null;
+    if (
+      membership?.status === "active" &&
+      (membership.membershipRole === "owner" || membership.membershipRole === "admin")
+    ) {
+      return;
+    }
+    throw forbidden("Company owner or admin access required to change product profile");
+  }
+
   async function assertCanManagePortability(req: Request, companyId: string, capability: "imports" | "exports") {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") return;
@@ -568,6 +583,12 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     } else {
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
+      if (
+        body.productProfile !== undefined &&
+        body.productProfile !== existingCompany.productProfile
+      ) {
+        await assertCanUpdateProductProfile(req, companyId);
+      }
 
       if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
         body = {
