@@ -630,6 +630,11 @@ export {
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "./types/instance.js";
 
+export type {
+  AgentStewardship,
+  AgentStewardshipWithAgent,
+} from "./types/agent-stewardship.js";
+
 export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
@@ -688,6 +693,8 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  assignAgentStewardshipSchema,
+  transferAgentStewardshipSchema,
   type CreateAgent,
   type CreateAgentHire,
   type UpdateAgent,
@@ -700,6 +707,8 @@ export {
   type ResetAgentSession,
   type TestAdapterEnvironment,
   type UpdateAgentPermissions,
+  type AssignAgentStewardship,
+  type TransferAgentStewardship,
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,

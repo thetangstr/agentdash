@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -412,6 +413,21 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalId, existing.principalId),
           ),
         );
+
+      const stewardshipSvc = agentStewardshipService(db);
+      const endedStewardships = await stewardshipSvc.endActiveForUser(
+        companyId,
+        existing.principalId,
+        existing.principalId,
+        tx,
+      );
+      await stewardshipSvc.createActivityForArchivedStewardships({
+        companyId,
+        userId: existing.principalId,
+        endedByUserId: existing.principalId,
+        stewardships: endedStewardships,
+        database: tx,
+      });
 
       const archived = await tx
         .update(companyMemberships)

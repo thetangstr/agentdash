@@ -134,6 +134,13 @@ export {
 } from "./agent.js";
 
 export {
+  assignAgentStewardshipSchema,
+  transferAgentStewardshipSchema,
+  type AssignAgentStewardship,
+  type TransferAgentStewardship,
+} from "./agent-stewardship.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,
