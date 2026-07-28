@@ -1,9 +1,13 @@
 # AgentDash-MK Claude Code Handoff
 
-**Prepared:** 2026-07-28  
-**Status:** Paused after Tasks 1–2; Task 3 has not started  
-**Branch:** `codex/agentdash-mk`  
-**HEAD:** `01a4748c5233be67dde26fa4e92748d4be7a772d`  
+**Prepared:** 2026-07-28
+
+**Status:** Paused after Tasks 1–2; Task 3 has not started
+
+**Branch:** `codex/agentdash-mk`
+
+**HEAD:** `01a4748c5233be67dde26fa4e92748d4be7a772d`
+
 **Working tree:** Clean
 
 ## 1. Start here
@@ -437,4 +441,3 @@ Do not implement the local Codex/Claude bridge; it is P2. Do not add new
 Salesforce, HubSpot, Jira, SharePoint, Google Drive, or WhatsApp integrations.
 Telegram must be complete before Teams is presented as complete.
 ```
-
