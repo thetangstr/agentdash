@@ -16,9 +16,23 @@ import {
 } from "@paperclipai/shared";
 import { HttpError, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
+import { accessService } from "./access.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 import { logActivity } from "./activity-log.js";
+import { logger } from "../middleware/logger.js";
 
 type AgentGovernancePolicyRow = typeof agentGovernancePolicies.$inferSelect;
+
+/**
+ * A governance policy as seen by callers. `id` is null when the agent has no
+ * persisted row yet and the unrestricted default is being reported
+ * synthetically — reads must not write.
+ */
+export type AgentGovernanceView = Omit<AgentGovernancePolicyRow, "id" | "createdAt" | "updatedAt"> & {
+  id: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+};
 
 export interface UpdateAgentGovernanceInput {
   policy: AgentGovernancePolicy;
@@ -26,6 +40,9 @@ export interface UpdateAgentGovernanceInput {
   actorUserId: string | null;
   channel?: AgentGovernanceChannel;
 }
+
+/** Which board principal may configure a given agent. */
+export type AgentConfigurationAuthority = "admin" | "steward";
 
 /** Internal sentinel so a revision conflict can roll the write back and still be audited after. */
 class RevisionConflict extends Error {
@@ -54,6 +71,9 @@ function revisionConflict(expected: number, actual: number) {
 }
 
 export function agentGovernanceService(db: Db) {
+  const access = accessService(db);
+  const stewardships = agentStewardshipService(db);
+
   async function isProfileCompany(companyId: string) {
     const company = await db
       .select({ productProfile: companies.productProfile })
@@ -65,7 +85,7 @@ export function agentGovernanceService(db: Db) {
 
   async function requireCompanyAgent(companyId: string, agentId: string) {
     const agent = await db
-      .select({ id: agents.id })
+      .select({ id: agents.id, budgetMonthlyCents: agents.budgetMonthlyCents })
       .from(agents)
       .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
       .then((rows) => rows[0] ?? null);
@@ -86,15 +106,39 @@ export function agentGovernanceService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
+  function syntheticDefault(companyId: string, agentId: string): AgentGovernanceView {
+    return {
+      id: null,
+      companyId,
+      agentId,
+      ownerCeiling: DEFAULT_AGENT_GOVERNANCE_POLICY,
+      ownerCeilingRevision: 1,
+      ownerCeilingUpdatedByUserId: null,
+      stewardRequest: DEFAULT_AGENT_GOVERNANCE_POLICY,
+      stewardRequestRevision: 1,
+      stewardRequestUpdatedByUserId: null,
+      effectivePolicy: DEFAULT_AGENT_GOVERNANCE_POLICY,
+      revision: 1,
+      createdAt: null,
+      updatedAt: null,
+    };
+  }
+
   /**
-   * Read the agent's governance row, materializing the unrestricted default on
-   * first touch. Concurrent first touches are resolved by the
-   * (company_id, agent_id) unique index rather than by locking.
+   * Read-only. Reports the unrestricted default synthetically when no row
+   * exists, so a GET never inserts. Materialization happens on first write.
    */
-  async function getForAgent(companyId: string, agentId: string): Promise<AgentGovernancePolicyRow> {
+  async function getForAgent(companyId: string, agentId: string): Promise<AgentGovernanceView> {
     const existing = await readRow(companyId, agentId);
     if (existing) return existing;
+    await requireCompanyAgent(companyId, agentId);
+    return syntheticDefault(companyId, agentId);
+  }
 
+  /** Insert-if-absent, used only on the write path. */
+  async function materialize(companyId: string, agentId: string): Promise<AgentGovernancePolicyRow> {
+    const existing = await readRow(companyId, agentId);
+    if (existing) return existing;
     await requireCompanyAgent(companyId, agentId);
 
     try {
@@ -112,9 +156,13 @@ export function agentGovernanceService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (inserted) return inserted;
     } catch (error) {
+      // onConflictDoNothing suppresses the unique violation; this only covers a
+      // PK collision, which is vanishingly rare but must not be swallowed.
       if (!isUniqueViolation(error)) throw error;
     }
 
+    // Lost the insert race: the winner has committed by the time the
+    // speculative-insertion lock releases, so a fresh read sees the row.
     const raced = await readRow(companyId, agentId);
     if (!raced) throw notFound("Agent governance policy not found");
     return raced;
@@ -123,7 +171,8 @@ export function agentGovernanceService(db: Db) {
   /**
    * Rejected attempts are audited on the base connection, never inside the
    * transaction that is about to roll back — a rollback would take the audit
-   * row with it and the rejection would leave no trace.
+   * row with it and the rejection would leave no trace. An audit failure must
+   * never convert a clean 422/409 into a 500, so it is logged and swallowed.
    */
   async function auditRejected(input: {
     companyId: string;
@@ -136,24 +185,31 @@ export function agentGovernanceService(db: Db) {
     requestedRevision: number;
     violations?: AgentPolicyViolation[];
   }) {
-    await logActivity(db, {
-      companyId: input.companyId,
-      actorType: "user",
-      actorId: input.actorUserId ?? "board",
-      action: "agent.governance_change_rejected",
-      entityType: "agent_governance_policy",
-      entityId: input.agentId,
-      agentId: input.agentId,
-      details: {
-        result: "rejected",
-        code: input.code,
-        target: input.target,
-        channel: input.channel,
-        fromRevision: input.fromRevision,
-        requestedRevision: input.requestedRevision,
-        violations: input.violations ?? [],
-      },
-    });
+    try {
+      await logActivity(db, {
+        companyId: input.companyId,
+        actorType: "user",
+        actorId: input.actorUserId ?? "board",
+        action: "agent.governance_change_rejected",
+        entityType: "agent_governance_policy",
+        entityId: input.agentId,
+        agentId: input.agentId,
+        details: {
+          result: "rejected",
+          code: input.code,
+          target: input.target,
+          channel: input.channel,
+          fromRevision: input.fromRevision,
+          requestedRevision: input.requestedRevision,
+          violations: input.violations ?? [],
+        },
+      });
+    } catch (error) {
+      logger.warn(
+        { err: error, companyId: input.companyId, agentId: input.agentId, code: input.code },
+        "failed to audit rejected agent governance change",
+      );
+    }
   }
 
   async function applyUpdate(
@@ -163,8 +219,8 @@ export function agentGovernanceService(db: Db) {
     input: UpdateAgentGovernanceInput,
   ): Promise<AgentGovernancePolicyRow> {
     const channel: AgentGovernanceChannel = input.channel ?? "web";
-    await requireCompanyAgent(companyId, agentId);
-    const current = await getForAgent(companyId, agentId);
+    const agent = await requireCompanyAgent(companyId, agentId);
+    const current = await materialize(companyId, agentId);
     const requested = normalizeAgentGovernancePolicy(input.policy);
 
     const nextCeiling = target === "owner_ceiling" ? requested : (current.ownerCeiling as AgentGovernancePolicy);
@@ -198,6 +254,14 @@ export function agentGovernanceService(db: Db) {
     const effectivePolicy = computeEffectiveAgentPolicy(nextCeiling, nextRequest);
     const nextRevision = current.revision + 1;
     const now = new Date();
+    // A ceiling is not merely a write gate: if it now sits below what the agent
+    // is already configured for, the standing configuration is brought down to
+    // it in the same transaction, otherwise lowering a ceiling would leave the
+    // over-ceiling budget in force indefinitely.
+    const clampedBudgetCents =
+      agent.budgetMonthlyCents > effectivePolicy.monthlyBudgetCents
+        ? effectivePolicy.monthlyBudgetCents
+        : null;
 
     try {
       return await db.transaction(async (tx) => {
@@ -230,6 +294,30 @@ export function agentGovernanceService(db: Db) {
           .then((rows) => rows[0] ?? null);
 
         if (!updated) throw new RevisionConflict();
+
+        if (clampedBudgetCents !== null) {
+          await tx
+            .update(agents)
+            .set({ budgetMonthlyCents: clampedBudgetCents, updatedAt: now })
+            .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
+
+          await logActivity(tx as unknown as Db, {
+            companyId,
+            actorType: "user",
+            actorId: input.actorUserId ?? "board",
+            action: "agent.governance_configuration_clamped",
+            entityType: "agent",
+            entityId: agentId,
+            agentId,
+            details: {
+              reason: "ceiling_lowered",
+              field: "budgetMonthlyCents",
+              previous: agent.budgetMonthlyCents,
+              clampedTo: clampedBudgetCents,
+              revision: updated.revision,
+            },
+          });
+        }
 
         await logActivity(tx as unknown as Db, {
           companyId,
@@ -264,6 +352,9 @@ export function agentGovernanceService(db: Db) {
           channel,
           target,
           code: AGENT_POLICY_REVISION_CONFLICT,
+          // Both audit shapes report the caller's value in `requestedRevision`
+          // and the server's in `fromRevision`, so a log reader never has to
+          // know which action produced the row.
           fromRevision: latest?.revision ?? current.revision,
           requestedRevision: input.revision,
         });
@@ -283,13 +374,15 @@ export function agentGovernanceService(db: Db) {
 
   /**
    * Service-boundary enforcement for the pre-existing agent configuration
-   * mutations (budget, permissions, providers, ...). No-op outside
-   * `agentdash_mk` so default-profile behavior is untouched.
+   * mutations (budget, permissions, ...). No-op outside `agentdash_mk` so
+   * default-profile behavior is untouched. Denials are audited: for a
+   * governance feature the rejected attempts are the ones that matter.
    */
   async function assertAgentMutationWithinCeiling(
     companyId: string,
     agentId: string,
     partial: Partial<AgentGovernancePolicy>,
+    context: { actorUserId?: string | null; channel?: AgentGovernanceChannel } = {},
   ): Promise<void> {
     if (!(await isProfileCompany(companyId))) return;
     const record = await getForAgent(companyId, agentId);
@@ -301,16 +394,51 @@ export function agentGovernanceService(db: Db) {
     try {
       assertWithinCeiling(ceiling, candidate);
     } catch (error) {
-      if (error instanceof AgentPolicyCeilingError) throw ceilingExceeded(error.violations);
+      if (error instanceof AgentPolicyCeilingError) {
+        await auditRejected({
+          companyId,
+          agentId,
+          actorUserId: context.actorUserId ?? null,
+          channel: context.channel ?? "web",
+          target: "steward_request",
+          code: error.code,
+          fromRevision: record.revision,
+          requestedRevision: record.revision,
+          violations: error.violations,
+        });
+        throw ceilingExceeded(error.violations);
+      }
       throw error;
     }
+  }
+
+  /**
+   * Single definition of who may configure one agent, shared by every route
+   * that guards agent configuration. Administrators are checked first so the
+   * common case costs no extra queries; stewardship is only consulted for
+   * non-administrators in profile companies, and is always scoped to the one
+   * target agent — it never widens to company-wide agent administration.
+   */
+  async function resolveConfigurationAuthority(
+    companyId: string,
+    agentId: string,
+    actor: { userId?: string | null; source?: string | null; isInstanceAdmin?: boolean },
+  ): Promise<AgentConfigurationAuthority | null> {
+    if (actor.source === "local_implicit" || actor.isInstanceAdmin) return "admin";
+    if (await access.canUser(companyId, actor.userId, "agents:create")) return "admin";
+    if (!actor.userId) return null;
+    if (!(await isProfileCompany(companyId))) return null;
+    const active = await stewardships.activeByAgent(companyId, agentId);
+    return active && active.userId === actor.userId ? "steward" : null;
   }
 
   return {
     isProfileCompany,
     getForAgent,
+    materialize,
     updateOwnerCeiling,
     updateStewardRequest,
     assertAgentMutationWithinCeiling,
+    resolveConfigurationAuthority,
   };
 }

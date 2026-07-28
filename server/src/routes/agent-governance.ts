@@ -8,14 +8,12 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
-import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 export function agentGovernanceRoutes(db: Db) {
   const router = Router();
   const governance = agentGovernanceService(db);
-  const stewardships = agentStewardshipService(db);
   const access = accessService(db);
 
   /**
@@ -47,9 +45,8 @@ export function agentGovernanceRoutes(db: Db) {
   /** The agent's current steward, or an administrator acting on their behalf. */
   async function requireRequestAuthority(req: Request, companyId: string, agentId: string) {
     assertBoard(req);
-    if (await isAdministrator(req, companyId)) return "admin" as const;
-    const active = await stewardships.activeByAgent(companyId, agentId);
-    if (active && req.actor.userId && active.userId === req.actor.userId) return "steward" as const;
+    const authority = await governance.resolveConfigurationAuthority(companyId, agentId, req.actor);
+    if (authority) return authority;
     throw forbidden("Only the assigned steward or an authorized administrator can configure this agent");
   }
 

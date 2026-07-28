@@ -544,32 +544,65 @@ export function agentRoutes(
     }
   }
 
-  // AgentDash-MK: the current steward of a specific agent may configure THAT
-  // agent. This is deliberately per-target and never widens to company-wide
-  // agent administration — stewardship must not silently grant that.
-  async function isCurrentStewardOfAgent(
-    req: Request,
-    targetAgent: { id: string; companyId: string },
-  ) {
-    if (req.actor.type !== "board" || !req.actor.userId) return false;
-    if (!(await governance.isProfileCompany(targetAgent.companyId))) return false;
-    const active = await stewardships.activeByAgent(targetAgent.companyId, targetAgent.id);
-    return Boolean(active && active.userId === req.actor.userId);
-  }
+  /**
+   * Fields a steward may change on their own agent. Everything outside this set
+   * requires `agents:create`.
+   *
+   * This allowlist is a security boundary, not ergonomics. `role` is excluded
+   * because promoting an agent to `ceo` grants that agent's key company-wide
+   * authority over every other agent (see the `actorAgent.role === "ceo"`
+   * branches below) — that would turn per-agent stewardship into exactly the
+   * company-wide agent administration the design forbids. `adapterConfig` and
+   * `runtimeConfig` are excluded because they carry host-executed
+   * `workspaceStrategy` commands; `spentMonthlyCents` because resetting
+   * recorded spend defeats the budget hard stop; `status`/`reportsTo`/
+   * `defaultEnvironmentId`/`adapterType` because none are ceiling-bound.
+   */
+  const STEWARD_PATCHABLE_AGENT_FIELDS = new Set([
+    "title",
+    "icon",
+    "capabilities",
+    "budgetMonthlyCents",
+    "desiredSkills",
+  ]);
 
   /**
    * Board authority to configure one agent: an administrator with
    * `agents:create`, or (in `agentdash_mk` companies) the agent's current
-   * steward. Returns which authority applied, for audit callers.
+   * steward. Returns which authority applied so callers can narrow what a
+   * steward is allowed to change.
    */
   async function requireAgentConfigurationAuthority(
     req: Request,
     targetAgent: { id: string; companyId: string },
   ): Promise<"admin" | "steward"> {
     assertCompanyAccess(req, targetAgent.companyId);
-    if (await isCurrentStewardOfAgent(req, targetAgent)) return "steward";
+    const authority = await governance.resolveConfigurationAuthority(
+      targetAgent.companyId,
+      targetAgent.id,
+      req.actor,
+    );
+    if (authority) return authority;
+    // Preserve the existing error semantics for non-stewards.
     await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
     return "admin";
+  }
+
+  /** 403 when a steward-authority caller touches a field only an admin may set. */
+  function assertStewardPatchScope(
+    authority: "admin" | "steward" | "agent",
+    body: Record<string, unknown>,
+  ) {
+    if (authority !== "steward") return;
+    const forbiddenFields = Object.keys(body).filter(
+      (key) => !STEWARD_PATCHABLE_AGENT_FIELDS.has(key),
+    );
+    if (forbiddenFields.length > 0) {
+      throw forbidden(
+        `Stewardship does not permit changing ${forbiddenFields.sort().join(", ")}; ` +
+          "an administrator with agents:create must make this change",
+      );
+    }
   }
 
   async function assertCanReadConfigurations(req: Request, companyId: string) {
@@ -669,11 +702,13 @@ export function agentRoutes(
     };
   }
 
-  async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+  async function assertCanUpdateAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward" | "agent"> {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await requireAgentConfigurationAuthority(req, targetAgent);
-      return;
+      return requireAgentConfigurationAuthority(req, targetAgent);
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
@@ -682,15 +717,15 @@ export function agentRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    if (actorAgent.id === targetAgent.id) return;
-    if (actorAgent.role === "ceo") return;
+    if (actorAgent.id === targetAgent.id) return "agent";
+    if (actorAgent.role === "ceo") return "agent";
     const allowedByGrant = await access.hasPermission(
       targetAgent.companyId,
       "agent",
       actorAgent.id,
       "agents:create",
     );
-    if (allowedByGrant || canCreateAgents(actorAgent)) return;
+    if (allowedByGrant || canCreateAgents(actorAgent)) return "agent";
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
@@ -1849,7 +1884,15 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const rollbackAuthority = await assertCanUpdateAgent(req, existing);
+    // A rollback restores a whole prior configuration — including fields no
+    // ceiling dimension covers (role, adapterConfig) and values captured before
+    // the current ceiling existed. Stewardship alone is not sufficient.
+    if (rollbackAuthority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
+      );
+    }
 
     const actor = getActorInfo(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
@@ -2368,12 +2411,24 @@ export function agentRoutes(
 
     // AgentDash-MK: the owner ceiling binds at the service boundary, so a
     // steward (or an admin) cannot grant an agent authority the owner withheld.
-    await governance.assertAgentMutationWithinCeiling(existing.companyId, existing.id, {
-      permissions: [
-        ...(req.body.canCreateAgents ? ["agents:create"] : []),
-        ...(req.body.canAssignTasks ? ["tasks:assign"] : []),
-      ],
-    });
+    // This must validate the permissions that will ACTUALLY be written, not the
+    // request body: `tasks:assign` is additionally derived below from the CEO
+    // role and from canCreateAgents, so checking the raw body would let
+    // `{canCreateAgents: true, canAssignTasks: false}` slip a withheld
+    // `tasks:assign` grant past a ceiling that forbids it.
+    const willAssignTasks =
+      existing.role === "ceo" || Boolean(req.body.canCreateAgents) || Boolean(req.body.canAssignTasks);
+    await governance.assertAgentMutationWithinCeiling(
+      existing.companyId,
+      existing.id,
+      {
+        permissions: [
+          ...(req.body.canCreateAgents ? ["agents:create"] : []),
+          ...(willAssignTasks ? ["tasks:assign"] : []),
+        ],
+      },
+      { actorUserId: req.actor.userId ?? null },
+    );
 
     const agent = await svc.updatePermissions(id, req.body);
     if (!agent) {
@@ -2690,7 +2745,8 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const updateAuthority = await assertCanUpdateAgent(req, existing);
+    assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
@@ -2700,9 +2756,12 @@ export function agentRoutes(
     // AgentDash-MK: budget is a ceiling dimension, so it is checked before
     // persistence rather than trusted from the client.
     if (hasOwn(req.body as object, "budgetMonthlyCents")) {
-      await governance.assertAgentMutationWithinCeiling(existing.companyId, existing.id, {
-        monthlyBudgetCents: Number((req.body as { budgetMonthlyCents: number }).budgetMonthlyCents),
-      });
+      await governance.assertAgentMutationWithinCeiling(
+        existing.companyId,
+        existing.id,
+        { monthlyBudgetCents: (req.body as { budgetMonthlyCents: number }).budgetMonthlyCents },
+        { actorUserId: req.actor.userId ?? null },
+      );
     }
 
     const patchData = { ...(req.body as Record<string, unknown>) };

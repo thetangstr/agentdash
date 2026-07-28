@@ -143,6 +143,7 @@ export {
 export {
   agentGovernancePolicySchema,
   updateAgentGovernancePolicySchema,
+  AGENT_GOVERNANCE_CLIENT_CHANNELS,
   type AgentGovernancePolicyInput,
   type UpdateAgentGovernancePolicy,
 } from "./agent-governance.js";

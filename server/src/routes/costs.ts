@@ -21,6 +21,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
 import { badRequest } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -60,6 +61,10 @@ export function costRoutes(
   const budgets = budgetService(db, budgetHooks);
   const companies = companyService(db);
   const agents = agentService(db);
+  // AgentDash-MK: agent budgets are a ceiling dimension. These routes are the
+  // primary agent-budget write paths, so the ceiling must bind here too —
+  // enforcing it only on PATCH /agents/:id would leave it trivially bypassable.
+  const governance = agentGovernanceService(db);
   const issues = issueService(db);
 
   async function resolveIssueByRef(rawId: string) {
@@ -249,6 +254,16 @@ export function costRoutes(
       assertBoard(req);
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      // An agent-scoped budget policy sets the same spend authority as the
+      // agent budget field, so it is ceiling-bound on the same terms.
+      if (req.body.scopeType === "agent" && typeof req.body.scopeId === "string") {
+        await governance.assertAgentMutationWithinCeiling(
+          companyId,
+          req.body.scopeId,
+          { monthlyBudgetCents: req.body.amount },
+          { actorUserId: req.actor.userId ?? null },
+        );
+      }
       const summary = await budgets.upsertPolicy(companyId, req.body, req.actor.userId ?? "board");
       res.json(summary);
     },
@@ -319,6 +334,12 @@ export function costRoutes(
 
     assertCompanyAccess(req, agent.companyId);
     assertBoard(req);
+    await governance.assertAgentMutationWithinCeiling(
+      agent.companyId,
+      agent.id,
+      { monthlyBudgetCents: req.body.budgetMonthlyCents },
+      { actorUserId: req.actor.userId ?? null },
+    );
 
     const updated = await agents.update(agentId, { budgetMonthlyCents: req.body.budgetMonthlyCents });
     if (!updated) {

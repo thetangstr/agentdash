@@ -37,9 +37,16 @@ export interface AgentGovernancePolicy {
 }
 
 /**
- * The default is deliberately unrestricted: enabling the `agentdash_mk`
- * profile must not, by itself, take authority away from an existing agent.
- * Owners tighten ceilings explicitly.
+ * Default ceiling. The three enumerable dimensions (`permissions`,
+ * `dataScopes`, `providers`) and the budget are deliberately unrestricted so
+ * enabling the `agentdash_mk` profile cannot, by itself, take authority away
+ * from an existing agent — owners tighten those explicitly.
+ *
+ * `destructiveActions` and `minimumApproval` are NOT unrestricted: they default
+ * to the safe end of their orderings, matching the profile's premise that
+ * destructive work is approved and that approval authority belongs to the
+ * steward. They are inert until Task 4 gives them a runtime consumer, but the
+ * default is chosen so switching them on later tightens nothing retroactively.
  */
 export const DEFAULT_AGENT_GOVERNANCE_POLICY: AgentGovernancePolicy = Object.freeze({
   permissions: [AGENT_POLICY_WILDCARD],
@@ -64,7 +71,14 @@ export interface AgentPolicyViolation {
   field: keyof AgentGovernancePolicy;
   code: AgentPolicyViolationCode;
   requested: string[] | string | number;
+  /**
+   * The bound that was breached. `direction` says how to read it: `"max"` means
+   * `allowed` is a maximum the request exceeded, `"min"` means it is a floor the
+   * request fell below (`minimumApproval` is the only floor). Without this a UI
+   * rendering "allowed: X" uniformly would invert the meaning of that one field.
+   */
   allowed: string[] | string | number;
+  direction: "max" | "min";
 }
 
 export const AGENT_POLICY_CEILING_EXCEEDED = "AGENT_POLICY_CEILING_EXCEEDED";
@@ -180,6 +194,7 @@ export function collectCeilingViolations(
       code: "PERMISSION_NOT_ALLOWED",
       requested: permissionOverflow,
       allowed: normalizeList(ceiling.permissions),
+      direction: "max",
     });
   }
 
@@ -189,6 +204,7 @@ export function collectCeilingViolations(
       code: "BUDGET_EXCEEDS_CEILING",
       requested: requested.monthlyBudgetCents,
       allowed: ceiling.monthlyBudgetCents,
+      direction: "max",
     });
   }
 
@@ -198,6 +214,7 @@ export function collectCeilingViolations(
       code: "DESTRUCTIVE_ACTIONS_EXCEED_CEILING",
       requested: requested.destructiveActions,
       allowed: ceiling.destructiveActions,
+      direction: "max",
     });
   }
 
@@ -208,6 +225,7 @@ export function collectCeilingViolations(
       code: "DATA_SCOPE_NOT_ALLOWED",
       requested: dataScopeOverflow,
       allowed: normalizeList(ceiling.dataScopes),
+      direction: "max",
     });
   }
 
@@ -218,6 +236,7 @@ export function collectCeilingViolations(
       code: "PROVIDER_NOT_ALLOWED",
       requested: providerOverflow,
       allowed: normalizeList(ceiling.providers),
+      direction: "max",
     });
   }
 
@@ -227,6 +246,8 @@ export function collectCeilingViolations(
       code: "MINIMUM_APPROVAL_BELOW_CEILING",
       requested: requested.minimumApproval,
       allowed: ceiling.minimumApproval,
+      // The ceiling is a FLOOR here: the request asked for weaker approval.
+      direction: "min",
     });
   }
 

