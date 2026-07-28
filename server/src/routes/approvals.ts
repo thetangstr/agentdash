@@ -3,10 +3,12 @@ import type { Db } from "@paperclipai/db";
 import {
   addApprovalCommentSchema,
   createApprovalSchema,
+  overrideApprovalSchema,
   requestApprovalRevisionSchema,
   resolveApprovalSchema,
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
+import { approvalAuthorityService } from "../services/approval-authority.js";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
@@ -41,6 +43,9 @@ export function approvalRoutes(
 ) {
   const router = Router();
   const svc = approvalService(db);
+  // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
+  // resolve authority here; provider routes never update approval rows directly.
+  const authority = approvalAuthorityService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
@@ -72,16 +77,31 @@ export function approvalRoutes(
     return approval;
   }
 
+  /** Decision provenance recorded alongside the status change. */
+  function decisionMeta(
+    context: Awaited<ReturnType<typeof authority.requireDecisionAuthority>>,
+    overrideReason?: string | null,
+  ) {
+    return {
+      revision: context.revision,
+      channel: context.channel,
+      idempotencyKey: context.idempotencyKey,
+      actorRole: context.role,
+      ...(overrideReason !== undefined ? { overrideReason } : {}),
+    };
+  }
+
   async function approveWithTierCapacity(
     id: string,
     existingApproval: Awaited<ReturnType<typeof svc.getById>>,
     decidedByUserId: string,
     decisionNote: string | null | undefined,
     res: import("express").Response,
+    meta: Parameters<typeof svc.approve>[3] = {},
   ) {
     if (!existingApproval) return null;
     if (!hireApprovalCreatesAgent(existingApproval) || isBillingDisabled()) {
-      return svc.approve(id, decidedByUserId, decisionNote);
+      return svc.approve(id, decidedByUserId, decisionNote, meta);
     }
 
     return withCompanyTierCapacityLock(db, existingApproval.companyId, async (dbOrTx) => {
@@ -92,7 +112,7 @@ export function approvalRoutes(
         return null;
       }
       if (!hireApprovalCreatesAgent(lockedApproval)) {
-        return txSvc.approve(id, decidedByUserId, decisionNote);
+        return txSvc.approve(id, decidedByUserId, decisionNote, meta);
       }
 
       const blockedAction = await exceededFreeTierCapacityAction(
@@ -105,7 +125,7 @@ export function approvalRoutes(
         return null;
       }
 
-      return txSvc.approve(id, decidedByUserId, decisionNote);
+      return txSvc.approve(id, decidedByUserId, decisionNote, meta);
     });
   }
 
@@ -201,6 +221,11 @@ export function approvalRoutes(
       res.status(404).json({ error: "Approval not found" });
       return;
     }
+    const decisionContext = await authority.requireDecisionAuthority(
+      existingApproval,
+      req.actor,
+      req.body,
+    );
     const decidedByUserId = req.actor.userId ?? "board";
     const resolution = await approveWithTierCapacity(
       id,
@@ -208,6 +233,7 @@ export function approvalRoutes(
       decidedByUserId,
       req.body.decisionNote,
       res,
+      decisionMeta(decisionContext),
     );
     if (!resolution) return;
     const { approval, applied } = resolution;
@@ -309,12 +335,23 @@ export function approvalRoutes(
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
-    if (!(await requireApprovalAccess(req, id))) {
+    const existingApproval = await requireApprovalAccess(req, id);
+    if (!existingApproval) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
+    const decisionContext = await authority.requireDecisionAuthority(
+      existingApproval,
+      req.actor,
+      req.body,
+    );
     const decidedByUserId = req.actor.userId ?? "board";
-    const { approval, applied } = await svc.reject(id, decidedByUserId, req.body.decisionNote);
+    const { approval, applied } = await svc.reject(
+      id,
+      decidedByUserId,
+      req.body.decisionNote,
+      decisionMeta(decisionContext),
+    );
 
     if (applied) {
       await logActivity(db, {
@@ -325,6 +362,63 @@ export function approvalRoutes(
         entityType: "approval",
         entityId: approval.id,
         details: { type: approval.type },
+      });
+    }
+
+    res.json(redactApprovalPayload(approval));
+  });
+
+  /**
+   * AgentDash-MK emergency override.
+   *
+   * Deliberately a separate route rather than a flag on approve/reject: it is
+   * an exceptional act, requires a stated reason, is restricted to
+   * owners/administrators, and is audited under its own action so it can never
+   * be mistaken for an ordinary steward decision in the history.
+   */
+  router.post("/approvals/:id/override", validate(overrideApprovalSchema), async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const existingApproval = await requireApprovalAccess(req, id);
+    if (!existingApproval) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+
+    const context = await authority.requireEmergencyOverride(existingApproval, req.actor, req.body);
+    const decidedByUserId = req.actor.userId ?? "board";
+    const meta = decisionMeta(context, req.body.overrideReason);
+
+    const resolution =
+      req.body.decision === "approved"
+        ? await approveWithTierCapacity(
+            id,
+            existingApproval,
+            decidedByUserId,
+            req.body.decisionNote,
+            res,
+            meta,
+          )
+        : await svc.reject(id, decidedByUserId, req.body.decisionNote, meta);
+    if (!resolution) return;
+    const { approval, applied } = resolution;
+
+    if (applied) {
+      await logActivity(db, {
+        companyId: approval.companyId,
+        actorType: "user",
+        actorId: decidedByUserId,
+        action: "approval.emergency_override",
+        entityType: "approval",
+        entityId: approval.id,
+        details: {
+          type: approval.type,
+          decision: req.body.decision,
+          overrideReason: req.body.overrideReason,
+          channel: context.channel,
+          revision: context.revision,
+          requestedByAgentId: approval.requestedByAgentId,
+        },
       });
     }
 

@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals } from "@paperclipai/db";
-import { notFound, unprocessable } from "../errors.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
@@ -16,6 +16,19 @@ export function approvalService(db: Db) {
   const resolvableStatuses = Array.from(canResolveStatuses);
   type ApprovalRecord = typeof approvals.$inferSelect;
   type ResolutionResult = { approval: ApprovalRecord; applied: boolean };
+
+  /**
+   * AgentDash-MK decision provenance. All optional so default-profile callers
+   * keep the pre-existing contract; the approval-authority service is what
+   * makes them mandatory inside `agentdash_mk`.
+   */
+  type DecisionMeta = {
+    revision?: number;
+    channel?: string | null;
+    idempotencyKey?: string | null;
+    actorRole?: string | null;
+    overrideReason?: string | null;
+  };
 
   function redactApprovalComment<T extends { body: string }>(comment: T, censorUsernameInLogs: boolean): T {
     return {
@@ -39,8 +52,25 @@ export function approvalService(db: Db) {
     targetStatus: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote: string | null | undefined,
+    meta: DecisionMeta = {},
   ): Promise<ResolutionResult> {
     const existing = await getExistingApproval(id);
+
+    // Idempotent replay: the same key on the same approval returns the original
+    // terminal result and performs no side effects. This is what makes a
+    // redelivered Telegram/Teams callback safe.
+    if (meta.idempotencyKey && existing.decisionIdempotencyKey === meta.idempotencyKey) {
+      return { approval: existing, applied: false };
+    }
+
+    if (meta.revision !== undefined && existing.revision !== meta.revision) {
+      throw conflict("Approval changed since this decision was requested", {
+        code: "APPROVAL_REVISION_CONFLICT",
+        expectedRevision: meta.revision,
+        currentRevision: existing.revision,
+      });
+    }
+
     if (!canResolveStatuses.has(existing.status)) {
       if (existing.status === targetStatus) {
         return { approval: existing, applied: false };
@@ -59,8 +89,20 @@ export function approvalService(db: Db) {
         decisionNote: decisionNote ?? null,
         decidedAt: now,
         updatedAt: now,
+        ...(meta.channel !== undefined ? { decisionChannel: meta.channel } : {}),
+        ...(meta.idempotencyKey !== undefined ? { decisionIdempotencyKey: meta.idempotencyKey } : {}),
+        ...(meta.actorRole !== undefined ? { decisionActorRole: meta.actorRole } : {}),
+        ...(meta.overrideReason !== undefined ? { overrideReason: meta.overrideReason } : {}),
       })
-      .where(and(eq(approvals.id, id), inArray(approvals.status, resolvableStatuses)))
+      .where(
+        and(
+          eq(approvals.id, id),
+          inArray(approvals.status, resolvableStatuses),
+          // Fold the revision into the conditional update so two concurrent
+          // deciders cannot both pass the check above and both write.
+          ...(meta.revision !== undefined ? [eq(approvals.revision, meta.revision)] : []),
+        ),
+      )
       .returning()
       .then((rows) => rows[0] ?? null);
 
@@ -99,12 +141,18 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]),
 
-    approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    approve: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote?: string | null,
+      meta: DecisionMeta = {},
+    ) => {
       const { approval: updated, applied } = await resolveApproval(
         id,
         "approved",
         decidedByUserId,
         decisionNote,
+        meta,
       );
 
       let hireApprovedAgentId: string | null = null;
@@ -168,12 +216,18 @@ export function approvalService(db: Db) {
       return { approval: updated, applied };
     },
 
-    reject: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    reject: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote?: string | null,
+      meta: DecisionMeta = {},
+    ) => {
       const { approval: updated, applied } = await resolveApproval(
         id,
         "rejected",
         decidedByUserId,
         decisionNote,
+        meta,
       );
 
       if (applied && updated.type === "hire_agent") {
@@ -223,6 +277,14 @@ export function approvalService(db: Db) {
           decisionNote: null,
           decidedByUserId: null,
           decidedAt: null,
+          // A resubmit changes what is being asked, so it advances the revision:
+          // any card or button issued against the previous revision is now stale
+          // and must fail closed rather than decide the new request.
+          revision: existing.revision + 1,
+          decisionChannel: null,
+          decisionIdempotencyKey: null,
+          decisionActorRole: null,
+          overrideReason: null,
           updatedAt: now,
         })
         .where(eq(approvals.id, id))

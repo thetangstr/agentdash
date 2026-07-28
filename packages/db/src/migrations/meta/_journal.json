@@ -694,6 +694,13 @@
       "when": 1785260162715,
       "tag": "0098_real_machine_man",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1785262227328,
+      "tag": "0099_parched_triton",
+      "breakpoints": true
     }
   ]
 }
