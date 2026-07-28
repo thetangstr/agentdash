@@ -861,6 +861,27 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
       };
     },
 
+    /**
+     * AgentDash-MK: the agent whose budget resolving this incident would raise,
+     * or null when the incident is not agent-scoped. Lets the route apply the
+     * owner ceiling before the raise is written.
+     */
+    getIncidentAgentScope: async (companyId: string, incidentId: string): Promise<string | null> => {
+      const incident = await db
+        .select()
+        .from(budgetIncidents)
+        .where(eq(budgetIncidents.id, incidentId))
+        .then((rows) => rows[0] ?? null);
+      if (!incident || incident.companyId !== companyId) return null;
+      const policy = await db
+        .select()
+        .from(budgetPolicies)
+        .where(eq(budgetPolicies.id, incident.policyId))
+        .then((rows) => rows[0] ?? null);
+      if (!policy) return null;
+      return policy.scopeType === "agent" ? policy.scopeId : null;
+    },
+
     resolveIncident: async (
       companyId: string,
       incidentId: string,

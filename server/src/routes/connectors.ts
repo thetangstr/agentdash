@@ -12,17 +12,13 @@ import { validate } from "../middleware/validate.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { connectorService } from "../services/connectors.js";
 import { logActivity } from "../services/activity-log.js";
-import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
-import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { forbidden } from "../errors.js";
 
 export function connectorRoutes(db: Db) {
   const router = Router();
   const svc = connectorService(db);
-  const access = accessService(db);
   const governance = agentGovernanceService(db);
-  const stewardships = agentStewardshipService(db);
 
   /**
    * AgentDash-MK: per-agent connector settings are agent configuration, so in a
@@ -36,10 +32,9 @@ export function connectorRoutes(db: Db) {
     agentId: string,
   ) {
     if (!(await governance.isProfileCompany(companyId))) return;
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-    if (await access.canUser(companyId, req.actor.userId, "agents:create")) return;
-    const active = await stewardships.activeByAgent(companyId, agentId);
-    if (active && req.actor.userId && active.userId === req.actor.userId) return;
+    // Same single definition of agent-configuration authority used by the agent
+    // and cost routes — this rule must not be hand-rolled per route.
+    if (await governance.resolveConfigurationAuthority(companyId, agentId, req.actor)) return;
     throw forbidden(
       "Only the assigned steward or an authorized administrator can configure this agent",
     );

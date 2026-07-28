@@ -563,7 +563,6 @@ export function agentRoutes(
     "icon",
     "capabilities",
     "budgetMonthlyCents",
-    "desiredSkills",
   ]);
 
   /**
@@ -1174,7 +1173,44 @@ export function agentRoutes(
     }
   }
 
-  async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
+  /**
+   * Instructions LOCATION — the adapterConfig path key, the bundle mode, and
+   * the external `rootPath`. Administrator only, even in a profile company.
+   *
+   * A steward must not reach this: `rootPath` is an arbitrary absolute
+   * directory that the server `mkdir -p`s and then writes files into, so
+   * granting it would hand an ordinary operator arbitrary host filesystem
+   * write. Stewards edit instruction CONTENT inside the configured root
+   * instead — see `assertCanEditInstructionsContent`.
+   */
+  async function assertCanManageInstructionsLocation(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "board") {
+      throw forbidden(
+        "Only board-authenticated callers can manage instructions path or bundle configuration",
+      );
+    }
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit changing where agent instructions are stored; " +
+          "an administrator with agents:create must make this change",
+      );
+    }
+  }
+
+  /**
+   * Instructions CONTENT — mandate files within the already-configured bundle
+   * root. This is the steward's mandate-editing surface (design §6.3); writes
+   * stay confined to the root an administrator chose.
+   */
+  async function assertCanEditInstructionsContent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type !== "board") {
       throw forbidden(
@@ -2406,7 +2442,18 @@ export function agentRoutes(
         return;
       }
     } else {
-      await requireAgentConfigurationAuthority(req, existing);
+      const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
+      // `agents:create` is company-wide agent administration by another name:
+      // an agent holding it can modify every agent in the company via its own
+      // key. A steward must not be able to grant it to their own agent, and the
+      // ceiling cannot be relied on to stop them because the default ceiling is
+      // deliberately unrestricted.
+      if (permissionAuthority === "steward" && req.body.canCreateAgents) {
+        throw forbidden(
+          "Stewardship does not permit granting agent-creation authority; " +
+            "an administrator with agents:create must make this change",
+        );
+      }
     }
 
     // AgentDash-MK: the owner ceiling binds at the service boundary, so a
@@ -2479,7 +2526,7 @@ export function agentRoutes(
       return;
     }
 
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
     const explicitKey = asNonEmptyString(req.body.adapterConfigKey);
@@ -2488,6 +2535,21 @@ export function agentRoutes(
     if (!adapterConfigKey) {
       res.status(422).json({
         error: `No default instructions path key for adapter type '${existing.adapterType}'. Provide adapterConfigKey.`,
+      });
+      return;
+    }
+    // `adapterConfigKey` is caller-supplied and this route writes it straight
+    // into adapterConfig, so it must be constrained to actual instructions-path
+    // keys. Unbounded, it is an arbitrary-adapterConfig writer — a caller could
+    // set `command` (the host binary every local adapter spawns) or delete
+    // `workspaceStrategy`. That is now reachable by stewards, not just admins.
+    const allowedInstructionsPathKeys = new Set(KNOWN_INSTRUCTIONS_PATH_KEYS);
+    if (defaultKey) allowedInstructionsPathKeys.add(defaultKey);
+    if (!allowedInstructionsPathKeys.has(adapterConfigKey)) {
+      res.status(422).json({
+        error:
+          `adapterConfigKey '${adapterConfigKey}' is not an instructions path key. ` +
+          `Expected one of: ${[...allowedInstructionsPathKeys].sort().join(", ")}.`,
       });
       return;
     }
@@ -2567,7 +2629,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
@@ -2633,7 +2695,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing);
 
     const actor = getActorInfo(req);
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
@@ -2682,7 +2744,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing);
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {
@@ -2776,7 +2838,7 @@ export function agentRoutes(
       assertNoAgentAdapterConfigMutation(req, adapterConfig);
       const changingInstructionsConfig = adapterConfigTouchesInstructionsConfig(adapterConfig);
       if (changingInstructionsConfig) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       patchData.adapterConfig = adapterConfig;
     }
@@ -2811,7 +2873,7 @@ export function agentRoutes(
           existingAdapterConfig[key] !== undefined && requestedAdapterConfig[key] === undefined,
         )
       ) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       let rawEffectiveAdapterConfig = requestedAdapterConfig ?? existingAdapterConfig;
       if (requestedAdapterConfig && !changingAdapterType && !replaceAdapterConfig) {

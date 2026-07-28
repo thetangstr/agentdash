@@ -7,6 +7,9 @@ import {
   activityLog,
   agentGovernancePolicies,
   agents,
+  principalPermissionGrants,
+  budgetIncidents,
+  budgetPolicies,
   agentStewardships,
   companies,
   companyMemberships,
@@ -371,6 +374,9 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(principalPermissionGrants);
+    await db.delete(budgetIncidents);
+    await db.delete(budgetPolicies);
     await db.delete(agentGovernancePolicies);
     await db.delete(agentStewardships);
     await db.delete(agents);
@@ -396,7 +402,7 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
     return { company, owner, steward, bystander, agent };
   }
 
-  it("lazily materializes an unrestricted default policy for an agent", async () => {
+  it("reports the unrestricted default for an agent without writing a row", async () => {
     const { company, agent } = await seed();
     const policy = await agentGovernanceService(db).getForAgent(company.id, agent.id);
 
@@ -404,6 +410,13 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
     expect(policy.stewardRequest).toEqual(DEFAULT_AGENT_GOVERNANCE_POLICY);
     expect(policy.effectivePolicy).toEqual(DEFAULT_AGENT_GOVERNANCE_POLICY);
     expect(policy.revision).toBe(1);
+    // Reads must not write: the synthetic default is reported, not persisted.
+    expect(policy.id).toBeNull();
+    const persisted = await db
+      .select()
+      .from(agentGovernancePolicies)
+      .where(eq(agentGovernancePolicies.agentId, agent.id));
+    expect(persisted).toHaveLength(0);
   });
 
   it("recomputes the effective policy when the owner lowers the ceiling", async () => {
@@ -821,7 +834,7 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
     });
 
     it("validates the permissions that will actually be written, not just the request body", async () => {
-      const { company, owner, steward, agent } = await seed();
+      const { company, owner, agent } = await seed();
       const svc = agentGovernanceService(db);
       // Ceiling deliberately withholds tasks:assign.
       await svc.updateOwnerCeiling(company.id, agent.id, {
@@ -830,7 +843,9 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
         actorUserId: owner.principalId,
         channel: "web",
       });
-      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+      // Deliberately an ADMIN: a steward is separately forbidden from granting
+      // agents:create at all, so only an admin reaches the ceiling check here.
+      const app = await createAgentApp(makeBoardActor(company.id, owner.principalId, "owner"));
 
       // canAssignTasks is false, but the route derives it as true from
       // canCreateAgents — the ceiling must see the derived value.
@@ -927,6 +942,143 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
         .from(agents)
         .where(eq(agents.id, agent.id));
       expect(remaining).toHaveLength(0);
+    });
+
+    it("refuses steward changes to where instructions are stored", async () => {
+      const { company, steward, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      // Instructions LOCATION is admin-only: rootPath is an absolute host
+      // directory the server creates and writes into.
+      const pathRes = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}/instructions-path`)
+          .send({ path: "/tmp/evil/AGENTS.md" }),
+      );
+      expect(pathRes.status).toBe(403);
+
+      const bundleRes = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}/instructions-bundle`)
+          .send({ mode: "external", rootPath: "/tmp/evil-root" }),
+      );
+      expect(bundleRes.status).toBe(403);
+    });
+
+    it("refuses an arbitrary adapterConfig key on the instructions-path route", async () => {
+      const { company, owner, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, owner.principalId, "owner"));
+
+      // `command` is the host binary local adapters spawn; the route must only
+      // ever write recognized instructions-path keys.
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}/instructions-path`)
+          .send({ path: "/tmp/pwned.sh", adapterConfigKey: "command" }),
+      );
+
+      expect(res.status).toBe(422);
+      const unchanged = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect((unchanged.adapterConfig as Record<string, unknown>).command).toBeUndefined();
+    });
+
+    it("refuses a steward granting their own agent agent-creation authority", async () => {
+      const { company, steward, agent } = await seed();
+      const app = await createAgentApp(makeBoardActor(company.id, steward.principalId, "operator"));
+
+      // Reachable under the DEFAULT unrestricted ceiling, so the ceiling cannot
+      // be what stops it — an agent holding agents:create can modify every
+      // agent in the company via its own key.
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl)
+          .patch(`/api/agents/${agent.id}/permissions`)
+          .send({ canCreateAgents: true, canAssignTasks: false }),
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    it("revokes permissions the ceiling no longer allows when the owner lowers it", async () => {
+      const { company, owner, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      await db
+        .update(agents)
+        .set({ permissions: { canCreateAgents: true, canAssignTasks: true } })
+        .where(eq(agents.id, agent.id));
+      await db.insert(principalPermissionGrants).values({
+        companyId: company.id,
+        principalType: "agent",
+        principalId: agent.id,
+        permissionKey: "agents:create",
+      });
+
+      // CEILING permits only issues:read / issues:write.
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: CEILING,
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+
+      const reconciled = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .then((rows) => rows[0]!);
+      expect((reconciled.permissions as Record<string, unknown>).canCreateAgents).toBe(false);
+
+      const grants = await db
+        .select()
+        .from(principalPermissionGrants)
+        .where(eq(principalPermissionGrants.principalId, agent.id));
+      expect(grants).toHaveLength(0);
+    });
+
+    it("binds the agent budget ceiling on the cost routes too", async () => {
+      const { company, owner, steward, bystander, agent } = await seed();
+      const svc = agentGovernanceService(db);
+      await svc.updateOwnerCeiling(company.id, agent.id, {
+        policy: CEILING,
+        revision: (await svc.getForAgent(company.id, agent.id)).revision,
+        actorUserId: owner.principalId,
+        channel: "web",
+      });
+
+      const { costRoutes } = await import("../routes/costs.js");
+      const buildCostApp = async (actor: Record<string, unknown>) => {
+        const app = express();
+        app.use(express.json());
+        app.use((req, _res, next) => {
+          (req as any).actor = { ...actor, companyIds: [company.id] };
+          next();
+        });
+        app.use("/api", costRoutes(db));
+        app.use(errorHandler);
+        return app;
+      };
+
+      // A company member who is not the steward has no business setting the
+      // budget of someone else's agent.
+      const bystanderApp = await buildCostApp(makeBoardActor(company.id, bystander.principalId, "operator"));
+      const denied = await requestApp(bystanderApp, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}/budgets`).send({ budgetMonthlyCents: 5_000 }),
+      );
+      expect(denied.status).toBe(403);
+
+      const stewardApp = await buildCostApp(makeBoardActor(company.id, steward.principalId, "operator"));
+      const overCeiling = await requestApp(stewardApp, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}/budgets`).send({ budgetMonthlyCents: 90_000 }),
+      );
+      expect(overCeiling.status).toBe(422);
+
+      const allowed = await requestApp(stewardApp, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}/budgets`).send({ budgetMonthlyCents: 8_000 }),
+      );
+      expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
     });
 
     it("leaves default-profile authority unchanged", async () => {

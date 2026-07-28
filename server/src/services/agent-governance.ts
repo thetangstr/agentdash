@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentGovernancePolicies, agents, companies } from "@paperclipai/db";
+import { agentGovernancePolicies, agents, companies, principalPermissionGrants } from "@paperclipai/db";
 import {
   AGENT_POLICY_CEILING_EXCEEDED,
   AGENT_POLICY_REVISION_CONFLICT,
@@ -50,6 +50,11 @@ class RevisionConflict extends Error {
     super("revision conflict");
     this.name = "RevisionConflict";
   }
+}
+
+/** Does the effective policy still permit this permission key? */
+function permissionAllowed(policy: AgentGovernancePolicy, permissionKey: string) {
+  return policy.permissions.includes("*") || policy.permissions.includes(permissionKey);
 }
 
 function ceilingExceeded(violations: AgentPolicyViolation[]) {
@@ -254,14 +259,7 @@ export function agentGovernanceService(db: Db) {
     const effectivePolicy = computeEffectiveAgentPolicy(nextCeiling, nextRequest);
     const nextRevision = current.revision + 1;
     const now = new Date();
-    // A ceiling is not merely a write gate: if it now sits below what the agent
-    // is already configured for, the standing configuration is brought down to
-    // it in the same transaction, otherwise lowering a ceiling would leave the
-    // over-ceiling budget in force indefinitely.
-    const clampedBudgetCents =
-      agent.budgetMonthlyCents > effectivePolicy.monthlyBudgetCents
-        ? effectivePolicy.monthlyBudgetCents
-        : null;
+    void agent;
 
     try {
       return await db.transaction(async (tx) => {
@@ -295,28 +293,79 @@ export function agentGovernanceService(db: Db) {
 
         if (!updated) throw new RevisionConflict();
 
-        if (clampedBudgetCents !== null) {
-          await tx
-            .update(agents)
-            .set({ budgetMonthlyCents: clampedBudgetCents, updatedAt: now })
-            .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
+        // A ceiling is not merely a write gate: standing configuration that now
+        // sits above it is brought down in the SAME transaction, otherwise
+        // lowering a ceiling would leave the over-ceiling values in force.
+        //
+        // The current values are re-read under a row lock here rather than
+        // reused from before the transaction: a concurrent legitimate budget
+        // change between the two would otherwise be clobbered upward, and the
+        // audit row would record a stale `previous`.
+        const lockedAgent = await tx
+          .select({
+            budgetMonthlyCents: agents.budgetMonthlyCents,
+            permissions: agents.permissions,
+          })
+          .from(agents)
+          .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
 
-          await logActivity(tx as unknown as Db, {
-            companyId,
-            actorType: "user",
-            actorId: input.actorUserId ?? "board",
-            action: "agent.governance_configuration_clamped",
-            entityType: "agent",
-            entityId: agentId,
-            agentId,
-            details: {
-              reason: "ceiling_lowered",
+        if (lockedAgent) {
+          const clamps: Array<{ field: string; previous: unknown; clampedTo: unknown }> = [];
+
+          if (lockedAgent.budgetMonthlyCents > effectivePolicy.monthlyBudgetCents) {
+            await tx
+              .update(agents)
+              .set({ budgetMonthlyCents: effectivePolicy.monthlyBudgetCents, updatedAt: now })
+              .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
+            clamps.push({
               field: "budgetMonthlyCents",
-              previous: agent.budgetMonthlyCents,
-              clampedTo: clampedBudgetCents,
-              revision: updated.revision,
-            },
-          });
+              previous: lockedAgent.budgetMonthlyCents,
+              clampedTo: effectivePolicy.monthlyBudgetCents,
+            });
+          }
+
+          // Permissions are the security-relevant dimension: a ceiling that no
+          // longer allows `agents:create` must actually revoke it, both on the
+          // agent row and in the permission grants that authorize the agent key.
+          const permissions = (lockedAgent.permissions ?? {}) as Record<string, unknown>;
+          for (const [permissionKey, flag] of [
+            ["agents:create", "canCreateAgents"],
+            ["tasks:assign", "canAssignTasks"],
+          ] as const) {
+            if (!permissions[flag]) continue;
+            if (permissionAllowed(effectivePolicy, permissionKey)) continue;
+            await tx
+              .update(agents)
+              .set({ permissions: { ...permissions, [flag]: false }, updatedAt: now })
+              .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
+            await tx
+              .delete(principalPermissionGrants)
+              .where(
+                and(
+                  eq(principalPermissionGrants.companyId, companyId),
+                  eq(principalPermissionGrants.principalType, "agent"),
+                  eq(principalPermissionGrants.principalId, agentId),
+                  eq(principalPermissionGrants.permissionKey, permissionKey),
+                ),
+              );
+            permissions[flag] = false;
+            clamps.push({ field: flag, previous: true, clampedTo: false });
+          }
+
+          for (const clamp of clamps) {
+            await logActivity(tx as unknown as Db, {
+              companyId,
+              actorType: "user",
+              actorId: input.actorUserId ?? "board",
+              action: "agent.governance_configuration_clamped",
+              entityType: "agent",
+              entityId: agentId,
+              agentId,
+              details: { reason: "ceiling_lowered", ...clamp, revision: updated.revision },
+            });
+          }
         }
 
         await logActivity(tx as unknown as Db, {
@@ -382,17 +431,25 @@ export function agentGovernanceService(db: Db) {
     companyId: string,
     agentId: string,
     partial: Partial<AgentGovernancePolicy>,
-    context: { actorUserId?: string | null; channel?: AgentGovernanceChannel } = {},
+    context: {
+      actorUserId?: string | null;
+      channel?: AgentGovernanceChannel;
+      target?: AgentGovernanceTarget;
+    } = {},
   ): Promise<void> {
     if (!(await isProfileCompany(companyId))) return;
     const record = await getForAgent(companyId, agentId);
-    const ceiling = record.ownerCeiling as AgentGovernancePolicy;
+    // The EFFECTIVE policy is the agent's actual authority (ceiling ∩ request),
+    // and it is what the ceiling-lowering clamp reconciles against. Validating
+    // against the raw ceiling instead would let a steward who narrowed their own
+    // request immediately widen back past it, making the clamp non-durable.
+    const bound = record.effectivePolicy as AgentGovernancePolicy;
     const candidate = normalizeAgentGovernancePolicy({
       ...(record.effectivePolicy as AgentGovernancePolicy),
       ...partial,
     });
     try {
-      assertWithinCeiling(ceiling, candidate);
+      assertWithinCeiling(bound, candidate);
     } catch (error) {
       if (error instanceof AgentPolicyCeilingError) {
         await auditRejected({
@@ -400,7 +457,7 @@ export function agentGovernanceService(db: Db) {
           agentId,
           actorUserId: context.actorUserId ?? null,
           channel: context.channel ?? "web",
-          target: "steward_request",
+          target: context.target ?? "steward_request",
           code: error.code,
           fromRevision: record.revision,
           requestedRevision: record.revision,
@@ -422,8 +479,11 @@ export function agentGovernanceService(db: Db) {
   async function resolveConfigurationAuthority(
     companyId: string,
     agentId: string,
-    actor: { userId?: string | null; source?: string | null; isInstanceAdmin?: boolean },
+    actor: { type?: string; userId?: string | null; source?: string | null; isInstanceAdmin?: boolean },
   ): Promise<AgentConfigurationAuthority | null> {
+    // Board principals only. Agent-authenticated callers have their own
+    // authority rules; the guard lives here so no caller can forget it.
+    if (actor.type && actor.type !== "board") return null;
     if (actor.source === "local_implicit" || actor.isInstanceAdmin) return "admin";
     if (await access.canUser(companyId, actor.userId, "agents:create")) return "admin";
     if (!actor.userId) return null;

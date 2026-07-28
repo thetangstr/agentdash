@@ -6,6 +6,8 @@ import {
   companyLogos,
   assets,
   agents,
+  agentGovernancePolicies,
+  agentStewardships,
   agentApiKeys,
   agentRuntimeState,
   agentTaskSessions,
@@ -444,6 +446,11 @@ export function companyService(db: Db) {
         await tx.delete(assets).where(eq(assets.companyId, id));
         await tx.delete(goals).where(eq(goals.companyId, id));
         await tx.delete(projects).where(eq(projects.companyId, id));
+        // AgentDash-MK: both reference agents with ON DELETE NO ACTION, so they
+        // must go before the agents themselves or the delete fails with a
+        // foreign-key violation.
+        await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
+        await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));
         const rows = await tx
           .delete(companies)

@@ -22,7 +22,7 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
-import { badRequest } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 export function parseCostDateRange(query: Record<string, unknown>) {
@@ -65,6 +65,26 @@ export function costRoutes(
   // primary agent-budget write paths, so the ceiling must bind here too —
   // enforcing it only on PATCH /agents/:id would leave it trivially bypassable.
   const governance = agentGovernanceService(db);
+
+  /**
+   * These routes historically required only company membership. In a profile
+   * company an agent's budget is agent configuration, so it needs the same
+   * steward-or-admin authority as every other agent-config mutation. No-op
+   * outside `agentdash_mk`, leaving default-profile behavior unchanged.
+   */
+  async function assertAgentBudgetAuthority(
+    req: Parameters<typeof assertCompanyAccess>[0],
+    companyId: string,
+    agentId: string,
+  ) {
+    if (!(await governance.isProfileCompany(companyId))) return;
+    const authority = await governance.resolveConfigurationAuthority(companyId, agentId, req.actor);
+    if (!authority) {
+      throw forbidden(
+        "Only the assigned steward or an authorized administrator can change this agent's budget",
+      );
+    }
+  }
   const issues = issueService(db);
 
   async function resolveIssueByRef(rawId: string) {
@@ -257,6 +277,7 @@ export function costRoutes(
       // An agent-scoped budget policy sets the same spend authority as the
       // agent budget field, so it is ceiling-bound on the same terms.
       if (req.body.scopeType === "agent" && typeof req.body.scopeId === "string") {
+        await assertAgentBudgetAuthority(req, companyId, req.body.scopeId);
         await governance.assertAgentMutationWithinCeiling(
           companyId,
           req.body.scopeId,
@@ -277,6 +298,20 @@ export function costRoutes(
       const companyId = req.params.companyId as string;
       const incidentId = req.params.incidentId as string;
       assertCompanyAccess(req, companyId);
+      // Resolving an incident with a raised limit writes agents.budgetMonthlyCents
+      // just like the two routes above, so it is bound by the same ceiling.
+      if (req.body.action === "raise_budget_and_resume" && typeof req.body.amount === "number") {
+        const scopedAgentId = await budgets.getIncidentAgentScope(companyId, incidentId);
+        if (scopedAgentId) {
+          await assertAgentBudgetAuthority(req, companyId, scopedAgentId);
+          await governance.assertAgentMutationWithinCeiling(
+            companyId,
+            scopedAgentId,
+            { monthlyBudgetCents: req.body.amount },
+            { actorUserId: req.actor.userId ?? null },
+          );
+        }
+      }
       const incident = await budgets.resolveIncident(companyId, incidentId, req.body, req.actor.userId ?? "board");
       res.json(incident);
     },
@@ -334,6 +369,7 @@ export function costRoutes(
 
     assertCompanyAccess(req, agent.companyId);
     assertBoard(req);
+    await assertAgentBudgetAuthority(req, agent.companyId, agent.id);
     await governance.assertAgentMutationWithinCeiling(
       agent.companyId,
       agent.id,
