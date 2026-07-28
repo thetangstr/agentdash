@@ -6,7 +6,7 @@
 
 **Branch:** `codex/agentdash-mk`
 
-**HEAD:** `01a4748c5233be67dde26fa4e92748d4be7a772d`
+**Last product-code commit:** `01a4748c5233be67dde26fa4e92748d4be7a772d`
 
 **Working tree:** Clean
 
@@ -24,7 +24,7 @@ Expected:
 
 - branch: `codex/agentdash-mk`
 - no uncommitted files
-- HEAD: `01a4748c`
+- product code through `01a4748c`, followed only by handoff-document commits
 
 Do not implement this work in the primary checkout at
 `/Volumes/home/Projects_Hosted/agentdash`. The primary checkout remains on
@@ -430,12 +430,13 @@ Continue the AgentDash-MK implementation in:
 Read AGENTS.md, the approved design, the implementation plan, and
 doc/plans/2026-07-28-agentdash-mk-claude-code-handoff.md in full.
 
-The branch is codex/agentdash-mk at 01a4748c. Tasks 1 and 2 are complete,
-reviewed, and verified. Resume at Task 3 only. Use strict TDD, preserve the
-default profile, keep every route/service company-scoped, generate coherent
-Drizzle migration metadata, do not commit pnpm-lock.yaml, and use Lore commit
-messages. After implementation, run focused verification, then perform separate
-specification and code-quality reviews before starting Task 4.
+The branch is codex/agentdash-mk. Product code is complete through 01a4748c;
+later commits only add this handoff. Tasks 1 and 2 are complete, reviewed, and
+verified. Resume at Task 3 only. Use strict TDD, preserve the default profile,
+keep every route/service company-scoped, generate coherent Drizzle migration
+metadata, do not commit pnpm-lock.yaml, and use Lore commit messages. After
+implementation, run focused verification, then perform separate specification
+and code-quality reviews before starting Task 4.
 
 Do not implement the local Codex/Claude bridge; it is P2. Do not add new
 Salesforce, HubSpot, Jira, SharePoint, Google Drive, or WhatsApp integrations.
