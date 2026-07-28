@@ -69,7 +69,7 @@ import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
-  assertNoAgentHostWorkspaceCommandMutation,
+  assertHostWorkspaceCommandAuthority,
   collectIssueWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
@@ -1823,7 +1823,7 @@ export function issueRoutes(
   router.post("/companies/:companyId/issues", validate(createIssueSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    await assertHostWorkspaceCommandAuthority(db, req, companyId, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
     }
@@ -1890,7 +1890,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, parent.companyId);
-    assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    await assertHostWorkspaceCommandAuthority(db, req, parent.companyId, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, parent.companyId);
     }
@@ -1947,7 +1947,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
-    assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
+    await assertHostWorkspaceCommandAuthority(db, req, existing.companyId, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
 
     const actor = getActorInfo(req);

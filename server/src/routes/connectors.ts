@@ -13,12 +13,29 @@ import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { connectorService } from "../services/connectors.js";
 import { logActivity } from "../services/activity-log.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { accessService } from "../services/access.js";
 import { forbidden } from "../errors.js";
 
 export function connectorRoutes(db: Db) {
   const router = Router();
   const svc = connectorService(db);
   const governance = agentGovernanceService(db);
+  const access = accessService(db);
+
+  /**
+   * Company-wide connector credentials and autonomy affect EVERY agent that
+   * uses a workspace-visible connection, so they are administrator-only.
+   * Previously any active member could widen `send` autonomy company-wide.
+   * Applies in every product profile — a pre-existing platform gap.
+   */
+  async function assertCompanyConnectorAdministrator(
+    req: Parameters<typeof assertCompanyAccess>[0],
+    companyId: string,
+  ) {
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (await access.canUser(companyId, req.actor.userId, "agents:create")) return;
+    throw forbidden("Managing company connector credentials requires administrator access");
+  }
 
   /**
    * AgentDash-MK: per-agent connector settings are agent configuration, so in a
@@ -117,6 +134,7 @@ export function connectorRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, existing.companyId);
+      await assertCompanyConnectorAdministrator(req, existing.companyId);
 
       const updated = await svc.update(id, {
         sendIdentity: req.body.sendIdentity,
@@ -144,6 +162,7 @@ export function connectorRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
+    await assertCompanyConnectorAdministrator(req, existing.companyId);
     const actor = getActorInfo(req);
 
     const revoked = await svc.revoke(id, actor.actorType, actor.actorId);
@@ -178,6 +197,7 @@ export function connectorRoutes(db: Db) {
       assertBoard(req);
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      await assertCompanyConnectorAdministrator(req, companyId);
 
       const updated = await svc.setWorkspaceDefaults(companyId, {
         sendIdentity: req.body.sendIdentity,

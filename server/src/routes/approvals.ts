@@ -9,6 +9,7 @@ import {
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
 import { approvalAuthorityService } from "../services/approval-authority.js";
+import { accessService } from "../services/access.js";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
@@ -20,6 +21,7 @@ import {
   secretService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
@@ -46,6 +48,7 @@ export function approvalRoutes(
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
   const authority = approvalAuthorityService(db);
+  const access = accessService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
@@ -66,6 +69,53 @@ export function approvalRoutes(
         ? (approval.payload as Record<string, unknown>)
         : {};
     return typeof payload.agentId !== "string";
+  }
+
+  /**
+   * Approving a `hire_agent` request CREATES an agent, with a `role` and
+   * `adapterConfig` taken from a payload that `createApprovalSchema` does not
+   * validate. Creating an agent directly requires `agents:create`, so deciding
+   * an approval that creates one must require it too — otherwise the approval
+   * path is a way around the permission, in every product profile.
+   *
+   * Deliberately applies to `default` companies as well: this is a
+   * pre-existing platform gap, not an AgentDash-MK one.
+   */
+  async function assertCanDecideAgentCreatingApproval(
+    req: Request,
+    approval: { type: string; status?: string | null; payload: unknown; companyId: string },
+  ) {
+    if (!hireApprovalCreatesAgent(approval)) return;
+    if (req.actor.type !== "board") {
+      throw forbidden("Only board callers can approve an agent hire");
+    }
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+    if (await access.canUser(approval.companyId, req.actor.userId, "agents:create")) return;
+    throw forbidden("Approving an agent hire requires the agents:create permission");
+  }
+
+  /**
+   * Host-executed workspace commands must never enter the system through an
+   * unvalidated hire payload; creating them directly is administrator-only.
+   */
+  function assertHirePayloadHasNoHostCommands(payload: unknown) {
+    const adapterConfig =
+      typeof payload === "object" && payload !== null
+        ? (payload as Record<string, unknown>).adapterConfig
+        : null;
+    const workspaceStrategy =
+      typeof adapterConfig === "object" && adapterConfig !== null
+        ? (adapterConfig as Record<string, unknown>).workspaceStrategy
+        : null;
+    if (typeof workspaceStrategy !== "object" || workspaceStrategy === null) return;
+    const offending = Object.keys(workspaceStrategy as Record<string, unknown>).filter((key) =>
+      key.toLowerCase().endsWith("command"),
+    );
+    if (offending.length > 0) {
+      throw forbidden(
+        `Agent hire payloads cannot carry host-executed workspace commands (${offending.sort().join(", ")})`,
+      );
+    }
   }
 
   async function requireApprovalAccess(req: Request, id: string) {
@@ -157,6 +207,9 @@ export function approvalRoutes(
       : [];
     const uniqueIssueIds = Array.from(new Set(issueIds));
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    if (approvalInput.type === "hire_agent") {
+      assertHirePayloadHasNoHostCommands(approvalInput.payload);
+    }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
@@ -226,6 +279,7 @@ export function approvalRoutes(
       req.actor,
       req.body,
     );
+    await assertCanDecideAgentCreatingApproval(req, existingApproval);
     const decidedByUserId = req.actor.userId ?? "board";
     const resolution = await approveWithTierCapacity(
       id,
@@ -386,6 +440,9 @@ export function approvalRoutes(
     }
 
     const context = await authority.requireEmergencyOverride(existingApproval, req.actor, req.body);
+    if (req.body.decision === "approved") {
+      await assertCanDecideAgentCreatingApproval(req, existingApproval);
+    }
     const decidedByUserId = req.actor.userId ?? "board";
     const meta = decisionMeta(context, req.body.overrideReason);
 
@@ -478,6 +535,9 @@ export function approvalRoutes(
       await authority.requireDecisionActor(existing, req.actor);
     }
 
+    if (existing.type === "hire_agent" && req.body.payload) {
+      assertHirePayloadHasNoHostCommands(req.body.payload);
+    }
     const normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
