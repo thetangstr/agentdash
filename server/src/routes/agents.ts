@@ -97,6 +97,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { LEGACY_PROMPT_TEMPLATE_PATH } from "../services/agent-instructions.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
@@ -1210,6 +1211,7 @@ export function agentRoutes(
   async function assertCanEditInstructionsContent(
     req: Request,
     targetAgent: { id: string; companyId: string },
+    body: { path?: unknown; clearLegacyPromptTemplate?: unknown } = {},
   ) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type !== "board") {
@@ -1217,7 +1219,31 @@ export function agentRoutes(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await requireAgentConfigurationAuthority(req, targetAgent);
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority !== "steward") return;
+
+    // A steward may only write inside the SERVER-MANAGED bundle root. An
+    // external or legacy-derived root is an arbitrary host directory (commonly
+    // the adapter's `cwd`, i.e. a real checkout), where writing files like
+    // `.claude/settings.json`, `.mcp.json`, or `Makefile` is host code
+    // execution on the next agent run. There is no filename allowlist here, so
+    // confining the ROOT is the control.
+    const bundle = await instructions.getBundle(targetAgent as never);
+    if (bundle.mode !== "managed" || !bundle.rootPath || bundle.rootPath !== bundle.managedRootPath) {
+      throw forbidden(
+        "Stewardship only permits editing instructions in the managed bundle; " +
+          "this agent uses an external instructions root, so an administrator must edit it",
+      );
+    }
+    // Both are back doors into instructions LOCATION: the legacy path writes
+    // adapterConfig.promptTemplate directly, and the clear flag rewrites the
+    // bundle-mode/root keys that assertCanManageInstructionsLocation reserves.
+    if (body.clearLegacyPromptTemplate === true) {
+      throw forbidden("Stewardship does not permit clearing the legacy prompt template");
+    }
+    if (typeof body.path === "string" && body.path.trim() === LEGACY_PROMPT_TEMPLATE_PATH) {
+      throw forbidden("Stewardship does not permit editing the legacy prompt template");
+    }
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -2695,7 +2721,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanEditInstructionsContent(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const actor = getActorInfo(req);
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
@@ -2744,7 +2770,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanEditInstructionsContent(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {

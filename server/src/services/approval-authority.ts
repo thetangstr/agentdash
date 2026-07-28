@@ -92,6 +92,45 @@ export function approvalAuthorityService(db: Db) {
    * Every call re-resolves company profile, membership, and active stewardship
    * from current state, so a decision made against a stale binding fails closed.
    */
+  /**
+   * Actor rules only, without the decision-metadata requirement.
+   *
+   * Split out so system-adjacent flows that resolve a linked approval as a side
+   * effect (budget incident resolution) enforce the SAME actor rules as a
+   * direct decision, without having to invent a revision and idempotency key.
+   * Returns `null` for default-profile companies, whose existing board
+   * behavior is unchanged.
+   */
+  async function requireDecisionActor(
+    approval: ApprovalRow,
+    actor: ApprovalDecisionActor,
+  ): Promise<ApprovalDecisionRole | null> {
+    if (!(await isProfileCompany(approval.companyId))) return null;
+
+    // The local_trusted bootstrap board actor has no userId and no steward, but
+    // is the founding operator. Treating it as an administrator keeps the
+    // documented local bootstrap flow usable instead of forcing every decision
+    // through a written emergency override.
+    if (actor.source === "local_implicit") return "admin";
+
+    if (approval.requestedByAgentId) {
+      const active = await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId);
+      if (!active || !actor.userId || active.userId !== actor.userId) {
+        throw forbidden(
+          "Only the current steward of the requesting agent can decide this approval; " +
+            "an owner or administrator must use the emergency override action",
+        );
+      }
+      return "steward";
+    }
+
+    // No requesting agent means no steward to route to; administrators decide.
+    if (!(await isAdministrator(approval.companyId, actor))) {
+      throw forbidden("Only an authorized administrator can decide this approval");
+    }
+    return "admin";
+  }
+
   async function requireDecisionAuthority(
     approval: ApprovalRow,
     actor: ApprovalDecisionActor,
@@ -109,28 +148,9 @@ export function approvalAuthorityService(db: Db) {
     requireDecisionMetadata(body);
     assertRevisionMatches(approval, body.revision);
 
-    if (approval.requestedByAgentId) {
-      const active = await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId);
-      if (!active || !actor.userId || active.userId !== actor.userId) {
-        throw forbidden(
-          "Only the current steward of the requesting agent can decide this approval; " +
-            "an owner or administrator must use the emergency override action",
-        );
-      }
-      return {
-        role: "steward",
-        channel: body.channel!,
-        revision: body.revision!,
-        idempotencyKey: body.idempotencyKey!,
-      };
-    }
-
-    // No requesting agent means no steward to route to; administrators decide.
-    if (!(await isAdministrator(approval.companyId, actor))) {
-      throw forbidden("Only an authorized administrator can decide this approval");
-    }
+    const role = (await requireDecisionActor(approval, actor)) ?? "admin";
     return {
-      role: "admin",
+      role,
       channel: body.channel!,
       revision: body.revision!,
       idempotencyKey: body.idempotencyKey!,
@@ -169,6 +189,7 @@ export function approvalAuthorityService(db: Db) {
   return {
     isProfileCompany,
     isAdministrator,
+    requireDecisionActor,
     requireDecisionAuthority,
     requireEmergencyOverride,
   };

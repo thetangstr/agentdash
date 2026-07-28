@@ -327,19 +327,30 @@ export function agentGovernanceService(db: Db) {
           }
 
           // Permissions are the security-relevant dimension: a ceiling that no
-          // longer allows `agents:create` must actually revoke it, both on the
-          // agent row and in the permission grants that authorize the agent key.
-          const permissions = (lockedAgent.permissions ?? {}) as Record<string, unknown>;
-          for (const [permissionKey, flag] of [
-            ["agents:create", "canCreateAgents"],
-            ["tasks:assign", "canAssignTasks"],
-          ] as const) {
-            if (!permissions[flag]) continue;
+          // longer allows a permission must actually revoke it.
+          //
+          // The GRANT ROW is the source of truth, not the `permissions` column.
+          // `normalizeAgentPermissions` keeps only `canCreateAgents` in that
+          // column, so keying off it would make `tasks:assign` unrevokable —
+          // yet every agent is issued a real `tasks:assign` grant at creation
+          // and `access.hasPermission` reads the grants table.
+          const permissions = { ...((lockedAgent.permissions ?? {}) as Record<string, unknown>) };
+          const grantRows = await tx
+            .select({ permissionKey: principalPermissionGrants.permissionKey })
+            .from(principalPermissionGrants)
+            .where(
+              and(
+                eq(principalPermissionGrants.companyId, companyId),
+                eq(principalPermissionGrants.principalType, "agent"),
+                eq(principalPermissionGrants.principalId, agentId),
+              ),
+            );
+          const heldPermissions = new Set(grantRows.map((row) => row.permissionKey));
+          if (permissions.canCreateAgents) heldPermissions.add("agents:create");
+
+          let permissionsChanged = false;
+          for (const permissionKey of heldPermissions) {
             if (permissionAllowed(effectivePolicy, permissionKey)) continue;
-            await tx
-              .update(agents)
-              .set({ permissions: { ...permissions, [flag]: false }, updatedAt: now })
-              .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
             await tx
               .delete(principalPermissionGrants)
               .where(
@@ -350,8 +361,18 @@ export function agentGovernanceService(db: Db) {
                   eq(principalPermissionGrants.permissionKey, permissionKey),
                 ),
               );
-            permissions[flag] = false;
-            clamps.push({ field: flag, previous: true, clampedTo: false });
+            if (permissionKey === "agents:create" && permissions.canCreateAgents) {
+              permissions.canCreateAgents = false;
+              permissionsChanged = true;
+            }
+            clamps.push({ field: permissionKey, previous: "granted", clampedTo: "revoked" });
+          }
+
+          if (permissionsChanged) {
+            await tx
+              .update(agents)
+              .set({ permissions, updatedAt: now })
+              .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
           }
 
           for (const clamp of clamps) {

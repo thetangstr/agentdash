@@ -9,6 +9,8 @@ import {
   agentStewardships,
   agentWakeupRequests,
   approvals,
+  budgetIncidents,
+  budgetPolicies,
   companies,
   companyMemberships,
   createDb,
@@ -22,6 +24,7 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { approvalRoutes } from "../routes/approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { approvalService } from "../services/approvals.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -146,6 +149,8 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     // Approving wakes the requesting agent, which creates heartbeat rows that
     // reference agents — they must be cleared before the agents themselves.
     await db.delete(activityLog);
+    await db.delete(budgetIncidents);
+    await db.delete(budgetPolicies);
     await db.delete(heartbeatRunEvents);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
@@ -421,6 +426,145 @@ describeEmbeddedPostgres("agentdash-mk approval authority", () => {
     );
 
     expect(res.status).toBe(403);
+  });
+
+  it("fails a card issued before a resubmit closed", async () => {
+    const { company, steward, approval } = await seed();
+    const app = await createApp(db, makeBoardActor(company.id, steward.principalId));
+
+    // The real staleness path: the request changed, so the revision the card
+    // carries is no longer current.
+    await approvalService(db).requestRevision(approval.id, steward.principalId, "needs detail");
+    await approvalService(db).resubmit(approval.id, { summary: "Revised deck" });
+
+    const stale = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/approve`)
+        .send({ revision: 1, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+    );
+    expect(stale.status).toBe(409);
+
+    const stored = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
+    expect(stored.revision).toBe(2);
+    expect(stored.supersededAt).toBeInstanceOf(Date);
+
+    const fresh = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/approve`)
+        .send({ revision: 2, idempotencyKey: `key-${randomUUID()}`, channel: "telegram" }),
+    );
+    expect(fresh.status, JSON.stringify(fresh.body)).toBe(200);
+  });
+
+  it("rejects a reused idempotency key with a conflict rather than a server error", async () => {
+    const { company, steward, agent, approval } = await seed();
+    const secondApproval = await createApproval(db, company.id, agent.id);
+    const app = await createApp(db, makeBoardActor(company.id, steward.principalId));
+    const sharedKey = `key-${randomUUID()}`;
+
+    const first = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/approve`)
+        .send({ revision: 1, idempotencyKey: sharedKey, channel: "web" }),
+    );
+    expect(first.status).toBe(200);
+
+    // Company-wide unique key: reusing it on another approval must be a clean
+    // 409, not a raw unique-violation surfacing as a 500.
+    const reused = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${secondApproval.id}/approve`)
+        .send({ revision: 1, idempotencyKey: sharedKey, channel: "web" }),
+    );
+    expect(reused.status).toBe(409);
+    expect(reused.body.details.code).toBe("APPROVAL_IDEMPOTENCY_KEY_CONFLICT");
+  });
+
+  it("refuses to silently swallow a replay that asks for the opposite decision", async () => {
+    const { company, steward, approval } = await seed();
+    const app = await createApp(db, makeBoardActor(company.id, steward.principalId));
+    const key = `key-${randomUUID()}`;
+
+    await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/approve`)
+        .send({ revision: 1, idempotencyKey: key, channel: "web" }),
+    );
+
+    const contradicting = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/approvals/${approval.id}/reject`)
+        .send({ revision: 1, idempotencyKey: key, channel: "web" }),
+    );
+    expect(contradicting.status).toBe(409);
+  });
+
+  it("does not let budget-incident resolution decide an approval without steward authority", async () => {
+    const { company, bystander, agent } = await seed();
+    const { budgetIncidents: incidentsTable, budgetPolicies: policiesTable } = await import("@paperclipai/db");
+    const approval = await createApproval(db, company.id, agent.id);
+    const policy = await db
+      .insert(policiesTable)
+      .values({
+        companyId: company.id,
+        scopeType: "agent",
+        scopeId: agent.id,
+        metric: "cost",
+        amount: 1_000,
+        windowKind: "calendar_month_utc",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const incident = await db
+      .insert(incidentsTable)
+      .values({
+        companyId: company.id,
+        policyId: policy.id,
+        scopeType: "agent",
+        scopeId: agent.id,
+        metric: "cost",
+        windowKind: "calendar_month_utc",
+        thresholdType: "hard",
+        status: "open",
+        approvalId: approval.id,
+        amountObserved: 2_000,
+        amountLimit: 1_000,
+        windowStart: new Date(),
+        windowEnd: new Date(),
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const { costRoutes } = await import("../routes/costs.js");
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = makeBoardActor(company.id, bystander.principalId);
+      next();
+    });
+    app.use("/api", costRoutes(db));
+    app.use(errorHandler);
+
+    // `keep_paused` drives the linked approval to `rejected` as a side effect;
+    // it is a decision and must satisfy the same actor rules as a direct reject.
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/budget-incidents/${incident.id}/resolve`)
+        .send({ action: "keep_paused" }),
+    );
+
+    expect(res.status).toBe(403);
+    const stored = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .then((rows) => rows[0]!);
+    expect(stored.status).toBe("pending");
   });
 
   it("lets the steward reject as well as approve", async () => {

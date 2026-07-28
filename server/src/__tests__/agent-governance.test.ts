@@ -1005,16 +1005,28 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
     it("revokes permissions the ceiling no longer allows when the owner lowers it", async () => {
       const { company, owner, agent } = await seed();
       const svc = agentGovernanceService(db);
+      // Only `canCreateAgents` is seeded in the column: normalizeAgentPermissions
+      // strips everything else, so seeding `canAssignTasks` there would assert
+      // against a state no production path can produce. `tasks:assign` lives in
+      // the grants table, which is what agents are actually issued at creation.
       await db
         .update(agents)
-        .set({ permissions: { canCreateAgents: true, canAssignTasks: true } })
+        .set({ permissions: { canCreateAgents: true } })
         .where(eq(agents.id, agent.id));
-      await db.insert(principalPermissionGrants).values({
-        companyId: company.id,
-        principalType: "agent",
-        principalId: agent.id,
-        permissionKey: "agents:create",
-      });
+      await db.insert(principalPermissionGrants).values([
+        {
+          companyId: company.id,
+          principalType: "agent",
+          principalId: agent.id,
+          permissionKey: "agents:create",
+        },
+        {
+          companyId: company.id,
+          principalType: "agent",
+          principalId: agent.id,
+          permissionKey: "tasks:assign",
+        },
+      ]);
 
       // CEILING permits only issues:read / issues:write.
       await svc.updateOwnerCeiling(company.id, agent.id, {
@@ -1031,11 +1043,14 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
         .then((rows) => rows[0]!);
       expect((reconciled.permissions as Record<string, unknown>).canCreateAgents).toBe(false);
 
+      // BOTH grants must go: CEILING allows only issues:read / issues:write.
+      // tasks:assign is the one that would survive if revocation keyed off the
+      // permissions column instead of the grants table.
       const grants = await db
         .select()
         .from(principalPermissionGrants)
         .where(eq(principalPermissionGrants.principalId, agent.id));
-      expect(grants).toHaveLength(0);
+      expect(grants.map((row) => row.permissionKey).sort()).toEqual([]);
     });
 
     it("binds the agent budget ceiling on the cost routes too", async () => {

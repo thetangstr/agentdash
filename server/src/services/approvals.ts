@@ -60,7 +60,39 @@ export function approvalService(db: Db) {
     // terminal result and performs no side effects. This is what makes a
     // redelivered Telegram/Teams callback safe.
     if (meta.idempotencyKey && existing.decisionIdempotencyKey === meta.idempotencyKey) {
+      if (existing.status !== targetStatus) {
+        // Same key, different intent: that is a client bug or a replayed
+        // callback crossed with another. Say so rather than silently returning
+        // the opposite decision as if it had been honoured.
+        throw conflict("Idempotency key was already used for a different decision on this approval", {
+          code: "APPROVAL_IDEMPOTENCY_KEY_CONFLICT",
+          recordedStatus: existing.status,
+          requestedStatus: targetStatus,
+        });
+      }
       return { approval: existing, applied: false };
+    }
+
+    // The uniqueness constraint is company-wide, so a key already spent on a
+    // DIFFERENT approval must be a clean 409 rather than a raw 23505 surfacing
+    // as a 500.
+    if (meta.idempotencyKey) {
+      const keyOwner = await db
+        .select({ id: approvals.id })
+        .from(approvals)
+        .where(
+          and(
+            eq(approvals.companyId, existing.companyId),
+            eq(approvals.decisionIdempotencyKey, meta.idempotencyKey),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (keyOwner && keyOwner.id !== existing.id) {
+        throw conflict("Idempotency key was already used for a different approval", {
+          code: "APPROVAL_IDEMPOTENCY_KEY_CONFLICT",
+          conflictingApprovalId: keyOwner.id,
+        });
+      }
     }
 
     if (meta.revision !== undefined && existing.revision !== meta.revision) {
@@ -108,6 +140,19 @@ export function approvalService(db: Db) {
 
     if (updated) {
       return { approval: updated, applied: true };
+    }
+
+    if (meta.revision !== undefined) {
+      // The pre-check passed but the conditional update matched nothing, so a
+      // concurrent decider moved the row between the two. Fail closed.
+      const current = await getExistingApproval(id);
+      if (current.revision !== meta.revision) {
+        throw conflict("Approval changed since this decision was requested", {
+          code: "APPROVAL_REVISION_CONFLICT",
+          expectedRevision: meta.revision,
+          currentRevision: current.revision,
+        });
+      }
     }
 
     const latest = await getExistingApproval(id);
@@ -281,6 +326,8 @@ export function approvalService(db: Db) {
           // any card or button issued against the previous revision is now stale
           // and must fail closed rather than decide the new request.
           revision: existing.revision + 1,
+          // This is precisely the supersede event, so record when it happened.
+          supersededAt: now,
           decisionChannel: null,
           decisionIdempotencyKey: null,
           decisionActorRole: null,

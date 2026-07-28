@@ -431,10 +431,16 @@ export function approvalRoutes(
     async (req, res) => {
       assertBoard(req);
       const id = req.params.id as string;
-      if (!(await requireApprovalAccess(req, id))) {
+      const existingApproval = await requireApprovalAccess(req, id);
+      if (!existingApproval) {
         res.status(404).json({ error: "Approval not found" });
         return;
       }
+      // Requesting revision stamps decidedByUserId/decidedAt and moves the
+      // approval out of `pending`, so it is decision-adjacent and needs the
+      // same actor rules — otherwise any member could make themselves the
+      // decider-of-record on another steward's approval.
+      await authority.requireDecisionActor(existingApproval, req.actor);
       const decidedByUserId = req.actor.userId ?? "board";
       const approval = await svc.requestRevision(id, decidedByUserId, req.body.decisionNote);
 
@@ -464,6 +470,12 @@ export function approvalRoutes(
     if (req.actor.type === "agent" && req.actor.agentId !== existing.requestedByAgentId) {
       res.status(403).json({ error: "Only requesting agent can resubmit this approval" });
       return;
+    }
+    // A resubmit now advances the revision, which invalidates every in-flight
+    // card. Without an authority check that is a decision-denial vector for any
+    // ordinary member, so board callers must satisfy the same actor rules.
+    if (req.actor.type === "board") {
+      await authority.requireDecisionActor(existing, req.actor);
     }
 
     const normalizedPayload = req.body.payload

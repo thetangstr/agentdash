@@ -22,6 +22,8 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { approvalAuthorityService } from "../services/approval-authority.js";
+import { approvalService } from "../services/approvals.js";
 import { badRequest, forbidden } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -65,6 +67,8 @@ export function costRoutes(
   // primary agent-budget write paths, so the ceiling must bind here too —
   // enforcing it only on PATCH /agents/:id would leave it trivially bypassable.
   const governance = agentGovernanceService(db);
+  const approvalAuthority = approvalAuthorityService(db);
+  const approvalsSvc = approvalService(db);
 
   /**
    * These routes historically required only company membership. In a profile
@@ -76,12 +80,36 @@ export function costRoutes(
     req: Parameters<typeof assertCompanyAccess>[0],
     companyId: string,
     agentId: string,
-  ) {
-    if (!(await governance.isProfileCompany(companyId))) return;
+  ): Promise<"admin" | "steward" | null> {
+    if (!(await governance.isProfileCompany(companyId))) return null;
     const authority = await governance.resolveConfigurationAuthority(companyId, agentId, req.actor);
     if (!authority) {
       throw forbidden(
         "Only the assigned steward or an authorized administrator can change this agent's budget",
+      );
+    }
+    return authority;
+  }
+
+  /**
+   * A budget ceiling that can be switched off is not a ceiling. Enforcement is
+   * `hardStopEnabled && amount > 0` (services/budgets.ts), so a steward who can
+   * clear either flag escapes the owner's spend limit while every amount check
+   * still passes. Only administrators may weaken those.
+   */
+  function assertStewardCannotWeakenBudgetPolicy(
+    authority: "admin" | "steward" | null,
+    body: { hardStopEnabled?: unknown; isActive?: unknown; amount?: unknown },
+  ) {
+    if (authority !== "steward") return;
+    const weakened: string[] = [];
+    if (body.hardStopEnabled === false) weakened.push("hardStopEnabled");
+    if (body.isActive === false) weakened.push("isActive");
+    if (body.amount === 0) weakened.push("amount=0");
+    if (weakened.length > 0) {
+      throw forbidden(
+        `Stewardship does not permit disabling the budget hard stop (${weakened.join(", ")}); ` +
+          "an administrator with agents:create must make this change",
       );
     }
   }
@@ -277,7 +305,8 @@ export function costRoutes(
       // An agent-scoped budget policy sets the same spend authority as the
       // agent budget field, so it is ceiling-bound on the same terms.
       if (req.body.scopeType === "agent" && typeof req.body.scopeId === "string") {
-        await assertAgentBudgetAuthority(req, companyId, req.body.scopeId);
+        const authority = await assertAgentBudgetAuthority(req, companyId, req.body.scopeId);
+        assertStewardCannotWeakenBudgetPolicy(authority, req.body);
         await governance.assertAgentMutationWithinCeiling(
           companyId,
           req.body.scopeId,
@@ -298,10 +327,23 @@ export function costRoutes(
       const companyId = req.params.companyId as string;
       const incidentId = req.params.incidentId as string;
       assertCompanyAccess(req, companyId);
+      const incidentContext = await budgets.getIncidentContext(companyId, incidentId);
+
+      // Resolving an incident ALSO resolves the linked approval, whatever the
+      // action. That is a decision, so it must satisfy the same actor rules as
+      // a direct approve/reject — otherwise `{"action":"dismiss"}` is an
+      // unguarded second decision boundary for any company member.
+      if (incidentContext?.approvalId) {
+        const linkedApproval = await approvalsSvc.getById(incidentContext.approvalId);
+        if (linkedApproval) {
+          await approvalAuthority.requireDecisionActor(linkedApproval, req.actor);
+        }
+      }
+
       // Resolving an incident with a raised limit writes agents.budgetMonthlyCents
       // just like the two routes above, so it is bound by the same ceiling.
       if (req.body.action === "raise_budget_and_resume" && typeof req.body.amount === "number") {
-        const scopedAgentId = await budgets.getIncidentAgentScope(companyId, incidentId);
+        const scopedAgentId = incidentContext?.agentScopeId ?? null;
         if (scopedAgentId) {
           await assertAgentBudgetAuthority(req, companyId, scopedAgentId);
           await governance.assertAgentMutationWithinCeiling(
