@@ -588,3 +588,26 @@ Networking behavior for this smoke script:
 - auto-detects and prints a Paperclip host URL reachable from inside OpenClaw Docker
 - default container-side host alias is `host.docker.internal` (override with `PAPERCLIP_HOST_FROM_CONTAINER` / `PAPERCLIP_HOST_PORT`)
 - if Paperclip rejects container hostnames in authenticated/private mode, allow `host.docker.internal` via `pnpm paperclipai allowed-hostname host.docker.internal` and restart Paperclip
+
+## AgentDash-MK profile
+
+Companies carry a `productProfile` of `default` or `agentdash_mk`. Profile-only
+routes return **404** off-profile, so a non-profile company looks identical to
+one that does not exist.
+
+To work on the profile locally, create a company with
+`productProfile: "agentdash_mk"`, assign an agent to yourself
+(`POST /api/companies/:companyId/agent-stewardships`), and open `/my-agent`.
+
+Two things to know while developing:
+
+- Approval decisions in a profile company require `revision`, `idempotencyKey`,
+  and `channel`. Default-profile callers may omit them, which is how the
+  existing UI, CLI, and MCP clients keep working. A profile company will 400 a
+  decision that omits them — the CLI and MCP clients do not send them yet.
+- Ceilings clamp rather than reject when an owner lowers them, and revoke
+  permission grants the ceiling no longer allows. Enabling the profile on an
+  existing company changes nothing by itself: the default ceiling is
+  unrestricted on every enumerable dimension.
+
+Endpoint reference: [`docs/api/agentdash-mk.md`](../docs/api/agentdash-mk.md).

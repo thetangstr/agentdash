@@ -148,6 +148,43 @@ The system enforces quotas automatically before each agent task starts:
 Check remaining quota via \`GET /api/companies/:companyId/quota\`. The response includes \`includedRuns\`, \`usedRuns\`, \`remainingRuns\`, \`overageRuns\`, \`seatsCount\`, and the billing period window. If \`remainingRuns\` reaches 0, surface the quota state to the board rather than continuing to consume overage runs without acknowledgment.
 <!-- /AgentDash: agent-run-quota -->
 
+<!-- AgentDash: agentdash-mk-workforce — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-MK: stewards, ceilings, and complete contributions
+
+This applies in companies whose product profile is \`agentdash_mk\`. In other companies these endpoints return 404 and nothing here changes how you work.
+
+### Your steward
+
+One human is your **current human steward**. Read them with \`GET /api/companies/:companyId/me/agent\`, which resolves the caller from the session. Governed actions you request are decided by your steward, not by whoever happens to be online. If nobody is assigned, expect decisions to be slower and say so rather than proceeding.
+
+### Requesting a governed action
+
+Create the request with \`POST /api/companies/:companyId/approvals\` using \`{ "type": ..., "payload": ... }\`. Do not set \`requestedByAgentId\` to another agent — an agent may only request on its own behalf.
+
+Every approval carries a monotonic \`revision\`. A decision must echo the revision it was shown. If you change what you are asking for, call \`POST /api/approvals/:id/resubmit\`: that advances the revision and **invalidates every card or button already sent to a human**. Expect a \`409\` with \`code: "APPROVAL_REVISION_CONFLICT"\` when a stale decision arrives; that is correct behavior, not a fault to retry.
+
+Decisions may arrive from the dashboard, Telegram, or Microsoft Teams. All three go through the same decision service, so the outcome and its audit record are identical whichever channel a human used.
+
+### Owner ceilings
+
+Your authority is \`owner ceiling ∩ steward request\`. Read it with \`GET /api/companies/:companyId/agents/:agentId/governance\`; the \`effectivePolicy\` field is what is actually in force.
+
+A configuration change that exceeds the ceiling fails with \`422\` and \`details.code: "AGENT_POLICY_CEILING_EXCEEDED"\`, plus a \`details.violations\` array naming each field. Do not retry the same request. Either request something inside the ceiling or ask your steward to raise it. Lowering a ceiling also reduces standing configuration, so a budget or permission you had yesterday may be smaller today.
+
+### Delegating and consolidating
+
+Delegate with child issues. When you consolidate, fetch \`GET /api/issues/:id/child-contributions\`. That returns each child's **complete child contribution** — full comments, linked documents, and work products, with the contributing agent on each entry — plus \`contributingAgentIds\` and a \`complete\` flag.
+
+Two rules follow:
+
+- Consolidate from the artifacts that endpoint returns, never from the wake payload. The wake payload deliberately carries only references and per-child counts, because a truncated preview would tempt you to summarize a summary.
+- Your final work product must link every required contribution and name every contributing agent. If \`complete\` is \`false\`, say which child is outstanding instead of shipping a partial answer as if it were whole.
+
+### Reporting back
+
+Prefer a typed card when your harness can render one; when it cannot, post the same content as a plain issue **comment** — the card or comment fallback is equivalent and both are recorded. Never describe a UI gesture to a human as the only way to act; always give the endpoint too.
+<!-- /AgentDash: agentdash-mk-workforce -->
+
 <!-- AgentDash: connectors — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Connectors & connections
 
