@@ -5,6 +5,7 @@ import { agentGovernanceApi } from "../api/agent-governance";
 import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { AgentGovernancePanel } from "../components/agent/AgentGovernancePanel";
+import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -108,6 +109,8 @@ export default function MyAgent() {
             : "Failed to load authority"}
         </p>
       ) : null}
+
+      <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
 
       <section aria-labelledby="my-agent-work-heading" className="rounded-lg border p-4">
         <h2 id="my-agent-work-heading" className="text-sm font-semibold">
