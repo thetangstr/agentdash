@@ -97,7 +97,13 @@ export default function MyAgent() {
         <h2 id="my-agent-inbox-heading" className="text-sm font-semibold">
           Awaiting your decision
         </h2>
-        {items.length === 0 ? (
+        {inbox.isLoading ? (
+          <p className="mt-2 text-xs text-muted-foreground">Loading…</p>
+        ) : inbox.error ? (
+          <p className="mt-2 text-xs text-destructive" role="alert">
+            {inbox.error instanceof Error ? inbox.error.message : "Failed to load your inbox"}
+          </p>
+        ) : items.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">Nothing is waiting on you.</p>
         ) : (
           <ul className="mt-2 flex flex-col gap-2">
@@ -107,8 +113,14 @@ export default function MyAgent() {
                   {item.type.replace(/_/g, " ")}
                 </Link>
                 <span className="text-muted-foreground">
-                  {" "}· requested by {item.requestingAgent.name} · revision {item.revision}
+                  {item.requestingAgent ? ` · requested by ${item.requestingAgent.name}` : ""}
+                  {" "}· revision {item.revision} · risk {item.risk?.level ?? "unknown"}
                 </span>
+                {item.sourceIssues?.length ? (
+                  <span className="text-muted-foreground">
+                    {" "}· {item.sourceIssues.map((issue) => issue.identifier).join(", ")}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>

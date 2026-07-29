@@ -17,11 +17,23 @@ export interface ApprovalDecisionOptions {
   revision?: number;
 }
 
+/**
+ * `crypto.randomUUID` is secure-context-only and absent on older Safari, so an
+ * unguarded call would throw before any request is made — killing every approve
+ * and reject button when AgentDash is served over plain HTTP. Matches the
+ * fallback convention already used elsewhere in this app.
+ */
+function newDecisionKey() {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (randomUuid) return `web-${randomUuid}`;
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 function decisionBody(options?: ApprovalDecisionOptions) {
   const body: Record<string, unknown> = { decisionNote: options?.decisionNote };
   if (typeof options?.revision === "number") {
     body.revision = options.revision;
-    body.idempotencyKey = `web-${crypto.randomUUID()}`;
+    body.idempotencyKey = newDecisionKey();
     body.channel = "web";
   }
   return body;
@@ -52,7 +64,7 @@ export const approvalsApi = {
       decision: data.decision,
       overrideReason: data.overrideReason,
       ...(typeof data.revision === "number"
-        ? { revision: data.revision, idempotencyKey: `web-${crypto.randomUUID()}`, channel: "web" }
+        ? { revision: data.revision, idempotencyKey: newDecisionKey(), channel: "web" }
         : {}),
     }),
   resubmit: (id: string, payload?: Record<string, unknown>) =>

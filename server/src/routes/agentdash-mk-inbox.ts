@@ -4,7 +4,10 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
+import { redactEventPayload } from "../redaction.js";
 import { accessService } from "../services/access.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
+import { issueApprovalService } from "../services/issue-approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -16,6 +19,41 @@ export function agentdashMkInboxRoutes(db: Db) {
   const router = Router();
   const stewardships = agentStewardshipService(db);
   const access = accessService(db);
+  const issueApprovals = issueApprovalService(db);
+  const governance = agentGovernanceService(db);
+
+  /**
+   * Coarse risk band derived from the approval type and payload. Enough for the
+   * decision surface to order attention; it is not an authorization input.
+   */
+  function summarizeRisk(type: string, payload: unknown): { level: "high" | "medium" | "low"; reason: string } {
+    const record = (payload ?? {}) as Record<string, unknown>;
+    if (type === "hire_agent") {
+      return { level: "high", reason: "Creates or changes an agent" };
+    }
+    if (type === "budget_override_required") {
+      return { level: "high", reason: "Raises a spend limit" };
+    }
+    if (type === "mandate_violation") {
+      return { level: "high", reason: "Mandate violation" };
+    }
+    if (typeof record.destructive === "boolean" && record.destructive) {
+      return { level: "high", reason: "Destructive action" };
+    }
+    return { level: "medium", reason: "Governed action" };
+  }
+
+  /** Who currently holds decision authority, and the minimum the ceiling demands. */
+  async function resolveEffectiveAuthority(companyId: string, agentId: string) {
+    const [active, policy] = await Promise.all([
+      stewardships.activeByAgent(companyId, agentId),
+      governance.getForAgent(companyId, agentId),
+    ]);
+    return {
+      steward: active ? { userId: active.userId, since: active.startedAt } : null,
+      minimumApproval: policy.effectivePolicy.minimumApproval,
+    };
+  }
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -38,37 +76,75 @@ export function agentdashMkInboxRoutes(db: Db) {
    * including the `revision` the decider must echo back — so the client never
    * has to guess or re-fetch to act.
    */
-  async function buildItems(companyId: string, agentIds: string[], requiresOverride: boolean) {
-    if (agentIds.length === 0) return [];
+  async function buildItems(
+    companyId: string,
+    scope: { agentIds: string[] } | { allCompanyAgents: true },
+    requiresOverride: boolean,
+  ) {
+    const scopeCondition =
+      "allCompanyAgents" in scope
+        ? undefined
+        : scope.agentIds.length === 0
+          ? null
+          : inArray(approvals.requestedByAgentId, scope.agentIds);
+    if (scopeCondition === null) return [];
+
     const rows = await db
       .select({ approval: approvals, agent: agents })
       .from(approvals)
-      .innerJoin(agents, eq(agents.id, approvals.requestedByAgentId))
+      // LEFT join: `requested_by_agent_id` is nullable, and budget-incident and
+      // human-created approvals have no requester. Those are exactly the class
+      // the authority service routes to administrators, so an inner join would
+      // hide them from the one admin surface that exists to decide them.
+      .leftJoin(agents, eq(agents.id, approvals.requestedByAgentId))
       .where(
         and(
           eq(approvals.companyId, companyId),
-          inArray(approvals.requestedByAgentId, agentIds),
           inArray(approvals.status, OPEN_APPROVAL_STATUSES),
+          ...(scopeCondition ? [scopeCondition] : []),
         ),
       )
       .orderBy(desc(approvals.createdAt));
 
-    return rows.map(({ approval, agent }) => ({
-      approvalId: approval.id,
-      type: approval.type,
-      status: approval.status,
-      revision: approval.revision,
-      payload: approval.payload,
-      createdAt: approval.createdAt,
-      decidedAt: approval.decidedAt,
-      decisionChannel: approval.decisionChannel,
-      decisionActorRole: approval.decisionActorRole,
-      requestingAgent: { id: agent.id, name: agent.name, role: agent.role },
-      // Owner/admin items are exceptional by construction: they are only
-      // decidable through the reasoned override action, never as an ordinary
-      // approval control.
-      requiresOverride,
-    }));
+    return Promise.all(
+      rows.map(async ({ approval, agent }) => ({
+        approvalId: approval.id,
+        type: approval.type,
+        status: approval.status,
+        revision: approval.revision,
+        // Same redaction every other approval read path applies. Hire payloads
+        // carry adapterConfig, which routinely holds credentials; returning it
+        // raw here would hand them to any steward and, on the override view, to
+        // every administrator.
+        payload: redactEventPayload(approval.payload) ?? {},
+        createdAt: approval.createdAt,
+        decidedAt: approval.decidedAt,
+        expiresAt: approval.expiresAt,
+        requestingAgent: agent ? { id: agent.id, name: agent.name, role: agent.role } : null,
+        sourceIssues: (await issueApprovals.listIssuesForApproval(approval.id)).map((issue) => ({
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          status: issue.status,
+        })),
+        risk: summarizeRisk(approval.type, approval.payload),
+        effectiveAuthority: approval.requestedByAgentId
+          ? await resolveEffectiveAuthority(companyId, approval.requestedByAgentId)
+          : { steward: null, minimumApproval: null },
+        decisionHistory: {
+          decidedAt: approval.decidedAt,
+          decidedByUserId: approval.decidedByUserId,
+          decisionChannel: approval.decisionChannel,
+          decisionActorRole: approval.decisionActorRole,
+          overrideReason: approval.overrideReason,
+          supersededAt: approval.supersededAt,
+        },
+        // Owner/admin items are exceptional by construction: they are only
+        // decidable through the reasoned override action, never as an ordinary
+        // approval control.
+        requiresOverride,
+      })),
+    );
   }
 
   /**
@@ -94,7 +170,7 @@ export function agentdashMkInboxRoutes(db: Db) {
         status: current.agent.status,
       },
       stewardship: current.stewardship,
-      items: await buildItems(companyId, [current.agent.id], false),
+      items: await buildItems(companyId, { agentIds: [current.agent.id] }, false),
     });
   });
 
@@ -115,18 +191,9 @@ export function agentdashMkInboxRoutes(db: Db) {
       throw forbidden("The override view requires company owner or administrator access");
     }
 
-    const companyAgents = await db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(eq(agents.companyId, companyId));
-
-    res.json({
-      items: await buildItems(
-        companyId,
-        companyAgents.map((agent) => agent.id),
-        true,
-      ),
-    });
+    // Scoped by company on the approvals table itself, so approvals with no
+    // requesting agent are included rather than filtered out by an agent list.
+    res.json({ items: await buildItems(companyId, { allCompanyAgents: true }, true) });
   });
 
   return router;

@@ -15,9 +15,23 @@ export interface InboxItem {
   payload: Record<string, unknown>;
   createdAt: string;
   decidedAt: string | null;
-  decisionChannel: string | null;
-  decisionActorRole: string | null;
-  requestingAgent: { id: string; name: string; role: string };
+  expiresAt: string | null;
+  /** Null when no agent requested the approval (budget incidents, human-created). */
+  requestingAgent: { id: string; name: string; role: string } | null;
+  sourceIssues: Array<{ id: string; identifier: string; title: string; status: string }>;
+  risk: { level: "high" | "medium" | "low"; reason: string };
+  effectiveAuthority: {
+    steward: { userId: string; since: string } | null;
+    minimumApproval: string | null;
+  };
+  decisionHistory: {
+    decidedAt: string | null;
+    decidedByUserId: string | null;
+    decisionChannel: string | null;
+    decisionActorRole: string | null;
+    overrideReason: string | null;
+    supersededAt: string | null;
+  };
   /** True only in the owner/admin override view. */
   requiresOverride: boolean;
 }

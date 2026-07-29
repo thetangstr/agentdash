@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -230,6 +231,71 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
       request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
     );
     expect(denied.status).toBe(403);
+  });
+
+  it("redacts approval payloads exactly like every other approval read path", async () => {
+    const { company, steward, myAgent } = await seed();
+    await db
+      .update(approvals)
+      .set({ payload: { adapterConfig: { env: { ANTHROPIC_API_KEY: "sk-should-not-leak" } } } })
+      .where(eq(approvals.requestedByAgentId, myAgent.id));
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain("sk-should-not-leak");
+  });
+
+  it("includes approvals with no requesting agent in the override view", async () => {
+    const { company, owner } = await seed();
+    // Budget-incident and human-created approvals have no requester, and are
+    // exactly the class routed to administrators — the override view is the
+    // only surface that can decide them.
+    const orphan = await createApproval(company.id, null);
+    const app = await createApp(boardActor(company.id, owner.principalId, "owner"));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/inbox/override`),
+    );
+
+    expect(res.status).toBe(200);
+    const ids = res.body.items.map((item: { approvalId: string }) => item.approvalId);
+    expect(ids).toContain(orphan.id);
+    const orphanItem = res.body.items.find(
+      (item: { approvalId: string }) => item.approvalId === orphan.id,
+    );
+    expect(orphanItem.requestingAgent).toBeNull();
+  });
+
+  it("carries the source issue, risk, effective authority, and decision history", async () => {
+    const { company, steward, mine } = await seed();
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox`),
+    );
+
+    const item = res.body.items.find((row: { approvalId: string }) => row.approvalId === mine.id);
+    expect(item.sourceIssues).toEqual([]);
+    expect(item.risk).toMatchObject({ level: expect.any(String), reason: expect.any(String) });
+    expect(item.effectiveAuthority.steward.userId).toBe(steward.principalId);
+    expect(item.effectiveAuthority.minimumApproval).toBe("steward");
+    expect(item.decisionHistory).toMatchObject({ decidedAt: null, decidedByUserId: null });
+  });
+
+  it("blocks reading another company's inbox", async () => {
+    const first = await seed();
+    const second = await seed();
+    const app = await createApp(boardActor(second.company.id, second.steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${first.company.id}/me/inbox`),
+    );
+
+    expect(res.status).toBe(403);
   });
 
   it("404s both routes for a company that is not agentdash_mk", async () => {

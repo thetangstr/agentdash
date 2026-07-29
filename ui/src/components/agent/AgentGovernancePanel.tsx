@@ -1,4 +1,8 @@
-import type { AgentGovernancePolicy, AgentPolicyViolation } from "@paperclipai/shared";
+import {
+  AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+  type AgentGovernancePolicy,
+  type AgentPolicyViolation,
+} from "@paperclipai/shared";
 import type { AgentGovernanceRecord } from "../../api/agent-governance";
 
 const WILDCARD = "*";
@@ -12,8 +16,22 @@ function describeList(values: string[]): string {
 function describeBudget(cents: number): string {
   // The unlimited sentinel is Postgres' integer max; showing it as a number
   // would read as a real (and alarming) spend limit.
-  if (cents >= 2_147_483_647) return "Unrestricted";
+  if (cents >= AGENT_POLICY_UNLIMITED_BUDGET_CENTS) return "Unrestricted";
   return `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}/mo`;
+}
+
+/**
+ * Formats a violation bound in the same units the table uses. Without this a
+ * $100/mo ceiling renders as the raw `10000`, which reads as $10,000 — the
+ * inverse of the sentinel problem `describeBudget` exists to avoid.
+ */
+function formatBound(
+  field: keyof AgentGovernancePolicy,
+  allowed: string[] | string | number,
+): string {
+  if (field === "monthlyBudgetCents" && typeof allowed === "number") return describeBudget(allowed);
+  if (Array.isArray(allowed)) return describeList(allowed);
+  return String(allowed);
 }
 
 const DIMENSION_LABELS: Record<keyof AgentGovernancePolicy, string> = {
@@ -56,7 +74,6 @@ export function AgentGovernancePanel({
   violations?: AgentPolicyViolation[];
 }) {
   const fields = Object.keys(DIMENSION_LABELS) as Array<keyof AgentGovernancePolicy>;
-  const violationsByField = new Map(violations?.map((v) => [v.field, v]));
 
   return (
     <section aria-labelledby="agent-governance-heading" className="rounded-lg border p-4">
@@ -75,12 +92,8 @@ export function AgentGovernancePanel({
               <li key={violation.field}>
                 {DIMENSION_LABELS[violation.field]}:{" "}
                 {violation.direction === "min"
-                  ? `must be at least ${String(violation.allowed)}`
-                  : `limited to ${
-                      Array.isArray(violation.allowed)
-                        ? describeList(violation.allowed)
-                        : String(violation.allowed)
-                    }`}
+                  ? `must be at least ${formatBound(violation.field, violation.allowed)}`
+                  : `limited to ${formatBound(violation.field, violation.allowed)}`}
               </li>
             ))}
           </ul>
@@ -112,7 +125,6 @@ export function AgentGovernancePanel({
                       (capped)
                     </span>
                   ) : null}
-                  {violationsByField.has(field) ? null : null}
                 </td>
               </tr>
             );
