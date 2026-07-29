@@ -974,6 +974,7 @@ async function loadCompanyAccessSummary(
       canManageMembers: false,
       canInviteUsers: false,
       canApproveJoinRequests: false,
+      canManageAgents: false,
     };
   }
   if (isLocalImplicit(req)) {
@@ -982,16 +983,22 @@ async function loadCompanyAccessSummary(
       canManageMembers: true,
       canInviteUsers: true,
       canApproveJoinRequests: true,
+      canManageAgents: true,
     };
   }
   const userId = req.actor.userId ?? null;
   const membership =
     userId ? await access.getMembership(companyId, "user", userId) : null;
-  const [canManageMembers, canInviteUsers, canApproveJoinRequests] =
+  const [canManageMembers, canInviteUsers, canApproveJoinRequests, canManageAgents] =
     await Promise.all([
       access.canUser(companyId, userId, "users:manage_permissions"),
       access.canUser(companyId, userId, "users:invite"),
       access.canUser(companyId, userId, "joins:approve"),
+      // AgentDash-MK: stewardship and ceiling routes gate on agents:create, a
+      // DIFFERENT permission from users:manage_permissions. Surfacing it lets
+      // those admin surfaces enable controls the server will actually accept
+      // instead of guessing from the member-management flag.
+      access.canUser(companyId, userId, "agents:create"),
     ]);
 
   return {
@@ -1002,6 +1009,7 @@ async function loadCompanyAccessSummary(
     canManageMembers,
     canInviteUsers,
     canApproveJoinRequests,
+    canManageAgents,
   };
 }
 

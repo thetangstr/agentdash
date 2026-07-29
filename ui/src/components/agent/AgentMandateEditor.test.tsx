@@ -79,9 +79,13 @@ describe("AgentMandateEditor", () => {
   });
 
   it("explains rather than errors when the bundle is not managed", async () => {
-    // The server refuses steward edits outside the managed root, so this is an
-    // expected state — the steward needs to know an admin owns the location.
-    mockAgentsApi.instructionsBundle.mockResolvedValue({ entryFile: null, mode: "external" });
+    // The real API always populates entryFile, so `mode` is the only signal
+    // that a steward cannot edit here. Keying off entryFile made this branch
+    // unreachable and handed the steward an editor that 403s on every save.
+    mockAgentsApi.instructionsBundle.mockResolvedValue({
+      entryFile: "AGENTS.md",
+      mode: "external",
+    });
 
     await render();
 
@@ -102,5 +106,55 @@ describe("AgentMandateEditor", () => {
 
     expect(container.textContent).toContain("managed bundle");
     expect(container.textContent).not.toContain("Saved.");
+  });
+
+  it("never saves one agent's draft into another agent's file", async () => {
+    // The component is re-rendered, not remounted, when the stewarded agent
+    // changes — an unkeyed draft would overwrite the new agent's mandate.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <AgentMandateEditor agentId="agent-1" companyId="company-1" />
+        </QueryClientProvider>,
+      );
+    });
+    for (let i = 0; i < 8; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    }
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(textarea, "AGENT ONE ONLY");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    // Same mount, different agent.
+    mockAgentsApi.instructionsFile.mockResolvedValue({ content: "Agent two mandate." });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <AgentMandateEditor agentId="agent-2" companyId="company-1" />
+        </QueryClientProvider>,
+      );
+    });
+    for (let i = 0; i < 8; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    }
+
+    const save = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Save mandate"),
+    )!;
+    await act(async () => save.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    const written = mockAgentsApi.saveInstructionsFile.mock.calls[0];
+    if (written) {
+      expect(written[0]).toBe("agent-2");
+      expect(written[1].content).not.toBe("AGENT ONE ONLY");
+    }
   });
 });

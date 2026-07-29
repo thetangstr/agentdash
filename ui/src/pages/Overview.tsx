@@ -804,19 +804,27 @@ export function Overview() {
 
   function resolveApproval(id: string, resolution: Resolution) {
     if (resolvingIds.current.has(id)) return;
+    // Captured before any optimistic mutation so a refusal can restore the
+    // exact card the user acted on.
+    const pendingCard = approvals.find((a) => a.id === id);
+    if (!pendingCard) return;
     resolvingIds.current.add(id);
 
-    // Optimistic UI update
+    setDecisionError(null);
+
+    // Optimistic UI update. The timers are captured so a refusal can cancel
+    // them — without that, restoring the card is pointless: the queued
+    // collapse and removal still fire and the card vanishes anyway.
     setApprovals((prev) =>
       prev.map((a) => (a.id === id ? { ...a, status: "resolving", resolution } : a)),
     );
-    window.setTimeout(
+    const collapseTimer = window.setTimeout(
       () => {
         setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status: "collapsing" } : a)));
       },
       reduced ? 400 : 720,
     );
-    window.setTimeout(
+    const removeTimer = window.setTimeout(
       () => {
         setApprovals((prev) => prev.filter((a) => a.id !== id));
       },
@@ -824,7 +832,7 @@ export function Overview() {
     );
 
     // Fire real API call
-    const revision = approvals.find((a) => a.id === id)?.revision;
+    const revision = pendingCard.revision;
     const decision =
       resolution.tone === "success"
         ? approvalsApi.approve(id, { revision })
@@ -833,11 +841,18 @@ export function Overview() {
     // 409. Swallowing that leaves the card animating "approved" while the
     // server refused, so restore the card and surface the reason instead.
     decision.catch((err: unknown) => {
+      window.clearTimeout(collapseTimer);
+      window.clearTimeout(removeTimer);
       resolvingIds.current.delete(id);
       setDecisionError(err instanceof Error ? err.message : "Decision failed");
-      setApprovals((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, status: "pending", resolution: undefined } : a)),
-      );
+      // Re-add rather than map: the removal timer may already have run if the
+      // server was slow, in which case the card is no longer in the list.
+      setApprovals((prev) => {
+        const restored = { ...pendingCard, status: "pending" as ApprovalStatus, resolution: undefined };
+        return prev.some((a) => a.id === id)
+          ? prev.map((a) => (a.id === id ? restored : a))
+          : [restored, ...prev];
+      });
     });
   }
 

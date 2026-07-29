@@ -405,7 +405,7 @@ export function CompanyAccess() {
         <StewardshipAssignments
           companyId={selectedCompanyId}
           members={membersQuery.data?.members ?? []}
-          canManage={membersQuery.data?.access.canManageMembers ?? false}
+          canManage={membersQuery.data?.access.canManageAgents ?? false}
         />
       ) : null}
 

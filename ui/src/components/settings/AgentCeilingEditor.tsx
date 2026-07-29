@@ -52,7 +52,7 @@ export function AgentCeilingEditor({ companyId }: Props) {
     queryFn: () => accessApi.listMembers(companyId),
     enabled: !!companyId,
   });
-  const canManage = membersQuery.data?.access.canManageMembers ?? false;
+  const canManage = membersQuery.data?.access.canManageAgents ?? false;
 
   const agentsQuery = useQuery({
     queryKey: queryKeys.agents.list(companyId),

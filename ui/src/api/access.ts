@@ -144,6 +144,8 @@ export type CompanyMembersResponse = {
     canManageMembers: boolean;
     canInviteUsers: boolean;
     canApproveJoinRequests: boolean;
+    /** agents:create — what stewardship and ceiling routes actually require. */
+    canManageAgents: boolean;
   };
 };
 

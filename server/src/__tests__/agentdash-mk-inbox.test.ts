@@ -196,8 +196,22 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
     expect(res.body.items.map((item: { approvalId: string }) => item.approvalId)).toEqual([mine.id]);
   });
 
-  it("returns an empty inbox rather than an error when the caller stewards no agent", async () => {
+  it("still returns the user's own work when they steward no agent", async () => {
     const { company, owner } = await seed();
+    // A human-created request has no requesting agent, so an agent-only filter
+    // would hide it from the person who filed it.
+    const own = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "budget_override_required",
+        requestedByAgentId: null,
+        requestedByUserId: owner.principalId,
+        status: "pending",
+        payload: {},
+      })
+      .returning()
+      .then((rows) => rows[0]!);
     const app = await createApp(boardActor(company.id, owner.principalId, "owner"));
 
     const res = await call(app, (baseUrl) =>
@@ -205,8 +219,32 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body.items).toEqual([]);
     expect(res.body.stewardedAgent).toBeNull();
+    expect(res.body.items.map((item: { approvalId: string }) => item.approvalId)).toEqual([own.id]);
+  });
+
+  it("includes the steward's own filed requests alongside their agent's", async () => {
+    const { company, steward, mine } = await seed();
+    const own = await db
+      .insert(approvals)
+      .values({
+        companyId: company.id,
+        type: "budget_override_required",
+        requestedByAgentId: null,
+        requestedByUserId: steward.principalId,
+        status: "pending",
+        payload: {},
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox`),
+    );
+
+    const ids = res.body.items.map((item: { approvalId: string }) => item.approvalId).sort();
+    expect(ids).toEqual([mine.id, own.id].sort());
   });
 
   it("exposes an owner/admin override view that is separate from the ordinary inbox", async () => {

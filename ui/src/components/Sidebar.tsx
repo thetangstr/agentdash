@@ -9,6 +9,7 @@ import {
   SquarePen,
   Network,
   Bot,
+  ShieldAlert,
   Boxes,
   Repeat,
   GitBranch,
@@ -21,6 +22,7 @@ import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarProjects } from "./SidebarProjects";
 import { SidebarAgents } from "./SidebarAgents";
 import { useDialogActions } from "../context/DialogContext";
+import { accessApi } from "@/api/access";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
@@ -49,6 +51,14 @@ export function Sidebar() {
   // AgentDash-MK: presentation only. The server 404s these routes off-profile,
   // so hiding the link is convenience, never the access control.
   const showMyAgentLink = selectedCompany?.productProfile === "agentdash_mk";
+  const { data: companyAccess } = useQuery({
+    queryKey: queryKeys.access.companyMembers(selectedCompanyId ?? ""),
+    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    enabled: !!selectedCompanyId && showMyAgentLink,
+  });
+  // Override is administrator-only and exceptional; the server enforces both,
+  // so this only decides whether the entry point is offered.
+  const showOverrideLink = showMyAgentLink && companyAccess?.access.canManageAgents === true;
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -87,6 +97,9 @@ export function Sidebar() {
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
           {showMyAgentLink ? (
             <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
+          ) : null}
+          {showOverrideLink ? (
+            <SidebarNavItem to="/inbox/override" label="Override" icon={ShieldAlert} />
           ) : null}
           <SidebarNavItem
             to="/inbox"

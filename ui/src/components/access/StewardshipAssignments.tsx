@@ -17,6 +17,12 @@ function memberLabel(member: CompanyMember) {
   return member.user?.name || member.user?.email || member.principalId;
 }
 
+/** Resolve a durable principal id to a human-readable name for display. */
+function principalLabel(members: CompanyMember[], principalId: string) {
+  const match = members.find((member) => member.principalId === principalId);
+  return match ? memberLabel(match) : principalId;
+}
+
 /**
  * Owner/admin surface for the one-to-one human↔agent relation.
  *
@@ -151,11 +157,15 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
 
       {selectedAgentId ? (
         <p className="text-xs text-muted-foreground">
-          {current ? `Currently stewarded by ${current.userId}.` : "No active steward."}
+          {stewardshipQuery.isLoading
+            ? "Checking current steward…"
+            : current
+              ? `Currently stewarded by ${principalLabel(members, current.userId)}.`
+              : "No active steward."}
         </p>
       ) : null}
 
-      {current ? (
+      {stewardshipQuery.isLoading ? null : current ? (
         <div className="space-y-2">
           <label className="block text-xs">
             <span className="font-medium">Reason</span>
@@ -199,7 +209,7 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
           <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
             {historyQuery.data.stewardships.map((row) => (
               <li key={row.id}>
-                {row.userId} · {row.endedAt ? "ended" : "active"}
+                {principalLabel(members, row.userId)} · {row.endedAt ? "ended" : "active"}
                 {row.transferReason ? ` · ${row.transferReason}` : ""}
               </li>
             ))}

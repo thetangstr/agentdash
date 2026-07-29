@@ -19,7 +19,11 @@ interface Props {
  */
 export function AgentMandateEditor({ agentId, companyId }: Props) {
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<string | null>(null);
+  // Keyed by agent: the component is re-rendered rather than remounted when the
+  // selected company or the stewarded agent changes, so an unkeyed draft could
+  // be saved into a DIFFERENT agent's entry file — a silent last-write-wins
+  // overwrite of a governance document.
+  const [draft, setDraft] = useState<{ agentId: string; content: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -38,16 +42,25 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
   });
 
   useEffect(() => {
-    if (file.data && draft === null) setDraft(file.data.content ?? "");
-  }, [file.data, draft]);
+    if (!file.data) return;
+    if (draft?.agentId === agentId) return;
+    setDraft({ agentId, content: file.data.content ?? "" });
+    setSaved(false);
+    setError(null);
+  }, [file.data, draft, agentId]);
 
   const save = useMutation({
-    mutationFn: () =>
-      agentsApi.saveInstructionsFile(
+    mutationFn: () => {
+      if (!draft || draft.agentId !== agentId) {
+        // Refuse rather than write someone else's text into this agent.
+        throw new Error("Mandate is still loading for this agent");
+      }
+      return agentsApi.saveInstructionsFile(
         agentId,
-        { path: entryFile!, content: draft ?? "" },
+        { path: entryFile!, content: draft.content },
         companyId,
-      ),
+      );
+    },
     onSuccess: () => {
       setError(null);
       setSaved(true);
@@ -65,9 +78,11 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
     return <p className="text-xs text-muted-foreground">Loading mandate…</p>;
   }
 
-  // The server refuses steward edits outside the managed bundle root, so an
-  // external root is an expected state here, not an error to hide.
-  if (bundle.error || !entryFile) {
+  // The server refuses steward edits outside the managed bundle root. `mode` is
+  // what reports that — `entryFile` is always populated, so keying off it left
+  // this branch unreachable and handed the steward an editor that 403s on save.
+  const isManaged = bundle.data?.mode === "managed";
+  if (bundle.error || !entryFile || !isManaged) {
     return (
       <section aria-labelledby="mandate-heading" className="rounded-lg border p-4">
         <h2 id="mandate-heading" className="text-sm font-semibold">
@@ -76,7 +91,7 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
         <p className="mt-2 text-xs text-muted-foreground">
           {bundle.error instanceof Error
             ? bundle.error.message
-            : "This agent has no managed instructions bundle. An administrator configures where instructions live."}
+            : "This agent uses an externally managed instructions bundle. An administrator configures where instructions live."}
         </p>
       </section>
     );
@@ -101,16 +116,16 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
       <textarea
         aria-label="Mandate"
         className="mt-2 h-48 w-full rounded border p-2 font-mono text-xs"
-        value={draft ?? ""}
+        value={draft?.content ?? ""}
         onChange={(event) => {
-          setDraft(event.target.value);
+          setDraft({ agentId, content: event.target.value });
           setSaved(false);
         }}
       />
 
       <button
         type="button"
-        disabled={save.isPending || draft === null}
+        disabled={save.isPending || draft?.agentId !== agentId}
         onClick={() => save.mutate()}
         className="mt-2 rounded border px-2 py-1 text-xs disabled:opacity-50"
       >

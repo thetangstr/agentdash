@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request } from "express";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
 import { forbidden } from "../errors.js";
@@ -78,16 +78,26 @@ export function agentdashMkInboxRoutes(db: Db) {
    */
   async function buildItems(
     companyId: string,
-    scope: { agentIds: string[] } | { allCompanyAgents: true },
+    scope: { agentIds: string[]; userId?: string } | { allCompanyAgents: true },
     requiresOverride: boolean,
   ) {
-    const scopeCondition =
-      "allCompanyAgents" in scope
-        ? undefined
-        : scope.agentIds.length === 0
-          ? null
-          : inArray(approvals.requestedByAgentId, scope.agentIds);
-    if (scopeCondition === null) return [];
+    let scopeCondition: ReturnType<typeof or> | undefined;
+    if (!("allCompanyAgents" in scope)) {
+      // Design 8.2: the personal inbox is the stewarded agent's requests PLUS
+      // the user's own work. Filtering on agent id alone made a steward's own
+      // human-created request (which has no requesting agent) invisible to the
+      // person who filed it.
+      const clauses = [];
+      if (scope.agentIds.length > 0) {
+        clauses.push(inArray(approvals.requestedByAgentId, scope.agentIds));
+      }
+      if (scope.userId) {
+        clauses.push(eq(approvals.requestedByUserId, scope.userId));
+        clauses.push(eq(approvals.decidedByUserId, scope.userId));
+      }
+      if (clauses.length === 0) return [];
+      scopeCondition = or(...clauses);
+    }
 
     const rows = await db
       .select({ approval: approvals, agent: agents })
@@ -104,7 +114,18 @@ export function agentdashMkInboxRoutes(db: Db) {
           ...(scopeCondition ? [scopeCondition] : []),
         ),
       )
-      .orderBy(desc(approvals.createdAt));
+      .orderBy(desc(approvals.createdAt))
+      // Bounded: the override view spans every agent in the company.
+      .limit(200);
+
+    // Authority is per AGENT, not per approval — resolving it inside the row
+    // map issued two extra queries for every row on an unbounded admin view.
+    const authorityByAgent = new Map<string, Awaited<ReturnType<typeof resolveEffectiveAuthority>>>();
+    for (const agentId of new Set(
+      rows.map((row) => row.approval.requestedByAgentId).filter((id): id is string => !!id),
+    )) {
+      authorityByAgent.set(agentId, await resolveEffectiveAuthority(companyId, agentId));
+    }
 
     return Promise.all(
       rows.map(async ({ approval, agent }) => ({
@@ -129,7 +150,10 @@ export function agentdashMkInboxRoutes(db: Db) {
         })),
         risk: summarizeRisk(approval.type, approval.payload),
         effectiveAuthority: approval.requestedByAgentId
-          ? await resolveEffectiveAuthority(companyId, approval.requestedByAgentId)
+          ? authorityByAgent.get(approval.requestedByAgentId) ?? {
+              steward: null,
+              minimumApproval: null,
+            }
           : { steward: null, minimumApproval: null },
         decisionHistory: {
           decidedAt: approval.decidedAt,
@@ -157,20 +181,24 @@ export function agentdashMkInboxRoutes(db: Db) {
     const userId = requireBoardUser(req);
 
     const current = await stewardships.activeByUserWithAgent(companyId, userId);
-    if (!current) {
-      res.json({ stewardedAgent: null, items: [] });
-      return;
-    }
 
+    // A user who stewards no agent still has their own work; returning an empty
+    // inbox unconditionally hid it and made the tab permanently blank for them.
     res.json({
-      stewardedAgent: {
-        id: current.agent.id,
-        name: current.agent.name,
-        role: current.agent.role,
-        status: current.agent.status,
-      },
-      stewardship: current.stewardship,
-      items: await buildItems(companyId, { agentIds: [current.agent.id] }, false),
+      stewardedAgent: current
+        ? {
+            id: current.agent.id,
+            name: current.agent.name,
+            role: current.agent.role,
+            status: current.agent.status,
+          }
+        : null,
+      stewardship: current?.stewardship ?? null,
+      items: await buildItems(
+        companyId,
+        { agentIds: current ? [current.agent.id] : [], userId },
+        false,
+      ),
     });
   });
 
