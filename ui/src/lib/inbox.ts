@@ -729,6 +729,24 @@ export function getApprovalsForTab(
   });
 }
 
+/**
+ * AgentDash-MK: restrict the "mine" tab to the set the server returned.
+ *
+ * `isApprovalVisibleInMine` treats every actionable approval as mine, which is
+ * correct for the default profile but wrong under stewardship — a steward may
+ * only act on their own agent's requests. The server resolves that from the
+ * session, so membership is its decision; the client only renders. A null
+ * `serverScopedApprovalIds` means the server set has not loaded yet, and we
+ * show nothing rather than briefly showing another steward's approvals.
+ */
+export function restrictApprovalsToServerScope(
+  approvals: Approval[],
+  serverScopedApprovalIds: Set<string> | null,
+): Approval[] {
+  if (!serverScopedApprovalIds) return [];
+  return approvals.filter((approval) => serverScopedApprovalIds.has(approval.id));
+}
+
 export function isApprovalVisibleInMine(
   approval: Approval,
   currentUserId?: string | null,

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
+import { stewardshipsApi } from "../api/stewardships";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
@@ -114,6 +115,7 @@ import {
   matchesInboxIssueSearch,
   getRecentTouchedIssues,
   isInboxEntityDismissed,
+  restrictApprovalsToServerScope,
   isMineInboxTab,
   loadCollapsedInboxGroupKeys,
   loadInboxFilterPreferences,
@@ -650,7 +652,7 @@ function JoinRequestInboxRow({
 }
 
 export function Inbox() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
@@ -749,6 +751,17 @@ export function Inbox() {
     queryKey: queryKeys.approvals.list(selectedCompanyId!),
     queryFn: () => approvalsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  // AgentDash-MK: which approvals are "mine" is a server decision, not a client
+  // filter. `isApprovalVisibleInMine` shows every actionable approval to every
+  // member, which is wrong under stewardship — a steward may only act on their
+  // own agent's requests. The server route resolves that from the session.
+  const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
+  const { data: personalInbox } = useQuery({
+    queryKey: queryKeys.myAgent.inbox(selectedCompanyId ?? ""),
+    queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isProfileCompany,
   });
 
   const {
@@ -1009,12 +1022,29 @@ export function Inbox() {
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
     if (tab === "mine") {
+      // In a profile company the server owns membership of "mine"; the client
+      // only decides how to draw it. Anything the server did not return is not
+      // this user's to act on, however the client-side heuristic would rank it.
+      if (isProfileCompany) {
+        filtered = restrictApprovalsToServerScope(
+          filtered,
+          personalInbox ? new Set(personalInbox.items.map((item) => item.approvalId)) : null,
+        );
+      }
       filtered = filtered.filter(
         (a) => !isInboxEntityDismissed(dismissedAtByKey, `approval:${a.id}`, a.updatedAt),
       );
     }
     return filtered;
-  }, [approvals, tab, allApprovalFilter, currentUserId, dismissedAtByKey]);
+  }, [
+    approvals,
+    tab,
+    allApprovalFilter,
+    currentUserId,
+    dismissedAtByKey,
+    isProfileCompany,
+    personalInbox,
+  ]);
   const showJoinRequestsCategory =
     allCategoryFilter === "everything" || allCategoryFilter === "join_requests";
   const showTouchedCategory =

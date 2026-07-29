@@ -15,6 +15,9 @@ const mockGovernanceApi = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const mockIssuesApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
+
 const mockCompany = vi.hoisted(() => ({
   value: { selectedCompanyId: "company-1", selectedCompany: { productProfile: "agentdash_mk" } },
 }));
@@ -25,6 +28,8 @@ vi.mock("react-router-dom", () => ({
 
 vi.mock("../api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
 vi.mock("../api/agent-governance", () => ({ agentGovernanceApi: mockGovernanceApi }));
+vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
+vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -70,6 +75,8 @@ describe("MyAgent", () => {
       selectedCompany: { productProfile: "agentdash_mk" },
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
+    mockIssuesApi.list.mockResolvedValue([]);
+    mockActivityApi.list.mockResolvedValue([]);
     mockGovernanceApi.get.mockResolvedValue({
       policy: {
         id: "policy-1",
@@ -174,5 +181,30 @@ describe("MyAgent", () => {
 
     expect(mockStewardshipsApi.getMyAgent).not.toHaveBeenCalled();
     expect(container.textContent).toContain("does not use the AgentDash-MK profile");
+  });
+
+  it("shows what the agent is currently working on and what it recently did", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+    mockIssuesApi.list.mockResolvedValue([
+      { id: "issue-1", identifier: "MK-12", title: "Draft the deck", status: "in_progress" },
+    ]);
+    mockActivityApi.list.mockResolvedValue([{ id: "act-1", action: "agent.run_started" }]);
+
+    await render();
+
+    expect(container.textContent).toContain("Current work");
+    expect(container.textContent).toContain("MK-12");
+    expect(container.textContent).toContain("Draft the deck");
+    expect(container.textContent).toContain("Recent activity");
+    expect(container.textContent).toContain("agent run started");
+    // Scoped to this agent, never the whole company.
+    expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", { assigneeAgentId: "agent-1" });
+    expect(mockActivityApi.list).toHaveBeenCalledWith("company-1", {
+      agentId: "agent-1",
+      limit: 10,
+    });
   });
 });

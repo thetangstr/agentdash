@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { activityApi } from "../api/activity";
 import { agentGovernanceApi } from "../api/agent-governance";
+import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { AgentGovernancePanel } from "../components/agent/AgentGovernancePanel";
 import { useCompany } from "../context/CompanyContext";
@@ -27,6 +29,20 @@ export default function MyAgent() {
   const governance = useQuery({
     queryKey: queryKeys.myAgent.governance(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => agentGovernanceApi.get(selectedCompanyId!, agentId!),
+    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+  });
+
+  // Design 8.1: the steward needs to see what their agent is actually doing and
+  // what it has recently done, not just what it is permitted to do.
+  const currentWork = useQuery({
+    queryKey: queryKeys.myAgent.currentWork(selectedCompanyId ?? "", agentId ?? ""),
+    queryFn: () => issuesApi.list(selectedCompanyId!, { assigneeAgentId: agentId! }),
+    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
+  });
+
+  const activity = useQuery({
+    queryKey: queryKeys.myAgent.activity(selectedCompanyId ?? "", agentId ?? ""),
+    queryFn: () => activityApi.list(selectedCompanyId!, { agentId: agentId!, limit: 10 }),
     enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
   });
 
@@ -93,6 +109,34 @@ export default function MyAgent() {
         </p>
       ) : null}
 
+      <section aria-labelledby="my-agent-work-heading" className="rounded-lg border p-4">
+        <h2 id="my-agent-work-heading" className="text-sm font-semibold">
+          Current work
+        </h2>
+        {currentWork.isLoading ? (
+          <p className="mt-2 text-xs text-muted-foreground">Loading…</p>
+        ) : currentWork.error ? (
+          <p className="mt-2 text-xs text-destructive" role="alert">
+            {currentWork.error instanceof Error
+              ? currentWork.error.message
+              : "Failed to load current work"}
+          </p>
+        ) : (currentWork.data ?? []).length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">No issues assigned.</p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-1">
+            {(currentWork.data ?? []).slice(0, 10).map((issue) => (
+              <li key={issue.id} className="text-xs">
+                <Link to={`/issues/${issue.id}`} className="underline">
+                  {issue.identifier}
+                </Link>
+                <span className="text-muted-foreground"> · {issue.title} · {issue.status}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section aria-labelledby="my-agent-inbox-heading" className="rounded-lg border p-4">
         <h2 id="my-agent-inbox-heading" className="text-sm font-semibold">
           Awaiting your decision
@@ -121,6 +165,26 @@ export default function MyAgent() {
                     {" "}· {item.sourceIssues.map((issue) => issue.identifier).join(", ")}
                   </span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section aria-labelledby="my-agent-activity-heading" className="rounded-lg border p-4">
+        <h2 id="my-agent-activity-heading" className="text-sm font-semibold">
+          Recent activity
+        </h2>
+        {activity.error ? (
+          <p className="mt-2 text-xs text-destructive" role="alert">
+            {activity.error instanceof Error ? activity.error.message : "Failed to load activity"}
+          </p>
+        ) : (activity.data ?? []).length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">No recent activity.</p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-1">
+            {(activity.data ?? []).map((event) => (
+              <li key={event.id} className="text-xs text-muted-foreground">
+                {event.action.replace(/[._]/g, " ")}
               </li>
             ))}
           </ul>

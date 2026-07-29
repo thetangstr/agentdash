@@ -21,6 +21,7 @@ import {
   getAvailableInboxIssueColumns,
   getInboxWorkItemKey,
   getApprovalsForTab,
+  restrictApprovalsToServerScope,
   getInboxWorkItems,
   getInboxKeyboardSelectionIndex,
   getInboxSearchSupplementIssues,
@@ -1382,5 +1383,29 @@ describe("inbox helpers", () => {
     expect(shouldResetInboxWorkspaceGrouping("workspace", false, true)).toBe(true);
     expect(shouldResetInboxWorkspaceGrouping("workspace", true, true)).toBe(false);
     expect(shouldResetInboxWorkspaceGrouping("none", false, true)).toBe(false);
+  });
+});
+
+describe("restrictApprovalsToServerScope", () => {
+  const actionable = { id: "a-1", status: "pending" } as Approval;
+  const otherStewards = { id: "a-2", status: "pending" } as Approval;
+
+  it("keeps only what the server returned, even when the client heuristic would show more", () => {
+    // Both are actionable, so isApprovalVisibleInMine would surface both. Under
+    // stewardship only the server knows which agent is mine.
+    const result = restrictApprovalsToServerScope(
+      [actionable, otherStewards],
+      new Set(["a-1"]),
+    );
+    expect(result.map((approval) => approval.id)).toEqual(["a-1"]);
+  });
+
+  it("shows nothing until the server set has loaded", () => {
+    // Failing open here would flash another steward's approvals on first paint.
+    expect(restrictApprovalsToServerScope([actionable, otherStewards], null)).toEqual([]);
+  });
+
+  it("returns an empty list when the server scopes the user to no approvals", () => {
+    expect(restrictApprovalsToServerScope([actionable], new Set())).toEqual([]);
   });
 });

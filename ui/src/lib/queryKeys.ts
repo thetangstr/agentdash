@@ -105,6 +105,10 @@ export const queryKeys = {
     overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
     governance: (companyId: string, agentId: string) =>
       ["myAgent", "governance", companyId, agentId] as const,
+    currentWork: (companyId: string, agentId: string) =>
+      ["myAgent", "currentWork", companyId, agentId] as const,
+    activity: (companyId: string, agentId: string) =>
+      ["myAgent", "activity", companyId, agentId] as const,
   },
   approvals: {
     list: (companyId: string, status?: string) =>
