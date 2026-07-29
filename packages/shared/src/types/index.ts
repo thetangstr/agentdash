@@ -383,3 +383,9 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+
+export type {
+  HumanChannelProvider,
+  ExternalChannelEventState,
+  HumanChannelBinding,
+} from "./human-channel.js";

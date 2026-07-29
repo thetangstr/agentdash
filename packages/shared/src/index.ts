@@ -1144,3 +1144,16 @@ export {
   humanTasteGateCardPayloadSchema,
   type HumanTasteGateCardPayload,
 } from "./validators/goals-eval-hitl.js";
+
+export {
+  HUMAN_CHANNEL_PROVIDERS,
+  EXTERNAL_CHANNEL_EVENT_STATES,
+  type HumanChannelProvider,
+  type ExternalChannelEventState,
+  type HumanChannelBinding,
+} from "./types/human-channel.js";
+
+export {
+  verifyHumanChannelBindingSchema,
+  type VerifyHumanChannelBinding,
+} from "./validators/human-channel.js";

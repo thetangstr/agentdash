@@ -5,6 +5,7 @@ import {
   agents,
   agentStewardships,
   companyMemberships,
+  humanChannelBindings,
 } from "@paperclipai/db";
 import { conflict, notFound } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -286,6 +287,23 @@ export function agentStewardshipService(db: Db) {
           .returning()
           .then((rows) => rows[0]!);
 
+        // The outgoing steward's channel bindings grant a path to act for this
+        // agent, so they end with the stewardship rather than outliving it.
+        await tx
+          .update(humanChannelBindings)
+          .set({
+            revokedAt: now,
+            revokedByUserId: input.transferredByUserId,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(humanChannelBindings.companyId, companyId),
+              eq(humanChannelBindings.userId, active.userId),
+              isNull(humanChannelBindings.revokedAt),
+            ),
+          );
+
         await logActivity(tx as unknown as Db, {
           companyId,
           actorType: "user",
@@ -319,6 +337,16 @@ export function agentStewardshipService(db: Db) {
     database: StewardshipDb = db,
   ) {
     const now = new Date();
+    await database
+      .update(humanChannelBindings)
+      .set({ revokedAt: now, revokedByUserId: endedByUserId, updatedAt: now })
+      .where(
+        and(
+          eq(humanChannelBindings.companyId, companyId),
+          eq(humanChannelBindings.userId, userId),
+          isNull(humanChannelBindings.revokedAt),
+        ),
+      );
     return database
       .update(agentStewardships)
       .set({

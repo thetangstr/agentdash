@@ -7,6 +7,8 @@ export { userSidebarPreferences } from "./user_sidebar_preferences.js";
 export { agents } from "./agents.js";
 export { agentStewardships } from "./agent_stewardships.js";
 export { agentGovernancePolicies } from "./agent_governance_policies.js";
+export { humanChannelBindings } from "./human_channel_bindings.js";
+export { externalChannelEvents } from "./external_channel_events.js";
 export { boardApiKeys } from "./board_api_keys.js";
 export { cliAuthChallenges } from "./cli_auth_challenges.js";
 export { companyMemberships } from "./company_memberships.js";
