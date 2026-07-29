@@ -8,6 +8,7 @@ import {
   Search,
   SquarePen,
   Network,
+  Bot,
   Boxes,
   Repeat,
   GitBranch,
@@ -45,6 +46,9 @@ export function Sidebar() {
   });
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
+  // AgentDash-MK: presentation only. The server 404s these routes off-profile,
+  // so hiding the link is convenience, never the access control.
+  const showMyAgentLink = selectedCompany?.productProfile === "agentdash_mk";
 
   function openSearch() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
@@ -81,6 +85,9 @@ export function Sidebar() {
             <span className="truncate">New Issue</span>
           </button>
           <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
+          {showMyAgentLink ? (
+            <SidebarNavItem to="/my-agent" label="My Agent" icon={Bot} />
+          ) : null}
           <SidebarNavItem
             to="/inbox"
             label="Inbox"

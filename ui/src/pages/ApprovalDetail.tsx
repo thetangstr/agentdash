@@ -85,7 +85,7 @@ export function ApprovalDetail() {
   };
 
   const approveMutation = useMutation({
-    mutationFn: () => approvalsApi.approve(approvalId!),
+    mutationFn: () => approvalsApi.approve(approvalId!, { revision: approval?.revision }),
     onSuccess: () => {
       setError(null);
       refresh();
@@ -95,7 +95,7 @@ export function ApprovalDetail() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: () => approvalsApi.reject(approvalId!),
+    mutationFn: () => approvalsApi.reject(approvalId!, { revision: approval?.revision }),
     onSuccess: () => {
       setError(null);
       refresh();

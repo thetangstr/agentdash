@@ -1761,11 +1761,15 @@ export function IssueDetail() {
   }, [updateChildIssue]);
 
   const approvalDecision = useMutation({
-    mutationFn: async ({ approvalId, action }: { approvalId: string; action: "approve" | "reject" }) => {
+    mutationFn: async ({
+      approvalId,
+      action,
+      revision,
+    }: { approvalId: string; action: "approve" | "reject"; revision?: number }) => {
       if (action === "approve") {
-        return approvalsApi.approve(approvalId);
+        return approvalsApi.approve(approvalId, { revision });
       }
-      return approvalsApi.reject(approvalId);
+      return approvalsApi.reject(approvalId, { revision });
     },
     onMutate: ({ approvalId, action }) => {
       setPendingApprovalAction({ approvalId, action });

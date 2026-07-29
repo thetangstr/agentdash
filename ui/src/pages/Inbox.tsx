@@ -1314,8 +1314,9 @@ export function Inbox() {
   }, []);
 
   const approveMutation = useMutation({
-    mutationFn: (id: string) => approvalsApi.approve(id),
-    onSuccess: (_approval, id) => {
+    mutationFn: ({ id, revision }: { id: string; revision: number }) =>
+      approvalsApi.approve(id, { revision }),
+    onSuccess: (_approval, { id }) => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
       navigate(`/approvals/${id}?resolved=approved`);
@@ -1326,7 +1327,8 @@ export function Inbox() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (id: string) => approvalsApi.reject(id),
+    mutationFn: ({ id, revision }: { id: string; revision: number }) =>
+      approvalsApi.reject(id, { revision }),
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
@@ -2335,8 +2337,8 @@ export function Inbox() {
                           approval={item.approval}
                           selected={isSelected}
                           requesterName={agentName(item.approval.requestedByAgentId)}
-                          onApprove={() => approveMutation.mutate(item.approval.id)}
-                          onReject={() => rejectMutation.mutate(item.approval.id)}
+                          onApprove={() => approveMutation.mutate({ id: item.approval.id, revision: item.approval.revision })}
+                          onReject={() => rejectMutation.mutate({ id: item.approval.id, revision: item.approval.revision })}
                           isPending={approveMutation.isPending || rejectMutation.isPending}
                           unreadState={nonIssueUnreadState(approvalKey)}
                           onMarkRead={() => handleMarkNonIssueRead(approvalKey)}

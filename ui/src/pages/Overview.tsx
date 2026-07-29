@@ -295,6 +295,8 @@ type Resolution = { label: string; tone: "success" | "muted" };
 
 type LiveApproval = {
   id: string;
+  /** Revision the card was rendered from; echoed back on decide. */
+  revision?: number;
   card: boolean;
   status: ApprovalStatus;
   eyebrowIcon?: LucideIcon;
@@ -716,6 +718,7 @@ export function Overview() {
         typeof payload?.role === "string" ? String(payload.role) : "";
       return {
         id: a.id,
+        revision: a.revision,
         card: true,
         status: "pending" as ApprovalStatus,
         eyebrowIcon: Icon,
@@ -820,10 +823,11 @@ export function Overview() {
     );
 
     // Fire real API call
+    const revision = approvals.find((a) => a.id === id)?.revision;
     if (resolution.tone === "success") {
-      approvalsApi.approve(id).catch(() => {});
+      approvalsApi.approve(id, { revision }).catch(() => {});
     } else {
-      approvalsApi.reject(id).catch(() => {});
+      approvalsApi.reject(id, { revision }).catch(() => {});
     }
   }
 

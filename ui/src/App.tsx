@@ -80,6 +80,7 @@ import { About as MarketingAbout } from "./marketing/pages/About";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
+import MyAgent from "./pages/MyAgent";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 
 // AgentDash: billing page wrapper — pulls companyId from context.
@@ -155,6 +156,7 @@ function boardRoutes() {
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
+      <Route path="my-agent" element={<MyAgent />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/company" element={<CompanyInbox />} />
       <Route path="inbox/mine" element={<Inbox />} />
