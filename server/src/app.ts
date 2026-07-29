@@ -27,6 +27,7 @@ import { agentGovernanceRoutes } from "./routes/agent-governance.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
 import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
+import { teamsConnectorRoutes } from "./routes/teams-connector.js";
 import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
 import { issueTreeControlRoutes } from "./routes/issue-tree-control.js";
@@ -368,6 +369,7 @@ export async function createApp(
   // AgentDash: Slack Connector (AGE-108)
   api.use("/connectors", slackConnectorRoutes(db));
   api.use(telegramConnectorRoutes(db));
+  api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
