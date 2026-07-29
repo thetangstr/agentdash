@@ -1221,6 +1221,25 @@ export function issueRoutes(
     });
   });
 
+  /**
+   * Complete child contributions for a parent issue.
+   *
+   * This is the retrieval path design section 12 requires: the parent agent
+   * fetches full comments, documents, and work products with author
+   * provenance, rather than consolidating from the truncated summary that used
+   * to ride along in the wake payload.
+   */
+  router.get("/issues/:id/child-contributions", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    res.json(await svc.listChildContributions(issue.companyId, issue.id));
+  });
+
   router.get("/issues/:id/work-products", async (req, res) => {
     const id = req.params.id as string;
     const issue = await svc.getById(id);

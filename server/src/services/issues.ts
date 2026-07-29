@@ -20,6 +20,7 @@ import {
   issueRelations,
   issueComments,
   issueDocuments,
+  issueWorkProducts,
   issueReadStates,
   issueThreadInteractions,
   issues,
@@ -196,7 +197,35 @@ export type ChildIssueCompletionSummary = {
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
   updatedAt: Date;
-  summary: string | null;
+  /**
+   * Counts, not content. A truncated preview here invites the parent to
+   * consolidate from the preview instead of fetching the source artifacts,
+   * which is exactly the lossy substitution design section 12 rules out.
+   */
+  contributionCounts: { comments: number; documents: number; workProducts: number };
+};
+
+/** One child issue's complete contribution, with author provenance. */
+export type ChildContribution = {
+  sourceIssueId: string;
+  sourceIssueIdentifier: string | null;
+  title: string;
+  status: string;
+  agentId: string | null;
+  comments: Array<{
+    id: string;
+    body: string;
+    authorAgentId: string | null;
+    authorUserId: string | null;
+    createdAt: Date;
+  }>;
+  documents: Array<{ id: string; key: string; title: string | null; format: string }>;
+  /**
+   * Work products record the RUN that produced them, not an agent directly;
+   * agent attribution comes from the child issue's assignee, which is the
+   * contribution's `agentId`.
+   */
+  workProducts: Array<{ id: string; title: string; type: string; status: string; createdByRunId: string | null }>;
 };
 
 function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
@@ -2550,6 +2579,114 @@ export function issueService(db: Db) {
         }));
     },
 
+    /**
+     * Every child contribution, in full, with author provenance.
+     *
+     * Design section 12: the parent must be able to retrieve complete child
+     * documents and work products, not a truncated latest-comment summary, and
+     * the consolidated output must link every required contribution and
+     * contributing agent. `complete` reports whether any required child is
+     * still outstanding, so a consolidator can tell "nothing to say" apart from
+     * "not finished yet".
+     */
+    listChildContributions: async (
+      companyId: string,
+      parentIssueId: string,
+    ): Promise<{
+      contributions: ChildContribution[];
+      contributingAgentIds: string[];
+      complete: boolean;
+    }> => {
+      const children = await db
+        .select({
+          id: issues.id,
+          identifier: issues.identifier,
+          title: issues.title,
+          status: issues.status,
+          assigneeAgentId: issues.assigneeAgentId,
+        })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.parentId, parentIssueId)))
+        .orderBy(asc(issues.issueNumber), asc(issues.createdAt));
+
+      if (children.length === 0) {
+        return { contributions: [], contributingAgentIds: [], complete: true };
+      }
+
+      const childIds = children.map((child) => child.id);
+      const [comments, docRows, workProducts] = await Promise.all([
+        db
+          .select({
+            id: issueComments.id,
+            issueId: issueComments.issueId,
+            body: issueComments.body,
+            authorAgentId: issueComments.authorAgentId,
+            authorUserId: issueComments.authorUserId,
+            createdAt: issueComments.createdAt,
+          })
+          .from(issueComments)
+          .where(and(eq(issueComments.companyId, companyId), inArray(issueComments.issueId, childIds)))
+          .orderBy(asc(issueComments.createdAt)),
+        db
+          .select({
+            issueId: issueDocuments.issueId,
+            id: documents.id,
+            key: issueDocuments.key,
+            title: documents.title,
+            format: documents.format,
+          })
+          .from(issueDocuments)
+          .innerJoin(documents, eq(documents.id, issueDocuments.documentId))
+          .where(and(eq(issueDocuments.companyId, companyId), inArray(issueDocuments.issueId, childIds))),
+        db
+          .select({
+            id: issueWorkProducts.id,
+            issueId: issueWorkProducts.issueId,
+            title: issueWorkProducts.title,
+            type: issueWorkProducts.type,
+            status: issueWorkProducts.status,
+            createdByRunId: issueWorkProducts.createdByRunId,
+          })
+          .from(issueWorkProducts)
+          .where(and(eq(issueWorkProducts.companyId, companyId), inArray(issueWorkProducts.issueId, childIds))),
+      ]);
+
+      const contributions: ChildContribution[] = children.map((child) => ({
+        sourceIssueId: child.id,
+        sourceIssueIdentifier: child.identifier,
+        title: child.title,
+        status: child.status,
+        agentId: child.assigneeAgentId,
+        // Full bodies: truncation here would recreate the gap this exists to close.
+        comments: comments
+          .filter((comment) => comment.issueId === child.id)
+          .map(({ issueId: _issueId, ...comment }) => comment),
+        documents: docRows
+          .filter((doc) => doc.issueId === child.id)
+          .map(({ issueId: _issueId, ...doc }) => doc),
+        workProducts: workProducts
+          .filter((product) => product.issueId === child.id)
+          .map(({ issueId: _issueId, ...product }) => product),
+      }));
+
+      const contributingAgentIds = [
+        ...new Set(
+          contributions
+            .flatMap((contribution) => [
+              contribution.agentId,
+              ...contribution.comments.map((comment) => comment.authorAgentId),
+            ])
+            .filter((id): id is string => !!id),
+        ),
+      ];
+
+      return {
+        contributions,
+        contributingAgentIds,
+        complete: children.every((child) => child.status === "done" || child.status === "cancelled"),
+      };
+    },
+
     getWakeableParentAfterChildCompletion: async (parentIssueId: string) => {
       const parent = await db
         .select({
@@ -2584,29 +2721,39 @@ export function issueService(db: Db) {
         return null;
       }
 
-      const childIdsForSummaries = children.slice(0, MAX_CHILD_COMPLETION_SUMMARIES).map((child) => child.id);
-      const commentRows = childIdsForSummaries.length > 0
-        ? await db
-            .select({
-              issueId: issueComments.issueId,
-              body: issueComments.body,
-              createdAt: issueComments.createdAt,
-            })
-            .from(issueComments)
-            .where(and(eq(issueComments.companyId, parent.companyId), inArray(issueComments.issueId, childIdsForSummaries)))
-            .orderBy(desc(issueComments.createdAt), desc(issueComments.id))
-        : [];
-      const latestCommentByIssueId = new Map<string, string>();
-      for (const comment of commentRows) {
-        if (!latestCommentByIssueId.has(comment.issueId)) {
-          latestCommentByIssueId.set(comment.issueId, comment.body);
-        }
-      }
+      // Counts per child rather than a truncated latest comment: the parent is
+      // told WHAT exists and where, then fetches the complete artifacts through
+      // listChildContributions.
+      const childIds = children.map((child) => child.id);
+      const [commentCounts, documentCounts, workProductCounts] = await Promise.all([
+        db
+          .select({ issueId: issueComments.issueId, count: sql<number>`count(*)::int` })
+          .from(issueComments)
+          .where(and(eq(issueComments.companyId, parent.companyId), inArray(issueComments.issueId, childIds)))
+          .groupBy(issueComments.issueId),
+        db
+          .select({ issueId: issueDocuments.issueId, count: sql<number>`count(*)::int` })
+          .from(issueDocuments)
+          .where(and(eq(issueDocuments.companyId, parent.companyId), inArray(issueDocuments.issueId, childIds)))
+          .groupBy(issueDocuments.issueId),
+        db
+          .select({ issueId: issueWorkProducts.issueId, count: sql<number>`count(*)::int` })
+          .from(issueWorkProducts)
+          .where(and(eq(issueWorkProducts.companyId, parent.companyId), inArray(issueWorkProducts.issueId, childIds)))
+          .groupBy(issueWorkProducts.issueId),
+      ]);
+      const countFor = (rows: Array<{ issueId: string; count: number }>, issueId: string) =>
+        rows.find((row) => row.issueId === issueId)?.count ?? 0;
+
       const childIssueSummaries: ChildIssueCompletionSummary[] = children
         .slice(0, MAX_CHILD_COMPLETION_SUMMARIES)
         .map((child) => ({
           ...child,
-          summary: truncateInlineSummary(latestCommentByIssueId.get(child.id)),
+          contributionCounts: {
+            comments: countFor(commentCounts, child.id),
+            documents: countFor(documentCounts, child.id),
+            workProducts: countFor(workProductCounts, child.id),
+          },
         }));
 
       return {
