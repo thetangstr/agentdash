@@ -685,6 +685,7 @@ export function Overview() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const [approvals, setApprovals] = useState<LiveApproval[]>([]);
   const resolvingIds = useRef<Set<string>>(new Set());
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   // Fetch real dashboard data
   const { data: dashboard, isLoading: dashLoading, error: dashError } = useQuery({
@@ -824,11 +825,20 @@ export function Overview() {
 
     // Fire real API call
     const revision = approvals.find((a) => a.id === id)?.revision;
-    if (resolution.tone === "success") {
-      approvalsApi.approve(id, { revision }).catch(() => {});
-    } else {
-      approvalsApi.reject(id, { revision }).catch(() => {});
-    }
+    const decision =
+      resolution.tone === "success"
+        ? approvalsApi.approve(id, { revision })
+        : approvalsApi.reject(id, { revision });
+    // Steward gating and revision binding mean this can legitimately 403 or
+    // 409. Swallowing that leaves the card animating "approved" while the
+    // server refused, so restore the card and surface the reason instead.
+    decision.catch((err: unknown) => {
+      resolvingIds.current.delete(id);
+      setDecisionError(err instanceof Error ? err.message : "Decision failed");
+      setApprovals((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: "pending", resolution: undefined } : a)),
+      );
+    });
   }
 
   // reveal index counter
@@ -1038,6 +1048,11 @@ export function Overview() {
           </Reveal>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {decisionError ? (
+              <div role="alert" style={{ color: "var(--destructive)", fontSize: 13 }}>
+                {decisionError}
+              </div>
+            ) : null}
             {visibleCards.map((approval) => (
               <Reveal key={approval.id} index={next()} reduced={reduced}>
                 <ApprovalCard approval={approval} reduced={reduced} onResolve={resolveApproval} />

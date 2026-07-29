@@ -93,6 +93,12 @@ export const queryKeys = {
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,
   },
+  stewardships: {
+    byAgent: (companyId: string, agentId: string) =>
+      ["stewardships", companyId, agentId] as const,
+    history: (companyId: string, agentId: string) =>
+      ["stewardships", "history", companyId, agentId] as const,
+  },
   myAgent: {
     detail: (companyId: string) => ["myAgent", companyId] as const,
     inbox: (companyId: string) => ["myAgent", "inbox", companyId] as const,
