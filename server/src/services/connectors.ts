@@ -15,8 +15,10 @@ import type {
   ConnectorWorkspaceDefaults,
   AgentConnectorOverrides,
 } from "@paperclipai/shared";
+import { policyListAllows, policyListAllowsAll } from "@paperclipai/shared";
 import { notFound, forbidden, conflict } from "../errors.js";
 import { logActivity } from "./activity-log.js";
+import { agentGovernanceService } from "./agent-governance.js";
 
 // ---------------------------------------------------------------------------
 // Token encryption helpers — reuse local_encrypted provider
@@ -65,6 +67,8 @@ const DEFAULT_SEND_IDENTITY: ConnectionSendIdentity = "service";
 // ---------------------------------------------------------------------------
 
 export function connectorService(db: Db) {
+  const governance = agentGovernanceService(db);
+
   // -------------------------------------------------------------------------
   // Connection CRUD
   // -------------------------------------------------------------------------
@@ -374,6 +378,25 @@ export function connectorService(db: Db) {
     actionClass: ConnectorActionClass,
     provider: string,
   ): Promise<ActingAsResult> {
+    // AgentDash-MK: the owner ceiling gates provider selection before anything
+    // else. Checking it first is deliberate — answering `no_connection` for a
+    // provider the owner disallowed would read as "set one up" instead of "you
+    // may not use this", and would also disclose connection inventory for a
+    // provider the caller has no business touching.
+    //
+    // `resolveAgentPolicy` returns null outside `agentdash_mk`, so every check
+    // below is a no-op for default-profile companies.
+    const policy = await governance.resolveAgentPolicy(companyId, agentId);
+    if (policy && !policyListAllows(policy.providers, provider)) {
+      return {
+        ok: false,
+        blocked: {
+          reason: "provider_not_allowed",
+          message: `The owner ceiling for this agent does not allow ${provider}`,
+        },
+      };
+    }
+
     // 1. Find an active connection for this agent+provider
     const agentConnections = await db
       .select()
@@ -407,7 +430,31 @@ export function connectorService(db: Db) {
       };
     }
 
-    const conn = usable[0];
+    // AgentDash-MK: a connection may not carry more data access than the
+    // ceiling allows. This filters rather than rejects outright, so one
+    // over-broad credential cannot disable a compliant one sitting beside it.
+    //
+    // A connection with no recorded scopes is treated as within any ceiling.
+    // Scope recording postdates most rows, and failing them closed would turn
+    // "narrow dataScopes" into an outage for every legacy connection — the
+    // opposite of an opt-in control. Providers that matter record their scopes.
+    let permitted = usable;
+    if (policy) {
+      permitted = usable.filter((c) =>
+        policyListAllowsAll(policy.dataScopes, (c.scopes ?? []) as string[]),
+      );
+      if (permitted.length === 0) {
+        return {
+          ok: false,
+          blocked: {
+            reason: "data_scope_not_allowed",
+            message: `Every available ${provider} connection carries data scopes beyond the owner ceiling`,
+          },
+        };
+      }
+    }
+
+    const conn = permitted[0];
 
     // 2. Resolve autonomy: per-agent → per-connection → workspace default
     const wsDefaults = await getWorkspaceDefaults(companyId);

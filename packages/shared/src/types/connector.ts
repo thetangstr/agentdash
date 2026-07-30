@@ -74,7 +74,17 @@ export interface ActingAsResolution {
 }
 
 export interface ActingAsBlocked {
-  reason: "no_connection" | "not_authorized" | "connection_revoked" | "autonomy_blocked";
+  reason:
+    | "no_connection"
+    | "not_authorized"
+    | "connection_revoked"
+    | "autonomy_blocked"
+    // AgentDash-MK: the owner ceiling refused this provider or the scope the
+    // available connection carries. Kept distinct from `not_authorized` so a
+    // caller can tell "an owner disallowed this" from "you picked the wrong
+    // connection" — the two have different remedies and different audiences.
+    | "provider_not_allowed"
+    | "data_scope_not_allowed";
   message: string;
 }
 

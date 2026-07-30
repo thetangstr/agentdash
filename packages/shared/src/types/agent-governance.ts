@@ -265,6 +265,28 @@ export function assertWithinCeiling(
   }
 }
 
+/**
+ * Does a list-valued ceiling dimension admit `value`?
+ *
+ * Runtime enforcement points (connector resolution, channel binding) need the
+ * same membership rule the mutation path uses, and they need it without
+ * constructing a whole candidate policy. Sharing this function is what keeps
+ * "what the ceiling permits" from meaning one thing at write time and another
+ * at use time.
+ */
+export function policyListAllows(allowed: readonly string[], value: string): boolean {
+  const normalized = normalizeList(allowed);
+  if (isUnrestricted(normalized)) return true;
+  return normalized.includes(value.trim());
+}
+
+/** Every value must be admitted. An empty `values` is vacuously allowed. */
+export function policyListAllowsAll(allowed: readonly string[], values: readonly string[]): boolean {
+  const normalized = normalizeList(allowed);
+  if (isUnrestricted(normalized)) return true;
+  return values.every((value) => normalized.includes(value.trim()));
+}
+
 /** Normalize a policy into its canonical (sorted, deduplicated) form. */
 export function normalizeAgentGovernancePolicy(policy: AgentGovernancePolicy): AgentGovernancePolicy {
   return {

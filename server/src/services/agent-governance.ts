@@ -1,6 +1,12 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentGovernancePolicies, agents, companies, principalPermissionGrants } from "@paperclipai/db";
+import {
+  agentGovernancePolicies,
+  agents,
+  companies,
+  humanChannelBindings,
+  principalPermissionGrants,
+} from "@paperclipai/db";
 import {
   AGENT_POLICY_CEILING_EXCEEDED,
   AGENT_POLICY_REVISION_CONFLICT,
@@ -9,6 +15,7 @@ import {
   assertWithinCeiling,
   computeEffectiveAgentPolicy,
   normalizeAgentGovernancePolicy,
+  policyListAllows,
   type AgentGovernanceChannel,
   type AgentGovernancePolicy,
   type AgentGovernanceTarget,
@@ -375,6 +382,45 @@ export function agentGovernanceService(db: Db) {
               .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)));
           }
 
+          // A ceiling that only gates NEW channel bindings is not a ceiling.
+          // The standing binding is the delivery path for this agent's approval
+          // cards, so leaving it active would keep routing decisions over the
+          // very channel the owner just disallowed.
+          //
+          // Same transaction as the ceiling write: a revocation that could
+          // survive a rollback of the narrowing, or vice versa, would leave the
+          // policy and the channels disagreeing about what is permitted.
+          const activeBindings = await tx
+            .select({
+              id: humanChannelBindings.id,
+              provider: humanChannelBindings.provider,
+            })
+            .from(humanChannelBindings)
+            .where(
+              and(
+                eq(humanChannelBindings.companyId, companyId),
+                eq(humanChannelBindings.agentId, agentId),
+                isNull(humanChannelBindings.revokedAt),
+              ),
+            );
+
+          for (const binding of activeBindings) {
+            if (policyListAllows(effectivePolicy.providers, binding.provider)) continue;
+            await tx
+              .update(humanChannelBindings)
+              .set({
+                revokedAt: now,
+                revokedByUserId: input.actorUserId ?? null,
+                updatedAt: now,
+              })
+              .where(eq(humanChannelBindings.id, binding.id));
+            clamps.push({
+              field: `channel:${binding.provider}`,
+              previous: "bound",
+              clampedTo: "revoked",
+            });
+          }
+
           for (const clamp of clamps) {
             await logActivity(tx as unknown as Db, {
               companyId,
@@ -513,9 +559,29 @@ export function agentGovernanceService(db: Db) {
     return active && active.userId === actor.userId ? "steward" : null;
   }
 
+  /**
+   * The agent's effective policy for runtime enforcement, or `null` when this
+   * company is not on the profile.
+   *
+   * Enforcement points call this instead of `getForAgent` so the "not on the
+   * profile" case is one falsy check rather than a policy object each caller
+   * must remember to ignore. Returning the unrestricted default here would be
+   * subtly wrong: it reads as "enforce, but permit everything", which hides the
+   * fact that the whole mechanism is off.
+   */
+  async function resolveAgentPolicy(
+    companyId: string,
+    agentId: string,
+  ): Promise<AgentGovernancePolicy | null> {
+    if (!(await isProfileCompany(companyId))) return null;
+    const record = await getForAgent(companyId, agentId);
+    return record.effectivePolicy as AgentGovernancePolicy;
+  }
+
   return {
     isProfileCompany,
     getForAgent,
+    resolveAgentPolicy,
     materialize,
     updateOwnerCeiling,
     updateStewardRequest,

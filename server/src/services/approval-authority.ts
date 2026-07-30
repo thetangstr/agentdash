@@ -4,6 +4,7 @@ import { approvals, companies } from "@paperclipai/db";
 import type { ApprovalDecisionChannel } from "@paperclipai/shared";
 import { badRequest, conflict, forbidden } from "../errors.js";
 import { accessService } from "./access.js";
+import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 
 type ApprovalRow = typeof approvals.$inferSelect;
@@ -14,7 +15,8 @@ type ApprovalRow = typeof approvals.$inferSelect;
  * - `steward`  — the current steward of the requesting agent (the ordinary
  *                AgentDash-MK path).
  * - `admin`    — an administrator deciding an approval no agent requested, so
- *                there is no steward to route it to.
+ *                there is no steward to route it to; or one deciding for an
+ *                agent whose ceiling sets `minimumApproval: "none"`.
  * - `owner_override` — the explicit, reasoned emergency action.
  */
 export type ApprovalDecisionRole = "board" | "steward" | "admin" | "owner_override";
@@ -41,6 +43,7 @@ export interface ApprovalDecisionRequest {
 export function approvalAuthorityService(db: Db) {
   const access = accessService(db);
   const stewardships = agentStewardshipService(db);
+  const governance = agentGovernanceService(db);
 
   async function isProfileCompany(companyId: string) {
     const company = await db
@@ -115,13 +118,34 @@ export function approvalAuthorityService(db: Db) {
 
     if (approval.requestedByAgentId) {
       const active = await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId);
-      if (!active || !actor.userId || active.userId !== actor.userId) {
-        throw forbidden(
-          "Only the current steward of the requesting agent can decide this approval; " +
-            "an owner or administrator must use the emergency override action",
-        );
+      if (active && actor.userId && active.userId === actor.userId) {
+        return "steward";
       }
-      return "steward";
+
+      // `minimumApproval` is a floor on how much approval authority this
+      // agent's actions require. At the default `steward` the rule above is the
+      // whole rule. At `none` the owner has said this agent's work does not
+      // need steward-level sign-off, so administrators may decide on the
+      // ordinary path instead of writing an emergency override for routine work.
+      //
+      // Deliberately bounded to administrators: it removes a ceremony for
+      // people who could already override, and adds no new class of decider.
+      // A bystander with no administrative authority is still refused.
+      const policy = await governance.resolveAgentPolicy(
+        approval.companyId,
+        approval.requestedByAgentId,
+      );
+      if (
+        policy?.minimumApproval === "none" &&
+        (await isAdministrator(approval.companyId, actor))
+      ) {
+        return "admin";
+      }
+
+      throw forbidden(
+        "Only the current steward of the requesting agent can decide this approval; " +
+          "an owner or administrator must use the emergency override action",
+      );
     }
 
     // No requesting agent means no steward to route to; administrators decide.

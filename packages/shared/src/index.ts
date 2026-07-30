@@ -651,6 +651,8 @@ export {
   collectCeilingViolations,
   assertWithinCeiling,
   normalizeAgentGovernancePolicy,
+  policyListAllows,
+  policyListAllowsAll,
   type AgentDestructiveActionMode,
   type AgentMinimumApprovalMode,
   type AgentGovernanceChannel,

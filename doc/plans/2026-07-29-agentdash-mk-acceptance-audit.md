@@ -8,7 +8,7 @@ Every criterion from the design, with the evidence that supports it. A missing
 live provider credential is a **verification gap**, not an implicit pass, and is
 recorded as such.
 
-**Verdict: 9 of 14 met, 4 partial, 1 not met. AgentDash-MK is NOT complete.**
+**Verdict: 10 of 14 met, 3 partial, 1 not met. AgentDash-MK is NOT complete.**
 
 **Scope note (2026-07-30):** the product owner deprioritized Microsoft Teams and
 brought WhatsApp, HubSpot, and the local computer-agent bridge into scope. See
@@ -86,19 +86,35 @@ authority", "refuses steward changes to where instructions are stored".
 
 This criterion failed three consecutive reviews before these controls existed.
 
-### 5. Ceilings reject every specified class of over-broad configuration — **PARTIAL**
+### 5. Ceilings reject every specified class of over-broad configuration — **MET**
 
-Enforced: `permissions` and `monthlyBudgetCents`, at every write path
+`permissions` and `monthlyBudgetCents` are enforced at every write path
 (`PATCH /agents/:id`, `PATCH /agents/:id/permissions`, both `costs.ts` budget
 routes, and budget-incident resolution), including the `hardStopEnabled` /
 `isActive` / `amount: 0` evasions.
 
-**Not enforced: `providers` and `dataScopes`.** `assertAgentMutationWithinCeiling`
-is never called with either. `destructiveActions` and `minimumApproval` are
-computed and stored but have no runtime consumer. Design §6.3 explicitly
-requires provider selection to be ceiling-bound; there is no agent-scoped
-provider selection surface today, so the dimension is inert rather than
-bypassable — but the criterion says *every* class.
+`providers` and `dataScopes` gained runtime consumers on 2026-07-30. Provider
+selection is refused in `connectorService.resolveActingAs` with
+`provider_not_allowed` **before** connection lookup, and in
+`humanChannelService.verifyBinding` with a 403. Data scopes filter the candidate
+connections and return `data_scope_not_allowed` only when every one exceeds the
+ceiling. Narrowing `providers` revokes standing channel bindings inside the same
+transaction as the ceiling write.
+
+`minimumApproval` is consumed by `approvalAuthorityService.requireDecisionActor`:
+at the default `steward` the steward-only rule is unchanged; at `none` an
+administrator may decide on the ordinary path.
+
+**Still without a runtime consumer: `destructiveActions`.** It is computed,
+stored, clamped, and rejected on write, but nothing reads it at action time —
+there is no destructive-action classification in the codebase to hang it on.
+Recorded here rather than claimed: the dimension is inert, not bypassable.
+
+Evidence: `agentdash-mk-provider-ceiling.test.ts` (17 tests), including
+default-profile no-op guards, the unrestricted-default guard, "prefers a
+within-ceiling connection over refusing outright", "treats a connection with no
+recorded scopes as within any ceiling", and "does not open the ordinary path to
+non-administrators".
 
 ### 6. Accepted and rejected changes retain actor and revision provenance — **MET**
 
@@ -122,6 +138,13 @@ Evidence: `agentdash-mk-approval-authority.test.ts` — 17 tests including "deni
 an owner the ordinary decision path", "requires a reason for an emergency
 override", "fails closed when a replayed key arrives after the stewardship
 moved on".
+
+**One deliberate relaxation (2026-07-30):** when the *effective*
+`minimumApproval` is `none`, an administrator may decide on the ordinary path
+instead of writing an override. Because that dimension's ceiling is a floor and
+the effective value is the stricter of the two sides, reaching `none` requires
+both the owner and the steward to ask for it. Non-administrators gain nothing.
+The default is unchanged and its test above still passes.
 
 ### 8. Web Inbox authenticated-user scoped and server-backed — **PARTIAL**
 
@@ -246,7 +269,9 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    when it resumes.*
 2. **Telegram pairing challenge and bidirectional conversation** (blocks §9).
 3. **Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).
-4. **`providers` / `dataScopes` ceiling enforcement** (blocks §5).
+4. ~~**`providers` / `dataScopes` ceiling enforcement** (blocks §5).~~ Closed
+   2026-07-30. `destructiveActions` still has no runtime consumer — tracked as
+   item 11 rather than left implied.
 5. ~~**Agent-authenticated E2E** (blocks §11).~~ Closed 2026-07-30 by
    `tests/e2e/agentdash-mk-agent-auth.spec.ts`.
 6. CLI and MCP approval clients omit decision metadata and will 400 in a profile
@@ -261,3 +286,7 @@ See the verification table above. Live Telegram and Teams sandbox runs have
     connector, HubSpot native BYO-key connector (read, then steward-approved
     writes), and the local computer-agent bridge. These are additions beyond the
     fourteen criteria, not gaps in them; see the scope-override addendum.
+11. **`destructiveActions` runtime consumer.** The dimension is rejected on
+    configuration write and clamped on narrowing, but no action-time check reads
+    it, because nothing in the codebase classifies an action as destructive yet.
+    That classification has to exist before the ceiling can bind anything.

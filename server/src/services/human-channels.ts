@@ -1,8 +1,10 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { externalChannelEvents, humanChannelBindings } from "@paperclipai/db";
-import { conflict, notFound } from "../errors.js";
+import { policyListAllows } from "@paperclipai/shared";
+import { conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
+import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { logActivity } from "./activity-log.js";
 
@@ -20,6 +22,7 @@ export interface VerifyBindingInput {
 
 export function humanChannelService(db: Db) {
   const stewardships = agentStewardshipService(db);
+  const governance = agentGovernanceService(db);
 
   /**
    * Complete a verified pairing ceremony.
@@ -35,6 +38,22 @@ export function humanChannelService(db: Db) {
     const active = await stewardships.activeByUser(companyId, input.userId);
     if (!active) {
       throw conflict("Channel binding requires an active stewarded agent");
+    }
+
+    // AgentDash-MK: a binding is the delivery path for that agent's approval
+    // cards, so the agent's own provider ceiling decides which channels may
+    // carry them. Keyed to the stewarded agent because the binding is only
+    // meaningful in relation to it — the row above already established that
+    // pairing, and it is the same agent recorded in `agentId` below.
+    //
+    // `resolveAgentPolicy` is null outside the profile, so default-profile
+    // companies bind exactly as before.
+    const policy = await governance.resolveAgentPolicy(companyId, active.agentId);
+    if (policy && !policyListAllows(policy.providers, input.provider)) {
+      throw forbidden(
+        `The owner ceiling for this agent does not allow ${input.provider}; ` +
+          "an administrator must widen it before this channel can be paired",
+      );
     }
 
     const now = new Date();

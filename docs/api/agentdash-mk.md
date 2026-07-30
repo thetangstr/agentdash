@@ -39,7 +39,44 @@ the `revision` last read; a stale value returns **409**
 **422** `AGENT_POLICY_CEILING_EXCEEDED` with a `details.violations` array.
 
 Lowering a ceiling clamps standing configuration in the same transaction and
-revokes permission grants the ceiling no longer allows.
+revokes permission grants the ceiling no longer allows. It also revokes any
+active human channel binding whose provider the ceiling no longer permits — a
+ceiling that gated only *new* bindings would keep delivering this agent's
+approval cards over the channel the owner just disallowed.
+
+### Runtime enforcement of each ceiling dimension
+
+| Dimension | Enforced at | On refusal |
+|---|---|---|
+| `permissions` | agent config and permission routes | **422** `AGENT_POLICY_CEILING_EXCEEDED` |
+| `monthlyBudgetCents` | agent config, both budget routes, incident resolution | **422** `AGENT_POLICY_CEILING_EXCEEDED` |
+| `providers` | `resolveActingAs`, channel binding | `provider_not_allowed`, **403** on binding |
+| `dataScopes` | `resolveActingAs` | `data_scope_not_allowed` |
+| `minimumApproval` | approval decision authority | **403**, or admin-decidable at `none` |
+| `destructiveActions` | computed and stored; no runtime consumer yet | — |
+
+The provider check runs **before** connection lookup, so a disallowed provider
+answers "the ceiling does not allow this" rather than "no connection available"
+— the latter reads as an invitation to set one up, and discloses connection
+inventory for a provider the caller may not touch.
+
+`dataScopes` filters rather than rejects: when several connections exist for a
+provider, over-scoped ones are skipped and a compliant one is used. Only when
+every candidate exceeds the ceiling is `data_scope_not_allowed` returned. A
+connection with no recorded scopes is treated as within any ceiling, because
+scope recording postdates most rows and failing them closed would turn
+narrowing `dataScopes` into an outage for every legacy connection.
+
+`minimumApproval` is the one dimension where the ceiling is a **floor**, so the
+effective value is the *stricter* of ceiling and steward request. Lowering it to
+`none` therefore takes both an owner and the steward. At `none`, administrators
+may decide that agent's approvals on the ordinary path instead of writing an
+emergency override; the relaxation is bounded to people who could already
+override and adds no new class of decider.
+
+Every dimension is inert outside `agentdash_mk`, and the default ceiling is
+unrestricted on `permissions`, `providers`, `dataScopes`, and the budget — so
+enabling the profile never removes authority by itself.
 
 ## Personal inbox
 
