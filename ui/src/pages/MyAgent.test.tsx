@@ -10,7 +10,7 @@ const mockStewardshipsApi = vi.hoisted(() => ({
   getMyAgent: vi.fn(),
   getMyInbox: vi.fn(),
   listMyChannels: vi.fn(),
-  startTelegramPairing: vi.fn(),
+  startPairing: vi.fn(),
 }));
 
 const mockGovernanceApi = vi.hoisted(() => ({
@@ -78,7 +78,7 @@ describe("MyAgent", () => {
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
     mockStewardshipsApi.listMyChannels.mockResolvedValue({ bindings: [] });
-    mockStewardshipsApi.startTelegramPairing.mockResolvedValue({
+    mockStewardshipsApi.startPairing.mockResolvedValue({
       deepLink: "https://t.me/agentdash_test_bot?start=tok",
       expiresAt: "2026-07-30T12:00:00.000Z",
     });
@@ -226,7 +226,7 @@ describe("MyAgent", () => {
     expect(container.textContent).toContain("Telegram");
     // Minting spends the user's one outstanding challenge and invalidates any
     // link they already opened. It must be an explicit act, never a page load.
-    expect(mockStewardshipsApi.startTelegramPairing).not.toHaveBeenCalled();
+    expect(mockStewardshipsApi.startPairing).not.toHaveBeenCalled();
 
     const connect = Array.from(container.querySelectorAll("button")).find((button) =>
       /connect telegram/i.test(button.textContent ?? ""),
@@ -242,7 +242,7 @@ describe("MyAgent", () => {
       });
     }
 
-    expect(mockStewardshipsApi.startTelegramPairing).toHaveBeenCalledWith("company-1");
+    expect(mockStewardshipsApi.startPairing).toHaveBeenCalledWith("company-1", "telegram");
     const link = Array.from(container.querySelectorAll("a")).find((anchor) =>
       anchor.getAttribute("href")?.startsWith("https://t.me/"),
     );
@@ -280,7 +280,7 @@ describe("MyAgent", () => {
       stewardship: { id: "s-1" },
       agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
     });
-    mockStewardshipsApi.startTelegramPairing.mockRejectedValue(
+    mockStewardshipsApi.startPairing.mockRejectedValue(
       new Error("Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset"),
     );
 

@@ -9,6 +9,7 @@ import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { requireProductProfile } from "../services/companies.js";
 import { humanChannelService } from "../services/human-channels.js";
+import { whatsappPairingLink } from "../services/whatsapp-connector.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 export function humanChannelRoutes(db: Db) {
@@ -84,6 +85,39 @@ export function humanChannelRoutes(db: Db) {
   });
 
   /**
+   * Start a WhatsApp pairing.
+   *
+   * Same shape as Telegram's, and the same rule about identity: the link
+   * prefills a message the user sends FROM their handset, and that inbound
+   * message is what proves they hold the number. No surface anywhere accepts a
+   * phone number a human typed — numbers are guessable, and a mis-paired
+   * binding leaks both the content of approvals and the authority to decide
+   * them.
+   */
+  router.post("/companies/:companyId/me/channels/whatsapp/pairing", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(req, companyId);
+    const userId = requireBoardUser(req);
+
+    const businessNumber = process.env.WHATSAPP_BUSINESS_NUMBER?.trim();
+    if (!businessNumber) {
+      throw serviceUnavailable(
+        "WhatsApp pairing is not configured: WHATSAPP_BUSINESS_NUMBER is unset",
+      );
+    }
+
+    const { token, expiresAt } = await channels.mintPairingChallenge(companyId, {
+      userId,
+      provider: "whatsapp",
+    });
+
+    res.status(201).json({
+      deepLink: whatsappPairingLink(businessNumber, token),
+      expiresAt: expiresAt.toISOString(),
+    });
+  });
+
+  /**
    * Complete a pairing. The provider identity is supplied, but WHO it binds to
    * is always the authenticated caller — accepting a userId here would let one
    * member attach a provider account to someone else's agent.
@@ -101,10 +135,11 @@ export function humanChannelRoutes(db: Db) {
       // the account they named, which meant a member could bind a stranger's —
       // or a colleague's — Telegram id to their own agent and receive that
       // person's messages. Providers with no ceremony yet still use this path.
-      if (req.body.provider === "telegram") {
+      if (req.body.provider === "telegram" || req.body.provider === "whatsapp") {
         throw badRequest(
-          "Telegram must be paired through POST /me/channels/telegram/pairing, " +
-            "which verifies the account instead of trusting the supplied id",
+          `${req.body.provider} must be paired through ` +
+            `POST /me/channels/${req.body.provider}/pairing, which verifies the ` +
+            "account instead of trusting the supplied id",
         );
       }
 

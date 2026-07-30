@@ -66,9 +66,9 @@ export const stewardshipsApi = {
    * never exposed to the client, so it cannot end up somewhere the link itself
    * would not reach.
    */
-  startTelegramPairing: (companyId: string) =>
+  startPairing: (companyId: string, provider: "telegram" | "whatsapp") =>
     api.post<{ deepLink: string; expiresAt: string }>(
-      `/companies/${companyId}/me/channels/telegram/pairing`,
+      `/companies/${companyId}/me/channels/${provider}/pairing`,
       {},
     ),
 

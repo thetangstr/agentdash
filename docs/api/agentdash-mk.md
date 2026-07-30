@@ -126,10 +126,13 @@ approving one creates an agent.
 |---|---|---|
 | `GET` | `/api/companies/:companyId/me/channels` | Own bindings |
 | `POST` | `/api/companies/:companyId/me/channels/telegram/pairing` | Own pairing, session identity |
+| `POST` | `/api/companies/:companyId/me/channels/whatsapp/pairing` | Own pairing, session identity |
 | `POST` | `/api/companies/:companyId/me/channels` | Own binding, session identity (**not** Telegram) |
 | `POST` | `/api/companies/:companyId/channel-bindings/:id/revoke` | Bound user or admin |
 | `GET` | `/api/companies/:companyId/channel-bindings` | `agents:create` |
 | `POST` | `/api/connectors/telegram/webhook` | Telegram (secret header) |
+| `GET` | `/api/connectors/whatsapp/webhook` | Meta (subscription handshake) |
+| `POST` | `/api/connectors/whatsapp/webhook` | Meta (`X-Hub-Signature-256`) |
 | `POST` | `/api/connectors/teams/messages` | Teams (validated activity) |
 
 One provider identity binds to at most one active human per company, and each
@@ -153,14 +156,14 @@ have seen. The response carries a **deep link only** — the raw token is never
 returned, so it cannot be logged or copied separately from the link the user is
 meant to open.
 
-`POST /me/channels` now **rejects `provider: "telegram"` with 400**. That route
-accepts a self-asserted external id and never proved the caller controls it, so
-before the ceremony existed a member could bind a colleague's Telegram account
+`POST /me/channels` now **rejects `telegram` and `whatsapp` with 400**. That
+route accepts a self-asserted external id and never proved the caller controls
+it, so before the ceremonies existed a member could bind a colleague's account
 to their own agent. Providers with no ceremony yet still use it.
 
-Requires `TELEGRAM_BOT_USERNAME`. When it is unset the mint returns **503** and
-spends no token, rather than handing back a `t.me/undefined?start=…` link that
-looks like it works.
+Requires `TELEGRAM_BOT_USERNAME` (and `WHATSAPP_BUSINESS_NUMBER` for WhatsApp).
+When unset the mint returns **503** and spends no token, rather than handing
+back a `t.me/undefined?start=…` link that looks like it works.
 
 ### Telegram
 
@@ -196,6 +199,33 @@ its company from the challenge instead. The order is **peek → claim → consum
 consuming before claiming would let a Telegram redelivery find the token already
 spent and tell the user their pairing failed, for a pairing that succeeded.
 
+### WhatsApp
+
+Authenticity is `X-Hub-Signature-256`, an HMAC-SHA256 over the **raw request
+bytes**, checked before parsing or dispatch. Verifying against
+`JSON.stringify(req.body)` instead would reject every authentic request:
+whitespace survives the wire and does not survive a parse/serialize round trip.
+`GET` answers Meta's one-time subscription handshake with `hub.challenge`.
+
+`wamid` is the dedup anchor, claimed **per message**. One POST may carry several
+messages, and each is claimed and dispatched on its own — treating the payload
+as a single unit would let a duplicate suppress a distinct sibling beside it.
+
+Pairing uses a `wa.me/<business>?text=<token>` link that prefills a message the
+user sends **from their own handset**. That inbound message is the proof of
+control. No surface anywhere accepts a phone number a human typed: numbers are
+guessable in a way a Telegram user id is not, and a mis-paired binding leaks
+both the content of approvals and the authority to decide them. The pairing
+message also opens the messaging window, so the first approval card after
+pairing is deliverable.
+
+Approval cards are interactive reply buttons carrying the same opaque handles
+Telegram uses. **Outside the 24-hour messaging window** a business may send only
+a Meta-reviewed template, which this build does not assume an operator has
+provisioned — so an out-of-window card is reported as *not delivered* and
+logged, never downgraded to a text message Meta would reject. An undelivered
+card must stay distinguishable from a steward who has not answered.
+
 ### Teams
 
 **Inbound authentication is not wired.** `@microsoft/teams.apps` keeps Bot
@@ -222,11 +252,20 @@ parent wake payload carries references and per-child counts only.
 | `TELEGRAM_BOT_TOKEN` | Bot API token for outbound calls |
 | `TELEGRAM_WEBHOOK_SECRET` | Value required in `X-Telegram-Bot-Api-Secret-Token` |
 | `TELEGRAM_BOT_USERNAME` | Bot handle used to build the `t.me/<bot>?start=` pairing link |
+| `WHATSAPP_APP_SECRET` | Meta app secret; HMAC key for `X-Hub-Signature-256` |
+| `WHATSAPP_VERIFY_TOKEN` | Value Meta echoes in the subscription handshake |
+| `WHATSAPP_ACCESS_TOKEN` | Graph API token for outbound calls |
+| `WHATSAPP_PHONE_NUMBER_ID` | Graph API phone-number id used to send |
+| `WHATSAPP_BUSINESS_NUMBER` | Public number used to build the `wa.me` pairing link |
 | `TEAMS_APP_ID` | Entra app (client) id |
 | `TEAMS_APP_PASSWORD` | Entra client secret |
 
 ## Not in scope
 
-The local Codex/Claude computer-agent bridge is **P2** and not implemented. No
-first-party Salesforce, HubSpot, Jira, SharePoint, Google Drive, or WhatsApp
-integrations are added by this work.
+The local Codex/Claude computer-agent bridge is not implemented yet. No
+first-party Salesforce, Jira, SharePoint, or Google Drive integrations are added
+by this work.
+
+WhatsApp and HubSpot were excluded by the original design and brought into scope
+by the [2026-07-30 scope override](../superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
+WhatsApp is implemented above; HubSpot is not yet.

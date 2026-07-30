@@ -42,10 +42,12 @@ describeEmbeddedPostgres("channel pairing routes", () => {
 
   beforeEach(() => {
     process.env.TELEGRAM_BOT_USERNAME = "agentdash_test_bot";
+    process.env.WHATSAPP_BUSINESS_NUMBER = "+1 555 010 9999";
   });
 
   afterEach(async () => {
     delete process.env.TELEGRAM_BOT_USERNAME;
+    delete process.env.WHATSAPP_BUSINESS_NUMBER;
     await db.delete(activityLog);
     await db.delete(channelPairingChallenges);
     await db.delete(humanChannelBindings);
@@ -271,5 +273,52 @@ describeEmbeddedPostgres("channel pairing routes", () => {
     );
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
+  });
+
+  it("mints a whatsapp pairing link that carries the token and no phone number", async () => {
+    const { company, steward } = await seed();
+    const app = createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/me/channels/whatsapp/pairing`).send({}),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.deepLink).toMatch(/^https:\/\/wa\.me\/15550109999\?text=/);
+    expect(res.body.token).toBeUndefined();
+
+    const rows = await db.select().from(channelPairingChallenges);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].provider).toBe("whatsapp");
+    expect(rows[0].userId).toBe(steward.principalId);
+  });
+
+  it("no longer accepts a self-asserted whatsapp number on the generic bind route", async () => {
+    // Phone numbers are guessable in a way a Telegram user id is not, so this
+    // route was the sharpest edge of the same self-asserted-identity problem.
+    const { company, steward } = await seed();
+    const app = createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/me/channels`)
+        .send({ provider: "whatsapp", externalUserId: "15550000000" }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await db.select().from(humanChannelBindings)).toHaveLength(0);
+  });
+
+  it("reports a configuration gap when the business number is unset", async () => {
+    delete process.env.WHATSAPP_BUSINESS_NUMBER;
+    const { company, steward } = await seed();
+    const app = createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).post(`/api/companies/${company.id}/me/channels/whatsapp/pairing`).send({}),
+    );
+
+    expect(res.status).toBe(503);
+    expect(await db.select().from(channelPairingChallenges)).toHaveLength(0);
   });
 });

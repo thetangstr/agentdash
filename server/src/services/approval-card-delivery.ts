@@ -4,6 +4,7 @@ import { agents, approvals, companies, humanChannelBindings } from "@paperclipai
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { telegramConnectorService } from "./telegram-connector.js";
+import { whatsappConnectorService } from "./whatsapp-connector.js";
 
 /**
  * AgentDash-MK: push an approval card to the deciding steward's channels.
@@ -32,6 +33,7 @@ const DELIVERABLE_STATUSES = new Set(["pending", "revision_requested"]);
 export function approvalCardDeliveryService(db: Db) {
   const stewardships = agentStewardshipService(db);
   const telegram = telegramConnectorService(db);
+  const whatsapp = whatsappConnectorService(db);
 
   function summarize(approval: typeof approvals.$inferSelect, agentName: string | null) {
     const payload = (approval.payload ?? {}) as Record<string, unknown>;
@@ -134,6 +136,28 @@ export function approvalCardDeliveryService(db: Db) {
         bindingId: binding.id,
       });
       await telegram.sendApprovalCard(chatId, text, keyboard);
+      return;
+    }
+
+    if (binding.provider === "whatsapp") {
+      const result = await whatsapp.sendApprovalCard({
+        companyId: approval.companyId,
+        approvalId: approval.id,
+        revision: approval.revision,
+        binding,
+        text,
+      });
+      if (!result.delivered) {
+        // Out of the 24-hour window a business may send only a Meta-reviewed
+        // template, which is an operator provisioning step this build does not
+        // assume. Recorded rather than silently downgraded to a text message
+        // Meta would reject — an undelivered card must be distinguishable from
+        // a steward who has not answered yet.
+        logger.info(
+          { approvalId: approval.id, bindingId: binding.id, reason: result.reason },
+          "whatsapp approval card not delivered",
+        );
+      }
       return;
     }
 

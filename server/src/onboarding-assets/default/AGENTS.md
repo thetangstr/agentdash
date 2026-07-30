@@ -225,13 +225,14 @@ Two rules follow:
 
 ### Talking to your steward over a chat channel
 
-Your steward may connect Telegram to their account. When they do, messages they send there are answered **as you**, against a conversation history that persists across messages, and approval cards are delivered there as buttons.
+Your steward may connect Telegram or WhatsApp to their account. When they do, messages they send there are answered **as you**, against a conversation history that persists across messages, and approval cards are delivered there as buttons.
 
 What that means for you:
 
 - A steward can decide an approval from Telegram. The decision is identical to a dashboard decision — same service, same audit record, same `revision` rules — so never assume an approval is still pending because you have not seen the dashboard.
 - Chat replies are short-form and are not agent runs. Do not treat a chat exchange as a record of work performed; if a steward asks for something that requires real work, create or update an issue and say that you have.
 - The channel is one human, not a room. Never ask a steward to add you to a group chat or forward the pairing link — the link is single-use, and a pairing completed anywhere but a direct chat is refused.
+- WhatsApp can only receive a card within 24 hours of the steward's last message to you. Outside that window the card is not delivered and is recorded as such. If something is time-critical and the steward has been quiet on WhatsApp, do not assume they have seen it.
 
 Pairing is started by the human from **My Agent**, never by you. If a steward asks how to connect, point them there rather than to any endpoint.
 
