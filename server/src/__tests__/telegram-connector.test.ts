@@ -11,6 +11,7 @@ import {
   companies,
   companyMemberships,
   channelCallbackTokens,
+  channelPairingChallenges,
   createDb,
   externalChannelEvents,
   humanChannelBindings,
@@ -24,6 +25,7 @@ import { telegramConnectorRoutes } from "../routes/telegram-connector.js";
 import { telegramConnectorService } from "../services/telegram-connector.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { humanChannelService } from "../services/human-channels.js";
+import { conversationService } from "../services/conversations.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -60,6 +62,7 @@ describeEmbeddedPostgres("telegram connector", () => {
     delete process.env.TELEGRAM_BOT_TOKEN;
     await db.delete(activityLog);
     await db.delete(channelCallbackTokens);
+    await db.delete(channelPairingChallenges);
     await db.delete(externalChannelEvents);
     await db.delete(humanChannelBindings);
     await db.delete(approvals);
@@ -141,10 +144,20 @@ describeEmbeddedPostgres("telegram connector", () => {
     return { company, owner, steward, agent, binding, approval };
   }
 
-  function createApp() {
+  /**
+   * The reply LLM is injected rather than stubbed globally: a unit test that
+   * depended on PAPERCLIP_E2E_SKIP_LLM would pass or fail on an env var set
+   * elsewhere, and its canned text has nothing to do with this subsystem.
+   */
+  function createApp(llm?: (input: { messages: Array<{ content: string }> }) => Promise<string>) {
     const app = express();
     app.use(express.json());
-    app.use("/api", telegramConnectorRoutes(db));
+    app.use(
+      "/api",
+      telegramConnectorRoutes(db, {
+        llm: llm ?? (async (input) => `echo:${input.messages.at(-1)?.content ?? ""}`),
+      }),
+    );
     app.use(errorHandler);
     return app;
   }
@@ -397,6 +410,298 @@ describeEmbeddedPostgres("telegram connector", () => {
 
     // Fail closed and acknowledge; never route an unpaired identity to an agent.
     expect(res.status).toBe(200);
+    expect(telegramCalls.filter((c) => c.method === "sendMessage")).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------
+  // Pairing ceremony (criterion 9)
+  // ---------------------------------------------------------------------
+
+  /** A company + stewarded human with NO binding yet — the pairing precondition. */
+  async function seedUnpaired() {
+    const company = await db
+      .insert(companies)
+      .values({
+        name: `TG ${randomUUID()}`,
+        issuePrefix: `TG${randomUUID().slice(0, 6).toUpperCase()}`,
+        productProfile: "agentdash_mk",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const owner = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: randomUUID(),
+        status: "active",
+        membershipRole: "owner",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const steward = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: randomUUID(),
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const agent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Agent ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: steward.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    return { company, owner, steward, agent };
+  }
+
+  function startUpdate(token: string, opts: { updateId?: number; externalUserId?: number; chatType?: string } = {}) {
+    return {
+      update_id: opts.updateId ?? 900,
+      message: {
+        text: `/start ${token}`,
+        from: { id: opts.externalUserId ?? 4242 },
+        chat: { id: opts.externalUserId ?? 4242, type: opts.chatType ?? "private" },
+      },
+    };
+  }
+
+  it("completes a pairing from a deep-link token and binds the human", async () => {
+    const { company, steward, agent } = await seedUnpaired();
+    const { token } = await humanChannelService(db).mintPairingChallenge(company.id, {
+      userId: steward.principalId,
+      provider: "telegram",
+    });
+    const app = createApp();
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate(token)),
+    );
+
+    expect(res.status).toBe(200);
+    const binding = await humanChannelService(db).resolveActiveBinding("telegram", "4242");
+    expect(binding, "pairing did not produce a binding").not.toBeNull();
+    expect(binding!.userId).toBe(steward.principalId);
+    expect(binding!.agentId).toBe(agent.id);
+    expect(binding!.verifiedAt).not.toBeNull();
+  });
+
+  it("refuses an unknown pairing token and creates no binding", async () => {
+    await seedUnpaired();
+    const app = createApp();
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate("not-a-real-token")),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await humanChannelService(db).resolveActiveBinding("telegram", "4242")).toBeNull();
+  });
+
+  it("refuses an expired pairing token", async () => {
+    const { company, steward } = await seedUnpaired();
+    const { token } = await humanChannelService(db).mintPairingChallenge(company.id, {
+      userId: steward.principalId,
+      provider: "telegram",
+    });
+    await db
+      .update(channelPairingChallenges)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(channelPairingChallenges.token, token));
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate(token)),
+    );
+
+    expect(await humanChannelService(db).resolveActiveBinding("telegram", "4242")).toBeNull();
+  });
+
+  it("consumes a pairing token exactly once", async () => {
+    // The deep link travels through a channel the user can forward. A second
+    // redemption — by anyone — must fail, or the token is a bearer credential
+    // for someone else's agent.
+    const { company, steward } = await seedUnpaired();
+    const { token } = await humanChannelService(db).mintPairingChallenge(company.id, {
+      userId: steward.principalId,
+      provider: "telegram",
+    });
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate(token, { updateId: 901, externalUserId: 4242 })),
+    );
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate(token, { updateId: 902, externalUserId: 5555 })),
+    );
+
+    expect(await humanChannelService(db).resolveActiveBinding("telegram", "4242")).not.toBeNull();
+    expect(
+      await humanChannelService(db).resolveActiveBinding("telegram", "5555"),
+      "a replayed pairing token bound a second identity",
+    ).toBeNull();
+  });
+
+  it("does not double-bind when telegram redelivers the same pairing update", async () => {
+    const { company, steward } = await seedUnpaired();
+    const { token } = await humanChannelService(db).mintPairingChallenge(company.id, {
+      userId: steward.principalId,
+      provider: "telegram",
+    });
+    const app = createApp();
+    const update = startUpdate(token, { updateId: 903 });
+
+    await call(app, (baseUrl) =>
+      request(baseUrl).post(webhookPath).set("X-Telegram-Bot-Api-Secret-Token", SECRET).send(update),
+    );
+    const second = await call(app, (baseUrl) =>
+      request(baseUrl).post(webhookPath).set("X-Telegram-Bot-Api-Secret-Token", SECRET).send(update),
+    );
+
+    expect(second.status).toBe(200);
+    const bindings = await db
+      .select()
+      .from(humanChannelBindings)
+      .where(eq(humanChannelBindings.companyId, company.id));
+    expect(bindings).toHaveLength(1);
+  });
+
+  it("refuses to pair from a group chat", async () => {
+    // A binding pairs ONE human. Completing it in a group would hand every
+    // member of that group the ability to decide this agent's approvals.
+    const { company, steward } = await seedUnpaired();
+    const { token } = await humanChannelService(db).mintPairingChallenge(company.id, {
+      userId: steward.principalId,
+      provider: "telegram",
+    });
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send(startUpdate(token, { chatType: "supergroup" })),
+    );
+
+    expect(await humanChannelService(db).resolveActiveBinding("telegram", "4242")).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Bidirectional conversation (criterion 9)
+  // ---------------------------------------------------------------------
+
+  it("answers a paired human's message as their agent", async () => {
+    const { company, steward, binding } = await seed();
+    const app = createApp();
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 910,
+          message: { text: "what is the status?", from: { id: 1 }, chat: { id: 1, type: "private" } },
+        }),
+    );
+
+    expect(res.status).toBe(200);
+    const sends = telegramCalls.filter((c) => c.method === "sendMessage");
+    expect(sends, "no reply was sent to a paired human").toHaveLength(1);
+    // The reply must actually be derived from what the human said, not a
+            // canned acknowledgement — the injected model echoes the question.
+    expect(String((sends[0].body as { text?: string }).text ?? "")).toContain("what is the status?");
+    void company;
+    void steward;
+    void binding;
+  });
+
+  it("persists the exchange so the conversation has history", async () => {
+    const { company, binding } = await seed();
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 911,
+          message: { text: "first question", from: { id: 1 }, chat: { id: 1, type: "private" } },
+        }),
+    );
+
+    const conversation = await conversationService(db).findByCompany(company.id, {
+      title: `telegram:${binding.id}`,
+    });
+    expect(conversation, "no durable conversation was created for the binding").not.toBeNull();
+    const messages = await conversationService(db).paginate(conversation!.id, { limit: 10 });
+    // Both halves: an agent that cannot see what the human said has no memory.
+    expect(messages.map((m) => m.role).sort()).toEqual(["agent", "user"]);
+  });
+
+  it("does not answer a message from a bot", async () => {
+    // Two bots in one chat will talk to each other until a rate limit stops
+    // them. The guard is `is_bot`, checked before any dispatch.
+    await seed();
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 912,
+          message: { text: "hi", from: { id: 1, is_bot: true }, chat: { id: 1, type: "private" } },
+        }),
+    );
+
+    expect(telegramCalls.filter((c) => c.method === "sendMessage")).toHaveLength(0);
+  });
+
+  it("does not answer a paired human in a group chat", async () => {
+    await seed();
+    const app = createApp();
+
+    await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 913,
+          message: { text: "hi", from: { id: 1 }, chat: { id: -100, type: "group" } },
+        }),
+    );
+
+    // The binding authenticates one human, not a room. Replying in a group
+    // discloses that human's agent's answers to everyone present.
     expect(telegramCalls.filter((c) => c.method === "sendMessage")).toHaveLength(0);
   });
 });

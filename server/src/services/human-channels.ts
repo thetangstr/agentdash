@@ -1,12 +1,20 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { externalChannelEvents, humanChannelBindings } from "@paperclipai/db";
+import {
+  channelPairingChallenges,
+  externalChannelEvents,
+  humanChannelBindings,
+} from "@paperclipai/db";
 import { policyListAllows } from "@paperclipai/shared";
 import { conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { logActivity } from "./activity-log.js";
+
+/** Long enough to open a link on another device, short enough to matter. */
+const PAIRING_CHALLENGE_TTL_MS = 15 * 60 * 1000;
 
 type HumanChannelBindingRow = typeof humanChannelBindings.$inferSelect;
 
@@ -87,6 +95,112 @@ export function humanChannelService(db: Db) {
       }
       throw error;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Pairing ceremony
+  //
+  // Provider-generic: Telegram carries the token in a `?start=` deep link,
+  // WhatsApp in a template quick-reply, Teams in an install link. All three get
+  // the same expiry, single-use, and replacement rules from one implementation
+  // rather than three that drift apart.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Mint a single-use pairing token for a human.
+   *
+   * Any outstanding challenge for the same (company, provider, human) is
+   * consumed first. A user who abandons a pairing and starts over must not
+   * leave a second live token behind — the first one already travelled through
+   * a channel someone else may have seen.
+   */
+  async function mintPairingChallenge(
+    companyId: string,
+    input: { userId: string; provider: string; ttlMs?: number },
+  ): Promise<{ token: string; expiresAt: Date }> {
+    const active = await stewardships.activeByUser(companyId, input.userId);
+    if (!active) {
+      throw conflict("Channel pairing requires an active stewarded agent");
+    }
+
+    // Same ceiling gate as verifyBinding, applied at mint time so the refusal
+    // arrives when the user asks rather than after they open the deep link.
+    const policy = await governance.resolveAgentPolicy(companyId, active.agentId);
+    if (policy && !policyListAllows(policy.providers, input.provider)) {
+      throw forbidden(
+        `The owner ceiling for this agent does not allow ${input.provider}; ` +
+          "an administrator must widen it before this channel can be paired",
+      );
+    }
+
+    const now = new Date();
+    await db
+      .update(channelPairingChallenges)
+      .set({ consumedAt: now })
+      .where(
+        and(
+          eq(channelPairingChallenges.companyId, companyId),
+          eq(channelPairingChallenges.provider, input.provider),
+          eq(channelPairingChallenges.userId, input.userId),
+          isNull(channelPairingChallenges.consumedAt),
+        ),
+      );
+
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(now.getTime() + (input.ttlMs ?? PAIRING_CHALLENGE_TTL_MS));
+    await db.insert(channelPairingChallenges).values({
+      token,
+      companyId,
+      userId: input.userId,
+      provider: input.provider,
+      expiresAt,
+      createdAt: now,
+    });
+    return { token, expiresAt };
+  }
+
+  /**
+   * Read a live challenge WITHOUT consuming it.
+   *
+   * The webhook needs the company id before it can claim the inbound event for
+   * deduplication, and claiming has to happen before consuming — otherwise a
+   * provider redelivery would find the token already spent and report a failed
+   * pairing for a pairing that in fact succeeded.
+   */
+  async function peekPairingChallenge(provider: string, token: string) {
+    return db
+      .select()
+      .from(channelPairingChallenges)
+      .where(
+        and(
+          eq(channelPairingChallenges.provider, provider),
+          eq(channelPairingChallenges.token, token),
+          isNull(channelPairingChallenges.consumedAt),
+          gt(channelPairingChallenges.expiresAt, new Date()),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * Atomically spend a challenge. Returns null if it was already spent or has
+   * expired — the conditional UPDATE is the claim, so two concurrent
+   * redemptions cannot both win.
+   */
+  async function consumePairingChallenge(provider: string, token: string) {
+    return db
+      .update(channelPairingChallenges)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(channelPairingChallenges.provider, provider),
+          eq(channelPairingChallenges.token, token),
+          isNull(channelPairingChallenges.consumedAt),
+          gt(channelPairingChallenges.expiresAt, new Date()),
+        ),
+      )
+      .returning()
+      .then((rows) => rows[0] ?? null);
   }
 
   /** Inbound dispatch and outbound send both go through this. */
@@ -226,6 +340,9 @@ export function humanChannelService(db: Db) {
 
   return {
     verifyBinding,
+    mintPairingChallenge,
+    peekPairingChallenge,
+    consumePairingChallenge,
     resolveActiveBinding,
     listForCompany,
     revokeBinding,

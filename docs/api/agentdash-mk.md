@@ -125,7 +125,8 @@ approving one creates an agent.
 | Method | Path | Who |
 |---|---|---|
 | `GET` | `/api/companies/:companyId/me/channels` | Own bindings |
-| `POST` | `/api/companies/:companyId/me/channels` | Own binding, session identity |
+| `POST` | `/api/companies/:companyId/me/channels/telegram/pairing` | Own pairing, session identity |
+| `POST` | `/api/companies/:companyId/me/channels` | Own binding, session identity (**not** Telegram) |
 | `POST` | `/api/companies/:companyId/channel-bindings/:id/revoke` | Bound user or admin |
 | `GET` | `/api/companies/:companyId/channel-bindings` | `agents:create` |
 | `POST` | `/api/connectors/telegram/webhook` | Telegram (secret header) |
@@ -139,6 +140,28 @@ Inbound events are deduplicated on `(provider, company_id, external_event_id)`
 via a unique index. `external_channel_events` stores a payload **digest**, never
 the payload.
 
+### Pairing ceremony
+
+`channel_pairing_challenges` holds short-lived single-use tokens and is
+provider-generic, so WhatsApp and Teams reuse one implementation of the expiry,
+replay, and replacement rules rather than growing three that drift.
+
+Minting replaces any outstanding challenge for the same (company, provider,
+human): a user who abandons a pairing must not leave a second live token
+behind, because the first already travelled through a channel someone else may
+have seen. The response carries a **deep link only** — the raw token is never
+returned, so it cannot be logged or copied separately from the link the user is
+meant to open.
+
+`POST /me/channels` now **rejects `provider: "telegram"` with 400**. That route
+accepts a self-asserted external id and never proved the caller controls it, so
+before the ceremony existed a member could bind a colleague's Telegram account
+to their own agent. Providers with no ceremony yet still use it.
+
+Requires `TELEGRAM_BOT_USERNAME`. When it is unset the mint returns **503** and
+spends no token, rather than handing back a `t.me/undefined?start=…` link that
+looks like it works.
+
 ### Telegram
 
 Webhook authenticity is the `X-Telegram-Bot-Api-Secret-Token` header, checked
@@ -146,6 +169,25 @@ before parsing. `update_id` is the dedup anchor. Inline keyboard
 `callback_data` carries an opaque 18-byte handle — never the approval id — and
 callback queries are always answered, including on replay. Refusals return 200
 with an explanatory answer, because a non-2xx makes Telegram retry forever.
+
+Telegram is **bidirectional**. A paired human's message is answered as their
+agent, against durable conversation history keyed to the binding (not the human
+or the agent — re-pairing produces a new binding and must not inherit the old
+transcript). The reply is a `dispatchLLM` call, not a summon of the agent's own
+runtime: an agent run is minutes long and a chat reply is seconds, so routing
+chat through the run queue would make the channel feel broken. Escalating a
+message into real agent work is a wakeup and is not implemented yet.
+
+Two fail-closed guards on the message path. `is_bot` messages are dropped
+before dispatch, because two bots in one chat answer each other until a rate
+limit intervenes. Non-private chats get no reply and cannot complete a pairing:
+a binding authenticates one human, not a room, so answering in a group would
+disclose that human's agent's replies to everyone present.
+
+A `/start <token>` deep link arrives before any binding exists, so it resolves
+its company from the challenge instead. The order is **peek → claim → consume**:
+consuming before claiming would let a Telegram redelivery find the token already
+spent and tell the user their pairing failed, for a pairing that succeeded.
 
 ### Teams
 
@@ -172,6 +214,7 @@ parent wake payload carries references and per-child counts only.
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Bot API token for outbound calls |
 | `TELEGRAM_WEBHOOK_SECRET` | Value required in `X-Telegram-Bot-Api-Secret-Token` |
+| `TELEGRAM_BOT_USERNAME` | Bot handle used to build the `t.me/<bot>?start=` pairing link |
 | `TEAMS_APP_ID` | Entra app (client) id |
 | `TEAMS_APP_PASSWORD` | Entra client secret |
 

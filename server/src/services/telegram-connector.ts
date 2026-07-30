@@ -1,11 +1,12 @@
 import { randomBytes, createHash } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals, channelCallbackTokens } from "@paperclipai/db";
+import { approvals, channelCallbackTokens, channelPairingChallenges } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalService } from "./approvals.js";
 import { humanChannelService } from "./human-channels.js";
+import { stewardAgentReplier, type StewardAgentReplierDeps } from "./steward-agent-replier.js";
 import { logActivity } from "./activity-log.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -20,8 +21,9 @@ export interface IssueCallbackTokenInput {
   bindingId?: string | null;
 }
 
-export function telegramConnectorService(db: Db) {
+export function telegramConnectorService(db: Db, deps: StewardAgentReplierDeps = {}) {
   const channels = humanChannelService(db);
+  const replier = stewardAgentReplier(db, deps);
   const approvalsSvc = approvalService(db);
   const authority = approvalAuthorityService(db);
 
@@ -137,6 +139,11 @@ export function telegramConnectorService(db: Db) {
     });
   }
 
+  /** Outbound text to one chat. Best-effort: a delivery failure never throws. */
+  async function sendMessage(chatId: string | number, text: string) {
+    await callTelegram("sendMessage", { chat_id: chatId, text });
+  }
+
   function digest(payload: unknown) {
     return `sha256:${createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex")}`;
   }
@@ -235,15 +242,28 @@ export function telegramConnectorService(db: Db) {
     }
 
     if (message) {
-      const from = message.from as { id?: number | string } | undefined;
+      const from = message.from as { id?: number | string; is_bot?: boolean } | undefined;
+      const chat = message.chat as { id?: number | string; type?: string } | undefined;
       const externalUserId = from?.id != null ? String(from.id) : null;
       if (!externalUserId) return;
+
+      // Two bots in one chat will answer each other until a rate limit stops
+      // them. Checked before anything else on the message path.
+      if (from?.is_bot === true) return;
+
+      // A binding authenticates ONE human, not a room. Answering in a group
+      // would disclose that human's agent's replies to everyone present.
+      const isPrivateChat = (chat?.type ?? "private") === "private";
+
       const binding = await channels.resolveActiveBinding(PROVIDER, externalUserId);
       if (!binding) {
         // Unpaired identities are dropped silently rather than answered, so the
         // bot cannot be used to probe which accounts exist.
         return;
       }
+
+      if (!isPrivateChat) return;
+
       await logActivity(db, {
         companyId: binding.companyId,
         actorType: "user",
@@ -254,12 +274,106 @@ export function telegramConnectorService(db: Db) {
         agentId: binding.agentId,
         details: { provider: PROVIDER },
       });
+
+      const text = typeof message.text === "string" ? message.text : "";
+      // `/start` with no token from an already-paired user is a greeting, not a
+      // question; answering it with the LLM would bill a token for "hi".
+      if (text.trim().startsWith("/start")) {
+        await sendMessage(chat?.id ?? externalUserId, "You are connected. Ask me anything.");
+        return;
+      }
+
+      const answer = await replier.reply(binding, text);
+      if (answer) {
+        await sendMessage(chat?.id ?? externalUserId, answer);
+      }
+    }
+  }
+
+  /**
+   * Complete a pairing from a `/start <token>` deep link.
+   *
+   * The caller has already claimed the update for deduplication, so this may be
+   * called at most once per inbound update.
+   */
+  async function completePairing(input: {
+    token: string;
+    externalUserId: string;
+    chatId: string | number | null;
+    chatType: string;
+    isBot: boolean;
+  }): Promise<{ paired: boolean }> {
+    if (input.isBot) return { paired: false };
+
+    // Pairing in a group would bind one human's agent to a room everyone can
+    // act in. Refused explicitly, and the refusal is not silent, because the
+    // person who opened the link deserves to know why nothing happened.
+    if (input.chatType !== "private") {
+      await sendMessage(
+        input.chatId ?? input.externalUserId,
+        "Open this link in a direct chat with me, not in a group.",
+      );
+      return { paired: false };
+    }
+
+    const challenge = await channels.consumePairingChallenge(PROVIDER, input.token);
+    if (!challenge) {
+      // Unknown, expired, or already spent. All three get the same answer: a
+      // distinct message per case would confirm which tokens exist.
+      await sendMessage(
+        input.chatId ?? input.externalUserId,
+        "That link is no longer valid. Generate a new one from AgentDash.",
+      );
+      return { paired: false };
+    }
+
+    try {
+      const binding = await channels.verifyBinding(challenge.companyId, {
+        provider: PROVIDER,
+        userId: challenge.userId,
+        externalUserId: input.externalUserId,
+        externalConversationId: input.chatId != null ? String(input.chatId) : null,
+      });
+      await db
+        .update(channelPairingChallenges)
+        .set({ bindingId: binding.id })
+        .where(eq(channelPairingChallenges.id, challenge.id));
+
+      await logActivity(db, {
+        companyId: binding.companyId,
+        actorType: "user",
+        actorId: binding.userId,
+        action: "human_channel.binding_verified",
+        entityType: "human_channel_binding",
+        entityId: binding.id,
+        agentId: binding.agentId,
+        details: { provider: PROVIDER, via: "pairing_challenge" },
+      });
+
+      await sendMessage(
+        input.chatId ?? input.externalUserId,
+        "Connected. I'll bring you approvals here, and you can ask me anything.",
+      );
+      return { paired: true };
+    } catch (error) {
+      // A conflicting active binding, a revoked stewardship, or a provider the
+      // ceiling stopped allowing between minting and redemption. The challenge
+      // is already spent, which is correct: a failed redemption must not leave
+      // a live token behind.
+      logger.info({ err: error, provider: PROVIDER }, "telegram pairing refused");
+      await sendMessage(
+        input.chatId ?? input.externalUserId,
+        "I couldn't connect this account. Check with your workspace administrator.",
+      );
+      return { paired: false };
     }
   }
 
   return {
     verifyWebhookSecret,
     setWebhook,
+    completePairing,
+    sendMessage,
     issueCallbackToken,
     buildApprovalKeyboard,
     consumeCallbackToken,

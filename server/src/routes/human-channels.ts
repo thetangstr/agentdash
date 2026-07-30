@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
 import { verifyHumanChannelBindingSchema } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
+import { badRequest, forbidden, serviceUnavailable } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { requireProductProfile } from "../services/companies.js";
@@ -47,6 +47,43 @@ export function humanChannelRoutes(db: Db) {
   });
 
   /**
+   * Start a Telegram pairing.
+   *
+   * Returns a deep link, never the raw token: the link is the only thing the
+   * user should ever handle, and echoing the token separately invites it into a
+   * log line or a copy-paste that the link itself would not reach.
+   *
+   * WHO gets paired is the authenticated caller, full stop. The body is not
+   * read — a `userId` here would let one member mint a link that binds THEIR
+   * Telegram account to another member's agent.
+   */
+  router.post("/companies/:companyId/me/channels/telegram/pairing", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(req, companyId);
+    const userId = requireBoardUser(req);
+
+    // Checked before minting. A link to `https://t.me/undefined?start=…` looks
+    // like it works and never will, and spending a token on it would burn the
+    // user's one outstanding challenge on an unusable link.
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME?.trim();
+    if (!botUsername) {
+      throw serviceUnavailable(
+        "Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset",
+      );
+    }
+
+    const { token, expiresAt } = await channels.mintPairingChallenge(companyId, {
+      userId,
+      provider: "telegram",
+    });
+
+    res.status(201).json({
+      deepLink: `https://t.me/${botUsername}?start=${token}`,
+      expiresAt: expiresAt.toISOString(),
+    });
+  });
+
+  /**
    * Complete a pairing. The provider identity is supplied, but WHO it binds to
    * is always the authenticated caller — accepting a userId here would let one
    * member attach a provider account to someone else's agent.
@@ -58,6 +95,18 @@ export function humanChannelRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       await requireProfileCompany(req, companyId);
       const userId = requireBoardUser(req);
+
+      // Telegram has a verified ceremony now, so this route must stop accepting
+      // a self-asserted Telegram identity. It never proved the caller controls
+      // the account they named, which meant a member could bind a stranger's —
+      // or a colleague's — Telegram id to their own agent and receive that
+      // person's messages. Providers with no ceremony yet still use this path.
+      if (req.body.provider === "telegram") {
+        throw badRequest(
+          "Telegram must be paired through POST /me/channels/telegram/pairing, " +
+            "which verifies the account instead of trusting the supplied id",
+        );
+      }
 
       const binding = await channels.verifyBinding(companyId, {
         provider: req.body.provider,

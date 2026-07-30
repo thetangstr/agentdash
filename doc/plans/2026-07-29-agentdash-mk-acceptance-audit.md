@@ -8,7 +8,7 @@ Every criterion from the design, with the evidence that supports it. A missing
 live provider credential is a **verification gap**, not an implicit pass, and is
 recorded as such.
 
-**Verdict: 11 of 14 met, 2 partial, 1 not met. AgentDash-MK is NOT complete.**
+**Verdict: 12 of 14 met, 1 partial, 1 not met.**
 
 **Scope note (2026-07-30):** the product owner deprioritized Microsoft Teams and
 brought WhatsApp, HubSpot, and the local computer-agent bridge into scope. See
@@ -21,12 +21,12 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 3918 passed, 0 failed |
+| `pnpm test:run` | 3940 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
 | `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
 
-Migrations `0096`–`0101`, each additive and correctly chained.
+Migrations `0096`–`0102`, each additive and correctly chained.
 `pnpm-lock.yaml` is intentionally uncommitted; CI owns it. The
 `@microsoft/teams.apps` dependency in `server/package.json` therefore needs a CI
 lockfile update before any build that installs from the lockfile alone.
@@ -176,22 +176,48 @@ count unscoped when the field is absent"; and a browser assertion in
 `agentdash-mk-workforce.spec.ts`, because the scoping is wiring between a query
 and a filter and unit tests cover both halves without proving they are connected.
 
-### 9. Telegram: pairing, bidirectional conversation, approvals, dedup, revocation — **PARTIAL**
+### 9. Telegram: pairing, bidirectional conversation, approvals, dedup, revocation — **MET**
 
-Delivered: webhook secret verified before parsing, `update_id` deduplication
-via unique index, native approve/reject through the shared decision boundary,
-opaque ≤64-byte callback tokens, callbacks always answered, immediate
-revocation.
+Webhook secret verified before parsing; `update_id` deduplication via unique
+index; native approve/reject through the shared decision boundary; opaque
+≤64-byte callback tokens; callbacks always answered; immediate revocation.
 
-**Not delivered:**
-- **No pairing ceremony.** Bindings are created through the authenticated route.
-  Identity is genuinely session-derived, but there is no signed, short-lived
-  deep-link challenge as §10 describes.
-- **Not bidirectional.** An inbound message from a paired user is logged and
-  dropped — `handleUpdate` never dispatches to the agent and never replies.
-  Telegram is approve/reject only.
+**Pairing ceremony** (added 2026-07-30). `channel_pairing_challenges`
+(migration `0102`) holds short-lived single-use tokens and is provider-generic,
+so WhatsApp and Teams reuse one implementation rather than growing three.
+`POST /me/channels/telegram/pairing` mints a `t.me/<bot>?start=TOKEN` deep link
+for the authenticated caller — the body is not read, so nobody can mint a link
+that binds their account to someone else's agent. Redemption arrives at the
+webhook as `/start TOKEN` and runs **peek → claim → consume**: consuming before
+claiming would let a Telegram redelivery find the token spent and report a
+failed pairing for one that succeeded.
 
-Evidence: `telegram-connector.test.ts` (9 tests).
+`POST /me/channels` now rejects `provider: "telegram"` with 400. It accepted a
+self-asserted external id and never proved the caller controlled it, so before
+the ceremony a member could bind a colleague's Telegram account to their own
+agent. Providers with no ceremony keep that route.
+
+**Bidirectional** (added 2026-07-30). `steward-agent-replier.ts` answers a
+paired human's message as their agent, against durable conversation history
+keyed to the *binding* — re-pairing produces a new binding and must not inherit
+the old transcript. The reply is a `dispatchLLM` call rather than a summon of
+the agent's runtime; that choice and its limit are recorded in the file and in
+the prompt surfaces, not left implicit.
+
+Two fail-closed guards: `is_bot` messages are dropped before dispatch, and
+non-private chats get no reply and cannot complete a pairing — a binding
+authenticates one human, not a room.
+
+Evidence: `telegram-connector.test.ts` (19 tests, up from 9) including
+"consumes a pairing token exactly once", "does not double-bind when telegram
+redelivers the same pairing update", "refuses to pair from a group chat", and
+"does not answer a message from a bot"; `channel-pairing-routes.test.ts` (8
+tests) including "mints for the authenticated caller and nobody else" and "no
+longer accepts a self-asserted telegram identity on the generic bind route";
+`MyAgent.test.tsx` (9 tests) including "never mints one until asked".
+
+**Verification gap, unchanged:** no live Telegram sandbox run has been
+performed. The Bot API is exercised through a local double.
 
 ### 10. Teams equivalent with supported bot/app and Adaptive Cards — **NOT MET (deprioritized 2026-07-30)**
 
@@ -283,7 +309,8 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    *Deprioritized 2026-07-30 by owner decision; unchanged in substance, parked
    until Teams is re-prioritized. Reuses the pairing-challenge table from item 2
    when it resumes.*
-2. **Telegram pairing challenge and bidirectional conversation** (blocks §9).
+2. ~~**Telegram pairing challenge and bidirectional conversation** (blocks §9).~~
+   Closed 2026-07-30.
 3. ~~**Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).~~
    Closed 2026-07-30.
 4. ~~**`providers` / `dataScopes` ceiling enforcement** (blocks §5).~~ Closed

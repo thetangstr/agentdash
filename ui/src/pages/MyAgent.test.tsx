@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockStewardshipsApi = vi.hoisted(() => ({
   getMyAgent: vi.fn(),
   getMyInbox: vi.fn(),
+  listMyChannels: vi.fn(),
+  startTelegramPairing: vi.fn(),
 }));
 
 const mockGovernanceApi = vi.hoisted(() => ({
@@ -75,6 +77,11 @@ describe("MyAgent", () => {
       selectedCompany: { productProfile: "agentdash_mk" },
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
+    mockStewardshipsApi.listMyChannels.mockResolvedValue({ bindings: [] });
+    mockStewardshipsApi.startTelegramPairing.mockResolvedValue({
+      deepLink: "https://t.me/agentdash_test_bot?start=tok",
+      expiresAt: "2026-07-30T12:00:00.000Z",
+    });
     mockIssuesApi.list.mockResolvedValue([]);
     mockActivityApi.list.mockResolvedValue([]);
     mockGovernanceApi.get.mockResolvedValue({
@@ -206,5 +213,92 @@ describe("MyAgent", () => {
       agentId: "agent-1",
       limit: 10,
     });
+  });
+
+  it("offers a telegram pairing link and never mints one until asked", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("Telegram");
+    // Minting spends the user's one outstanding challenge and invalidates any
+    // link they already opened. It must be an explicit act, never a page load.
+    expect(mockStewardshipsApi.startTelegramPairing).not.toHaveBeenCalled();
+
+    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
+      /connect telegram/i.test(button.textContent ?? ""),
+    );
+    expect(connect, "no Connect Telegram control was rendered").toBeTruthy();
+
+    await act(async () => {
+      connect!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    expect(mockStewardshipsApi.startTelegramPairing).toHaveBeenCalledWith("company-1");
+    const link = Array.from(container.querySelectorAll("a")).find((anchor) =>
+      anchor.getAttribute("href")?.startsWith("https://t.me/"),
+    );
+    expect(link, "the minted deep link was not shown to the user").toBeTruthy();
+  });
+
+  it("shows an already-connected channel instead of offering to pair again", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.listMyChannels.mockResolvedValue({
+      bindings: [
+        {
+          id: "binding-1",
+          provider: "telegram",
+          externalUserId: "1",
+          verifiedAt: "2026-07-29T00:00:00.000Z",
+          revokedAt: null,
+        },
+      ],
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("Connected");
+    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
+      /connect telegram/i.test(button.textContent ?? ""),
+    );
+    expect(connect, "offered to pair a channel that is already connected").toBeFalsy();
+  });
+
+  it("surfaces a pairing refusal instead of failing silently", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.startTelegramPairing.mockRejectedValue(
+      new Error("Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset"),
+    );
+
+    await render();
+    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
+      /connect telegram/i.test(button.textContent ?? ""),
+    )!;
+    await act(async () => {
+      connect.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    // The owner ceiling and the missing-config case both surface here. A button
+    // that quietly does nothing reads as a broken page.
+    expect(container.textContent).toContain("TELEGRAM_BOT_USERNAME");
   });
 });

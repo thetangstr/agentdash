@@ -87,6 +87,27 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
+  it("tells every agent that a steward may decide from a chat channel", () => {
+    // Telegram decisions are indistinguishable from dashboard decisions at the
+    // service layer. An agent whose prompt does not say so will poll the
+    // dashboard and conclude an approval is still pending after it was decided
+    // on someone's phone.
+    for (const surface of renderedPromptSurfaces) {
+      expect(surface.content, `${surface.name} omits the chat-channel section`).toContain(
+        "Talking to your steward over a chat channel",
+      );
+      expect(surface.content, `${surface.name} omits who starts pairing`).toMatch(
+        /Pairing is started by the human/,
+      );
+      // The channel is one human, not a room — the guard that matters most,
+      // because an agent that asks to be added to a group defeats it socially
+      // even though the server refuses it.
+      expect(surface.content, `${surface.name} omits the one-human rule`).toMatch(
+        /one human, not a room/,
+      );
+    }
+  });
+
   it("does not promise the deferred local computer-agent bridge", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content.toLowerCase()).not.toContain("computer-agent bridge");

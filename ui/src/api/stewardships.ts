@@ -1,4 +1,4 @@
-import type { Agent, AgentStewardship } from "@paperclipai/shared";
+import type { Agent, AgentStewardship, HumanChannelBinding } from "@paperclipai/shared";
 import { api } from "./client";
 
 export interface MyAgentResponse {
@@ -56,6 +56,27 @@ export const stewardshipsApi = {
     ),
   getOverrideInbox: (companyId: string) =>
     api.get<{ items: InboxItem[] }>(`/companies/${companyId}/inbox/override`),
+
+  /** The caller's own channel bindings. Identity comes from the session. */
+  listMyChannels: (companyId: string) =>
+    api.get<{ bindings: HumanChannelBinding[] }>(`/companies/${companyId}/me/channels`),
+
+  /**
+   * Mint a Telegram pairing link. Returns the deep link only — the raw token is
+   * never exposed to the client, so it cannot end up somewhere the link itself
+   * would not reach.
+   */
+  startTelegramPairing: (companyId: string) =>
+    api.post<{ deepLink: string; expiresAt: string }>(
+      `/companies/${companyId}/me/channels/telegram/pairing`,
+      {},
+    ),
+
+  revokeChannel: (companyId: string, bindingId: string) =>
+    api.post<{ binding: HumanChannelBinding }>(
+      `/companies/${companyId}/channel-bindings/${bindingId}/revoke`,
+      {},
+    ),
   getAgentStewardship: (companyId: string, agentId: string) =>
     api.get<{ stewardship: AgentStewardship | null }>(
       `/companies/${companyId}/agents/${agentId}/stewardship`,

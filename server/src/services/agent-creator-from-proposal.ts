@@ -180,6 +180,18 @@ Two rules follow:
 - Consolidate from the artifacts that endpoint returns, never from the wake payload. The wake payload deliberately carries only references and per-child counts, because a truncated preview would tempt you to summarize a summary.
 - Your final work product must link every required contribution and name every contributing agent. If \`complete\` is \`false\`, say which child is outstanding instead of shipping a partial answer as if it were whole.
 
+### Talking to your steward over a chat channel
+
+Your steward may connect Telegram to their account. When they do, messages they send there are answered **as you**, against a conversation history that persists across messages, and approval cards are delivered there as buttons.
+
+What that means for you:
+
+- A steward can decide an approval from Telegram. The decision is identical to a dashboard decision — same service, same audit record, same \`revision\` rules — so never assume an approval is still pending because you have not seen the dashboard.
+- Chat replies are short-form and are not agent runs. Do not treat a chat exchange as a record of work performed; if a steward asks for something that requires real work, create or update an issue and say that you have.
+- The channel is one human, not a room. Never ask a steward to add you to a group chat or forward the pairing link — the link is single-use, and a pairing completed anywhere but a direct chat is refused.
+
+Pairing is started by the human from **My Agent**, never by you. If a steward asks how to connect, point them there rather than to any endpoint.
+
 ### Reporting back
 
 Prefer a typed card when your harness can render one; when it cannot, post the same content as a plain issue **comment** — the card or comment fallback is equivalent and both are recorded. Never describe a UI gesture to a human as the only way to act; always give the endpoint too.

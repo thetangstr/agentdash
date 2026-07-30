@@ -2,7 +2,21 @@ import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { humanChannelService } from "../services/human-channels.js";
+import type { StewardAgentReplierDeps } from "../services/steward-agent-replier.js";
 import { telegramConnectorService } from "../services/telegram-connector.js";
+
+/**
+ * Extract the pairing token from `/start <token>`.
+ *
+ * Returns null for a bare `/start`, which an already-paired user sends every
+ * time they reopen the chat — treating that as a failed pairing attempt would
+ * answer a greeting with an error.
+ */
+function parsePairingToken(text: string | undefined): string | null {
+  if (typeof text !== "string") return null;
+  const match = /^\/start(?:@\S+)?\s+(\S+)\s*$/.exec(text.trim());
+  return match ? match[1] : null;
+}
 
 /**
  * Telegram webhook.
@@ -11,9 +25,9 @@ import { telegramConnectorService } from "../services/telegram-connector.js";
  * board user, and authenticity comes from the shared secret header rather than
  * a session.
  */
-export function telegramConnectorRoutes(db: Db) {
+export function telegramConnectorRoutes(db: Db, deps: StewardAgentReplierDeps = {}) {
   const router = Router();
-  const telegram = telegramConnectorService(db);
+  const telegram = telegramConnectorService(db, deps);
   const channels = humanChannelService(db);
 
   router.post("/connectors/telegram/webhook", async (req, res) => {
@@ -33,8 +47,67 @@ export function telegramConnectorRoutes(db: Db) {
 
     // Resolve the company from the binding so dedup is company-scoped.
     const callbackQuery = update.callback_query as { from?: { id?: number | string } } | undefined;
-    const message = update.message as { from?: { id?: number | string } } | undefined;
+    const message = update.message as {
+      text?: string;
+      from?: { id?: number | string; is_bot?: boolean };
+      chat?: { id?: number | string; type?: string };
+    } | undefined;
     const fromId = callbackQuery?.from?.id ?? message?.from?.id;
+
+    // A `/start <token>` deep link arrives BEFORE any binding exists, so it
+    // cannot resolve its company the way every other update does. The token
+    // carries that: peek at the challenge to learn the company, claim the
+    // update against it for deduplication, and only then spend the token.
+    //
+    // That ordering is what makes a Telegram redelivery safe. Consuming before
+    // claiming would let the retry find the token already spent and tell the
+    // user their pairing failed — for a pairing that in fact succeeded.
+    const pairingToken = parsePairingToken(message?.text);
+    if (pairingToken && fromId != null) {
+      const challenge = await channels.peekPairingChallenge("telegram", pairingToken);
+      if (!challenge) {
+        // Unknown, expired, or spent. Hand it to the connector anyway so the
+        // person who opened a dead link is told, rather than met with silence.
+        await telegram.completePairing({
+          token: pairingToken,
+          externalUserId: String(fromId),
+          chatId: message?.chat?.id ?? null,
+          chatType: message?.chat?.type ?? "private",
+          isBot: message?.from?.is_bot === true,
+        });
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      const pairClaim = await channels.claimEvent(
+        "telegram",
+        challenge.companyId,
+        String(updateId),
+        telegram.digest(update),
+        { eventType: "pairing" },
+      );
+      if (!pairClaim.claimed) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      try {
+        await telegram.completePairing({
+          token: pairingToken,
+          externalUserId: String(fromId),
+          chatId: message?.chat?.id ?? null,
+          chatType: message?.chat?.type ?? "private",
+          isBot: message?.from?.is_bot === true,
+        });
+        if (pairClaim.eventId) await channels.markEventProcessed(pairClaim.eventId, "processed");
+      } catch (error) {
+        logger.warn({ err: error, updateId }, "telegram pairing failed");
+        if (pairClaim.eventId) await channels.markEventProcessed(pairClaim.eventId, "failed");
+      }
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     const binding =
       fromId != null
         ? await channels.resolveActiveBinding("telegram", String(fromId))
