@@ -144,6 +144,15 @@ export function telegramConnectorService(db: Db, deps: StewardAgentReplierDeps =
     await callTelegram("sendMessage", { chat_id: chatId, text });
   }
 
+  /** Outbound approval card: the same message plus the decision keyboard. */
+  async function sendApprovalCard(
+    chatId: string | number,
+    text: string,
+    replyMarkup: Awaited<ReturnType<typeof buildApprovalKeyboard>>,
+  ) {
+    await callTelegram("sendMessage", { chat_id: chatId, text, reply_markup: replyMarkup });
+  }
+
   function digest(payload: unknown) {
     return `sha256:${createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex")}`;
   }
@@ -374,6 +383,7 @@ export function telegramConnectorService(db: Db, deps: StewardAgentReplierDeps =
     setWebhook,
     completePairing,
     sendMessage,
+    sendApprovalCard,
     issueCallbackToken,
     buildApprovalKeyboard,
     consumeCallbackToken,

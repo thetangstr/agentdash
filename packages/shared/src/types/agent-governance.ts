@@ -11,7 +11,7 @@ export type AgentDestructiveActionMode = (typeof AGENT_DESTRUCTIVE_ACTION_MODES)
 export const AGENT_MINIMUM_APPROVAL_MODES = ["none", "steward"] as const;
 export type AgentMinimumApprovalMode = (typeof AGENT_MINIMUM_APPROVAL_MODES)[number];
 
-export const AGENT_GOVERNANCE_CHANNELS = ["web", "telegram", "teams", "system"] as const;
+export const AGENT_GOVERNANCE_CHANNELS = ["web", "telegram", "teams", "whatsapp", "system"] as const;
 export type AgentGovernanceChannel = (typeof AGENT_GOVERNANCE_CHANNELS)[number];
 
 /**

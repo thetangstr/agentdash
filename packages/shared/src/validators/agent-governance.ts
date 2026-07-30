@@ -43,7 +43,7 @@ export type AgentGovernancePolicyInput = z.infer<typeof agentGovernancePolicySch
  * it is written only by server-side callers, so a steward cannot attribute
  * their own policy change to the system in the audit trail.
  */
-export const AGENT_GOVERNANCE_CLIENT_CHANNELS = ["web", "telegram", "teams"] as const;
+export const AGENT_GOVERNANCE_CLIENT_CHANNELS = ["web", "telegram", "teams", "whatsapp"] as const;
 
 /**
  * Mutation envelope for both the owner ceiling and the steward request.

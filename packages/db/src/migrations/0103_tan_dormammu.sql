@@ -1,0 +1,1 @@
+ALTER TABLE "human_channel_bindings" ADD COLUMN "last_inbound_at" timestamp with time zone;

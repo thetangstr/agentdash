@@ -28,6 +28,16 @@ export const humanChannelBindings = pgTable(
     /** Provider-specific routing detail (thread/topic), never secrets. */
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /**
+     * Last inbound message from this human.
+     *
+     * WhatsApp only permits free-form messages inside a 24-hour window that
+     * opens on the user's last inbound message; outside it, a business may send
+     * only pre-approved templates. Delivery has to know which side of that line
+     * it is on, and the answer changes per binding by the minute — a real
+     * column rather than a metadata key, because it is read on every send.
+     */
+    lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedByUserId: text("revoked_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

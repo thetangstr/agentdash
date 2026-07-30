@@ -4,7 +4,7 @@
 // credential serves many human conversations, so identity pairing and
 // credential lifecycle revoke independently.
 
-export const HUMAN_CHANNEL_PROVIDERS = ["telegram", "teams"] as const;
+export const HUMAN_CHANNEL_PROVIDERS = ["telegram", "teams", "whatsapp"] as const;
 export type HumanChannelProvider = (typeof HUMAN_CHANNEL_PROVIDERS)[number];
 
 export const EXTERNAL_CHANNEL_EVENT_STATES = ["claimed", "processed", "failed"] as const;

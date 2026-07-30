@@ -11,7 +11,7 @@ export const createApprovalSchema = z.object({
 
 export type CreateApproval = z.infer<typeof createApprovalSchema>;
 
-export const APPROVAL_DECISION_CHANNELS = ["web", "telegram", "teams"] as const;
+export const APPROVAL_DECISION_CHANNELS = ["web", "telegram", "teams", "whatsapp"] as const;
 export type ApprovalDecisionChannel = (typeof APPROVAL_DECISION_CHANNELS)[number];
 
 /**

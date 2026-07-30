@@ -21,12 +21,12 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 3940 passed, 0 failed |
+| `pnpm test:run` | 3950 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
 | `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
 
-Migrations `0096`–`0102`, each additive and correctly chained.
+Migrations `0096`–`0103`, each additive and correctly chained.
 `pnpm-lock.yaml` is intentionally uncommitted; CI owns it. The
 `@microsoft/teams.apps` dependency in `server/package.json` therefore needs a CI
 lockfile update before any build that installs from the lockfile alone.
@@ -216,6 +216,26 @@ tests) including "mints for the authenticated caller and nobody else" and "no
 longer accepts a self-asserted telegram identity on the generic bind route";
 `MyAgent.test.tsx` (9 tests) including "never mints one until asked".
 
+**Outbound delivery** (added 2026-07-30, after a false MET claim the same day).
+`buildApprovalKeyboard` had existed, minted correct tokens, and been tested —
+with no caller outside those tests. Nothing pushed a card when an approval was
+created, so a steward never received a button to press. The tests asserted that
+a card *decides* correctly and never that a card *arrives*.
+
+`approval-card-delivery.ts` closes it, wired into approval creation and
+resubmit. Verified bindings only — an unverified binding names an identity
+nobody proved control of. The current steward only, because anyone else gets a
+button the server refuses. It never throws: delivery is a side effect of
+creating an approval, so a provider outage must not fail the request that
+created it. Resubmit re-delivers, since advancing the revision kills every card
+already sent. Providers with no delivery implementation are logged as *not
+delivered* rather than counted as delivered.
+
+Evidence: `approval-card-delivery.test.ts` (10 tests) including "does not
+deliver to an unverified binding", "never lets a delivery failure escape to the
+caller", and — the one that would have caught the original gap — "delivers when
+an approval is created through the API, not only when the service is called".
+
 **Verification gap, unchanged:** no live Telegram sandbox run has been
 performed. The Bot API is exercised through a local double.
 
@@ -310,7 +330,8 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    until Teams is re-prioritized. Reuses the pairing-challenge table from item 2
    when it resumes.*
 2. ~~**Telegram pairing challenge and bidirectional conversation** (blocks §9).~~
-   Closed 2026-07-30.
+   Closed 2026-07-30, including outbound approval-card delivery, which was
+   missing entirely and briefly claimed complete before being caught.
 3. ~~**Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).~~
    Closed 2026-07-30.
 4. ~~**`providers` / `dataScopes` ceiling enforcement** (blocks §5).~~ Closed

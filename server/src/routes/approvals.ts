@@ -9,6 +9,7 @@ import {
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
 import { approvalAuthorityService } from "../services/approval-authority.js";
+import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { accessService } from "../services/access.js";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
@@ -45,6 +46,7 @@ export function approvalRoutes(
 ) {
   const router = Router();
   const svc = approvalService(db);
+  const cardDelivery = approvalCardDeliveryService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
   const authority = approvalAuthorityService(db);
@@ -261,6 +263,12 @@ export function approvalRoutes(
       entityId: approval.id,
       details: { type: approval.type, issueIds: uniqueIssueIds },
     });
+
+    // Push the card to the deciding steward's paired channels. Awaited rather
+    // than fired and forgotten so a test can observe it and so the request does
+    // not outlive its own side effects — the service swallows every failure
+    // internally, so an unreachable provider cannot fail this response.
+    await cardDelivery.deliverForApproval(approval.id);
 
     res.status(201).json(redactApprovalPayload(approval));
   });
@@ -569,6 +577,12 @@ export function approvalRoutes(
       entityId: approval.id,
       details: { type: approval.type },
     });
+
+    // A resubmit advances the revision, which kills every card already sent.
+    // Without a fresh one the steward is left holding buttons that now fail
+    // closed with no explanation of what replaced them.
+    await cardDelivery.deliverForApproval(approval.id);
+
     res.json(redactApprovalPayload(approval));
   });
 

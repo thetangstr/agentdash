@@ -170,6 +170,13 @@ before parsing. `update_id` is the dedup anchor. Inline keyboard
 callback queries are always answered, including on replay. Refusals return 200
 with an explanatory answer, because a non-2xx makes Telegram retry forever.
 
+Approval cards are **pushed** when an approval is created and again on every
+resubmit, to the current steward's verified, unrevoked bindings and to nobody
+else. Delivery never throws — it is a side effect of creating an approval, and a
+provider outage must not fail the request that created it. A provider with no
+delivery implementation is logged as *not delivered* rather than counted as
+delivered, so a paired steward's silence is always attributable.
+
 Telegram is **bidirectional**. A paired human's message is answered as their
 agent, against durable conversation history keyed to the binding (not the human
 or the agent — re-pairing produces a new binding and must not inherit the old
