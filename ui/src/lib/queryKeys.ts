@@ -102,6 +102,14 @@ export const queryKeys = {
   myAgent: {
     detail: (companyId: string) => ["myAgent", companyId] as const,
     inbox: (companyId: string) => ["myAgent", "inbox", companyId] as const,
+    /**
+     * Distinct from `inbox` on purpose. That key holds the OPEN-only response
+     * My Agent renders; this one holds the open-and-resolved response the Inbox
+     * uses to scope its tabs. Sharing a key would let whichever query mounted
+     * last decide what the other saw — and the failure mode is silent, because
+     * both responses have the same shape.
+     */
+    inboxScope: (companyId: string) => ["myAgent", "inboxScope", companyId] as const,
     overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
     governance: (companyId: string, agentId: string) =>
       ["myAgent", "governance", companyId, agentId] as const,

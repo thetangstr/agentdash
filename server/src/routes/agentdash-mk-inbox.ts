@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
-import { forbidden } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
@@ -80,6 +80,7 @@ export function agentdashMkInboxRoutes(db: Db) {
     companyId: string,
     scope: { agentIds: string[]; userId?: string } | { allCompanyAgents: true },
     requiresOverride: boolean,
+    options: { includeResolved?: boolean } = {},
   ) {
     let scopeCondition: ReturnType<typeof or> | undefined;
     if (!("allCompanyAgents" in scope)) {
@@ -110,7 +111,11 @@ export function agentdashMkInboxRoutes(db: Db) {
       .where(
         and(
           eq(approvals.companyId, companyId),
-          inArray(approvals.status, OPEN_APPROVAL_STATUSES),
+          // `includeResolved` widens the STATUS filter and nothing else. The
+          // scope condition below is what keeps the result the caller's own —
+          // the two are deliberately separate so widening one can never widen
+          // the other.
+          ...(options.includeResolved ? [] : [inArray(approvals.status, OPEN_APPROVAL_STATUSES)]),
           ...(scopeCondition ? [scopeCondition] : []),
         ),
       )
@@ -180,6 +185,16 @@ export function agentdashMkInboxRoutes(db: Db) {
     await requireProfileCompany(req, companyId);
     const userId = requireBoardUser(req);
 
+    // `open` (the default) is what a decision surface needs. `all` exists for
+    // the Inbox tabs that render decided work — scoping those to an open-only
+    // set would erase every resolved item rather than scope it. An unrecognized
+    // value is rejected rather than silently treated as the default, so a
+    // client typo cannot quietly narrow what a user sees.
+    const statusParam = typeof req.query.status === "string" ? req.query.status : "open";
+    if (statusParam !== "open" && statusParam !== "all") {
+      throw badRequest("status must be 'open' or 'all'");
+    }
+
     const current = await stewardships.activeByUserWithAgent(companyId, userId);
 
     // A user who stewards no agent still has their own work; returning an empty
@@ -198,6 +213,7 @@ export function agentdashMkInboxRoutes(db: Db) {
         companyId,
         { agentIds: current ? [current.agent.id] : [], userId },
         false,
+        { includeResolved: statusParam === "all" },
       ),
     });
   });

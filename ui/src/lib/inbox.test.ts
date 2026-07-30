@@ -370,6 +370,64 @@ describe("inbox helpers", () => {
     });
   });
 
+  it("counts only server-scoped approvals when the server owns the scope", () => {
+    // The sidebar badge and the Inbox tab have to agree. Counting the unscoped
+    // company list here made the badge promise work a steward could not act on,
+    // and the tab it opened showed a different number.
+    const mine = { ...makeApproval("pending"), id: "approval-mine", requestedByUserId: "user-1" };
+    const theirs = { ...makeApproval("pending"), id: "approval-theirs", requestedByUserId: "user-2" };
+
+    const result = computeInboxBadgeData({
+      approvals: [mine, theirs],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [],
+      dismissedAlerts: new Set<string>(["alert:budget", "alert:agent-errors"]),
+      dismissedAtByKey: new Map<string, number>(),
+      currentUserId: "user-1",
+      serverScopedApprovalIds: new Set(["approval-mine"]),
+    });
+
+    expect(result.approvals).toBe(1);
+  });
+
+  it("counts nothing while the server scope is still unknown", () => {
+    // `null` means "the profile company's scope has not loaded". Falling back to
+    // the unscoped count would flash a number the user cannot act on, and it is
+    // the same fail-closed rule `restrictApprovalsToServerScope` already uses.
+    const result = computeInboxBadgeData({
+      approvals: [{ ...makeApproval("pending"), requestedByUserId: "user-1" }],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [],
+      dismissedAlerts: new Set<string>(["alert:budget", "alert:agent-errors"]),
+      dismissedAtByKey: new Map<string, number>(),
+      currentUserId: "user-1",
+      serverScopedApprovalIds: null,
+    });
+
+    expect(result.approvals).toBe(0);
+  });
+
+  it("leaves the count unscoped when the field is absent", () => {
+    // Absent means "not a profile company" — every existing caller passes
+    // nothing, and none of them may change behavior.
+    const result = computeInboxBadgeData({
+      approvals: [{ ...makeApproval("pending"), requestedByUserId: "user-1" }],
+      joinRequests: [],
+      dashboard,
+      heartbeatRuns: [],
+      mineIssues: [],
+      dismissedAlerts: new Set<string>(["alert:budget", "alert:agent-errors"]),
+      dismissedAtByKey: new Map<string, number>(),
+      currentUserId: "user-1",
+    });
+
+    expect(result.approvals).toBe(1);
+  });
+
   it("drops dismissed runs and alerts from the computed badge", () => {
     const result = computeInboxBadgeData({
       approvals: [],

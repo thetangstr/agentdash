@@ -44,8 +44,16 @@ export interface PersonalInboxResponse {
 export const stewardshipsApi = {
   /** The signed-in user's own agent. The server derives identity from the session. */
   getMyAgent: (companyId: string) => api.get<MyAgentResponse>(`/companies/${companyId}/me/agent`),
-  getMyInbox: (companyId: string) =>
-    api.get<PersonalInboxResponse>(`/companies/${companyId}/me/inbox`),
+  /**
+   * `status` defaults to `open` on the server — what a decision surface needs.
+   * Pass `all` when the caller has to scope tabs that render decided work;
+   * scoping those against an open-only set would erase resolved items rather
+   * than scope them.
+   */
+  getMyInbox: (companyId: string, status?: "open" | "all") =>
+    api.get<PersonalInboxResponse>(
+      `/companies/${companyId}/me/inbox${status ? `?status=${status}` : ""}`,
+    ),
   getOverrideInbox: (companyId: string) =>
     api.get<{ items: InboxItem[] }>(`/companies/${companyId}/inbox/override`),
   getAgentStewardship: (companyId: string, agentId: string) =>

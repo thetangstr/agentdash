@@ -86,9 +86,19 @@ enabling the profile never removes authority by itself.
 | `GET` | `/api/companies/:companyId/inbox/override` | `agents:create` |
 
 There is deliberately no `userId` parameter — identity comes from the session.
-The personal inbox returns the stewarded agent's open approvals **plus** the
-user's own work. Override items are marked `requiresOverride: true` and are
-decidable only through the reasoned override action.
+The personal inbox returns the stewarded agent's approvals **plus** the user's
+own work. Override items are marked `requiresOverride: true` and are decidable
+only through the reasoned override action.
+
+`GET /me/inbox` accepts `?status=open` (default) or `?status=all`. Any other
+value is a **400**, not a silent fallback, so a client typo cannot quietly
+narrow what a user sees. `all` includes resolved approvals for the Inbox tabs
+that render decided work; it widens the *status* filter only — the identity
+scope is unchanged, and a test asserts that.
+
+The web Inbox scopes every tab to this response in a profile company, and the
+sidebar badge reads the same set, so the badge and the tab it opens always
+agree. The company-wide view lives on the Override screen.
 
 ## Approvals
 

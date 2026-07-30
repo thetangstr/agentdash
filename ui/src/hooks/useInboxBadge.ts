@@ -8,6 +8,8 @@ import { authApi } from "../api/auth";
 import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
+import { stewardshipsApi } from "../api/stewardships";
+import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 import {
   buildInboxDismissedAtByKey,
@@ -195,6 +197,25 @@ export function useInboxBadge(companyId: string | null | undefined) {
     enabled: !!companyId,
   });
 
+  // AgentDash-MK: the badge counted the unscoped company approval list while
+  // the Inbox tab it opens is scoped to this user, so the two disagreed — the
+  // badge promised work the tab would not show. It reads the same server-owned
+  // scope the page does, from the same query key, so there is one answer.
+  const { selectedCompany } = useCompany();
+  const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
+  const { data: personalInbox } = useQuery({
+    queryKey: queryKeys.myAgent.inboxScope(companyId ?? ""),
+    queryFn: () => stewardshipsApi.getMyInbox(companyId!, "all"),
+    enabled: !!companyId && isProfileCompany,
+  });
+  // `undefined` off-profile leaves the count exactly as it was; `null` while
+  // the profile scope loads counts nothing rather than flashing an unscoped
+  // number the tab will immediately contradict.
+  const serverScopedApprovalIds = useMemo(() => {
+    if (!isProfileCompany) return undefined;
+    return personalInbox ? new Set(personalInbox.items.map((item) => item.approvalId)) : null;
+  }, [isProfileCompany, personalInbox]);
+
   return useMemo(
     () =>
       computeInboxBadgeData({
@@ -206,7 +227,8 @@ export function useInboxBadge(companyId: string | null | undefined) {
         dismissedAlerts,
         dismissedAtByKey,
         currentUserId,
+        serverScopedApprovalIds,
       }),
-    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId],
+    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId, serverScopedApprovalIds],
   );
 }

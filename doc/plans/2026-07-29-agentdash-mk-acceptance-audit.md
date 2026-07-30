@@ -1,6 +1,6 @@
 # AgentDash-MK Acceptance Audit
 
-**Date:** 2026-07-29
+**Date:** 2026-07-29 (re-verified 2026-07-30)
 **Branch:** `codex/agentdash-mk`
 **Design:** [`docs/superpowers/specs/2026-07-28-agentdash-mk-design.md`](../../docs/superpowers/specs/2026-07-28-agentdash-mk-design.md) §17
 
@@ -8,7 +8,7 @@ Every criterion from the design, with the evidence that supports it. A missing
 live provider credential is a **verification gap**, not an implicit pass, and is
 recorded as such.
 
-**Verdict: 10 of 14 met, 3 partial, 1 not met. AgentDash-MK is NOT complete.**
+**Verdict: 11 of 14 met, 2 partial, 1 not met. AgentDash-MK is NOT complete.**
 
 **Scope note (2026-07-30):** the product owner deprioritized Microsoft Teams and
 brought WhatsApp, HubSpot, and the local computer-agent bridge into scope. See
@@ -21,10 +21,10 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 3894 passed, 0 failed |
+| `pnpm test:run` | 3918 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
-| `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 1 passed against a live `local_trusted` server |
+| `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
 
 Migrations `0096`–`0101`, each additive and correctly chained.
 `pnpm-lock.yaml` is intentionally uncommitted; CI owns it. The
@@ -146,19 +146,35 @@ the effective value is the stricter of the two sides, reaching `none` requires
 both the owner and the steward to ask for it. Non-administrators gain nothing.
 The default is unchanged and its test above still passes.
 
-### 8. Web Inbox authenticated-user scoped and server-backed — **PARTIAL**
+### 8. Web Inbox authenticated-user scoped and server-backed — **MET**
 
 `GET /api/companies/:companyId/me/inbox` derives identity from the session with
 no `userId` parameter, and returns the stewarded agent's work plus the user's
-own. The Inbox `mine` tab consumes it via `restrictApprovalsToServerScope`.
+own. It takes `status=open` (default) or `status=all`; anything else is a 400
+rather than a silent fallback to the default.
 
-**But `all`, `recent`, and `unread` still render the unscoped company approval
-list.** Aggregation moved for one tab, not for the Inbox. Payloads are redacted
-on that route so this is metadata exposure, not credential exposure, and the
-server refuses the resulting decisions — but the criterion is not met.
+`status=all` exists because the Inbox's `recent` and `all` tabs render decided
+work — scoping those against an open-only set would erase every resolved
+approval instead of scoping it. Widening the status filter deliberately does not
+widen the identity filter, and a test asserts that.
 
-Also open: the sidebar badge counts unscoped approvals and can disagree with the
-tab.
+All four tabs now apply `restrictApprovalsToServerScope`, not just `mine`. The
+sidebar badge reads the same server-owned scope from the same query key, so the
+badge and the tab it opens can no longer disagree. `computeInboxBadgeData` takes
+`serverScopedApprovalIds` with three states: absent (not a profile company —
+every existing caller, unchanged), a `Set` (scoped), and `null` (profile scope
+still loading — counts zero rather than flashing a number the tab contradicts).
+
+Scoping `all` removes a company-wide view some people legitimately had, so the
+tab carries a one-line notice, and for users the server confirms may use it, a
+link to the Override screen where that view lives with matching controls.
+
+Evidence: `agentdash-mk-inbox.test.ts` (15 tests, including "keeps status=all
+scoped to the caller" and "rejects an unrecognized status filter rather than
+guessing"); `ui/src/lib/inbox.test.ts` badge-scoping tests including "leaves the
+count unscoped when the field is absent"; and a browser assertion in
+`agentdash-mk-workforce.spec.ts`, because the scoping is wiring between a query
+and a filter and unit tests cover both halves without proving they are connected.
 
 ### 9. Telegram: pairing, bidirectional conversation, approvals, dedup, revocation — **PARTIAL**
 
@@ -268,7 +284,8 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    until Teams is re-prioritized. Reuses the pairing-challenge table from item 2
    when it resumes.*
 2. **Telegram pairing challenge and bidirectional conversation** (blocks §9).
-3. **Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).
+3. ~~**Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).~~
+   Closed 2026-07-30.
 4. ~~**`providers` / `dataScopes` ceiling enforcement** (blocks §5).~~ Closed
    2026-07-30. `destructiveActions` still has no runtime consumer — tracked as
    item 11 rather than left implied.

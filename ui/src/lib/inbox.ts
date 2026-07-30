@@ -1083,6 +1083,7 @@ export function computeInboxBadgeData({
   dismissedAlerts,
   dismissedAtByKey,
   currentUserId,
+  serverScopedApprovalIds,
 }: {
   approvals: Approval[];
   joinRequests: JoinRequest[];
@@ -1092,8 +1093,23 @@ export function computeInboxBadgeData({
   dismissedAlerts: Set<string>;
   dismissedAtByKey: ReadonlyMap<string, number>;
   currentUserId?: string | null;
+  /**
+   * AgentDash-MK: which approvals this user may actually act on, as decided by
+   * the server.
+   *
+   * Three states, and the difference matters. `undefined` means the company is
+   * not on the profile and the client heuristic stands — every existing caller
+   * passes nothing and must not change. A `Set` scopes the count. `null` means
+   * the profile company's scope has not loaded yet, and the count is zero: the
+   * badge must never promise work the tab it opens will not show.
+   */
+  serverScopedApprovalIds?: Set<string> | null;
 }): InboxBadgeData {
-  const actionableApprovals = approvals.filter(
+  const scopedApprovals =
+    serverScopedApprovalIds === undefined
+      ? approvals
+      : restrictApprovalsToServerScope(approvals, serverScopedApprovalIds);
+  const actionableApprovals = scopedApprovals.filter(
     (approval) =>
       isApprovalVisibleInMine(approval, currentUserId) &&
       ACTIONABLE_APPROVAL_STATUSES.has(approval.status) &&

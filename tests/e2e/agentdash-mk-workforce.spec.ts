@@ -184,4 +184,11 @@ test("CEO consolidates three stewarded contributions with web and Telegram appro
   await expect(page.getByRole("heading", { name: "My Agent" })).toBeVisible();
   // Unassigned is an explicit state, and ordinary users cannot self-claim.
   await expect(page.getByText("No agent assigned")).toBeVisible();
+
+  // The Inbox `all` tab is scoped to the signed-in user in a profile company,
+  // and says so. Asserted in the browser because the scoping is wiring between
+  // a query and a filter — unit tests cover both halves and neither proves they
+  // are connected.
+  await page.goto(`/${issuePrefix}/inbox/all`);
+  await expect(page.getByText("Showing only the approvals you can act on.")).toBeVisible();
 });

@@ -182,6 +182,66 @@ describeEmbeddedPostgres("agentdash-mk personal inbox", () => {
     });
   });
 
+  it("omits resolved approvals by default", async () => {
+    const { company, steward, myAgent, mine } = await seed();
+    const resolved = await createApproval(company.id, myAgent.id);
+    await db.update(approvals).set({ status: "approved" }).where(eq(approvals.id, resolved.id));
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((item: { approvalId: string }) => item.approvalId)).toEqual([mine.id]);
+  });
+
+  it("returns the user's resolved approvals too when asked for status=all", async () => {
+    // The Inbox's `recent` and `all` tabs render decided items. Scoping those
+    // tabs to an open-only set would erase every resolved approval instead of
+    // scoping it, so the scope set has to be able to span both.
+    const { company, steward, myAgent, mine } = await seed();
+    const resolved = await createApproval(company.id, myAgent.id);
+    await db.update(approvals).set({ status: "approved" }).where(eq(approvals.id, resolved.id));
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox?status=all`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((item: { approvalId: string }) => item.approvalId).sort()).toEqual(
+      [mine.id, resolved.id].sort(),
+    );
+  });
+
+  it("keeps status=all scoped to the caller", async () => {
+    // Widening the status filter must not widen the identity filter. This is
+    // the assertion that would catch `status=all` being implemented as "return
+    // everything open or closed in the company".
+    const { company, steward, theirs, mine } = await seed();
+    await db.update(approvals).set({ status: "approved" }).where(eq(approvals.id, theirs.id));
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox?status=all`),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((item: { approvalId: string }) => item.approvalId)).toEqual([mine.id]);
+  });
+
+  it("rejects an unrecognized status filter rather than guessing", async () => {
+    const { company, steward } = await seed();
+    const app = await createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/me/inbox?status=everything`),
+    );
+
+    expect(res.status).toBe(400);
+  });
+
   it("never accepts a caller-supplied user id", async () => {
     const { company, steward, otherSteward, mine } = await seed();
     const app = await createApp(boardActor(company.id, steward.principalId));
