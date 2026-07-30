@@ -10,6 +10,12 @@ recorded as such.
 
 **Verdict: 8 of 14 met, 5 partial, 1 not met. AgentDash-MK is NOT complete.**
 
+**Scope note (2026-07-30):** the product owner deprioritized Microsoft Teams and
+brought WhatsApp, HubSpot, and the local computer-agent bridge into scope. See
+[`2026-07-30-agentdash-mk-scope-override.md`](../../docs/superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
+Criterion 10 is now **deprioritized, not abandoned**; criterion 13 is restated
+there. The remaining criteria are unaffected.
+
 ## Repository verification
 
 | Command | Result |
@@ -148,7 +154,12 @@ revocation.
 
 Evidence: `telegram-connector.test.ts` (9 tests).
 
-### 10. Teams equivalent with supported bot/app and Adaptive Cards — **NOT MET**
+### 10. Teams equivalent with supported bot/app and Adaptive Cards — **NOT MET (deprioritized 2026-07-30)**
+
+Owner decision: Teams is low priority and yields to the other criteria and to
+WhatsApp/HubSpot/bridge. No code is removed and no test is skipped — the gap
+below stands as written and stays visible in the E2E spec. This criterion is
+parked, not waived.
 
 `@microsoft/teams.apps` ^2.0.14 is a dependency, cards use `Action.Execute`
 (a test asserts no `Action.Submit` anywhere), and the decision path enforces
@@ -187,12 +198,23 @@ agent behavior; the prompt block instructs it, but the system does not enforce
 it, so "the final result links every required contribution" is a documented
 expectation rather than a guarantee.
 
-### 13. No P0 surface claims the deferred bridge or excluded integrations — **MET**
+### 13. Every P0 surface agrees with the current scope decision — **MET**
 
-No Codex/Claude computer-agent bridge exists. No Salesforce, HubSpot, Jira,
-SharePoint, Google Drive, or WhatsApp code was added. `docs/api/agentdash-mk.md`
-states the exclusions, and a prompt-drift test asserts no surface mentions the
-bridge.
+Restated 2026-07-30. The original criterion asserted *absence* of the bridge and
+the excluded integrations; the owner's scope override makes absence the wrong
+test. What matters is that no surface promises a capability that does not exist
+and none omits one that does.
+
+Today: no Codex/Claude computer-agent bridge, no HubSpot, and no WhatsApp code
+exists, and `docs/api/agentdash-mk.md` plus the prompt-drift test in
+`agent-instruction-bundles.test.ts` both say so. Consistent.
+
+Salesforce, Jira, SharePoint, and Google Drive remain excluded — that half of
+the original criterion is unchanged.
+
+As each in-scope integration lands, its PR must move the API doc, the four
+prompt surfaces, and (for the bridge) invert the drift test in the same commit.
+The debt table lives in §6 of the scope-override addendum.
 
 ### 14. Tests, typecheck, suite, build, browser suites pass — **MET**
 
@@ -202,6 +224,9 @@ See the verification table above. Live Telegram and Teams sandbox runs have
 ## Open work
 
 1. **Teams inbound validation** — wire `App`/`ExpressAdapter` (blocks §10).
+   *Deprioritized 2026-07-30 by owner decision; unchanged in substance, parked
+   until Teams is re-prioritized. Reuses the pairing-challenge table from item 2
+   when it resumes.*
 2. **Telegram pairing challenge and bidirectional conversation** (blocks §9).
 3. **Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).
 4. **`providers` / `dataScopes` ceiling enforcement** (blocks §5).
@@ -214,3 +239,7 @@ See the verification table above. Live Telegram and Teams sandbox runs have
 9. Pre-existing platform gaps left open by choice: routines gated on
    `tasks:assign` (which operators hold), and caller-supplied `agentId` on issue
    checkout and cost-events.
+10. **Newly in scope 2026-07-30**, sequenced after the blockers above: WhatsApp
+    connector, HubSpot native BYO-key connector (read, then steward-approved
+    writes), and the local computer-agent bridge. These are additions beyond the
+    fourteen criteria, not gaps in them; see the scope-override addendum.
