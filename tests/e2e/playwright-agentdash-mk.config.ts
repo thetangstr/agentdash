@@ -11,7 +11,7 @@ const BASE_URL = process.env.PAPERCLIP_E2E_BASE_URL ?? `http://127.0.0.1:${PORT}
  */
 export default defineConfig({
   testDir: ".",
-  testMatch: "agentdash-mk-workforce.spec.ts",
+  testMatch: /agentdash-mk-(workforce|agent-auth)\.spec\.ts/,
   timeout: 180_000,
   expect: { timeout: 20_000 },
   retries: 0,

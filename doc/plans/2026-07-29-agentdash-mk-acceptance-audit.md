@@ -8,7 +8,7 @@ Every criterion from the design, with the evidence that supports it. A missing
 live provider credential is a **verification gap**, not an implicit pass, and is
 recorded as such.
 
-**Verdict: 8 of 14 met, 5 partial, 1 not met. AgentDash-MK is NOT complete.**
+**Verdict: 9 of 14 met, 4 partial, 1 not met. AgentDash-MK is NOT complete.**
 
 **Scope note (2026-07-30):** the product owner deprioritized Microsoft Teams and
 brought WhatsApp, HubSpot, and the local computer-agent bridge into scope. See
@@ -175,16 +175,33 @@ manifest, and pairing are also absent.
 Per the handoff's own rule, Teams cannot be presented as complete while Telegram
 itself is partial (§9).
 
-### 11. CEO-to-three-stakeholders with agent-authenticated execution — **PARTIAL**
+### 11. CEO-to-three-stakeholders with agent-authenticated execution — **MET**
 
-The scenario runs end to end: `tests/e2e/agentdash-mk-workforce.spec.ts` passes
-against a live server, covering four agents, ceilings, a refused over-broad
-request, three delegated children, a web decision, replay, and consolidation
-with full artifacts.
+Two specs, both passing against a live `local_trusted` server.
 
-**The spec drives the API as a board actor, not with agent API keys.** Criterion
-11 says "agent-authenticated execution"; that half is unproven end to end.
-Agent-key paths are covered by unit and route tests only.
+`tests/e2e/agentdash-mk-workforce.spec.ts` covers the governance scenario as a
+board actor: four agents, ceilings, a refused over-broad request, three
+delegated children, a web decision, replay, and consolidation with full
+artifacts.
+
+`tests/e2e/agentdash-mk-agent-auth.spec.ts` covers the agent-authenticated half.
+Every agent gets its own API key and `APIRequestContext`, and the CEO agent
+delegates, each stakeholder agent writes its own contribution, the Product agent
+requests a governed action, and the CEO agent consolidates — all under
+`x-agent-key`, none as the board.
+
+The trap this closes: in `local_trusted` an unrecognized agent key does not
+fail. `agentAuth` calls `next()` and the actor falls back to the implicit local
+board, an instance admin. A spec that sent the header and asserted 200 would
+pass with the key misspelled or revoked. So `agentContext()` refuses to return a
+context until `GET /api/agents/me` returns that exact agent id, and a garbage
+key is asserted to 401 there.
+
+Negative coverage, pinned to exact refusals rather than `>= 400` ranges:
+Marketing's key on Engineering's issue → `403 Agent cannot mutate another
+agent's issue`; an agent deciding its own approval → `403`, with a follow-up
+read asserting the approval is still `pending` so a refusal that wrote anyway
+cannot pass.
 
 ### 12. Final result links every contribution and reconstructs the audit chain — **PARTIAL**
 
@@ -230,7 +247,8 @@ See the verification table above. Live Telegram and Teams sandbox runs have
 2. **Telegram pairing challenge and bidirectional conversation** (blocks §9).
 3. **Inbox `all`/`recent`/`unread` scoping** and the sidebar badge (blocks §8).
 4. **`providers` / `dataScopes` ceiling enforcement** (blocks §5).
-5. **Agent-authenticated E2E** (blocks §11).
+5. ~~**Agent-authenticated E2E** (blocks §11).~~ Closed 2026-07-30 by
+   `tests/e2e/agentdash-mk-agent-auth.spec.ts`.
 6. CLI and MCP approval clients omit decision metadata and will 400 in a profile
    company.
 7. No steward-request editor in the UI, so ceiling violation messages are
