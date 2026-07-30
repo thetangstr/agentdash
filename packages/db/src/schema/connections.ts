@@ -1,4 +1,5 @@
 // AgentDash: Connectors (AGE-106)
+import { sql } from "drizzle-orm";
 import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
@@ -54,6 +55,19 @@ export const connections = pgTable(
     companyProviderIdx: index("connections_company_provider_idx").on(table.companyId, table.provider),
     ownerIdx: index("connections_owner_idx").on(table.companyId, table.ownerType, table.ownerId),
     statusIdx: index("connections_status_idx").on(table.companyId, table.status),
+    /**
+     * AgentDash-MK: one active HubSpot connection per owner per company.
+     *
+     * A second active key for the same person is not a richer setup, it is an
+     * ambiguity: `resolveActingAs` picks the newest and the older one keeps
+     * working for anything holding its id, so revoking "the" key revokes only
+     * one of them. Enforced in the database because the check-then-insert
+     * version loses a race, and rotation is exactly when two concurrent writes
+     * are most likely.
+     */
+    activeHubspotOwnerUq: uniqueIndex("connections_hubspot_active_owner_uq")
+      .on(table.companyId, table.ownerType, table.ownerId)
+      .where(sql`${table.provider} = 'hubspot' and ${table.revokedAt} is null`),
   }),
 );
 

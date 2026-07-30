@@ -120,6 +120,58 @@ invalidates outstanding cards.
 Deciding a `hire_agent` approval requires `agents:create` in every profile —
 approving one creates an agent.
 
+## HubSpot (per-user BYO key)
+
+| Method | Path | Who |
+|---|---|---|
+| `GET` | `/api/companies/:companyId/me/connections/hubspot` | Own key health |
+| `POST` | `/api/companies/:companyId/me/connections/hubspot` | Own key, session identity |
+| `POST` | `/api/companies/:companyId/me/connections/hubspot/rotate` | Own key |
+| `POST` | `/api/companies/:companyId/me/connections/hubspot/recheck` | Own key |
+| `POST` | `/api/companies/:companyId/me/connections/hubspot/revoke` | Own key or admin |
+| `GET` | `/api/companies/:companyId/hubspot/:objectType` | **Agent key only** |
+
+`objectType` is `contacts`, `companies`, or `deals`; anything else is a 400
+rather than a pass-through to HubSpot.
+
+Native rather than routed through the local-agent bridge, because only this path
+makes the owner ceiling an *enforcement* mechanism: every read resolves through
+`resolveActingAs`, where `providers` and `dataScopes` refuse it. A ceiling over a
+bridge task constrains what may be **asked**, not what the machine **could** do.
+
+**Validate before persist.** Connecting makes two calls: token introspection for
+the portal and scopes, then a live CRM read. A token that introspects cleanly and
+403s on every read would otherwise be stored as healthy and fail later inside an
+agent run, far from the cure.
+
+**Visibility is hard-forced `private`** and never read from input. A
+workspace-visible connection is usable by every agent in the company through
+`resolveActingAs`, which would turn one person's personal key into a shared
+company credential.
+
+**One active key per person per company**, enforced by a partial unique index
+(migration `0104`), so the DB decides the race rather than a check-then-insert.
+Two active keys is an ambiguity, not a richer setup: `resolveActingAs` picks the
+newest and the older keeps working, so "revoke my key" would revoke one of them.
+
+`recheck` reports **scopes lost** since the key was stored. A super admin can
+narrow a private app's scopes at any time and nothing tells us; without this the
+first symptom is a failing agent run.
+
+Repeated `401`/`403` marks the connection `error`, which removes it from
+`resolveActingAs` entirely — so the next read makes no request at all. That is
+the durable breaker; the in-process counter only covers the window before that
+write lands.
+
+All free-text CRM properties are **framed, not sanitized**, before reaching an
+agent: CRM notes are attacker-writable for inbound leads, and stripping
+"instruction-looking" text would mangle legitimate notes while missing novel
+phrasings. Non-string properties are left alone.
+
+**Known limit:** a HubSpot private-app token is portal-scoped and created by a
+super admin, so writes attribute to *the app*, not to the person whose key it is.
+A public OAuth app is the fix and is not built here.
+
 ## Channels
 
 | Method | Path | Who |
@@ -268,4 +320,5 @@ by this work.
 
 WhatsApp and HubSpot were excluded by the original design and brought into scope
 by the [2026-07-30 scope override](../superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
-WhatsApp is implemented above; HubSpot is not yet.
+WhatsApp and HubSpot reads are implemented above. HubSpot **writes** and the
+local computer-agent bridge are not built yet.

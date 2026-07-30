@@ -269,25 +269,30 @@ describeEmbeddedPostgres("agentdash-mk provider and data-scope ceilings", () => 
     it("prefers a within-ceiling connection over refusing outright", async () => {
       // Refusing when ANY connection is over-scoped would make one over-broad
       // credential disable an otherwise compliant one.
+      //
+      // Uses `google` rather than `hubspot` on purpose. The filter is
+      // provider-agnostic, but HubSpot carries a partial unique index allowing
+      // only one active connection per owner, so two agent-owned HubSpot rows
+      // cannot coexist. Writing this against HubSpot would couple a general
+      // behavior to one provider's uniqueness rule — and it did, until that
+      // index landed and broke this test.
       const company = await createCompany();
       const agent = await createAgent(company.id);
       await createConnection(company.id, agent.id, {
-        provider: "hubspot",
-        scopes: ["crm.objects.contacts.read", "crm.objects.deals.write"],
+        provider: "google",
+        scopes: ["drive.readonly", "drive.file"],
       });
       const compliant = await createConnection(company.id, agent.id, {
-        provider: "hubspot",
-        scopes: ["crm.objects.contacts.read"],
+        provider: "google",
+        scopes: ["drive.readonly"],
       });
-      await setCeiling(company.id, agent.id, {
-        dataScopes: ["crm.objects.contacts.read"],
-      });
+      await setCeiling(company.id, agent.id, { dataScopes: ["drive.readonly"] });
 
       const result = await connectorService(db).resolveActingAs(
         company.id,
         agent.id,
         "read",
-        "hubspot",
+        "google",
       );
 
       expect(result.ok).toBe(true);

@@ -21,12 +21,12 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 3970 passed, 0 failed |
+| `pnpm test:run` | 3990 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
 | `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
 
-Migrations `0096`–`0103`, each additive and correctly chained. WhatsApp
+Migrations `0096`–`0104`, each additive and correctly chained. WhatsApp
 added no table: it reuses `channel_pairing_challenges`, `channel_callback_tokens`,
 and `external_channel_events`, which is the point of having made them
 provider-generic.
@@ -351,10 +351,14 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    `tasks:assign` (which operators hold), and caller-supplied `agentId` on issue
    checkout and cost-events.
 10. **Newly in scope 2026-07-30**, sequenced after the blockers above.
-    ~~WhatsApp connector~~ shipped 2026-07-30. Still outstanding: HubSpot native
-    BYO-key connector (read, then steward-approved writes), and the local
-    computer-agent bridge. These are additions beyond the fourteen criteria, not
+    ~~WhatsApp connector~~ and ~~HubSpot native BYO-key reads~~ shipped
+    2026-07-30. Still outstanding: HubSpot steward-approved **writes**, and the
+    local computer-agent bridge. These are additions beyond the fourteen criteria, not
     gaps in them; see the scope-override addendum.
+13. **HubSpot writes attribute to the app, not the person.** A private-app
+    token is portal-scoped and created by a super admin, so a write made with
+    one member's key is indistinguishable from any other. Acceptable for reads;
+    it needs deciding before writes ship, and a public OAuth app is the fix.
 12. **WhatsApp out-of-window delivery.** Outside the 24-hour messaging window an
     approval card is reported undelivered rather than sent, because a
     Meta-reviewed utility template is an operator provisioning step this build
