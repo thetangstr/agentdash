@@ -253,12 +253,22 @@ an approval is created through the API, not only when the service is called".
 **Verification gap, unchanged:** no live Telegram sandbox run has been
 performed. The Bot API is exercised through a local double.
 
-### 10. Teams equivalent with supported bot/app and Adaptive Cards — **NOT MET (deprioritized 2026-07-30)**
+### 10. Teams equivalent with supported bot/app and Adaptive Cards — **NOT MET (accepted direction, not scheduled)**
 
-Owner decision: Teams is low priority and yields to the other criteria and to
-WhatsApp/HubSpot/bridge. No code is removed and no test is skipped — the gap
-below stands as written and stays visible in the E2E spec. This criterion is
-parked, not waived.
+Owner decision 2026-07-30: deprioritized. Revisited 2026-07-31: the owner
+accepted publishing to the Teams Store *eventually*, which settles the approach
+without scheduling the work. This criterion stands as written — Teams parity,
+not a renegotiated notifier. It is parked, not waived, and no test is skipped.
+
+**The blocker recorded here until 2026-07-31 was wrong.** It stated that the SDK
+exports no standalone validator. `ServiceTokenValidator` does exist, standalone,
+issuer-pinned and `serviceUrl`-bound; it is simply not re-exported from the
+package root. The real blocker is that Microsoft deprecated multi-tenant bot
+creation after 2025-07-31 and this project holds nothing grandfathered, so
+cross-tenant reach requires AppSource publication.
+
+Sequenced plan, pre-engineering verifications, and the endorsement-validation
+sign-off requirement: [`2026-07-31-teams-store-path.md`](2026-07-31-teams-store-path.md).
 
 `@microsoft/teams.apps` ^2.0.14 is a dependency, cards use `Action.Execute`
 (a test asserts no `Action.Submit` anywhere), and the decision path enforces

@@ -104,8 +104,8 @@ The owner revisited scope after the first pass shipped.
 | Item | Decision | State |
 |---|---|---|
 | HubSpot private-app attribution | **Accepted.** "hubspot is fine" | Writes ship as built. Provenance stamping into HubSpot moves to the backlog, not a blocker |
-| WhatsApp | **Dropped.** "lets drop whatsapp" | Code **parked, not deleted** — pending explicit confirmation. Deleting a shipped, tested connector plus its migration is irreversible; parking is not. The out-of-window utility template is abandoned |
-| Microsoft Teams | **Reopened for evaluation** | Blocked on a go-to-market decision, not an engineering one — see below |
+| WhatsApp | **Dropped.** "lets drop whatsapp" → **"park it"** | Code **parked, confirmed 2026-07-31.** Left in place and passing; not deleted. No further investment — the out-of-window utility template is abandoned. Removal remains available later at no additional cost |
+| Microsoft Teams | **Store path accepted.** *"i do want it to be in the store eventually as an app for teams"* | The distribution gate is **open**. Finishing the existing bot is now the right engineering answer; the no-bot notifier alternative is retired. **Not scheduled** — "eventually". Plan held at [`2026-07-31-teams-store-path.md`](../../../doc/plans/2026-07-31-teams-store-path.md) |
 
 ### Teams: the blocker was misdiagnosed
 
@@ -129,11 +129,14 @@ remaining path is one **single-tenant** bot reached cross-tenant via **AppSource
 certification, publisher verification, listing maintenance) rather than an
 engineering task.
 
-**Open owner decision: publish to AppSource, yes or no?** Everything on the bot
-path is downstream of it. If no, the honest alternative is a Teams *notifier*
-(Workflows webhook out, deep link back into AgentDash) with no inbound Teams
-surface — which renegotiates criterion 10 rather than meeting it, and should be
-renamed accordingly.
+**Resolved 2026-07-31: yes, eventually.** The owner accepted the AppSource
+commitment. That opens the gate and retires the notifier alternative, which had
+no inbound Teams surface and no incremental path to one. Criterion 10 stands as
+originally written — Teams parity — rather than being renegotiated.
+
+Two of the plan's slices already landed as ordinary security work before the
+decision: shared-layer hardening and the doc corrections, both in `625f074e`.
+The remainder is sequenced in the plan doc and is **not scheduled**.
 
 Two findings that should inform the answer, both from the 2026-07-31 research:
 
