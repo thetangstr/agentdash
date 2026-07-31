@@ -93,3 +93,59 @@ The four mandatory prompt surfaces
 (`server/src/onboarding-assets/{default,ceo,chief_of_staff}/AGENTS.md` plus
 `server/src/services/agent-creator-from-proposal.ts`) are updated by whichever
 PR adds agent-visible behavior, per the rule in repo-root `AGENTS.md`.
+
+
+---
+
+## 7. Amendments (2026-07-31)
+
+The owner revisited scope after the first pass shipped.
+
+| Item | Decision | State |
+|---|---|---|
+| HubSpot private-app attribution | **Accepted.** "hubspot is fine" | Writes ship as built. Provenance stamping into HubSpot moves to the backlog, not a blocker |
+| WhatsApp | **Dropped.** "lets drop whatsapp" | Code **parked, not deleted** — pending explicit confirmation. Deleting a shipped, tested connector plus its migration is irreversible; parking is not. The out-of-window utility template is abandoned |
+| Microsoft Teams | **Reopened for evaluation** | Blocked on a go-to-market decision, not an engineering one — see below |
+
+### Teams: the blocker was misdiagnosed
+
+Criterion 10 and `teams-connector.ts` both claimed the SDK "exports no standalone
+validator." That is **wrong**. `ServiceTokenValidator` exists at
+`@microsoft/teams.apps/dist/middleware/`, is standalone, pins the issuer and
+binds `serviceUrl` — it is simply not re-exported from the package root. All
+three statements of the false claim were corrected on 2026-07-31.
+
+The real blocker is upstream and nobody had checked it. Microsoft Learn
+(*Register a Bot Framework bot with Azure*, page updated 2025-12-16):
+
+> Multi-tenant bot creation will be deprecated after July 31, 2025. Existing
+> multi-tenant bots will continue to function, but new multi-tenant bot creation
+> will no longer be supported after that date.
+
+This project holds no grandfathered registration — there is no manifest in the
+repo and `TEAMS_APP_ID` / `TEAMS_APP_PASSWORD` are read by no code. The
+remaining path is one **single-tenant** bot reached cross-tenant via **AppSource
+/ Teams Store publication**, which is a go-to-market commitment (Partner Center
+certification, publisher verification, listing maintenance) rather than an
+engineering task.
+
+**Open owner decision: publish to AppSource, yes or no?** Everything on the bot
+path is downstream of it. If no, the honest alternative is a Teams *notifier*
+(Workflows webhook out, deep link back into AgentDash) with no inbound Teams
+surface — which renegotiates criterion 10 rather than meeting it, and should be
+renamed accordingly.
+
+Two findings that should inform the answer, both from the 2026-07-31 research:
+
+- **Cross-tenant proactive send is unproven even with AppSource.** Every
+  supporting Microsoft statement found was a forum moderator answer, not
+  documentation, and the SDK's own token path resolves a single fixed tenant
+  authority. Proving it needs two tenants, not one.
+- **Channel endorsement validation is implemented by neither Microsoft SDK.**
+  A live JWKS pull found 255 keys with only 54 endorsed for `msteams`, so ~79%
+  of currently-valid signing keys would be accepted for an activity claiming to
+  be from Teams. Pinning `channelId` in code does not help — that field is in
+  the unsigned body. The only control is enabling solely the Teams channel on
+  the registration, which is per-customer portal config with no server-side
+  verification. Shipping six of seven checks should be signed off in writing
+  before engineering starts.
