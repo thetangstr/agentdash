@@ -112,6 +112,55 @@ async function lockAssignableCompanyAgent(
   }
 }
 
+/**
+ * One audit row per revoked channel binding and bridge endpoint.
+ *
+ * Revocation on stewardship end lives inline in this service, and when it moved
+ * here it lost the per-row audit the standalone helper had. `stewardship_ended`
+ * records that authority ended; it does not record that a specific Telegram
+ * binding or a specific enrolled laptop stopped being able to act. Recovering
+ * that meant joining a `revoked_at` timestamp against a stewardship row and
+ * hoping the timestamps matched.
+ *
+ * Written on the SAME connection or transaction as the revocation it describes,
+ * so a rolled-back transfer cannot leave an audit row claiming a revocation
+ * that never happened.
+ */
+async function auditRevocations(
+  database: StewardshipDb,
+  input: {
+    companyId: string;
+    actorUserId: string | null;
+    reason: "stewardship_ended" | "stewardship_transferred";
+    bindings: Array<{ id: string; agentId: string; provider: string }>;
+    endpoints: Array<{ id: string; label: string }>;
+  },
+) {
+  for (const binding of input.bindings) {
+    await logActivity(database as unknown as Db, {
+      companyId: input.companyId,
+      actorType: "user",
+      actorId: input.actorUserId ?? "board",
+      action: "human_channel.binding_revoked",
+      entityType: "human_channel_binding",
+      entityId: binding.id,
+      agentId: binding.agentId,
+      details: { provider: binding.provider, reason: input.reason },
+    });
+  }
+  for (const endpoint of input.endpoints) {
+    await logActivity(database as unknown as Db, {
+      companyId: input.companyId,
+      actorType: "user",
+      actorId: input.actorUserId ?? "board",
+      action: "bridge.endpoint_revoked",
+      entityType: "bridge_endpoint",
+      entityId: endpoint.id,
+      details: { label: endpoint.label, reason: input.reason },
+    });
+  }
+}
+
 export function agentStewardshipService(db: Db) {
 
   async function activeByUser(companyId: string, userId: string) {
@@ -290,7 +339,12 @@ export function agentStewardshipService(db: Db) {
 
         // The outgoing steward's channel bindings grant a path to act for this
         // agent, so they end with the stewardship rather than outliving it.
-        await tx
+        //
+        // `.returning()` is load-bearing: each revoked row gets its own audit
+        // entry below. "The stewardship ended" does not answer the question an
+        // incident review actually asks — when did THIS channel stop being able
+        // to act, and why.
+        const revokedBindings = await tx
           .update(humanChannelBindings)
           .set({
             revokedAt: now,
@@ -303,12 +357,13 @@ export function agentStewardshipService(db: Db) {
               eq(humanChannelBindings.userId, active.userId),
               isNull(humanChannelBindings.revokedAt),
             ),
-          );
+          )
+          .returning();
 
         // Same rule, same transaction, for bridge endpoints: an enrolled
         // machine is a path for the outgoing steward to keep doing this agent's
         // work, and it must not survive the stewardship that justified it.
-        await tx
+        const revokedEndpoints = await tx
           .update(bridgeEndpoints)
           .set({
             revokedAt: now,
@@ -321,7 +376,16 @@ export function agentStewardshipService(db: Db) {
               eq(bridgeEndpoints.userId, active.userId),
               isNull(bridgeEndpoints.revokedAt),
             ),
-          );
+          )
+          .returning();
+
+        await auditRevocations(tx, {
+          companyId,
+          actorUserId: input.transferredByUserId,
+          reason: "stewardship_transferred",
+          bindings: revokedBindings,
+          endpoints: revokedEndpoints,
+        });
 
         await logActivity(tx as unknown as Db, {
           companyId,
@@ -356,7 +420,7 @@ export function agentStewardshipService(db: Db) {
     database: StewardshipDb = db,
   ) {
     const now = new Date();
-    await database
+    const revokedBindings = await database
       .update(humanChannelBindings)
       .set({ revokedAt: now, revokedByUserId: endedByUserId, updatedAt: now })
       .where(
@@ -365,8 +429,9 @@ export function agentStewardshipService(db: Db) {
           eq(humanChannelBindings.userId, userId),
           isNull(humanChannelBindings.revokedAt),
         ),
-      );
-    await database
+      )
+      .returning();
+    const revokedEndpoints = await database
       .update(bridgeEndpoints)
       .set({ revokedAt: now, revokedByUserId: endedByUserId, updatedAt: now })
       .where(
@@ -375,7 +440,15 @@ export function agentStewardshipService(db: Db) {
           eq(bridgeEndpoints.userId, userId),
           isNull(bridgeEndpoints.revokedAt),
         ),
-      );
+      )
+      .returning();
+    await auditRevocations(database, {
+      companyId,
+      actorUserId: endedByUserId,
+      reason: "stewardship_ended",
+      bindings: revokedBindings,
+      endpoints: revokedEndpoints,
+    });
     return database
       .update(agentStewardships)
       .set({

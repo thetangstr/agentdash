@@ -21,7 +21,7 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 4011 passed, 0 failed |
+| `pnpm test:run` | 4040 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
 | `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
@@ -33,6 +33,17 @@ provider-generic.
 `pnpm-lock.yaml` is intentionally uncommitted; CI owns it. The
 `@microsoft/teams.apps` dependency in `server/package.json` therefore needs a CI
 lockfile update before any build that installs from the lockfile alone.
+
+### Known flake
+
+`zk-permission-mandated-action.test.ts` — "flag ON: generates a proof, binds
+proof_hash into attest inputs..." intermittently fails on
+`permissionProof.anchored` under full-suite load. Observed twice on 2026-07-30,
+passing in isolation both times, in runs whose diffs touched nothing in the ZK
+path. Load-dependent, pre-existing, and not caused by this branch — recorded so
+it is recognized rather than re-diagnosed. `run-vitest-stable.mjs` bails the
+remaining packages when the server package fails, so a single flake also
+depresses the reported total.
 
 ## Criteria
 
@@ -390,7 +401,15 @@ See the verification table above. Live Telegram and Teams sandbox runs have
     nothing schedules it. Until it is on a timer or a heartbeat, a claimed task
     on a machine that went quiet stays `claimed` indefinitely rather than
     expiring.
-17. **`revokeBindingsForEndedStewardship` in `human-channels.ts` is dead code.**
-    `agent-stewardships.ts` performs the same revocation inline at both sites, so
-    the exported helper has no caller. Not a gap in behavior — the inline version
-    is what runs and is tested — but a duplicate that reads like the mechanism.
+17. ~~**`revokeBindingsForEndedStewardship` in `human-channels.ts` is dead
+    code.**~~ Closed 2026-07-30, and it was more than a duplicate. The dead
+    helper logged one `human_channel.binding_revoked` row per revoked binding;
+    the inline version that actually runs logged only
+    `agent.stewardship_ended`. So the audit trail answered "the stewardship
+    ended" but never "this Telegram binding and this enrolled laptop stopped
+    being able to act, and why" — recoverable only by joining a `revoked_at`
+    timestamp against a stewardship row and hoping they matched.
+
+    Deleting the dead code would have cemented that gap. Both inline sites now
+    audit per revoked binding and per revoked endpoint, in the same transaction
+    as the revocation, and the helper is removed.

@@ -7,9 +7,11 @@ import {
   activityLog,
   agents,
   agentStewardships,
+  bridgeEndpoints,
   companies,
   companyMemberships,
   createDb,
+  humanChannelBindings,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -133,6 +135,8 @@ describeEmbeddedPostgres("agent stewardships", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(bridgeEndpoints);
+    await db.delete(humanChannelBindings);
     await db.delete(agentStewardships);
     await db.delete(agents);
     await db.delete(companyMemberships);
@@ -474,6 +478,68 @@ describeEmbeddedPostgres("agent stewardships", () => {
     expect(endedEvent.details).toMatchObject({
       userId: user.principalId,
       reason: "member_archived",
+    });
+  });
+
+  it("records which channels and endpoints a stewardship end revoked, not just that it ended", async () => {
+    // Revocation on stewardship end was moved inline into this service and lost
+    // its per-row audit on the way. `agent.stewardship_ended` says the
+    // stewardship ended; it does not say that this person's Telegram binding
+    // and enrolled laptop stopped being able to act for that agent.
+    //
+    // That is the question an incident review actually asks — "when did this
+    // channel stop working, and why" — and the answer was only inferable by
+    // joining a revokedAt timestamp against a stewardship row.
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+
+    const now = new Date();
+    await db.insert(humanChannelBindings).values({
+      companyId: company.id,
+      userId: user.principalId,
+      agentId: agent.id,
+      provider: "telegram",
+      externalUserId: "tg-audit-1",
+      verifiedAt: now,
+    });
+    await db.insert(bridgeEndpoints).values({
+      companyId: company.id,
+      userId: user.principalId,
+      label: "laptop",
+      tokenHash: "hash-audit-1",
+      enrolledAt: now,
+      approvedByUserId: owner.principalId,
+    });
+
+    await accessService(db).archiveMember(company.id, user.id, {
+      actorUserId: owner.principalId,
+    });
+
+    const bindingRevoked = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "human_channel.binding_revoked"));
+    expect(bindingRevoked, "no audit row named the revoked channel binding").toHaveLength(1);
+    expect(bindingRevoked[0].details).toMatchObject({
+      provider: "telegram",
+      reason: "stewardship_ended",
+    });
+
+    const endpointRevoked = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "bridge.endpoint_revoked"));
+    expect(endpointRevoked, "no audit row named the revoked bridge endpoint").toHaveLength(1);
+    expect(endpointRevoked[0].details).toMatchObject({
+      label: "laptop",
+      reason: "stewardship_ended",
     });
   });
 

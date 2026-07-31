@@ -260,44 +260,6 @@ export function humanChannelService(db: Db) {
   }
 
   /**
-   * A channel grants a person a path to act for an agent, so it must not
-   * outlive their stewardship of it.
-   */
-  async function revokeBindingsForEndedStewardship(
-    companyId: string,
-    userId: string,
-    actor: { actorUserId: string | null },
-  ) {
-    const now = new Date();
-    const revoked = await db
-      .update(humanChannelBindings)
-      .set({ revokedAt: now, revokedByUserId: actor.actorUserId, updatedAt: now })
-      .where(
-        and(
-          eq(humanChannelBindings.companyId, companyId),
-          eq(humanChannelBindings.userId, userId),
-          isNull(humanChannelBindings.revokedAt),
-        ),
-      )
-      .returning();
-
-    for (const binding of revoked) {
-      await logActivity(db, {
-        companyId,
-        actorType: "user",
-        actorId: actor.actorUserId ?? "board",
-        action: "human_channel.binding_revoked",
-        entityType: "human_channel_binding",
-        entityId: binding.id,
-        agentId: binding.agentId,
-        details: { provider: binding.provider, reason: "stewardship_ended" },
-      });
-    }
-
-    return revoked;
-  }
-
-  /**
    * Exactly-once claim for an inbound provider event.
    *
    * The unique index does the work, not a read-then-write: providers redeliver
@@ -346,7 +308,6 @@ export function humanChannelService(db: Db) {
     resolveActiveBinding,
     listForCompany,
     revokeBinding,
-    revokeBindingsForEndedStewardship,
     claimEvent,
     markEventProcessed,
   };
