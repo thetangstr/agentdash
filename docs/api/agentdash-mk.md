@@ -220,6 +220,97 @@ AgentDash records who requested and who approved every write; HubSpot does not.
 The product owner accepted this on 2026-07-30 and it is stated in the UI rather
 than hidden. A public OAuth app is the fix and is not built here.
 
+## Local agent bridge
+
+A human enrolls their own machine — typically a local Claude — as an endpoint
+that does work for AgentDash agents.
+
+| Method | Path | Who |
+|---|---|---|
+| `GET` | `/api/companies/:companyId/me/bridge/endpoints` | Own endpoints |
+| `POST` | `/api/companies/:companyId/me/bridge/endpoints` | Request enrollment (inert) |
+| `POST` | `/api/companies/:companyId/bridge/endpoints/:id/approve` | Owner or admin — mints the token |
+| `POST` | `/api/companies/:companyId/bridge/endpoints/:id/revoke` | Owner or admin |
+| `POST` | `/api/companies/:companyId/bridge/tasks` | **Agent key only** — file a task |
+| `GET` | `/api/companies/:companyId/bridge/tasks` | **Agent key only** — read outcomes |
+| `POST` | `/api/bridge/poll` | **Endpoint token only** |
+| `POST` | `/api/bridge/result` | **Endpoint token only** |
+| `POST` | `/api/bridge/decline` | **Endpoint token only** |
+
+### What the ceiling does and does not do here
+
+**The owner ceiling constrains what may be *asked* of an endpoint, not what the
+endpoint *could* do.** A local Claude has its host machine's full reach — its
+filesystem, its shells, its logged-in sessions — and nothing on this server can
+bound that. This is inherent to running code on a computer we do not control and
+is not fixable by more validation.
+
+It is exactly why HubSpot was built as a native connector instead of as bridge
+tasks: there every call resolves through `resolveActingAs`, where the ceiling is
+a real gate that refuses. Here it is a request, not a gate.
+
+The controls that **do** bind on this path: enrollment, the route allowlist,
+approval-gating of act-class tasks, and audit.
+
+### Enrollment
+
+Two steps on purpose. `POST /me/bridge/endpoints` records the request and mints
+**nothing** — `enrolled_at` stays null and the stored hash is a placeholder that
+matches no token. Only `/approve` produces a credential, and the plaintext
+appears in that one response and nowhere else. A machine cannot become someone's
+endpoint by asserting that it is.
+
+Declared capabilities (`bridge:read`, `bridge:act`) are validated at enrollment;
+an endpoint that declares something outside the vocabulary is refused rather
+than stored as an unknown.
+
+### The route allowlist
+
+A `bridge_endpoint` credential reaches **only** `/api/bridge/poll`,
+`/api/bridge/result`, and `/api/bridge/decline`. The allowlist lives in
+`middleware/auth.ts` beside where the actor is minted, not in the router — a
+check far from the credential it governs is one that gets forgotten when someone
+adds a route. On any other path the token is not even looked up, so the request
+is indistinguishable from an unauthenticated one.
+
+The actor is also minted with `type: "none"`, so every ordinary authorization
+helper (which branches on `type`) refuses it by construction. Only the bridge's
+own explicit `source === "bridge_endpoint"` check accepts it.
+
+### Task delivery
+
+Pull-only: the server never connects to a laptop, so no inbound port is needed.
+The claim is a conditional `UPDATE` keyed on the row still being `queued`, so two
+pollers racing cannot both receive the same task. Each claim issues a single-use
+result token scoped to that endpoint.
+
+`act` tasks are created `awaiting_approval` with a linked approval and are
+invisible to polling until a steward approves through the ordinary approvals
+service. Approve, reject, and **override** all drive the task — an overridden
+approval that left its task stranded would be a silent hang.
+
+### Lease lapse
+
+Deliberately asymmetric. A lapsed `read` re-queues **once** — re-reading is
+harmless, unbounded retries against a wedged endpoint are not. A lapsed `act`
+terminates as `outcome_unknown` and **never** re-queues: the endpoint may have
+completed the side effect before going quiet, and a duplicated side effect is
+worse than a missing one. Same reasoning as connector sends.
+
+### Results
+
+Framed as `<untrusted-bridge-result>` on the way **in**, so nothing downstream
+can read one raw by forgetting to frame it on the way out. Ending a stewardship
+(transfer or archival) revokes that person's endpoints in the same transaction
+as their channel bindings.
+
+### Deferred
+
+`/bridge/poll` is a plain poll, not a held long-poll — a client polls on an
+interval. Bridge decisions are web-only in P0; the approval is an ordinary one,
+so it reaches Telegram and WhatsApp cards, but no bridge-specific channel
+affordance exists.
+
 ## Channels
 
 | Method | Path | Who |
@@ -362,11 +453,11 @@ parent wake payload carries references and per-child counts only.
 
 ## Not in scope
 
-The local Codex/Claude computer-agent bridge is not implemented yet. No
-first-party Salesforce, Jira, SharePoint, or Google Drive integrations are added
-by this work.
+No first-party Salesforce, Jira, SharePoint, or Google Drive integrations are
+added by this work.
 
-WhatsApp and HubSpot were excluded by the original design and brought into scope
-by the [2026-07-30 scope override](../superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
-WhatsApp and HubSpot reads are implemented above. HubSpot **writes** and the
-local computer-agent bridge are not built yet.
+WhatsApp, HubSpot, and the local computer-agent bridge were excluded by the
+original design and brought into scope by the
+[2026-07-30 scope override](../superpowers/specs/2026-07-30-agentdash-mk-scope-override.md).
+All three are implemented above. Microsoft Teams remains deprioritized by the
+same decision.

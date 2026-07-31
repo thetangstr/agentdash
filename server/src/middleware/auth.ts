@@ -8,6 +8,7 @@ import { isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
+import { bridgeService } from "../services/bridge.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -18,6 +19,31 @@ function normalizeRunId(value: string | null | undefined): string | undefined {
   return isUuidLike(trimmed) ? trimmed : undefined;
 }
 
+/**
+ * The ONLY paths a `bridge_endpoint` credential may reach.
+ *
+ * This is the single most important control in the bridge. An endpoint token
+ * lives on someone's laptop, is long-lived, and belongs to a machine we cannot
+ * inspect — if it were usable as a general API key, enrolling a laptop would be
+ * equivalent to issuing a company credential.
+ *
+ * Kept here, beside where the actor is minted, rather than in the router: a
+ * check that lives far from the credential it governs is one that gets
+ * forgotten when someone adds a route. Anything not on this list sees the
+ * request as unauthenticated, exactly as if no token had been sent.
+ */
+const BRIDGE_ENDPOINT_ROUTES = new Set([
+  "/api/bridge/poll",
+  "/api/bridge/result",
+  "/api/bridge/decline",
+]);
+
+/** Path without query string or trailing slash, for allowlist comparison. */
+function normalizedPath(req: Request): string {
+  const raw = (req.originalUrl || req.url || "").split("?")[0];
+  return raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
+}
+
 interface ActorMiddlewareOptions {
   deploymentMode: DeploymentMode;
   resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
@@ -25,6 +51,7 @@ interface ActorMiddlewareOptions {
 
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
+  const bridge = bridgeService(db);
   return async (req, _res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
@@ -126,6 +153,32 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           keyId: boardKey.id,
           runId: runIdHeader || undefined,
           source: "board_key",
+        };
+        next();
+        return;
+      }
+    }
+
+    // AgentDash-MK: a human's enrolled local machine.
+    //
+    // Resolved ONLY on the bridge's own routes. On any other path the token is
+    // not even looked up, so a leaked endpoint credential cannot be used to
+    // probe which routes exist, and a future route addition cannot accidentally
+    // widen what an endpoint can reach.
+    if (BRIDGE_ENDPOINT_ROUTES.has(normalizedPath(req))) {
+      const endpoint = await bridge.resolveEndpointByToken(token);
+      if (endpoint) {
+        req.actor = {
+          // `type: "none"` on purpose, not an oversight. Every existing
+          // authorization helper branches on `type` ("board", "agent"), so a
+          // bridge actor is refused by all of them by construction. Only the
+          // bridge's own explicit `source === "bridge_endpoint"` check accepts
+          // it. Belt and braces: even a misrouted bridge endpoint cannot pass
+          // an ordinary guard.
+          type: "none",
+          companyId: endpoint.companyId,
+          bridgeEndpointId: endpoint.id,
+          source: "bridge_endpoint",
         };
         next();
         return;

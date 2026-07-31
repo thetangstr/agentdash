@@ -5,6 +5,7 @@ import {
   agents,
   agentStewardships,
   companyMemberships,
+  bridgeEndpoints,
   humanChannelBindings,
 } from "@paperclipai/db";
 import { conflict, notFound } from "../errors.js";
@@ -304,6 +305,24 @@ export function agentStewardshipService(db: Db) {
             ),
           );
 
+        // Same rule, same transaction, for bridge endpoints: an enrolled
+        // machine is a path for the outgoing steward to keep doing this agent's
+        // work, and it must not survive the stewardship that justified it.
+        await tx
+          .update(bridgeEndpoints)
+          .set({
+            revokedAt: now,
+            revokedByUserId: input.transferredByUserId,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(bridgeEndpoints.companyId, companyId),
+              eq(bridgeEndpoints.userId, active.userId),
+              isNull(bridgeEndpoints.revokedAt),
+            ),
+          );
+
         await logActivity(tx as unknown as Db, {
           companyId,
           actorType: "user",
@@ -345,6 +364,16 @@ export function agentStewardshipService(db: Db) {
           eq(humanChannelBindings.companyId, companyId),
           eq(humanChannelBindings.userId, userId),
           isNull(humanChannelBindings.revokedAt),
+        ),
+      );
+    await database
+      .update(bridgeEndpoints)
+      .set({ revokedAt: now, revokedByUserId: endedByUserId, updatedAt: now })
+      .where(
+        and(
+          eq(bridgeEndpoints.companyId, companyId),
+          eq(bridgeEndpoints.userId, userId),
+          isNull(bridgeEndpoints.revokedAt),
         ),
       );
     return database

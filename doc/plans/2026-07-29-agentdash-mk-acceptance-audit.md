@@ -306,20 +306,27 @@ expectation rather than a guarantee.
 ### 13. Every P0 surface agrees with the current scope decision — **MET**
 
 Restated 2026-07-30. The original criterion asserted *absence* of the bridge and
-the excluded integrations; the owner's scope override makes absence the wrong
+the excluded integrations; the owner's scope override made absence the wrong
 test. What matters is that no surface promises a capability that does not exist
 and none omits one that does.
 
-Today: no Codex/Claude computer-agent bridge, no HubSpot, and no WhatsApp code
-exists, and `docs/api/agentdash-mk.md` plus the prompt-drift test in
-`agent-instruction-bundles.test.ts` both say so. Consistent.
+Every item the override brought into scope has now landed, and the surfaces moved
+with it in the same commits: WhatsApp, HubSpot reads, HubSpot steward-approved
+writes, and the local agent bridge each updated `docs/api/agentdash-mk.md` and
+all four prompt surfaces alongside their code.
 
-Salesforce, Jira, SharePoint, and Google Drive remain excluded — that half of
-the original criterion is unchanged.
+The scope debt named in §6 of the addendum is **paid in full**:
 
-As each in-scope integration lands, its PR must move the API doc, the four
-prompt surfaces, and (for the bridge) invert the drift test in the same commit.
-The debt table lives in §6 of the scope-override addendum.
+- `docs/api/agentdash-mk.md` "Not in scope" no longer lists WhatsApp, HubSpot, or
+  the bridge; each has a reference section instead.
+- `agent-instruction-bundles.test.ts` — the assertion "does not promise the
+  deferred local computer-agent bridge" is **inverted**. It now requires every
+  surface to describe the bridge, its act-class approval rule, its untrusted
+  results, and — the part that matters most — that the ceiling cannot bound what
+  an enrolled machine is able to do.
+- Salesforce, Jira, SharePoint, and Google Drive remain excluded, unchanged.
+- Microsoft Teams remains deprioritized, and criterion 10 still records the
+  unwired inbound validation rather than hiding it.
 
 ### 14. Tests, typecheck, suite, build, browser suites pass — **MET**
 
@@ -375,3 +382,15 @@ See the verification table above. Live Telegram and Teams sandbox runs have
     configuration write and clamped on narrowing, but no action-time check reads
     it, because nothing in the codebase classifies an action as destructive yet.
     That classification has to exist before the ceiling can bind anything.
+15. **The bridge has no push and no long-poll.** `/bridge/poll` returns
+    immediately; a client polls on an interval, and a closed laptop receives
+    nothing. An agent that files a task learns the outcome only by polling
+    `GET /bridge/tasks`. Nothing wakes it — the same gap connector sends have.
+16. **Lapsed leases are swept only when `sweepLapsedLeases` is called**, and
+    nothing schedules it. Until it is on a timer or a heartbeat, a claimed task
+    on a machine that went quiet stays `claimed` indefinitely rather than
+    expiring.
+17. **`revokeBindingsForEndedStewardship` in `human-channels.ts` is dead code.**
+    `agent-stewardships.ts` performs the same revocation inline at both sites, so
+    the exported helper has no caller. Not a gap in behavior — the inline version
+    is what runs and is tested — but a duplicate that reads like the mechanism.

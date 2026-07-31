@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { bridgeService } from "../services/bridge.js";
 import { connectorSendExecutionService } from "../services/connector-send-execution.js";
 import { accessService } from "../services/access.js";
 import { validate } from "../middleware/validate.js";
@@ -48,6 +49,7 @@ export function approvalRoutes(
   const router = Router();
   const svc = approvalService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  const bridge = bridgeService(db);
   const connectorSend = connectorSendExecutionService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
@@ -404,6 +406,25 @@ export function approvalRoutes(
       }
     }
 
+    // AgentDash-MK: an approved bridge `act` task becomes visible to polling.
+    // Until this runs the task is `awaiting_approval` and no endpoint can see
+    // it, which is what keeps the bridge from having a private path to action.
+    if (applied) {
+      // Logged rather than thrown: the decision is already committed, so a 500
+      // here would tell the client their approval failed when it did not. But
+      // this is NOT best-effort the way a notification is — a release that
+      // fails strands the task invisibly, so it is an error-level event, not a
+      // warning to scroll past.
+      try {
+        await bridge.releaseApprovedTask(approval.id);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "bridge task release failed after approval; task may be stranded",
+        );
+      }
+    }
+
     if (applied && approval.type === "connector_send") {
       // Executed here rather than inside the approval service, so the service
       // stays the decision boundary and nothing else. Awaited so the response
@@ -447,6 +468,16 @@ export function approvalRoutes(
         entityId: approval.id,
         details: { type: approval.type },
       });
+      // A rejected bridge task terminates carrying the steward's reason, so the
+      // requesting agent can read WHY rather than watch a request vanish.
+      try {
+        await bridge.declineRejectedTask(approval.id, req.body.decisionNote ?? null);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "bridge task decline failed after rejection; task may be stranded",
+        );
+      }
     }
 
     res.json(redactApprovalPayload(approval));
@@ -505,6 +536,20 @@ export function approvalRoutes(
           requestedByAgentId: approval.requestedByAgentId,
         },
       });
+      // An override is still a decision, so a bridge task must follow it. Left
+      // out, an overridden approval would strand its task forever.
+      try {
+        if (req.body.decision === "approved") {
+          await bridge.releaseApprovedTask(approval.id);
+        } else {
+          await bridge.declineRejectedTask(approval.id, req.body.overrideReason ?? null);
+        }
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "bridge task settlement failed after override; task may be stranded",
+        );
+      }
     }
 
     res.json(redactApprovalPayload(approval));

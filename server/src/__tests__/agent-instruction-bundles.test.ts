@@ -108,9 +108,28 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
-  it("does not promise the deferred local computer-agent bridge", () => {
+  it("tells every agent how the local machine bridge works, and what it cannot bound", () => {
+    // INVERTED 2026-07-30. This test used to assert the bridge was NOT
+    // mentioned, because it was deferred. The owner brought it into scope, so
+    // silence is now the defect: an agent that does not know the bridge exists
+    // cannot use it, and one that does not know the ceiling stops at the
+    // network boundary will assume a guarantee that is not there.
     for (const surface of renderedPromptSurfaces) {
-      expect(surface.content.toLowerCase()).not.toContain("computer-agent bridge");
+      expect(surface.content, `${surface.name} omits the bridge section`).toContain(
+        "Asking a human's machine to do something",
+      );
+      expect(surface.content, `${surface.name} omits the act-class approval rule`).toMatch(
+        /act.{0,40}steward|steward.{0,40}approv/i,
+      );
+      // The honest limit has to reach the agents, not just the design docs.
+      expect(surface.content, `${surface.name} omits the bridge's trust limit`).toMatch(
+        /cannot (bound|constrain) what that machine/i,
+      );
+      // Results come back framed; an agent that treats them as instructions is
+      // the exact failure this warning exists to prevent.
+      expect(surface.content, `${surface.name} omits the untrusted-result warning`).toContain(
+        "untrusted-bridge-result",
+      );
     }
   });
 });
