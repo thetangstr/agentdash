@@ -10,6 +10,7 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
+import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
 // AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
 import {
   createAuthRateLimiter,
@@ -269,6 +270,16 @@ export async function createApp(
     // signup endpoint itself, not at company-creation time.
     app.use(
       corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
+    );
+    // AgentDash: closed-phase funnel gate on BROWSER signup. The MCP self-serve
+    // path has always been invite-gated; this door was not. Off unless the
+    // operator opts in, so local dev, the e2e suites, and existing self-hosters
+    // are unaffected.
+    app.use(
+      "/api/auth",
+      inviteCodeSignupGuard({
+        enabled: process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE === "true",
+      }),
     );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
     app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }));

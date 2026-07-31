@@ -69,8 +69,21 @@ describe("PricingPage", () => {
     render();
     expect(container.textContent).toContain("50 agent-runs / month");
     expect(container.textContent).toContain("1,000 agent-runs / mo");
-    expect(container.textContent).toContain("$0.05 / run");
     expect(container.textContent).toContain("14-day trial");
+  });
+
+  it("does not advertise per-run overage, because nothing can charge it", () => {
+    // `reportUsageToStripe` exists, is unit-tested, and has NO production
+    // caller — no scheduler, no webhook, no invoice hook ever pushes a meter
+    // event. So the $0.05/run overage was a price we could not collect.
+    //
+    // This assertion used to be the inverse, inside a test named "without
+    // fabricating numbers" — it required the fabricated number to be present.
+    // Restore the claim only when a caller exists and a real Stripe meter event
+    // has been observed.
+    render();
+    expect(container.textContent).not.toContain("$0.05");
+    expect(container.textContent).not.toMatch(/overage/i);
   });
 
   it("routes Free and Pro CTAs to sign-up and Team CTA to a mailto (no live Stripe dependency)", () => {

@@ -51,7 +51,7 @@ function makeStripe() {
   };
 }
 
-async function createApp(stripe: ReturnType<typeof makeStripe>) {
+async function createApp(stripe: ReturnType<typeof makeStripe>, trialDays = 14) {
   const { billingRoutes } = await import("../routes/billing.js");
   const app = express();
   app.use(express.json());
@@ -68,7 +68,7 @@ async function createApp(stripe: ReturnType<typeof makeStripe>) {
     stripe,
     webhookSecret: "whsec_test",
     proPriceId: "price_agentdash_pro",
-    trialDays: 14,
+    trialDays,
     publicBaseUrl: "https://app.agentdash.example",
   }));
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -109,6 +109,16 @@ describe("POST /api/billing/checkout-session", () => {
       mode: "subscription",
       customer: "cus_existing",
       line_items: [{ price: "price_agentdash_pro", quantity: 1 }],
+      // DO NOT REMOVE `payment_method_collection`. Stripe Checkout in
+      // subscription mode collects a card by DEFAULT, and the product promises
+      // a no-card trial on the pricing page, the terms page, the billing button
+      // and in CLAUDE.md. Without this flag every one of those is false, and a
+      // design partner who is not meant to pay yet is asked for a card.
+      //
+      // This assertion previously pinned the payload WITHOUT the flag, which
+      // locked the bug in: the design spec called for it, the implementation
+      // dropped it, and the test then made the omission look deliberate.
+      payment_method_collection: "if_required",
       subscription_data: {
         trial_period_days: 14,
         trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
@@ -117,5 +127,20 @@ describe("POST /api/billing/checkout-session", () => {
       success_url: "https://app.agentdash.example/billing?session=success",
       cancel_url: "https://app.agentdash.example/billing?session=cancel",
     });
+  });
+
+  it("carries the configured trial length through to Stripe", async () => {
+    // STRIPE_TRIAL_DAYS is how the owner gives a design partner ~6 months free.
+    // It reaches trial_period_days or the setting silently does nothing.
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 180);
+
+    await request(app).post("/api/billing/checkout-session").send({ companyId: "company-1" });
+
+    expect(stripe.checkout.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscription_data: expect.objectContaining({ trial_period_days: 180 }),
+      }),
+    );
   });
 });

@@ -17,6 +17,7 @@ import {
 } from "@paperclipai/shared";
 import { badRequest, forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
+import { isMkInviteCode } from "../lib/mk-invite-codes.js";
 import {
   accessService,
   agentService,
@@ -323,6 +324,37 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   router.post("/", validate(createCompanySchema), async (req, res) => {
     assertBoard(req);
+
+    // AgentDash-MK: a non-default product profile is granted by invite code.
+    //
+    // `createCompanySchema` has always accepted `productProfile`, and nothing
+    // checked it — so MK was not opt-in, it was merely unadvertised. Any
+    // authenticated board user could self-select the whole governance profile.
+    //
+    // Gated in `authenticated` deployments only. `local_trusted` is the
+    // founder's own machine with no untrusted callers, and it is the mode the
+    // MK acceptance specs run in — they create MK companies over raw HTTP by
+    // design, so gating that mode would break the suite to protect nobody.
+    const requestedProfile = req.body.productProfile;
+    const suppliedInviteCode = req.body.inviteCode;
+    // The code is an authorization input, never company data. Deleted before
+    // the body is spread into `svc.create`, so it cannot land in a row that
+    // company portability would later export.
+    delete req.body.inviteCode;
+
+    if (
+      requestedProfile
+      && requestedProfile !== "default"
+      && options.deploymentMode === "authenticated"
+      && !isMkInviteCode(suppliedInviteCode)
+    ) {
+      res.status(403).json({
+        code: "mk_invite_code_required",
+        error:
+          "This workspace profile requires an invite code. Ask the AgentDash team for one.",
+      });
+      return;
+    }
     // AgentDash (AGE-104): no instance-admin gate here. The FRE Plan B
     // contract (AGE-55) is that any authenticated board user can create
     // their first company and is promoted to `owner` membership below.

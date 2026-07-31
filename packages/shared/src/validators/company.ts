@@ -18,6 +18,13 @@ export const createCompanySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().nullable(),
   productProfile: z.enum(COMPANY_PRODUCT_PROFILES).optional(),
+  /**
+   * AgentDash-MK: an invite code that authorizes a non-default
+   * `productProfile`. Authorization input only — the route strips it before
+   * the company row is written, so it never reaches the database or a
+   * portability export.
+   */
+  inviteCode: z.string().trim().min(1).max(120).optional(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   attachmentMaxBytes: attachmentMaxBytesSchema.optional(),
 });

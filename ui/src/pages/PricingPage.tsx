@@ -13,7 +13,7 @@
 //
 // Tiers + numbers below come from the Subscription + Billing sub-project (Free:
 // 1 human + 1 agent, 50 runs/mo; Pro: $29/seat, unlimited, 1,000 runs/mo +250
-// per seat then $0.05/run overage, 14-day no-card trial; Team: custom). Every
+// per seat, 14-day no-card trial; Team: custom). Every
 // CTA routes to sign-up (`/auth?mode=sign_up`) — in-app upgrade/checkout lives at
 // `/{prefix}/billing` and is Stripe-env-gated, so this PUBLIC page never hard-
 // depends on a live Stripe key. The Team contact address is an OBVIOUS placeholder
@@ -249,7 +249,6 @@ const TIERS: Tier[] = [
       "Everything in Free, plus:",
       "Unlimited humans + agents",
       "1,000 agent-runs / mo, +250 per additional seat",
-      "Then $0.05 / run overage — only what you use",
       "Teammate invites + multi-human workspace",
       "CoS substrate: @-mention summons, shared org brain",
     ],
@@ -399,7 +398,6 @@ const COMPARISON: { label: string; free: Cell; pro: Cell; team: Cell }[] = [
   { label: "Human seats", free: "1", pro: "Unlimited", team: "Unlimited" },
   { label: "Agents", free: "1 (Chief of Staff)", pro: "Unlimited", team: "Unlimited" },
   { label: "Agent-runs / month", free: "50", pro: "1,000 +250 / seat", team: "Custom" },
-  { label: "Overage", free: false, pro: "$0.05 / run", team: "Custom" },
   { label: "Autonomous-company Test Drive", free: true, pro: true, team: true },
   { label: "Teammate invites", free: false, pro: true, team: true },
   { label: "Multi-human + CoS substrate", free: false, pro: true, team: true },
@@ -432,7 +430,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
   },
   {
     q: "What counts as an agent-run?",
-    a: "A run is one unit of agent work — an agent picking up a task and producing a result. Free includes 50 runs a month. Pro includes 1,000 runs a month plus 250 for each additional seat, then $0.05 per run beyond that.",
+    a: "A run is one unit of agent work — an agent picking up a task and producing a result. Free includes 50 runs a month. Pro includes 1,000 runs a month plus 250 for each additional seat.",
   },
   {
     q: "Do I need a credit card to try Pro?",

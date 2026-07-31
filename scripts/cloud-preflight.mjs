@@ -75,8 +75,30 @@ export function cloudPreflight(env = process.env) {
   }
 
   // Billing sanity for the usage-based Cloud SKU.
+  //
+  // With billing OFF this is a warning: caps are bypassed and nothing charges,
+  // which is a legitimate self-hosted configuration.
+  //
+  // With billing ON the companions are HARD failures, because each one breaks
+  // at the customer's first click rather than at boot. An unset
+  // BILLING_PUBLIC_BASE_URL is the sharpest: `success_url` becomes the relative
+  // string "/billing?session=success", which Stripe rejects outright — so
+  // checkout dies for every customer while preflight reports success.
   if (!get("STRIPE_SECRET_KEY")) {
     warnings.push("STRIPE_SECRET_KEY unset — tier caps are bypassed and usage billing cannot charge.");
+  } else {
+    if (!get("STRIPE_PRO_PRICE_ID")) {
+      errors.push("STRIPE_PRO_PRICE_ID is required when STRIPE_SECRET_KEY is set — checkout would send an empty price.");
+    }
+    if (!get("STRIPE_WEBHOOK_SECRET")) {
+      errors.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set — subscription events could not be verified.");
+    }
+    const billingBaseUrl = get("BILLING_PUBLIC_BASE_URL");
+    if (!billingBaseUrl) {
+      errors.push("BILLING_PUBLIC_BASE_URL is required when STRIPE_SECRET_KEY is set — Stripe rejects a relative success_url.");
+    } else if (!/^https:\/\//.test(billingBaseUrl)) {
+      errors.push("BILLING_PUBLIC_BASE_URL must be an absolute https:// URL — Stripe rejects anything else.");
+    }
   }
 
   return { ok: errors.length === 0, errors, warnings };
