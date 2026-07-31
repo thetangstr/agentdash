@@ -23,11 +23,18 @@ export interface TeamsRouteOptions {
 /**
  * Default validator — DELIBERATELY REJECTS EVERYTHING.
  *
- * `@microsoft/teams.apps` keeps Bot Framework token validation inside its `App`
- * / `HttpPlugin` pipeline; it exports no standalone validator. Wiring that
- * pipeline (so the SDK owns the endpoint and validates activities) is NOT done
- * yet, and hand-rolling JWKS validation here would mean reimplementing the
- * security-critical part the SDK exists to provide.
+ * CORRECTION (2026-07-31): an earlier version of this comment claimed the SDK
+ * "exports no standalone validator". That is wrong. `ServiceTokenValidator`
+ * exists at `@microsoft/teams.apps/dist/middleware/`, is standalone, pins the
+ * issuer, and binds `serviceUrl`. It is simply not re-exported from the package
+ * root, so reaching it means a deep import into `dist/` — unsupported, and
+ * working only because the package ships no `exports` map.
+ *
+ * So the validator was never the blocker. The blocker is upstream: Microsoft
+ * deprecated multi-tenant bot creation after 2025-07-31, this project has no
+ * grandfathered registration, and the single-tenant path appears to require
+ * AppSource/Teams Store publication to reach other tenants. That is a
+ * go-to-market decision, not an engineering one, and it is unresolved.
  *
  * Until that wiring lands this endpoint accepts nothing in production. That is
  * the correct failure direction — an unauthenticated bot endpoint that decided

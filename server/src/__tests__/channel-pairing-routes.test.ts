@@ -16,6 +16,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+import { HUMAN_CHANNEL_PROVIDERS } from "@paperclipai/shared";
 import { errorHandler } from "../middleware/index.js";
 import { humanChannelRoutes } from "../routes/human-channels.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
@@ -262,7 +263,33 @@ describeEmbeddedPostgres("channel pairing routes", () => {
     expect(await db.select().from(humanChannelBindings)).toHaveLength(0);
   });
 
-  it("still accepts providers that have no ceremony yet", async () => {
+  it("refuses a self-asserted identity for EVERY provider, not just the ones with ceremonies", async () => {
+    // This hole was closed for telegram, then for whatsapp, and left open for
+    // teams — because the guard was a blocklist, so each new provider defaulted
+    // to spoofable and had to be remembered. It is now an allowlist, and this
+    // test iterates the whole provider enum so adding a provider cannot quietly
+    // reopen it: a new entry fails here until someone explicitly opts it in.
+    const { company, steward } = await seed();
+    const app = createApp(boardActor(company.id, steward.principalId));
+
+    for (const provider of HUMAN_CHANNEL_PROVIDERS) {
+      const res = await call(app, (baseUrl) =>
+        request(baseUrl)
+          .post(`/api/companies/${company.id}/me/channels`)
+          .send({ provider, externalUserId: "spoofed-1", externalTenantId: "tenant-1" }),
+      );
+      expect(res.status, `${provider} accepted a self-asserted identity`).toBe(400);
+    }
+
+    expect(await db.select().from(humanChannelBindings)).toHaveLength(0);
+  });
+
+  it("leaves the generic bind route with no provider it will accept", async () => {
+    // Documented deliberately rather than discovered. With the allowlist empty,
+    // POST /me/channels can only 400. It is kept rather than deleted because
+    // removing a published route is an API change that deserves its own
+    // decision — but it is a dead surface, and the next person to add a
+    // provider should reach for a ceremony, not for this.
     const { company, steward } = await seed();
     const app = createApp(boardActor(company.id, steward.principalId));
 
@@ -272,7 +299,8 @@ describeEmbeddedPostgres("channel pairing routes", () => {
         .send({ provider: "teams", externalUserId: "teams-1", externalTenantId: "tenant-1" }),
     );
 
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/ceremony that verifies the account/);
   });
 
   it("mints a whatsapp pairing link that carries the token and no phone number", async () => {

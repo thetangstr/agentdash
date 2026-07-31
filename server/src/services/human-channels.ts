@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   channelPairingChallenges,
@@ -9,6 +9,7 @@ import {
 import { policyListAllows } from "@paperclipai/shared";
 import { conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
+import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { logActivity } from "./activity-log.js";
@@ -203,19 +204,48 @@ export function humanChannelService(db: Db) {
       .then((rows) => rows[0] ?? null);
   }
 
-  /** Inbound dispatch and outbound send both go through this. */
+  /**
+   * Inbound dispatch and outbound send both go through this.
+   *
+   * Deliberately NOT company-scoped, and it cannot be: an inbound webhook has
+   * no companyId to pass — it resolves the company FROM the binding. So this
+   * lookup assumes one external identity maps to one company, and
+   * `human_channel_bindings_active_external_global_uq` is what makes that
+   * assumption true. Before that index existed the same account could be bound
+   * in several companies and this returned whichever row Postgres handed back
+   * first, silently routing a message to the wrong company's agent.
+   *
+   * `verifiedAt IS NOT NULL` is required because an unverified binding names an
+   * identity nobody proved control of. Routing a message or a decision through
+   * one hands the conversation, and the agent's approval authority, to whoever
+   * holds that account.
+   */
   async function resolveActiveBinding(provider: string, externalUserId: string) {
-    return db
+    const rows = await db
       .select()
       .from(humanChannelBindings)
       .where(
         and(
           eq(humanChannelBindings.provider, provider),
           eq(humanChannelBindings.externalUserId, externalUserId),
+          isNotNull(humanChannelBindings.verifiedAt),
           isNull(humanChannelBindings.revokedAt),
         ),
       )
-      .then((rows) => rows[0] ?? null);
+      .limit(2);
+
+    if (rows.length > 1) {
+      // Unreachable while the global index holds. If it is ever reached — a
+      // pre-index row, a restored backup, a migration slip — refusing is the
+      // only safe answer: picking one arbitrarily IS the defect this guards,
+      // and nothing here can tell which company the sender meant.
+      logger.error(
+        { provider, externalUserId },
+        "ambiguous channel binding: one external identity is active in more than one company; refusing to route",
+      );
+      return null;
+    }
+    return rows[0] ?? null;
   }
 
   async function listForCompany(companyId: string) {

@@ -264,11 +264,19 @@ parked, not waived.
 (a test asserts no `Action.Submit` anywhere), and the decision path enforces
 tenant, identity, binding, revision, and dedup — all failing closed.
 
-**Inbound Bot Framework token validation is not wired.** The SDK exports no
-standalone validator; validation lives inside its `App`/`HttpPlugin` pipeline,
-which is not connected. `defaultVerifyActivity` rejects every request, so **no
-real Teams activity can reach the decision path** — the flow is exercised only
-through an injected test validator. Proactive outbound delivery, the app
+**Inbound Bot Framework token validation is not wired.**
+`defaultVerifyActivity` rejects every request, so **no real Teams activity can
+reach the decision path** — the flow is exercised only through an injected test
+validator.
+
+*Corrected 2026-07-31:* this previously said the SDK "exports no standalone
+validator". It does export one — `ServiceTokenValidator` at
+`@microsoft/teams.apps/dist/middleware/`, standalone, issuer-pinned,
+`serviceUrl`-bound — just not from the package root. The real blocker is that
+Microsoft deprecated multi-tenant bot creation after 2025-07-31 and this project
+has no grandfathered registration, so cross-tenant reach appears to need
+AppSource publication. Recorded because the wrong premise had propagated to
+three places and would have mis-scoped the work. Proactive outbound delivery, the app
 manifest, and pairing are also absent.
 
 Per the handoff's own rule, Teams cannot be presented as complete while Telegram

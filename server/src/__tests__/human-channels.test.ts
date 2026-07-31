@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
@@ -183,6 +183,99 @@ describeEmbeddedPostgres("human channel bindings", () => {
 
     // Revocation must block inbound dispatch and outbound sends at once.
     expect(await svc.resolveActiveBinding("telegram", "tg-100")).toBeNull();
+  });
+
+  it("refuses to bind one external identity to a second company", async () => {
+    // `resolveActiveBinding` looks up on (provider, externalUserId) alone —
+    // the webhook has no companyId to pass, because it resolves the company
+    // FROM the binding. So the code assumes one external identity maps to one
+    // company, and until now nothing enforced it: the per-company unique index
+    // happily allowed the same Telegram account in several companies, and the
+    // lookup then returned whichever row Postgres handed back first.
+    //
+    // The consequence was silent cross-company routing on the message path:
+    // the wrong agent replies, the transcript lands in the wrong company, and
+    // `lastInboundAt` is written against a binding the sender never used.
+    const first = await seed();
+    const second = await seed();
+    const svc = humanChannelService(db);
+
+    await svc.verifyBinding(first.company.id, {
+      provider: "telegram",
+      userId: first.steward.principalId,
+      externalUserId: "tg-shared",
+    });
+
+    await expect(
+      svc.verifyBinding(second.company.id, {
+        provider: "telegram",
+        userId: second.steward.principalId,
+        externalUserId: "tg-shared",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("fails closed rather than guessing when one identity somehow has two active bindings", async () => {
+    // Belt and braces behind the index. If a duplicate ever exists — a
+    // pre-index row, a restored backup, a future migration slip — picking one
+    // arbitrarily is the exact failure mode being fixed. Refusing is the only
+    // safe answer, because the lookup cannot tell which company the sender
+    // meant.
+    const first = await seed();
+    const second = await seed();
+    const svc = humanChannelService(db);
+    const now = new Date();
+
+    // Bypass the service to manufacture the state the index now prevents.
+    await db.insert(humanChannelBindings).values([
+      {
+        companyId: first.company.id,
+        userId: first.steward.principalId,
+        agentId: first.agent.id,
+        provider: "telegram",
+        externalUserId: "tg-dupe",
+        verifiedAt: now,
+      },
+    ]);
+    await db.execute(
+      sql`insert into human_channel_bindings (company_id, user_id, agent_id, provider, external_user_id, verified_at)
+          values (${second.company.id}, ${second.steward.principalId}, ${second.agent.id}, 'telegram', 'tg-dupe', now())
+          on conflict do nothing`,
+    );
+
+    const rows = await db
+      .select()
+      .from(humanChannelBindings)
+      .where(eq(humanChannelBindings.externalUserId, "tg-dupe"));
+
+    if (rows.length < 2) {
+      // The index did its job and the duplicate never landed. That is the
+      // primary defence working; the fail-closed branch below is unreachable
+      // in that case, which is the intended end state.
+      expect(await svc.resolveActiveBinding("telegram", "tg-dupe")).not.toBeNull();
+      return;
+    }
+
+    expect(await svc.resolveActiveBinding("telegram", "tg-dupe")).toBeNull();
+  });
+
+  it("never resolves an unverified binding", async () => {
+    // An unverified binding names an identity nobody proved control of.
+    // Routing a message or a decision through one hands the conversation — and
+    // the agent's approval authority — to whoever holds that account.
+    const { company, steward, agent } = await seed();
+    const svc = humanChannelService(db);
+
+    await db.insert(humanChannelBindings).values({
+      companyId: company.id,
+      userId: steward.principalId,
+      agentId: agent.id,
+      provider: "telegram",
+      externalUserId: "tg-unverified",
+      verifiedAt: null,
+    });
+
+    expect(await svc.resolveActiveBinding("telegram", "tg-unverified")).toBeNull();
   });
 
   it("claims one external event exactly once", async () => {

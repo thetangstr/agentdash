@@ -667,6 +667,50 @@ describeEmbeddedPostgres("telegram connector", () => {
     expect(messages.map((m) => m.role).sort()).toEqual(["agent", "user"]);
   });
 
+  it("does not route an inbound message through an unverified binding", async () => {
+    // The REAL entry point. The service-level test proves the query filters
+    // correctly; only this proves the webhook actually uses that query. An
+    // unverified binding names an account nobody proved control of, so routing
+    // its messages to an agent hands that conversation to whoever holds it.
+    const { company, agent, steward } = await seed();
+    // Revoke the verified binding the seed created, then plant an unverified
+    // one for a different Telegram id.
+    const existing = await db
+      .select()
+      .from(humanChannelBindings)
+      .where(eq(humanChannelBindings.companyId, company.id))
+      .then((rows) => rows[0]!);
+    await db
+      .update(humanChannelBindings)
+      .set({ revokedAt: new Date() })
+      .where(eq(humanChannelBindings.id, existing.id));
+    await db.insert(humanChannelBindings).values({
+      companyId: company.id,
+      userId: steward.principalId,
+      agentId: agent.id,
+      provider: "telegram",
+      externalUserId: "7777",
+      verifiedAt: null,
+    });
+    const app = createApp();
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(webhookPath)
+        .set("X-Telegram-Bot-Api-Secret-Token", SECRET)
+        .send({
+          update_id: 940,
+          message: { text: "hello", from: { id: 7777 }, chat: { id: 7777, type: "private" } },
+        }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(
+      telegramCalls.filter((c) => c.method === "sendMessage"),
+      "an unverified binding received an agent reply",
+    ).toHaveLength(0);
+  });
+
   it("does not answer a message from a bot", async () => {
     // Two bots in one chat will talk to each other until a rate limit stops
     // them. The guard is `is_bot`, checked before any dispatch.

@@ -419,10 +419,16 @@ card must stay distinguishable from a steward who has not answered.
 
 ### Teams
 
-**Inbound authentication is not wired.** `@microsoft/teams.apps` keeps Bot
-Framework validation inside its `App`/`HttpPlugin` pipeline and exports no
-standalone validator; until that pipeline is wired the endpoint rejects every
-activity. Cards use `Action.Execute` (never legacy `Action.Submit`) and carry
+**Inbound authentication is not wired.** The endpoint rejects every activity.
+
+The reason is not the one previously recorded here. `@microsoft/teams.apps`
+*does* ship a standalone `ServiceTokenValidator` (at `dist/middleware/`, pinning
+issuer and binding `serviceUrl`) — it is only absent from the package root, so
+using it means an unsupported deep import. The actual blocker is upstream:
+Microsoft deprecated multi-tenant bot creation after **2025-07-31**, this
+project holds no grandfathered registration, and reaching other tenants from a
+single-tenant bot appears to require AppSource/Teams Store publication. That is
+a go-to-market decision and it is open. Cards use `Action.Execute` (never legacy `Action.Submit`) and carry
 an opaque handle. Everything downstream of validation — tenant, identity,
 binding, revision, dedup — is implemented and fails closed.
 

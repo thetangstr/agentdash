@@ -50,6 +50,23 @@ export const humanChannelBindings = pgTable(
     activeExternalIdentityUq: uniqueIndex("human_channel_bindings_active_external_uq")
       .on(table.companyId, table.provider, table.externalUserId)
       .where(sql`${table.revokedAt} is null`),
+    /**
+     * GLOBAL: one external identity binds to at most one company at a time.
+     *
+     * Stronger than the per-company index above, and it exists because
+     * `resolveActiveBinding` cannot be company-scoped: an inbound webhook has
+     * no companyId to pass, it resolves the company FROM the binding. The code
+     * therefore assumes this uniqueness, and before this index nothing enforced
+     * it — the same Telegram account could be bound in several companies and
+     * the lookup returned whichever row Postgres happened to hand back.
+     *
+     * The per-company index is now redundant and is deliberately kept: dropping
+     * it would make this migration destructive, and every migration on this
+     * branch is additive. It costs one index maintenance per write.
+     */
+    activeExternalIdentityGlobalUq: uniqueIndex("human_channel_bindings_active_external_global_uq")
+      .on(table.provider, table.externalUserId)
+      .where(sql`${table.revokedAt} is null`),
     activeUserUq: uniqueIndex("human_channel_bindings_active_user_uq")
       .on(table.companyId, table.provider, table.userId)
       .where(sql`${table.revokedAt} is null`),

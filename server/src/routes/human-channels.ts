@@ -12,6 +12,16 @@ import { humanChannelService } from "../services/human-channels.js";
 import { whatsappPairingLink } from "../services/whatsapp-connector.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
+/**
+ * Providers that may still be bound by asserting an external id.
+ *
+ * Empty, and it should stay that way. Membership here means "we accept an
+ * identity this caller merely claims" — which is only defensible for a provider
+ * whose ids are unguessable AND unforgeable, and none are. Telegram and
+ * WhatsApp have verified ceremonies; Teams needs one before it is switched on.
+ */
+const SELF_ASSERTABLE_PROVIDERS = new Set<string>();
+
 export function humanChannelRoutes(db: Db) {
   const router = Router();
   const channels = humanChannelService(db);
@@ -130,16 +140,25 @@ export function humanChannelRoutes(db: Db) {
       await requireProfileCompany(req, companyId);
       const userId = requireBoardUser(req);
 
-      // Telegram has a verified ceremony now, so this route must stop accepting
-      // a self-asserted Telegram identity. It never proved the caller controls
-      // the account they named, which meant a member could bind a stranger's —
-      // or a colleague's — Telegram id to their own agent and receive that
-      // person's messages. Providers with no ceremony yet still use this path.
-      if (req.body.provider === "telegram" || req.body.provider === "whatsapp") {
+      // An ALLOWLIST, not a blocklist, and the distinction is the whole point.
+      //
+      // This guard began as "reject telegram", then became "reject telegram or
+      // whatsapp", and teams stayed spoofable through both edits — because a
+      // blocklist defaults every new provider to accepting an identity the
+      // caller merely asserts. A member could name a colleague's Teams id and
+      // receive that person's approvals.
+      //
+      // Inverted, the default is refusal: a provider added to
+      // HUMAN_CHANNEL_PROVIDERS cannot self-assert until someone deliberately
+      // opts it in here, and the test iterates the enum so that choice is
+      // visible in review rather than implied by omission.
+      //
+      // The set is currently empty. Every provider has, or needs, a ceremony
+      // that proves the caller controls the account.
+      if (!SELF_ASSERTABLE_PROVIDERS.has(req.body.provider)) {
         throw badRequest(
-          `${req.body.provider} must be paired through ` +
-            `POST /me/channels/${req.body.provider}/pairing, which verifies the ` +
-            "account instead of trusting the supplied id",
+          `${req.body.provider} cannot be paired by asserting an identity; ` +
+            "it must be paired through a ceremony that verifies the account",
         );
       }
 
