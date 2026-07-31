@@ -148,11 +148,14 @@ describeEmbeddedPostgres("hubspot steward-approved writes", () => {
       userId: steward.principalId,
       assignedByUserId: owner.principalId,
     });
-    // Agent-owned so `resolveActingAs` can find it; the owner's credential is
-    // what executes either way.
+    // The STEWARD's own private key, created exactly as the connect route makes
+    // it. This used to hand-build an `ownerType: "agent"` row with the comment
+    // "Agent-owned so resolveActingAs can find it" — which was the workaround
+    // documenting the bug: a real user's key never resolved, so the whole write
+    // path was only ever exercised against a connection no product flow creates.
     const connection = await connectorService(db).create(company.id, {
-      ownerType: "agent",
-      ownerId: agent.id,
+      ownerType: "user",
+      ownerId: steward.principalId,
       provider: "hubspot",
       scopes: ["crm.objects.contacts.write"],
       visibility: "private",

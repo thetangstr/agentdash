@@ -225,6 +225,92 @@ describeEmbeddedPostgres("agentdash-mk provider and data-scope ceilings", () => 
       expect(result.ok).toBe(true);
     });
 
+    it("still applies the ceiling to a connection owned by the agent's steward", async () => {
+      // Every other connection in this suite is `ownerType: "agent"`, which is a
+      // real shape but not the one a human creates. The steward-owned path is
+      // now the primary real-world route, and it reaches the usable-connection
+      // set through a different branch — so ceiling enforcement has to be proven
+      // against it separately, or a future change could exempt exactly the
+      // connections users actually have.
+      const company = await createCompany();
+      const agent = await createAgent(company.id);
+      await db.insert(companyMemberships).values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: "steward-ceiling-1",
+        membershipRole: "operator",
+        status: "active",
+      });
+      await db.insert(agentStewardships).values({
+        companyId: company.id,
+        agentId: agent.id,
+        userId: "steward-ceiling-1",
+        assignedByUserId: "owner-1",
+      });
+      await db.insert(connections).values({
+        companyId: company.id,
+        ownerType: "user",
+        ownerId: "steward-ceiling-1",
+        provider: "hubspot",
+        scopes: [],
+        visibility: "private",
+        status: "active",
+        autonomy: { read: "full", draft: "full", send: "draft_only" },
+      });
+      await setCeiling(company.id, agent.id, { providers: ["telegram"] });
+
+      const result = await connectorService(db).resolveActingAs(
+        company.id,
+        agent.id,
+        "read",
+        "hubspot",
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.blocked.reason).toBe("provider_not_allowed");
+    });
+
+    it("resolves a steward-owned connection the ceiling permits", async () => {
+      // The positive half: without this, the test above would pass even if
+      // steward-owned connections never resolved at all.
+      const company = await createCompany();
+      const agent = await createAgent(company.id);
+      await db.insert(companyMemberships).values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: "steward-ceiling-2",
+        membershipRole: "operator",
+        status: "active",
+      });
+      await db.insert(agentStewardships).values({
+        companyId: company.id,
+        agentId: agent.id,
+        userId: "steward-ceiling-2",
+        assignedByUserId: "owner-1",
+      });
+      await db.insert(connections).values({
+        companyId: company.id,
+        ownerType: "user",
+        ownerId: "steward-ceiling-2",
+        provider: "hubspot",
+        scopes: [],
+        visibility: "private",
+        status: "active",
+        autonomy: { read: "full", draft: "full", send: "draft_only" },
+      });
+      await setCeiling(company.id, agent.id, { providers: ["hubspot"] });
+
+      const result = await connectorService(db).resolveActingAs(
+        company.id,
+        agent.id,
+        "read",
+        "hubspot",
+      );
+
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+    });
+
     it("permits everything under the unrestricted default ceiling", async () => {
       // Enabling the profile must not, by itself, take authority away.
       const company = await createCompany();

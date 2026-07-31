@@ -19,6 +19,7 @@ import { policyListAllows, policyListAllowsAll } from "@paperclipai/shared";
 import { notFound, forbidden, conflict } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { agentGovernanceService } from "./agent-governance.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 
 // ---------------------------------------------------------------------------
 // Token encryption helpers — reuse local_encrypted provider
@@ -68,6 +69,7 @@ const DEFAULT_SEND_IDENTITY: ConnectionSendIdentity = "service";
 
 export function connectorService(db: Db) {
   const governance = agentGovernanceService(db);
+  const stewardships = agentStewardshipService(db);
 
   // -------------------------------------------------------------------------
   // Connection CRUD
@@ -414,11 +416,46 @@ export function connectorService(db: Db) {
     // Filter to connections this agent can use:
     // - agent's own connections (ownerId = agentId, ownerType = "agent")
     // - workspace-visible connections from any owner
-    const usable = agentConnections.filter(
+    let usable = agentConnections.filter(
       (c) =>
         (c.ownerType === "agent" && c.ownerId === agentId) ||
         c.visibility === "workspace",
     );
+
+    // AgentDash-MK: ...and the private connection of the human who CURRENTLY
+    // stewards this agent.
+    //
+    // This clause is the whole bring-your-own-key premise, and its absence made
+    // the feature non-functional for every real user. `hubspotConnectorService
+    // .connect()` deliberately stores a pasted key as `ownerType: "user"` with
+    // `visibility: "private"` so one person's credential never becomes a shared
+    // company one — and neither clause above matches that shape, so every read
+    // and every write from a genuinely-connected key returned `no_connection`.
+    //
+    // Deliberately narrow: the steward of THIS agent, resolved live, and only
+    // their own private rows. Not "any user in the company", not a steward of
+    // some other agent, and not a stewardship that has ended — access follows
+    // accountability, so it lapses the moment the stewardship does, with no
+    // separate revocation to remember.
+    //
+    // Gated on `policy` being non-null, which is true exactly when the company
+    // is on the `agentdash_mk` profile — it was already computed above, so this
+    // costs nothing and keeps default-profile resolution byte-identical.
+    // Stewardship rows are not themselves profile-gated, so without this a
+    // default-profile company that happened to hold one would silently change
+    // behavior.
+    //
+    // Only consulted when nothing above matched, so the common path adds no
+    // query. The consequence is that an agent-owned or workspace connection
+    // takes precedence over the steward's own — more specific ownership wins.
+    if (usable.length === 0 && policy) {
+      const activeStewardship = await stewardships.activeByAgent(companyId, agentId);
+      if (activeStewardship) {
+        usable = agentConnections.filter(
+          (c) => c.ownerType === "user" && c.ownerId === activeStewardship.userId,
+        );
+      }
+    }
 
     if (usable.length === 0) {
       return {

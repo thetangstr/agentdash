@@ -25,6 +25,7 @@ import {
 import { errorHandler } from "../middleware/index.js";
 import { hubspotConnectorRoutes } from "../routes/hubspot-connector.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { connectorService } from "../services/connectors.js";
 import {
   __resetHubspotLimiterState,
@@ -127,6 +128,36 @@ describeEmbeddedPostgres("hubspot connector", () => {
       .returning()
       .then((rows) => rows[0]!);
     return { company, user, agent };
+  }
+
+
+  /**
+   * A company where the user actually STEWARDS the agent.
+   *
+   * The plain `seed()` above never assigns a stewardship, which is why every
+   * test in this file passed while the production path was broken: the resolver
+   * was exercised with hand-built agent-owned connections, `connect()` was
+   * exercised creating user-owned ones, and nothing joined the two.
+   */
+  async function seedStewarded(profile: "agentdash_mk" | "default" = "agentdash_mk") {
+    const base = await seed(profile);
+    const owner = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: base.company.id,
+        principalType: "user",
+        principalId: randomUUID(),
+        status: "active",
+        membershipRole: "owner",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await agentStewardshipService(db).assign(base.company.id, {
+      agentId: base.agent.id,
+      userId: base.user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    return { ...base, owner };
   }
 
   async function setCeiling(
@@ -361,12 +392,15 @@ describeEmbeddedPostgres("hubspot connector", () => {
     expect(result.reason).toBe("provider_not_allowed");
   });
 
-  it("refuses an agent read when the connection is another user's private key", async () => {
-    // The key is private to its owner, and the agent is not its owner, so
-    // resolveActingAs finds nothing usable. This is what keeps one member's
-    // personal CRM key from becoming every agent's CRM key.
-    const { company, user, agent } = await seed();
-    await hubspotConnectorService(db).connect(company.id, user.principalId, "pat-1");
+  it("lets an agent read through the key its own steward connected", async () => {
+    // THE TEST THAT WOULD HAVE CAUGHT IT. Nothing hand-builds a connection here
+    // — this is the literal production path: a human pastes a key through
+    // `connect()`, and their own agent reads with it. Every other read test in
+    // this file constructed an `ownerType: "agent"` row directly, which routed
+    // around `resolveActingAs` and hid the fact that a real user's credential
+    // never resolved at all.
+    const { company, user, agent } = await seedStewarded();
+    await hubspotConnectorService(db).connect(company.id, user.principalId, "pat-steward");
 
     const result = await hubspotConnectorService(db).readObjects({
       companyId: company.id,
@@ -374,9 +408,66 @@ describeEmbeddedPostgres("hubspot connector", () => {
       objectType: "contacts",
     });
 
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+  });
+
+  it("refuses a key owned by someone who stewards a different agent", async () => {
+    // The real security property, tested against a genuinely different user
+    // rather than against the feature being broken.
+    const { company, user, agent } = await seedStewarded();
+    await hubspotConnectorService(db).connect(company.id, user.principalId, "pat-steward");
+
+    const otherAgent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Other ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const result = await hubspotConnectorService(db).readObjects({
+      companyId: company.id,
+      agentId: otherAgent.id,
+      objectType: "contacts",
+    });
+
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("no_connection");
+  });
+
+  it("stops resolving a steward's key once their stewardship ends", async () => {
+    // Access follows accountability. When the person stops being answerable for
+    // the agent, their credential stops being usable by it — without anyone
+    // having to remember to revoke the key.
+    const { company, user, agent, owner } = await seedStewarded();
+    await hubspotConnectorService(db).connect(company.id, user.principalId, "pat-steward");
+
+    const before = await hubspotConnectorService(db).readObjects({
+      companyId: company.id,
+      agentId: agent.id,
+      objectType: "contacts",
+    });
+    expect(before.ok, "precondition: the steward's key should resolve").toBe(true);
+
+    await agentStewardshipService(db).endActiveForUser(
+      company.id,
+      user.principalId,
+      owner.principalId,
+    );
+
+    const after = await hubspotConnectorService(db).readObjects({
+      companyId: company.id,
+      agentId: agent.id,
+      objectType: "contacts",
+    });
+    expect(after.ok).toBe(false);
+    if (after.ok) return;
+    expect(after.reason).toBe("no_connection");
   });
 
   it("frames CRM text before it reaches an agent", async () => {
