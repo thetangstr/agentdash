@@ -7,6 +7,7 @@ import { stewardshipsApi } from "../api/stewardships";
 import { AgentGovernancePanel } from "../components/agent/AgentGovernancePanel";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ChannelPairingPanel } from "../components/agent/ChannelPairingPanel";
+import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 
@@ -177,6 +178,7 @@ export default function MyAgent() {
       {/* Channels hang off the agent, so they only make sense once one is
           assigned — and the unassigned state deliberately offers no controls. */}
       {agentId && selectedCompanyId && <ChannelPairingPanel companyId={selectedCompanyId} />}
+      {agentId && selectedCompanyId && <HubspotConnectionPanel companyId={selectedCompanyId} />}
       <section aria-labelledby="my-agent-activity-heading" className="rounded-lg border p-4">
         <h2 id="my-agent-activity-heading" className="text-sm font-semibold">
           Recent activity

@@ -11,6 +11,7 @@ export { humanChannelBindings } from "./human_channel_bindings.js";
 export { externalChannelEvents } from "./external_channel_events.js";
 export { channelCallbackTokens } from "./channel_callback_tokens.js";
 export { channelPairingChallenges } from "./channel_pairing_challenges.js";
+export { connectorSendExecutions } from "./connector_send_executions.js";
 export { boardApiKeys } from "./board_api_keys.js";
 export { cliAuthChallenges } from "./cli_auth_challenges.js";
 export { companyMemberships } from "./company_memberships.js";

@@ -17,6 +17,13 @@ const mockGovernanceApi = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const mockHubspotApi = vi.hoisted(() => ({
+  get: vi.fn(),
+  connect: vi.fn(),
+  recheck: vi.fn(),
+  revoke: vi.fn(),
+}));
+
 const mockIssuesApi = vi.hoisted(() => ({ list: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -29,6 +36,7 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("../api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
+vi.mock("../api/hubspot", () => ({ hubspotApi: mockHubspotApi }));
 vi.mock("../api/agent-governance", () => ({ agentGovernanceApi: mockGovernanceApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
@@ -78,6 +86,7 @@ describe("MyAgent", () => {
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
     mockStewardshipsApi.listMyChannels.mockResolvedValue({ bindings: [] });
+    mockHubspotApi.get.mockResolvedValue({ connection: null });
     mockStewardshipsApi.startPairing.mockResolvedValue({
       deepLink: "https://t.me/agentdash_test_bot?start=tok",
       expiresAt: "2026-07-30T12:00:00.000Z",
@@ -300,5 +309,42 @@ describe("MyAgent", () => {
     // The owner ceiling and the missing-config case both surface here. A button
     // that quietly does nothing reads as a broken page.
     expect(container.textContent).toContain("TELEGRAM_BOT_USERNAME");
+  });
+
+  it("states that HubSpot writes attribute to the app, not the person", async () => {
+    // The owner accepted this tradeoff; accepting it is not hiding it. Someone
+    // pasting a key deserves to know what their name will not be attached to.
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("attributed to the app, not to you");
+    // And that a write is never unilateral.
+    expect(container.textContent).toContain("cannot write on its own");
+  });
+
+  it("never renders the stored HubSpot token", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1" },
+      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+    });
+    mockHubspotApi.get.mockResolvedValue({
+      connection: {
+        id: "conn-1",
+        hubId: "12345",
+        scopes: ["crm.objects.contacts.read"],
+        status: "active",
+        createdAt: "2026-07-30T00:00:00.000Z",
+        updatedAt: "2026-07-30T00:00:00.000Z",
+      },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("12345");
+    expect(container.textContent).not.toContain("pat-");
   });
 });

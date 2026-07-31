@@ -21,12 +21,12 @@ there. The remaining criteria are unaffected.
 | Command | Result |
 |---|---|
 | `pnpm -r typecheck` | exit 0 |
-| `pnpm test:run` | 3990 passed, 0 failed |
+| `pnpm test:run` | 4011 passed, 0 failed |
 | `pnpm build` | exit 0 (all packages) |
 | `pnpm --filter @paperclipai/db run check:migrations` | exit 0 |
 | `pnpm exec playwright test --config tests/e2e/playwright-agentdash-mk.config.ts` | 2 passed against a live `local_trusted` server |
 
-Migrations `0096`–`0104`, each additive and correctly chained. WhatsApp
+Migrations `0096`–`0105`, each additive and correctly chained. WhatsApp
 added no table: it reuses `channel_pairing_challenges`, `channel_callback_tokens`,
 and `external_channel_events`, which is the point of having made them
 provider-generic.
@@ -351,14 +351,21 @@ See the verification table above. Live Telegram and Teams sandbox runs have
    `tasks:assign` (which operators hold), and caller-supplied `agentId` on issue
    checkout and cost-events.
 10. **Newly in scope 2026-07-30**, sequenced after the blockers above.
-    ~~WhatsApp connector~~ and ~~HubSpot native BYO-key reads~~ shipped
-    2026-07-30. Still outstanding: HubSpot steward-approved **writes**, and the
-    local computer-agent bridge. These are additions beyond the fourteen criteria, not
+    ~~WhatsApp connector~~, ~~HubSpot native BYO-key reads~~ and ~~HubSpot
+    steward-approved writes~~ shipped 2026-07-30. Still outstanding: the local
+    computer-agent bridge. These are additions beyond the fourteen criteria, not
     gaps in them; see the scope-override addendum.
 13. **HubSpot writes attribute to the app, not the person.** A private-app
     token is portal-scoped and created by a super admin, so a write made with
-    one member's key is indistinguishable from any other. Acceptable for reads;
-    it needs deciding before writes ship, and a public OAuth app is the fix.
+    one member's key is indistinguishable in HubSpot from any other. The product
+    owner accepted this on 2026-07-30 and writes shipped on that basis; the
+    caveat is stated in the UI rather than hidden. AgentDash records who
+    requested and who approved every write, HubSpot does not. A public OAuth app
+    remains the real fix.
+14. **`outcome_unknown` has no operator surface.** An ambiguous write is
+    recorded and never retried, which is correct, but nothing yet lists these
+    for a human to reconcile against the CRM. Until that exists the record is
+    discoverable only by query.
 12. **WhatsApp out-of-window delivery.** Outside the 24-hour messaging window an
     approval card is reported undelivered rather than sent, because a
     Meta-reviewed utility template is an operator provisioning step this build

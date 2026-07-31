@@ -336,8 +336,22 @@ export const APPROVAL_TYPES = [
   "budget_override_required",
   "request_board_approval",
   "mandate_violation",
+  // AgentDash-MK: an agent asking to WRITE through a connector. Never executed
+  // by the agent; the steward decides and the server executes with the
+  // connection owner's credential.
+  "connector_send",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
+
+/**
+ * Outcome of executing an approved `connector_send`.
+ *
+ * Deliberately NOT an approval status. The human's decision and the write's
+ * outcome are different facts: an approval can be cleanly `approved` while the
+ * write that followed it landed, failed, or — worst case — is unknowable.
+ */
+export const CONNECTOR_SEND_OUTCOMES = ["succeeded", "failed", "outcome_unknown"] as const;
+export type ConnectorSendOutcome = (typeof CONNECTOR_SEND_OUTCOMES)[number];
 
 export const APPROVAL_STATUSES = [
   "pending",

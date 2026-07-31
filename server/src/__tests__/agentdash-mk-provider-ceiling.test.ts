@@ -431,6 +431,90 @@ describeEmbeddedPostgres("agentdash-mk provider and data-scope ceilings", () => 
     });
   });
 
+  describe("pending connector sends", () => {
+    async function pendingSend(companyId: string, agentId: string, provider = "hubspot") {
+      return db
+        .insert(approvals)
+        .values({
+          companyId,
+          type: "connector_send",
+          requestedByAgentId: agentId,
+          status: "pending",
+          payload: { provider, objectType: "contacts", operation: "create", properties: {} },
+        })
+        .returning()
+        .then((rows) => rows[0]!);
+    }
+
+    it("cancels a pending write when the ceiling stops allowing its provider", async () => {
+      // A pending connector_send is an act waiting for a human. Leaving it
+      // decidable after the owner disallowed the provider means the ceiling can
+      // be defeated simply by approving something filed before it narrowed.
+      const company = await createCompany();
+      const agent = await createAgent(company.id);
+      await setCeiling(company.id, agent.id, { providers: ["hubspot"] });
+      const approval = await pendingSend(company.id, agent.id);
+
+      await setCeiling(company.id, agent.id, { providers: ["telegram"] });
+
+      const stored = await db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.id, approval.id))
+        .then((rows) => rows[0]!);
+      expect(stored.status).toBe("cancelled");
+
+      const clamped = await db
+        .select()
+        .from(activityLog)
+        .where(eq(activityLog.action, "agent.governance_configuration_clamped"));
+      expect(
+        clamped.some(
+          (row) => (row.details as { field?: string } | null)?.field === "connector_send:hubspot",
+        ),
+      ).toBe(true);
+    });
+
+    it("leaves a pending write for a still-allowed provider alone", async () => {
+      const company = await createCompany();
+      const agent = await createAgent(company.id);
+      await setCeiling(company.id, agent.id, { providers: ["hubspot", "telegram"] });
+      const approval = await pendingSend(company.id, agent.id);
+
+      await setCeiling(company.id, agent.id, { providers: ["hubspot"] });
+
+      const stored = await db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.id, approval.id))
+        .then((rows) => rows[0]!);
+      expect(stored.status).toBe("pending");
+    });
+
+    it("does not touch an already-decided write", async () => {
+      // Cancelling a decided approval would rewrite history: the human's
+      // decision happened, and the execution record is the place that says
+      // whether it was honoured.
+      const company = await createCompany();
+      const agent = await createAgent(company.id);
+      await setCeiling(company.id, agent.id, { providers: ["hubspot"] });
+      const approval = await pendingSend(company.id, agent.id);
+      await db
+        .update(approvals)
+        .set({ status: "approved" })
+        .where(eq(approvals.id, approval.id));
+
+      await setCeiling(company.id, agent.id, { providers: ["telegram"] });
+
+      const stored = await db
+        .select()
+        .from(approvals)
+        .where(eq(approvals.id, approval.id))
+        .then((rows) => rows[0]!);
+      expect(stored.status).toBe("approved");
+    });
+  });
+
   describe("minimumApproval", () => {
     /**
      * Set BOTH sides to the same value.

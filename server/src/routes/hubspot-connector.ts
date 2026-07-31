@@ -6,7 +6,11 @@ import { companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { requireProductProfile } from "../services/companies.js";
-import { hubspotConnectorService } from "../services/hubspot-connector.js";
+import {
+  HUBSPOT_WRITE_OBJECT_TYPES,
+  hubspotConnectorService,
+  type HubspotWriteObjectType,
+} from "../services/hubspot-connector.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 /**
@@ -161,6 +165,56 @@ export function hubspotConnectorRoutes(db: Db) {
       return;
     }
     res.json({ results: result.results });
+  });
+
+  /**
+   * Agent-facing CRM write REQUEST.
+   *
+   * Returns 202 with an approval id, never a write result. An agent that
+   * receives this has not changed the CRM and must not tell a human it has.
+   */
+  router.post("/companies/:companyId/hubspot/:objectType/write", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(req, companyId);
+
+    if (req.actor.type !== "agent" || !req.actor.agentId) {
+      throw forbidden("Agent authentication required");
+    }
+    if (req.actor.companyId !== companyId) {
+      throw forbidden("Agent key cannot access another company");
+    }
+
+    const objectType = req.params.objectType as string;
+    if (!HUBSPOT_WRITE_OBJECT_TYPES.includes(objectType as HubspotWriteObjectType)) {
+      throw badRequest("objectType must be contacts, companies, or deals");
+    }
+
+    const operation = req.body?.operation === "update" ? "update" : "create";
+    const properties = req.body?.properties;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+      throw badRequest("properties must be an object");
+    }
+
+    const result = await hubspot.requestWrite({
+      companyId,
+      agentId: req.actor.agentId,
+      objectType: objectType as HubspotWriteObjectType,
+      operation,
+      objectId: typeof req.body?.objectId === "string" ? req.body.objectId : null,
+      properties: properties as Record<string, unknown>,
+    });
+
+    if (!result.ok) {
+      res.status(403).json({ error: result.message, details: { reason: result.reason } });
+      return;
+    }
+
+    // 202: accepted for a human decision, explicitly not performed.
+    res.status(202).json({
+      approvalId: result.approvalId,
+      expiresAt: result.expiresAt.toISOString(),
+      status: "pending_steward_approval",
+    });
   });
 
   return router;

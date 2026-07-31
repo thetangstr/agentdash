@@ -1,8 +1,9 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agentGovernancePolicies,
   agents,
+  approvals,
   companies,
   humanChannelBindings,
   principalPermissionGrants,
@@ -418,6 +419,42 @@ export function agentGovernanceService(db: Db) {
               field: `channel:${binding.provider}`,
               previous: "bound",
               clampedTo: "revoked",
+            });
+          }
+
+          // A pending connector_send is an act waiting for a human. Leaving it
+          // decidable after the owner disallowed its provider would let the
+          // ceiling be defeated by approving something filed before it
+          // narrowed — the execution path re-checks, but a steward would be
+          // shown a card for work that can no longer happen.
+          //
+          // Only PENDING rows. Cancelling a decided approval would rewrite
+          // history; the execution record is where "was it honoured" lives.
+          const pendingSends = await tx
+            .select({ id: approvals.id, payload: approvals.payload })
+            .from(approvals)
+            .where(
+              and(
+                eq(approvals.companyId, companyId),
+                eq(approvals.requestedByAgentId, agentId),
+                eq(approvals.type, "connector_send"),
+                inArray(approvals.status, ["pending", "revision_requested"]),
+              ),
+            );
+
+          for (const pending of pendingSends) {
+            const provider = String(
+              (pending.payload as Record<string, unknown> | null)?.provider ?? "",
+            );
+            if (provider && policyListAllows(effectivePolicy.providers, provider)) continue;
+            await tx
+              .update(approvals)
+              .set({ status: "cancelled", updatedAt: now })
+              .where(eq(approvals.id, pending.id));
+            clamps.push({
+              field: `connector_send:${provider || "unknown"}`,
+              previous: "pending",
+              clampedTo: "cancelled",
             });
           }
 

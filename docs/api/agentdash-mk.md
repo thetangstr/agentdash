@@ -130,6 +130,7 @@ approving one creates an agent.
 | `POST` | `/api/companies/:companyId/me/connections/hubspot/recheck` | Own key |
 | `POST` | `/api/companies/:companyId/me/connections/hubspot/revoke` | Own key or admin |
 | `GET` | `/api/companies/:companyId/hubspot/:objectType` | **Agent key only** |
+| `POST` | `/api/companies/:companyId/hubspot/:objectType/write` | **Agent key only** — files a request |
 
 `objectType` is `contacts`, `companies`, or `deals`; anything else is a 400
 rather than a pass-through to HubSpot.
@@ -168,9 +169,56 @@ agent: CRM notes are attacker-writable for inbound leads, and stripping
 "instruction-looking" text would mangle legitimate notes while missing novel
 phrasings. Non-string properties are left alone.
 
+### Writes
+
+An agent never writes. It files a request; the steward decides; the server
+executes with the connection owner's credential. The write route returns **202**
+with an approval id and `status: "pending_steward_approval"` — never a write
+result. An agent that receives that has not changed the CRM.
+
+The request becomes a `connector_send` approval carrying the target, the
+properties, and a **sha256 digest of the properties**, so what executes can be
+proven to be what was decided.
+
+Everything is re-resolved at **execution** time, not request time: stewardship,
+the owner ceiling through `resolveActingAs`, the connection's status, and that
+the resolved connection is still the one that was approved. Authority checked
+when a request is filed is stale by the time a human presses approve — a ceiling
+narrowed in between must block the write, and does.
+
+`approvals.expiresAt` has its first consumer here: a connector_send expires
+after 24 hours. A CRM write approved a week late is acting on a world that has
+moved.
+
+Outcomes are recorded in `connector_send_executions`, one row per approval,
+enforced by a unique index:
+
+| Outcome | When |
+|---|---|
+| `succeeded` | provider returned 2xx |
+| `failed` | 4xx, or a refusal before any call was made (expired, ceiling, revoked connection) |
+| `outcome_unknown` | 5xx or transport failure — the write **may** have landed |
+
+`outcome_unknown` is **never retried**. The row is claimed *before* the provider
+call and already carries `outcome_unknown`, so a crash mid-flight leaves exactly
+the truth. For a CRM of record a duplicate contact is worse than a missing one,
+and only a human can tell which happened.
+
+The execution row carries ids, counts, and the digest — never the written
+properties. Those live on the approval, which has redaction on every read path;
+copying them here would put CRM data in a second store with different access
+rules.
+
+Narrowing an owner ceiling **cancels pending connector_send approvals** for that
+agent in the same transaction as the ceiling write. Already-decided approvals are
+untouched — cancelling those would rewrite history, and the execution record is
+where "was it honoured" lives.
+
 **Known limit:** a HubSpot private-app token is portal-scoped and created by a
 super admin, so writes attribute to *the app*, not to the person whose key it is.
-A public OAuth app is the fix and is not built here.
+AgentDash records who requested and who approved every write; HubSpot does not.
+The product owner accepted this on 2026-07-30 and it is stated in the UI rather
+than hidden. A public OAuth app is the fix and is not built here.
 
 ## Channels
 

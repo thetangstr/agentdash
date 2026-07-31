@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { connectorSendExecutionService } from "../services/connector-send-execution.js";
 import { accessService } from "../services/access.js";
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
@@ -47,6 +48,7 @@ export function approvalRoutes(
   const router = Router();
   const svc = approvalService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  const connectorSend = connectorSendExecutionService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
   const authority = approvalAuthorityService(db);
@@ -400,6 +402,14 @@ export function approvalRoutes(
           });
         }
       }
+    }
+
+    if (applied && approval.type === "connector_send") {
+      // Executed here rather than inside the approval service, so the service
+      // stays the decision boundary and nothing else. Awaited so the response
+      // does not outlive its own side effect; the executor swallows every
+      // failure internally, so an unreachable provider cannot fail this call.
+      await connectorSend.executeForApproval(approval.id);
     }
 
     res.json(redactApprovalPayload(approval));

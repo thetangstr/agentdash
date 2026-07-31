@@ -111,6 +111,7 @@ export const queryKeys = {
      */
     inboxScope: (companyId: string) => ["myAgent", "inboxScope", companyId] as const,
     channels: (companyId: string) => ["myAgent", "channels", companyId] as const,
+    hubspot: (companyId: string) => ["myAgent", "hubspot", companyId] as const,
     overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
     governance: (companyId: string, agentId: string) =>
       ["myAgent", "governance", companyId, agentId] as const,

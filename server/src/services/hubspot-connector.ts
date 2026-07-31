@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { connections } from "@paperclipai/db";
 import { badRequest, conflict, forbidden, serviceUnavailable } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
+import { approvalService } from "./approvals.js";
 import { connectorService } from "./connectors.js";
 import { logActivity } from "./activity-log.js";
 
@@ -36,6 +38,31 @@ const RATE_WINDOW_MS = 60_000;
 
 /** Consecutive auth failures before we stop trying and mark the key dead. */
 const AUTH_FAILURE_THRESHOLD = 3;
+
+/**
+ * How long a steward has to decide a write before it goes stale.
+ *
+ * A CRM write approved a week after it was requested is acting on a world that
+ * has moved: the lead was probably already contacted, the deal already updated.
+ * Expiry makes the request's age a first-class refusal rather than something a
+ * human has to notice.
+ */
+const CONNECTOR_SEND_TTL_MS = 24 * 60 * 60 * 1000;
+
+export const HUBSPOT_WRITE_OBJECT_TYPES = ["contacts", "companies", "deals"] as const;
+export type HubspotWriteObjectType = (typeof HUBSPOT_WRITE_OBJECT_TYPES)[number];
+
+/**
+ * Digest the properties exactly as approved.
+ *
+ * Keys are sorted so the digest is stable across serializations — an unstable
+ * digest would fail to detect the thing it exists to detect, and would also
+ * produce false alarms on identical payloads.
+ */
+export function digestWriteProperties(properties: Record<string, unknown>): string {
+  const sorted = Object.fromEntries(Object.entries(properties).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
+}
 
 export interface HubspotTokenInfo {
   hubId: string;
@@ -86,6 +113,7 @@ function consumeRateBudget(connectionId: string): boolean {
 
 export function hubspotConnectorService(db: Db) {
   const connectors = connectorService(db);
+  const approvals = approvalService(db);
 
   async function hubspotFetch(path: string, token: string, init: RequestInit = {}) {
     return fetch(`${HUBSPOT_API}${path}`, {
@@ -406,9 +434,135 @@ export function hubspotConnectorService(db: Db) {
     return { ...row, properties: framed };
   }
 
+  /**
+   * File a write request. Creates an approval; writes nothing.
+   *
+   * The ceiling is checked here so an agent learns immediately that it may not
+   * touch this provider, rather than filing a request that will be refused
+   * after a human has already spent attention on it. It is checked AGAIN at
+   * execution, because this check goes stale the moment it returns.
+   */
+  async function requestWrite(input: {
+    companyId: string;
+    agentId: string;
+    objectType: HubspotWriteObjectType;
+    operation: "create" | "update";
+    objectId?: string | null;
+    properties: Record<string, unknown>;
+  }): Promise<
+    | { ok: true; approvalId: string; expiresAt: Date }
+    | { ok: false; reason: string; message: string }
+  > {
+    if (input.operation === "update" && !input.objectId) {
+      return { ok: false, reason: "objectId_required", message: "An update requires an objectId" };
+    }
+
+    const acting = await connectors.resolveActingAs(
+      input.companyId,
+      input.agentId,
+      "send",
+      PROVIDER,
+    );
+    if (!acting.ok) {
+      return { ok: false, reason: acting.blocked.reason, message: acting.blocked.message };
+    }
+
+    const expiresAt = new Date(Date.now() + CONNECTOR_SEND_TTL_MS);
+    const approval = await approvals.create(input.companyId, {
+      type: "connector_send",
+      requestedByAgentId: input.agentId,
+      requestedByUserId: null,
+      status: "pending",
+      expiresAt,
+      payload: {
+        provider: PROVIDER,
+        connectionId: acting.resolution.connectionId,
+        objectType: input.objectType,
+        operation: input.operation,
+        objectId: input.objectId ?? null,
+        properties: input.properties,
+        payloadDigest: digestWriteProperties(input.properties),
+      },
+      decisionNote: null,
+      decidedByUserId: null,
+      decidedAt: null,
+      updatedAt: new Date(),
+    });
+
+    await logActivity(db, {
+      companyId: input.companyId,
+      actorType: "agent",
+      actorId: input.agentId,
+      agentId: input.agentId,
+      action: "connection.hubspot_write_requested",
+      entityType: "approval",
+      entityId: approval.id,
+      // References and counts only; the properties live on the approval, which
+      // has its own redaction on every read path.
+      details: {
+        objectType: input.objectType,
+        operation: input.operation,
+        propertyCount: Object.keys(input.properties).length,
+      },
+    });
+
+    return { ok: true, approvalId: approval.id, expiresAt };
+  }
+
+  /** Execute an already-approved write. Called only by the execution service. */
+  async function executeWrite(input: {
+    connectionId: string;
+    objectType: string;
+    operation: "create" | "update";
+    objectId?: string | null;
+    properties: Record<string, unknown>;
+  }): Promise<
+    | { outcome: "succeeded"; externalId: string | null }
+    | { outcome: "failed"; reason: string }
+    | { outcome: "outcome_unknown"; reason: string }
+  > {
+    const token = await connectors.getDecryptedToken(input.connectionId);
+    if (!token?.accessToken) {
+      return { outcome: "failed", reason: "connection_unreadable" };
+    }
+
+    const path =
+      input.operation === "create"
+        ? `/crm/v3/objects/${input.objectType}`
+        : `/crm/v3/objects/${input.objectType}/${input.objectId}`;
+
+    let response: Response;
+    try {
+      response = await hubspotFetch(path, token.accessToken, {
+        method: input.operation === "create" ? "POST" : "PATCH",
+        body: JSON.stringify({ properties: input.properties }),
+      });
+    } catch (error) {
+      // A transport failure is the ambiguous case in its purest form: the
+      // request may have been received and answered after we stopped listening.
+      logger.warn({ err: error, connectionId: input.connectionId }, "hubspot write transport failed");
+      return { outcome: "outcome_unknown", reason: "transport_failure" };
+    }
+
+    if (response.status >= 500) {
+      // A 5xx may mean the write landed. Never retried — a duplicate CRM record
+      // is worse than a missing one, and only a human can tell which happened.
+      return { outcome: "outcome_unknown", reason: `provider_${response.status}` };
+    }
+    if (!response.ok) {
+      // 4xx is unambiguous: nothing landed.
+      return { outcome: "failed", reason: `provider_${response.status}` };
+    }
+
+    const body = (await response.json().catch(() => ({}))) as { id?: string | number };
+    return { outcome: "succeeded", externalId: body.id != null ? String(body.id) : null };
+  }
+
   return {
     validateToken,
     connect,
+    requestWrite,
+    executeWrite,
     rotate,
     recheck,
     revoke,
