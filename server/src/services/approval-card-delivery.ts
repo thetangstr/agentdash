@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies, humanChannelBindings } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { teamsConnectorService } from "./teams-connector.js";
 import { telegramConnectorService } from "./telegram-connector.js";
 import { whatsappConnectorService } from "./whatsapp-connector.js";
 
@@ -32,6 +33,7 @@ const DELIVERABLE_STATUSES = new Set(["pending", "revision_requested"]);
 
 export function approvalCardDeliveryService(db: Db) {
   const stewardships = agentStewardshipService(db);
+  const teams = teamsConnectorService(db);
   const telegram = telegramConnectorService(db);
   const whatsapp = whatsappConnectorService(db);
 
@@ -136,6 +138,62 @@ export function approvalCardDeliveryService(db: Db) {
         bindingId: binding.id,
       });
       await telegram.sendApprovalCard(chatId, text, keyboard);
+      return;
+    }
+
+    if (binding.provider === "teams") {
+      // Teams is the notification channel for every stalled escalation, so this
+      // branch is the difference between an escalation that reaches a human and
+      // one that sits in a queue nobody is watching.
+      //
+      // Composed here rather than behind a `sendApprovalCard` helper on the
+      // connector, matching the Telegram branch above: the composition IS the
+      // delivery decision, and hiding it one layer down is how `buildApprovalCard`
+      // ended up with no caller in the first place.
+      //
+      // Coordinates are re-resolved from the binding rather than read off the
+      // row in hand. A proactive send needs a conversation and a service url
+      // that only the account's own verified activity could have supplied, and
+      // re-reading them is what makes a revoked binding stop receiving cards
+      // without this loop having to remember.
+      const reference = await teams.resolveConversationReference(
+        approval.companyId,
+        binding.userId,
+      );
+      if (!reference) {
+        logger.info(
+          { approvalId: approval.id, bindingId: binding.id },
+          "teams approval card not delivered: no conversation reference",
+        );
+        return;
+      }
+
+      // Two opaque handles and nothing else. A decision comes back through
+      // `decideFromCardAction`, which re-resolves tenant, binding, stewardship,
+      // revision, and terminal state before the approvals service sees it — the
+      // button is never the authority.
+      const card = await teams.buildApprovalCard({
+        companyId: approval.companyId,
+        approvalId: approval.id,
+        revision: approval.revision,
+        bindingId: binding.id,
+        summary: text,
+      });
+
+      const result = await teams.sendActivity(reference, {
+        type: "message",
+        attachments: [
+          { contentType: "application/vnd.microsoft.card.adaptive", content: card },
+        ],
+      });
+      if (!result.delivered) {
+        // Recorded rather than silently treated as sent. An undelivered card
+        // must stay distinguishable from a steward who has not answered yet.
+        logger.info(
+          { approvalId: approval.id, bindingId: binding.id, reason: result.reason },
+          "teams approval card not delivered",
+        );
+      }
       return;
     }
 

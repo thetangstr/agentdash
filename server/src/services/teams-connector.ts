@@ -1,7 +1,11 @@
 import { randomBytes, createHash } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { channelCallbackTokens, humanChannelBindings } from "@paperclipai/db";
+import {
+  channelCallbackTokens,
+  channelPairingChallenges,
+  humanChannelBindings,
+} from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalService } from "./approvals.js";
@@ -10,6 +14,52 @@ import { logActivity } from "./activity-log.js";
 
 const PROVIDER = "teams";
 const CALLBACK_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Default Entra authority for a Bot Framework client credential.
+ *
+ * Overridable via `TEAMS_BOT_TOKEN_URL` because this is genuinely per-
+ * deployment: a multi-tenant bot uses the `botframework.com` authority, a
+ * single-tenant one uses `login.microsoftonline.com/{tenantId}/…`, and which of
+ * those applies is decided by the app registration, not by us. See the note in
+ * `routes/teams-connector.ts` about why single-tenant is the only path still
+ * open.
+ */
+const DEFAULT_BOT_TOKEN_URL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token";
+const BOT_SCOPE = "https://api.botframework.com/.default";
+
+/**
+ * The prefix a pairing message carries.
+ *
+ * Teams has no `/start` deep-link convention, so the install link prefills
+ * `pair <token>` and this is what the bot looks for. A bare token would be
+ * indistinguishable from someone pasting a code into a chat, and treating every
+ * opaque-looking message as a redemption attempt would turn the bot into an
+ * oracle for which tokens exist.
+ */
+const PAIRING_PREFIX = "pair";
+
+/** Extract a pairing token from an inbound message, or null if it is not one. */
+export function parseTeamsPairingToken(text: unknown): string | null {
+  if (typeof text !== "string") return null;
+  const match = new RegExp(`^${PAIRING_PREFIX}\\s+(\\S+)\\s*$`, "i").exec(text.trim());
+  return match ? match[1]! : null;
+}
+
+/**
+ * The link a human follows to pair.
+ *
+ * `message` is prefilled, so the token travels inside the one artifact the user
+ * is meant to handle. The raw token is never returned beside it — the same rule
+ * Telegram and WhatsApp pairing already follow, and for the same reason: a token
+ * echoed separately ends up in a log line or a copy-paste the link never reaches.
+ */
+export function teamsPairingLink(botAppId: string, token: string): string {
+  return (
+    `https://teams.microsoft.com/l/chat/0/0?users=28:${encodeURIComponent(botAppId)}` +
+    `&message=${encodeURIComponent(`${PAIRING_PREFIX} ${token}`)}`
+  );
+}
 
 /** Adaptive Card action — `Action.Execute` only; `Action.Submit` is legacy. */
 export interface AdaptiveCardExecuteAction {
@@ -145,6 +195,162 @@ export function teamsConnectorService(db: Db) {
     return `sha256:${createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex")}`;
   }
 
+  // ---------------------------------------------------------------------------
+  // Outbound: proactive messages
+  //
+  // A "proactive" message is one the bot initiates rather than one it sends in
+  // reply, and it is the only shape that can carry an approval to a steward who
+  // is not currently typing. It needs conversation coordinates the bot cannot
+  // invent — hence `resolveConversationReference`, which reads them off the
+  // binding the account itself established during pairing.
+  // ---------------------------------------------------------------------------
+
+  async function botAccessToken(): Promise<string | null> {
+    const appId = process.env.TEAMS_BOT_APP_ID?.trim();
+    const password = process.env.TEAMS_BOT_APP_PASSWORD?.trim();
+    if (!appId || !password) {
+      logger.warn("teams bot credentials missing; skipping outbound activity");
+      return null;
+    }
+    const url = process.env.TEAMS_BOT_TOKEN_URL?.trim() || DEFAULT_BOT_TOKEN_URL;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: appId,
+          client_secret: password,
+          scope: BOT_SCOPE,
+        }).toString(),
+      });
+      const body = (await response.json()) as { access_token?: unknown };
+      return typeof body.access_token === "string" ? body.access_token : null;
+    } catch (error) {
+      logger.warn({ err: error }, "teams bot token request failed");
+      return null;
+    }
+  }
+
+  /**
+   * POST one activity into an existing conversation.
+   *
+   * Never throws. Delivery is a side effect of creating an approval, and an
+   * unreachable Teams must not take the governed-action flow down with it.
+   */
+  async function sendActivity(
+    reference: { conversationId: string | null; serviceUrl: string | null },
+    activity: Record<string, unknown>,
+  ): Promise<{ delivered: boolean; reason?: string }> {
+    if (!reference.serviceUrl || !reference.conversationId) {
+      // A binding without coordinates cannot be messaged proactively. Reported
+      // rather than treated as delivered: an undelivered card must stay
+      // distinguishable from a steward who has not answered yet.
+      return { delivered: false, reason: "no_conversation_reference" };
+    }
+    const token = await botAccessToken();
+    if (!token) return { delivered: false, reason: "not_configured" };
+
+    const base = reference.serviceUrl.endsWith("/")
+      ? reference.serviceUrl
+      : `${reference.serviceUrl}/`;
+    const url = `${base}v3/conversations/${encodeURIComponent(reference.conversationId)}/activities`;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(activity),
+      });
+      if (!response.ok) {
+        logger.warn({ status: response.status }, "teams activity rejected");
+        return { delivered: false, reason: `http_${response.status}` };
+      }
+      return { delivered: true };
+    } catch (error) {
+      logger.warn({ err: error }, "teams activity send failed");
+      return { delivered: false, reason: "send_failed" };
+    }
+  }
+
+  /**
+   * Complete a pairing from a token the account sent itself.
+   *
+   * Identity comes entirely from the validated activity — the AAD object id and
+   * the tenant — never from anything a human typed. Redeeming the token from
+   * that account IS the proof of control, which is why `teams` stays out of the
+   * self-assertable set in `routes/human-channels.ts`.
+   */
+  async function completePairing(input: {
+    token: string;
+    aadObjectId: string;
+    tenantId: string | null;
+    conversationId: string | null;
+    serviceUrl: string | null;
+  }): Promise<{ paired: boolean }> {
+    const challenge = await channels.consumePairingChallenge(PROVIDER, input.token);
+    if (!challenge) {
+      // Unknown, expired, or already spent. One answer for all three: a distinct
+      // message per case would confirm which tokens exist.
+      await sendActivity(
+        { conversationId: input.conversationId, serviceUrl: input.serviceUrl },
+        {
+          type: "message",
+          text: "That link is no longer valid. Generate a new one from AgentDash.",
+        },
+      );
+      return { paired: false };
+    }
+
+    try {
+      const binding = await channels.verifyBinding(challenge.companyId, {
+        provider: PROVIDER,
+        userId: challenge.userId,
+        externalTenantId: input.tenantId,
+        externalUserId: input.aadObjectId,
+        externalConversationId: input.conversationId,
+        // The proactive send needs a service url and there is no other honest
+        // source for one; it is recorded from the verified activity, not from a
+        // configuration file that could point at a different tenant's endpoint.
+        metadata: input.serviceUrl ? { serviceUrl: input.serviceUrl } : null,
+      });
+      await db
+        .update(channelPairingChallenges)
+        .set({ bindingId: binding.id })
+        .where(eq(channelPairingChallenges.id, challenge.id));
+
+      await logActivity(db, {
+        companyId: binding.companyId,
+        actorType: "user",
+        actorId: binding.userId,
+        action: "human_channel.binding_verified",
+        entityType: "human_channel_binding",
+        entityId: binding.id,
+        agentId: binding.agentId,
+        details: { provider: PROVIDER, via: "pairing_challenge" },
+      });
+
+      await sendActivity(
+        { conversationId: input.conversationId, serviceUrl: input.serviceUrl },
+        { type: "message", text: "Connected. I'll bring you approvals here." },
+      );
+      return { paired: true };
+    } catch (error) {
+      // A conflicting active binding, a lost stewardship, or a provider the
+      // ceiling stopped allowing between minting and redemption. The challenge
+      // is already spent, which is correct: a failed redemption must not leave a
+      // live token behind.
+      logger.info({ err: error, provider: PROVIDER }, "teams pairing refused");
+      await sendActivity(
+        { conversationId: input.conversationId, serviceUrl: input.serviceUrl },
+        {
+          type: "message",
+          text: "I couldn't connect this account. Check with your workspace administrator.",
+        },
+      );
+      return { paired: false };
+    }
+  }
+
   /**
    * Decide an approval from a card action.
    *
@@ -233,6 +439,8 @@ export function teamsConnectorService(db: Db) {
     consumeCallbackToken,
     resolveConversationReference,
     decideFromCardAction,
+    sendActivity,
+    completePairing,
     digest,
   };
 }

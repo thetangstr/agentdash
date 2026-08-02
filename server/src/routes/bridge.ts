@@ -5,6 +5,7 @@ import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
 import { accessService } from "../services/access.js";
+import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -29,6 +30,7 @@ export function bridgeRoutes(db: Db) {
   const router = Router();
   const bridge = bridgeService(db);
   const access = accessService(db);
+  const cardDelivery = approvalCardDeliveryService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -224,6 +226,21 @@ export function bridgeRoutes(db: Db) {
       taskClass,
       instruction,
     });
+
+    // An `act` task IS a stalled escalation: the agent cannot proceed until a
+    // human decides. Until this call existed, the approval landed in the web
+    // inbox and nothing told the steward it was there — so the stall lasted
+    // until they happened to look. Delivery lives in the route rather than in
+    // `createTask` for the same reason it does in the approvals routes: the
+    // service layer stays acyclic, and the connectors it reaches import the
+    // approvals service.
+    //
+    // Awaited so the request does not outlive its own side effects. The
+    // delivery service swallows every failure internally, so an unreachable
+    // provider cannot fail this response.
+    if (task.approvalId) {
+      await cardDelivery.deliverForApproval(task.approvalId);
+    }
 
     // 202 for an act task: nothing has been dispatched, a human must decide.
     res.status(201).json({

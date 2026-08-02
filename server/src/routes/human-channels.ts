@@ -9,6 +9,7 @@ import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { requireProductProfile } from "../services/companies.js";
 import { humanChannelService } from "../services/human-channels.js";
+import { teamsPairingLink } from "../services/teams-connector.js";
 import { whatsappPairingLink } from "../services/whatsapp-connector.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
@@ -17,8 +18,10 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
  *
  * Empty, and it should stay that way. Membership here means "we accept an
  * identity this caller merely claims" — which is only defensible for a provider
- * whose ids are unguessable AND unforgeable, and none are. Telegram and
- * WhatsApp have verified ceremonies; Teams needs one before it is switched on.
+ * whose ids are unguessable AND unforgeable, and none are. All three providers
+ * now have verified ceremonies: Telegram's `/start` deep link, WhatsApp's
+ * prefilled handset message, and Teams' prefilled chat message. Adding a
+ * provider to `HUMAN_CHANNEL_PROVIDERS` must never imply adding it here.
  */
 const SELF_ASSERTABLE_PROVIDERS = new Set<string>();
 
@@ -123,6 +126,45 @@ export function humanChannelRoutes(db: Db) {
 
     res.status(201).json({
       deepLink: whatsappPairingLink(businessNumber, token),
+      expiresAt: expiresAt.toISOString(),
+    });
+  });
+
+  /**
+   * Start a Teams pairing.
+   *
+   * Teams is the notification channel for every stalled escalation, so this is
+   * the route that makes the escalation path reachable at all — before it there
+   * was no way to create a Teams binding, because the only other surface is the
+   * self-assert one below and `teams` is (correctly) not in its allowlist.
+   *
+   * Same identity rule as the other two: the link prefills a message the user
+   * sends FROM their own Teams client, and the AAD object id on that inbound
+   * activity is what proves they hold the account. Nothing here accepts an AAD
+   * id a human typed — those are visible to every colleague in the directory,
+   * and a mis-paired binding hands over both the content of approvals and the
+   * authority to decide them.
+   */
+  router.post("/companies/:companyId/me/channels/teams/pairing", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(req, companyId);
+    const userId = requireBoardUser(req);
+
+    // Checked before minting, like Telegram's: an unusable link would burn the
+    // user's one outstanding challenge.
+    const botAppId = process.env.TEAMS_BOT_APP_ID?.trim();
+    if (!botAppId) {
+      throw serviceUnavailable("Teams pairing is not configured: TEAMS_BOT_APP_ID is unset");
+    }
+
+    const { token, expiresAt } = await channels.mintPairingChallenge(companyId, {
+      userId,
+      provider: "teams",
+    });
+
+    // The link, never the raw token — see the Telegram note above.
+    res.status(201).json({
+      deepLink: teamsPairingLink(botAppId, token),
       expiresAt: expiresAt.toISOString(),
     });
   });

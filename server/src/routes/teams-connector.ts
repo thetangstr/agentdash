@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { humanChannelService } from "../services/human-channels.js";
 import {
+  parseTeamsPairingToken,
   teamsConnectorService,
   type TeamsVerifiedActor,
 } from "../services/teams-connector.js";
@@ -73,6 +74,62 @@ export function teamsConnectorRoutes(db: Db, options: TeamsRouteOptions = {}) {
     const activity = (req.body ?? {}) as Record<string, unknown>;
     const activityId = typeof activity.id === "string" ? activity.id : null;
     if (!activityId) {
+      res.status(200).json({ status: 200 });
+      return;
+    }
+
+    const serviceUrl = typeof activity.serviceUrl === "string" ? activity.serviceUrl : null;
+    const conversation = activity.conversation as { id?: unknown } | undefined;
+    const conversationId = typeof conversation?.id === "string" ? conversation.id : null;
+
+    // A pairing message arrives BEFORE any binding exists, so it cannot resolve
+    // its company the way every other activity does. The token carries that:
+    // peek to learn the company, claim the activity for deduplication, and only
+    // then spend the token. Consuming before claiming would let a Teams
+    // redelivery find the token already spent and report a failed pairing for a
+    // pairing that in fact succeeded — the same ordering Telegram needs.
+    const pairingToken = parseTeamsPairingToken(activity.text);
+    if (pairingToken && actor.aadObjectId) {
+      const challenge = await channels.peekPairingChallenge("teams", pairingToken);
+      if (!challenge) {
+        // Hand it over anyway so the person who followed a dead link is told,
+        // rather than met with silence.
+        await teams.completePairing({
+          token: pairingToken,
+          aadObjectId: actor.aadObjectId,
+          tenantId: actor.tenantId,
+          conversationId,
+          serviceUrl,
+        });
+        res.status(200).json({ status: 200 });
+        return;
+      }
+
+      const pairClaim = await channels.claimEvent(
+        "teams",
+        challenge.companyId,
+        activityId,
+        teams.digest(activity),
+        { eventType: "pairing" },
+      );
+      if (!pairClaim.claimed) {
+        res.status(200).json({ status: 200 });
+        return;
+      }
+
+      try {
+        await teams.completePairing({
+          token: pairingToken,
+          aadObjectId: actor.aadObjectId,
+          tenantId: actor.tenantId,
+          conversationId,
+          serviceUrl,
+        });
+        if (pairClaim.eventId) await channels.markEventProcessed(pairClaim.eventId, "processed");
+      } catch (error) {
+        logger.warn({ err: error, activityId }, "teams pairing failed");
+        if (pairClaim.eventId) await channels.markEventProcessed(pairClaim.eventId, "failed");
+      }
       res.status(200).json({ status: 200 });
       return;
     }
