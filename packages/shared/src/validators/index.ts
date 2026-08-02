@@ -162,6 +162,15 @@ export {
 } from "./workflow-events.js";
 
 export {
+  answerAgentFactSchema,
+  askAgentFactSchema,
+  declineAgentFactSchema,
+  type AnswerAgentFact,
+  type AskAgentFact,
+  type DeclineAgentFact,
+} from "./agent-facts.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,

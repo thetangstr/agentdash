@@ -1082,6 +1082,35 @@ export async function startServer(): Promise<StartedServer> {
     }, coldSignupIntervalMs);
   }
 
+  // AgentDash-MK: expire stalled work.
+  //
+  // Two leases, one tick. A bridge task whose endpoint went quiet, and a fact
+  // request whose escalation nobody answered. Both were written with expiry
+  // semantics and neither had a caller — `sweepLapsedLeases` shipped with none
+  // at all — which meant a lapsed lease was a comment rather than a behaviour:
+  // a claimed task stayed claimed forever and a stalled fact stayed `escalated`
+  // forever. Nothing about that is visible from the outside, which is exactly
+  // why it survived.
+  //
+  // Both sweeps are conditional updates keyed on the row still being in the
+  // state that was read, so two processes ticking together cannot both reap the
+  // same row.
+  const leaseSweepIntervalMs = 60 * 1000;
+  {
+    const { bridgeService } = await import("./services/bridge.js");
+    const { agentFactRequestService } = await import("./services/agent-fact-requests.js");
+    const bridgeLeases = bridgeService(db as any);
+    const factLeases = agentFactRequestService(db as any);
+    setInterval(() => {
+      void bridgeLeases
+        .sweepLapsedLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] bridge lease sweep failed"));
+      void factLeases
+        .sweepExpiredFactLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] fact lease sweep failed"));
+    }, leaseSweepIntervalMs).unref?.();
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);

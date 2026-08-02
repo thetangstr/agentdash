@@ -122,3 +122,5 @@ export { trialSessions } from "./trial_sessions.js";
 export { trialArtifacts } from "./trial_artifacts.js";
 // AgentDash-MK: measurement — events attach to the pipeline, never to a person.
 export { workflowEvents } from "./workflow_events.js";
+// AgentDash-MK: agent-to-agent fact requests — provenance attaches to the fact.
+export { agentFactRequests } from "./agent_fact_requests.js";

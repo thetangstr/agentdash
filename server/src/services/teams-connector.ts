@@ -273,6 +273,24 @@ export function teamsConnectorService(db: Db) {
   }
 
   /**
+   * Deliver a plain notice — a stalled escalation, a lapsed lease.
+   *
+   * No actions, deliberately. A notice carries no authority, so it carries no
+   * handle either; anything decidable goes through an approval card and the
+   * approvals service behind it. A button on a notice would be a second
+   * decision path, and there is exactly one.
+   */
+  async function sendNotice(
+    companyId: string,
+    userId: string,
+    text: string,
+  ): Promise<{ delivered: boolean; reason?: string }> {
+    const reference = await resolveConversationReference(companyId, userId);
+    if (!reference) return { delivered: false, reason: "no_active_binding" };
+    return sendActivity(reference, { type: "message", text });
+  }
+
+  /**
    * Complete a pairing from a token the account sent itself.
    *
    * Identity comes entirely from the validated activity — the AAD object id and
@@ -440,6 +458,7 @@ export function teamsConnectorService(db: Db) {
     resolveConversationReference,
     decideFromCardAction,
     sendActivity,
+    sendNotice,
     completePairing,
     digest,
   };

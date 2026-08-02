@@ -430,7 +430,13 @@ describe("startServer run-healer scheduler", () => {
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 12345);
     expect(timer.unref).toHaveBeenCalled();
 
-    const scheduledScan = setIntervalSpy.mock.calls.at(-1)?.[0] as (() => void) | undefined;
+    // Selected by its own interval, not by position. Startup schedules more
+    // than one timer (the AgentDash-MK lease sweep is unconditional), so
+    // `.at(-1)` was picking up whichever periodic task happened to register
+    // last rather than the one this test is about.
+    const scheduledScan = setIntervalSpy.mock.calls.find(
+      (call) => call[1] === 12345,
+    )?.[0] as (() => void) | undefined;
     scheduledScan?.();
     await Promise.resolve();
     expect(runHealerScanMock).toHaveBeenCalledTimes(1);
@@ -443,6 +449,13 @@ describe("startServer run-healer scheduler", () => {
     await startServer();
 
     expect(runHealerServiceMock).not.toHaveBeenCalled();
-    expect(setIntervalSpy).not.toHaveBeenCalled();
+    // Scoped to the run-healer's own schedule. Asserting that startup schedules
+    // NOTHING was always broader than this test's subject, and it is no longer
+    // true: expiring a lapsed lease is unconditional, because a lease nothing
+    // sweeps is not a lease.
+    const healerIntervals = setIntervalSpy.mock.calls.filter(
+      (call) => call[1] === 5 * 60 * 1000,
+    );
+    expect(healerIntervals).toHaveLength(0);
   });
 });

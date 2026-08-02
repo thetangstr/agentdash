@@ -703,6 +703,25 @@ export {
   type EmitWorkflowEvent,
 } from "./validators/workflow-events.js";
 
+// AgentDash-MK: agent-to-agent fact requests
+export {
+  AGENT_FACT_REQUEST_STATUSES,
+  AGENT_FACT_SOURCE_KINDS,
+  type AgentFactProvenance,
+  type AgentFactRequestStatus,
+  type AgentFactRequestView,
+  type AgentFactSourceKind,
+} from "./types/agent-facts.js";
+
+export {
+  answerAgentFactSchema,
+  askAgentFactSchema,
+  declineAgentFactSchema,
+  type AnswerAgentFact,
+  type AskAgentFact,
+  type DeclineAgentFact,
+} from "./validators/agent-facts.js";
+
 export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,

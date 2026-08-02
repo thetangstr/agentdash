@@ -119,6 +119,17 @@ export {
   WORKFLOW_EVENT_TYPES,
   WORKFLOW_STEP_CLOSING_EVENT_TYPES,
 } from "./workflow-events.js";
+// AgentDash-MK: agent-to-agent fact requests
+export {
+  AGENT_FACT_REQUEST_STATUSES,
+  AGENT_FACT_SOURCE_KINDS,
+} from "./agent-facts.js";
+export type {
+  AgentFactProvenance,
+  AgentFactRequestStatus,
+  AgentFactRequestView,
+  AgentFactSourceKind,
+} from "./agent-facts.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {

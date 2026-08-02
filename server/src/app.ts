@@ -27,6 +27,7 @@ import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
 import { agentGovernanceRoutes } from "./routes/agent-governance.js";
 import { agentDirectivesRoutes } from "./routes/agent-directives.js";
 import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
+import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
 import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
@@ -319,6 +320,8 @@ export async function createApp(
   api.use(agentGovernanceRoutes(db));
   api.use(agentDirectivesRoutes(db));
   api.use(workflowMetricsRoutes(db));
+  // AgentDash-MK: agent↔agent fact requests. 404s outside `agentdash_mk`.
+  api.use(agentFactRequestRoutes(db));
   api.use(agentdashMkInboxRoutes(db));
   api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
