@@ -3,11 +3,15 @@ import type { Request } from "express";
 import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
-import { updateAgentGovernancePolicySchema } from "@paperclipai/shared";
+import {
+  pushHarnessAgentPolicySchema,
+  updateAgentGovernancePolicySchema,
+} from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 
@@ -15,6 +19,7 @@ export function agentGovernanceRoutes(db: Db) {
   const router = Router();
   const governance = agentGovernanceService(db);
   const access = accessService(db);
+  const stewardships = agentStewardshipService(db);
 
   /**
    * Profile gate. Non-`agentdash_mk` companies must be indistinguishable from a
@@ -93,6 +98,43 @@ export function agentGovernanceRoutes(db: Db) {
         channel: req.body.channel ?? "web",
       });
       res.json({ policy });
+    },
+  );
+
+  /**
+   * AgentDash-MK: the harness's ceiling write.
+   *
+   * Same target as `/governance/request` — the steward request — because the
+   * harness is the steward's instrument, not a third authority. What differs is
+   * the failure mode: over-ceiling values are CLAMPED here rather than 422'd,
+   * so a harness that asks for too much ends up more constrained instead of
+   * leaving the previous, broader request in force. See
+   * `pushHarnessStewardRequest` for why that direction is the safe one.
+   *
+   * Steward-only, like directives. An administrator has `/governance/ceiling`
+   * and `/governance/request`; routing them through the clamping path would
+   * silently discard an admin's over-ceiling intent instead of telling them.
+   */
+  router.put(
+    "/companies/:companyId/agents/:agentId/governance/harness-request",
+    validate(pushHarnessAgentPolicySchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const agentId = req.params.agentId as string;
+      await requireProfileCompany(req, companyId);
+      assertBoard(req);
+      const userId = req.actor.userId ?? null;
+      const active = userId ? await stewardships.activeByAgent(companyId, agentId) : null;
+      if (!active || active.userId !== userId) {
+        throw forbidden("Only the agent's active steward can push a harness ceiling");
+      }
+
+      const { policy, clamped } = await governance.pushHarnessStewardRequest(companyId, agentId, {
+        policy: req.body.policy,
+        revision: req.body.revision,
+        actorUserId: active.userId,
+      });
+      res.json({ policy, clamped });
     },
   );
 

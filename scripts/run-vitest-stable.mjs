@@ -14,6 +14,10 @@ const nonServerProjects = [
   "@paperclipai/adapter-acpx-local",
   "@paperclipai/adapter-codex-local",
   "@paperclipai/adapter-opencode-local",
+  // AgentDash: the MCP server's suites were listed in no runner, so 96 passing
+  // tests were never executed by `pnpm test:run`. A test nobody runs is the
+  // same shape of gap as a function nobody calls.
+  "@agentdash/mcp-server",
   "@paperclipai/ui",
   "paperclipai",
 ];

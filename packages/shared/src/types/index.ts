@@ -104,6 +104,15 @@ export type {
   AgentPolicyViolation,
   AgentPolicyViolationCode,
 } from "./agent-governance.js";
+export type {
+  AgentDirective,
+  AgentDirectiveHistory,
+  AgentDirectiveRuntimeContext,
+} from "./agent-directives.js";
+export {
+  AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_DIRECTIVES_MAX_LENGTH,
+} from "./agent-directives.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {

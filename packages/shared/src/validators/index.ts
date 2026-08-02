@@ -149,6 +149,13 @@ export {
 } from "./agent-governance.js";
 
 export {
+  pushAgentDirectivesSchema,
+  pushHarnessAgentPolicySchema,
+  type PushAgentDirectives,
+  type PushHarnessAgentPolicy,
+} from "./agent-directives.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,

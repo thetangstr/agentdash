@@ -14,6 +14,7 @@ import {
   AgentPolicyCeilingError,
   DEFAULT_AGENT_GOVERNANCE_POLICY,
   assertWithinCeiling,
+  collectCeilingViolations,
   computeEffectiveAgentPolicy,
   normalizeAgentGovernancePolicy,
   policyListAllows,
@@ -526,6 +527,78 @@ export function agentGovernanceService(db: Db) {
   }
 
   /**
+   * AgentDash-MK: the harness write path — NARROWING ONLY.
+   *
+   * The web steward-request path rejects an over-ceiling request with 422,
+   * which is right for a human at a form: they can see the ceiling and fix the
+   * value. It is wrong for a harness. A rejected push leaves the agent running
+   * on the PREVIOUS, broader request, so an error here would make "the laptop
+   * asked for too much" fail toward *less* constraint. A compromised or merely
+   * out-of-date harness must only ever be able to make its agent more
+   * constrained than the org authorized.
+   *
+   * So the request is clamped to the ceiling instead. `computeEffectiveAgentPolicy`
+   * IS the clamp — it is the same intersection the effective policy already
+   * uses, so a clamped request is by construction within the ceiling and the
+   * assertion in `applyUpdate` cannot fire.
+   *
+   * This adds no term to the policy model. The harness is the steward's
+   * instrument writing the steward's side; `effective = owner ceiling ∩ steward
+   * request` is unchanged.
+   *
+   * The clamp list is returned rather than swallowed: silently accepting a push
+   * that did not take effect is how a human ends up debugging "why can't my
+   * agent do X" with no signal at all.
+   */
+  async function pushHarnessStewardRequest(
+    companyId: string,
+    agentId: string,
+    input: {
+      policy: AgentGovernancePolicy;
+      /** Optional — the harness rarely holds one. Defaults to the current row. */
+      revision?: number;
+      actorUserId: string | null;
+    },
+  ): Promise<{ policy: AgentGovernancePolicyRow; clamped: AgentPolicyViolation[] }> {
+    const current = await materialize(companyId, agentId);
+    const ceiling = current.ownerCeiling as AgentGovernancePolicy;
+    const requested = normalizeAgentGovernancePolicy(input.policy);
+
+    // Recorded before clamping — after clamping there is nothing left to see.
+    const clamped = collectCeilingViolations(ceiling, requested);
+    const narrowed = computeEffectiveAgentPolicy(ceiling, requested);
+
+    const policy = await applyUpdate(companyId, agentId, "steward_request", {
+      policy: narrowed,
+      revision: input.revision ?? current.revision,
+      actorUserId: input.actorUserId,
+      channel: "system",
+    });
+
+    for (const violation of clamped) {
+      await logActivity(db, {
+        companyId,
+        actorType: "user",
+        actorId: input.actorUserId ?? "board",
+        action: "agent.governance_harness_request_clamped",
+        entityType: "agent_governance_policy",
+        entityId: policy.id,
+        agentId,
+        details: {
+          reason: "narrowing_only",
+          field: violation.field,
+          requested: violation.requested,
+          allowed: violation.allowed,
+          direction: violation.direction,
+          revision: policy.revision,
+        },
+      });
+    }
+
+    return { policy, clamped };
+  }
+
+  /**
    * Service-boundary enforcement for the pre-existing agent configuration
    * mutations (budget, permissions, ...). No-op outside `agentdash_mk` so
    * default-profile behavior is untouched. Denials are audited: for a
@@ -622,6 +695,7 @@ export function agentGovernanceService(db: Db) {
     materialize,
     updateOwnerCeiling,
     updateStewardRequest,
+    pushHarnessStewardRequest,
     assertAgentMutationWithinCeiling,
     resolveConfigurationAuthority,
   };

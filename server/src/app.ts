@@ -25,6 +25,7 @@ import { companySkillRoutes } from "./routes/company-skills.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
 import { agentGovernanceRoutes } from "./routes/agent-governance.js";
+import { agentDirectivesRoutes } from "./routes/agent-directives.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
 import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
@@ -315,6 +316,7 @@ export async function createApp(
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(agentStewardshipRoutes(db));
   api.use(agentGovernanceRoutes(db));
+  api.use(agentDirectivesRoutes(db));
   api.use(agentdashMkInboxRoutes(db));
   api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));

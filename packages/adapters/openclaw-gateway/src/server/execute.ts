@@ -8,6 +8,7 @@ import {
   asString,
   buildPaperclipEnv,
   parseObject,
+  renderAgentDirectivesPrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -1107,12 +1108,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paperclipEnv = buildPaperclipEnvForWake(ctx, wakePayload);
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx.context.paperclipWake);
   const structuredWakeJson = stringifyPaperclipWakePayload(ctx.context.paperclipWake);
+  // AgentDash-MK: the steward harness's standing directives ride the same
+  // structured-wake slot as the wake prompt, ahead of it — this gateway has no
+  // joinPromptSections seam, and a channel the directives cannot reach is an
+  // adapter where the steward's constraints silently do not apply.
+  const agentDirectivesNote = renderAgentDirectivesPrompt(ctx.context.paperclipAgentDirectives);
+  const structuredSections = structuredWakeJson
+    ? joinWakePayloadSections(structuredWakePrompt, structuredWakeJson)
+    : structuredWakePrompt;
   const wakeText = buildWakeText(
     wakePayload,
     paperclipEnv,
-    structuredWakeJson
-      ? joinWakePayloadSections(structuredWakePrompt, structuredWakeJson)
-      : structuredWakePrompt,
+    agentDirectivesNote
+      ? [agentDirectivesNote, structuredSections].filter(Boolean).join("\n\n")
+      : structuredSections,
   );
 
   const sessionKeyStrategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);

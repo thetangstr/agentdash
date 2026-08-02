@@ -30,6 +30,7 @@ import { PaperclipApiClient } from "./client.js";
 import { readConfigFromEnv, type PaperclipMcpConfig } from "./config.js";
 import { createJourneyToolDefinitions } from "./journey.js";
 import { bridgeTools } from "./bridge.js";
+import { harnessTools } from "./harness.js";
 import { PLAYBOOK } from "./playbook.js";
 import { toolInputSchema } from "./schema.js";
 import { createToolDefinitions, type ToolDefinition } from "./tools.js";
@@ -43,6 +44,7 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
     ...createToolDefinitions(client),
     ...createJourneyToolDefinitions(client),
     ...bridgeTools(client),
+    ...harnessTools(client),
   ];
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 

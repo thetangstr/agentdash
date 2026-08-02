@@ -6,6 +6,8 @@ export default defineConfig({
       "packages/shared",
       "packages/db",
       "packages/adapter-utils",
+      // AgentDash: mcp-server carries 96 tests that no runner was executing.
+      "packages/mcp-server",
       "packages/adapters/acpx-local",
       "packages/adapters/claude-local",
       "packages/adapters/codex-local",

@@ -674,6 +674,21 @@ export {
 } from "./validators/agent-governance.js";
 
 export {
+  AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_DIRECTIVES_MAX_LENGTH,
+  type AgentDirective,
+  type AgentDirectiveHistory,
+  type AgentDirectiveRuntimeContext,
+} from "./types/agent-directives.js";
+
+export {
+  pushAgentDirectivesSchema,
+  pushHarnessAgentPolicySchema,
+  type PushAgentDirectives,
+  type PushHarnessAgentPolicy,
+} from "./validators/agent-directives.js";
+
+export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
 } from "./execution-workspace-guards.js";
