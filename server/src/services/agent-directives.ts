@@ -6,6 +6,7 @@ import type { AgentDirective, AgentDirectiveRuntimeContext } from "@paperclipai/
 import { conflict, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logActivity } from "./activity-log.js";
+import { workflowEventsService } from "./workflow-events.js";
 
 type AgentDirectiveRow = typeof agentDirectives.$inferSelect;
 
@@ -181,6 +182,28 @@ export function agentDirectivesService(db: Db) {
         });
 
         return row;
+      });
+
+      // AgentDash-MK measurement: a directives push is a CORRECTION — a human
+      // telling their agent it got the shape of the work wrong. It is the only
+      // correction-shaped transition that exists before facts do, and how often
+      // an agent has to be re-instructed is a labour-curve number in its own
+      // right.
+      //
+      // Emitted outside the transaction on purpose. The push is the thing that
+      // must be durable; the measurement of it must never be able to roll it
+      // back.
+      await workflowEventsService(db).emit({
+        companyId,
+        pipelineId: "agent_directives",
+        // One standing run per agent: corrections to how this agent works
+        // accumulate against the same key rather than against the person who
+        // wrote them.
+        runId: `directives:${agentId}`,
+        stepKey: "operating_directives",
+        eventType: "correction_recorded",
+        actorKind: "human",
+        payload: { version: inserted.version, correctionChars: inserted.directives.length },
       });
 
       return toApi(inserted);

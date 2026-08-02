@@ -120,3 +120,5 @@ export { connections, connectorWorkspaceDefaults, agentConnectorOverrides } from
 // AgentDash: Test Drive — no-signup anonymous trial
 export { trialSessions } from "./trial_sessions.js";
 export { trialArtifacts } from "./trial_artifacts.js";
+// AgentDash-MK: measurement — events attach to the pipeline, never to a person.
+export { workflowEvents } from "./workflow_events.js";

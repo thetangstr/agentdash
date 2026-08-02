@@ -113,6 +113,12 @@ export {
   AGENT_DIRECTIVES_CONTEXT_KEY,
   AGENT_DIRECTIVES_MAX_LENGTH,
 } from "./agent-directives.js";
+export type { WorkflowActorKind, WorkflowEventType, WorkflowRunMetrics } from "./workflow-events.js";
+export {
+  WORKFLOW_ACTOR_KINDS,
+  WORKFLOW_EVENT_TYPES,
+  WORKFLOW_STEP_CLOSING_EVENT_TYPES,
+} from "./workflow-events.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {

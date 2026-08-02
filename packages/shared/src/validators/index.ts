@@ -156,6 +156,12 @@ export {
 } from "./agent-directives.js";
 
 export {
+  emitWorkflowEventSchema,
+  workflowEventPayloadSchema,
+  type EmitWorkflowEvent,
+} from "./workflow-events.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,

@@ -689,6 +689,21 @@ export {
 } from "./validators/agent-directives.js";
 
 export {
+  WORKFLOW_ACTOR_KINDS,
+  WORKFLOW_EVENT_TYPES,
+  WORKFLOW_STEP_CLOSING_EVENT_TYPES,
+  type WorkflowActorKind,
+  type WorkflowEventType,
+  type WorkflowRunMetrics,
+} from "./types/workflow-events.js";
+
+export {
+  emitWorkflowEventSchema,
+  workflowEventPayloadSchema,
+  type EmitWorkflowEvent,
+} from "./validators/workflow-events.js";
+
+export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
 } from "./execution-workspace-guards.js";

@@ -1,17 +1,43 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, bridgeTasks } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
   const budgets = budgetService(db);
   const instanceSettings = instanceSettingsService(db);
+  const workflow = workflowEventsService(db);
+
+  /**
+   * AgentDash-MK measurement: which run this approval is a step of.
+   *
+   * An approval that gates a bridge task is not its own run — it is the middle
+   * step of one, between the agent opening the escalation and the endpoint
+   * executing it. Correlating here is what makes "% of steps completed with no
+   * human touch" a real fraction today rather than a constant, because the
+   * bridge act flow is the only genuinely multi-step, mixed-actor run that
+   * exists before the deliverable pipeline lands.
+   *
+   * Neither key names a person: `bridge:act` and `approval:hire_agent` are
+   * kinds of work, and the run ids are work items.
+   */
+  async function resolveWorkflowRun(approval: { id: string; type: string }) {
+    const linked = await db
+      .select({ id: bridgeTasks.id, taskClass: bridgeTasks.taskClass })
+      .from(bridgeTasks)
+      .where(eq(bridgeTasks.approvalId, approval.id))
+      .then((rows) => rows[0] ?? null);
+    return linked
+      ? { pipelineId: `bridge:${linked.taskClass}`, runId: linked.id, taskClass: linked.taskClass }
+      : { pipelineId: `approval:${approval.type}`, runId: approval.id, taskClass: undefined };
+  }
   const canResolveStatuses = new Set(["pending", "revision_requested"]);
   const resolvableStatuses = Array.from(canResolveStatuses);
   type ApprovalRecord = typeof approvals.$inferSelect;
@@ -139,6 +165,28 @@ export function approvalService(db: Db) {
       .then((rows) => rows[0] ?? null);
 
     if (updated) {
+      // Measurement, and only on the branch where the write actually applied —
+      // the idempotent-replay returns above are the same decision arriving
+      // twice, and counting them twice would inflate the very number the
+      // instrument exists to watch fall.
+      const run = await resolveWorkflowRun(updated);
+      await workflow.emit({
+        companyId: updated.companyId,
+        pipelineId: run.pipelineId,
+        runId: run.runId,
+        stepKey: "approval",
+        eventType: "approval_decided",
+        // A named human decided. What is recorded is that a human did.
+        actorKind: "human",
+        durationMs: elapsedMsBetween(updated.createdAt, now),
+        payload: {
+          approvalType: updated.type,
+          decision: targetStatus,
+          channel: meta.channel ?? null,
+          actorRole: meta.actorRole ?? null,
+          override: Boolean(meta.overrideReason),
+        },
+      });
       return { approval: updated, applied: true };
     }
 
@@ -179,12 +227,27 @@ export function approvalService(db: Db) {
         .where(eq(approvals.id, id))
         .then((rows) => rows[0] ?? null),
 
-    create: (companyId: string, data: Omit<typeof approvals.$inferInsert, "companyId">) =>
-      db
+    create: async (companyId: string, data: Omit<typeof approvals.$inferInsert, "companyId">) => {
+      const created = await db
         .insert(approvals)
         .values({ ...data, companyId })
         .returning()
-        .then((rows) => rows[0]),
+        .then((rows) => rows[0]);
+      if (created) {
+        await workflow.emit({
+          companyId,
+          pipelineId: `approval:${created.type}`,
+          runId: created.id,
+          stepKey: "approval",
+          eventType: "approval_requested",
+          // Whether the work stopped on an agent's own initiative or a person's
+          // is a fact about the workflow. Which agent, or which person, is not.
+          actorKind: created.requestedByAgentId ? "agent" : "human",
+          payload: { approvalType: created.type },
+        });
+      }
+      return created;
+    },
 
     approve: async (
       id: string,

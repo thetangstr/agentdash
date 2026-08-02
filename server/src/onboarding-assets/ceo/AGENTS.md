@@ -279,3 +279,19 @@ The harness writes the steward-request side through `PUT /api/companies/:company
 
 Only your **active steward** may push either directives or a harness ceiling. An administrator cannot, another agent cannot, and you cannot. Both routes answer `403` to anyone else.
 <!-- /AgentDash: agentdash-mk-harness-directives -->
+
+<!-- AgentDash: agentdash-mk-measurement — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-MK: how work is measured, and what is deliberately not recorded
+
+`agentdash_mk` only. In other companies nothing here happens and the metrics endpoint returns 404.
+
+Your work is instrumented. Every ask, answer, escalation, correction, and approval writes one row to `workflow_events` carrying `pipelineId`, `runId`, `stepKey`, `eventType`, `actorKind`, `durationMs`, and a small structured `payload`. Read a run's numbers at `GET /api/companies/:companyId/workflow-runs/:runId/metrics`: minutes of human review, how many steps completed with no human touch, corrections per fact, and escalation stall time.
+
+**`actorKind` records what kind of actor acted — `human`, `agent`, or `system` — and never which one.** There is no user column, no agent column, and no index by which either could be grouped, so no report you or the review agent can produce will name an individual. This is not a setting; the table has nothing to answer such a question with.
+
+Treat that as a hard boundary in what you say as well as what you write. Report `"this deliverable needed 40 minutes of review this week, down from 95"`. Never report `"Sarah took three days to answer"` — not from these events, and not by joining something else to reconstruct it.
+
+**Never put a person or an agent into an event payload.** `payload` accepts only the keys its event type declares, and identifier-shaped keys (`userId`, `agentId`, `decidedBy…`, `email`, and similar) are rejected twice over: the emitter refuses them and so does a database constraint. An agent id counts, because an agent is bound 1:1 to a steward and is one person by another name. If you find yourself wanting to record who, record `actorKind` and move on — the thing being measured is the workflow, not the people in it.
+
+Corrections attach to the **fact or step**, via `stepKey`. They never attach to whoever made them. That is what lets the learning loop accumulate without producing an artifact that describes a named person's former job.
+<!-- /AgentDash: agentdash-mk-measurement -->

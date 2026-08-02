@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
+import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
 
 /**
  * AgentDash-MK: the local agent bridge.
@@ -86,6 +87,18 @@ export function frameUntrustedBridgeResult(value: string): string {
 }
 
 export function bridgeService(db: Db) {
+  /**
+   * AgentDash-MK measurement. A bridge task IS an escalation: the agent could
+   * not do the thing itself and handed it to a human's machine, which is
+   * exactly the transition the labour curve is made of.
+   *
+   * The run is the task; the steps are `escalation`, `approval` (act-class
+   * only), and `execution`. The pipeline is the CLASS of work — `bridge:read`,
+   * `bridge:act` — never the endpoint, never the agent, and never the person
+   * whose laptop it is.
+   */
+  const workflow = workflowEventsService(db);
+
   async function isProfileCompany(companyId: string) {
     const company = await db
       .select({ productProfile: companies.productProfile })
@@ -368,6 +381,31 @@ export function bridgeService(db: Db) {
       details: { taskClass: input.taskClass, endpointId: input.endpointId, approvalId },
     });
 
+    await workflow.emit({
+      companyId,
+      pipelineId: `bridge:${input.taskClass}`,
+      runId: task.id,
+      stepKey: "escalation",
+      eventType: "escalation_opened",
+      actorKind: input.requestedByAgentId ? "agent" : "system",
+      payload: { taskClass: input.taskClass, approvalGated: approvalId !== null },
+    });
+
+    // The gating approval is a step of THIS run, so its request event is filed
+    // here where both ids are in hand. The approvals service files the same
+    // event for approvals that stand alone.
+    if (approvalId) {
+      await workflow.emit({
+        companyId,
+        pipelineId: `bridge:${input.taskClass}`,
+        runId: task.id,
+        stepKey: "approval",
+        eventType: "approval_requested",
+        actorKind: input.requestedByAgentId ? "agent" : "system",
+        payload: { approvalType: "request_board_approval", taskClass: input.taskClass },
+      });
+    }
+
     return task;
   }
 
@@ -467,6 +505,20 @@ export function bridgeService(db: Db) {
       // frames it.
       details: { taskClass: task.taskClass, resultLength: result.length },
     });
+
+    await workflow.emit({
+      companyId: task.companyId,
+      pipelineId: `bridge:${task.taskClass}`,
+      runId: task.id,
+      stepKey: "execution",
+      eventType: "step_completed",
+      // The work happened on a person's machine, but it was their local harness
+      // agent that did it. `agent` is the honest kind here; recording `human`
+      // would quietly turn every bridge task into a measurement of its owner.
+      actorKind: "agent",
+      durationMs: elapsedMsBetween(task.createdAt, now),
+      payload: { taskClass: task.taskClass, resultChars: result.length },
+    });
     return updated;
   }
 
@@ -502,6 +554,21 @@ export function bridgeService(db: Db) {
       entityType: "bridge_task",
       entityId: task.id,
       details: { reason: updated.declineReason },
+    });
+
+    await workflow.emit({
+      companyId: task.companyId,
+      pipelineId: `bridge:${task.taskClass}`,
+      runId: task.id,
+      stepKey: "execution",
+      eventType: "step_failed",
+      actorKind: "agent",
+      durationMs: elapsedMsBetween(task.createdAt, now),
+      payload: {
+        taskClass: task.taskClass,
+        // Length only: the reason is text from a machine we cannot see.
+        reasonChars: (updated.declineReason ?? "").length,
+      },
     });
     return updated;
   }
@@ -584,6 +651,26 @@ export function bridgeService(db: Db) {
         { taskId: task.id, taskClass: task.taskClass, requeued: canRequeue },
         "bridge task lease lapsed",
       );
+
+      // A re-queued read is still stalled, not finished, so only the terminal
+      // lapse closes the step. A stall that ends in nothing is precisely the
+      // cost this instrument exists to make visible.
+      if (!canRequeue) {
+        await workflow.emit({
+          companyId: task.companyId,
+          pipelineId: `bridge:${task.taskClass}`,
+          runId: task.id,
+          stepKey: "execution",
+          eventType: "escalation_expired",
+          actorKind: "system",
+          durationMs: elapsedMsBetween(task.createdAt, now),
+          payload: {
+            taskClass: task.taskClass,
+            outcome: task.taskClass === "act" ? "outcome_unknown" : "expired",
+            requeued: false,
+          },
+        });
+      }
     }
     return lapsed.length;
   }
