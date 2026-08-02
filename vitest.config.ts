@@ -13,6 +13,9 @@ export default defineConfig({
       "packages/adapters/codex-local",
       "packages/adapters/cursor-local",
       "packages/adapters/gemini-local",
+      // AgentDash: openclaw-gateway's suite was listed in no project, so the
+      // weakest harness-directive path in the system had a test file nobody ran.
+      "packages/adapters/openclaw-gateway",
       "packages/adapters/opencode-local",
       "packages/adapters/pi-local",
       "server",
