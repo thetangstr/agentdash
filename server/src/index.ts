@@ -1111,6 +1111,27 @@ export async function startServer(): Promise<StartedServer> {
     }, leaseSweepIntervalMs).unref?.();
   }
 
+  // AgentDash-MK: open the cycles that are due.
+  //
+  // A separate, slower tick than the lease sweep because opening a run does
+  // real work — it fetches every `system` fact through a connector and files an
+  // ask for every `human` one. The sweep is idempotent (one run per period by
+  // unique index), so the interval is a latency choice rather than a
+  // correctness one: a deliverable becomes collectable within five minutes of
+  // its period starting, and re-ticking inside the same period does nothing.
+  const deliverableSweepIntervalMs = 5 * 60 * 1000;
+  {
+    const { deliverableRunService } = await import("./services/deliverable-runs.js");
+    const deliverableRuns = deliverableRunService(db as any);
+    setInterval(() => {
+      void deliverableRuns
+        .sweepDueDeliverableRuns()
+        .catch((err: unknown) =>
+          logger.error({ err }, "[deliverables] due-run sweep failed"),
+        );
+    }, deliverableSweepIntervalMs).unref?.();
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);

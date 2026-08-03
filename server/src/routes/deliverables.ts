@@ -11,6 +11,7 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { requireProductProfile } from "../services/companies.js";
+import { deliverableRunService } from "../services/deliverable-runs.js";
 import { deliverableService } from "../services/deliverables.js";
 import { assertCompanyAccess } from "./authz.js";
 
@@ -36,6 +37,7 @@ import { assertCompanyAccess } from "./authz.js";
 export function deliverableRoutes(db: Db) {
   const router = Router();
   const svc = deliverableService(db);
+  const runs = deliverableRunService(db);
 
   async function requireProfileCompany(companyId: string) {
     const company = await db
@@ -118,6 +120,71 @@ export function deliverableRoutes(db: Db) {
       res.status(201).json(await svc.addCheck(companyId, req.params.key as string, req.body));
     },
   );
+
+  // -------------------------------------------------------------------------
+  // Runs
+  // -------------------------------------------------------------------------
+
+  /**
+   * The agent that drives this cycle, or a refusal.
+   *
+   * Collection and assembly belong to the deliverable's own assembler. Any
+   * other agent is refused, because an agent that could assemble somebody
+   * else's deliverable could put figures it chose into a document two named
+   * humans are about to sign. Implementers are admitted too — a cycle that
+   * stalls has to be pushable by hand.
+   */
+  async function requireRunDriver(req: Request, companyId: string, runId: string) {
+    const run = await runs.getRun(companyId, runId);
+    if (req.actor.type === "agent") {
+      const deliverable = await runs.deliverableForRun(run);
+      if (req.actor.companyId !== companyId || req.actor.agentId !== deliverable.assemblerAgentId) {
+        throw forbidden("Only this deliverable's assembling agent can drive its run");
+      }
+      return run;
+    }
+    requireImplementer(req);
+    return run;
+  }
+
+  /**
+   * Open a cycle by hand. The scheduler is the ordinary caller; this exists so
+   * an implementer can force one while watching a real cycle.
+   */
+  router.post("/companies/:companyId/deliverables/:key/runs", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    requireImplementer(req);
+    const { run, opened } = await runs.openRun(companyId, req.params.key as string);
+    res.status(opened ? 201 : 200).json({ ...(await runs.detail(companyId, run.id)), opened });
+  });
+
+  /**
+   * The run and the provenance of every figure in it.
+   *
+   * Readable by the whole company, like the definition. The record of how a
+   * number was made is not a privilege.
+   */
+  router.get("/companies/:companyId/deliverable-runs/:runId", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    assertCompanyAccess(req, companyId);
+    res.json(await runs.detail(companyId, req.params.runId as string));
+  });
+
+  router.post("/companies/:companyId/deliverable-runs/:runId/collect", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    const run = await requireRunDriver(req, companyId, req.params.runId as string);
+    res.json(await runs.collect(companyId, run.id));
+  });
+
+  router.post("/companies/:companyId/deliverable-runs/:runId/assemble", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    const run = await requireRunDriver(req, companyId, req.params.runId as string);
+    res.json(await runs.assemble(companyId, run.id));
+  });
 
   return router;
 }
