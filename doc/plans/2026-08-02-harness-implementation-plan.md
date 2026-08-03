@@ -199,15 +199,46 @@ no decision surface.
 
 ## PHASE 3
 
-### H. Review agent — recommendations
-Only after ≥3 cycles of B's data exists.
+### H. Review agent — recommendations — **shipped**
+Planned for "only after ≥3 cycles of B's data exists". **No real cycle has ever run**,
+so the machinery is built and exercised against synthetic histories written by B's real
+emitters, and nothing it emits has been validated. See the boundary statement below.
 
 **Acceptance criteria**
-- H1. Recommendations are advisory and require human approval.
+- H1. Recommendations are advisory and require human approval. ✅ raised through
+  `approvalService` as a `workflow_recommendation` decided by the named pipeline
+  owner; approving sets `accepted` and nothing else — no status means `applied`
+  and no branch writes to a deliverable, fact, correction, or run. There is no
+  create/accept/apply route.
 - H2. **Recommendations name pipelines and steps, never individuals** — inherits
-  B's structural constraint.
-- H3. Reporting surface defaults to the pipeline owner, not up the org chart.
-- H4. Every recommendation cites the events supporting it.
+  B's structural constraint. ✅ four mechanisms: no free-text column at all (the
+  sentence is rendered from a step key and integer counts), a closed observation
+  allowlist admitting only numbers, a database blocklist on identifier-shaped
+  keys, and a check constraint refusing any **seat-shaped subject**. The last is
+  the interesting one — approval-seat latency is derivable and deliberately
+  refused, because a deliverable names exactly one user per seat.
+- H3. Reporting surface defaults to the pipeline owner, not up the org chart. ✅
+  the deliverable's FIRST approver; the second (senior) seat sees nothing by
+  default, and a pipeline with no resolvable owner raises nothing rather than
+  escalating upward to find a reader.
+- H4. Every recommendation cites the events supporting it. ✅ event ids **and** a
+  reproducible query, with a check constraint refusing a recommendation that
+  cites none.
+- H5. Derived from real accumulated events through B's own query surface. ✅
+  `metricsForPipeline` / `listMeasuredPipelines` on `workflowEventsService`; H
+  opens no query of its own against `workflow_events`, so there is one place the
+  person dimension could ever be added rather than two.
+
+**Refused, on purpose:** approval-seat latency (identifies by construction), a
+review-burden trend (no defensible threshold at three points; the metric is already
+served per run by B), and "this step always needs a human" (tautological on a fact list
+that declares its human facts). A plausible-looking recommendation with no evidential
+basis is worse than an absent one.
+
+**Never run:** no recommendation has ever been produced from real data. Every figure
+that would feed one came from events written in tests, no timer has fired outside a
+test, and no pipeline owner has read the surface. The quality of what this emits is
+entirely unvalidated.
 
 ---
 

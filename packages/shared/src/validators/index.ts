@@ -162,6 +162,13 @@ export {
 } from "./workflow-events.js";
 
 export {
+  raiseWorkflowRecommendationSchema,
+  workflowRecommendationEvidenceSchema,
+  workflowRecommendationObservationSchema,
+  type RaiseWorkflowRecommendation,
+} from "./workflow-recommendations.js";
+
+export {
   answerAgentFactSchema,
   askAgentFactSchema,
   declineAgentFactSchema,

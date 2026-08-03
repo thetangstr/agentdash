@@ -27,6 +27,7 @@ import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
 import { agentGovernanceRoutes } from "./routes/agent-governance.js";
 import { agentDirectivesRoutes } from "./routes/agent-directives.js";
 import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
+import { workflowRecommendationRoutes } from "./routes/workflow-recommendations.js";
 import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
 import { deliverableRoutes } from "./routes/deliverables.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
@@ -323,6 +324,10 @@ export async function createApp(
   api.use(agentGovernanceRoutes(db));
   api.use(agentDirectivesRoutes(db));
   api.use(workflowMetricsRoutes(db));
+  // AgentDash-MK: the review agent's recommendation half. Read-only — there is
+  // no create verb, and decisions go through the approvals routes like every
+  // other decision. 404s outside `agentdash_mk`.
+  api.use(workflowRecommendationRoutes(db));
   // AgentDash-MK: agent↔agent fact requests. 404s outside `agentdash_mk`.
   api.use(agentFactRequestRoutes(db));
   // AgentDash-MK: the weekly deliverable pipeline. Definition is

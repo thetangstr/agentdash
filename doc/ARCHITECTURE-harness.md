@@ -229,6 +229,47 @@ adoption at the exact moment the system starts working.
 
 Reporting defaults to the pipeline owner, not up the org chart.
 
+### 6.1 The recommendation half
+
+Shipped (H). An org-level reader of accumulated events that raises a suggestion when a
+pattern has held for at least three cycles, cites the rows it rests on, and routes it to
+one human through the approvals service. **It never acts:** there is no status meaning
+`applied` and no branch anywhere that writes to a deliverable, a fact, or a run.
+Acceptance records that a person agreed; the change it suggests is an implementer's to
+make while watching a real cycle.
+
+Two kinds survive: a figure corrected in three or more cycles (the derivation is wrong,
+not the number), and an ask whose lease ran out in three or more cycles (the fact is
+never supplied in time). Three categories were considered and **refused**, and the
+refusals carry as much of the design as the inclusions:
+
+| Refused | Why |
+|---|---|
+| **Approval-seat latency** | Derivable, and forbidden. A deliverable names exactly one user per seat on its own row, and a check constraint guarantees the seats are two different people — so *"seat one is your bottleneck"* has no reading that is not *"this named colleague is slow"*. Excluded twice: skipped by the derivation, refused by the table. |
+| **Review-burden trend** | Three points and a threshold nobody can justify. The metric is already served per run by B, where a human reads it in context. |
+| **"This step always needs a human"** | Tautological — a fact declared `human` in the fact list needs a human every cycle by definition. |
+
+The reporting default is the deliverable's **first** approver, deliberately not the
+second: the second seat is the more senior one, and the version where a CEO receives
+efficiency recommendations about the work below them is the version that kills adoption.
+A pipeline whose owner cannot be resolved raises nothing at all, because routing it
+upward to find a reader is worse than silence.
+
+**Never run.** No real cycle has executed anywhere in this system. Every recommendation
+it can currently produce would be derived from events written in tests. The machinery is
+proven; the *quality* of what it emits — whether these two patterns are the ones worth
+surfacing, whether three cycles is the right floor — is entirely unvalidated and cannot
+be validated until real cycles accumulate.
+
+**The residual limit, stated rather than claimed away.** `pipeline_id` and `step_key` are
+correlation keys. A deliverable fact names an owning agent, and an agent has a steward, so
+somebody holding authority over `workflow_recommendations`, `deliverable_facts`, and
+`agent_stewardships` can still join their way to a person. That is weaker than the seat
+case — a stewardship is reassignable, and an ask may be answered by the agent, the
+harness, or the person, so the wait is not attributable to one of them — but it is not
+nothing. What the table guarantees is that it contains no such name and that nothing
+reading it alone can produce a per-person number.
+
 ---
 
 ## 7. What this deliberately does not do
@@ -272,6 +313,7 @@ Each of these is a considered exclusion, not a gap.
 | Inbound filter | `server/src/services/inbound-filter.ts` | shipped (E) |
 | Deliverable pipeline | `server/src/services/deliverable-{runs,checks,review,record}.ts`, `server/src/services/deliverables.ts` | shipped (G) |
 | Derivation record over MCP | `packages/mcp-server/src/resources.ts` | shipped (G9) |
+| Review agent — recommendations | `workflow_recommendations`, `server/src/services/workflow-recommendations.ts` | shipped (H), never run against real data |
 
 ---
 

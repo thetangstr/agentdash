@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/shared";
 import { agentFactRequestService } from "../services/agent-fact-requests.js";
 import { deliverableReviewService } from "../services/deliverable-review.js";
+import { workflowRecommendationService } from "../services/workflow-recommendations.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { bridgeService } from "../services/bridge.js";
@@ -57,6 +58,10 @@ export function approvalRoutes(
   // filter escalates INTO this service; it does not decide anything itself.
   const facts = agentFactRequestService(db);
   const deliverableReview = deliverableReviewService(db);
+  // AgentDash-MK Slice H: the review agent's recommendations are decided here,
+  // through the same service as everything else. Settling one records that a
+  // human agreed or did not; nothing acts on the result.
+  const recommendations = workflowRecommendationService(db);
   const connectorSend = connectorSendExecutionService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
@@ -452,6 +457,17 @@ export function approvalRoutes(
           "deliverable approval advance failed; the run may be stranded mid-approval",
         );
       }
+      // AgentDash-MK: a recommendation the pipeline owner agreed with. This
+      // records the agreement and stops — there is no branch anywhere that
+      // acts on one, which is the whole of what "advisory" means here.
+      try {
+        await recommendations.settleRecommendationApproval(approval.id);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "recommendation settlement failed; it may stay open after being decided",
+        );
+      }
     }
 
     if (applied && approval.type === "connector_send") {
@@ -529,6 +545,16 @@ export function approvalRoutes(
           "deliverable rejection handling failed; the run may be stranded awaiting approval",
         );
       }
+      // A declined recommendation. It comes back only if the condition gets
+      // worse, never merely because the tick came round again.
+      try {
+        await recommendations.settleRecommendationApproval(approval.id);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "recommendation settlement failed; it may stay open after being declined",
+        );
+      }
     }
 
     res.json(redactApprovalPayload(approval));
@@ -596,6 +622,7 @@ export function approvalRoutes(
           // An override is still a decision, so a deliverable seat must follow
           // it. Left out, an overridden sign-off would strand the run forever.
           await deliverableReview.advanceDeliverableApproval(approval.id);
+          await recommendations.settleRecommendationApproval(approval.id);
         } else {
           await bridge.declineRejectedTask(approval.id, req.body.overrideReason ?? null);
           await facts.discardHeldFactAnswer(approval.id, req.body.overrideReason ?? null);
@@ -603,6 +630,7 @@ export function approvalRoutes(
             approval.id,
             req.body.overrideReason ?? null,
           );
+          await recommendations.settleRecommendationApproval(approval.id);
         }
       } catch (err) {
         logger.error(

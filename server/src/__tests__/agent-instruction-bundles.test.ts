@@ -108,6 +108,37 @@ describe("AgentDash-MK prompt surface synchronization", () => {
     }
   });
 
+  /**
+   * Slice H. The recommendation half is agent-facing in exactly one direction:
+   * an agent must know that a recommendation is advisory, that it cannot read
+   * one, and that it must not act on one on somebody's behalf. An agent whose
+   * prompt omits this will treat an accepted suggestion as a work order, which
+   * is the only way "it never acts" gets falsified in practice.
+   */
+  it("tells every agent that recommendations are advisory and name nobody", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(surface.content, `${surface.name} omits the recommendations block`).toContain(
+        "<!-- AgentDash: agentdash-mk-recommendations",
+      );
+      expect(surface.content, `${surface.name} omits the block terminator`).toContain(
+        "<!-- /AgentDash: agentdash-mk-recommendations -->",
+      );
+      expect(surface.content, `${surface.name} omits that it never acts`).toMatch(
+        /It observes and suggests\. It never acts/,
+      );
+      expect(surface.content, `${surface.name} omits the seat exclusion`).toMatch(
+        /seat exclusion/i,
+      );
+      expect(surface.content, `${surface.name} omits who a recommendation is addressed to`).toMatch(
+        /not up the org chart/i,
+      );
+      // The boundary statement has to reach the agents too, not just the docs.
+      expect(surface.content, `${surface.name} omits that nothing has been validated`).toMatch(
+        /No real cycle has run/,
+      );
+    }
+  });
+
   it("tells every agent how the local machine bridge works, and what it cannot bound", () => {
     // INVERTED 2026-07-30. This test used to assert the bridge was NOT
     // mentioned, because it was deferred. The owner brought it into scope, so

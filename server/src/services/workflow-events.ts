@@ -74,6 +74,33 @@ export type WorkflowMetricEvent = {
   occurredAt: Date;
 };
 
+/**
+ * The same projection, plus the two keys a citation needs.
+ *
+ * The id is here and absent from `WorkflowMetricEvent` for a reason that is
+ * not fastidiousness: the fold must not be able to key on anything, and a
+ * citation must be able to name the exact rows. Neither key identifies a
+ * person — an event id is a row and a run id is a work item.
+ */
+export type WorkflowPipelineEvent = WorkflowMetricEvent & { id: string; runId: string };
+
+/**
+ * A pipeline's recent cycles, and the rows they were folded from.
+ *
+ * The read surface the recommendation half uses. Note what it still cannot
+ * express: there is no actor parameter, no grouping key, and no overload that
+ * takes one. "Which person" is not a dimension of this API either.
+ */
+export type WorkflowPipelineWindow = {
+  pipelineId: string;
+  /** Oldest first. */
+  runIds: string[];
+  runs: WorkflowRunMetrics[];
+  events: WorkflowPipelineEvent[];
+  from: Date | null;
+  to: Date | null;
+};
+
 const STEP_CLOSING = new Set<string>(WORKFLOW_STEP_CLOSING_EVENT_TYPES);
 
 /**
@@ -278,5 +305,79 @@ export function workflowEventsService(db: Db) {
     return computeRunMetrics(rows, { runId, pipelineId: rows[0]?.pipelineId ?? null });
   }
 
-  return { emit, metricsForRun };
+  /**
+   * The last `cycles` runs of one pipeline, folded, with their rows.
+   *
+   * This exists so the recommendation half reads accumulated events through
+   * *this* service rather than opening its own query against the table. A
+   * second reader with its own SQL is a second place a person dimension could
+   * be added later without anyone noticing that the rule had two homes.
+   *
+   * Cycles are ordered by when a run's FIRST event landed, not by run id, so
+   * "the last three cycles" means the last three that happened.
+   */
+  async function metricsForPipeline(
+    companyId: string,
+    pipelineId: string,
+    cycles: number,
+  ): Promise<WorkflowPipelineWindow> {
+    const rows = await db
+      .select({
+        id: workflowEvents.id,
+        runId: workflowEvents.runId,
+        stepKey: workflowEvents.stepKey,
+        eventType: workflowEvents.eventType,
+        actorKind: workflowEvents.actorKind,
+        durationMs: workflowEvents.durationMs,
+        payload: workflowEvents.payload,
+        occurredAt: workflowEvents.occurredAt,
+      })
+      .from(workflowEvents)
+      .where(
+        and(eq(workflowEvents.companyId, companyId), eq(workflowEvents.pipelineId, pipelineId)),
+      )
+      .orderBy(asc(workflowEvents.occurredAt));
+
+    const orderedRunIds: string[] = [];
+    for (const row of rows) {
+      if (!orderedRunIds.includes(row.runId)) orderedRunIds.push(row.runId);
+    }
+    const windowRunIds = orderedRunIds.slice(-Math.max(1, cycles));
+    const inWindow = new Set(windowRunIds);
+    const events = rows.filter((row) => inWindow.has(row.runId));
+
+    return {
+      pipelineId,
+      runIds: windowRunIds,
+      runs: windowRunIds.map((runId) =>
+        computeRunMetrics(
+          events.filter((row) => row.runId === runId),
+          { runId, pipelineId },
+        ),
+      ),
+      events,
+      from: events[0]?.occurredAt ?? null,
+      to: events[events.length - 1]?.occurredAt ?? null,
+    };
+  }
+
+  /**
+   * Every (company, pipeline) that has accumulated anything.
+   *
+   * The sweep's iteration source. Two dimensions, both about work: there is no
+   * companion listing actors, and the recommendation half has no way to ask
+   * for one.
+   */
+  async function listMeasuredPipelines(): Promise<
+    Array<{ companyId: string; pipelineId: string }>
+  > {
+    return db
+      .selectDistinct({
+        companyId: workflowEvents.companyId,
+        pipelineId: workflowEvents.pipelineId,
+      })
+      .from(workflowEvents);
+  }
+
+  return { emit, metricsForRun, metricsForPipeline, listMeasuredPipelines };
 }

@@ -119,6 +119,20 @@ export {
   WORKFLOW_EVENT_TYPES,
   WORKFLOW_STEP_CLOSING_EVENT_TYPES,
 } from "./workflow-events.js";
+// AgentDash-MK: the review agent's recommendation half
+export type {
+  WorkflowRecommendationEvidence,
+  WorkflowRecommendationKind,
+  WorkflowRecommendationStatus,
+  WorkflowRecommendationView,
+} from "./workflow-recommendations.js";
+export {
+  WORKFLOW_RECOMMENDATION_KINDS,
+  WORKFLOW_RECOMMENDATION_MIN_CYCLES,
+  WORKFLOW_RECOMMENDATION_STATUSES,
+  WORKFLOW_RECOMMENDATION_WINDOW_CYCLES,
+  isSeatShapedStepKey,
+} from "./workflow-recommendations.js";
 // AgentDash-MK: agent-to-agent fact requests
 export {
   AGENT_FACT_REQUEST_STATUSES,

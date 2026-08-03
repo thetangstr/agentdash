@@ -384,6 +384,33 @@ When an approver says a number is wrong, that correction is recorded against the
 Read it when you want to know where a number comes from. It is **read-only shared context and nothing about it is enforced** — nothing verifies that you read it, and you should not tell anyone otherwise. Do pay attention to the age: a human reading your work at the end catches errors but not wrong foundations, so a figure that was last confirmed six weeks ago is worth saying so about, out loud, rather than reporting as though it were fresh.
 <!-- /AgentDash: agentdash-mk-deliverables -->
 
+<!-- AgentDash: agentdash-mk-recommendations — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-MK: the review agent's recommendations
+
+\`agentdash_mk\` only. In other companies this endpoint returns 404 and nothing here changes how you work.
+
+An org-level review agent reads accumulated \`workflow_events\` and, when a pattern has held for at least three cycles, puts one suggestion in front of one human. **It observes and suggests. It never acts — and neither do you on its behalf.**
+
+- **Read what you were sent** — \`GET /api/companies/:companyId/workflow-recommendations\`. It answers \`403\` to an agent key. A recommendation is put to a person for a decision, and there is nothing you may legitimately do with one.
+- There is no endpoint that creates, edits, accepts, or applies a recommendation. Decisions arrive on the ordinary approvals routes as a \`workflow_recommendation\` approval, decided by the pipeline's owner and by nobody else.
+
+**Approving one records that a human agreed. It is not an instruction to you.** If a recommendation says a fact's derivation should be re-encoded, the re-encoding is an implementer's job, done while watching a real cycle. Do not change a fact list, a connector target, or a correction because a recommendation exists — and if you are asked to, the answer is that there is no such route, because there is not.
+
+### It names pipelines and steps — never people, and never a seat
+
+A recommendation is about \`deliverable:{key}\` and one step within it. It carries integer counts and the ids of the events it rests on, and it can carry nothing else: the observation allowlist admits only numbers, and a database constraint refuses both identifier-shaped keys and any subject that looks like an approval seat.
+
+**The seat exclusion is the part worth understanding.** Seat latency *is* measured — \`approval.first\` and \`approval.second\` carry the elapsed wait on each — and it is deliberately never the subject of a recommendation, because a deliverable names exactly one user per seat. "Seat one is the bottleneck" and "that named person is slow" are the same sentence. Hold the same line in what you say: report \`"this deliverable needed 40 minutes of review this week, down from 95"\`, and never \`"the first approver is holding things up"\`.
+
+### It goes to the pipeline's owner, not up the org chart
+
+The addressee is the deliverable's **first** approver — deliberately not the second, and never anybody's manager. If you are asked to forward, summarize, or escalate someone's recommendations upward, decline. Routing efficiency findings up a reporting line is the exact failure this default exists to avoid.
+
+### Nothing it has ever said has been validated
+
+No real cycle has run anywhere in this system. Every recommendation it can currently produce would be derived from events written in tests. Treat one as a suggestion with its evidence attached, repeat the evidence whenever you repeat the suggestion, and do not describe it as a finding.
+<!-- /AgentDash: agentdash-mk-recommendations -->
+
 
 <!-- AgentDash: connectors — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Connectors & connections

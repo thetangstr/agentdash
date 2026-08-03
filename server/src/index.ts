@@ -1157,6 +1157,28 @@ export async function startServer(): Promise<StartedServer> {
     }, deliverableSweepIntervalMs).unref?.();
   }
 
+  // AgentDash-MK Slice H: the review agent's recommendation half.
+  //
+  // Hourly, not two-minutely. It reads a window of accumulated cycles per
+  // pipeline and raises nothing below three of them, so nothing it produces is
+  // urgent — a recommendation is a suggestion about a pattern that has been
+  // true for weeks, and putting it in front of somebody twenty minutes sooner
+  // buys nothing. It is idempotent, so the interval is a cost choice.
+  //
+  // It observes and suggests. There is no branch in it that acts.
+  const recommendationSweepIntervalMs = 60 * 60 * 1000;
+  {
+    const { workflowRecommendationService } = await import(
+      "./services/workflow-recommendations.js"
+    );
+    const recommendations = workflowRecommendationService(db as any);
+    setInterval(() => {
+      void recommendations
+        .sweepRecommendations()
+        .catch((err: unknown) => logger.error({ err }, "[recommendations] sweep tick failed"));
+    }, recommendationSweepIntervalMs).unref?.();
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);

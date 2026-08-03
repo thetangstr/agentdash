@@ -349,6 +349,13 @@ export const APPROVAL_TYPES = [
   // decider is the user named in the payload, never the requesting agent's
   // steward — who signs an artifact off is a property of the artifact.
   "deliverable_review",
+  // AgentDash-MK: the review agent asking a pipeline's owner to decide on a
+  // suggestion it derived from three or more cycles of accumulated events.
+  // Advisory: approving one records that a human agreed, and nothing acts on
+  // it. It routes through the approvals service rather than inventing a
+  // parallel decision path, and the decider is the pipeline owner named in the
+  // payload — never up the org chart.
+  "workflow_recommendation",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 

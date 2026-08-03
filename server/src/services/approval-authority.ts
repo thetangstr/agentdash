@@ -139,14 +139,27 @@ export function approvalAuthorityService(db: Db) {
      * payload when the seat opens; only that user may decide, and the second
      * approver may not decide the first seat.
      */
-    if (approval.type === "deliverable_review") {
+    /**
+     * `workflow_recommendation` joins this branch rather than getting its own.
+     *
+     * It has the same shape: the decider is named on the approval when it is
+     * opened, and it is a property of the artifact — the pipeline owner —
+     * rather than of anybody's reporting line. Giving it a second branch would
+     * be a second place the "who decides" rule lives, and the reason it is the
+     * pipeline owner and not the senior seat is precisely the reason it must
+     * not drift.
+     */
+    if (approval.type === "deliverable_review" || approval.type === "workflow_recommendation") {
       const named = (approval.payload as Record<string, unknown> | null)?.approverUserId;
       if (typeof named === "string" && actor.userId && named === actor.userId) {
         return "approver";
       }
       throw forbidden(
-        "Only the approver named on this stage of the deliverable can decide it; " +
-          "an owner or administrator must use the emergency override action",
+        approval.type === "deliverable_review"
+          ? "Only the approver named on this stage of the deliverable can decide it; " +
+              "an owner or administrator must use the emergency override action"
+          : "Only the owner of this pipeline can decide a recommendation about it; " +
+              "an owner or administrator must use the emergency override action",
       );
     }
 

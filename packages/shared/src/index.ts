@@ -703,6 +703,26 @@ export {
   type EmitWorkflowEvent,
 } from "./validators/workflow-events.js";
 
+// AgentDash-MK: the review agent's recommendation half
+export {
+  WORKFLOW_RECOMMENDATION_KINDS,
+  WORKFLOW_RECOMMENDATION_MIN_CYCLES,
+  WORKFLOW_RECOMMENDATION_STATUSES,
+  WORKFLOW_RECOMMENDATION_WINDOW_CYCLES,
+  isSeatShapedStepKey,
+  type WorkflowRecommendationEvidence,
+  type WorkflowRecommendationKind,
+  type WorkflowRecommendationStatus,
+  type WorkflowRecommendationView,
+} from "./types/workflow-recommendations.js";
+
+export {
+  raiseWorkflowRecommendationSchema,
+  workflowRecommendationEvidenceSchema,
+  workflowRecommendationObservationSchema,
+  type RaiseWorkflowRecommendation,
+} from "./validators/workflow-recommendations.js";
+
 // AgentDash-MK: agent-to-agent fact requests
 export {
   AGENT_FACT_REQUEST_STATUSES,
