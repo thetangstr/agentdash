@@ -17,7 +17,7 @@ plan, and the Mac-mini runbook are in `main`. The plans of record are:
 
 - `doc/plans/2026-08-02-harness-implementation-plan.md` — the shipped slices, gates, dependency graph.
 - `doc/plans/2026-08-02-graph-learning-system.md` — GL foundations (B/C/G/H) shipped; GL-1..GL-5 are forward work. Its defining rule: the graph measures pipelines/steps/seats, **never a named person**.
-- `doc/plans/2026-08-02-mac-mini-test-runbook.md` — standing the branch up on a Mac mini (non-frozen install, license mint, `claude_local` BYOT) and running the first real cycle.
+- `doc/plans/2026-08-03-mac-mini-test-runbook.md` — standing `main` up on a Mac mini (frozen install, license mint, `claude_local` BYOT, the MK invite-code gate) and running the first real cycle. Supersedes the 2026-08-02 runbook, whose install steps the merge reversed.
 - `docs/superpowers/specs/2026-07-28-human-agent-workforce-p0-spec.md` — the stewardship/ceilings/approval-authority model the harness implements.
 
 The handoff's deferred-merge caveat ("merge to `main` is blocked by a lockfile
@@ -26,6 +26,17 @@ timeout in `.github/workflows/pr.yml` is now `35` minutes, matching the comment
 that had long asked for it.
 
 ## Still open
+
+The fuller, per-criterion list lives in
+[`2026-07-29-agentdash-mk-acceptance-audit.md`](2026-07-29-agentdash-mk-acceptance-audit.md)
+§"Open work" — treat that as authoritative and this as the summary. Two of its items have
+since closed: `sweepLapsedLeases` gained a real caller and the deliverable pipeline is on a
+timer (both in `server/src/index.ts`), so "no timer has fired outside a test" is no longer
+true of the wiring — only of a real cycle.
+
+The items most likely to be felt by a design partner on day one are the two missing steward
+surfaces: no `HumanChannelBindings` component (so channel pairing is not self-serve) and no
+steward-request editor (so ceiling-violation messages are unreachable).
 
 1. **Two signup gaps** — design-partner reach and the subscribe-without-paying
    path. Context is in commit `653dd76d` ("Let a design partner reach AgentDash-MK
