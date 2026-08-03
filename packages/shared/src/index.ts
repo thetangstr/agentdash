@@ -734,6 +734,41 @@ export {
   type DeclineAgentFact,
 } from "./validators/agent-facts.js";
 
+// AgentDash-MK: the weekly deliverable pipeline
+export {
+  DELIVERABLE_CADENCES,
+  DELIVERABLE_CHECK_KINDS,
+  DELIVERABLE_CHECK_SEVERITIES,
+  DELIVERABLE_FACT_SOURCE_TYPES,
+  DELIVERABLE_RUN_STATUSES,
+  DELIVERABLE_STATUSES,
+  FACT_CORRECTION_KINDS,
+  FACT_VALUE_STATUSES,
+  type DeliverableCadence,
+  type DeliverableCheckKind,
+  type DeliverableCheckOutcome,
+  type DeliverableCheckSeverity,
+  type DeliverableFactSourceType,
+  type DeliverableReliabilityScore,
+  type DeliverableReviewSurface,
+  type DeliverableRunStatus,
+  type DeliverableStatus,
+  type FactCorrectionKind,
+  type FactProvenance,
+  type FactValueStatus,
+} from "./types/deliverables.js";
+
+export {
+  createDeliverableCheckSchema,
+  createDeliverableFactSchema,
+  createDeliverableSchema,
+  recordFactCorrectionSchema,
+  type CreateDeliverable,
+  type CreateDeliverableCheck,
+  type CreateDeliverableFact,
+  type RecordFactCorrection,
+} from "./validators/deliverables.js";
+
 export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,

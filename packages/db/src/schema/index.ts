@@ -124,3 +124,13 @@ export { trialArtifacts } from "./trial_artifacts.js";
 export { workflowEvents } from "./workflow_events.js";
 // AgentDash-MK: agent-to-agent fact requests — provenance attaches to the fact.
 export { agentFactRequests } from "./agent_fact_requests.js";
+// AgentDash-MK: the weekly deliverable pipeline — definition, runs, values,
+// corrections, and the acceptance tests the assembler cannot author.
+export {
+  deliverableChecks,
+  deliverableFacts,
+  deliverableRuns,
+  deliverables,
+  factCorrections,
+  factValues,
+} from "./deliverables.js";

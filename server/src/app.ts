@@ -28,6 +28,7 @@ import { agentGovernanceRoutes } from "./routes/agent-governance.js";
 import { agentDirectivesRoutes } from "./routes/agent-directives.js";
 import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
 import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
+import { deliverableRoutes } from "./routes/deliverables.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
 import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
@@ -324,6 +325,9 @@ export async function createApp(
   api.use(workflowMetricsRoutes(db));
   // AgentDash-MK: agent↔agent fact requests. 404s outside `agentdash_mk`.
   api.use(agentFactRequestRoutes(db));
+  // AgentDash-MK: the weekly deliverable pipeline. Definition is
+  // implementer-only; runs, review, and approval follow the same profile gate.
+  api.use(deliverableRoutes(db));
   api.use(agentdashMkInboxRoutes(db));
   api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
