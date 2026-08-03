@@ -68,6 +68,20 @@ export const connections = pgTable(
     activeHubspotOwnerUq: uniqueIndex("connections_hubspot_active_owner_uq")
       .on(table.companyId, table.ownerType, table.ownerId)
       .where(sql`${table.provider} = 'hubspot' and ${table.revokedAt} is null`),
+    /**
+     * AgentDash-MK: one active SharePoint identity per person per company.
+     *
+     * Sharper than the HubSpot case it mirrors. A connection here IS a person's
+     * Entra identity, and `resolveActingAs` picks the newest of several — so a
+     * second row means an agent may silently start acting as a different
+     * assertion for the same human, with a different (possibly stale) grant
+     * behind it. Enforced in the database because check-then-insert loses a
+     * race, and re-establishing an identity is exactly when two concurrent
+     * writes are most likely.
+     */
+    activeSharepointOwnerUq: uniqueIndex("connections_sharepoint_active_owner_uq")
+      .on(table.companyId, table.ownerType, table.ownerId)
+      .where(sql`${table.provider} = 'sharepoint' and ${table.revokedAt} is null`),
   }),
 );
 

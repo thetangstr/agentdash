@@ -33,6 +33,8 @@ import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
 import { whatsappConnectorRoutes } from "./routes/whatsapp-connector.js";
 import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
+// AgentDash-MK: SharePoint read through the acting person's Entra identity.
+import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
 import { bridgeRoutes } from "./routes/bridge.js";
 import { teamsConnectorRoutes } from "./routes/teams-connector.js";
 import { projectRoutes } from "./routes/projects.js";
@@ -392,6 +394,7 @@ export async function createApp(
   api.use(telegramConnectorRoutes(db));
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
+  api.use(sharepointConnectorRoutes(db));
   api.use(bridgeRoutes(db));
   api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)

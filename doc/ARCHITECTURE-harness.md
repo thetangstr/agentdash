@@ -243,10 +243,10 @@ Each of these is a considered exclusion, not a gap.
 | Runtime injection | `server/src/services/heartbeat.ts` → `executeRun` | shipped |
 | Harness tools | `packages/mcp-server/src/harness.ts` | shipped |
 | Local task execution | `server/src/services/bridge.ts`, `cli/src/bridge/` | shipped |
-| Measurement | `workflow_events` | planned (B) |
-| Agent↔agent facts | — | planned (C) |
-| Teams delivery | `server/src/services/approval-card-delivery.ts` | planned (D) |
-| OBO / SharePoint | — | planned (F) |
+| Measurement | `workflow_events`, `server/src/services/workflow-events.ts` | shipped (B) |
+| Agent↔agent facts | `server/src/services/agent-fact-requests.ts` | shipped (C) |
+| Teams delivery | `server/src/services/approval-card-delivery.ts` | shipped (D) |
+| OBO / SharePoint | `server/src/services/entra-obo.ts`, `server/src/services/sharepoint-connector.ts` | shipped (F) |
 | Deliverable pipeline | — | planned (G) |
 
 ---
