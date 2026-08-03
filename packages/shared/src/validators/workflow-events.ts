@@ -85,6 +85,23 @@ const workflowEventPayloadSchemas = {
       correctionChars: z.number().int().nonnegative().optional(),
     })
     .strict(),
+  /**
+   * A filter verdict. Every key here is about the CONTENT and the EDGE, never
+   * about who wrote it or what it said: `surface` names the edge it was
+   * crossing, `ruleIds` name decidable checks, and the text itself is reduced
+   * to a character count. Copying the content in would put untrusted text into
+   * the one table nothing frames.
+   */
+  content_filtered: z
+    .object({
+      surface: z.string().min(1),
+      verdict: z.enum(["pass", "escalate"]),
+      categories: z.array(z.string().min(1)).optional(),
+      ruleIds: z.array(z.string().min(1)).optional(),
+      contentChars: z.number().int().nonnegative().optional(),
+      taskClass: z.string().min(1).optional(),
+    })
+    .strict(),
 } satisfies Record<WorkflowEventType, z.ZodTypeAny>;
 
 export function workflowEventPayloadSchema(eventType: WorkflowEventType): z.ZodTypeAny {

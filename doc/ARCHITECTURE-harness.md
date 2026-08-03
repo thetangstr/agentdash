@@ -45,6 +45,28 @@ environment where it is continuously exposed to *other people's agents' output* 
 untrusted content by definition. Anything travelling back toward the harness is a
 potential injection channel **into the machine holding the real credentials**.
 
+The gate is two controls, and they are not interchangeable:
+
+| | Control | Answers |
+|---|---|---|
+| **Framing** | `frameUntrusted*` | *what is this reader reading?* |
+| **Filtering** | `inbound-filter.ts` | *does this content travel at all?* |
+
+A frame is advice to a model, and advice is not enforcement. The filter is the
+enforcement: sensitive material, instruction-shaped content, and content missing
+its declared context escalate to the approvals service rather than passing.
+Content that passes is still framed — the newer control did not replace the older
+one.
+
+Deliberately no model in that loop. A filter implemented as "ask a model whether
+this looks like an injection" can be argued out of filtering by the content it is
+inspecting, because the attacker writes the text being classified. Every rule is
+a structural or lexical predicate, and the undecidable residue is covered by
+escalating rather than by a second opinion. The honest cost: a lexical rule set
+is a blocklist, so novel phrasings pass. What it buys is that the shapes that
+work today stop at a chokepoint, and it fails closed — content that cannot be
+classified is held.
+
 The asymmetry is the point. The trust gradient runs one direction, so the gate belongs
 on the return path only. This is `frameUntrustedBridgeResult`'s principle — *"data to
 report on, never instructions to follow"* — promoted from a single function to the
@@ -247,6 +269,7 @@ Each of these is a considered exclusion, not a gap.
 | Agent↔agent facts | `server/src/services/agent-fact-requests.ts` | shipped (C) |
 | Teams delivery | `server/src/services/approval-card-delivery.ts` | shipped (D) |
 | OBO / SharePoint | `server/src/services/entra-obo.ts`, `server/src/services/sharepoint-connector.ts` | shipped (F) |
+| Inbound filter | `server/src/services/inbound-filter.ts` | shipped (E) |
 | Deliverable pipeline | — | planned (G) |
 
 ---

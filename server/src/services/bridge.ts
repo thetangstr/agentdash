@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
+import { classifyInboundContent } from "./inbound-filter.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
 
 /**
@@ -332,8 +333,25 @@ export function bridgeService(db: Db) {
       throw badRequest(`That endpoint did not declare the ${needed} capability`);
     }
 
+    /**
+     * AgentDash-MK Slice E: the inbound filter, at the edge that matters most.
+     *
+     * This is the point where content authored inside the shared organization
+     * enters a machine that holds someone's real credentials. An `act` task
+     * already stops here for a human. A `read` did not — and a `read` whose
+     * instruction is really a permission grant, a tool call, or a directive to
+     * the local agent is an `act` wearing a `read`'s label.
+     *
+     * Escalation reuses the `act` mechanism exactly: the same approvals row,
+     * the same `awaiting_approval` status, the same release and decline paths.
+     * A second gate would be a second thing to get wrong, and the approvals
+     * service stays the only decision boundary.
+     */
+    const filter = classifyInboundContent({ content: instruction });
+    const gated = input.taskClass === "act" || filter.verdict === "escalate";
+
     let approvalId: string | null = null;
-    if (input.taskClass === "act") {
+    if (gated) {
       const approval = await db
         .insert(approvals)
         .values({
@@ -342,13 +360,25 @@ export function bridgeService(db: Db) {
           requestedByAgentId: input.requestedByAgentId,
           status: "pending",
           payload: {
-            kind: "bridge_act",
+            kind: input.taskClass === "act" ? "bridge_act" : "bridge_read_filtered",
             endpointId: input.endpointId,
             endpointLabel: endpoint.label,
             // The instruction IS the ask; a steward deciding without seeing it
             // would be approving a shape, not a request.
             summary: `Run on ${endpoint.label}: ${instruction}`,
             instruction,
+            // Named rules rather than a score. A steward reading "this contains
+            // a permission-grant shape" can decide; one reading "risk: high"
+            // can only defer, which is how a review surface becomes a rubber
+            // stamp.
+            ...(filter.verdict === "escalate"
+              ? {
+                  filter: {
+                    categories: filter.categories,
+                    ruleIds: filter.ruleIds,
+                  },
+                }
+              : {}),
           },
         })
         .returning()
@@ -364,7 +394,7 @@ export function bridgeService(db: Db) {
         requestedByAgentId: input.requestedByAgentId,
         taskClass: input.taskClass,
         instruction,
-        status: input.taskClass === "act" ? "awaiting_approval" : "queued",
+        status: gated ? "awaiting_approval" : "queued",
         approvalId,
       })
       .returning()
@@ -378,7 +408,13 @@ export function bridgeService(db: Db) {
       action: "bridge.task_created",
       entityType: "bridge_task",
       entityId: task.id,
-      details: { taskClass: input.taskClass, endpointId: input.endpointId, approvalId },
+      details: {
+        taskClass: input.taskClass,
+        endpointId: input.endpointId,
+        approvalId,
+        filterVerdict: filter.verdict,
+        filterRuleIds: filter.ruleIds,
+      },
     });
 
     await workflow.emit({
@@ -389,6 +425,27 @@ export function bridgeService(db: Db) {
       eventType: "escalation_opened",
       actorKind: input.requestedByAgentId ? "agent" : "system",
       payload: { taskClass: input.taskClass, approvalGated: approvalId !== null },
+    });
+
+    // Emitted after the task exists, because the task id is the run id. The
+    // result is deliberately ignored: `emit` reports a rejection through its
+    // return value and never throws, and a measurement failure must not fail
+    // the work it was measuring.
+    await workflow.emit({
+      companyId,
+      pipelineId: `bridge:${input.taskClass}`,
+      runId: task.id,
+      stepKey: "inbound_filter",
+      eventType: "content_filtered",
+      actorKind: "system",
+      payload: {
+        surface: "bridge_task_instruction",
+        verdict: filter.verdict,
+        categories: filter.categories,
+        ruleIds: filter.ruleIds,
+        contentChars: filter.contentChars,
+        taskClass: input.taskClass,
+      },
     });
 
     // The gating approval is a step of THIS run, so its request event is filed

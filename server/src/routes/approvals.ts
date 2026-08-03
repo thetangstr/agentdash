@@ -8,6 +8,7 @@ import {
   resolveApprovalSchema,
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
+import { agentFactRequestService } from "../services/agent-fact-requests.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { bridgeService } from "../services/bridge.js";
@@ -50,6 +51,10 @@ export function approvalRoutes(
   const svc = approvalService(db);
   const cardDelivery = approvalCardDeliveryService(db);
   const bridge = bridgeService(db);
+  // AgentDash-MK Slice E: content the inbound filter held is released or
+  // discarded here, on the same branches that settle a gated bridge task. The
+  // filter escalates INTO this service; it does not decide anything itself.
+  const facts = agentFactRequestService(db);
   const connectorSend = connectorSendExecutionService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
@@ -423,6 +428,16 @@ export function approvalRoutes(
           "bridge task release failed after approval; task may be stranded",
         );
       }
+      // Released still framed: the decision was that this content may travel,
+      // not that it stopped being untrusted.
+      try {
+        await facts.releaseHeldFactAnswer(approval.id);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "held fact answer release failed after approval; the fact may be stranded",
+        );
+      }
     }
 
     if (applied && approval.type === "connector_send") {
@@ -476,6 +491,17 @@ export function approvalRoutes(
         logger.error(
           { err, approvalId: approval.id },
           "bridge task decline failed after rejection; task may be stranded",
+        );
+      }
+      // A refused release destroys the content and declines the fact, flagged.
+      // Left held it would be a figure nobody can ever obtain and nobody can
+      // see is outstanding.
+      try {
+        await facts.discardHeldFactAnswer(approval.id, req.body.decisionNote ?? null);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "held fact answer discard failed after rejection; the fact may be stranded",
         );
       }
     }
@@ -541,8 +567,10 @@ export function approvalRoutes(
       try {
         if (req.body.decision === "approved") {
           await bridge.releaseApprovedTask(approval.id);
+          await facts.releaseHeldFactAnswer(approval.id);
         } else {
           await bridge.declineRejectedTask(approval.id, req.body.overrideReason ?? null);
+          await facts.discardHeldFactAnswer(approval.id, req.body.overrideReason ?? null);
         }
       } catch (err) {
         logger.error(

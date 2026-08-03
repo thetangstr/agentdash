@@ -340,6 +340,10 @@ export const APPROVAL_TYPES = [
   // by the agent; the steward decides and the server executes with the
   // connection owner's credential.
   "connector_send",
+  // AgentDash-MK: the inbound filter held return-path content. The agent whose
+  // content it is asks for its release; the decision is an ordinary approval,
+  // because a second decision boundary is a second thing to get wrong.
+  "inbound_content_review",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 

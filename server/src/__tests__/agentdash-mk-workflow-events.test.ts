@@ -507,6 +507,9 @@ describeEmbeddedPostgres("agentdash-mk workflow events", () => {
     expect(rows.map((row) => row.eventType).sort()).toEqual([
       "approval_decided",
       "approval_requested",
+      // Slice E: every instruction entering a person's machine is classified,
+      // and the verdict is recorded whether it passed or not. This one passed.
+      "content_filtered",
       "escalation_opened",
       "step_completed",
     ]);

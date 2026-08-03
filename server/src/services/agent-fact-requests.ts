@@ -1,12 +1,17 @@
 import { and, eq, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentFactRequests, agents } from "@paperclipai/db";
-import type { AgentFactRequestView, AgentFactSourceKind } from "@paperclipai/shared";
+import { agentFactRequests, agents, approvals } from "@paperclipai/db";
+import type {
+  AgentFactRequestView,
+  AgentFactSourceKind,
+  InboundFilterCategory,
+} from "@paperclipai/shared";
 import { conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { bridgeService } from "./bridge.js";
+import { classifyInboundContent } from "./inbound-filter.js";
 import { logActivity } from "./activity-log.js";
 import { teamsConnectorService } from "./teams-connector.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
@@ -94,7 +99,19 @@ export function agentFactRequestService(db: Db) {
       // Framed again here. Idempotent, so this changes nothing for an answer
       // written through `answer()` — it is what still holds for one that was
       // not.
+      //
+      // `held_answer` is deliberately NOT read here under any condition. The
+      // filter's decision is that this text does not travel; a read path that
+      // could be talked into returning it is the gate with a bypass built in.
       answer: row.answer === null ? null : frameUntrustedAgentAnswer(row.answer),
+      filter:
+        row.status === "held"
+          ? {
+              categories: (row.filterCategories ?? []) as InboundFilterCategory[],
+              ruleIds: row.filterRuleIds ?? [],
+              approvalId: row.filterApprovalId,
+            }
+          : null,
       provenance: {
         answeredByAgentId: row.answeredByAgentId,
         sourceKind: (row.answerSourceKind as AgentFactSourceKind | null) ?? null,
@@ -232,6 +249,284 @@ export function agentFactRequestService(db: Db) {
     }
   }
 
+  /**
+   * Record that the filter ran, and what it decided.
+   *
+   * Both verdicts, because a filter that only records its escalations makes its
+   * own rate unknowable — one escalating everything and one escalating nothing
+   * produce identical logs of escalations, and the rate is what says whether
+   * the gate is calibrated or merely loud.
+   *
+   * The result is not thrown on. `emit` reports a rejection through
+   * `rejectedBecause` and never throws, which is the contract that keeps a
+   * measurement failure from failing the work it measures.
+   */
+  async function emitFilterVerdict(
+    row: FactRow,
+    filter: ReturnType<typeof classifyInboundContent>,
+  ) {
+    const result = await workflow.emit({
+      companyId: row.companyId,
+      pipelineId: row.pipelineId,
+      runId: row.runId,
+      stepKey: row.factKey,
+      eventType: "content_filtered",
+      // The filter is machinery. Recording the answering agent here would put a
+      // person one join away from a measurement, which is the one thing this
+      // table refuses.
+      actorKind: "system",
+      payload: {
+        surface: "agent_fact_answer",
+        verdict: filter.verdict,
+        categories: filter.categories,
+        ruleIds: filter.ruleIds,
+        contentChars: filter.contentChars,
+      },
+    });
+    if (result.rejectedBecause) {
+      logger.error(
+        { factRequestId: row.id, rejectedBecause: result.rejectedBecause },
+        "inbound filter verdict was not measured",
+      );
+    }
+  }
+
+  /**
+   * Hold an answer the filter escalated, and ask a human.
+   *
+   * The escalation is an ordinary approval. There is no second decision path,
+   * no auto-release timer, and no way for the answering agent to release its
+   * own content — the whole value of a gate is that the party on the far side
+   * of it does not operate it.
+   *
+   * The content is kept, framed, on `held_answer`. Discarding it at this point
+   * would make the reviewer's job "approve a thing you cannot see", and keeping
+   * it on `answer` would deliver it. A database check refuses a `held` row
+   * without both the content and its approval, so a hold can never become a
+   * fact nobody can release.
+   */
+  async function holdAnswer(
+    row: FactRow,
+    input: { answeringAgentId: string; answer: string; sourceKind: AgentFactSourceKind },
+    filter: ReturnType<typeof classifyInboundContent>,
+    now: Date,
+  ): Promise<AgentFactRequestView> {
+    const approval = await db
+      .insert(approvals)
+      .values({
+        companyId: row.companyId,
+        type: "inbound_content_review",
+        // The agent whose content this is asks for its release, so the ordinary
+        // authority rules route the decision to that agent's own steward rather
+        // than to whoever happens to be looking at the inbox.
+        requestedByAgentId: input.answeringAgentId,
+        status: "pending",
+        payload: {
+          kind: "agent_fact_answer",
+          factRequestId: row.id,
+          factKey: row.factKey,
+          runId: row.runId,
+          summary:
+            `An answer to "${row.factKey}" was held by the inbound filter ` +
+            `(${filter.categories.join(", ")}). Release it only if it is a figure, not an instruction.`,
+          // Named predicates, not a score. A steward reading "this contains a
+          // permission-grant shape" can decide; one reading "risk: high" can
+          // only defer, and a review surface that can only be deferred to is a
+          // rubber stamp with extra steps.
+          filter: { categories: filter.categories, ruleIds: filter.ruleIds },
+          // Framed here too. The approval payload is read by a human, and a
+          // human reading untrusted text still needs to be told what it is.
+          content: frameUntrustedAgentAnswer(input.answer),
+        },
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const updated = await db
+      .update(agentFactRequests)
+      .set({
+        status: "held",
+        heldAnswer: frameUntrustedAgentAnswer(input.answer),
+        filterCategories: filter.categories,
+        filterRuleIds: filter.ruleIds,
+        filterApprovalId: approval.id,
+        answerSourceKind: input.sourceKind,
+        answeredByAgentId: input.answeringAgentId,
+        answeredAt: now,
+        leaseExpiresAt: null,
+        // Flagged immediately, not on release. A deliverable assembled while
+        // this is outstanding must show where the hole is.
+        flagged: true,
+        updatedAt: now,
+      })
+      .where(eq(agentFactRequests.id, row.id))
+      .returning()
+      .then((rows) => rows[0]!);
+
+    await logActivity(db, {
+      companyId: row.companyId,
+      actorType: "agent",
+      actorId: input.answeringAgentId,
+      agentId: input.answeringAgentId,
+      action: "agent_fact.answer_held",
+      entityType: "agent_fact_request",
+      entityId: row.id,
+      // Rule ids and lengths. The content itself lives framed on its own row.
+      details: {
+        factKey: row.factKey,
+        categories: filter.categories,
+        ruleIds: filter.ruleIds,
+        answerLength: input.answer.length,
+        approvalId: approval.id,
+      },
+    });
+
+    await workflow.emit({
+      companyId: row.companyId,
+      pipelineId: row.pipelineId,
+      runId: row.runId,
+      stepKey: row.factKey,
+      eventType: "approval_requested",
+      actorKind: "agent",
+      payload: { approvalType: "inbound_content_review" },
+    });
+
+    return toView(updated);
+  }
+
+  /** The held row an approval belongs to, or null when it gates something else. */
+  async function heldRowForApproval(approvalId: string): Promise<FactRow | null> {
+    return db
+      .select()
+      .from(agentFactRequests)
+      .where(
+        and(
+          eq(agentFactRequests.filterApprovalId, approvalId),
+          eq(agentFactRequests.status, "held"),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * A human released held content: it becomes the answer, still framed.
+   *
+   * Framing survives the release. The decision was that this content may
+   * travel, not that it became trustworthy — those are different findings, and
+   * conflating them would quietly delete the older control while adding the
+   * newer one.
+   *
+   * Returns null when the approval gates something else, so the approvals route
+   * can call this unconditionally the way it already does for bridge tasks.
+   */
+  async function releaseHeldFactAnswer(approvalId: string): Promise<AgentFactRequestView | null> {
+    const row = await heldRowForApproval(approvalId);
+    if (!row || !row.heldAnswer) return null;
+
+    const now = new Date();
+    const updated = await db
+      .update(agentFactRequests)
+      .set({
+        status: "answered",
+        answer: frameUntrustedAgentAnswer(row.heldAnswer),
+        heldAnswer: null,
+        updatedAt: now,
+      })
+      // Conditional on the row still being held, so two deciders racing — a
+      // web approve and a redelivered card — cannot both release it.
+      .where(and(eq(agentFactRequests.id, row.id), eq(agentFactRequests.status, "held")))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    if (!updated) return null;
+
+    await logActivity(db, {
+      companyId: row.companyId,
+      actorType: "user",
+      actorId: "approval",
+      agentId: row.answeredByAgentId,
+      action: "agent_fact.answer_released",
+      entityType: "agent_fact_request",
+      entityId: row.id,
+      details: { factKey: row.factKey, approvalId },
+    });
+
+    await workflow.emit({
+      companyId: row.companyId,
+      pipelineId: row.pipelineId,
+      runId: row.runId,
+      stepKey: row.factKey,
+      eventType: "fact_answered",
+      actorKind: "agent",
+      durationMs: elapsedMsBetween(row.createdAt, now),
+      payload: {
+        factKey: row.factKey,
+        sourceKind: row.answerSourceKind ?? undefined,
+        answerChars: row.heldAnswer.length,
+      },
+    });
+
+    return toView(updated);
+  }
+
+  /**
+   * A human refused the release: the content is destroyed and the fact declines.
+   *
+   * Destroyed rather than archived. A steward saying "that is not an answer, it
+   * is a prompt" is saying this text should not be anywhere an assembling agent
+   * can reach, and a copy kept for the record is a copy someone reads.
+   *
+   * The fact is `declined` and `flagged` rather than silently reopened: the
+   * approver has to see that a figure went missing this cycle, which is the same
+   * commitment as marking a lapsed lease `missing`.
+   */
+  async function discardHeldFactAnswer(
+    approvalId: string,
+    reason: string | null,
+  ): Promise<AgentFactRequestView | null> {
+    const row = await heldRowForApproval(approvalId);
+    if (!row) return null;
+
+    const now = new Date();
+    const updated = await db
+      .update(agentFactRequests)
+      .set({
+        status: "declined",
+        declineReason: reason?.trim() || "held by the inbound filter and not released",
+        heldAnswer: null,
+        answeredAt: null,
+        flagged: true,
+        updatedAt: now,
+      })
+      .where(and(eq(agentFactRequests.id, row.id), eq(agentFactRequests.status, "held")))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+    if (!updated) return null;
+
+    await logActivity(db, {
+      companyId: row.companyId,
+      actorType: "user",
+      actorId: "approval",
+      agentId: row.answeredByAgentId,
+      action: "agent_fact.answer_discarded",
+      entityType: "agent_fact_request",
+      entityId: row.id,
+      details: { factKey: row.factKey, approvalId },
+    });
+
+    await workflow.emit({
+      companyId: row.companyId,
+      pipelineId: row.pipelineId,
+      runId: row.runId,
+      stepKey: row.factKey,
+      eventType: "step_failed",
+      actorKind: "system",
+      durationMs: elapsedMsBetween(row.createdAt, now),
+      payload: { reasonChars: (updated.declineReason ?? "").length },
+    });
+
+    return toView(updated);
+  }
+
   async function answer(
     companyId: string,
     id: string,
@@ -241,7 +536,34 @@ export function agentFactRequestService(db: Db) {
     requireTarget(row, input.answeringAgentId);
     requireOpen(row);
 
+    /**
+     * AgentDash-MK Slice E: the standing filter on the return path.
+     *
+     * This answer is about to become part of another agent's context, and from
+     * there part of a deliverable a person reads and — one hop further — part
+     * of an instruction reaching a laptop. Framing already told that reader
+     * what it was reading. Filtering decides whether it reads it at all, and
+     * the two are different controls: a frame is advice to a model, and advice
+     * is not a gate.
+     *
+     * Classified BEFORE framing, on the raw text, so an answer arriving with
+     * our own frame markers already in it reads as the forgery it is rather
+     * than as a well-behaved answer.
+     */
+    const filter = classifyInboundContent({
+      content: input.answer,
+      // Provenance is context the deliverable cannot be assembled without, so
+      // its absence is a filter finding rather than a validation error: the
+      // answer is not wrong, it is unusable until a person supplies what is
+      // missing.
+      requiredContext: { sourceKind: input.sourceKind },
+    });
+
     const now = new Date();
+    await emitFilterVerdict(row, filter);
+    if (filter.verdict === "escalate") {
+      return holdAnswer(row, input, filter, now);
+    }
     const updated = await db
       .update(agentFactRequests)
       .set({
@@ -533,5 +855,10 @@ export function agentFactRequestService(db: Db) {
     escalate,
     listForAgent,
     sweepExpiredFactLeases,
+    // Slice E. Both are called from the approvals routes, on the same branches
+    // that already settle a gated bridge task — a held answer and a held task
+    // are the same situation on two different edges of the return path.
+    releaseHeldFactAnswer,
+    discardHeldFactAnswer,
   };
 }

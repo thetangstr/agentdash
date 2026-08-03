@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -10,6 +11,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
+import { approvals } from "./approvals.js";
 import { bridgeTasks } from "./bridge_tasks.js";
 import { companies } from "./companies.js";
 
@@ -77,7 +79,7 @@ export const agentFactRequests = pgTable(
     targetAgentId: uuid("target_agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    /** asked | answered | declined | escalated | missing */
+    /** asked | answered | declined | escalated | missing | held */
     status: text("status").notNull().default("asked"),
     /**
      * Framed as untrusted before it is stored, and framed again on the way out.
@@ -90,6 +92,29 @@ export const agentFactRequests = pgTable(
      * output and still misses novel phrasings.
      */
     answer: text("answer"),
+    /**
+     * An answer the inbound filter escalated instead of passing.
+     *
+     * Separate from `answer` rather than a flag beside it, because the question
+     * "may the requesting agent read this" must be answerable from the column
+     * it reads. A single column plus a boolean is one forgotten `if` away from
+     * delivering held content, and the read path here has three callers.
+     *
+     * Stored FRAMED, like `answer`. A hold is a decision about travel, not a
+     * licence to park raw untrusted text where a future reader finds it bare.
+     */
+    heldAnswer: text("held_answer"),
+    /** Why the filter held it — decidable rule categories, never a judgement. */
+    filterCategories: jsonb("filter_categories").$type<string[]>(),
+    /** Rule ids, so a reviewer reads which predicate fired rather than a verdict. */
+    filterRuleIds: jsonb("filter_rule_ids").$type<string[]>(),
+    /**
+     * The approval a human decides. `set null` rather than cascade: an approval
+     * swept away must not take the fact's record of having been held with it.
+     */
+    filterApprovalId: uuid("filter_approval_id").references(() => approvals.id, {
+      onDelete: "set null",
+    }),
     /** connector | harness | human | agent | external */
     answerSourceKind: text("answer_source_kind"),
     answeredByAgentId: uuid("answered_by_agent_id").references(() => agents.id, {
@@ -135,7 +160,7 @@ export const agentFactRequests = pgTable(
     leaseIdx: index("agent_fact_requests_lease_idx").on(table.status, table.leaseExpiresAt),
     statusCk: check(
       "agent_fact_requests_status_ck",
-      sql`${table.status} in ('asked', 'answered', 'declined', 'escalated', 'missing')`,
+      sql`${table.status} in ('asked', 'answered', 'declined', 'escalated', 'missing', 'held')`,
     ),
     sourceKindCk: check(
       "agent_fact_requests_source_kind_ck",
@@ -159,6 +184,29 @@ export const agentFactRequests = pgTable(
     answerFramedCk: check(
       "agent_fact_requests_answer_framed_ck",
       sql`${table.answer} is null or ${table.answer} like '<untrusted-agent-answer>%'`,
+    ),
+    /**
+     * Held content is framed too.
+     *
+     * Held content is read by a human deciding whether to release it, which is
+     * a reader, and a reader of untrusted text needs to be told what it is
+     * reading. Content that is withheld is not content that stopped being
+     * hostile.
+     */
+    heldAnswerFramedCk: check(
+      "agent_fact_requests_held_answer_framed_ck",
+      sql`${table.heldAnswer} is null or ${table.heldAnswer} like '<untrusted-agent-answer>%'`,
+    ),
+    /**
+     * A hold always names its approval.
+     *
+     * Without this, `held` with a null approval id is a fact nobody can ever
+     * release — a silent drop wearing a better name, and the exact failure the
+     * lease sweep exists to prevent one table over.
+     */
+    heldHasApprovalCk: check(
+      "agent_fact_requests_held_has_approval_ck",
+      sql`${table.status} <> 'held' or (${table.heldAnswer} is not null and ${table.filterApprovalId} is not null)`,
     ),
   }),
 );

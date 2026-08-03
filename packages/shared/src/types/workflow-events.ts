@@ -31,6 +31,19 @@ export const WORKFLOW_EVENT_TYPES = [
   "step_completed",
   "step_failed",
   "correction_recorded",
+  /**
+   * The inbound filter reached a verdict on return-path content.
+   *
+   * Emitted for BOTH verdicts. A filter that only records its escalations makes
+   * its own rate unknowable, and the rate is the number that says whether the
+   * gate is calibrated or merely loud — a filter escalating everything and one
+   * escalating nothing look identical in a log of escalations.
+   *
+   * Deliberately NOT step-closing: a verdict is a check on a step, not the end
+   * of one. Counting it as a completion would let a run whose every answer was
+   * held report as a run whose every step completed.
+   */
+  "content_filtered",
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

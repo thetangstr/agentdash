@@ -125,11 +125,24 @@ export {
   AGENT_FACT_SOURCE_KINDS,
 } from "./agent-facts.js";
 export type {
+  AgentFactFilterHold,
   AgentFactProvenance,
   AgentFactRequestStatus,
   AgentFactRequestView,
   AgentFactSourceKind,
 } from "./agent-facts.js";
+// AgentDash-MK: the standing filter on the return path
+export {
+  INBOUND_FILTER_CATEGORIES,
+  INBOUND_FILTER_SURFACES,
+  INBOUND_FILTER_VERDICTS,
+} from "./inbound-filter.js";
+export type {
+  InboundFilterCategory,
+  InboundFilterDecision,
+  InboundFilterSurface,
+  InboundFilterVerdict,
+} from "./inbound-filter.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {

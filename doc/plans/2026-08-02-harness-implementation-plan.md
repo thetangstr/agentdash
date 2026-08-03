@@ -159,13 +159,23 @@ connector fetch as the collection mechanism.
 - G7. Nothing ships without both approvals.
 - G8. Scored `pass^k` across runs, not `pass@k`.
 
-### E. Inbound filter policy
+### E. Inbound filter policy — **shipped**
 Extends the approvals gate from per-action to a standing filter on the return path.
 
 **Acceptance criteria**
-- E1. Sensitive updates, elevated risk, and missing context escalate rather than pass.
+- E1. Sensitive updates, elevated risk, and missing context escalate rather than pass. ✅
 - E2. **Adversarial (G4):** content crafted to look like an instruction to the
-  harness is caught by the filter, not passed through framed-but-live.
+  harness is caught by the filter, not passed through framed-but-live. ✅
+- E3. Fail-closed: unclassifiable content escalates. ✅
+- E4. Framing preserved, not replaced. ✅
+- E5. `content_filtered` `workflow_events` for both verdicts. ✅
+
+Two chokepoints: `bridgeService.createTask` (content entering a person's machine —
+a filtered `read` becomes approval-gated exactly like an `act`) and
+`agentFactRequestService.answer` (a held answer, released or discarded by an
+`inbound_content_review` approval). Not gated: the Teams stall notice on the
+unreachable-harness branch of `escalate`, which reaches a human as a notice with
+no decision surface.
 
 ---
 

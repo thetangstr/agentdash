@@ -707,11 +707,23 @@ export {
 export {
   AGENT_FACT_REQUEST_STATUSES,
   AGENT_FACT_SOURCE_KINDS,
+  type AgentFactFilterHold,
   type AgentFactProvenance,
   type AgentFactRequestStatus,
   type AgentFactRequestView,
   type AgentFactSourceKind,
 } from "./types/agent-facts.js";
+
+// AgentDash-MK: the standing filter on the return path
+export {
+  INBOUND_FILTER_CATEGORIES,
+  INBOUND_FILTER_SURFACES,
+  INBOUND_FILTER_VERDICTS,
+  type InboundFilterCategory,
+  type InboundFilterDecision,
+  type InboundFilterSurface,
+  type InboundFilterVerdict,
+} from "./types/inbound-filter.js";
 
 export {
   answerAgentFactSchema,
