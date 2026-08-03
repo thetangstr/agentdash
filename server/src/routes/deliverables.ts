@@ -11,6 +11,7 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { requireProductProfile } from "../services/companies.js";
+import { deliverableCheckService } from "../services/deliverable-checks.js";
 import { deliverableRunService } from "../services/deliverable-runs.js";
 import { deliverableService } from "../services/deliverables.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -38,6 +39,7 @@ export function deliverableRoutes(db: Db) {
   const router = Router();
   const svc = deliverableService(db);
   const runs = deliverableRunService(db);
+  const checks = deliverableCheckService(db);
 
   async function requireProfileCompany(companyId: string) {
     const company = await db
@@ -184,6 +186,37 @@ export function deliverableRoutes(db: Db) {
     await requireProfileCompany(companyId);
     const run = await requireRunDriver(req, companyId, req.params.runId as string);
     res.json(await runs.assemble(companyId, run.id));
+  });
+
+  /**
+   * Fire the check by hand.
+   *
+   * The sweep is the ordinary caller. `requireImplementer` refuses an agent key
+   * outright, which is the point: the assembling agent can neither author the
+   * acceptance criteria nor fire the verdict on its own draft. The party being
+   * checked does not operate the checker.
+   */
+  router.post("/companies/:companyId/deliverable-runs/:runId/check", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    requireImplementer(req);
+    res.json(await checks.runChecks(companyId, req.params.runId as string));
+  });
+
+  /**
+   * `pass^k` across cycles, with `pass@k` beside it.
+   *
+   * Both, deliberately. 75% per run over three cycles is 42%, and reporting the
+   * flattering number alone is how a system that does not work reads like one
+   * that does.
+   */
+  router.get("/companies/:companyId/deliverables/:key/reliability", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    assertCompanyAccess(req, companyId);
+    const requested = Number.parseInt(String(req.query.cycles ?? "3"), 10);
+    const cycles = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 52) : 3;
+    res.json(await checks.scoreDeliverable(companyId, req.params.key as string, cycles));
   });
 
   return router;

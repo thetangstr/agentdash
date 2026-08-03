@@ -65,11 +65,11 @@ export type FactValueStatus = (typeof FACT_VALUE_STATUSES)[number];
  * Kinds of acceptance test. Authored with the fact list by an implementer,
  * never by the thing that assembles.
  *
- * - `missing` — this fact must have a value this cycle.
+ * - `missing` — this fact must have a value this cycle, unflagged.
  * - `moved_more_than` — it moved more than N% against the last shipped run.
- * - `matches_prior` — it did not move at all when it should have.
+ * - `matches_prior` — it did not move when it was not supposed to.
  * - `range` — it sits between a floor and a ceiling.
- * - `custom` — a named predicate seeded from a real failure in the observed cycle.
+ * - `custom` — see `AUTHORABLE_DELIVERABLE_CHECK_KINDS`.
  */
 export const DELIVERABLE_CHECK_KINDS = [
   "moved_more_than",
@@ -79,6 +79,32 @@ export const DELIVERABLE_CHECK_KINDS = [
   "custom",
 ] as const;
 export type DeliverableCheckKind = (typeof DELIVERABLE_CHECK_KINDS)[number];
+
+/**
+ * The kinds an implementer may actually author. `custom` is deliberately not
+ * among them.
+ *
+ * A `custom` check needs an evaluator. An evaluator over arbitrary predicates
+ * needs either an expression language nobody has specified or a model — and a
+ * model asked "does this look right" is a second opinion, not a check, because
+ * the thing it inspects is the thing that would have to be wrong. What is left
+ * is a check that always passes, which is worthless, or one that always fails,
+ * which is noise that trains the approver to scroll past everything including
+ * the real failures. There is no third option, so the kind is not authorable
+ * and the evaluator treats it as an unmet criterion rather than a pass.
+ *
+ * It stays in `DELIVERABLE_CHECK_KINDS` because the database constraint admits
+ * it and dropping that would cost a migration to remove a value nothing can
+ * write.
+ */
+export const AUTHORABLE_DELIVERABLE_CHECK_KINDS = [
+  "moved_more_than",
+  "missing",
+  "matches_prior",
+  "range",
+] as const;
+export type AuthorableDeliverableCheckKind =
+  (typeof AUTHORABLE_DELIVERABLE_CHECK_KINDS)[number];
 
 /**
  * `blocking` stops the run from reaching a human at all. `advisory` is a flag

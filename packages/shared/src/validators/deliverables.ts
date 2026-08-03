@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
+  AUTHORABLE_DELIVERABLE_CHECK_KINDS,
   DELIVERABLE_CADENCES,
-  DELIVERABLE_CHECK_KINDS,
   DELIVERABLE_CHECK_SEVERITIES,
   DELIVERABLE_FACT_SOURCE_TYPES,
   FACT_CORRECTION_KINDS,
@@ -80,10 +80,18 @@ export const createDeliverableFactSchema = z
   );
 export type CreateDeliverableFact = z.infer<typeof createDeliverableFactSchema>;
 
+/**
+ * An acceptance test.
+ *
+ * `custom` is absent from the authorable kinds on purpose — see
+ * `AUTHORABLE_DELIVERABLE_CHECK_KINDS`. A check with no evaluator either always
+ * passes or always fails, and the second trains an approver to scroll past
+ * everything including the real failures.
+ */
 export const createDeliverableCheckSchema = z
   .object({
     key,
-    kind: z.enum(DELIVERABLE_CHECK_KINDS),
+    kind: z.enum(AUTHORABLE_DELIVERABLE_CHECK_KINDS),
     config: z.record(z.unknown()),
     severity: z.enum(DELIVERABLE_CHECK_SEVERITIES).optional(),
   })

@@ -1122,12 +1122,22 @@ export async function startServer(): Promise<StartedServer> {
   const deliverableSweepIntervalMs = 5 * 60 * 1000;
   {
     const { deliverableRunService } = await import("./services/deliverable-runs.js");
+    const { deliverableCheckService } = await import("./services/deliverable-checks.js");
     const deliverableRuns = deliverableRunService(db as any);
+    const deliverableChecks = deliverableCheckService(db as any);
     setInterval(() => {
       void deliverableRuns
         .sweepDueDeliverableRuns()
         .catch((err: unknown) =>
           logger.error({ err }, "[deliverables] due-run sweep failed"),
+        );
+      // The check is fired by the sweep, never by the assembling agent. It is a
+      // separate call on a separate service with no import edge to assembly —
+      // the party being checked does not operate the checker.
+      void deliverableChecks
+        .sweepAssembledRuns()
+        .catch((err: unknown) =>
+          logger.error({ err }, "[deliverables] assembled-run check sweep failed"),
         );
     }, deliverableSweepIntervalMs).unref?.();
   }

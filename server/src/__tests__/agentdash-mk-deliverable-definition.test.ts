@@ -329,8 +329,8 @@ describeEmbeddedPostgres("agentdash-mk deliverable definition", () => {
           .post(`/api/companies/${seeded.company.id}/deliverables/weekly-project-review/checks`)
           .send({
             key: "always-passes",
-            kind: "custom",
-            config: { alwaysPasses: true },
+            kind: "missing",
+            config: { factKey: "labour.hours_booked" },
             severity: "blocking",
           }),
     );

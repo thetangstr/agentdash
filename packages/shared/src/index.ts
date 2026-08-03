@@ -736,6 +736,7 @@ export {
 
 // AgentDash-MK: the weekly deliverable pipeline
 export {
+  AUTHORABLE_DELIVERABLE_CHECK_KINDS,
   DELIVERABLE_CADENCES,
   DELIVERABLE_CHECK_KINDS,
   DELIVERABLE_CHECK_SEVERITIES,
@@ -744,6 +745,7 @@ export {
   DELIVERABLE_STATUSES,
   FACT_CORRECTION_KINDS,
   FACT_VALUE_STATUSES,
+  type AuthorableDeliverableCheckKind,
   type DeliverableCadence,
   type DeliverableCheckKind,
   type DeliverableCheckOutcome,
