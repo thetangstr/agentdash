@@ -122,9 +122,19 @@ export function deliverableReviewService(db: Db) {
   /**
    * Ask one approver, through the approvals service.
    *
-   * `requestedByAgentId` is the assembler, so the audit trail says which agent
-   * produced the thing being signed off. The *decider* is not derived from that
-   * — it is the user named in the payload, and `approval-authority` enforces it.
+   * `requestedByAgentId` is deliberately NOT set, and the assembler is recorded
+   * in the payload instead. Two reasons, and the second is the load-bearing one:
+   *
+   * 1. The thing asking for sign-off is the *deliverable*, not an agent waiting
+   *    on an answer. Nothing about the assembler blocks on this decision — the
+   *    next step is the second seat or the ship, both server-side.
+   * 2. The shared approvals route wakes the requesting agent on every decision.
+   *    That is right when an agent is genuinely blocked; here it would spend a
+   *    whole agent run per approval stage to tell the assembler something it
+   *    does not act on.
+   *
+   * The decider is the user named in the payload either way — never derived
+   * from a requesting agent — and `approval-authority` enforces it.
    */
   async function askApprover(
     run: RunRow,
@@ -135,11 +145,14 @@ export function deliverableReviewService(db: Db) {
   ) {
     const approval = await approvalsSvc.create(run.companyId, {
       type: "deliverable_review",
-      requestedByAgentId: deliverable.assemblerAgentId,
       status: "pending",
       payload: {
         kind: "deliverable_review",
         stage,
+        // Recorded here rather than on `requested_by_agent_id`, so the audit
+        // trail still says which agent produced the draft without the shared
+        // approvals route treating that agent as blocked on the decision.
+        assemblerAgentId: deliverable.assemblerAgentId,
         runId: run.id,
         runKey: run.runKey,
         deliverableKey: deliverable.key,

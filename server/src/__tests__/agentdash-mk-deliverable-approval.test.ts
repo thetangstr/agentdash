@@ -153,6 +153,28 @@ describeEmbeddedPostgres("agentdash-mk deliverable review and approval", () => {
     process.env.SHAREPOINT_GRAPH_BASE_URL = `${msBaseUrl}/graph`;
   });
 
+  /**
+   * Delete a table, retrying on a foreign-key refusal.
+   *
+   * These suites drive the shared approvals route, which has background work
+   * hanging off a decision. The deliverable path no longer triggers any of it —
+   * a sign-off does not wake the assembling agent, because nothing about the
+   * assembler is blocked on the decision — but the retry stays as a cheap guard
+   * against a future decision hook doing so and turning teardown into a race
+   * somebody debugs from a foreign-key error rather than from the cause.
+   */
+  async function purge(table: Parameters<TestDb["delete"]>[0], attempts = 20) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await db.delete(table);
+        return;
+      } catch (error) {
+        if (attempt === attempts - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  }
+
   afterEach(async () => {
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
@@ -165,29 +187,32 @@ describeEmbeddedPostgres("agentdash-mk deliverable review and approval", () => {
     }
     msServer = null;
 
-    await db.delete(workflowEvents);
-    await db.delete(activityLog);
-    await db.delete(factValues);
-    await db.delete(factCorrections);
-    await db.delete(deliverableRuns);
-    await db.delete(deliverableChecks);
-    await db.delete(deliverableFacts);
-    await db.delete(deliverables);
-    await db.delete(agentFactRequests);
-    await db.delete(approvalComments);
-    await db.delete(approvals);
-    await db.delete(connections);
+    await purge(workflowEvents);
+    await purge(factValues);
+    await purge(factCorrections);
+    await purge(deliverableRuns);
+    await purge(deliverableChecks);
+    await purge(deliverableFacts);
+    await purge(deliverables);
+    await purge(agentFactRequests);
+    await purge(approvalComments);
+    await purge(approvals);
+    await purge(connections);
     // The approvals route wakes the requesting agent on a decision, which is a
     // heartbeat run holding an agent reference.
-    await db.delete(heartbeatRunEvents);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(agentRuntimeState);
-    await db.delete(agentStewardships);
-    await db.delete(agents);
-    await db.delete(companyMemberships);
-    await db.delete(companySkills);
-    await db.delete(companies);
+    // After the deliverable tables, and immediately before the heartbeat rows
+    // it references: the approvals route wakes the requesting agent in the
+    // background, so activity rows can still be arriving when teardown starts.
+    await purge(activityLog);
+    await purge(heartbeatRunEvents);
+    await purge(heartbeatRuns);
+    await purge(agentWakeupRequests);
+    await purge(agentRuntimeState);
+    await purge(agentStewardships);
+    await purge(agents);
+    await purge(companyMemberships);
+    await purge(companySkills);
+    await purge(companies);
   });
 
   afterAll(async () => {

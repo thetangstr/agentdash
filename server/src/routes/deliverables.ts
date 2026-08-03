@@ -13,6 +13,7 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { requireProductProfile } from "../services/companies.js";
 import { deliverableCheckService } from "../services/deliverable-checks.js";
+import { deliverableRecordService } from "../services/deliverable-record.js";
 import { deliverableReviewService } from "../services/deliverable-review.js";
 import { deliverableRunService } from "../services/deliverable-runs.js";
 import { deliverableService } from "../services/deliverables.js";
@@ -43,6 +44,7 @@ export function deliverableRoutes(db: Db) {
   const runs = deliverableRunService(db);
   const checks = deliverableCheckService(db);
   const review = deliverableReviewService(db);
+  const record = deliverableRecordService(db);
 
   async function requireProfileCompany(companyId: string) {
     const company = await db
@@ -281,6 +283,37 @@ export function deliverableRoutes(db: Db) {
     const requested = Number.parseInt(String(req.query.cycles ?? "3"), 10);
     const cycles = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 52) : 3;
     res.json(await checks.scoreDeliverable(companyId, req.params.key as string, cycles));
+  });
+
+  // -------------------------------------------------------------------------
+  // The derivation record — read-only shared context, served over MCP
+  // -------------------------------------------------------------------------
+
+  /**
+   * Where one figure comes from.
+   *
+   * The `:factKey` may be `deliverable/fact` when the same key exists on more
+   * than one deliverable; a bare ambiguous key is a 409 naming the candidates
+   * rather than a guess. Picking one would be picking the wrong number some of
+   * the time, and which time is unknowable from here.
+   *
+   * **Nothing here is enforced.** The payload says so, in every response.
+   */
+  router.get("/companies/:companyId/fact-records/{*factKey}", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    assertCompanyAccess(req, companyId);
+    const raw = req.params.factKey;
+    const key = Array.isArray(raw) ? raw.join("/") : String(raw ?? "");
+    res.json(await record.factRecord(companyId, key));
+  });
+
+  /** The last cycle two named humans actually signed off, with provenance. */
+  router.get("/companies/:companyId/deliverables/:key/latest", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    assertCompanyAccess(req, companyId);
+    res.json(await record.latestShipped(companyId, req.params.key as string));
   });
 
   return router;
