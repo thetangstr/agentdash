@@ -289,15 +289,17 @@ export function deliverableReviewService(db: Db) {
         appliedCorrectionId: factValues.appliedCorrectionId,
       })
       .from(deliverableFacts)
-      .leftJoin(factValues, eq(factValues.factId, deliverableFacts.id))
-      .where(
-        and(
-          eq(deliverableFacts.deliverableId, run.deliverableId),
-          // The left join has to be narrowed to THIS run, or a fact with values
-          // in three cycles would appear three times in one draft.
-          eq(factValues.runId, run.id),
-        ),
-      );
+      // The run condition belongs in the JOIN, not the WHERE. In the WHERE it
+      // silently turns the left join into an inner one, and a fact that
+      // collection never reached would vanish from the draft entirely — an
+      // unmarked hole, which is the one shape of error this whole pipeline is
+      // built to make impossible. Here it comes back with null values and is
+      // put in front of the approver below.
+      .leftJoin(
+        factValues,
+        and(eq(factValues.factId, deliverableFacts.id), eq(factValues.runId, run.id)),
+      )
+      .where(eq(deliverableFacts.deliverableId, run.deliverableId));
     rows.sort((a, b) => a.orderIndex - b.orderIndex || a.factKey.localeCompare(b.factKey));
 
     const corrections = await activeCorrections(run.deliverableId);
@@ -305,6 +307,17 @@ export function deliverableReviewService(db: Db) {
 
     const attention: DeliverableReviewSurface["attention"] = [];
     for (const row of rows) {
+      // A fact with no value row at all: collection never reached it. Louder
+      // than a flag, because nothing recorded a reason for it either.
+      if (row.status === null) {
+        attention.push({
+          factKey: row.factKey,
+          kind: "flagged_value",
+          severity: "blocking",
+          detail: "no value was collected for this fact in this cycle",
+        });
+        continue;
+      }
       if (!row.flagged) continue;
       attention.push({
         factKey: row.factKey,
@@ -676,6 +689,42 @@ export function deliverableReviewService(db: Db) {
     return created;
   }
 
+  /**
+   * Put every checked run in front of its first approver.
+   *
+   * The last link in "a run opens on schedule, collects, assembles, checks, and
+   * presents". Without it a checked cycle would sit until an agent thought to
+   * call `present`, which makes reaching a human depend on an agent
+   * remembering — and the whole point of the schedule is that nothing in the
+   * cycle depends on anybody remembering.
+   *
+   * A run whose figures moved since the check is skipped rather than presented:
+   * `present` refuses it, and it is picked up again once it has been checked
+   * against what it now contains.
+   */
+  async function sweepCheckedRuns() {
+    const checkedRuns = await db
+      .select({ id: deliverableRuns.id, companyId: deliverableRuns.companyId })
+      .from(deliverableRuns)
+      .where(eq(deliverableRuns.status, "checked"));
+
+    let presented = 0;
+    for (const row of checkedRuns) {
+      try {
+        await present(row.companyId, row.id);
+        presented += 1;
+      } catch (error) {
+        // One run whose draft moved must not stop every other company's cycle
+        // from reaching its approver.
+        logger.error(
+          { err: error, runId: row.id },
+          "[deliverables] presenting a checked run failed",
+        );
+      }
+    }
+    return { presented, considered: checkedRuns.length };
+  }
+
   /** Whether this user holds one of the two approver seats. */
   async function isApprover(companyId: string, runId: string, userId: string | null | undefined) {
     if (!userId) return false;
@@ -688,6 +737,7 @@ export function deliverableReviewService(db: Db) {
 
   return {
     present,
+    sweepCheckedRuns,
     reviewSurface,
     advanceDeliverableApproval,
     failDeliverableApproval,

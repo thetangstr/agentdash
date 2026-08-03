@@ -444,6 +444,13 @@ describe("startServer run-healer scheduler", () => {
 
   it("does not construct or schedule the run-healer when disabled", async () => {
     process.env.RUN_HEALER_ENABLED = "false";
+    // A distinctive interval, so the filter below identifies the run-healer's
+    // timer rather than any timer that happens to share its cadence. The
+    // previous version filtered on the DEFAULT five minutes, which is a value
+    // other periodic work can legitimately pick — and did: the AgentDash-MK
+    // deliverable sweep landed on it and failed this test for a collision
+    // rather than for a regression.
+    process.env.RUN_HEALER_SCAN_INTERVAL_MS = "24680";
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
 
     await startServer();
@@ -453,9 +460,7 @@ describe("startServer run-healer scheduler", () => {
     // NOTHING was always broader than this test's subject, and it is no longer
     // true: expiring a lapsed lease is unconditional, because a lease nothing
     // sweeps is not a lease.
-    const healerIntervals = setIntervalSpy.mock.calls.filter(
-      (call) => call[1] === 5 * 60 * 1000,
-    );
+    const healerIntervals = setIntervalSpy.mock.calls.filter((call) => call[1] === 24680);
     expect(healerIntervals).toHaveLength(0);
   });
 });

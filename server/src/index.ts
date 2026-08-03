@@ -1111,42 +1111,49 @@ export async function startServer(): Promise<StartedServer> {
     }, leaseSweepIntervalMs).unref?.();
   }
 
-  // AgentDash-MK: open the cycles that are due.
+  // AgentDash-MK: carry every open cycle forward.
   //
-  // A separate, slower tick than the lease sweep because opening a run does
-  // real work — it fetches every `system` fact through a connector and files an
-  // ask for every `human` one. The sweep is idempotent (one run per period by
-  // unique index), so the interval is a latency choice rather than a
-  // correctness one: a deliverable becomes collectable within five minutes of
-  // its period starting, and re-ticking inside the same period does nothing.
-  const deliverableSweepIntervalMs = 5 * 60 * 1000;
+  // A separate, slower tick than the lease sweep because each pass does real
+  // work — it fetches every `system` fact through a connector and files an ask
+  // for every `human` one. Every stage is idempotent (one run per period by
+  // unique index; settled figures are not re-read; a checked run is not
+  // re-checked), so the interval is a latency choice rather than a correctness
+  // one: a person's answer moves the cycle on within two minutes of arriving.
+  //
+  // Two minutes rather than five deliberately. The run-healer's default scan is
+  // five, and two periodic jobs that both do database and network work should
+  // not share a tick.
+  const deliverableSweepIntervalMs = 2 * 60 * 1000;
   {
     const { deliverableRunService } = await import("./services/deliverable-runs.js");
     const { deliverableCheckService } = await import("./services/deliverable-checks.js");
+    const { deliverableReviewService } = await import("./services/deliverable-review.js");
     const deliverableRuns = deliverableRunService(db as any);
     const deliverableChecks = deliverableCheckService(db as any);
-    setInterval(() => {
-      void deliverableRuns
-        .sweepDueDeliverableRuns()
-        .catch((err: unknown) =>
-          logger.error({ err }, "[deliverables] due-run sweep failed"),
-        );
+    const deliverableReview = deliverableReviewService(db as any);
+    // Sequenced rather than fired together: each stage's input is the previous
+    // stage's output, so running them concurrently would mean a cycle needed
+    // four ticks — twenty minutes — to travel from open to an approver's inbox
+    // for no reason. Every stage is individually idempotent, so a tick that
+    // overlaps the previous one is harmless.
+    const tickDeliverables = async () => {
+      await deliverableRuns.sweepDueDeliverableRuns();
       // Push open cycles forward. A run that stalled waiting on one person
       // would otherwise stay `collecting` forever after they answered, because
       // nothing else would ever look at it again.
-      void deliverableRuns
-        .sweepCollectingRuns()
-        .catch((err: unknown) =>
-          logger.error({ err }, "[deliverables] collecting-run sweep failed"),
-        );
+      await deliverableRuns.sweepCollectingRuns();
       // The check is fired by the sweep, never by the assembling agent. It is a
       // separate call on a separate service with no import edge to assembly —
       // the party being checked does not operate the checker.
-      void deliverableChecks
-        .sweepAssembledRuns()
-        .catch((err: unknown) =>
-          logger.error({ err }, "[deliverables] assembled-run check sweep failed"),
-        );
+      await deliverableChecks.sweepAssembledRuns();
+      // And the last link: a checked run reaches its first approver without an
+      // agent having to remember to send it.
+      await deliverableReview.sweepCheckedRuns();
+    };
+    setInterval(() => {
+      void tickDeliverables().catch((err: unknown) =>
+        logger.error({ err }, "[deliverables] sweep tick failed"),
+      );
     }, deliverableSweepIntervalMs).unref?.();
   }
 

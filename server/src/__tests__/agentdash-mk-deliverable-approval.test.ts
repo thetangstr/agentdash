@@ -81,6 +81,7 @@ describe("deliverable approval wiring", () => {
     ["advanceDeliverableApproval", "server/src/routes/approvals.ts"],
     ["failDeliverableApproval", "server/src/routes/approvals.ts"],
     ["deliverableReviewService", "server/src/routes/deliverables.ts"],
+    ["sweepCheckedRuns", "server/src/index.ts"],
   ])("%s has a non-test caller in %s", (fnName, file) => {
     const source = readFileSync(path.join(repoRoot, file), "utf8");
     expect(source.includes(`${fnName}(`), `${fnName} has no non-test caller`).toBe(true);
@@ -484,6 +485,45 @@ describeEmbeddedPostgres("agentdash-mk deliverable review and approval", () => {
     expect(res.body.stage).toBe("first");
   });
 
+  it("puts a fact collection never reached in front of the approver rather than dropping it", async () => {
+    const seeded = await seed();
+    const runs = deliverableRunService(db);
+    const { run } = await runs.openRun(seeded.company.id, DELIVERABLE_KEY, {
+      at: new Date("2026-07-30T09:00:00Z"),
+    });
+    // No value row at all — the shape a half-finished collection leaves. Not a
+    // flagged value with a reason on it, which is the ordinary case; this is the
+    // one where nothing recorded anything.
+    const forecastFact = await db
+      .select()
+      .from(deliverableFacts)
+      .where(eq(deliverableFacts.key, "labour.hours_forecast"))
+      .then((rows) => rows[0]!);
+    await db
+      .delete(factValues)
+      .where(and(eq(factValues.runId, run.id), eq(factValues.factId, forecastFact.id)));
+    await runs.assemble(seeded.company.id, run.id);
+    await deliverableCheckService(db).runChecks(seeded.company.id, run.id);
+    await deliverableReviewService(db).present(seeded.company.id, run.id);
+
+    const res = await call(
+      deliverableApp(seeded.company.id, boardActor(seeded.company.id, seeded.approverOne.principalId)),
+      (baseUrl) =>
+        request(baseUrl).get(
+          `/api/companies/${seeded.company.id}/deliverable-runs/${run.id}/review`,
+        ),
+    );
+    // Present in the draft AND in the attention list. A fact that simply
+    // vanished from the surface is the unmarked hole this pipeline exists to
+    // make impossible.
+    expect(res.body.draft.map((item: any) => item.factKey)).toContain("labour.hours_forecast");
+    const flagged = res.body.attention.find(
+      (item: any) => item.factKey === "labour.hours_forecast",
+    );
+    expect(flagged, JSON.stringify(res.body.attention)).toBeDefined();
+    expect(flagged.detail).toMatch(/no value was collected/i);
+  });
+
   it("puts a failed acceptance check in front of the first approver", async () => {
     const seeded = await seed();
     graphValues = [["Hours"], [9_999]];
@@ -500,6 +540,28 @@ describeEmbeddedPostgres("agentdash-mk deliverable review and approval", () => {
     expect(failed, JSON.stringify(res.body.attention)).toBeDefined();
     expect(failed.detail).toContain("9999");
     expect(res.body.checkPassed).toBe(false);
+  });
+
+  it("carries a cycle from schedule to an approver's inbox with nobody driving it", async () => {
+    // G2 end to end, through the sweeps only. No route call, no agent
+    // remembering to do anything: the schedule opens it, collection fills it,
+    // the check certifies it, and it arrives in front of the first approver.
+    const seeded = await seed();
+    const runs = deliverableRunService(db);
+
+    expect((await runs.sweepDueDeliverableRuns(new Date("2026-07-30T09:00:00Z"))).opened).toBe(1);
+    expect((await runs.sweepCollectingRuns()).assembled).toBe(1);
+    expect((await deliverableCheckService(db).sweepAssembledRuns()).checked).toBe(1);
+    expect((await deliverableReviewService(db).sweepCheckedRuns()).presented).toBe(1);
+
+    const run = await db.select().from(deliverableRuns).then((rows) => rows[0]!);
+    expect(run.status).toBe("awaiting_approval");
+    const pending = await pendingApproval(seeded.company.id);
+    expect(pending, "the cycle never reached a human").not.toBeNull();
+    expect((pending!.payload as any).approverUserId).toBe(seeded.approverOne.principalId);
+
+    // And it does not present twice.
+    expect((await deliverableReviewService(db).sweepCheckedRuns()).presented).toBe(0);
   });
 
   // -- G5 / G7: two approvers, sequential -----------------------------------

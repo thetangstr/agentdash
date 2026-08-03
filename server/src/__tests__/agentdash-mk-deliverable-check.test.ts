@@ -119,6 +119,41 @@ describe("check independence is structural", () => {
     ).toBe(false);
   });
 
+  /**
+   * The transitive edge, closed explicitly.
+   *
+   * Assembly imports the review service (for the corrections it applies on the
+   * way in), and the review service imports this one (to refuse presenting a
+   * run whose figures moved). So there IS a path from assembly to the checker
+   * through a third module, and "no direct import" alone would be a claim with
+   * a hole in it.
+   *
+   * What closes it is that the review service's surface exposes no check
+   * function: `runChecks` and `verifyDraftUnchanged` are not on the object
+   * assembly receives, so the path exists in the module graph and not in the
+   * program. Asserted on the source rather than at runtime because the service
+   * needs a database handle to construct.
+   */
+  it("gives assembly no reachable handle on the checker", () => {
+    const reviewSource = readFileSync(
+      path.join(repoRoot, "server/src/services/deliverable-review.ts"),
+      "utf8",
+    );
+    const returned = reviewSource.slice(reviewSource.lastIndexOf("  return {"));
+    for (const name of ["runChecks", "verifyDraftUnchanged", "sweepAssembledRuns"]) {
+      expect(
+        returned.includes(name),
+        `deliverable-review.ts re-exports ${name}; assembly can reach the checker through it`,
+      ).toBe(false);
+    }
+    for (const name of ["runChecks", "sweepAssembledRuns", "scoreDeliverable"]) {
+      expect(
+        assemblySource.includes(name),
+        `deliverable-runs.ts names ${name}; assembly can fire its own verdict`,
+      ).toBe(false);
+    }
+  });
+
   it("never lets assembly write the check's own artifacts", () => {
     // Reads are fine — assembly's `detail()` legitimately reports whether a run
     // has been checked. Writes are not, so this looks only inside `.set({...})`
