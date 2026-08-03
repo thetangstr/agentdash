@@ -9,6 +9,7 @@ import {
   resubmitApprovalSchema,
 } from "@paperclipai/shared";
 import { agentFactRequestService } from "../services/agent-fact-requests.js";
+import { deliverableReviewService } from "../services/deliverable-review.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { bridgeService } from "../services/bridge.js";
@@ -55,6 +56,7 @@ export function approvalRoutes(
   // discarded here, on the same branches that settle a gated bridge task. The
   // filter escalates INTO this service; it does not decide anything itself.
   const facts = agentFactRequestService(db);
+  const deliverableReview = deliverableReviewService(db);
   const connectorSend = connectorSendExecutionService(db);
   // AgentDash-MK: the single decision boundary. Web, Telegram, and Teams all
   // resolve authority here; provider routes never update approval rows directly.
@@ -438,6 +440,18 @@ export function approvalRoutes(
           "held fact answer release failed after approval; the fact may be stranded",
         );
       }
+      // AgentDash-MK: one seat of a deliverable's two-approver sign-off. The
+      // first approval opens the second seat; the second ships. Error-level
+      // rather than best-effort: a failure here strands a run that two people
+      // believe they approved.
+      try {
+        await deliverableReview.advanceDeliverableApproval(approval.id);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "deliverable approval advance failed; the run may be stranded mid-approval",
+        );
+      }
     }
 
     if (applied && approval.type === "connector_send") {
@@ -504,6 +518,17 @@ export function approvalRoutes(
           "held fact answer discard failed after rejection; the fact may be stranded",
         );
       }
+      // AgentDash-MK: a refused deliverable goes back to collection with its
+      // verdict cleared, not to the second approver and not to the bin. A
+      // weekly artifact that is wrong on Tuesday should still ship on Wednesday.
+      try {
+        await deliverableReview.failDeliverableApproval(approval.id, req.body.decisionNote ?? null);
+      } catch (err) {
+        logger.error(
+          { err, approvalId: approval.id },
+          "deliverable rejection handling failed; the run may be stranded awaiting approval",
+        );
+      }
     }
 
     res.json(redactApprovalPayload(approval));
@@ -568,9 +593,16 @@ export function approvalRoutes(
         if (req.body.decision === "approved") {
           await bridge.releaseApprovedTask(approval.id);
           await facts.releaseHeldFactAnswer(approval.id);
+          // An override is still a decision, so a deliverable seat must follow
+          // it. Left out, an overridden sign-off would strand the run forever.
+          await deliverableReview.advanceDeliverableApproval(approval.id);
         } else {
           await bridge.declineRejectedTask(approval.id, req.body.overrideReason ?? null);
           await facts.discardHeldFactAnswer(approval.id, req.body.overrideReason ?? null);
+          await deliverableReview.failDeliverableApproval(
+            approval.id,
+            req.body.overrideReason ?? null,
+          );
         }
       } catch (err) {
         logger.error(

@@ -19,7 +19,20 @@ type ApprovalRow = typeof approvals.$inferSelect;
  *                agent whose ceiling sets `minimumApproval: "none"`.
  * - `owner_override` — the explicit, reasoned emergency action.
  */
-export type ApprovalDecisionRole = "board" | "steward" | "admin" | "owner_override";
+export type ApprovalDecisionRole =
+  | "board"
+  | "steward"
+  | "admin"
+  /**
+   * AgentDash-MK: one of a deliverable's two named approvers.
+   *
+   * A separate role because the ordinary rule — the steward of the requesting
+   * agent decides — is the wrong rule here. A deliverable names its approvers
+   * at definition time, and the agent that assembled it has a steward who is
+   * very often neither of them.
+   */
+  | "approver"
+  | "owner_override";
 
 export interface ApprovalDecisionContext {
   role: ApprovalDecisionRole;
@@ -115,6 +128,27 @@ export function approvalAuthorityService(db: Db) {
     // documented local bootstrap flow usable instead of forcing every decision
     // through a written emergency override.
     if (actor.source === "local_implicit") return "admin";
+
+    /**
+     * AgentDash-MK deliverable sign-off, checked BEFORE the steward rule.
+     *
+     * The approval carries a requesting agent — the assembler — so without this
+     * branch the steward rule below would hand the decision to whoever stewards
+     * the agent that produced the draft. That is the one person who must not
+     * decide it. The approver is named on the definition and copied into the
+     * payload when the seat opens; only that user may decide, and the second
+     * approver may not decide the first seat.
+     */
+    if (approval.type === "deliverable_review") {
+      const named = (approval.payload as Record<string, unknown> | null)?.approverUserId;
+      if (typeof named === "string" && actor.userId && named === actor.userId) {
+        return "approver";
+      }
+      throw forbidden(
+        "Only the approver named on this stage of the deliverable can decide it; " +
+          "an owner or administrator must use the emergency override action",
+      );
+    }
 
     if (approval.requestedByAgentId) {
       const active = await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId);

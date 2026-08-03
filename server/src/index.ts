@@ -1131,6 +1131,14 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err: unknown) =>
           logger.error({ err }, "[deliverables] due-run sweep failed"),
         );
+      // Push open cycles forward. A run that stalled waiting on one person
+      // would otherwise stay `collecting` forever after they answered, because
+      // nothing else would ever look at it again.
+      void deliverableRuns
+        .sweepCollectingRuns()
+        .catch((err: unknown) =>
+          logger.error({ err }, "[deliverables] collecting-run sweep failed"),
+        );
       // The check is fired by the sweep, never by the assembling agent. It is a
       // separate call on a separate service with no import edge to assembly —
       // the party being checked does not operate the checker.

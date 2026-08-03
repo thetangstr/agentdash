@@ -7,11 +7,13 @@ import {
   createDeliverableCheckSchema,
   createDeliverableFactSchema,
   createDeliverableSchema,
+  recordFactCorrectionSchema,
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { requireProductProfile } from "../services/companies.js";
 import { deliverableCheckService } from "../services/deliverable-checks.js";
+import { deliverableReviewService } from "../services/deliverable-review.js";
 import { deliverableRunService } from "../services/deliverable-runs.js";
 import { deliverableService } from "../services/deliverables.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -40,6 +42,7 @@ export function deliverableRoutes(db: Db) {
   const svc = deliverableService(db);
   const runs = deliverableRunService(db);
   const checks = deliverableCheckService(db);
+  const review = deliverableReviewService(db);
 
   async function requireProfileCompany(companyId: string) {
     const company = await db
@@ -210,6 +213,67 @@ export function deliverableRoutes(db: Db) {
    * flattering number alone is how a system that does not work reads like one
    * that does.
    */
+  /**
+   * Put a checked run in front of its first approver.
+   *
+   * Driven by the assembler or an implementer. Presenting is not certifying —
+   * the verdict was written by the check, and `present` refuses a run whose
+   * figures moved since the check read them.
+   */
+  router.post("/companies/:companyId/deliverable-runs/:runId/present", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    const run = await requireRunDriver(req, companyId, req.params.runId as string);
+    res.json(await review.present(companyId, run.id));
+  });
+
+  /**
+   * The review surface: the draft, plus what needs attention, and nothing else.
+   *
+   * Readable by the whole company. The filtering is server-side and not a
+   * client's choice — a client-side filter is a filter somebody turns off, and
+   * then the review slot is spent on the twenty figures that were fine.
+   */
+  router.get("/companies/:companyId/deliverable-runs/:runId/review", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await requireProfileCompany(companyId);
+    assertCompanyAccess(req, companyId);
+    res.json(await review.reviewSurface(companyId, req.params.runId as string));
+  });
+
+  /**
+   * Record a correction against a FACT.
+   *
+   * The two named approvers and implementers, nobody else — and no agent. An
+   * agent that could write a durable override would be choosing the number
+   * every future cycle reports, permanently, with no human in the loop.
+   */
+  router.post(
+    "/companies/:companyId/deliverable-runs/:runId/corrections",
+    validate(recordFactCorrectionSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      await requireProfileCompany(companyId);
+      const runId = req.params.runId as string;
+      if (req.actor.type !== "board") {
+        throw forbidden("A correction is a human decision about a figure, not an agent's");
+      }
+      assertCompanyAccess(req, companyId);
+      const isApprover = await review.isApprover(companyId, runId, req.actor.userId);
+      if (!isApprover) requireImplementer(req);
+      res
+        .status(201)
+        .json(
+          await review.recordCorrection(
+            companyId,
+            runId,
+            req.body,
+            req.actor.userId ?? "implementer",
+          ),
+        );
+    },
+  );
+
   router.get("/companies/:companyId/deliverables/:key/reliability", async (req, res) => {
     const companyId = req.params.companyId as string;
     await requireProfileCompany(companyId);

@@ -13,6 +13,7 @@ import { conflict, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentFactRequestService } from "./agent-fact-requests.js";
+import { deliverableReviewService } from "./deliverable-review.js";
 import { deliverableService } from "./deliverables.js";
 import {
   sharepointConnectorService,
@@ -87,9 +88,42 @@ export function runKeyFor(cadence: DeliverableCadence, at: Date): string {
 export type DeliverableRow = typeof deliverableRuns.$inferSelect;
 type FactRow = typeof deliverableFacts.$inferSelect;
 
+/** One active correction, as the collector needs it. */
+type ActiveCorrection = {
+  id: string;
+  correction: Record<string, unknown> | null;
+  reason: string;
+};
+
+/**
+ * Overlay a correction's connector target on the fact's.
+ *
+ * A shallow merge with a deliberate second level for `target`, so a correction
+ * can say "same site, same workbook, different table" without restating the
+ * whole address. Anything deeper would be a patch language, and a patch
+ * language is a thing nobody can read six months later while asking where a
+ * number came from.
+ */
+function mergeConnectorConfig(
+  base: Record<string, unknown> | null,
+  overlay: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...(base ?? {}), ...overlay };
+  const baseTarget = (base?.target ?? null) as Record<string, unknown> | null;
+  const overlayTarget = (overlay.target ?? null) as Record<string, unknown> | null;
+  if (baseTarget && overlayTarget) {
+    merged.target = { ...baseTarget, ...overlayTarget };
+  }
+  return merged;
+}
+
 export function deliverableRunService(db: Db) {
   const definitions = deliverableService(db);
   const factRequests = agentFactRequestService(db);
+  // Corrections only. This is NOT the check — `deliverable-review.ts` holds the
+  // durable corrections loop, and a test asserts there is no import edge to
+  // `deliverable-checks.ts` in either direction.
+  const review = deliverableReviewService(db);
   const sharepoint = sharepointConnectorService(db);
   const workflow = workflowEventsService(db);
 
@@ -181,6 +215,7 @@ export function deliverableRunService(db: Db) {
     run: DeliverableRow,
     deliverableKey: string,
     fact: FactRow,
+    correction: ActiveCorrection | null,
   ): Promise<void> {
     const runContext = {
       pipelineId: pipelineIdFor(deliverableKey),
@@ -209,7 +244,16 @@ export function deliverableRunService(db: Db) {
       return;
     }
 
-    const config = parseWorkbookConfig(fact.connectorConfig);
+    // `replace_source` rewrites WHERE the figure is read from, before the read.
+    // Carried forward silently, because it is a corrected derivation: the next
+    // cycle simply reads the right place and nobody re-enters anything.
+    const shape = (correction?.correction ?? {}) as Record<string, unknown>;
+    const corrected =
+      shape.kind === "replace_source" && shape.connectorConfig
+        ? mergeConnectorConfig(fact.connectorConfig, shape.connectorConfig as Record<string, unknown>)
+        : fact.connectorConfig;
+
+    const config = parseWorkbookConfig(corrected);
     if (!config) {
       await upsertValue(run.id, run.companyId, fact.id, {
         status: "missing",
@@ -250,19 +294,34 @@ export function deliverableRunService(db: Db) {
       `/workbook/${result.target.kind}/${result.target.name}` +
       (result.address ? `!${result.address}` : "");
 
+    const fetched = {
+      values: result.values,
+      address: result.address,
+      rowCount: result.rowCount,
+      columnCount: result.columnCount,
+    };
+
+    /**
+     * `override_value` replaces the figure, and stays flagged forever.
+     *
+     * A number nobody re-derives is a stale premise. A human at the end catches
+     * errors but not wrong foundations, so a carried-forward override has to
+     * stay visible every cycle rather than quietly becoming the new truth.
+     */
+    const overridden = shape.kind === "override_value";
     await upsertValue(run.id, run.companyId, fact.id, {
       status: "fetched",
-      value: {
-        values: result.values,
-        address: result.address,
-        rowCount: result.rowCount,
-        columnCount: result.columnCount,
-      },
+      value: overridden ? ((shape.value ?? null) as never) : fetched,
       sourceRef,
-      method: "connector:sharepoint:read_workbook_range",
+      method:
+        "connector:sharepoint:read_workbook_range" +
+        (correction ? `+corrected:${String(shape.kind)}` : ""),
       fetchedAt: new Date(),
-      flagged: false,
-      flagReason: null,
+      appliedCorrectionId: correction?.id ?? null,
+      flagged: overridden,
+      flagReason: overridden
+        ? `override_value carried forward: ${correction?.reason ?? "no reason recorded"}`
+        : null,
     });
   }
 
@@ -317,6 +376,10 @@ export function deliverableRunService(db: Db) {
     }
     const deliverable = await deliverableForRun(run);
     const facts = await definitions.factsFor(deliverable.id);
+    // Applied on the way in, automatically. Nobody re-enters a correction and
+    // nobody has to remember one; the correction is attached to the fact, so
+    // it holds regardless of who collects the figure this cycle.
+    const corrections = await review.activeCorrections(deliverable.id);
 
     for (const fact of facts) {
       const existing = await db
@@ -329,7 +392,7 @@ export function deliverableRunService(db: Db) {
       if (existing && existing.status !== null) continue;
 
       if (fact.sourceType === "system") {
-        await fetchSystemFact(run, deliverable.key, fact);
+        await fetchSystemFact(run, deliverable.key, fact, corrections.get(fact.id) ?? null);
       } else {
         await askHumanFact(run, deliverable, fact);
       }
@@ -582,10 +645,43 @@ export function deliverableRunService(db: Db) {
     return { opened, considered: due.length };
   }
 
+  /**
+   * Push every open cycle forward: collect what is now available, assemble if
+   * nothing is still outstanding.
+   *
+   * Without this a run that stalled waiting on one person would stay
+   * `collecting` forever after they answered, because nothing else would ever
+   * look at it again. It is also what carries a rejected run back round: the
+   * approver's refusal resets it to `collecting` and this rebuilds the draft
+   * with their correction applied.
+   */
+  async function sweepCollectingRuns() {
+    const open = await db
+      .select({ id: deliverableRuns.id, companyId: deliverableRuns.companyId })
+      .from(deliverableRuns)
+      .where(eq(deliverableRuns.status, "collecting"));
+
+    let assembled = 0;
+    for (const row of open) {
+      try {
+        await collect(row.companyId, row.id);
+        const result = await assemble(row.companyId, row.id);
+        if (result.assembled) assembled += 1;
+      } catch (error) {
+        logger.error(
+          { err: error, runId: row.id },
+          "[deliverables] pushing a collecting run forward failed",
+        );
+      }
+    }
+    return { assembled, considered: open.length };
+  }
+
   return {
     openRun,
     collect,
     assemble,
+    sweepCollectingRuns,
     detail,
     getRun,
     deliverableForRun,

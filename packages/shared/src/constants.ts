@@ -344,6 +344,11 @@ export const APPROVAL_TYPES = [
   // content it is asks for its release; the decision is an ordinary approval,
   // because a second decision boundary is a second thing to get wrong.
   "inbound_content_review",
+  // AgentDash-MK: a named approver signing off one cycle of a deliverable.
+  // Two of these per run, in sequence, and nothing ships without both. The
+  // decider is the user named in the payload, never the requesting agent's
+  // steward — who signs an artifact off is a property of the artifact.
+  "deliverable_review",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
