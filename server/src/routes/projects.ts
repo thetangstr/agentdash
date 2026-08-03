@@ -28,7 +28,7 @@ import {
   stopRuntimeServicesForProjectWorkspace,
 } from "../services/workspace-runtime.js";
 import {
-  assertNoAgentHostWorkspaceCommandMutation,
+  assertHostWorkspaceCommandAuthority,
   collectProjectExecutionWorkspaceCommandPaths,
   collectProjectWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
@@ -133,8 +133,10 @@ export function projectRoutes(db: Db) {
       companyId,
       readProjectPolicyEnvironmentId(projectData.executionWorkspacePolicy),
     );
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      companyId,
       [
         ...collectProjectExecutionWorkspaceCommandPaths(projectData.executionWorkspacePolicy),
         ...collectProjectWorkspaceCommandPaths(workspace, "workspace"),
@@ -191,8 +193,10 @@ export function projectRoutes(db: Db) {
     }
     assertCompanyAccess(req, existing.companyId);
     const body = { ...req.body };
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      existing.companyId,
       collectProjectExecutionWorkspaceCommandPaths(body.executionWorkspacePolicy),
     );
     await assertProjectEnvironmentSelection(
@@ -255,8 +259,10 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      existing.companyId,
       collectProjectWorkspaceCommandPaths(req.body),
     );
     const workspace = await svc.createWorkspace(id, req.body);
@@ -297,8 +303,10 @@ export function projectRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, existing.companyId);
-      assertNoAgentHostWorkspaceCommandMutation(
+      await assertHostWorkspaceCommandAuthority(
+        db,
         req,
+        existing.companyId,
         collectProjectWorkspaceCommandPaths(req.body),
       );
       const workspaceExists = (await svc.listWorkspaces(id)).some((workspace) => workspace.id === workspaceId);

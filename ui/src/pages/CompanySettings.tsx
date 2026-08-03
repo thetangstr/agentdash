@@ -4,6 +4,7 @@ import {
   DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
+import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
@@ -589,6 +590,11 @@ export function CompanySettings() {
           </div>
         </div>
       </div>
+
+      {selectedCompany?.productProfile === "agentdash_mk" && selectedCompany?.id ? (
+        <AgentCeilingEditor companyId={selectedCompany.id} />
+      ) : null}
+
     </div>
   );
 }

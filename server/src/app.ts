@@ -10,6 +10,7 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
+import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
 // AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
 import {
   createAuthRateLimiter,
@@ -22,6 +23,22 @@ import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
 import { agentRoutes } from "./routes/agents.js";
+import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
+import { agentGovernanceRoutes } from "./routes/agent-governance.js";
+import { agentDirectivesRoutes } from "./routes/agent-directives.js";
+import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
+import { workflowRecommendationRoutes } from "./routes/workflow-recommendations.js";
+import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
+import { deliverableRoutes } from "./routes/deliverables.js";
+import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
+import { humanChannelRoutes } from "./routes/human-channels.js";
+import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
+import { whatsappConnectorRoutes } from "./routes/whatsapp-connector.js";
+import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
+// AgentDash-MK: SharePoint read through the acting person's Entra identity.
+import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
+import { bridgeRoutes } from "./routes/bridge.js";
+import { teamsConnectorRoutes } from "./routes/teams-connector.js";
 import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
 import { issueTreeControlRoutes } from "./routes/issue-tree-control.js";
@@ -261,6 +278,16 @@ export async function createApp(
     app.use(
       corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
     );
+    // AgentDash: closed-phase funnel gate on BROWSER signup. The MCP self-serve
+    // path has always been invite-gated; this door was not. Off unless the
+    // operator opts in, so local dev, the e2e suites, and existing self-hosters
+    // are unaffected.
+    app.use(
+      "/api/auth",
+      inviteCodeSignupGuard({
+        enabled: process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE === "true",
+      }),
+    );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
     app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }));
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
@@ -293,6 +320,21 @@ export async function createApp(
   }));
   api.use(companySkillRoutes(db));
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(agentStewardshipRoutes(db));
+  api.use(agentGovernanceRoutes(db));
+  api.use(agentDirectivesRoutes(db));
+  api.use(workflowMetricsRoutes(db));
+  // AgentDash-MK: the review agent's recommendation half. Read-only — there is
+  // no create verb, and decisions go through the approvals routes like every
+  // other decision. 404s outside `agentdash_mk`.
+  api.use(workflowRecommendationRoutes(db));
+  // AgentDash-MK: agent↔agent fact requests. 404s outside `agentdash_mk`.
+  api.use(agentFactRequestRoutes(db));
+  // AgentDash-MK: the weekly deliverable pipeline. Definition is
+  // implementer-only; runs, review, and approval follow the same profile gate.
+  api.use(deliverableRoutes(db));
+  api.use(agentdashMkInboxRoutes(db));
+  api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {
@@ -358,6 +400,12 @@ export async function createApp(
   api.use(connectorRoutes(db));
   // AgentDash: Slack Connector (AGE-108)
   api.use("/connectors", slackConnectorRoutes(db));
+  api.use(telegramConnectorRoutes(db));
+  api.use(whatsappConnectorRoutes(db));
+  api.use(hubspotConnectorRoutes(db));
+  api.use(sharepointConnectorRoutes(db));
+  api.use(bridgeRoutes(db));
+  api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl

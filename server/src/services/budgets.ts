@@ -201,6 +201,12 @@ async function markApprovalStatus(
     .update(approvals)
     .set({
       status,
+      // AgentDash-MK: this path resolves a linked approval as a side effect of
+      // budget-incident resolution. It still records decision provenance so the
+      // row is never left with a NULL actor role, which would be
+      // indistinguishable from an unaudited write.
+      decisionActorRole: "budget_incident",
+      decisionChannel: "web",
       decisionNote: decisionNote ?? null,
       decidedByUserId,
       decidedAt: new Date(),
@@ -858,6 +864,32 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         scopeId: project.id,
         scopeName: project.name,
         reason: "Project is paused because its budget hard-stop was reached.",
+      };
+    },
+
+    /**
+     * AgentDash-MK: the agent whose budget resolving this incident would raise,
+     * or null when the incident is not agent-scoped. Lets the route apply the
+     * owner ceiling before the raise is written.
+     */
+    getIncidentContext: async (
+      companyId: string,
+      incidentId: string,
+    ): Promise<{ agentScopeId: string | null; approvalId: string | null } | null> => {
+      const incident = await db
+        .select()
+        .from(budgetIncidents)
+        .where(eq(budgetIncidents.id, incidentId))
+        .then((rows) => rows[0] ?? null);
+      if (!incident || incident.companyId !== companyId) return null;
+      const policy = await db
+        .select()
+        .from(budgetPolicies)
+        .where(eq(budgetPolicies.id, incident.policyId))
+        .then((rows) => rows[0] ?? null);
+      return {
+        agentScopeId: policy?.scopeType === "agent" ? policy.scopeId : null,
+        approvalId: incident.approvalId ?? null,
       };
     },
 

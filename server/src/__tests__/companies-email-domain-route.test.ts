@@ -32,8 +32,11 @@ const fakeDb = {
 } as any;
 
 let createMock: ReturnType<typeof vi.fn>;
+let getByIdMock: ReturnType<typeof vi.fn>;
+let updateMock: ReturnType<typeof vi.fn>;
 let findByEmailDomainMock: ReturnType<typeof vi.fn>;
 let ensureMembershipMock: ReturnType<typeof vi.fn>;
+let getMembershipMock: ReturnType<typeof vi.fn>;
 let setPrincipalPermissionMock: ReturnType<typeof vi.fn>;
 
 vi.mock("../services/index.js", () => ({
@@ -44,10 +47,10 @@ vi.mock("../services/index.js", () => ({
     hasActiveCompany: vi.fn().mockResolvedValue(false),
     list: vi.fn().mockResolvedValue([]),
     stats: vi.fn().mockResolvedValue({}),
-    getById: vi.fn(),
+    getById: (...args: unknown[]) => getByIdMock(...args),
     create: (...args: unknown[]) => createMock(...args),
     findByEmailDomain: (...args: unknown[]) => findByEmailDomainMock(...args),
-    update: vi.fn(),
+    update: (...args: unknown[]) => updateMock(...args),
     archive: vi.fn(),
     remove: vi.fn(),
   }),
@@ -59,6 +62,7 @@ vi.mock("../services/index.js", () => ({
   }),
   accessService: () => ({
     canUser: vi.fn(),
+    getMembership: (...args: unknown[]) => getMembershipMock(...args),
     ensureMembership: (...args: unknown[]) => ensureMembershipMock(...args),
     setPrincipalPermission: (...args: unknown[]) => setPrincipalPermissionMock(...args),
   }),
@@ -93,10 +97,32 @@ function buildApp(opts: { actorEmail?: string; allowMultiTenantPerDomain?: boole
   return app;
 }
 
+function buildPatchApp(actor: Record<string, unknown>) {
+  fakeDb.select = vi.fn(() => ({
+    from: () => ({
+      where: () => Promise.resolve([]),
+    }),
+  }));
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as any).actor = actor;
+    next();
+  });
+  app.use("/api/companies", companyRoutes(fakeDb, undefined, {
+    allowMultiTenantPerDomain: false,
+  }));
+  app.use(errorHandler);
+  return app;
+}
+
 beforeEach(() => {
   createMock = vi.fn();
+  getByIdMock = vi.fn();
+  updateMock = vi.fn();
   findByEmailDomainMock = vi.fn();
   ensureMembershipMock = vi.fn().mockResolvedValue({});
+  getMembershipMock = vi.fn();
   setPrincipalPermissionMock = vi.fn().mockResolvedValue(undefined);
 });
 
@@ -381,5 +407,84 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
       expect.anything(),
       expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
     );
+  });
+});
+
+describe("PATCH /api/companies/:companyId — product profile authorization", () => {
+  const existingCompany = {
+    id: "company-1",
+    name: "Acme",
+    status: "active",
+    productProfile: "default",
+    budgetMonthlyCents: 0,
+    feedbackDataSharingEnabled: false,
+  };
+
+  function boardActor(membershipRole: "owner" | "admin" | "operator" | "viewer") {
+    return {
+      type: "board",
+      userId: `${membershipRole}-user`,
+      companyIds: ["company-1"],
+      memberships: [{ companyId: "company-1", status: "active", membershipRole }],
+      isInstanceAdmin: false,
+      source: "session",
+    };
+  }
+
+  it("rejects ordinary company members changing productProfile", async () => {
+    getByIdMock.mockResolvedValue(existingCompany);
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "operator" });
+    updateMock.mockResolvedValue({
+      ...existingCompany,
+      productProfile: "agentdash_mk",
+    });
+
+    const app = buildPatchApp(boardActor("operator"));
+    const res = await request(app)
+      .patch("/api/companies/company-1")
+      .send({ productProfile: "agentdash_mk" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Company owner or admin access required");
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(getMembershipMock).toHaveBeenCalledWith("company-1", "user", "operator-user");
+  });
+
+  it.each(["owner", "admin"] as const)(
+    "allows %s company members changing productProfile",
+    async (membershipRole) => {
+      getByIdMock.mockResolvedValue(existingCompany);
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole });
+      updateMock.mockResolvedValue({
+        ...existingCompany,
+        productProfile: "agentdash_mk",
+      });
+
+      const app = buildPatchApp(boardActor(membershipRole));
+      const res = await request(app)
+        .patch("/api/companies/company-1")
+        .send({ productProfile: "agentdash_mk" });
+
+      expect(res.status).toBe(200);
+      expect(updateMock).toHaveBeenCalledWith("company-1", { productProfile: "agentdash_mk" });
+      expect(res.body.productProfile).toBe("agentdash_mk");
+    },
+  );
+
+  it("leaves unrelated company updates on the existing member write path", async () => {
+    getByIdMock.mockResolvedValue(existingCompany);
+    updateMock.mockResolvedValue({
+      ...existingCompany,
+      name: "Acme Updated",
+    });
+
+    const app = buildPatchApp(boardActor("operator"));
+    const res = await request(app)
+      .patch("/api/companies/company-1")
+      .send({ name: "Acme Updated" });
+
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith("company-1", { name: "Acme Updated" });
+    expect(getMembershipMock).not.toHaveBeenCalled();
   });
 });

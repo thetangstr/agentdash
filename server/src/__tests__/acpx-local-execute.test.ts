@@ -600,4 +600,44 @@ describe("acpx_local execute", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  // AgentDash-MK: harness directives must reach the prompt the agent actually
+  // reads, not merely the run's context snapshot. A stored directive with no
+  // path into the model is the same failure mode as a tested function with no
+  // caller.
+  it("renders harness directives into the prompt, framed as non-granting", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-acpx-directives-"));
+    try {
+      let meta: Record<string, unknown> | null = null;
+      const execute = createAcpxLocalExecutor({
+        createRuntime: (options) => new FakeRuntime(options),
+      });
+
+      const result = await execute(buildContext(root, {
+        context: {
+          issueId: "issue-1",
+          paperclipTaskMarkdown: "Task context",
+          paperclipAgentDirectives: {
+            version: 4,
+            directives: "Never contact a client directly. Escalate instead.",
+            pushedAt: "2026-08-02T10:00:00.000Z",
+            pushedByUserId: "steward-1",
+          },
+        },
+        onMeta: async (payload) => {
+          meta = payload as Record<string, unknown>;
+        },
+      }));
+
+      expect(result.exitCode).toBe(0);
+      const prompt = String(meta?.prompt ?? "");
+      expect(prompt).toContain("Never contact a client directly. Escalate instead.");
+      expect(prompt).toContain("Operating Directives");
+      expect(prompt).toContain("v4");
+      // The non-granting frame is the load-bearing half: without it the text
+      // reads as authority the structured policy never gave.
+      expect(prompt).toContain("cannot grant");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

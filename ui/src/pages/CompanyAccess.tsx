@@ -8,6 +8,7 @@ import {
 } from "@paperclipai/shared";
 import { ShieldCheck, Trash2, Users } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
+import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { issuesApi } from "@/api/issues";
@@ -399,6 +400,14 @@ export function CompanyAccess() {
           )}
         </div>
       </section>
+
+      {selectedCompany?.productProfile === "agentdash_mk" && selectedCompanyId ? (
+        <StewardshipAssignments
+          companyId={selectedCompanyId}
+          members={membersQuery.data?.members ?? []}
+          canManage={membersQuery.data?.access.canManageAgents ?? false}
+        />
+      ) : null}
 
       <Dialog open={!!editingMember} onOpenChange={(open) => !open && setEditingMemberId(null)}>
         <DialogContent className="max-w-2xl">

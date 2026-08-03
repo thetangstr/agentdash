@@ -306,6 +306,13 @@ describe("CommentThread", () => {
       decidedAt: null,
       createdAt: new Date("2026-03-11T09:00:00.000Z"),
       updatedAt: new Date("2026-03-11T09:00:00.000Z"),
+      revision: 1,
+      decisionChannel: null,
+      decisionIdempotencyKey: null,
+      decisionActorRole: null,
+      overrideReason: null,
+      expiresAt: null,
+      supersededAt: null,
     };
 
     act(() => {

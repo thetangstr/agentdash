@@ -134,6 +134,50 @@ export {
 } from "./agent.js";
 
 export {
+  assignAgentStewardshipSchema,
+  transferAgentStewardshipSchema,
+  type AssignAgentStewardship,
+  type TransferAgentStewardship,
+} from "./agent-stewardship.js";
+
+export {
+  agentGovernancePolicySchema,
+  updateAgentGovernancePolicySchema,
+  AGENT_GOVERNANCE_CLIENT_CHANNELS,
+  type AgentGovernancePolicyInput,
+  type UpdateAgentGovernancePolicy,
+} from "./agent-governance.js";
+
+export {
+  pushAgentDirectivesSchema,
+  pushHarnessAgentPolicySchema,
+  type PushAgentDirectives,
+  type PushHarnessAgentPolicy,
+} from "./agent-directives.js";
+
+export {
+  emitWorkflowEventSchema,
+  workflowEventPayloadSchema,
+  type EmitWorkflowEvent,
+} from "./workflow-events.js";
+
+export {
+  raiseWorkflowRecommendationSchema,
+  workflowRecommendationEvidenceSchema,
+  workflowRecommendationObservationSchema,
+  type RaiseWorkflowRecommendation,
+} from "./workflow-recommendations.js";
+
+export {
+  answerAgentFactSchema,
+  askAgentFactSchema,
+  declineAgentFactSchema,
+  type AnswerAgentFact,
+  type AskAgentFact,
+  type DeclineAgentFact,
+} from "./agent-facts.js";
+
+export {
   createProjectSchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,
@@ -249,11 +293,15 @@ export {
 export {
   createApprovalSchema,
   resolveApprovalSchema,
+  overrideApprovalSchema,
+  APPROVAL_DECISION_CHANNELS,
   requestApprovalRevisionSchema,
   resubmitApprovalSchema,
   addApprovalCommentSchema,
   type CreateApproval,
   type ResolveApproval,
+  type OverrideApproval,
+  type ApprovalDecisionChannel,
   type RequestApprovalRevision,
   type ResubmitApproval,
   type AddApprovalComment,
@@ -419,3 +467,8 @@ export {
 // AgentDash (#234): canonical type guard for AgentPlanProposalV1Payload;
 // replaces the previously-duplicated isPlanPayload + isAgentPlanPayload.
 export { isAgentPlanPayload } from "./agent-plan.js";
+
+export {
+  verifyHumanChannelBindingSchema,
+  type VerifyHumanChannelBinding,
+} from "./human-channel.js";

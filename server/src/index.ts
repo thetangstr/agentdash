@@ -1082,6 +1082,103 @@ export async function startServer(): Promise<StartedServer> {
     }, coldSignupIntervalMs);
   }
 
+  // AgentDash-MK: expire stalled work.
+  //
+  // Two leases, one tick. A bridge task whose endpoint went quiet, and a fact
+  // request whose escalation nobody answered. Both were written with expiry
+  // semantics and neither had a caller — `sweepLapsedLeases` shipped with none
+  // at all — which meant a lapsed lease was a comment rather than a behaviour:
+  // a claimed task stayed claimed forever and a stalled fact stayed `escalated`
+  // forever. Nothing about that is visible from the outside, which is exactly
+  // why it survived.
+  //
+  // Both sweeps are conditional updates keyed on the row still being in the
+  // state that was read, so two processes ticking together cannot both reap the
+  // same row.
+  const leaseSweepIntervalMs = 60 * 1000;
+  {
+    const { bridgeService } = await import("./services/bridge.js");
+    const { agentFactRequestService } = await import("./services/agent-fact-requests.js");
+    const bridgeLeases = bridgeService(db as any);
+    const factLeases = agentFactRequestService(db as any);
+    setInterval(() => {
+      void bridgeLeases
+        .sweepLapsedLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] bridge lease sweep failed"));
+      void factLeases
+        .sweepExpiredFactLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] fact lease sweep failed"));
+    }, leaseSweepIntervalMs).unref?.();
+  }
+
+  // AgentDash-MK: carry every open cycle forward.
+  //
+  // A separate, slower tick than the lease sweep because each pass does real
+  // work — it fetches every `system` fact through a connector and files an ask
+  // for every `human` one. Every stage is idempotent (one run per period by
+  // unique index; settled figures are not re-read; a checked run is not
+  // re-checked), so the interval is a latency choice rather than a correctness
+  // one: a person's answer moves the cycle on within two minutes of arriving.
+  //
+  // Two minutes rather than five deliberately. The run-healer's default scan is
+  // five, and two periodic jobs that both do database and network work should
+  // not share a tick.
+  const deliverableSweepIntervalMs = 2 * 60 * 1000;
+  {
+    const { deliverableRunService } = await import("./services/deliverable-runs.js");
+    const { deliverableCheckService } = await import("./services/deliverable-checks.js");
+    const { deliverableReviewService } = await import("./services/deliverable-review.js");
+    const deliverableRuns = deliverableRunService(db as any);
+    const deliverableChecks = deliverableCheckService(db as any);
+    const deliverableReview = deliverableReviewService(db as any);
+    // Sequenced rather than fired together: each stage's input is the previous
+    // stage's output, so running them concurrently would mean a cycle needed
+    // four ticks — twenty minutes — to travel from open to an approver's inbox
+    // for no reason. Every stage is individually idempotent, so a tick that
+    // overlaps the previous one is harmless.
+    const tickDeliverables = async () => {
+      await deliverableRuns.sweepDueDeliverableRuns();
+      // Push open cycles forward. A run that stalled waiting on one person
+      // would otherwise stay `collecting` forever after they answered, because
+      // nothing else would ever look at it again.
+      await deliverableRuns.sweepCollectingRuns();
+      // The check is fired by the sweep, never by the assembling agent. It is a
+      // separate call on a separate service with no import edge to assembly —
+      // the party being checked does not operate the checker.
+      await deliverableChecks.sweepAssembledRuns();
+      // And the last link: a checked run reaches its first approver without an
+      // agent having to remember to send it.
+      await deliverableReview.sweepCheckedRuns();
+    };
+    setInterval(() => {
+      void tickDeliverables().catch((err: unknown) =>
+        logger.error({ err }, "[deliverables] sweep tick failed"),
+      );
+    }, deliverableSweepIntervalMs).unref?.();
+  }
+
+  // AgentDash-MK Slice H: the review agent's recommendation half.
+  //
+  // Hourly, not two-minutely. It reads a window of accumulated cycles per
+  // pipeline and raises nothing below three of them, so nothing it produces is
+  // urgent — a recommendation is a suggestion about a pattern that has been
+  // true for weeks, and putting it in front of somebody twenty minutes sooner
+  // buys nothing. It is idempotent, so the interval is a cost choice.
+  //
+  // It observes and suggests. There is no branch in it that acts.
+  const recommendationSweepIntervalMs = 60 * 60 * 1000;
+  {
+    const { workflowRecommendationService } = await import(
+      "./services/workflow-recommendations.js"
+    );
+    const recommendations = workflowRecommendationService(db as any);
+    setInterval(() => {
+      void recommendations
+        .sweepRecommendations()
+        .catch((err: unknown) => logger.error({ err }, "[recommendations] sweep tick failed"));
+    }, recommendationSweepIntervalMs).unref?.();
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);

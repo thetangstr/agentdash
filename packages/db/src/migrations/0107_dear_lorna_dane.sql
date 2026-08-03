@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "human_channel_bindings_active_external_global_uq" ON "human_channel_bindings" USING btree ("provider","external_user_id") WHERE "human_channel_bindings"."revoked_at" is null;

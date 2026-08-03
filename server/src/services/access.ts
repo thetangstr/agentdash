@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -22,7 +23,16 @@ type MemberArchiveInput = {
     assigneeAgentId?: string | null;
     assigneeUserId?: string | null;
   } | null;
+  actorUserId?: string | null;
 };
+
+function resultRows(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: unknown[] }).rows;
+  }
+  return [];
+}
 
 export function accessService(db: Db) {
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
@@ -349,6 +359,15 @@ export function accessService(db: Db) {
         for update
       `);
 
+      const targetLock = await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.id} = ${memberId}
+        for update
+      `);
+      if (resultRows(targetLock).length === 0) return null;
+
       const existing = await tx
         .select()
         .from(companyMemberships)
@@ -412,6 +431,21 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalId, existing.principalId),
           ),
         );
+
+      const stewardshipSvc = agentStewardshipService(db);
+      const endedStewardships = await stewardshipSvc.endActiveForUser(
+        companyId,
+        existing.principalId,
+        input.actorUserId ?? existing.principalId,
+        tx,
+      );
+      await stewardshipSvc.createActivityForArchivedStewardships({
+        companyId,
+        userId: existing.principalId,
+        endedByUserId: input.actorUserId ?? existing.principalId,
+        stewardships: endedStewardships,
+        database: tx,
+      });
 
       const archived = await tx
         .update(companyMemberships)
@@ -528,9 +562,10 @@ export function accessService(db: Db) {
         }
       }
       if (toArchive.length > 0) {
+        const now = new Date();
         await tx
           .update(companyMemberships)
-          .set({ status: "archived", updatedAt: new Date() })
+          .set({ status: "archived", updatedAt: now })
           .where(inArray(companyMemberships.id, toArchive.map((row) => row.id)));
         await tx
           .delete(principalPermissionGrants)
@@ -541,6 +576,23 @@ export function accessService(db: Db) {
               inArray(principalPermissionGrants.companyId, toArchive.map((row) => row.companyId)),
             ),
           );
+
+        const stewardshipSvc = agentStewardshipService(db);
+        for (const membership of toArchive.filter((row) => row.principalType === "user")) {
+          const endedStewardships = await stewardshipSvc.endActiveForUser(
+            membership.companyId,
+            membership.principalId,
+            options.actorUserId ?? membership.principalId,
+            tx,
+          );
+          await stewardshipSvc.createActivityForArchivedStewardships({
+            companyId: membership.companyId,
+            userId: membership.principalId,
+            endedByUserId: options.actorUserId ?? membership.principalId,
+            stewardships: endedStewardships,
+            database: tx,
+          });
+        }
       }
 
       for (const companyId of target) {

@@ -93,6 +93,33 @@ export const queryKeys = {
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,
   },
+  stewardships: {
+    byAgent: (companyId: string, agentId: string) =>
+      ["stewardships", companyId, agentId] as const,
+    history: (companyId: string, agentId: string) =>
+      ["stewardships", "history", companyId, agentId] as const,
+  },
+  myAgent: {
+    detail: (companyId: string) => ["myAgent", companyId] as const,
+    inbox: (companyId: string) => ["myAgent", "inbox", companyId] as const,
+    /**
+     * Distinct from `inbox` on purpose. That key holds the OPEN-only response
+     * My Agent renders; this one holds the open-and-resolved response the Inbox
+     * uses to scope its tabs. Sharing a key would let whichever query mounted
+     * last decide what the other saw — and the failure mode is silent, because
+     * both responses have the same shape.
+     */
+    inboxScope: (companyId: string) => ["myAgent", "inboxScope", companyId] as const,
+    channels: (companyId: string) => ["myAgent", "channels", companyId] as const,
+    hubspot: (companyId: string) => ["myAgent", "hubspot", companyId] as const,
+    overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
+    governance: (companyId: string, agentId: string) =>
+      ["myAgent", "governance", companyId, agentId] as const,
+    currentWork: (companyId: string, agentId: string) =>
+      ["myAgent", "currentWork", companyId, agentId] as const,
+    activity: (companyId: string, agentId: string) =>
+      ["myAgent", "activity", companyId, agentId] as const,
+  },
   approvals: {
     list: (companyId: string, status?: string) =>
       ["approvals", companyId, status] as const,

@@ -5,7 +5,17 @@ export { instanceSettings } from "./instance_settings.js";
 export { instanceUserRoles } from "./instance_user_roles.js";
 export { userSidebarPreferences } from "./user_sidebar_preferences.js";
 export { agents } from "./agents.js";
+export { agentStewardships } from "./agent_stewardships.js";
+export { agentGovernancePolicies } from "./agent_governance_policies.js";
+export { agentDirectives } from "./agent_directives.js";
+export { humanChannelBindings } from "./human_channel_bindings.js";
+export { externalChannelEvents } from "./external_channel_events.js";
+export { channelCallbackTokens } from "./channel_callback_tokens.js";
+export { channelPairingChallenges } from "./channel_pairing_challenges.js";
+export { connectorSendExecutions } from "./connector_send_executions.js";
 export { boardApiKeys } from "./board_api_keys.js";
+export { bridgeEndpoints } from "./bridge_endpoints.js";
+export { bridgeTasks } from "./bridge_tasks.js";
 export { cliAuthChallenges } from "./cli_auth_challenges.js";
 export { companyMemberships } from "./company_memberships.js";
 export { companyUserSidebarPreferences } from "./company_user_sidebar_preferences.js";
@@ -110,3 +120,20 @@ export { connections, connectorWorkspaceDefaults, agentConnectorOverrides } from
 // AgentDash: Test Drive — no-signup anonymous trial
 export { trialSessions } from "./trial_sessions.js";
 export { trialArtifacts } from "./trial_artifacts.js";
+// AgentDash-MK: measurement — events attach to the pipeline, never to a person.
+export { workflowEvents } from "./workflow_events.js";
+// AgentDash-MK: the review agent's recommendation half — advisory, evidence-
+// bearing, and about a pipeline step rather than anybody in particular.
+export { workflowRecommendations } from "./workflow_recommendations.js";
+// AgentDash-MK: agent-to-agent fact requests — provenance attaches to the fact.
+export { agentFactRequests } from "./agent_fact_requests.js";
+// AgentDash-MK: the weekly deliverable pipeline — definition, runs, values,
+// corrections, and the acceptance tests the assembler cannot author.
+export {
+  deliverableChecks,
+  deliverableFacts,
+  deliverableRuns,
+  deliverables,
+  factCorrections,
+  factValues,
+} from "./deliverables.js";

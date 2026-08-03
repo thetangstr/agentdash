@@ -24,12 +24,16 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { PaperclipApiClient } from "./client.js";
 import { readConfigFromEnv, type PaperclipMcpConfig } from "./config.js";
 import { createJourneyToolDefinitions } from "./journey.js";
+import { bridgeTools } from "./bridge.js";
+import { harnessTools } from "./harness.js";
 import { PLAYBOOK } from "./playbook.js";
+import { RESOURCE_TEMPLATES, listResources, readAgentDashResource } from "./resources.js";
 import { toolInputSchema } from "./schema.js";
 import { createToolDefinitions, type ToolDefinition } from "./tools.js";
 
@@ -41,6 +45,8 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
   const tools: ToolDefinition[] = [
     ...createToolDefinitions(client),
     ...createJourneyToolDefinitions(client),
+    ...bridgeTools(client),
+    ...harnessTools(client),
   ];
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 
@@ -74,39 +80,27 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
 
   const appBaseUrl = config.apiUrl.replace(/\/api$/, "");
 
-  const resources = [
-    {
-      uri: "agentdash://playbook",
-      name: "Operating Playbook",
-      description:
-        "The goal-oriented operating contract: the setup-status loop, the approval boundaries, "
-        + "and what to do when blocked. Read this before operating.",
-      mimeType: "text/markdown",
-    },
-    {
-      uri: "agentdash://dashboard",
-      name: "Dashboard URL",
-      description: "The AgentDash dashboard URL for this workspace",
-      mimeType: "text/plain",
-    },
-    {
-      uri: "agentdash://agents",
-      name: "Agent Roster",
-      description: "Current list of agents and their statuses",
-      mimeType: "application/json",
-    },
-    {
-      uri: "agentdash://tasks",
-      name: "Task Board",
-      description: "Current tasks and their statuses",
-      mimeType: "application/json",
-    },
-  ];
+  const resources = listResources();
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources }));
 
+  /**
+   * AgentDash-MK: the derivation record.
+   *
+   * Templates rather than fixed URIs, because the interesting resource is "this
+   * figure" and there is one per fact. Read-only shared context: nothing
+   * verifies that a harness read any of it, and the descriptions say so.
+   */
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+    resourceTemplates: RESOURCE_TEMPLATES.map((template) => ({ ...template })),
+  }));
+
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
+    // Tried first, and returns null for anything it does not own, so the static
+    // resources below are unchanged by its existence.
+    const derivation = await readAgentDashResource(client, { companyId: config.companyId }, uri);
+    if (derivation) return derivation;
     if (uri === "agentdash://playbook") {
       return {
         contents: [{ uri, mimeType: "text/markdown", text: PLAYBOOK }],

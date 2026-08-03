@@ -40,6 +40,17 @@ export function billingService(deps: Deps) {
         mode: "subscription",
         customer: customerId,
         line_items: [{ price: deps.config.proPriceId, quantity: 1 }],
+        // Stripe Checkout in subscription mode collects a card by DEFAULT.
+        // Without this flag the "no card required" promise on the pricing page,
+        // the terms page, the billing button and CLAUDE.md is false, and a
+        // design partner who is not meant to pay yet is asked for a card before
+        // they can reach the product.
+        //
+        // This pairs with `missing_payment_method: "cancel"` below, which is
+        // only meaningful once a card can legitimately be absent: together they
+        // mean "start with no card, and end the subscription at trial expiry
+        // rather than silently converting it into a charge."
+        payment_method_collection: "if_required",
         subscription_data: {
           trial_period_days: deps.config.trialDays,
           trial_settings: { end_behavior: { missing_payment_method: "cancel" } },

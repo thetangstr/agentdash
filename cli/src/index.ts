@@ -6,6 +6,7 @@ import { envCommand } from "./commands/env.js";
 import { configure } from "./commands/configure.js";
 import { addAllowedHostname } from "./commands/allowed-hostname.js";
 import { heartbeatRun } from "./commands/heartbeat-run.js";
+import { registerBridgeCommands } from "./commands/bridge-run.js";
 import { runCommand } from "./commands/run.js";
 import { bootstrapCeoInvite } from "./commands/auth-bootstrap-ceo.js";
 import { dbBackupCommand } from "./commands/db-backup.js";
@@ -182,6 +183,9 @@ heartbeat
   .option("--json", "Output raw JSON where applicable")
   .option("--debug", "Show raw adapter stdout/stderr JSON chunks")
   .action(heartbeatRun);
+
+// AgentDash-MK: the local bridge worker (macOS only, sandboxed, opt-in egress).
+registerBridgeCommands(program);
 
 registerContextCommands(program);
 registerCompanyCommands(program);

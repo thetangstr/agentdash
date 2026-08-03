@@ -477,10 +477,10 @@ export function OnboardingWizard() {
         runtimeConfig: buildNewAgentRuntimeConfig()
       });
       if (hire.approval) {
-        await approvalsApi.approve(
-          hire.approval.id,
-          "Approved during onboarding first-agent setup."
-        );
+        await approvalsApi.approve(hire.approval.id, {
+          decisionNote: "Approved during onboarding first-agent setup.",
+          revision: hire.approval.revision,
+        });
         queryClient.invalidateQueries({
           queryKey: queryKeys.approvals.list(createdCompanyId)
         });

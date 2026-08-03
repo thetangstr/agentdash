@@ -102,6 +102,25 @@ The billing code already lives at [server/src/routes/billing.ts](../server/src/r
 | `STRIPE_PRO_PRICE_ID` | `price_…` from step 2 |
 | `STRIPE_TRIAL_DAYS` | `14` (or whatever you negotiate per customer) |
 | `BILLING_PUBLIC_BASE_URL` | `https://your-domain.com` (where Stripe redirects after checkout) |
+| `AGENTDASH_MK_INVITE_CODES` | comma-separated codes that grant the `agentdash_mk` profile |
+| `AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE` | `true` during a closed phase; omit otherwise |
+
+**Design-partner setup.** A partner who should reach AgentDash-MK without paying
+needs three things:
+
+1. An entry in `AGENTDASH_MK_INVITE_CODES` — without a code, company creation in
+   an `authenticated` deployment refuses a non-default `productProfile` with
+   `403 mk_invite_code_required`. Hand the partner the code; they enter it when
+   creating their workspace.
+2. `STRIPE_TRIAL_DAYS` set to the free period you have agreed (e.g. `180` for six
+   months). Checkout now sends `payment_method_collection: "if_required"`, so
+   they subscribe, become a tracked Stripe customer, and are never asked for a
+   card. `trial_settings.end_behavior.missing_payment_method` is `cancel`, so at
+   the end of the period the subscription cancels rather than silently charging
+   — extend the trial in Stripe before then if the partnership continues.
+3. `AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE=true` if the phase is genuinely closed.
+   Until this is set, browser signup is open to anyone who finds the URL — the
+   invite gate historically covered only the MCP self-serve path.
 
 **Tier semantics today** (enforced by [server/src/middleware/require-tier.ts](../server/src/middleware/require-tier.ts)):
 - **Free:** 1 human + 1 agent (CoS only)

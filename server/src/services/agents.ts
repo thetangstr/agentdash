@@ -5,7 +5,9 @@ import {
   agents,
   agentConfigRevisions,
   agentApiKeys,
+  agentGovernancePolicies,
   agentRuntimeState,
+  agentStewardships,
   agentTaskSessions,
   agentWakeupRequests,
   activityLog,
@@ -532,6 +534,10 @@ export function agentService(db: Db) {
         await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id));
         await tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
         await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id));
+        // AgentDash-MK: both tables reference agents with ON DELETE NO ACTION,
+        // so without these the delete fails with a foreign-key violation.
+        await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.agentId, id));
+        await tx.delete(agentStewardships).where(eq(agentStewardships.agentId, id));
         const deleted = await tx
           .delete(agents)
           .where(eq(agents.id, id))

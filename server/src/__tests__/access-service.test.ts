@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  activityLog,
+  agents,
+  agentStewardships,
   companies,
   companyMemberships,
   createDb,
@@ -14,6 +17,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { accessService } from "../services/access.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -53,6 +57,9 @@ describeEmbeddedPostgres("access service", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(activityLog);
+    await db.delete(agentStewardships);
+    await db.delete(agents);
     await db.delete(issues);
     await db.delete(principalPermissionGrants);
     await db.delete(instanceUserRoles);
@@ -220,5 +227,157 @@ describeEmbeddedPostgres("access service", () => {
     await expect(
       access.setUserCompanyAccess(operator.principalId, [], { actorUserId: owner.principalId }),
     ).rejects.toThrow("Instance admins cannot be removed from company access");
+  });
+
+  it("ends active stewardship when instance admin removes company access", async () => {
+    const { company, owner } = await createCompanyWithOwner(db);
+    const member = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `operator-${randomUUID()}`,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const agent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Stewarded agent",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const stewardship = await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: member.principalId,
+      assignedByUserId: owner.principalId,
+    });
+
+    await accessService(db).setUserCompanyAccess(member.principalId, [], {
+      actorUserId: owner.principalId,
+    });
+
+    const ended = await db
+      .select()
+      .from(agentStewardships)
+      .where(eq(agentStewardships.id, stewardship.id))
+      .then((rows) => rows[0]!);
+    expect(ended.endedAt).toBeInstanceOf(Date);
+    expect(ended.endedByUserId).toBe(owner.principalId);
+    expect(await db.select().from(agents).where(eq(agents.id, agent.id))).toHaveLength(1);
+
+    const event = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "agent.stewardship_ended"))
+      .then((rows) => rows[0]!);
+    expect(event.actorId).toBe(owner.principalId);
+    expect(event.details).toMatchObject({
+      userId: member.principalId,
+      reason: "member_archived",
+    });
+  });
+
+  it("locks the archived membership row before stewardship cleanup so concurrent assignment rechecks archived status", async () => {
+    const { company, owner } = await createCompanyWithOwner(db);
+    const member = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: company.id,
+        principalType: "user",
+        principalId: `operator-${randomUUID()}`,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const activeAgent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Existing steward",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const competingAgent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Competing steward",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const stewardship = await agentStewardshipService(db).assign(company.id, {
+      agentId: activeAgent.id,
+      userId: member.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    const secondDb = createDb(tempDb!.connectionString);
+    const thirdDb = createDb(tempDb!.connectionString);
+    let releaseLock!: () => void;
+    let lockAcquired!: () => void;
+    const lockAcquiredPromise = new Promise<void>((resolve) => {
+      lockAcquired = resolve;
+    });
+    const releaseLockPromise = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    const locker = db.transaction(async (tx) => {
+      await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.id} = ${member.id}
+        for update
+      `);
+      lockAcquired();
+      await releaseLockPromise;
+    });
+    await lockAcquiredPromise;
+
+    const archiveAttempt = accessService(secondDb).archiveMember(company.id, member.id, {
+      actorUserId: owner.principalId,
+    });
+    let archiveSettled = false;
+    archiveAttempt.finally(() => {
+      archiveSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(archiveSettled).toBe(false);
+    expect(await agentStewardshipService(db).activeByUser(company.id, member.principalId))
+      .toMatchObject({ id: stewardship.id });
+
+    const assignAttempt = agentStewardshipService(thirdDb).assign(company.id, {
+      agentId: competingAgent.id,
+      userId: member.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    let assignSettled = false;
+    assignAttempt.finally(() => {
+      assignSettled = true;
+    }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(assignSettled).toBe(false);
+
+    releaseLock();
+    await locker;
+    const result = await archiveAttempt;
+    expect(result?.member.status).toBe("archived");
+
+    await expect(assignAttempt).rejects.toMatchObject({ status: 409 });
+    expect(await agentStewardshipService(db).activeByUser(company.id, member.principalId)).toBeNull();
+    expect(await agentStewardshipService(db).activeByAgent(company.id, competingAgent.id)).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ import {
   buildInvocationEnvForLogs,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   materializePaperclipSkillCopy,
+  renderAgentDirectivesPrompt,
   renderPaperclipWakePrompt,
   runningProcesses,
   runChildProcess,
@@ -558,5 +559,31 @@ describe("appendWithByteCap", () => {
     expect(output).not.toContain("\uFFFD");
     expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
     expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(7);
+  });
+});
+
+// AgentDash-MK: directives inform, they never grant. The renderer carries that
+// distinction into the prompt; without it the text reads as authorization the
+// structured policy never issued.
+describe("renderAgentDirectivesPrompt", () => {
+  it("renders the directive text with its version and a non-granting frame", () => {
+    const rendered = renderAgentDirectivesPrompt({
+      version: 7,
+      directives: "Write in plain English. Never email a client without asking.",
+      pushedAt: "2026-08-02T10:00:00.000Z",
+      pushedByUserId: "steward-1",
+    });
+
+    expect(rendered).toContain("Operating Directives");
+    expect(rendered).toContain("v7");
+    expect(rendered).toContain("Write in plain English. Never email a client without asking.");
+    expect(rendered).toContain("cannot grant");
+  });
+
+  it("returns an empty section when there are no directives", () => {
+    expect(renderAgentDirectivesPrompt(null)).toBe("");
+    expect(renderAgentDirectivesPrompt(undefined)).toBe("");
+    expect(renderAgentDirectivesPrompt({ version: 1, directives: "   " })).toBe("");
+    expect(renderAgentDirectivesPrompt("just a string")).toBe("");
   });
 });

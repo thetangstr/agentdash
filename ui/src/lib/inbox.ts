@@ -729,6 +729,24 @@ export function getApprovalsForTab(
   });
 }
 
+/**
+ * AgentDash-MK: restrict the "mine" tab to the set the server returned.
+ *
+ * `isApprovalVisibleInMine` treats every actionable approval as mine, which is
+ * correct for the default profile but wrong under stewardship — a steward may
+ * only act on their own agent's requests. The server resolves that from the
+ * session, so membership is its decision; the client only renders. A null
+ * `serverScopedApprovalIds` means the server set has not loaded yet, and we
+ * show nothing rather than briefly showing another steward's approvals.
+ */
+export function restrictApprovalsToServerScope(
+  approvals: Approval[],
+  serverScopedApprovalIds: Set<string> | null,
+): Approval[] {
+  if (!serverScopedApprovalIds) return [];
+  return approvals.filter((approval) => serverScopedApprovalIds.has(approval.id));
+}
+
 export function isApprovalVisibleInMine(
   approval: Approval,
   currentUserId?: string | null,
@@ -1065,6 +1083,7 @@ export function computeInboxBadgeData({
   dismissedAlerts,
   dismissedAtByKey,
   currentUserId,
+  serverScopedApprovalIds,
 }: {
   approvals: Approval[];
   joinRequests: JoinRequest[];
@@ -1074,8 +1093,23 @@ export function computeInboxBadgeData({
   dismissedAlerts: Set<string>;
   dismissedAtByKey: ReadonlyMap<string, number>;
   currentUserId?: string | null;
+  /**
+   * AgentDash-MK: which approvals this user may actually act on, as decided by
+   * the server.
+   *
+   * Three states, and the difference matters. `undefined` means the company is
+   * not on the profile and the client heuristic stands — every existing caller
+   * passes nothing and must not change. A `Set` scopes the count. `null` means
+   * the profile company's scope has not loaded yet, and the count is zero: the
+   * badge must never promise work the tab it opens will not show.
+   */
+  serverScopedApprovalIds?: Set<string> | null;
 }): InboxBadgeData {
-  const actionableApprovals = approvals.filter(
+  const scopedApprovals =
+    serverScopedApprovalIds === undefined
+      ? approvals
+      : restrictApprovalsToServerScope(approvals, serverScopedApprovalIds);
+  const actionableApprovals = scopedApprovals.filter(
     (approval) =>
       isApprovalVisibleInMine(approval, currentUserId) &&
       ACTIONABLE_APPROVAL_STATUSES.has(approval.status) &&

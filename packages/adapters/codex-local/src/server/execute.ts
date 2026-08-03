@@ -30,6 +30,7 @@ import {
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
   renderTemplate,
+  renderAgentDirectivesPrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -616,9 +617,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   })();
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  // AgentDash-MK: standing directives from the steward's harness. Placed ahead
+  // of the wake/task sections because they constrain HOW the work is done, and
+  // rendered on every turn — including resumed sessions, where the bootstrap
+  // prompt is suppressed — because a constraint the agent stops being told
+  // about stops being a constraint.
+  const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
   const prompt = joinPromptSections([
     promptInstructionsPrefix,
     renderedBootstrapPrompt,
+    agentDirectivesNote,
     wakePrompt,
     codexFallbackHandoffNote,
     sessionHandoffNote,

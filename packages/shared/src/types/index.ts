@@ -88,6 +88,75 @@ export type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
 } from "./agent.js";
+export type {
+  AgentStewardship,
+  AgentStewardshipWithAgent,
+  AssignAgentStewardship,
+  TransferAgentStewardship,
+} from "./agent-stewardship.js";
+export type {
+  AgentDestructiveActionMode,
+  AgentMinimumApprovalMode,
+  AgentGovernanceChannel,
+  AgentGovernanceTarget,
+  AgentGovernancePolicy,
+  AgentGovernancePolicyRecord,
+  AgentPolicyViolation,
+  AgentPolicyViolationCode,
+} from "./agent-governance.js";
+export type {
+  AgentDirective,
+  AgentDirectiveHistory,
+  AgentDirectiveRuntimeContext,
+} from "./agent-directives.js";
+export {
+  AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_DIRECTIVES_MAX_LENGTH,
+} from "./agent-directives.js";
+export type { WorkflowActorKind, WorkflowEventType, WorkflowRunMetrics } from "./workflow-events.js";
+export {
+  WORKFLOW_ACTOR_KINDS,
+  WORKFLOW_EVENT_TYPES,
+  WORKFLOW_STEP_CLOSING_EVENT_TYPES,
+} from "./workflow-events.js";
+// AgentDash-MK: the review agent's recommendation half
+export type {
+  WorkflowRecommendationEvidence,
+  WorkflowRecommendationKind,
+  WorkflowRecommendationStatus,
+  WorkflowRecommendationView,
+} from "./workflow-recommendations.js";
+export {
+  WORKFLOW_RECOMMENDATION_KINDS,
+  WORKFLOW_RECOMMENDATION_MIN_CYCLES,
+  WORKFLOW_RECOMMENDATION_STATUSES,
+  WORKFLOW_RECOMMENDATION_WINDOW_CYCLES,
+  isSeatShapedStepKey,
+} from "./workflow-recommendations.js";
+// AgentDash-MK: agent-to-agent fact requests
+export {
+  AGENT_FACT_REQUEST_STATUSES,
+  AGENT_FACT_SOURCE_KINDS,
+} from "./agent-facts.js";
+export type {
+  AgentFactFilterHold,
+  AgentFactProvenance,
+  AgentFactRequestStatus,
+  AgentFactRequestView,
+  AgentFactSourceKind,
+} from "./agent-facts.js";
+// AgentDash-MK: the standing filter on the return path
+export {
+  INBOUND_FILTER_CATEGORIES,
+  INBOUND_FILTER_SURFACES,
+  INBOUND_FILTER_VERDICTS,
+} from "./inbound-filter.js";
+export type {
+  InboundFilterCategory,
+  InboundFilterDecision,
+  InboundFilterSurface,
+  InboundFilterVerdict,
+} from "./inbound-filter.js";
 export type { AssetImage } from "./asset.js";
 export type { Project, ProjectCodebase, ProjectCodebaseOrigin, ProjectGoalRef, ProjectWorkspace } from "./project.js";
 export type {
@@ -367,3 +436,9 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+
+export type {
+  HumanChannelProvider,
+  ExternalChannelEventState,
+  HumanChannelBinding,
+} from "./human-channel.js";

@@ -54,8 +54,10 @@ import {
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
-  assertNoAgentHostWorkspaceCommandMutation,
+  assertHostWorkspaceCommandAuthority,
   collectAgentAdapterWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -95,6 +97,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { LEGACY_PROMPT_TEMPLATE_PATH } from "../services/agent-instructions.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
@@ -166,6 +169,10 @@ export function agentRoutes(
   const router = Router();
   const svc = agentService(db);
   const access = accessService(db);
+  // AgentDash-MK: steward authority + owner-ceiling enforcement for agent
+  // configuration. No-ops for `default`-profile companies.
+  const governance = agentGovernanceService(db);
+  const stewardships = agentStewardshipService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -538,6 +545,66 @@ export function agentRoutes(
     }
   }
 
+  /**
+   * Fields a steward may change on their own agent. Everything outside this set
+   * requires `agents:create`.
+   *
+   * This allowlist is a security boundary, not ergonomics. `role` is excluded
+   * because promoting an agent to `ceo` grants that agent's key company-wide
+   * authority over every other agent (see the `actorAgent.role === "ceo"`
+   * branches below) — that would turn per-agent stewardship into exactly the
+   * company-wide agent administration the design forbids. `adapterConfig` and
+   * `runtimeConfig` are excluded because they carry host-executed
+   * `workspaceStrategy` commands; `spentMonthlyCents` because resetting
+   * recorded spend defeats the budget hard stop; `status`/`reportsTo`/
+   * `defaultEnvironmentId`/`adapterType` because none are ceiling-bound.
+   */
+  const STEWARD_PATCHABLE_AGENT_FIELDS = new Set([
+    "title",
+    "icon",
+    "capabilities",
+    "budgetMonthlyCents",
+  ]);
+
+  /**
+   * Board authority to configure one agent: an administrator with
+   * `agents:create`, or (in `agentdash_mk` companies) the agent's current
+   * steward. Returns which authority applied so callers can narrow what a
+   * steward is allowed to change.
+   */
+  async function requireAgentConfigurationAuthority(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward"> {
+    assertCompanyAccess(req, targetAgent.companyId);
+    const authority = await governance.resolveConfigurationAuthority(
+      targetAgent.companyId,
+      targetAgent.id,
+      req.actor,
+    );
+    if (authority) return authority;
+    // Preserve the existing error semantics for non-stewards.
+    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    return "admin";
+  }
+
+  /** 403 when a steward-authority caller touches a field only an admin may set. */
+  function assertStewardPatchScope(
+    authority: "admin" | "steward" | "agent",
+    body: Record<string, unknown>,
+  ) {
+    if (authority !== "steward") return;
+    const forbiddenFields = Object.keys(body).filter(
+      (key) => !STEWARD_PATCHABLE_AGENT_FIELDS.has(key),
+    );
+    if (forbiddenFields.length > 0) {
+      throw forbidden(
+        `Stewardship does not permit changing ${forbiddenFields.sort().join(", ")}; ` +
+          "an administrator with agents:create must make this change",
+      );
+    }
+  }
+
   async function assertCanReadConfigurations(req: Request, companyId: string) {
     return assertCanCreateAgentsForCompany(req, companyId);
   }
@@ -635,11 +702,13 @@ export function agentRoutes(
     };
   }
 
-  async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+  async function assertCanUpdateAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward" | "agent"> {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
-      return;
+      return requireAgentConfigurationAuthority(req, targetAgent);
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
@@ -648,15 +717,15 @@ export function agentRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    if (actorAgent.id === targetAgent.id) return;
-    if (actorAgent.role === "ceo") return;
+    if (actorAgent.id === targetAgent.id) return "agent";
+    if (actorAgent.role === "ceo") return "agent";
     const allowedByGrant = await access.hasPermission(
       targetAgent.companyId,
       "agent",
       actorAgent.id,
       "agents:create",
     );
-    if (allowedByGrant || canCreateAgents(actorAgent)) return;
+    if (allowedByGrant || canCreateAgents(actorAgent)) return "agent";
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
@@ -884,9 +953,13 @@ export function agentRoutes(
     return entries;
   }
 
-  function assertNoAgentRuntimeConfigAdapterConfigMutation(req: Request, runtimeConfig: unknown) {
+  async function assertNoAgentRuntimeConfigAdapterConfigMutation(
+    req: Request,
+    companyId: string,
+    runtimeConfig: unknown,
+  ) {
     for (const entry of listRuntimeModelProfileAdapterConfigs(runtimeConfig)) {
-      assertNoAgentAdapterConfigMutation(req, entry.adapterConfig, entry.path);
+      await assertNoAgentAdapterConfigMutation(req, companyId, entry.adapterConfig, entry.path);
     }
   }
 
@@ -1105,14 +1178,76 @@ export function agentRoutes(
     }
   }
 
-  async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
+  /**
+   * Instructions LOCATION — the adapterConfig path key, the bundle mode, and
+   * the external `rootPath`. Administrator only, even in a profile company.
+   *
+   * A steward must not reach this: `rootPath` is an arbitrary absolute
+   * directory that the server `mkdir -p`s and then writes files into, so
+   * granting it would hand an ordinary operator arbitrary host filesystem
+   * write. Stewards edit instruction CONTENT inside the configured root
+   * instead — see `assertCanEditInstructionsContent`.
+   */
+  async function assertCanManageInstructionsLocation(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type !== "board") {
       throw forbidden(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit changing where agent instructions are stored; " +
+          "an administrator with agents:create must make this change",
+      );
+    }
+  }
+
+  /**
+   * Instructions CONTENT — mandate files within the already-configured bundle
+   * root. This is the steward's mandate-editing surface (design §6.3); writes
+   * stay confined to the root an administrator chose.
+   */
+  async function assertCanEditInstructionsContent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+    body: { path?: unknown; clearLegacyPromptTemplate?: unknown } = {},
+  ) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "board") {
+      throw forbidden(
+        "Only board-authenticated callers can manage instructions path or bundle configuration",
+      );
+    }
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority !== "steward") return;
+
+    // A steward may only write inside the SERVER-MANAGED bundle root. An
+    // external or legacy-derived root is an arbitrary host directory (commonly
+    // the adapter's `cwd`, i.e. a real checkout), where writing files like
+    // `.claude/settings.json`, `.mcp.json`, or `Makefile` is host code
+    // execution on the next agent run. There is no filename allowlist here, so
+    // confining the ROOT is the control.
+    const bundle = await instructions.getBundle(targetAgent as never);
+    if (bundle.mode !== "managed" || !bundle.rootPath || bundle.rootPath !== bundle.managedRootPath) {
+      throw forbidden(
+        "Stewardship only permits editing instructions in the managed bundle; " +
+          "this agent uses an external instructions root, so an administrator must edit it",
+      );
+    }
+    // Both are back doors into instructions LOCATION: the legacy path writes
+    // adapterConfig.promptTemplate directly, and the clear flag rewrites the
+    // bundle-mode/root keys that assertCanManageInstructionsLocation reserves.
+    if (body.clearLegacyPromptTemplate === true) {
+      throw forbidden("Stewardship does not permit clearing the legacy prompt template");
+    }
+    if (typeof body.path === "string" && body.path.trim() === LEGACY_PROMPT_TEMPLATE_PATH) {
+      throw forbidden("Stewardship does not permit editing the legacy prompt template");
+    }
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -1134,14 +1269,17 @@ export function agentRoutes(
     return KNOWN_INSTRUCTIONS_BUNDLE_KEYS.some((key) => adapterConfig[key] !== undefined);
   }
 
-  function assertNoAgentAdapterConfigMutation(
+  async function assertNoAgentAdapterConfigMutation(
     req: Request,
+    companyId: string,
     adapterConfig: Record<string, unknown>,
     path = "adapterConfig",
   ) {
     assertNoAgentInstructionsConfigMutation(req, adapterConfig, path);
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      companyId,
       collectAgentAdapterWorkspaceCommandPaths(adapterConfig, path),
     );
   }
@@ -1815,7 +1953,15 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const rollbackAuthority = await assertCanUpdateAgent(req, existing);
+    // A rollback restores a whole prior configuration — including fields no
+    // ceiling dimension covers (role, adapterConfig) and values captured before
+    // the current ceiling existed. Stewardship alone is not sufficient.
+    if (rollbackAuthority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
+      );
+    }
 
     const actor = getActorInfo(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
@@ -1984,8 +2130,8 @@ export function agentRoutes(
       hireInput.adapterType,
       rawHireAdapterConfig,
     );
-    assertNoAgentAdapterConfigMutation(req, rawHireAdapterConfig);
-    assertNoAgentRuntimeConfigAdapterConfigMutation(req, hireInput.runtimeConfig);
+    await assertNoAgentAdapterConfigMutation(req, companyId, rawHireAdapterConfig);
+    await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, hireInput.runtimeConfig);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
@@ -2189,8 +2335,8 @@ export function agentRoutes(
       createInput.adapterType,
       rawCreateAdapterConfig,
     );
-    assertNoAgentAdapterConfigMutation(req, rawCreateAdapterConfig);
-    assertNoAgentRuntimeConfigAdapterConfigMutation(req, createInput.runtimeConfig);
+    await assertNoAgentAdapterConfigMutation(req, companyId, rawCreateAdapterConfig);
+    await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, createInput.runtimeConfig);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
@@ -2329,8 +2475,40 @@ export function agentRoutes(
         return;
       }
     } else {
-      await assertBoardCanManageAgentsForCompany(req, existing.companyId);
+      const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
+      // `agents:create` is company-wide agent administration by another name:
+      // an agent holding it can modify every agent in the company via its own
+      // key. A steward must not be able to grant it to their own agent, and the
+      // ceiling cannot be relied on to stop them because the default ceiling is
+      // deliberately unrestricted.
+      if (permissionAuthority === "steward" && req.body.canCreateAgents) {
+        throw forbidden(
+          "Stewardship does not permit granting agent-creation authority; " +
+            "an administrator with agents:create must make this change",
+        );
+      }
     }
+
+    // AgentDash-MK: the owner ceiling binds at the service boundary, so a
+    // steward (or an admin) cannot grant an agent authority the owner withheld.
+    // This must validate the permissions that will ACTUALLY be written, not the
+    // request body: `tasks:assign` is additionally derived below from the CEO
+    // role and from canCreateAgents, so checking the raw body would let
+    // `{canCreateAgents: true, canAssignTasks: false}` slip a withheld
+    // `tasks:assign` grant past a ceiling that forbids it.
+    const willAssignTasks =
+      existing.role === "ceo" || Boolean(req.body.canCreateAgents) || Boolean(req.body.canAssignTasks);
+    await governance.assertAgentMutationWithinCeiling(
+      existing.companyId,
+      existing.id,
+      {
+        permissions: [
+          ...(req.body.canCreateAgents ? ["agents:create"] : []),
+          ...(willAssignTasks ? ["tasks:assign"] : []),
+        ],
+      },
+      { actorUserId: req.actor.userId ?? null },
+    );
 
     const agent = await svc.updatePermissions(id, req.body);
     if (!agent) {
@@ -2381,7 +2559,7 @@ export function agentRoutes(
       return;
     }
 
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
     const explicitKey = asNonEmptyString(req.body.adapterConfigKey);
@@ -2390,6 +2568,21 @@ export function agentRoutes(
     if (!adapterConfigKey) {
       res.status(422).json({
         error: `No default instructions path key for adapter type '${existing.adapterType}'. Provide adapterConfigKey.`,
+      });
+      return;
+    }
+    // `adapterConfigKey` is caller-supplied and this route writes it straight
+    // into adapterConfig, so it must be constrained to actual instructions-path
+    // keys. Unbounded, it is an arbitrary-adapterConfig writer — a caller could
+    // set `command` (the host binary every local adapter spawns) or delete
+    // `workspaceStrategy`. That is now reachable by stewards, not just admins.
+    const allowedInstructionsPathKeys = new Set(KNOWN_INSTRUCTIONS_PATH_KEYS);
+    if (defaultKey) allowedInstructionsPathKeys.add(defaultKey);
+    if (!allowedInstructionsPathKeys.has(adapterConfigKey)) {
+      res.status(422).json({
+        error:
+          `adapterConfigKey '${adapterConfigKey}' is not an instructions path key. ` +
+          `Expected one of: ${[...allowedInstructionsPathKeys].sort().join(", ")}.`,
       });
       return;
     }
@@ -2469,7 +2662,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
@@ -2535,7 +2728,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const actor = getActorInfo(req);
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
@@ -2584,7 +2777,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {
@@ -2647,11 +2840,23 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const updateAuthority = await assertCanUpdateAgent(req, existing);
+    assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
+    }
+
+    // AgentDash-MK: budget is a ceiling dimension, so it is checked before
+    // persistence rather than trusted from the client.
+    if (hasOwn(req.body as object, "budgetMonthlyCents")) {
+      await governance.assertAgentMutationWithinCeiling(
+        existing.companyId,
+        existing.id,
+        { monthlyBudgetCents: (req.body as { budgetMonthlyCents: number }).budgetMonthlyCents },
+        { actorUserId: req.actor.userId ?? null },
+      );
     }
 
     const patchData = { ...(req.body as Record<string, unknown>) };
@@ -2663,10 +2868,10 @@ export function agentRoutes(
         res.status(422).json({ error: "adapterConfig must be an object" });
         return;
       }
-      assertNoAgentAdapterConfigMutation(req, adapterConfig);
+      await assertNoAgentAdapterConfigMutation(req, existing.companyId, adapterConfig);
       const changingInstructionsConfig = adapterConfigTouchesInstructionsConfig(adapterConfig);
       if (changingInstructionsConfig) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       patchData.adapterConfig = adapterConfig;
     }
@@ -2681,7 +2886,7 @@ export function agentRoutes(
         res.status(422).json({ error: "runtimeConfig must be an object" });
         return;
       }
-      assertNoAgentRuntimeConfigAdapterConfigMutation(req, runtimeConfig);
+      await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;
     }
     const touchesAdapterConfiguration =
@@ -2701,7 +2906,7 @@ export function agentRoutes(
           existingAdapterConfig[key] !== undefined && requestedAdapterConfig[key] === undefined,
         )
       ) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       let rawEffectiveAdapterConfig = requestedAdapterConfig ?? existingAdapterConfig;
       if (requestedAdapterConfig && !changingAdapterType && !replaceAdapterConfig) {

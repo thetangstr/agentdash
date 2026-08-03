@@ -12,8 +12,21 @@ const nonServerProjects = [
   "@paperclipai/db",
   "@paperclipai/adapter-utils",
   "@paperclipai/adapter-acpx-local",
+  // AgentDash: this manifest and vitest.config.ts are maintained separately and
+  // had drifted — five adapter packages carried suites that `pnpm test:run`
+  // never opened, openclaw-gateway in both manifests. A test nobody runs is the
+  // same shape of gap as a function nobody calls.
+  "@paperclipai/adapter-claude-local",
   "@paperclipai/adapter-codex-local",
+  "@paperclipai/adapter-cursor-local",
+  "@paperclipai/adapter-gemini-local",
+  "@paperclipai/adapter-openclaw-gateway",
   "@paperclipai/adapter-opencode-local",
+  "@paperclipai/adapter-pi-local",
+  // AgentDash: the MCP server's suites were listed in no runner, so 96 passing
+  // tests were never executed by `pnpm test:run`. A test nobody runs is the
+  // same shape of gap as a function nobody calls.
+  "@agentdash/mcp-server",
   "@paperclipai/ui",
   "paperclipai",
 ];

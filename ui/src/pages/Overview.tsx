@@ -295,6 +295,8 @@ type Resolution = { label: string; tone: "success" | "muted" };
 
 type LiveApproval = {
   id: string;
+  /** Revision the card was rendered from; echoed back on decide. */
+  revision?: number;
   card: boolean;
   status: ApprovalStatus;
   eyebrowIcon?: LucideIcon;
@@ -683,6 +685,7 @@ export function Overview() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const [approvals, setApprovals] = useState<LiveApproval[]>([]);
   const resolvingIds = useRef<Set<string>>(new Set());
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   // Fetch real dashboard data
   const { data: dashboard, isLoading: dashLoading, error: dashError } = useQuery({
@@ -716,6 +719,7 @@ export function Overview() {
         typeof payload?.role === "string" ? String(payload.role) : "";
       return {
         id: a.id,
+        revision: a.revision,
         card: true,
         status: "pending" as ApprovalStatus,
         eyebrowIcon: Icon,
@@ -800,19 +804,27 @@ export function Overview() {
 
   function resolveApproval(id: string, resolution: Resolution) {
     if (resolvingIds.current.has(id)) return;
+    // Captured before any optimistic mutation so a refusal can restore the
+    // exact card the user acted on.
+    const pendingCard = approvals.find((a) => a.id === id);
+    if (!pendingCard) return;
     resolvingIds.current.add(id);
 
-    // Optimistic UI update
+    setDecisionError(null);
+
+    // Optimistic UI update. The timers are captured so a refusal can cancel
+    // them — without that, restoring the card is pointless: the queued
+    // collapse and removal still fire and the card vanishes anyway.
     setApprovals((prev) =>
       prev.map((a) => (a.id === id ? { ...a, status: "resolving", resolution } : a)),
     );
-    window.setTimeout(
+    const collapseTimer = window.setTimeout(
       () => {
         setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status: "collapsing" } : a)));
       },
       reduced ? 400 : 720,
     );
-    window.setTimeout(
+    const removeTimer = window.setTimeout(
       () => {
         setApprovals((prev) => prev.filter((a) => a.id !== id));
       },
@@ -820,11 +832,28 @@ export function Overview() {
     );
 
     // Fire real API call
-    if (resolution.tone === "success") {
-      approvalsApi.approve(id).catch(() => {});
-    } else {
-      approvalsApi.reject(id).catch(() => {});
-    }
+    const revision = pendingCard.revision;
+    const decision =
+      resolution.tone === "success"
+        ? approvalsApi.approve(id, { revision })
+        : approvalsApi.reject(id, { revision });
+    // Steward gating and revision binding mean this can legitimately 403 or
+    // 409. Swallowing that leaves the card animating "approved" while the
+    // server refused, so restore the card and surface the reason instead.
+    decision.catch((err: unknown) => {
+      window.clearTimeout(collapseTimer);
+      window.clearTimeout(removeTimer);
+      resolvingIds.current.delete(id);
+      setDecisionError(err instanceof Error ? err.message : "Decision failed");
+      // Re-add rather than map: the removal timer may already have run if the
+      // server was slow, in which case the card is no longer in the list.
+      setApprovals((prev) => {
+        const restored = { ...pendingCard, status: "pending" as ApprovalStatus, resolution: undefined };
+        return prev.some((a) => a.id === id)
+          ? prev.map((a) => (a.id === id ? restored : a))
+          : [restored, ...prev];
+      });
+    });
   }
 
   // reveal index counter
@@ -1034,6 +1063,11 @@ export function Overview() {
           </Reveal>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {decisionError ? (
+              <div role="alert" style={{ color: "var(--destructive)", fontSize: 13 }}>
+                {decisionError}
+              </div>
+            ) : null}
             {visibleCards.map((approval) => (
               <Reveal key={approval.id} index={next()} reduced={reduced}>
                 <ApprovalCard approval={approval} reduced={reduced} onResolve={resolveApproval} />

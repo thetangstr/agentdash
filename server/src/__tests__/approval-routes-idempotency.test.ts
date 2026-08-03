@@ -53,10 +53,30 @@ function registerModuleMocks() {
   }));
 }
 
+/**
+ * A no-op `update` chain.
+ *
+ * Deciding an approval now also settles any bridge task linked to it. That is a
+ * conditional UPDATE which matches nothing for an approval that is not a bridge
+ * task — but a stub that models only `select` throws instead of returning no
+ * rows, which is a defect in the fake, not in the code under test.
+ */
+function noopUpdateChain() {
+  const chain: any = {
+    set: () => chain,
+    where: () => chain,
+    returning: () => Promise.resolve([]),
+    then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
+      Promise.resolve([]).then(resolve, reject),
+  };
+  return chain;
+}
+
 function createTierDbStub(options: { planTier?: string; activeAgents?: number } = {}) {
   const db: any = {
     execute: vi.fn().mockResolvedValue([]),
     transaction: vi.fn((fn: (tx: unknown) => Promise<unknown>) => fn(db)),
+    update: vi.fn(() => noopUpdateChain()),
   };
   db.select = vi.fn((shape?: Record<string, unknown>) => {
     const rowsForShape = () => {
@@ -85,7 +105,34 @@ function createTierDbStub(options: { planTier?: string; activeAgents?: number } 
   return db;
 }
 
-async function createApp(actorOverrides: Record<string, unknown> = {}, db: unknown = {}) {
+/**
+ * Minimal db stub. Approval decisions now resolve the owning company's product
+ * profile to decide whether AgentDash-MK steward authority applies; this
+ * returns a `default`-profile company so these tests exercise the unchanged
+ * board-approval baseline.
+ */
+function createDefaultProfileDbStub() {
+  const chain: any = {
+    from: () => chain,
+    leftJoin: () => chain,
+    where: () => chain,
+    groupBy: () => chain,
+    then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
+      Promise.resolve([{ id: "company-1", productProfile: "default" }]).then(resolve, reject),
+  };
+  const db: any = {
+    select: () => chain,
+    execute: () => Promise.resolve([]),
+    update: () => noopUpdateChain(),
+  };
+  db.transaction = (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+  return db;
+}
+
+async function createApp(
+  actorOverrides: Record<string, unknown> = {},
+  db: unknown = createDefaultProfileDbStub(),
+) {
   const [{ errorHandler }, { approvalRoutes }] = await Promise.all([
     import("../middleware/index.js"),
     import("../routes/approvals.js"),
@@ -125,7 +172,7 @@ async function createAgentApp() {
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes(createDefaultProfileDbStub() as any));
   app.use(errorHandler);
   return app;
 }
@@ -284,7 +331,7 @@ describe("approval routes idempotent retries", () => {
       .send({ decidedByUserId: "forged-user", decisionNote: "ship it" });
 
     expect(res.status).toBe(200);
-    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-4", "user-1", "ship it");
+    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-4", "user-1", "ship it", expect.objectContaining({ actorRole: "board", channel: "web" }));
   });
 
   it("blocks approving a hire_agent approval that would create a second Free agent", async () => {
@@ -366,7 +413,7 @@ describe("approval routes idempotent retries", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-free-retry", "user-1", undefined);
+    expect(mockApprovalService.approve).toHaveBeenCalledWith("approval-free-retry", "user-1", undefined, expect.objectContaining({ actorRole: "board", channel: "web" }));
     expect(db.execute).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
@@ -395,7 +442,7 @@ describe("approval routes idempotent retries", () => {
       .send({ decidedByUserId: "forged-user", decisionNote: "not now" });
 
     expect(res.status).toBe(200);
-    expect(mockApprovalService.reject).toHaveBeenCalledWith("approval-5", "user-1", "not now");
+    expect(mockApprovalService.reject).toHaveBeenCalledWith("approval-5", "user-1", "not now", expect.objectContaining({ actorRole: "board", channel: "web" }));
   });
 
   it("derives approval attribution from the authenticated actor on request revision", async () => {

@@ -78,3 +78,7 @@ scratch.md
 .draft.*
 tmp/
 worktrees/
+
+# Playwright run artifacts
+test-results/
+tests/e2e/test-results/

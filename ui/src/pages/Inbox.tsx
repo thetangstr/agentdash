@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
+import { stewardshipsApi } from "../api/stewardships";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
@@ -114,6 +115,7 @@ import {
   matchesInboxIssueSearch,
   getRecentTouchedIssues,
   isInboxEntityDismissed,
+  restrictApprovalsToServerScope,
   isMineInboxTab,
   loadCollapsedInboxGroupKeys,
   loadInboxFilterPreferences,
@@ -650,7 +652,7 @@ function JoinRequestInboxRow({
 }
 
 export function Inbox() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
@@ -749,6 +751,38 @@ export function Inbox() {
     queryKey: queryKeys.approvals.list(selectedCompanyId!),
     queryFn: () => approvalsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  // AgentDash-MK: which approvals are "mine" is a server decision, not a client
+  // filter. `isApprovalVisibleInMine` shows every actionable approval to every
+  // member, which is wrong under stewardship — a steward may only act on their
+  // own agent's requests. The server route resolves that from the session.
+  const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
+  // `status=all` because the `recent` and `all` tabs render decided work.
+  // Scoping those against an open-only set would erase every resolved approval
+  // instead of scoping it. Distinct query key from My Agent's open-only fetch.
+  const { data: personalInbox } = useQuery({
+    queryKey: queryKeys.myAgent.inboxScope(selectedCompanyId ?? ""),
+    queryFn: () => stewardshipsApi.getMyInbox(selectedCompanyId!, "all"),
+    enabled: !!selectedCompanyId && isProfileCompany,
+  });
+  const serverScopedApprovalIds = useMemo(
+    () =>
+      personalInbox ? new Set(personalInbox.items.map((item) => item.approvalId)) : null,
+    [personalInbox],
+  );
+
+  // Scoping the `all` tab removes a company-wide view some people legitimately
+  // had. Rather than leave it looking like items vanished, point the people who
+  // still have that view at where it moved. Derived from whether the override
+  // endpoint answers, because it is the same authority check the server makes —
+  // a client-side role guess would drift from it. Only fires on the tab that
+  // needs it.
+  const { isSuccess: canUseOverrideView } = useQuery({
+    queryKey: queryKeys.myAgent.overrideInbox(selectedCompanyId ?? ""),
+    queryFn: () => stewardshipsApi.getOverrideInbox(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isProfileCompany && tab === "all",
+    retry: false,
   });
 
   const {
@@ -1008,13 +1042,34 @@ export function Inbox() {
   );
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
+    // In a profile company the server owns membership of the Inbox, and it owns
+    // it on EVERY tab — not just `mine`. Scoping one tab moved aggregation for
+    // that tab while `all`, `recent`, and `unread` kept rendering the unscoped
+    // company approval list, so the same items a steward could not decide were
+    // one click away. Payloads are redacted and the server refuses the
+    // resulting decisions, so this was metadata exposure rather than credential
+    // exposure — but it is still not this user's work to see here.
+    //
+    // Administrators keep a company-wide view; it lives on the Override screen,
+    // where the controls match the authority (see the notice below).
+    if (isProfileCompany) {
+      filtered = restrictApprovalsToServerScope(filtered, serverScopedApprovalIds);
+    }
     if (tab === "mine") {
       filtered = filtered.filter(
         (a) => !isInboxEntityDismissed(dismissedAtByKey, `approval:${a.id}`, a.updatedAt),
       );
     }
     return filtered;
-  }, [approvals, tab, allApprovalFilter, currentUserId, dismissedAtByKey]);
+  }, [
+    approvals,
+    tab,
+    allApprovalFilter,
+    currentUserId,
+    dismissedAtByKey,
+    isProfileCompany,
+    serverScopedApprovalIds,
+  ]);
   const showJoinRequestsCategory =
     allCategoryFilter === "everything" || allCategoryFilter === "join_requests";
   const showTouchedCategory =
@@ -1313,26 +1368,48 @@ export function Inbox() {
     saveInboxWorkItemGroupBy(nextGroupBy);
   }, []);
 
+  /**
+   * The scope set decides what every tab renders, so it has to be refetched
+   * whenever a decision changes an approval's status — `status=all` keeps the
+   * item, but its status moves, and a stale set would leave the tab drawing the
+   * pre-decision picture. `onSettled` rather than `onSuccess`: a failed
+   * decision may still have moved the row (a revision conflict means someone
+   * else decided it).
+   */
+  const invalidateApprovalScopeQueries = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+    if (isProfileCompany) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAgent.inboxScope(selectedCompanyId!) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAgent.inbox(selectedCompanyId!) });
+    }
+  };
+
   const approveMutation = useMutation({
-    mutationFn: (id: string) => approvalsApi.approve(id),
-    onSuccess: (_approval, id) => {
+    mutationFn: ({ id, revision }: { id: string; revision: number }) =>
+      approvalsApi.approve(id, { revision }),
+    onSuccess: (_approval, { id }) => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
       navigate(`/approvals/${id}?resolved=approved`);
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Failed to approve");
     },
+    onSettled: () => {
+      invalidateApprovalScopeQueries();
+    },
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (id: string) => approvalsApi.reject(id),
+    mutationFn: ({ id, revision }: { id: string; revision: number }) =>
+      approvalsApi.reject(id, { revision }),
     onSuccess: () => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Failed to reject");
+    },
+    onSettled: () => {
+      invalidateApprovalScopeQueries();
     },
   });
 
@@ -2098,6 +2175,21 @@ export function Inbox() {
         </div>
       )}
 
+      {isProfileCompany && tab === "all" && (
+        <p className="text-xs text-muted-foreground">
+          Showing only the approvals you can act on.
+          {canUseOverrideView && (
+            <>
+              {" "}
+              <Link to="/inbox/override" className="underline underline-offset-2">
+                Override view
+              </Link>{" "}
+              lists every company approval.
+            </>
+          )}
+        </p>
+      )}
+
       {approvalsError && <p className="text-sm text-destructive">{approvalsError.message}</p>}
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
 
@@ -2335,8 +2427,8 @@ export function Inbox() {
                           approval={item.approval}
                           selected={isSelected}
                           requesterName={agentName(item.approval.requestedByAgentId)}
-                          onApprove={() => approveMutation.mutate(item.approval.id)}
-                          onReject={() => rejectMutation.mutate(item.approval.id)}
+                          onApprove={() => approveMutation.mutate({ id: item.approval.id, revision: item.approval.revision })}
+                          onReject={() => rejectMutation.mutate({ id: item.approval.id, revision: item.approval.revision })}
                           isPending={approveMutation.isPending || rejectMutation.isPending}
                           unreadState={nonIssueUnreadState(approvalKey)}
                           onMarkRead={() => handleMarkNonIssueRead(approvalKey)}

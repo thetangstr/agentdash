@@ -1,10 +1,13 @@
 import { and, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import type { CompanyProductProfile } from "@paperclipai/shared";
 import {
   companies,
   companyLogos,
   assets,
   agents,
+  agentGovernancePolicies,
+  agentStewardships,
   agentApiKeys,
   agentRuntimeState,
   agentTaskSessions,
@@ -79,6 +82,16 @@ export interface CompanyCreatorMembership {
   membershipRole?: string;
 }
 
+export function requireProductProfile<T extends { productProfile: CompanyProductProfile }>(
+  company: T | null | undefined,
+  productProfile: CompanyProductProfile,
+) {
+  if (!company || company.productProfile !== productProfile) {
+    throw notFound("Company not found");
+  }
+  return company;
+}
+
 export function companyService(db: Db) {
   const ISSUE_PREFIX_FALLBACK = "CMP";
   const environmentsSvc = environmentService(db);
@@ -88,6 +101,7 @@ export function companyService(db: Db) {
     name: companies.name,
     description: companies.description,
     status: companies.status,
+    productProfile: companies.productProfile,
     pauseReason: companies.pauseReason,
     pausedAt: companies.pausedAt,
     issuePrefix: companies.issuePrefix,
@@ -432,6 +446,11 @@ export function companyService(db: Db) {
         await tx.delete(assets).where(eq(assets.companyId, id));
         await tx.delete(goals).where(eq(goals.companyId, id));
         await tx.delete(projects).where(eq(projects.companyId, id));
+        // AgentDash-MK: both reference agents with ON DELETE NO ACTION, so they
+        // must go before the agents themselves or the delete fails with a
+        // foreign-key violation.
+        await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
+        await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));
         const rows = await tx
           .delete(companies)

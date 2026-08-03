@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "product_profile" text DEFAULT 'default' NOT NULL;

@@ -1,6 +1,9 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
+export const COMPANY_PRODUCT_PROFILES = ["default", "agentdash_mk"] as const;
+export type CompanyProductProfile = (typeof COMPANY_PRODUCT_PROFILES)[number];
+
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
 
@@ -333,8 +336,38 @@ export const APPROVAL_TYPES = [
   "budget_override_required",
   "request_board_approval",
   "mandate_violation",
+  // AgentDash-MK: an agent asking to WRITE through a connector. Never executed
+  // by the agent; the steward decides and the server executes with the
+  // connection owner's credential.
+  "connector_send",
+  // AgentDash-MK: the inbound filter held return-path content. The agent whose
+  // content it is asks for its release; the decision is an ordinary approval,
+  // because a second decision boundary is a second thing to get wrong.
+  "inbound_content_review",
+  // AgentDash-MK: a named approver signing off one cycle of a deliverable.
+  // Two of these per run, in sequence, and nothing ships without both. The
+  // decider is the user named in the payload, never the requesting agent's
+  // steward — who signs an artifact off is a property of the artifact.
+  "deliverable_review",
+  // AgentDash-MK: the review agent asking a pipeline's owner to decide on a
+  // suggestion it derived from three or more cycles of accumulated events.
+  // Advisory: approving one records that a human agreed, and nothing acts on
+  // it. It routes through the approvals service rather than inventing a
+  // parallel decision path, and the decider is the pipeline owner named in the
+  // payload — never up the org chart.
+  "workflow_recommendation",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
+
+/**
+ * Outcome of executing an approved `connector_send`.
+ *
+ * Deliberately NOT an approval status. The human's decision and the write's
+ * outcome are different facts: an approval can be cleanly `approved` while the
+ * write that followed it landed, failed, or — worst case — is unknowable.
+ */
+export const CONNECTOR_SEND_OUTCOMES = ["succeeded", "failed", "outcome_unknown"] as const;
+export type ConnectorSendOutcome = (typeof CONNECTOR_SEND_OUTCOMES)[number];
 
 export const APPROVAL_STATUSES = [
   "pending",

@@ -292,6 +292,38 @@ The system enforces per-workspace run quotas before each agent task starts. The 
 All four prompt surfaces (`default/AGENTS.md`, `ceo/AGENTS.md`, `chief_of_staff/AGENTS.md`, `agent-creator-from-proposal.ts`) have been updated in the `agent-run-quota` named block to describe the enforcement behavior. Agents should not retry quota-blocked runs and should escalate to the board for an upgrade.
 <!-- /AgentDash: quota-enforcement -->
 
+<!-- AgentDash: harness-directives — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-MK: Harness→Agent Control Channel (Slice 1)
+
+Every human in an `agentdash_mk` company has two agents: an autonomous one inside AgentDash, and a local harness agent (their own Claude Code) that supervises it. The harness is the authority and pushes the AgentDash agent's operating constraints. This is that push channel.
+
+### The two halves, and why they are separate
+
+- **Ceilings** (structured: `providers`, `dataScopes`, `permissions`, budget, destructive actions, minimum approval) grant and revoke. Enforced at `resolveActingAs`.
+- **Directives** (free text) shape behaviour. They reach the agent's runtime context and prompt, and they **cannot grant capability**. Nothing in the authorization path reads `agent_directives`, and nothing may be added that does.
+
+The separation is structural rather than conventional: capability lives in `agent_governance_policies`, directives live in `agent_directives`, and there is no column in the latter an enforcement point could consult.
+
+### Narrowing only
+
+`PUT /api/companies/:companyId/agents/:agentId/governance/harness-request` writes the **existing steward request** — no third term is added to `effective = owner ceiling ∩ steward request`. A pushed value broader than the owner ceiling is **clamped** to the ceiling and reported in `clamped`, not accepted and not 422'd. Rejecting would leave the previous, broader request in force, so the clamp is the fail-safe direction.
+
+### Key files
+
+- `packages/db/src/schema/agent_directives.ts` — append-only versioned rows, partial unique index on the active version
+- `server/src/services/agent-directives.ts` — storage plus the supersede-and-insert invariant; deliberately holds no policy logic
+- `server/src/routes/agent-directives.ts` — 404 outside the profile, 403 for anyone but the active steward
+- `server/src/services/agent-governance.ts` — `pushHarnessStewardRequest` (the clamp)
+- `server/src/services/heartbeat.ts` — injects `paperclipAgentDirectives` into the run context every tick
+- `packages/adapter-utils/src/server-utils.ts` — `renderAgentDirectivesPrompt`, wired into every adapter's prompt assembly
+- `packages/mcp-server/src/harness.ts` — the local Claude's four tools
+- `server/src/__tests__/agentdash-mk-harness-directives.test.ts` — including the clamp and the "a directive cannot widen `resolveActingAs`" case
+
+### Agent-facing impact
+
+All four prompt surfaces carry the `agentdash-mk-harness-directives` named block. Agents must treat directives as authoritative about HOW they work, must not read them as authorization, and must report rather than retry when a harness push narrows something away.
+<!-- /AgentDash: harness-directives -->
+
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash: Slack Connector (AGE-108)
 

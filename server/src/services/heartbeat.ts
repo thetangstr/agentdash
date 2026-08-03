@@ -7,6 +7,7 @@ import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArr
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  AGENT_DIRECTIVES_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
   isEnvironmentDriverSupportedForAdapter,
@@ -56,6 +57,7 @@ import { quotaEnforcementService, quotaExceededPayload } from "./quota-enforceme
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
+import { agentDirectivesService } from "./agent-directives.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -2188,6 +2190,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
+  const agentDirectivesSvc = agentDirectivesService(db);
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
@@ -5195,6 +5198,30 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       context.paperclipTaskMarkdown = taskMarkdown;
     } else {
       delete context.paperclipTaskMarkdown;
+    }
+    // AgentDash-MK: the harness→agent directives channel lands here.
+    //
+    // Injected on every tick, not once at agent creation, because a steward's
+    // harness can push a new version between two heartbeats and a constraint
+    // the agent stopped being told about is not a constraint. Re-read rather
+    // than cached for the same reason.
+    //
+    // No product-profile check: this is a single indexed lookup that returns
+    // nothing for a company whose harness never pushed, and the routes that
+    // write the table already 404 outside `agentdash_mk`. Adding a profile
+    // query here would cost a round trip to learn what the empty result
+    // already says. The `delete` branch keeps a default-profile company's
+    // context byte-identical to before.
+    //
+    // This is the ONLY place directives enter the runtime, and they enter as
+    // TEXT. Nothing downstream turns them into an authorization input — the
+    // agent's actual capability is `resolveActingAs`, which has never heard of
+    // this table.
+    const activeDirectives = await agentDirectivesSvc.activeForRuntime(agent.companyId, agent.id);
+    if (activeDirectives) {
+      context[AGENT_DIRECTIVES_CONTEXT_KEY] = activeDirectives;
+    } else {
+      delete context[AGENT_DIRECTIVES_CONTEXT_KEY];
     }
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;
