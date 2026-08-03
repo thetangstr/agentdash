@@ -270,7 +270,8 @@ Each of these is a considered exclusion, not a gap.
 | Teams delivery | `server/src/services/approval-card-delivery.ts` | shipped (D) |
 | OBO / SharePoint | `server/src/services/entra-obo.ts`, `server/src/services/sharepoint-connector.ts` | shipped (F) |
 | Inbound filter | `server/src/services/inbound-filter.ts` | shipped (E) |
-| Deliverable pipeline | — | planned (G) |
+| Deliverable pipeline | `server/src/services/deliverable-{runs,checks,review,record}.ts`, `server/src/services/deliverables.ts` | shipped (G) |
+| Derivation record over MCP | `packages/mcp-server/src/resources.ts` | shipped (G9) |
 
 ---
 

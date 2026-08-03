@@ -141,23 +141,41 @@ the user, then ceilings narrow it. OBO must never widen — that would break Rul
 
 ## PHASE 2
 
-### G. Weekly pipeline
+### G. Weekly pipeline — **shipped**
 Slices A–F of the pipeline plan, with cross-agent collaboration replacing direct
 connector fetch as the collection mechanism.
 
 **Acceptance criteria**
 - G1. A deliverable is defined with its fact list by an implementer — **no customer
-  authors anything**.
-- G2. A run opens on schedule, collects, assembles, checks, and presents.
+  authors anything**. ✅ implementer-only routes; ordinary members and agent keys 403.
+- G2. A run opens on schedule, collects, assembles, checks, and presents. ✅ four
+  sequenced sweeps on one tick.
 - G3. **The check runs on a different execution path from assembly** — self-
-  certification impossible, not merely discouraged.
-- G4. Review surface shows draft + flagged items only.
+  certification impossible, not merely discouraged. ✅ four mechanisms: the
+  assembler cannot author the criteria, there is no import edge in either
+  direction and no reachable handle through the third module that bridges them,
+  the check records a digest of exactly what it read, and the database refuses
+  `checked` without the check's own artifacts.
+- G4. Review surface shows draft + flagged items only. ✅ `attention` computed
+  server-side, not left to a client filter.
 - G5. **Two approvers, sequential** (Titus then CEO). Instrument who waited on whom
   and for how long — this is the only multi-human signal MKThink can produce.
+  ✅ instrumented by SEAT (`approval.first` / `approval.second`, `approver_1` /
+  `approver_2`, elapsed per stage). Never by person — B3 forbids it, and a
+  per-employee response-time report is the documented task-mining backlash.
 - G6. Corrections write to `fact_corrections`, attach to the **fact not the person**,
-  and carry forward automatically.
-- G7. Nothing ships without both approvals.
-- G8. Scored `pass^k` across runs, not `pass@k`.
+  and carry forward automatically. ✅ three kinds; `override_value` carries forward
+  always flagged.
+- G7. Nothing ships without both approvals. ✅ database check constraint, with an
+  adversarial test that attempts the violation directly against the table.
+- G8. Scored `pass^k` across runs, not `pass@k`. ✅ both returned, so they can be
+  read next to each other.
+- G9. Derivation record served over MCP, read-only, no enforcement claimed. ✅
+  every served figure carries its age and last-confirmed-by.
+
+**Never run:** no real weekly cycle has executed. Every figure the pipeline has
+ever produced came from a mocked Microsoft Graph, and no approver has read the
+review surface.
 
 ### E. Inbound filter policy — **shipped**
 Extends the approvals gate from per-action to a standing filter on the return path.
