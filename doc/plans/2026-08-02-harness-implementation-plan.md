@@ -46,7 +46,7 @@ repository has actually shipped.
 | **G6** | Agent-facing change → all four prompt surfaces updated (CI drift check enforces) | — |
 
 Standing: strict TDD proving RED first; Lore commit format; never commit
-`pnpm-lock.yaml`; migrations only via `pnpm db:generate`; default-profile behaviour
+`pnpm-lock.yaml` [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md]; migrations only via `pnpm db:generate`; default-profile behaviour
 unchanged; profile-only routes 404 not 403; approvals service remains the only
 decision boundary.
 
@@ -248,7 +248,7 @@ entirely unvalidated.
 2. All acceptance criteria met, each with a named test
 3. All six cross-cutting gates pass
 4. Full gate green with real numbers reported
-5. Lore-format commit, `pnpm-lock.yaml` untouched
+5. Lore-format commit, `pnpm-lock.yaml` untouched [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md]
 6. What was **not** verified stated explicitly — the boundary between tested and
    merely wired
 
