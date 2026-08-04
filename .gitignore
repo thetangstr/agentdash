@@ -15,6 +15,7 @@ data/
 .pnpm-store/
 tmp-*
 cli/tmp/
+.vercel/
 
 # Scratch/seed scripts (but not scripts/ dir)
 check-*.mjs
