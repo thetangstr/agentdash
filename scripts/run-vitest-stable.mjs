@@ -27,6 +27,11 @@ const nonServerProjects = [
   // tests were never executed by `pnpm test:run`. A test nobody runs is the
   // same shape of gap as a function nobody calls.
   "@agentdash/mcp-server",
+  // AgentDash: packages/plugins/* was registered by no runner, so this
+  // workspace member's suite ran under neither manifest. Its e2b sibling
+  // (packages/plugins/sandbox-providers/e2b) stays out — it is deliberately
+  // excluded from the workspace in pnpm-workspace.yaml.
+  "@paperclipai/plugin-fake-sandbox",
   "@paperclipai/ui",
   "paperclipai",
 ];
