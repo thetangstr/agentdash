@@ -2,12 +2,12 @@ packages:
   - packages/*
   - packages/adapters/*
   - packages/plugins/*
-  # Keep sandbox-provider plugins installable as standalone packages without
-  # forcing root pnpm-lock.yaml churn for their third-party deps.
+  # Keep sandbox-provider plugins installable as standalone packages, out of the
+  # workspace so their third-party deps stay out of the CI-owned lockfile churn.
   - "!packages/plugins/sandbox-providers/**"
   - packages/plugins/examples/*
-  # Keep this smoke fixture installable as a local plugin example without
-  # forcing PRs to commit pnpm-lock.yaml for a new workspace importer.
+  # Keep this smoke fixture installable as a local plugin example, out of the
+  # workspace so a new importer adds no CI-owned lockfile churn.
   - "!packages/plugins/examples/plugin-orchestration-smoke-example"
   - server
   - ui

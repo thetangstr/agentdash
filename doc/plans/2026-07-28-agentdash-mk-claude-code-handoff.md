@@ -297,7 +297,7 @@ pnpm --filter @paperclipai/db run check:migrations
 ```
 
 Do not commit `pnpm-lock.yaml`; repository CI owns lockfile updates for this
-work.
+work. [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 
 ## 8. Exact continuation point
 
@@ -395,7 +395,7 @@ Do not use the CI bypass for this feature.
 - Prefer existing utilities and patterns; do not add abstractions or
   dependencies without need.
 - Generate migrations rather than hand-authoring the intended schema delta.
-- Do not commit `pnpm-lock.yaml`.
+- Do not commit `pnpm-lock.yaml`. [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 - Commits must use the Lore commit format from `AGENTS.md`.
 - Do not push or open a PR unless explicitly requested.
 
@@ -434,7 +434,7 @@ The branch is codex/agentdash-mk. Product code is complete through 01a4748c;
 later commits only add this handoff. Tasks 1 and 2 are complete, reviewed, and
 verified. Resume at Task 3 only. Use strict TDD, preserve the default profile,
 keep every route/service company-scoped, generate coherent Drizzle migration
-metadata, do not commit pnpm-lock.yaml, and use Lore commit messages. After
+metadata, do not commit pnpm-lock.yaml [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md], and use Lore commit messages. After
 implementation, run focused verification, then perform separate specification
 and code-quality reviews before starting Task 4.
 

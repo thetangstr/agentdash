@@ -30,7 +30,7 @@ Migrations `0096`–`0105`, each additive and correctly chained. WhatsApp
 added no table: it reuses `channel_pairing_challenges`, `channel_callback_tokens`,
 and `external_channel_events`, which is the point of having made them
 provider-generic.
-`pnpm-lock.yaml` is intentionally uncommitted; CI owns it. The
+`pnpm-lock.yaml` is tracked; CI owns it. [Superseded 2026-08-03: previously uncommitted — the lockfile is now tracked and the refresh-lockfile bot owns updates; see DEVELOPING.md.] The
 `@microsoft/teams.apps` dependency in `server/package.json` therefore needs a CI
 lockfile update before any build that installs from the lockfile alone.
 

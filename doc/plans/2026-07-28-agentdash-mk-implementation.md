@@ -48,7 +48,7 @@
 - Modify `server/src/services/access.ts` for offboarding stewardship.
 - Modify `server/src/services/issues.ts` and `server/src/routes/issues.ts` for complete child contributions.
 - Modify `server/src/app.ts`, `server/src/routes/index.ts`, and `server/src/services/index.ts`.
-- Modify `server/package.json` to add the current Teams SDK; do not commit `pnpm-lock.yaml`.
+- Modify `server/package.json` to add the current Teams SDK; do not commit `pnpm-lock.yaml`. [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 
 ### UI
 
@@ -623,7 +623,7 @@ git commit -m "Put each stewarded agent in Telegram"
 - Modify: `server/src/app.ts`
 - Test: `server/src/__tests__/teams-connector.test.ts`
 
-- [ ] **Step 1: Add the manifest dependency without committing the lockfile**
+- [ ] **Step 1: Add the manifest dependency** [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 
 ```json
 "@microsoft/teams.apps": "^2.0.14"
