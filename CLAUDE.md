@@ -97,7 +97,7 @@ When `STRIPE_SECRET_KEY` is set in production, caps are enforced as designed (Fr
 | CLI | Commander, esbuild | `cli/src/index.ts` |
 | Database | PostgreSQL, Drizzle ORM | `packages/db/src/schema/` |
 | Shared Types | Zod validators, constants | `packages/shared/src/` |
-| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw | `packages/adapters/` |
+| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, acpx | `packages/adapters/` |
 | Plugins | JSON-RPC workers, event bus | `packages/plugins/` |
 
 ### Service pattern
@@ -161,7 +161,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - **Dev**: Embedded PG (leave `DATABASE_URL` unset) — auto-managed at `~/.paperclip/instances/default/db/`
 - **Reset**: `rm -rf ~/.paperclip/instances/default/db && pnpm dev`
 - **Schema → Migration**: Edit `packages/db/src/schema/*.ts` → `pnpm db:generate` → `pnpm -r typecheck`
-- **14 migrations** (0046-0059) added by AgentDash; 60 total migrations
+- **Migrations** run 0000–0114 as of 2026-08-04 (the agentdash-mk work is 0096–0114); check `packages/db/src/migrations/meta/_journal.json` for the current head
 
 ## Branding
 
