@@ -8,6 +8,7 @@ import {
 } from "@paperclipai/shared";
 import { ShieldCheck, Trash2, Users } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
+import { ChannelBindingsTable } from "@/components/access/ChannelBindingsTable";
 import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
@@ -402,11 +403,14 @@ export function CompanyAccess() {
       </section>
 
       {selectedCompany?.productProfile === "agentdash_mk" && selectedCompanyId ? (
-        <StewardshipAssignments
-          companyId={selectedCompanyId}
-          members={membersQuery.data?.members ?? []}
-          canManage={membersQuery.data?.access.canManageAgents ?? false}
-        />
+        <>
+          <StewardshipAssignments
+            companyId={selectedCompanyId}
+            members={membersQuery.data?.members ?? []}
+            canManage={membersQuery.data?.access.canManageAgents ?? false}
+          />
+          <ChannelBindingsTable companyId={selectedCompanyId} />
+        </>
       ) : null}
 
       <Dialog open={!!editingMember} onOpenChange={(open) => !open && setEditingMemberId(null)}>
