@@ -5,6 +5,7 @@ import {
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
 } from "@paperclipai/shared";
 import { AgentCeilingEditor } from "@/components/settings/AgentCeilingEditor";
+import { NeedsReconciliationPanel } from "@/components/settings/NeedsReconciliationPanel";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { companiesApi } from "../api/companies";
@@ -592,7 +593,10 @@ export function CompanySettings() {
       </div>
 
       {selectedCompany?.productProfile === "agentdash_mk" && selectedCompany?.id ? (
-        <AgentCeilingEditor companyId={selectedCompany.id} />
+        <>
+          <AgentCeilingEditor companyId={selectedCompany.id} />
+          <NeedsReconciliationPanel companyId={selectedCompany.id} />
+        </>
       ) : null}
 
     </div>
