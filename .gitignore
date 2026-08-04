@@ -63,6 +63,13 @@ tests/release-smoke/playwright-report/
 .omc/
 **/.omc/
 
+# OMX runtime state — interview/skill state machines and the tmux hook config.
+# The durable design docs OMX produces are carried into docs/superpowers/specs/
+# instead (see 2026-07-28-human-agent-workforce-p0-spec.md); only the scratch
+# state is ignored here.
+.omx/
+**/.omx/
+
 # Stale Next.js marketing tree from v1 — only the repo-root /marketing dir is dead.
 # (ui/src/marketing/ IS our active React marketing surface; keep tracking it.)
 /marketing/
