@@ -115,6 +115,21 @@ const workflowEventPayloadSchemas = {
       executionId: z.string().min(1),
     })
     .strict(),
+  /**
+   * A destructive-action classifier verdict. Every key is about the ACTION and
+   * the ceiling, never who requested it: `surface` names the chokepoint,
+   * `actionClass` is the classifier's placement (a destructive class, or
+   * `safe_read` / `unclassified_write`), `mode` is the ceiling's setting, and
+   * `decision` is what the chokepoint did about it.
+   */
+  destructive_action_gated: z
+    .object({
+      surface: z.string().min(1),
+      actionClass: z.string().min(1),
+      mode: z.enum(["blocked", "approval_required", "allowed"]),
+      decision: z.enum(["refused", "approval_raised", "allowed"]),
+    })
+    .strict(),
 } satisfies Record<WorkflowEventType, z.ZodTypeAny>;
 
 export function workflowEventPayloadSchema(eventType: WorkflowEventType): z.ZodTypeAny {

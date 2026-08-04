@@ -510,6 +510,10 @@ describeEmbeddedPostgres("agentdash-mk workflow events", () => {
       // Slice E: every instruction entering a person's machine is classified,
       // and the verdict is recorded whether it passed or not. This one passed.
       "content_filtered",
+      // T5a: the destructive-action classifier's verdict. A bridge `act` is a
+      // local_machine_mutation, so under the default `approval_required` ceiling
+      // it is raised for approval — recorded here, and NOT step-closing.
+      "destructive_action_gated",
       "escalation_opened",
       "step_completed",
     ]);

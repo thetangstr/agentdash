@@ -1,13 +1,49 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, lt, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvals, bridgeEndpoints, bridgeTasks, companies } from "@paperclipai/db";
-import { badRequest, conflict, forbidden, notFound } from "../errors.js";
+import {
+  AGENT_POLICY_CEILING_EXCEEDED,
+  classifyAction,
+  type ActionClassification,
+  type AgentDestructiveActionMode,
+} from "@paperclipai/shared";
+import { HttpError, badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
+import { agentGovernanceService } from "./agent-governance.js";
 import { logActivity } from "./activity-log.js";
 import { classifyInboundContent } from "./inbound-filter.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
+
+/**
+ * AgentDash-MK T5a: the refusal a `blocked` destructive-action ceiling raises.
+ *
+ * Reuses the T2/T3 ceiling-error shape exactly — a 422 carrying
+ * `AGENT_POLICY_CEILING_EXCEEDED` and a `destructiveActions` violation — so a
+ * client that already renders a ceiling refusal renders this one unchanged. The
+ * class the action was placed into is the `requested` value; `blocked` is the
+ * bound it breached.
+ */
+function destructiveActionBlocked(actionClass: ActionClassification) {
+  return new HttpError(
+    422,
+    "This action is blocked by the owner ceiling for destructive actions",
+    {
+      code: AGENT_POLICY_CEILING_EXCEEDED,
+      violations: [
+        {
+          field: "destructiveActions",
+          code: "DESTRUCTIVE_ACTIONS_EXCEED_CEILING",
+          requested: actionClass,
+          allowed: "blocked",
+          direction: "max",
+        },
+      ],
+    },
+    AGENT_POLICY_CEILING_EXCEEDED,
+  );
+}
 
 /**
  * AgentDash-MK: the local agent bridge.
@@ -99,6 +135,7 @@ export function bridgeService(db: Db) {
    * whose laptop it is.
    */
   const workflow = workflowEventsService(db);
+  const governance = agentGovernanceService(db);
 
   async function isProfileCompany(companyId: string) {
     const company = await db
@@ -348,7 +385,65 @@ export function bridgeService(db: Db) {
      * service stays the only decision boundary.
      */
     const filter = classifyInboundContent({ content: instruction });
-    const gated = input.taskClass === "act" || filter.verdict === "escalate";
+
+    /**
+     * AgentDash-MK T5a: destructive-action enforcement, at the same chokepoint
+     * slice E filters. `resolveAgentPolicy` returns null for any company not on
+     * the `agentdash_mk` profile (and for a task with no requesting agent, there
+     * is no per-agent ceiling to bind), so this whole block is inert off-profile
+     * — a default company's bridge tasks behave exactly as before.
+     *
+     * A bridge `act` is a `local_machine_mutation` (destructive); a `read` is a
+     * `safe_read` the ceiling never touches; anything else fails closed. The
+     * mode then decides: `blocked` refuses here, `approval_required` forces the
+     * gate (routing the decision through the ordinary approval, never acting
+     * inline), and `allowed` proceeds.
+     */
+    let destructiveClass: ActionClassification | null = null;
+    let destructiveMode: AgentDestructiveActionMode | null = null;
+    let destructiveDecision: "approval_raised" | "allowed" | null = null;
+    if (input.requestedByAgentId) {
+      const policy = await governance.resolveAgentPolicy(companyId, input.requestedByAgentId);
+      if (policy) {
+        const classification = classifyAction({ kind: "bridge", taskClass: input.taskClass });
+        destructiveClass = classification.class;
+        destructiveMode = policy.destructiveActions;
+        if (classification.destructive && destructiveMode === "blocked") {
+          // Refuse: emit the verdict first so a refused action is as visible in
+          // the measurement substrate as one that ran, then raise the refusal.
+          await workflow.emit({
+            companyId,
+            pipelineId: `bridge:${input.taskClass}`,
+            runId: randomUUID(),
+            stepKey: "authorization",
+            eventType: "destructive_action_gated",
+            actorKind: "agent",
+            payload: {
+              surface: "bridge_task",
+              actionClass: classification.class,
+              mode: destructiveMode,
+              decision: "refused",
+            },
+          });
+          throw destructiveActionBlocked(classification.class);
+        }
+        // A destructive action under `approval_required` must be gated; a
+        // safe_read (or an `allowed` destructive action) proceeds.
+        destructiveDecision =
+          classification.destructive && destructiveMode === "approval_required"
+            ? "approval_raised"
+            : "allowed";
+      }
+    }
+
+    // Off-profile (destructiveMode === null) preserves the original rule: an
+    // `act` always gates. On-profile, the classifier's decision governs, so an
+    // `allowed` act task queues directly. A read gates only when the inbound
+    // filter escalates it, in every profile.
+    const gated =
+      filter.verdict === "escalate" ||
+      destructiveDecision === "approval_raised" ||
+      (destructiveMode === null && input.taskClass === "act");
 
     let approvalId: string | null = null;
     if (gated) {
@@ -416,6 +511,27 @@ export function bridgeService(db: Db) {
         filterRuleIds: filter.ruleIds,
       },
     });
+
+    // AgentDash-MK T5a: the destructive-action verdict for this authorization,
+    // recorded on the same run as the task. Only when the classifier ran (i.e.
+    // on-profile, with a requesting agent); the `blocked` branch already emitted
+    // its own refusal above and never reaches here.
+    if (destructiveDecision && destructiveClass && destructiveMode) {
+      await workflow.emit({
+        companyId,
+        pipelineId: `bridge:${input.taskClass}`,
+        runId: task.id,
+        stepKey: "authorization",
+        eventType: "destructive_action_gated",
+        actorKind: input.requestedByAgentId ? "agent" : "system",
+        payload: {
+          surface: "bridge_task",
+          actionClass: destructiveClass,
+          mode: destructiveMode,
+          decision: destructiveDecision,
+        },
+      });
+    }
 
     await workflow.emit({
       companyId,
