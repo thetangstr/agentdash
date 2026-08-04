@@ -4,7 +4,7 @@ import { activityApi } from "../api/activity";
 import { agentGovernanceApi } from "../api/agent-governance";
 import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
-import { AgentGovernancePanel } from "../components/agent/AgentGovernancePanel";
+import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
@@ -103,7 +103,16 @@ export default function MyAgent() {
       </header>
 
       {governance.data ? (
-        <AgentGovernancePanel policy={governance.data.policy} />
+        // On this page the viewer is, by construction, the agent's own
+        // steward (getMyAgent returns only the caller's stewarded agent), so
+        // they may edit the request. The server independently re-checks via
+        // resolveConfigurationAuthority on every write.
+        <StewardRequestEditor
+          companyId={selectedCompanyId!}
+          agentId={agent.id}
+          policy={governance.data.policy}
+          canEdit={!!myAgent.data?.stewardship}
+        />
       ) : governance.error ? (
         <p className="text-sm text-destructive" role="alert">
           {governance.error instanceof Error
