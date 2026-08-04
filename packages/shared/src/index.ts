@@ -1217,6 +1217,7 @@ export {
   initiateOAuthSchema,
   oauthCallbackSchema,
   connectorApprovalDecisionSchema,
+  reconcileConnectorSendExecutionSchema,
   type ConnectionAutonomyConfigInput,
   type CreateConnection,
   type UpdateConnection,
@@ -1225,6 +1226,7 @@ export {
   type InitiateOAuth,
   type OAuthCallback,
   type ConnectorApprovalDecision,
+  type ReconcileConnectorSendExecution,
 } from "./validators/index.js";
 
 // AgentDash (#234, #231): canonical agent-plan validator. Re-exported

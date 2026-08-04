@@ -44,6 +44,20 @@ export const WORKFLOW_EVENT_TYPES = [
    * held report as a run whose every step completed.
    */
   "content_filtered",
+  /**
+   * A human reconciled an `outcome_unknown` connector send (audit item 14).
+   *
+   * The ambiguous case: a write was claimed, the provider answer was lost, and
+   * a person has now attested whether it landed. Recorded as measurement — what
+   * KIND of actor resolved it (human) and the verdict, never which person. The
+   * actor attribution the audit needs lives in the activity log, which is
+   * allowed to name people; this row is not.
+   *
+   * Deliberately NOT step-closing: it settles an operational loose end, not a
+   * step of a measured pipeline, and counting it as a completion would flatter
+   * the untouched-step ratio with work that was never part of a run.
+   */
+  "outcome_reconciled",
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 
