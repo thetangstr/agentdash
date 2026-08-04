@@ -1281,3 +1281,16 @@ export {
   verifyHumanChannelBindingSchema,
   type VerifyHumanChannelBinding,
 } from "./validators/human-channel.js";
+
+export {
+  DESTRUCTIVE_ACTION_CLASS_KEYS,
+  DEFAULT_DESTRUCTIVE_ACTION_CLASSES,
+  classifyAction,
+  type DestructiveActionClassKey,
+  type ActionClassification,
+  type DestructiveActionClassEntry,
+  type ClassifyConnectorAction,
+  type ClassifyBridgeAction,
+  type ClassifyActionInput,
+  type ClassifyActionResult,
+} from "./agent-destructive-classifier.js";
