@@ -209,11 +209,17 @@ describe("AgentCeilingEditor", () => {
 
   // G4 — a ceiling-violation case per T2b's taxonomy, built from the real
   // shared collectCeilingViolations so the body matches what the route emits.
+  // `dimension` is the DIMENSION_LABELS value the violation <li> prefixes with;
+  // `expected` is the breached bound as describeViolation renders it (note the
+  // raw enum `approval_required`, not the select's display text). Both are
+  // asserted inside the violation list, so neither can be satisfied by the
+  // always-present ceiling table or a <select> option.
   const overCeilingCases: Array<{
     name: string;
     label: string;
     value: string;
     requested: AgentGovernancePolicy;
+    dimension: string;
     expected: string;
   }> = [
     {
@@ -221,6 +227,7 @@ describe("AgentCeilingEditor", () => {
       label: "Allowed providers",
       value: "hubspot, salesforce",
       requested: { ...CEILING, providers: ["hubspot", "salesforce"] },
+      dimension: "Providers",
       expected: "hubspot",
     },
     {
@@ -228,6 +235,7 @@ describe("AgentCeilingEditor", () => {
       label: "Maximum monthly budget",
       value: "50000",
       requested: { ...CEILING, monthlyBudgetCents: 50_000 },
+      dimension: "Monthly budget",
       expected: "$100.00/mo",
     },
     {
@@ -235,13 +243,15 @@ describe("AgentCeilingEditor", () => {
       label: "Destructive actions",
       value: "allowed",
       requested: { ...CEILING, destructiveActions: "allowed" },
-      expected: "approval required",
+      dimension: "Destructive actions",
+      expected: "approval_required",
     },
     {
       name: "approval-mode rank",
       label: "Minimum approval",
       value: "none",
       requested: { ...CEILING, minimumApproval: "none" },
+      dimension: "Minimum approval",
       expected: "steward",
     },
   ];
@@ -262,10 +272,20 @@ describe("AgentCeilingEditor", () => {
       setInput(`[aria-label="${testCase.label}"]`, testCase.value);
       await click(findButton(/save ceiling/i)!);
 
-      const alert = container.querySelector('[role="alert"]');
-      expect(alert, "no violation surfaced to the owner").not.toBeNull();
-      expect(container.textContent).toContain("exceeds the owner ceiling");
-      expect(container.textContent).toContain(testCase.expected);
+      const alerts = Array.from(container.querySelectorAll('[role="alert"]'));
+      // The editor surfaces the API's named refusal...
+      expect(
+        alerts.some((a) => a.textContent?.includes("exceeds the owner ceiling")),
+        "no ceiling refusal surfaced to the owner",
+      ).toBe(true);
+      // ...and the per-field violation list — not the always-present ceiling
+      // table — must name the breached bound. Scope the assertion to the
+      // violation <ul> so a substring that also appears in the ceiling column
+      // cannot fake-pass this check.
+      const violationList = alerts.find((a) => a.querySelector("li"));
+      expect(violationList, "no per-field violation list rendered").toBeTruthy();
+      expect(violationList!.textContent).toContain(testCase.dimension);
+      expect(violationList!.textContent).toContain(testCase.expected);
     });
   }
 });
