@@ -8,6 +8,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { requireLicense } from "./middleware/require-license.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
@@ -313,6 +314,24 @@ export async function createApp(
       companyDeletionEnabled: opts.companyDeletionEnabled,
     }),
   );
+  // AgentDash on-prem SKU: the license gate, deliberately mounted HERE.
+  //
+  // Everything registered after this line is gated; everything before it is not.
+  // Two exemptions are load-bearing and must stay that way:
+  //
+  //   /api/health   — mounted immediately above. The install runbooks and the
+  //                   launchd service both poll it to decide whether the server
+  //                   came up, so gating it would make an unlicensed box look
+  //                   like a boot failure instead of a licensing problem.
+  //   /api/auth/*   — mounted on `app` before this router exists, so it is out
+  //                   of reach here by construction. An operator locked out of
+  //                   sign-in could never reach the UI to fix their license.
+  //
+  // The middleware itself no-ops unless AGENTDASH_ENFORCE_LICENSE=true AND this
+  // process is an on_prem deployment, so wiring it changes nothing for cloud or
+  // for any existing self-hoster who has not opted in. `license-enforcement.test.ts`
+  // pins both the behaviour and this ordering.
+  api.use(requireLicense);
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,
