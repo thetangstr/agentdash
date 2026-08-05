@@ -121,7 +121,8 @@ which agent, and anything you couldn't finish.`;
         </li>
         <li>
           <strong>Licence key</strong> and <strong>licence public key</strong> — two
-          values. On-prem installs verify the licence locally.
+          values that record your on-prem entitlement. Paste them as given; they are kept
+          on the machine and never sent anywhere.
         </li>
       </ul>
 

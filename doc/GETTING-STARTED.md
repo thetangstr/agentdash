@@ -18,8 +18,18 @@ send one welcome email containing exactly four things:
 |---|---|---|
 | **Invite code** | Gates the signup funnel. Validated against `agentdash.cloud`; an unreachable validator **fails closed**, so a missing code is a hard stop, not a warning. | `AGD-MKTHINK-7F3K` |
 | **Workspace code** | Authorizes the `agentdash_mk` product profile at company creation. Without it the company is created on the DEFAULT profile and **every workforce surface 404s** — My Agent, ceilings, the bridge, reconciliation. | `MK-WORKFORCE-92QD` |
-| **License key** | On-prem license enforcement (`AGENTDASH_ENFORCE_LICENSE`). | `eyJ…` |
-| **License public key** | Verifies the license key. | `-----BEGIN PUBLIC KEY-----…` |
+| **License key** | Records the on-prem entitlement. See the enforcement note below. | `eyJ…` |
+| **License public key** | The verifying half of the pair. | `-----BEGIN PUBLIC KEY-----…` |
+
+> **Licence enforcement is not currently wired.** `server/src/middleware/require-license.ts`
+> exports `requireLicense`, and grep finds **no caller** — not a route, not even a test; the
+> only reader of `licenseStatusFromEnv` is that unused middleware. So
+> `AGENTDASH_ENFORCE_LICENSE=true` and both licence values have no runtime effect today: a
+> wrong or absent licence cannot 402 anyone, and an unlicensed install is not gated. The
+> prompt still collects and writes them because the operator does issue them and the env is
+> then forward-compatible — but do not tell a customer the install verifies a licence, and
+> do not treat on-prem entitlement as technically enforced. Wiring it is a product decision
+> (switching it on would gate existing self-hosters), so it is deliberately left alone here.
 
 > The invite code and the workspace code are **different gates** and both are required.
 > Conflating them is the single most likely way a install stalls.
@@ -51,6 +61,20 @@ Nothing here should ever appear in a doc, a repo, or an email:
   install, no `DATABASE_URL` to set, no Docker.
 
 ---
+
+### What the launchd installer does and does not touch
+
+`docker/launchd/install.sh` was read rather than run (running it would install a service on
+the reader's machine). It writes `~/.config/agentdash/agentdash.env`, `~/.agentdash/{data,logs}`,
+and a plist at `~/Library/LaunchAgents/ai.agentdash.agent.plist` under the label
+`ai.agentdash.agent` — which is why §4's `launchctl kickstart` targets that label and §4's log
+path is `~/.agentdash/logs/agentdash.err`. It requires `node` and `pnpm`, and it takes
+`--uninstall` for rollback.
+
+**It creates the env file only if one does not already exist** (`Using existing $ENV_FILE`
+otherwise). That is why the prompt writes the env in §3 *before* running the installer in §4:
+the installer's own generated env would not carry the licence values or the workspace code, and
+this ordering keeps what the customer pasted.
 
 ## 4. The prompt
 
