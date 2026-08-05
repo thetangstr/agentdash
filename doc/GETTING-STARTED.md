@@ -172,9 +172,13 @@ Both were found by running the flow end to end, not by reading the code:
    is no API to add a member directly — production goes through the invite flow. If the
    team is invited but hasn't accepted, step 8 fails with a message that doesn't obviously
    point at the cause. Hence auto-approve in step 7.
-2. **The wrong profile is silent.** A company created without the workspace code succeeds
-   — it just isn't a workforce workspace, and every feature 404s afterwards. Step 6's
-   check exists to catch that immediately, while recreating the company is still cheap.
+2. **Asking for the workspace and forgetting to ask are different failures.** Requesting
+   `productProfile: "agentdash_mk"` *without* the code is refused loudly and helpfully —
+   `403 mk_invite_code_required`, "Ask the AgentDash team for one." That case is safe.
+   The quiet one is **omitting the profile altogether**: the company is created, succeeds,
+   and is simply an ordinary workspace where every workforce feature 404s later with
+   nothing explaining why. That is exactly what the older install prompts do, which is why
+   step 6 both sends the profile and then verifies a gated route answers 200.
 
 ## 7. See also
 
