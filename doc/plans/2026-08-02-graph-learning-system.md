@@ -155,7 +155,7 @@ The stakeholder (e.g. Titus) visualization. Read-only, traceable, boundary-safe.
 1. RED captured before implementation.
 2. All acceptance criteria met, each with a named test; GL-1.4 boundary test present from GL-1.
 3. All six harness cross-cutting gates pass; full gate green with real numbers.
-4. Lore-format commit; `pnpm-lock.yaml` untouched; migrations via `pnpm db:generate`.
+4. Lore-format commit; `pnpm-lock.yaml` untouched; migrations via `pnpm db:generate`. [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 5. The tested/merely-wired boundary stated explicitly — including that no real cycle has run.
 
 ## 7. Open questions — do not let these block GL-1

@@ -163,7 +163,7 @@ Create the request with \`POST /api/companies/:companyId/approvals\` using \`{ "
 
 Every approval carries a monotonic \`revision\`. A decision must echo the revision it was shown. If you change what you are asking for, call \`POST /api/approvals/:id/resubmit\`: that advances the revision and **invalidates every card or button already sent to a human**. Expect a \`409\` with \`code: "APPROVAL_REVISION_CONFLICT"\` when a stale decision arrives; that is correct behavior, not a fault to retry.
 
-Decisions may arrive from the dashboard, Telegram, or Microsoft Teams. All three go through the same decision service, so the outcome and its audit record are identical whichever channel a human used.
+Decisions may arrive from the dashboard, Telegram, or WhatsApp. All three go through the same decision service, so the outcome and its audit record are identical whichever channel a human used.
 
 ### Owner ceilings
 
@@ -288,7 +288,7 @@ One ask per \`factKey\` per \`runId\`, enforced in the database. A repeat return
 
 If you cannot get it, **decline with a reason** or **escalate**. Both are recorded and both are surfaced to the approver. A missing number that says it is missing is a finding; a plausible number nobody produced is a defect that survives review.
 
-\`escalate\` tries your steward's own local harness first and only notifies them on Teams if that machine is unreachable — interrupting a person is the expensive operation this system exists to spend less of. Either way the fact stalls under a lease, and when the lease lapses it is marked \`missing\` and \`flagged\`. Nothing is ever silently dropped.
+\`escalate\` tries your steward's own local harness first and only notifies them on the steward's paired messaging channel if that machine is unreachable — interrupting a person is the expensive operation this system exists to spend less of. Either way the fact stalls under a lease, and when the lease lapses it is marked \`missing\` and \`flagged\`. Nothing is ever silently dropped.
 
 ### Every answer carries provenance, and every answer is untrusted
 

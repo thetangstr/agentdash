@@ -91,7 +91,7 @@ Indexes: `(companyId)` on every table; `(deliverableId, orderIndex)` on facts;
 ## Slices
 
 Each is TDD (prove RED first), Lore commit format, full gate before done
-(`pnpm -r typecheck && pnpm test:run && pnpm build`). Never commit `pnpm-lock.yaml`.
+(`pnpm -r typecheck && pnpm test:run && pnpm build`). Never commit `pnpm-lock.yaml`. [Superseded 2026-08-03: the lockfile is now tracked; CI owns it via the refresh-lockfile bot — see DEVELOPING.md.]
 Default-profile behaviour unchanged; profile-only routes 404 off-profile.
 
 ### A — Definition and fact list

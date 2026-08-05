@@ -454,8 +454,9 @@ parent wake payload carries references and per-child counts only.
 | `WHATSAPP_ACCESS_TOKEN` | Graph API token for outbound calls |
 | `WHATSAPP_PHONE_NUMBER_ID` | Graph API phone-number id used to send |
 | `WHATSAPP_BUSINESS_NUMBER` | Public number used to build the `wa.me` pairing link |
-| `TEAMS_APP_ID` | Entra app (client) id |
-| `TEAMS_APP_PASSWORD` | Entra client secret |
+| `TEAMS_BOT_APP_ID` | Entra app (client) id |
+| `TEAMS_BOT_APP_PASSWORD` | Entra client secret |
+| `TEAMS_BOT_TOKEN_URL` | Optional override for the bot-framework token endpoint |
 
 ## Not in scope
 

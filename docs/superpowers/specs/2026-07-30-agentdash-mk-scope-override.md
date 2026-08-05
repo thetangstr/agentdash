@@ -123,7 +123,7 @@ The real blocker is upstream and nobody had checked it. Microsoft Learn
 > will no longer be supported after that date.
 
 This project holds no grandfathered registration — there is no manifest in the
-repo and `TEAMS_APP_ID` / `TEAMS_APP_PASSWORD` are read by no code. The
+repo and `TEAMS_BOT_APP_ID` / `TEAMS_BOT_APP_PASSWORD` are read by no code. The
 remaining path is one **single-tenant** bot reached cross-tenant via **AppSource
 / Teams Store publication**, which is a go-to-market commitment (Partner Center
 certification, publisher verification, listing maintenance) rather than an
