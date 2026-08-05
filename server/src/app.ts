@@ -31,6 +31,7 @@ import { workflowRecommendationRoutes } from "./routes/workflow-recommendations.
 import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
 import { deliverableRoutes } from "./routes/deliverables.js";
 import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
+import { connectorSendExecutionRoutes } from "./routes/connector-send-executions.js";
 import { humanChannelRoutes } from "./routes/human-channels.js";
 import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
 import { whatsappConnectorRoutes } from "./routes/whatsapp-connector.js";
@@ -334,6 +335,7 @@ export async function createApp(
   // implementer-only; runs, review, and approval follow the same profile gate.
   api.use(deliverableRoutes(db));
   api.use(agentdashMkInboxRoutes(db));
+  api.use(connectorSendExecutionRoutes(db));
   api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));

@@ -102,6 +102,19 @@ const workflowEventPayloadSchemas = {
       taskClass: z.string().min(1).optional(),
     })
     .strict(),
+  /**
+   * A human's verdict on an ambiguous connector send. `verdict` is the
+   * attestation; `executionId` is the row it settles — a connector-send
+   * execution, not a person. There is deliberately no key for who reconciled
+   * it: that attribution belongs in the activity log, and putting it here would
+   * reintroduce exactly the per-person dimension this allowlist exists to deny.
+   */
+  outcome_reconciled: z
+    .object({
+      verdict: z.enum(["confirmed_delivered", "confirmed_failed"]),
+      executionId: z.string().min(1),
+    })
+    .strict(),
 } satisfies Record<WorkflowEventType, z.ZodTypeAny>;
 
 export function workflowEventPayloadSchema(eventType: WorkflowEventType): z.ZodTypeAny {

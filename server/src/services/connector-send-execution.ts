@@ -1,12 +1,43 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvals, companies, connections, connectorSendExecutions } from "@paperclipai/db";
+import {
+  approvals,
+  companies,
+  connections,
+  connectorSendExecutions,
+  workflowEvents,
+} from "@paperclipai/db";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { connectorService } from "./connectors.js";
 import { hubspotConnectorService } from "./hubspot-connector.js";
+import { workflowEventsService } from "./workflow-events.js";
 import { logActivity } from "./activity-log.js";
+
+/**
+ * AgentDash-MK T4: the pipeline key a reconcile event lands under.
+ *
+ * Names a KIND of work — resolving ambiguous connector sends — and nobody who
+ * does it, matching the measurement substrate's rule. Every reconcile event
+ * shares it so the operator surface can find them, and `runId` is the execution
+ * id, which is the row it settles rather than a person.
+ */
+const RECONCILE_PIPELINE_ID = "connector_send:reconcile";
+const RECONCILE_STEP_KEY = "reconcile";
+
+export type ReconcileVerdict = "confirmed_delivered" | "confirmed_failed";
+
+/**
+ * The result of a reconcile attempt. `not_found` is a missing/wrong-company
+ * execution; `conflict` covers a stale revision and a refused verdict flip.
+ * The route maps these to 404/409 so a stale button cannot masquerade as a
+ * fresh decision.
+ */
+export type ReconcileResult =
+  | { status: "ok"; verdict: ReconcileVerdict; idempotent: boolean }
+  | { status: "not_found" }
+  | { status: "conflict"; reason: "stale_revision" | "already_reconciled" | "not_reconcilable" };
 
 /**
  * AgentDash-MK: execute a `connector_send` after its steward approved it.
@@ -28,6 +59,7 @@ export function connectorSendExecutionService(db: Db) {
   const connectors = connectorService(db);
   const hubspot = hubspotConnectorService(db);
   const stewardships = agentStewardshipService(db);
+  const workflow = workflowEventsService(db);
 
   /** Record a refusal that happened before any provider call was made. */
   async function recordRefusal(
@@ -222,5 +254,181 @@ export function connectorSendExecutionService(db: Db) {
     }
   }
 
-  return { executeForApproval };
+  /**
+   * The set of execution ids this company has already reconciled.
+   *
+   * "Already reconciled" is derived from the presence of a reconcile event, not
+   * from a status column: the execution row keeps saying `outcome_unknown`
+   * because that is still the true machine outcome — a human's belief that a
+   * write landed is a different fact from the provider confirming it, and
+   * overwriting one with the other would lose exactly the case this table
+   * exists to preserve.
+   */
+  async function reconciledExecutionIds(companyId: string): Promise<Set<string>> {
+    const rows = await db
+      .select({ runId: workflowEvents.runId })
+      .from(workflowEvents)
+      .where(
+        and(
+          eq(workflowEvents.companyId, companyId),
+          eq(workflowEvents.pipelineId, RECONCILE_PIPELINE_ID),
+          eq(workflowEvents.eventType, "outcome_reconciled"),
+        ),
+      );
+    return new Set(rows.map((row) => row.runId));
+  }
+
+  /**
+   * The unresolved `outcome_unknown` rows a caller may act on.
+   *
+   * `agentIds` scopes to a steward's own agent(s); passing `null` is the
+   * owner/admin view over every agent in the company. Rows that already carry a
+   * reconcile event are excluded — that is what makes reconciling one remove it
+   * from the list. Reference-not-content: no payload, no external id text.
+   */
+  async function listUnresolved(
+    companyId: string,
+    agentIds: string[] | null,
+  ): Promise<
+    Array<{
+      id: string;
+      provider: string;
+      objectType: string;
+      operation: string;
+      outcome: string;
+      reason: string | null;
+      requestedByAgentId: string | null;
+      executedAt: Date;
+      /** The state the reconcile button must echo back; 0 while unresolved. */
+      revision: number;
+    }>
+  > {
+    if (agentIds !== null && agentIds.length === 0) return [];
+    const rows = await db
+      .select({
+        id: connectorSendExecutions.id,
+        provider: connectorSendExecutions.provider,
+        objectType: connectorSendExecutions.objectType,
+        operation: connectorSendExecutions.operation,
+        outcome: connectorSendExecutions.outcome,
+        reason: connectorSendExecutions.reason,
+        requestedByAgentId: connectorSendExecutions.requestedByAgentId,
+        executedAt: connectorSendExecutions.executedAt,
+      })
+      .from(connectorSendExecutions)
+      .where(
+        and(
+          eq(connectorSendExecutions.companyId, companyId),
+          eq(connectorSendExecutions.outcome, "outcome_unknown"),
+          ...(agentIds !== null
+            ? [inArray(connectorSendExecutions.requestedByAgentId, agentIds)]
+            : []),
+        ),
+      )
+      .orderBy(desc(connectorSendExecutions.executedAt));
+
+    const reconciled = await reconciledExecutionIds(companyId);
+    return rows
+      .filter((row) => !reconciled.has(row.id))
+      .map((row) => ({ ...row, revision: 0 }));
+  }
+
+  /** One unresolved execution, scoped to the company. Null off-company. */
+  async function getUnresolvedById(companyId: string, executionId: string) {
+    return db
+      .select()
+      .from(connectorSendExecutions)
+      .where(
+        and(
+          eq(connectorSendExecutions.id, executionId),
+          eq(connectorSendExecutions.companyId, companyId),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+  }
+
+  /**
+   * Record a human's verdict on an ambiguous send.
+   *
+   * This is an AUDIT record and nothing else: it writes a workflow event (the
+   * measurement substrate, actorKind `human`, no person) and an activity-log
+   * entry (which is allowed to name the acting user). It never touches the
+   * provider — resending stays with the approvals flow, the single decision
+   * boundary. It is idempotent and revision-bound so a stale button cannot flip
+   * a verdict decided after the button was rendered.
+   */
+  async function reconcile(input: {
+    companyId: string;
+    executionId: string;
+    actingUserId: string;
+    verdict: ReconcileVerdict;
+    revision: number;
+  }): Promise<ReconcileResult> {
+    const execution = await getUnresolvedById(input.companyId, input.executionId);
+    if (!execution) return { status: "not_found" };
+
+    // The authoritative verdict is the first one recorded. Reading it also
+    // yields the current revision (the count of reconcile events for this row).
+    const prior = await db
+      .select({ payload: workflowEvents.payload })
+      .from(workflowEvents)
+      .where(
+        and(
+          eq(workflowEvents.companyId, input.companyId),
+          eq(workflowEvents.pipelineId, RECONCILE_PIPELINE_ID),
+          eq(workflowEvents.eventType, "outcome_reconciled"),
+          eq(workflowEvents.runId, input.executionId),
+        ),
+      );
+    if (prior.length > 0) {
+      const priorVerdict = (prior[0].payload as { verdict?: string }).verdict;
+      // A replay of the same verdict is harmless and returns success; a
+      // different verdict is a stale button trying to flip a decided row.
+      if (priorVerdict === input.verdict) {
+        return { status: "ok", verdict: input.verdict, idempotent: true };
+      }
+      return { status: "conflict", reason: "already_reconciled" };
+    }
+
+    // Not yet reconciled: the current revision is 0. A button rendered against
+    // any other state is stale and must not decide.
+    if (input.revision !== 0) return { status: "conflict", reason: "stale_revision" };
+    if (execution.outcome !== "outcome_unknown") {
+      return { status: "conflict", reason: "not_reconcilable" };
+    }
+
+    // Measurement first: what kind of actor acted (human) and the verdict.
+    await workflow.emit({
+      companyId: input.companyId,
+      pipelineId: RECONCILE_PIPELINE_ID,
+      runId: input.executionId,
+      stepKey: RECONCILE_STEP_KEY,
+      eventType: "outcome_reconciled",
+      actorKind: "human",
+      payload: { verdict: input.verdict, executionId: input.executionId },
+    });
+
+    // Actor attribution belongs in the audit trail that is allowed to name a
+    // person. Reference-not-content: the provider/object/operation are the
+    // execution's own reference fields, never its payload.
+    await logActivity(db, {
+      companyId: input.companyId,
+      actorType: "user",
+      actorId: input.actingUserId,
+      agentId: execution.requestedByAgentId,
+      action: "connector_send.reconciled",
+      entityType: "connector_send_execution",
+      entityId: input.executionId,
+      details: {
+        verdict: input.verdict,
+        provider: execution.provider,
+        objectType: execution.objectType,
+        operation: execution.operation,
+      },
+    });
+
+    return { status: "ok", verdict: input.verdict, idempotent: false };
+  }
+
+  return { executeForApproval, listUnresolved, getUnresolvedById, reconcile };
 }

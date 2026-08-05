@@ -105,3 +105,23 @@ export const connectorApprovalDecisionSchema = z.object({
 });
 
 export type ConnectorApprovalDecision = z.infer<typeof connectorApprovalDecisionSchema>;
+
+// ---------------------------------------------------------------------------
+// AgentDash-MK T4: reconciling an `outcome_unknown` connector send.
+//
+// A human attests whether an ambiguous write landed. `revision` is the state
+// the button was rendered against (an unresolved row is revision 0); the
+// server rejects a mismatch so a stale button cannot flip a verdict decided
+// after it was shown. Reconcile records an audit fact — it never resends.
+// ---------------------------------------------------------------------------
+
+export const reconcileConnectorSendExecutionSchema = z
+  .object({
+    verdict: z.enum(["confirmed_delivered", "confirmed_failed"]),
+    revision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type ReconcileConnectorSendExecution = z.infer<
+  typeof reconcileConnectorSendExecutionSchema
+>;

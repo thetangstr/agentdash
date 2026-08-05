@@ -454,6 +454,7 @@ export {
   initiateOAuthSchema,
   oauthCallbackSchema,
   connectorApprovalDecisionSchema,
+  reconcileConnectorSendExecutionSchema,
   type ConnectionAutonomyConfigInput,
   type CreateConnection,
   type UpdateConnection,
@@ -462,6 +463,7 @@ export {
   type InitiateOAuth,
   type OAuthCallback,
   type ConnectorApprovalDecision,
+  type ReconcileConnectorSendExecution,
 } from "./connector.js";
 
 // AgentDash (#234): canonical type guard for AgentPlanProposalV1Payload;
