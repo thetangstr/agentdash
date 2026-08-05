@@ -4,9 +4,9 @@ import { activityApi } from "../api/activity";
 import { agentGovernanceApi } from "../api/agent-governance";
 import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
-import { AgentGovernancePanel } from "../components/agent/AgentGovernancePanel";
+import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
-import { ChannelPairingPanel } from "../components/agent/ChannelPairingPanel";
+import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -103,7 +103,16 @@ export default function MyAgent() {
       </header>
 
       {governance.data ? (
-        <AgentGovernancePanel policy={governance.data.policy} />
+        // On this page the viewer is, by construction, the agent's own
+        // steward (getMyAgent returns only the caller's stewarded agent), so
+        // they may edit the request. The server independently re-checks via
+        // resolveConfigurationAuthority on every write.
+        <StewardRequestEditor
+          companyId={selectedCompanyId!}
+          agentId={agent.id}
+          policy={governance.data.policy}
+          canEdit={!!myAgent.data?.stewardship}
+        />
       ) : governance.error ? (
         <p className="text-sm text-destructive" role="alert">
           {governance.error instanceof Error
@@ -177,7 +186,7 @@ export default function MyAgent() {
       </section>
       {/* Channels hang off the agent, so they only make sense once one is
           assigned — and the unassigned state deliberately offers no controls. */}
-      {agentId && selectedCompanyId && <ChannelPairingPanel companyId={selectedCompanyId} />}
+      {agentId && selectedCompanyId && <MyChannels companyId={selectedCompanyId} />}
       {agentId && selectedCompanyId && <HubspotConnectionPanel companyId={selectedCompanyId} />}
       <section aria-labelledby="my-agent-activity-heading" className="rounded-lg border p-4">
         <h2 id="my-agent-activity-heading" className="text-sm font-semibold">

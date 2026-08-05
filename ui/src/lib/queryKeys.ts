@@ -139,6 +139,7 @@ export const queryKeys = {
     joinRequests: (companyId: string, status: string = "pending_approval") =>
       ["access", "join-requests", companyId, status] as const,
     companyMembers: (companyId: string) => ["access", "company-members", companyId] as const,
+    channelBindings: (companyId: string) => ["access", "channel-bindings", companyId] as const,
     companyUserDirectory: (companyId: string) => ["access", "company-user-directory", companyId] as const,
     adminUsers: (query: string) => ["access", "admin-users", query] as const,
     userCompanyAccess: (userId: string) => ["access", "user-company-access", userId] as const,

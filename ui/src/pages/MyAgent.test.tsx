@@ -9,8 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockStewardshipsApi = vi.hoisted(() => ({
   getMyAgent: vi.fn(),
   getMyInbox: vi.fn(),
-  listMyChannels: vi.fn(),
+}));
+
+const mockHumanChannelsApi = vi.hoisted(() => ({
+  listMine: vi.fn(),
   startPairing: vi.fn(),
+  revoke: vi.fn(),
+  listAll: vi.fn(),
 }));
 
 const mockGovernanceApi = vi.hoisted(() => ({
@@ -36,6 +41,7 @@ vi.mock("react-router-dom", () => ({
 }));
 
 vi.mock("../api/stewardships", () => ({ stewardshipsApi: mockStewardshipsApi }));
+vi.mock("../api/human-channels", () => ({ humanChannelsApi: mockHumanChannelsApi }));
 vi.mock("../api/hubspot", () => ({ hubspotApi: mockHubspotApi }));
 vi.mock("../api/agent-governance", () => ({ agentGovernanceApi: mockGovernanceApi }));
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
@@ -85,12 +91,13 @@ describe("MyAgent", () => {
       selectedCompany: { productProfile: "agentdash_mk" },
     };
     mockStewardshipsApi.getMyInbox.mockResolvedValue({ stewardedAgent: null, items: [] });
-    mockStewardshipsApi.listMyChannels.mockResolvedValue({ bindings: [] });
+    mockHumanChannelsApi.listMine.mockResolvedValue({ bindings: [] });
     mockHubspotApi.get.mockResolvedValue({ connection: null });
-    mockStewardshipsApi.startPairing.mockResolvedValue({
+    mockHumanChannelsApi.startPairing.mockResolvedValue({
       deepLink: "https://t.me/agentdash_test_bot?start=tok",
       expiresAt: "2026-07-30T12:00:00.000Z",
     });
+    mockHumanChannelsApi.revoke.mockResolvedValue({ binding: { id: "binding-1", revokedAt: "2026-07-30T00:00:00.000Z" } });
     mockIssuesApi.list.mockResolvedValue([]);
     mockActivityApi.list.mockResolvedValue([]);
     mockGovernanceApi.get.mockResolvedValue({
@@ -235,7 +242,7 @@ describe("MyAgent", () => {
     expect(container.textContent).toContain("Telegram");
     // Minting spends the user's one outstanding challenge and invalidates any
     // link they already opened. It must be an explicit act, never a page load.
-    expect(mockStewardshipsApi.startPairing).not.toHaveBeenCalled();
+    expect(mockHumanChannelsApi.startPairing).not.toHaveBeenCalled();
 
     const connect = Array.from(container.querySelectorAll("button")).find((button) =>
       /connect telegram/i.test(button.textContent ?? ""),
@@ -251,7 +258,7 @@ describe("MyAgent", () => {
       });
     }
 
-    expect(mockStewardshipsApi.startPairing).toHaveBeenCalledWith("company-1", "telegram");
+    expect(mockHumanChannelsApi.startPairing).toHaveBeenCalledWith("company-1", "telegram");
     const link = Array.from(container.querySelectorAll("a")).find((anchor) =>
       anchor.getAttribute("href")?.startsWith("https://t.me/"),
     );
@@ -263,7 +270,7 @@ describe("MyAgent", () => {
       stewardship: { id: "s-1" },
       agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
     });
-    mockStewardshipsApi.listMyChannels.mockResolvedValue({
+    mockHumanChannelsApi.listMine.mockResolvedValue({
       bindings: [
         {
           id: "binding-1",
@@ -289,7 +296,7 @@ describe("MyAgent", () => {
       stewardship: { id: "s-1" },
       agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
     });
-    mockStewardshipsApi.startPairing.mockRejectedValue(
+    mockHumanChannelsApi.startPairing.mockRejectedValue(
       new Error("Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset"),
     );
 

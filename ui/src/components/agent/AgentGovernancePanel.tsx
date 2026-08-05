@@ -25,7 +25,7 @@ function describeBudget(cents: number): string {
  * $100/mo ceiling renders as the raw `10000`, which reads as $10,000 — the
  * inverse of the sentinel problem `describeBudget` exists to avoid.
  */
-function formatBound(
+export function formatBound(
   field: keyof AgentGovernancePolicy,
   allowed: string[] | string | number,
 ): string {
@@ -34,7 +34,7 @@ function formatBound(
   return String(allowed);
 }
 
-const DIMENSION_LABELS: Record<keyof AgentGovernancePolicy, string> = {
+export const DIMENSION_LABELS: Record<keyof AgentGovernancePolicy, string> = {
   permissions: "Permissions",
   monthlyBudgetCents: "Monthly budget",
   destructiveActions: "Destructive actions",
@@ -42,6 +42,17 @@ const DIMENSION_LABELS: Record<keyof AgentGovernancePolicy, string> = {
   providers: "Providers",
   minimumApproval: "Minimum approval",
 };
+
+/**
+ * Human-readable statement of the bound a violation breached, in the same units
+ * the table renders. Shared so the effective-vs-request banner and the
+ * steward-request editor's per-field refusal read identically — the ceiling a
+ * steward is shown when a save is refused is the exact ceiling the table shows.
+ */
+export function describeViolation(violation: AgentPolicyViolation): string {
+  const bound = formatBound(violation.field, violation.allowed);
+  return violation.direction === "min" ? `must be at least ${bound}` : `limited to ${bound}`;
+}
 
 function formatValue(field: keyof AgentGovernancePolicy, policy: AgentGovernancePolicy): string {
   switch (field) {
@@ -90,10 +101,7 @@ export function AgentGovernancePanel({
           <ul className="mt-1 list-disc pl-4">
             {violations.map((violation) => (
               <li key={violation.field}>
-                {DIMENSION_LABELS[violation.field]}:{" "}
-                {violation.direction === "min"
-                  ? `must be at least ${formatBound(violation.field, violation.allowed)}`
-                  : `limited to ${formatBound(violation.field, violation.allowed)}`}
+                {DIMENSION_LABELS[violation.field]}: {describeViolation(violation)}
               </li>
             ))}
           </ul>

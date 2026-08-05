@@ -182,6 +182,30 @@ export function AgentCeilingEditor({ companyId }: Props) {
           </label>
 
           <label className="block">
+            <span className="font-medium">Allowed data scopes (comma separated, * for any)</span>
+            <input
+              aria-label="Allowed data scopes"
+              className="mt-1 w-full rounded border px-2 py-1"
+              value={draft.dataScopes.join(", ")}
+              onChange={(event) =>
+                setDraft({ ...draft, dataScopes: parseList(event.target.value) })
+              }
+            />
+          </label>
+
+          <label className="block">
+            <span className="font-medium">Allowed providers (comma separated, * for any)</span>
+            <input
+              aria-label="Allowed providers"
+              className="mt-1 w-full rounded border px-2 py-1"
+              value={draft.providers.join(", ")}
+              onChange={(event) =>
+                setDraft({ ...draft, providers: parseList(event.target.value) })
+              }
+            />
+          </label>
+
+          <label className="block">
             <span className="font-medium">Minimum approval</span>
             <select
               aria-label="Minimum approval"
