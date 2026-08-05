@@ -58,6 +58,16 @@ export const WORKFLOW_EVENT_TYPES = [
    * the untouched-step ratio with work that was never part of a run.
    */
   "outcome_reconciled",
+  /**
+   * The destructive-action classifier reached a verdict at an authorization
+   * chokepoint (T5a: `bridge.createTask` and the connector-send apply path).
+   *
+   * One row per authorization decision — refused, raised for approval, or
+   * allowed. Like `content_filtered` it records the DECISION and the class of
+   * action, never who requested it, and it is NOT step-closing: a gate verdict
+   * is a check on the way in, not the completion of a step.
+   */
+  "destructive_action_gated",
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

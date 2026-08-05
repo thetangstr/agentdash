@@ -10,6 +10,7 @@ import { accessApi } from "@/api/access";
 import { agentsApi } from "@/api/agents";
 import { agentGovernanceApi } from "@/api/agent-governance";
 import { AgentGovernancePanel } from "@/components/agent/AgentGovernancePanel";
+import { DefaultDestructiveActionsNotice } from "@/components/settings/DefaultDestructiveActionsNotice";
 import { queryKeys } from "@/lib/queryKeys";
 
 interface Props {
@@ -103,6 +104,10 @@ export function AgentCeilingEditor({ companyId }: Props) {
           configuration down to it.
         </p>
       </div>
+
+      {/* T5a-3: read-only display of the default destructive-action classes the
+          `destructiveActions` ceiling below applies to. */}
+      <DefaultDestructiveActionsNotice />
 
       <label className="block text-xs">
         <span className="font-medium">Agent</span>

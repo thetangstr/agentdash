@@ -7,8 +7,10 @@ import {
   connectorSendExecutions,
   workflowEvents,
 } from "@paperclipai/db";
+import { classifyAction } from "@paperclipai/shared";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
+import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
 import { connectorService } from "./connectors.js";
 import { hubspotConnectorService } from "./hubspot-connector.js";
@@ -59,6 +61,7 @@ export function connectorSendExecutionService(db: Db) {
   const connectors = connectorService(db);
   const hubspot = hubspotConnectorService(db);
   const stewardships = agentStewardshipService(db);
+  const governance = agentGovernanceService(db);
   const workflow = workflowEventsService(db);
 
   /** Record a refusal that happened before any provider call was made. */
@@ -141,6 +144,65 @@ export function connectorSendExecutionService(db: Db) {
       if (!agentId) {
         await recordRefusal(approval, payload, "no_requesting_agent");
         return;
+      }
+
+      /**
+       * AgentDash-MK T5a: destructive-action enforcement at the apply path.
+       *
+       * The mode binds to the classifier's placement of `(provider, operation)`.
+       * A HubSpot write is `unclassified_write` — it fails closed to destructive
+       * — and every destructive class under a `blocked` ceiling is refused HERE,
+       * before any provider call. `approval_required` needs nothing more of this
+       * path: reaching it means a steward already decided through the approval
+       * service, which is the only decision boundary; the send proceeds. A
+       * `safe_read` proceeds unconditionally.
+       *
+       * `resolveAgentPolicy` returns null off-profile, but this path is already
+       * gated to `agentdash_mk` above, so on any real call it is non-null.
+       */
+      const provider = String(payload.provider ?? "hubspot");
+      const policy = await governance.resolveAgentPolicy(approval.companyId, agentId);
+      if (policy) {
+        const classification = classifyAction({
+          kind: "connector",
+          provider,
+          operation: String(payload.operation ?? "unknown"),
+        });
+        const mode = policy.destructiveActions;
+        if (classification.destructive && mode === "blocked") {
+          await recordRefusal(approval, payload, "destructive_action_blocked");
+          await workflow.emit({
+            companyId: approval.companyId,
+            pipelineId: `connector_send:${provider}`,
+            runId: approval.id,
+            stepKey: "authorization",
+            eventType: "destructive_action_gated",
+            actorKind: "agent",
+            payload: {
+              surface: "connector_send",
+              actionClass: classification.class,
+              mode,
+              decision: "refused",
+            },
+          });
+          return;
+        }
+        // Not refused: the send proceeds. Record the verdict as an audit row on
+        // the same run before the work happens.
+        await workflow.emit({
+          companyId: approval.companyId,
+          pipelineId: `connector_send:${provider}`,
+          runId: approval.id,
+          stepKey: "authorization",
+          eventType: "destructive_action_gated",
+          actorKind: "agent",
+          payload: {
+            surface: "connector_send",
+            actionClass: classification.class,
+            mode,
+            decision: "allowed",
+          },
+        });
       }
 
       // A stewardship that moved between the decision and now means the person
