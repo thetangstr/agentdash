@@ -227,6 +227,7 @@ export default function RootLayout({ children }) {
             <nav>
               <div className="section-label">Getting Started</div>
               <a href="/">Welcome</a>
+              <a href="/install">Install on a New Mac Mini</a>
               <a href="/getting-started">Quick Start</a>
               <a href="/daily-usage">Daily Usage Guide</a>
               <div className="section-label">Guides</div>
