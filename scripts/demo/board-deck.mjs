@@ -133,12 +133,31 @@ say(inbox.status === 200 && !!convId, `Titus opens the company conversation`, `c
 const sent = await api("post", `/api/conversations/${convId}/messages`, {
   companyId, body: "@Product what should the board know about product this week?" });
 say(sent.status < 300, `Titus addresses the Product agent by name`, `status=${sent.status}`);
-await sleep(2500);
-const thread = await api("get", `/api/conversations/${convId}/messages?limit=20`);
-const msgs = thread.body?.messages ?? thread.body ?? [];
-const replied = msgs.filter((m) => m.role === "agent");
+// Wait for a real reply, rather than for a fixed 2.5s.
+//
+// That sleep was calibrated against a stub that answered instantly. A summoned
+// agent now calls a model — 60-90s through `claude_local`, which spawns a whole
+// CLI — so the old wait reported "no reply" on a system that was working, and a
+// test that cries wolf on a healthy path is worse than no test.
+//
+// Poll to a generous ceiling and report how long it took, so a slow reply reads
+// as slow instead of broken.
+const REPLY_CEILING_MS = Number(process.env.REPLY_CEILING_MS ?? 180_000);
+const replyStartedAt = Date.now();
+let msgs = [];
+let replied = [];
+while (Date.now() - replyStartedAt < REPLY_CEILING_MS) {
+  const poll = await api("get", `/api/conversations/${convId}/messages?limit=20`);
+  msgs = poll.body?.messages ?? poll.body ?? [];
+  replied = msgs.filter((m) => m.role === "agent");
+  if (replied.length >= 1) break;
+  await sleep(5000);
+}
+const replyWaitedS = Math.round((Date.now() - replyStartedAt) / 1000);
 say(replied.length >= 1, `the agent replies in the thread`,
-  replied.length ? `"${String(replied[0].content ?? "").slice(0, 90)}"` : `no reply`);
+  replied.length
+    ? `after ${replyWaitedS}s — "${String(replied[0].content ?? "").slice(0, 80)}"`
+    : `no reply within ${Math.round(REPLY_CEILING_MS / 1000)}s`);
 if (replied.some((m) => /stub/i.test(String(m.content ?? "")))) {
   say(null, `replies are STUB text`, `the conversation path works; the words need a model — set ANTHROPIC_API_KEY or use claude_local`);
 }

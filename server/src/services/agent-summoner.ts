@@ -93,15 +93,42 @@ export function agentSummoner(deps: Deps) {
       const agent = await deps.agents.getById(input.agentId);
       if (!agent) throw new Error(`Agent ${input.agentId} not found`);
       const adapter = deps.adapterFor(agent.adapterType);
-      const result = await adapter.execute({
-        agent,
-        prompt: buildSummonPrompt(recent),
-      });
+      let result: { output?: string };
+      try {
+        result = await adapter.execute({ agent, prompt: buildSummonPrompt(recent) });
+      } catch (err) {
+        /**
+         * Say that the answer failed, rather than saying nothing.
+         *
+         * Silence is indistinguishable from being ignored: the person @-mentions
+         * their colleague's agent, nothing appears, and they are left deciding
+         * whether to wait or ask again. The failure was visible only in the
+         * server log, which is not where they are looking.
+         *
+         * This is not the thing being guarded against elsewhere. Inventing an
+         * ANSWER is forbidden because a wrong figure travels; reporting that no
+         * answer was produced invents nothing, and it is genuinely this agent's
+         * failure to report. The message says plainly that nothing was answered,
+         * so it cannot be mistaken for a reply.
+         */
+        const reason = err instanceof Error ? err.message : String(err);
+        await deps.conversations.postMessage({
+          conversationId: input.conversationId,
+          authorKind: "agent",
+          authorId: agent.id,
+          body:
+            `I could not answer this — my model call failed, so nothing here is an answer.\n\n` +
+            `${reason}\n\n` +
+            `Ask again, or tell whoever looks after this workspace.`,
+        });
+        throw err;
+      }
+
       return deps.conversations.postMessage({
         conversationId: input.conversationId,
         authorKind: "agent",
         authorId: agent.id,
-        body: result.output,
+        body: result.output as string,
       });
     },
   };

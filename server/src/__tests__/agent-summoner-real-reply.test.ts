@@ -157,9 +157,11 @@ describe("agentSummoner posts what the adapter produced", () => {
     });
   });
 
-  it("posts nothing when the reply fails", async () => {
-    // A failed summon must leave no message. A half-written agent turn in a team
-    // chat is read as the agent's considered answer.
+  it("says the answer failed rather than leaving silence", async () => {
+    // Silence is indistinguishable from being ignored: the person @-mentions an
+    // agent, nothing appears, and the failure is visible only in a server log
+    // they are not reading. Reporting "I could not answer" invents nothing — it
+    // is this agent's own failure — and it cannot be mistaken for an answer.
     const conversations = {
       paginate: vi.fn().mockResolvedValue([{ role: "user", content: "@Delivery ?" }]),
       postMessage: vi.fn(),
@@ -181,6 +183,12 @@ describe("agentSummoner posts what the adapter produced", () => {
         triggeringMessageId: "msg-1",
       }),
     ).rejects.toThrow(/model down/);
-    expect(conversations.postMessage).not.toHaveBeenCalled();
+
+    // Posted, and unmistakably not an answer.
+    expect(conversations.postMessage).toHaveBeenCalledTimes(1);
+    const posted = conversations.postMessage.mock.calls[0][0] as { body: string };
+    expect(posted.body).toContain("could not answer");
+    expect(posted.body).toContain("nothing here is an answer");
+    expect(posted.body).toContain("model down");
   });
 });
