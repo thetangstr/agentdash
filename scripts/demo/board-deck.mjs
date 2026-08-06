@@ -150,14 +150,28 @@ while (Date.now() - replyStartedAt < REPLY_CEILING_MS) {
   const poll = await api("get", `/api/conversations/${convId}/messages?limit=20`);
   msgs = poll.body?.messages ?? poll.body ?? [];
   replied = msgs.filter((m) => m.role === "agent");
-  if (replied.length >= 1) break;
+  if (replied.length >= 1) break; // includes a failure notice: either way, done waiting
   await sleep(5000);
 }
 const replyWaitedS = Math.round((Date.now() - replyStartedAt) / 1000);
-say(replied.length >= 1, `the agent replies in the thread`,
-  replied.length
-    ? `after ${replyWaitedS}s — "${String(replied[0].content ?? "").slice(0, 80)}"`
-    : `no reply within ${Math.round(REPLY_CEILING_MS / 1000)}s`);
+// A failure notice is an agent message too.
+//
+// When a summon fails the agent now posts "I could not answer this — my model
+// call failed…", which is the right product behaviour and would otherwise make
+// this check pass on a run where no question was answered. Counting any agent
+// message as a reply would turn the honest failure into a green tick.
+const realAnswers = replied.filter(
+  (m) => !/could not answer this/i.test(String(m.content ?? "")),
+);
+const failureNotice = replied.find((m) =>
+  /could not answer this/i.test(String(m.content ?? "")),
+);
+say(realAnswers.length >= 1, `the agent replies in the thread`,
+  realAnswers.length
+    ? `after ${replyWaitedS}s — "${String(realAnswers[0].content ?? "").slice(0, 80)}"`
+    : failureNotice
+      ? `the agent reported a failure instead of answering: "${String(failureNotice.content ?? "").slice(0, 120)}"`
+      : `no reply within ${Math.round(REPLY_CEILING_MS / 1000)}s`);
 if (replied.some((m) => /stub/i.test(String(m.content ?? "")))) {
   say(null, `replies are STUB text`, `the conversation path works; the words need a model — set ANTHROPIC_API_KEY or use claude_local`);
 }
