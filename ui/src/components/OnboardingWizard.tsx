@@ -8,6 +8,7 @@ import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
+import { stewardshipsApi } from "../api/stewardships";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -929,6 +930,31 @@ export function OnboardingWizard() {
         }
         queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(createdCompanyId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(createdCompanyId) });
+      }
+
+      /**
+       * Make the owner the steward of the agent they just created.
+       *
+       * Without this the owner is the one person in the company who cannot
+       * reach their own agent: My Agent, the connect command for their harness,
+       * and every escalation to them all key off an active stewardship, and
+       * the wizard created agents with none. It surfaced as "Titus: no account"
+       * in a cold end-to-end run — the owner already had an account, but no
+       * stewardship, so nothing tied him to his own Chief of Staff.
+       *
+       * Checked rather than attempted-and-swallowed: pairing is refused with 409
+       * when either side already has an active stewardship, which is correct and
+       * expected on a second run. Asking first keeps a real failure visible
+       * instead of hiding it among the expected ones.
+       */
+      if (createdCompanyHasWorkforce && session?.session.userId) {
+        const mine = await stewardshipsApi.getMyAgent(createdCompanyId);
+        if (!mine.agent) {
+          await stewardshipsApi.pair(createdCompanyId, createdAgentId, session.session.userId);
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.myAgent.detail(createdCompanyId)
+          });
+        }
       }
 
       let goalId = createdCompanyGoalId;

@@ -45,6 +45,18 @@ export const stewardshipsApi = {
   /** The signed-in user's own agent. The server derives identity from the session. */
   getMyAgent: (companyId: string) => api.get<MyAgentResponse>(`/companies/${companyId}/me/agent`),
   /**
+   * Pair a person with an agent they will look after.
+   *
+   * Refused with 409 when either side already has an active stewardship — one
+   * human, one agent, per workspace — so callers should check `getMyAgent`
+   * first rather than treating the conflict as an error to swallow.
+   */
+  pair: (companyId: string, agentId: string, userId: string) =>
+    api.post<AgentStewardship>(`/companies/${companyId}/agent-stewardships`, {
+      agentId,
+      userId,
+    }),
+  /**
    * `status` defaults to `open` on the server — what a decision surface needs.
    * Pass `all` when the caller has to scope tabs that render decided work;
    * scoping those against an open-only set would erase resolved items rather

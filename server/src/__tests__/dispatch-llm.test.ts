@@ -35,9 +35,14 @@ import { dispatchLLM } from "../services/dispatch-llm.js";
 const originalAdapter = process.env.AGENTDASH_DEFAULT_ADAPTER;
 const originalHermesCommand = process.env.AGENTDASH_HERMES_COMMAND;
 const originalSkipLLM = process.env.PAPERCLIP_E2E_SKIP_LLM;
+const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
 
 describe("dispatchLLM", () => {
   beforeEach(() => {
+    // A fallback to claude_api only happens when claude_api can actually
+    // answer. These cases are about routing, so give them a key; the cases that
+    // are about the missing-key behaviour clear it explicitly.
+    process.env.ANTHROPIC_API_KEY = "sk-test-key";
     anthropicLLM.mockClear();
     minimaxLLM.mockClear();
     minimaxLLM.mockResolvedValue("minimax reply");
@@ -73,6 +78,11 @@ describe("dispatchLLM", () => {
   });
 
   afterEach(() => {
+    if (originalAnthropicKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+    }
     if (originalAdapter === undefined) {
       delete process.env.AGENTDASH_DEFAULT_ADAPTER;
     } else {
@@ -253,5 +263,86 @@ describe("dispatchLLM", () => {
     );
 
     expect(reply).toBe("Routed reply.");
+  });
+});
+
+/**
+ * A failed adapter must not answer with placeholder text.
+ *
+ * `anthropicLLM` returns a canned "set ANTHROPIC_API_KEY" line when no key is
+ * configured. As the landing spot for someone poking at chat locally that is
+ * fine. As a FALLBACK from a failed adapter it is a serious bug: it turns a
+ * failure into a plausible-looking agent turn.
+ *
+ * Observed for real on a cold end-to-end run — `claude_local` hit its timeout,
+ * fell through to the keyless fallback, and an agent replied
+ * "Got it. (stub reply — set ANTHROPIC_API_KEY…)" to a colleague's question in a
+ * team thread. Nothing surfaced the timeout, because the conversation looked
+ * like it had worked.
+ */
+describe("dispatchLLM refuses to answer with placeholder text", () => {
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  const originalAdapterEnv = process.env.AGENTDASH_DEFAULT_ADAPTER;
+
+  beforeEach(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+    anthropicLLM.mockClear();
+    spawnMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalKey;
+    if (originalAdapterEnv === undefined) delete process.env.AGENTDASH_DEFAULT_ADAPTER;
+    else process.env.AGENTDASH_DEFAULT_ADAPTER = originalAdapterEnv;
+  });
+
+  const input = { system: "s", messages: [{ role: "user" as const, content: "hi" }] };
+
+  it("throws instead of stubbing when a local adapter fails and there is no key", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_local";
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/no ANTHROPIC_API_KEY is set to fall back to/);
+    expect(anthropicLLM, "the stub was reached anyway").not.toHaveBeenCalled();
+  });
+
+  it("names the adapter and the underlying cause, so the log says what broke", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_local";
+    spawnMock.mockImplementation(() => {
+      throw new Error("claude timed out after 45000ms");
+    });
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/claude_local/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/timed out/);
+  });
+
+  it("throws when a hosted adapter fails with no key to fall back to", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/Refusing to answer with placeholder text/);
+    expect(anthropicLLM).not.toHaveBeenCalled();
+  });
+
+  it("still falls back normally once a key exists", async () => {
+    // The fallback is useful when there is something to fall back to — this
+    // guards against over-correcting into "never fall back".
+    process.env.ANTHROPIC_API_KEY = "sk-test-key";
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
+
+    await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
+    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the direct claude_api path stubbing for keyless local dev", async () => {
+    // Someone running chat locally with no keys should still get a reply and a
+    // clear hint — that path never pretended an adapter had succeeded.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_api";
+
+    await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
   });
 });

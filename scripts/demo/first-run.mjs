@@ -145,6 +145,24 @@ say(mandate.status < 300, `its mandate is written`,
 const cosKey = (await api("post", `/api/agents/${cosId}/keys`, { name: `${OWNER} desktop` })).body?.token;
 say(!!cosKey, `it has its own key for ${OWNER}'s desktop harness`);
 
+// Pair the owner with the agent that is theirs.
+//
+// Without this the owner is the one person who cannot reach their own agent:
+// My Agent, the connect command for their harness, and escalations to them all
+// key off an active stewardship. A cold run reported "Titus: no account" — he
+// had an account; what he lacked was any link to his own Chief of Staff.
+const me = await api("get", "/api/auth/get-session");
+const ownerUserId = me.body?.session?.userId ?? me.body?.user?.id ?? null;
+let paired = { status: 0, body: null };
+if (ownerUserId) {
+  paired = await api("post", `/api/companies/${companyId}/agent-stewardships`, {
+    agentId: cosId, userId: ownerUserId,
+  });
+}
+say(paired.status > 0 && paired.status < 300,
+  `${OWNER} is its steward — so it shows up on ${OWNER}'s My Agent page`,
+  ownerUserId ? `status ${paired.status}` : `could not resolve ${OWNER}'s user id from the session`);
+
 // ── Stage 3: the first goal ─────────────────────────────────────────────────
 console.log("\n── stage 3 · your first goal ──");
 const GOAL = {

@@ -299,6 +299,20 @@ say(Object.keys(userIds).length >= STAKEHOLDERS.length,
   `password for all demo accounts: ${DEMO_PASSWORD}`);
 
 // pair each human with their agent — one person, one agent
+//
+// The owner is not in `userIds`: they were never invited, because they already
+// existed before this script ran. That produced "Titus: no account" on a cold
+// run — he had an account, he just had no link to his own Chief of Staff, which
+// is what My Agent, his connect command and every escalation to him key off.
+// Resolve him from the session behind the board key instead.
+// AGENTDASH_OWNER_USER_ID still wins when set; this only removes the need to
+// know it, since the board key already identifies its own user.
+if (!userIds.Titus) {
+  const ownerSession = await api("get", "/api/auth/get-session");
+  const ownerUserId = ownerSession.body?.session?.userId ?? ownerSession.body?.user?.id ?? null;
+  if (ownerUserId) userIds.Titus = ownerUserId;
+}
+
 let paired = 0;
 const pairFailures = [];
 for (const t of TEAM) {
