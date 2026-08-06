@@ -121,17 +121,47 @@ Two details worth watching in the output:
 
 ## 6. What is real and what is not
 
-| Real | Still a stub |
+| Real | Still mocked |
 |---|---|
-| Claim, password, session, API keys | Agent **replies** are canned until a model is configured |
-| Workspace, agents, mandates, goals, tasks | SharePoint/HubSpot reads are mocked |
-| Human accounts, invites, membership, pairing | No real Telegram/WhatsApp delivery |
+| Claim, password, session, API keys | SharePoint/HubSpot reads |
+| Workspace, agents, mandates, goals, tasks | Telegram/WhatsApp delivery |
+| Human accounts, invites, membership, pairing | |
+| **Agent replies — a real model, governed by the agent's mandate** | |
 | Agent→agent fact requests and escalation | |
 | Bridge tasks reaching a specific person's machine | |
 | Consolidation with attribution | |
 
-Set `ANTHROPIC_API_KEY` (or keep `claude_local` and sign the Mac's Claude in) to turn the
-stub replies into real ones.
+Agent replies used to be a hardcoded string. They are now real: the agent's
+AGENTS.md becomes the system prompt, so what an agent says is governed by the
+mandate its owner wrote. Asked what it watches, a Chief of Staff on the LAN box
+answered:
+
+> Watching whether the client comes back with new requirements framed as
+> "feedback" after the review — that's the moment scope quietly doubles, and
+> I'll flag it before you agree to anything in the room.
+
+### Choose the adapter deliberately
+
+`AGENTDASH_DEFAULT_ADAPTER` decides how those replies are produced, and the two
+options are not equivalent for a workspace with several people in it:
+
+| | `claude_local` | `claude_api` |
+|---|---|---|
+| Needs | the Mac's own signed-in Claude CLI | `ANTHROPIC_API_KEY` |
+| Cost | covered by the subscription | per token |
+| Latency, idle | 60–110s — it starts a whole CLI | a few seconds |
+| Under concurrent load | **exceeded 120s and failed** in a measured run | unaffected |
+
+`claude_local` is a good fit for one person trying the product. For MKThink,
+with four agents and three colleagues active at once, set `ANTHROPIC_API_KEY` and
+leave the adapter on `claude_api`. A failed adapter no longer answers with
+placeholder text — the agent posts that it could not answer and why — so the
+symptom of picking the wrong one is honest, but it is still a worse experience
+than not hitting it.
+
+Two related settings: `AGENTDASH_ADAPTER_TIMEOUT_MS` (default 120s) bounds a
+local adapter, and local adapters run in an empty scratch directory so an agent
+cannot absorb whatever repository the server happens to be running inside.
 
 ## 7. Two things that will bite
 
