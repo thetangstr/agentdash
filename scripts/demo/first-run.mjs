@@ -211,16 +211,34 @@ MY RUNTIME AND CREDENTIALS
   Workspace: ${companyId}  (${COMPANY})
   Workspace code (for creating workspaces): ${MK_CODE}
 
-Send the key as \`Authorization: Bearer <key>\`. Never invent an email address, an
-API key, or a code — ask me.
+Never invent an email address, an API key, or a code — ask me.
+
+CONNECT THE TOOLS FIRST
+
+Run this once, then restart yourself. It gives you typed AgentDash tools instead
+of hand-written HTTP, so the calls below cannot be malformed:
+
+  claude mcp add agentdash \\
+    --env PAPERCLIP_API_URL=${BASE} \\
+    --env PAPERCLIP_API_KEY=${KEY} \\
+    --env PAPERCLIP_COMPANY_ID=${companyId} \\
+    -- npx -y ${BASE}/downloads/agentdash-mcp-server.tgz
+
+Do NOT set PAPERCLIP_AGENT_ID here. That flag makes the connection act AS one
+agent; you are acting as me, to build the company.
+
+Some of what follows has no typed tool yet. For those, use \`paperclipApiRequest\`
+with the method and path given — it reuses this connection, so you never handle
+the key yourself. If you cannot install the MCP, everything below also works as
+plain HTTP with \`Authorization: Bearer <the key above>\`.
 
 WHAT ALREADY EXISTS
 
   Chief of Staff agent: ${cosId}
     - it is my own agent AND the company's Chief of Staff
     - its mandate is already written; read it before changing anything:
-      GET /api/agents/${cosId}/instructions-bundle
-      GET /api/agents/${cosId}/instructions-bundle/file?path=AGENTS.md
+      paperclipApiRequest { method: "GET",
+        path: "/agents/${cosId}/instructions-bundle/file?path=AGENTS.md" }
 
 THE GOAL WE ARE WORKING ON
 
@@ -238,8 +256,7 @@ WHAT I WANT YOU TO DO
 
 2. For each lead, create an agent. Use a SINGLE-WORD name (an @mention resolves
    on one token, so "Delivery" works and "delivery agent" can never be reached).
-     POST /api/companies/${companyId}/agents
-          { "name": "Delivery", "role": "engineer", "adapterType": "process" }
+     agentdashHireAgent { name: "Delivery", role: "engineer", adapterType: "process" }
 
 3. Write each agent a mandate at AGENTS.md covering: who it is and whose agent it
    is, what it is for, who it listens to when two people disagree, how it
@@ -247,12 +264,22 @@ WHAT I WANT YOU TO DO
    inferring. Ask me for the "must never" list — that is the part I care about
    most and the part you cannot guess. For example, an agent that owns our
    systems must never delete anything; it proposes a list for a human to approve.
-     PUT /api/agents/<agentId>/instructions-bundle/file
-         { "path": "AGENTS.md", "content": "# ..." }
+     paperclipApiRequest
+       method: "PUT"
+       path:   "/agents/<agentId>/instructions-bundle/file"
+       jsonBody: { "path": "AGENTS.md", "content": "# ..." }
+
+   Write AGENTS.md, not directives. There is an \`agentdashPushAgentDirectives\`
+   tool and it is NOT this: directives are a separate steward-provenance store,
+   and only AGENTS.md is read as the agent's system prompt when it answers. A
+   mandate pushed as directives would look saved and change nothing about how
+   the agent behaves.
 
 4. Invite each lead, with auto-approve on:
-     POST /api/onboarding/invites
-          { "companyId": "${companyId}", "emails": ["..."], "autoApprove": true }
+     paperclipApiRequest
+       method: "POST"
+       path:   "/onboarding/invites"
+       jsonBody: { "companyId": "${companyId}", "emails": ["..."], "autoApprove": true }
    Each entry in the \`invites\` array carries \`inviteUrl\` — that is the link I
    send. \`emailStatus: "skipped"\` is expected and not a failure; no email
    provider is configured, so handing me the links IS the delivery.
@@ -270,12 +297,17 @@ WHAT I WANT YOU TO DO
    someone who has not accepted is refused with
    "Steward user must be an active company member", which reads like a bug and is
    not one. If they have not accepted yet, tell me, and stop at this step.
-     POST /api/companies/${companyId}/agent-stewardships
-          { "agentId": "<agentId>", "userId": "<their user id>" }
+     paperclipApiRequest
+       method: "POST"
+       path:   "/companies/${companyId}/agent-stewardships"
+       jsonBody: { "agentId": "<agentId>", "userId": "<their user id>" }
 
 6. Mint one key per agent, and tell me which key belongs to which person. Each
    person pastes their own key into their own Claude Code or Codex.
-     POST /api/agents/<agentId>/keys   { "name": "<Person> desktop" }
+     paperclipApiRequest
+       method: "POST"
+       path:   "/agents/<agentId>/keys"
+       jsonBody: { "name": "<Person> desktop" }
    The key comes back in the \`token\` field — not \`key\` or \`apiKey\` — and it is
    shown once. Reading the wrong field yields an empty string, and an empty
    agent key fails later as "Agent authentication required", which looks like a
@@ -285,29 +317,33 @@ WHAT I WANT YOU TO DO
    the agent that owns that domain, leaving the assembly task on the Chief of
    Staff. Then show me the shape of it: who is doing what, and what the Chief is
    waiting on.
-     GET   /api/companies/${companyId}/issues
-     PATCH /api/issues/<issueId>   { "assigneeAgentId": "<agentId>" }
-   That GET returns a BARE ARRAY, not { "issues": [...] } — indexing it as an
-   object silently yields nothing and looks like an empty workspace.
+     paperclipListIssues  {}
+     paperclipUpdateIssue { issueId: "<issueId>", assigneeAgentId: "<agentId>" }
+   Both are typed tools, so this step needs no hand-written paths at all.
 
 8. Finally, walk one loop for real so I can watch it: have the Chief of Staff ask
    one lead's agent for its contribution, let that agent escalate to its human,
    and show me the answer coming back attributed.
-     POST /api/companies/${companyId}/fact-requests
-          { "targetAgentId": "...", "factKey": "delivery_status",
-            "runId": "board-pack-week-1", "pipelineId": "board-pack",
-            "question": "..." }
+     paperclipApiRequest
+       method: "POST"
+       path:   "/companies/${companyId}/fact-requests"
+       jsonBody: { "targetAgentId": "...", "factKey": "delivery_status",
+                   "runId": "board-pack-week-1", "pipelineId": "board-pack",
+                   "question": "..." }
    All five fields are required and no others are accepted — the validator is
    strict, so a stray field is a 400 rather than an ignored key. \`runId\` plus
    \`factKey\` is the dedup key: asking twice in one run answers 200 with
    \`deduplicated: true\` instead of asking a person the same question again.
    Answers carry a \`sourceKind\`, one of:
    connector | harness | human | agent | external  — "system" is NOT valid.
-     POST /api/companies/${companyId}/fact-requests/<id>/escalate    (as that agent)
-     POST /api/companies/${companyId}/fact-requests/<id>/answer      (as that agent)
-   To act AS an agent, send its own key as \`x-agent-key\` instead of my Bearer key.
-   Do not use my key for an agent's action — agent-only routes will refuse it, and
-   an action attributed to me when an agent did it is a lie in the audit trail.
+     .../fact-requests/<id>/escalate    (as that agent)
+     .../fact-requests/<id>/answer      (as that agent)
+
+   These three are the one place you cannot use this connection. They are
+   agent-only, and this connection is me — my key gets 403 on them, which is
+   correct: an action attributed to me when an agent did it is a lie in the audit
+   trail. Use plain HTTP with that agent's own key as the \`x-agent-key\` header,
+   or add a second MCP connection with PAPERCLIP_AGENT_ID set to that agent.
 
 WHEN YOU ARE STUCK
 Stop and tell me what you need. A half-built workspace I do not know about is
