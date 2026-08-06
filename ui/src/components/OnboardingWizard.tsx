@@ -98,8 +98,23 @@ const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the
  *    wait on an approval before they are even pollable, and connector sends run
  *    through approvals with the destructive ceiling on top. An agent's own
  *    adapter work is not intercepted, so the broader promise would be false.
+ *
+ * The last two points describe the workforce features, which are gated to the
+ * `agentdash_mk` profile and answer 404 elsewhere — and this wizard creates a
+ * plain workspace, because `companiesApi.create` is called with a name and
+ * nothing else. So they are shown only when the workspace really has the
+ * profile. Describing agent-to-agent asks and the bridge on a workspace where
+ * both endpoints 404 would teach someone a mental model of the product that
+ * their own instance then contradicts.
  */
-function WhatHappensNext({ agentName }: { agentName: string }) {
+function WhatHappensNext({
+  agentName,
+  workforce,
+}: {
+  agentName: string;
+  /** Whether this workspace actually has the `agentdash_mk` features. */
+  workforce: boolean;
+}) {
   const points: Array<{ icon: typeof ListTodo; title: string; body: string }> = [
     {
       icon: ListTodo,
@@ -116,16 +131,26 @@ function WhatHappensNext({ agentName }: { agentName: string }) {
       title: "It works inside limits you set",
       body: "Your agent follows a written mandate — who it is, what it must never do, whose direction wins when two people disagree. And when it wants to act on someone's machine or send something outside the company, that waits for a person to approve it.",
     },
-    {
-      icon: MessageSquare,
-      title: "If something is outside its area, it asks",
-      body: "It can ask a colleague's agent for a fact it does not own, and it is told to say what it does not know rather than fill the gap with a guess.",
-    },
-    {
-      icon: Laptop,
-      title: "When only a person can answer, it reaches you",
-      body: "Some things live in no system at all — intent, risk, a decision made in a room. The path to a person is what we call the bridge. Connect your own machine and the question lands in your Claude Code or Codex; you answer where you already work, and it comes back with your name on it. Until you connect one, the question simply arrives here.",
-    },
+    ...(workforce
+      ? [
+          {
+            icon: MessageSquare,
+            title: "If something is outside its area, it asks",
+            body: "It can ask a colleague's agent for a fact it does not own, and it is told to say what it does not know rather than fill the gap with a guess.",
+          },
+          {
+            icon: Laptop,
+            title: "When only a person can answer, it reaches you",
+            body: "Some things live in no system at all — intent, risk, a decision made in a room. The path to a person is what we call the bridge. Connect your own machine and the question lands in your Claude Code or Codex; you answer where you already work, and it comes back with your name on it. Until you connect one, the question simply arrives here.",
+          },
+        ]
+      : [
+          {
+            icon: MessageSquare,
+            title: "Working with other people's agents is not on here",
+            body: "Agents asking each other for facts, and reaching a person on their own machine, come with a workspace code. This workspace was created without one, so those stay off — your agent works on its own for now. You can set up a workspace with them from the start screen.",
+          },
+        ]),
   ];
 
   return (
@@ -462,6 +487,19 @@ export function OnboardingWizard() {
       setAdapterEnvLoading(false);
     }
   }
+
+  /**
+   * Whether the workspace this wizard is filling in has the workforce features.
+   *
+   * Read from the company record rather than assumed, because the wizard runs
+   * both on a workspace it just created (never profiled) and on an existing one
+   * entered at a later step (which may be). Unknown counts as off: the copy it
+   * controls promises collaboration endpoints, and claiming those on a workspace
+   * where they 404 is worse than staying quiet about them.
+   */
+  const createdCompanyHasWorkforce =
+    companies.find((candidate) => candidate.id === createdCompanyId)?.productProfile ===
+    "agentdash_mk";
 
   async function handleStep1Next() {
     setLoading(true);
@@ -1226,7 +1264,10 @@ export function OnboardingWizard() {
                       onChange={(e) => setTaskDescription(e.target.value)}
                     />
                   </div>
-                  <WhatHappensNext agentName={agentName.trim() || "Your agent"} />
+                  <WhatHappensNext
+                    agentName={agentName.trim() || "Your agent"}
+                    workforce={createdCompanyHasWorkforce}
+                  />
                 </div>
               )}
 
