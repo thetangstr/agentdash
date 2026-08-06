@@ -7,6 +7,7 @@ import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
+import { ConnectYourMachine } from "../components/agent/ConnectYourMachine";
 import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
@@ -127,6 +128,8 @@ export default function MyAgent() {
         agentName={agent.name}
         companyId={selectedCompanyId!}
       />
+
+      <ConnectYourMachine companyId={selectedCompanyId!} agentName={agent.name} />
 
       <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
 
