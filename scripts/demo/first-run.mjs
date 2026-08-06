@@ -167,8 +167,12 @@ say(goal.status < 300, `goal set, owned by the Chief of Staff`, GOAL.title);
 
 const issueIds = [];
 for (const title of GOAL.tasks) {
+  // `goalId` is not optional decoration: without it the task is created loose,
+  // outside the goal, while the line below still reports it as being under one.
+  // A goal that reads as populated and is actually empty is the failure nobody
+  // investigates, because the summary looked right.
   const r = await api("post", `/api/companies/${companyId}/issues`, {
-    title, assigneeAgentId: cosId,
+    title, assigneeAgentId: cosId, goalId: goal.body?.id,
   });
   if (r.status < 300) issueIds.push(r.body?.id);
 }

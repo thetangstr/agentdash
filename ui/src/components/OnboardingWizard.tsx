@@ -61,7 +61,8 @@ import {
   ShieldCheck,
   MessageSquare,
   Laptop,
-  ScrollText
+  ScrollText,
+  Target
 } from "lucide-react";
 import {
   AUTONOMOUS_ACTIONS,
@@ -72,9 +73,16 @@ import {
   type MandateAnswers
 } from "../lib/agent-mandate";
 import { DEFAULT_DESTRUCTIVE_ACTION_CLASSES } from "@paperclipai/shared";
+import {
+  buildFirstGoalPayload,
+  buildFirstGoalTaskPayloads,
+  defaultFirstGoal,
+  firstGoalExamples,
+  type FirstGoalDraft
+} from "../lib/first-goal";
 
 
-type Step = 1 | 2 | 3 | 4 | 5;
+type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type AdapterType = string;
 
 const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the operator route work, coordinate agents, and keep the company moving forward.
@@ -295,6 +303,14 @@ export function OnboardingWizard() {
   const [mandateDraft, setMandateDraft] = useState("");
   const [showMandateText, setShowMandateText] = useState(false);
 
+  // Step 4 — the first goal. Pre-filled with a worked example so the step can be
+  // accepted rather than composed; `goalSkipped` records a deliberate decline,
+  // which is different from an empty draft.
+  const [goalDraft, setGoalDraft] = useState<FirstGoalDraft>(() => defaultFirstGoal(""));
+  const [goalExampleKey, setGoalExampleKey] = useState("board_pack");
+  const [goalSkipped, setGoalSkipped] = useState(false);
+  const [goalTouched, setGoalTouched] = useState(false);
+
   // Step 2
   const [agentName, setAgentName] = useState("CoS");
   const [adapterType, setAdapterType] = useState<AdapterType>("claude_local");
@@ -374,7 +390,7 @@ export function OnboardingWizard() {
 
   // Resize textarea when step 3 is shown or description changes
   useEffect(() => {
-    if (step === 4) autoResizeTextarea();
+    if (step === 5) autoResizeTextarea();
   }, [step, taskDescription, autoResizeTextarea]);
 
   const {
@@ -481,6 +497,10 @@ export function OnboardingWizard() {
     setCompanyName("");
     setCompanyGoal("");
     setWorkspaceCode("");
+    setGoalDraft(defaultFirstGoal(""));
+    setGoalExampleKey("board_pack");
+    setGoalSkipped(false);
+    setGoalTouched(false);
     setMandateAnswers(defaultMandateAnswers());
     setMandateEdited(false);
     setMandateDraft("");
@@ -606,6 +626,27 @@ export function OnboardingWizard() {
     enabled: effectiveOnboardingOpen
   });
   const ownerFirstName = (session?.user.name?.trim().split(/\s+/)[0] || "your owner").trim();
+
+  /**
+   * Re-seed the goal example once the owner's name arrives.
+   *
+   * The session loads after first render, so the initial draft is written with a
+   * neutral subject. Refreshing it only while `goalTouched` is false means an
+   * owner who has already edited the draft never has their words replaced by a
+   * late-arriving name.
+   */
+  useEffect(() => {
+    if (goalTouched) return;
+    const example = firstGoalExamples(ownerFirstName).find(
+      (candidate) => candidate.key === goalExampleKey
+    );
+    if (!example) return;
+    setGoalDraft({
+      title: example.title,
+      description: example.description,
+      tasks: [...example.tasks]
+    });
+  }, [ownerFirstName, goalExampleKey, goalTouched]);
 
   /**
    * The mandate as it currently stands: generated from the answers, unless the
@@ -825,10 +866,17 @@ export function OnboardingWizard() {
     setStep(4);
   }
 
-  async function handleStep4Next() {
+  /** Goal step → task step. The goal itself is written at launch. */
+  function handleStep4Next() {
     if (!createdCompanyId || !createdAgentId) return;
     setError(null);
     setStep(5);
+  }
+
+  async function handleStep5Next() {
+    if (!createdCompanyId || !createdAgentId) return;
+    setError(null);
+    setStep(6);
   }
 
   async function handleLaunch() {
@@ -851,6 +899,37 @@ export function OnboardingWizard() {
         { path: "AGENTS.md", content: mandateText },
         createdCompanyId
       );
+
+      /**
+       * The owner's first goal, and the work under it.
+       *
+       * Created here rather than at the goal step so that backing out of the
+       * wizard leaves nothing half-built, and written before the starter task so
+       * the goal exists by the time anything is assigned. Every task carries
+       * `goalId`: the scripted version of this flow omitted it and reported the
+       * tasks as being under the goal when they were not, which is the failure
+       * nobody investigates because the summary reads correctly.
+       */
+      if (!goalSkipped && goalDraft.title.trim()) {
+        const firstGoal = await goalsApi.create(
+          createdCompanyId,
+          buildFirstGoalPayload({
+            title: goalDraft.title,
+            description: goalDraft.description,
+            ownerAgentId: createdAgentId
+          })
+        );
+        setCreatedCompanyGoalId(firstGoal.id);
+        for (const payload of buildFirstGoalTaskPayloads({
+          goalId: firstGoal.id,
+          assigneeAgentId: createdAgentId,
+          tasks: goalDraft.tasks
+        })) {
+          await issuesApi.create(createdCompanyId, payload);
+        }
+        queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(createdCompanyId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(createdCompanyId) });
+      }
 
       let goalId = createdCompanyGoalId;
       if (!goalId) {
@@ -912,8 +991,9 @@ export function OnboardingWizard() {
       if (step === 1 && companyName.trim()) handleStep1Next();
       else if (step === 2 && agentName.trim()) handleStep2Next();
       else if (step === 3) handleStep3Next();
-      else if (step === 4 && taskTitle.trim()) handleStep4Next();
-      else if (step === 5) handleLaunch();
+      else if (step === 4) handleStep4Next();
+      else if (step === 5 && taskTitle.trim()) handleStep5Next();
+      else if (step === 6) handleLaunch();
     }
   }
 
@@ -959,8 +1039,9 @@ export function OnboardingWizard() {
                     { step: 1 as Step, label: "Company", icon: Building2 },
                     { step: 2 as Step, label: "Agent", icon: Bot },
                     { step: 3 as Step, label: "Mandate", icon: ScrollText },
-                    { step: 4 as Step, label: "Task", icon: ListTodo },
-                    { step: 5 as Step, label: "Launch", icon: Rocket }
+                    { step: 4 as Step, label: "Goal", icon: Target },
+                    { step: 5 as Step, label: "Task", icon: ListTodo },
+                    { step: 6 as Step, label: "Launch", icon: Rocket }
                   ] as const
                 ).map(({ step: s, label, icon: Icon }) => (
                   <button
@@ -1683,6 +1764,120 @@ export function OnboardingWizard() {
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
+                      <Target className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-medium">Your first goal</h3>
+                      <p className="text-xs text-muted-foreground">
+                        A goal is the thing {agentName.trim() || "your agent"} keeps moving on
+                        its own. Pick the one that sounds most like your week — you can change
+                        every word of it.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {firstGoalExamples(ownerFirstName).map((example) => (
+                      <label
+                        key={example.key}
+                        className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                      >
+                        <input
+                          type="radio"
+                          name="first-goal-example"
+                          className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                          checked={!goalSkipped && goalExampleKey === example.key}
+                          onChange={() => {
+                            setGoalSkipped(false);
+                            setGoalTouched(false);
+                            setGoalExampleKey(example.key);
+                          }}
+                        />
+                        <span className="text-xs leading-snug">{example.label}</span>
+                      </label>
+                    ))}
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
+                      <input
+                        type="radio"
+                        name="first-goal-example"
+                        className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                        checked={goalSkipped}
+                        onChange={() => setGoalSkipped(true)}
+                      />
+                      <span className="text-xs leading-snug">
+                        Not yet — I'll set a goal later
+                      </span>
+                    </label>
+                  </div>
+
+                  {!goalSkipped && (
+                    <>
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          Goal
+                        </label>
+                        <input
+                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                          value={goalDraft.title}
+                          onChange={(e) => {
+                            setGoalTouched(true);
+                            setGoalDraft({ ...goalDraft, title: e.target.value });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          Why it matters — {agentName.trim() || "your agent"} reads this
+                        </label>
+                        <textarea
+                          className="min-h-[80px] w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                          value={goalDraft.description}
+                          onChange={(e) => {
+                            setGoalTouched(true);
+                            setGoalDraft({ ...goalDraft, description: e.target.value });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          The work underneath it
+                        </label>
+                        <div className="space-y-1.5">
+                          {goalDraft.tasks.map((task, index) => (
+                            <div key={index} className="flex items-center gap-2">
+                              <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                                {index === 0 ? "assemble" : "collect"}
+                              </span>
+                              <input
+                                className="w-full rounded-md border border-border bg-transparent px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                                value={task}
+                                onChange={(e) => {
+                                  setGoalTouched(true);
+                                  const tasks = [...goalDraft.tasks];
+                                  tasks[index] = e.target.value;
+                                  setGoalDraft({ ...goalDraft, tasks });
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-1.5 text-xs text-muted-foreground">
+                          All of these start on {agentName.trim() || "your agent"}. When you add
+                          the rest of your team, each collection task moves to whoever owns that
+                          area — that hand-off is what the next screen sets up.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {step === 5 && (
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="bg-muted/50 p-2">
                       <ListTodo className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
@@ -1725,7 +1920,7 @@ export function OnboardingWizard() {
                 </div>
               )}
 
-              {step === 5 && (
+              {step === 6 && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1764,6 +1959,18 @@ export function OnboardingWizard() {
                       </div>
                       <Check className="h-4 w-4 text-green-500 shrink-0" />
                     </div>
+                    {!goalSkipped && goalDraft.title.trim() ? (
+                      <div className="flex items-center gap-3 px-3 py-2.5">
+                        <Target className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{goalDraft.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Goal · {goalDraft.tasks.filter((t) => t.trim()).length} tasks
+                          </p>
+                        </div>
+                        <Check className="h-4 w-4 text-green-500 shrink-0" />
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-3 px-3 py-2.5">
                       <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -1851,8 +2058,18 @@ export function OnboardingWizard() {
                   {step === 4 && (
                     <Button
                       size="sm"
-                      disabled={!taskTitle.trim() || loading}
+                      disabled={loading || (!goalSkipped && !goalDraft.title.trim())}
                       onClick={handleStep4Next}
+                    >
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Next
+                    </Button>
+                  )}
+                  {step === 5 && (
+                    <Button
+                      size="sm"
+                      disabled={!taskTitle.trim() || loading}
+                      onClick={handleStep5Next}
                     >
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -1862,7 +2079,7 @@ export function OnboardingWizard() {
                       {loading ? "Creating..." : "Next"}
                     </Button>
                   )}
-                  {step === 5 && (
+                  {step === 6 && (
                     <Button size="sm" disabled={loading} onClick={handleLaunch}>
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
