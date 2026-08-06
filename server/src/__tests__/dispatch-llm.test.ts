@@ -115,8 +115,31 @@ describe("dispatchLLM", () => {
     expect(spawnMock).toHaveBeenCalledWith(
       "hermes",
       ["chat", "-q", expect.stringContaining("Draft a rollout plan."), "-Q"],
-      { stdio: ["pipe", "pipe", "pipe"] },
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
     );
+  });
+
+  /**
+   * A locally-spawned adapter must not inherit the server's working directory.
+   *
+   * `claude --print` starts a full Claude Code session and reads the project it
+   * launches in. Running it in the server's cwd hands every agent the operator's
+   * repository as context — an agent in a consultancy workspace, asked what to
+   * focus on this week, answered "getting license enforcement finished and
+   * merged, it's the branch you're on". That is the server's git branch, and an
+   * agent that can see it can quote it to a colleague.
+   */
+  it("spawns local adapters in a neutral directory, not the server's", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+
+    await dispatchLLM({
+      system: "You are a Chief of Staff.",
+      messages: [{ role: "user", content: "Draft a rollout plan." }],
+    });
+
+    const options = spawnMock.mock.calls[0][2] as { cwd?: string };
+    expect(options.cwd, "no cwd was set, so the adapter inherits the server's").toBeTruthy();
+    expect(options.cwd).not.toBe(process.cwd());
   });
 
   it("rejects unsupported CoS chat adapters instead of silently using claude_api", async () => {

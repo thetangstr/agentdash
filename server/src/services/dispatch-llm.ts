@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { anthropicLLM } from "./anthropic-llm.js";
 import { minimaxLLM } from "./minimax-llm.js";
 import { openaiCompatLLMDetailed, type OpenAICompatUsage } from "./openai-compat-llm.js";
@@ -114,6 +116,32 @@ async function recordOpenAICompatUsage(
  * Run a child process with a timeout, collecting stdout.
  * Rejects if the process exits non-zero or the timeout fires.
  */
+/**
+ * A neutral working directory for locally-spawned adapters.
+ *
+ * `claude --print` starts a full Claude Code session, which reads the project it
+ * is launched in: CLAUDE.md, the git branch, the files around it. Inheriting the
+ * server's cwd therefore hands every agent the operator's repository as context.
+ *
+ * Observed for real: asked "what should I focus on this week?", an agent in a
+ * consultancy workspace answered "getting license enforcement finished and
+ * merged — it's the branch you're on". That is the server's git branch, not
+ * anything about the company. Beyond being wrong, it means an agent answering a
+ * colleague can quote whatever repository the server happens to run inside.
+ *
+ * An empty scratch directory gives the model nothing to absorb but the prompt it
+ * was given — which is the mandate and the conversation, and should be all of it.
+ */
+function neutralSpawnCwd(): string {
+  const dir = path.join(os.tmpdir(), "agentdash-adapter-cwd");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return os.tmpdir();
+  }
+}
+
 function spawnWithTimeout(
   command: string,
   args: string[],
@@ -121,7 +149,10 @@ function spawnWithTimeout(
   timeoutMs = ADAPTER_TIMEOUT_MS,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: neutralSpawnCwd(),
+    });
 
     let stdout = "";
     let stderr = "";
