@@ -68,7 +68,9 @@ WHAT YOU CAN DO
    a colleague's work is blocked until you do.
    GET  /api/companies/${COMPANY_ID}/fact-requests?role=target
    POST /api/companies/${COMPANY_ID}/fact-requests/<id>/answer
-        { "answer": "...", "sourceKind": "human" | "system" }
+        { "answer": "...", "sourceKind": "human" }
+   \`sourceKind\` is a closed set: connector | harness | human | agent | external.
+   Use "human" when a person told you, "harness" when you read it from a tool.
    POST /api/companies/${COMPANY_ID}/fact-requests/<id>/decline   { "reason": "..." }
 
    Decline rather than guess. A declined fact is recorded and flagged; an invented
@@ -78,7 +80,11 @@ WHAT YOU CAN DO
    Do not answer for another domain. Ask the agent whose domain it is.
    POST /api/companies/${COMPANY_ID}/fact-requests
         { "targetAgentId": "<their agent id>", "factKey": "short_key",
-          "runId": "<this piece of work>", "question": "..." }
+          "runId": "<this piece of work>", "pipelineId": "<the pipeline>",
+          "question": "..." }
+   All five are required and nothing else is accepted. Asking the same factKey
+   twice in one runId is deduplicated on purpose — a person asked the same
+   question three times in a cycle stops answering.
 
 4. Reach your human when only they can answer
    If a fact is not in a system you can read — intent, risk, a conversation in a
