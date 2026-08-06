@@ -55,7 +55,11 @@ import {
   Check,
   Loader2,
   ChevronDown,
-  X
+  X,
+  Play,
+  ShieldCheck,
+  MessageSquare,
+  Laptop
 } from "lucide-react";
 
 
@@ -67,6 +71,80 @@ const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the
 - help the operator onboard and get oriented
 - coordinate and delegate tasks to other agents as they are hired
 - surface blockers and keep context across the operator's priorities`;
+
+/**
+ * What the task step tells the owner about the machinery they are about to
+ * switch on.
+ *
+ * This step used to say only "give your agent a small task to start with",
+ * which describes the text box and nothing else. Everything a newcomer actually
+ * needs to predict was left implicit: that the work goes to the agent rather
+ * than to them, that nothing runs until they say so, that the agent will reach
+ * out to a colleague's agent — or to them personally, on their own machine —
+ * instead of inventing an answer. People met all of that for the first time
+ * when it happened to them, which is the wrong moment to learn it.
+ *
+ * Every line here is deliberately checkable against behaviour rather than
+ * aspiration:
+ *  - the task is created with status `todo` and no run is triggered, so
+ *    "nothing starts until you say so" is literally true;
+ *  - escalation prefers an enrolled `bridge:read` endpoint and falls back to a
+ *    notice when there is none, so the bridge line names both outcomes. Copy
+ *    promising the laptop path unconditionally would be a lie for every owner
+ *    who has not connected a machine yet — which is all of them, here;
+ *  - the approval line says "act on someone's machine or send something outside
+ *    the company" rather than the tempting "anything irreversible", because
+ *    those two surfaces are what is actually gated: `act`-class bridge tasks
+ *    wait on an approval before they are even pollable, and connector sends run
+ *    through approvals with the destructive ceiling on top. An agent's own
+ *    adapter work is not intercepted, so the broader promise would be false.
+ */
+function WhatHappensNext({ agentName }: { agentName: string }) {
+  const points: Array<{ icon: typeof ListTodo; title: string; body: string }> = [
+    {
+      icon: ListTodo,
+      title: "The work goes to the agent, not to you",
+      body: `This becomes an issue assigned to ${agentName}. You watch it, comment on it, and stay the person accountable for it.`,
+    },
+    {
+      icon: Play,
+      title: "Nothing runs until you say so",
+      body: "The task is created as To do. It sits there until you start it on the next screen, so an agent never begins work you did not ask for.",
+    },
+    {
+      icon: ShieldCheck,
+      title: "It works inside limits you set",
+      body: "Your agent follows a written mandate — who it is, what it must never do, whose direction wins when two people disagree. And when it wants to act on someone's machine or send something outside the company, that waits for a person to approve it.",
+    },
+    {
+      icon: MessageSquare,
+      title: "If something is outside its area, it asks",
+      body: "It can ask a colleague's agent for a fact it does not own, and it is told to say what it does not know rather than fill the gap with a guess.",
+    },
+    {
+      icon: Laptop,
+      title: "When only a person can answer, it reaches you",
+      body: "Some things live in no system at all — intent, risk, a decision made in a room. The path to a person is what we call the bridge. Connect your own machine and the question lands in your Claude Code or Codex; you answer where you already work, and it comes back with your name on it. Until you connect one, the question simply arrives here.",
+    },
+  ];
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <p className="text-xs font-medium">What happens after you launch</p>
+      <ul className="mt-2.5 space-y-2.5">
+        {points.map(({ icon: Icon, title, body }) => (
+          <li key={title} className="flex gap-2.5">
+            <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium leading-snug">{title}</p>
+              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{body}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
@@ -1118,8 +1196,9 @@ export function OnboardingWizard() {
                     <div>
                       <h3 className="font-medium">Give it something to do</h3>
                       <p className="text-xs text-muted-foreground">
-                        Give your agent a small task to start with — a bug fix,
-                        a research question, writing a script.
+                        Give {agentName.trim() || "your agent"} a small task to
+                        start with — a bug fix, a research question, writing a
+                        script.
                       </p>
                     </div>
                   </div>
@@ -1147,6 +1226,7 @@ export function OnboardingWizard() {
                       onChange={(e) => setTaskDescription(e.target.value)}
                     />
                   </div>
+                  <WhatHappensNext agentName={agentName.trim() || "Your agent"} />
                 </div>
               )}
 
@@ -1159,8 +1239,10 @@ export function OnboardingWizard() {
                     <div>
                       <h3 className="font-medium">Ready to launch</h3>
                       <p className="text-xs text-muted-foreground">
-                        Everything is set up. Launching now will create the
-                        starter task, wake the agent, and open the issue.
+                        Everything is set up. This creates the task, assigns it
+                        to {agentName.trim() || "your agent"}, and opens it — it
+                        does not start the work. You do that from the issue,
+                        when you are ready.
                       </p>
                     </div>
                   </div>
