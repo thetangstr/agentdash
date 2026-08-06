@@ -4,6 +4,7 @@ import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { useLocation, useNavigate, useParams } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
@@ -59,11 +60,21 @@ import {
   Play,
   ShieldCheck,
   MessageSquare,
-  Laptop
+  Laptop,
+  ScrollText
 } from "lucide-react";
+import {
+  AUTONOMOUS_ACTIONS,
+  MANDATE_JOBS,
+  NEVER_ACTIONS,
+  buildMandateMarkdown,
+  defaultMandateAnswers,
+  type MandateAnswers
+} from "../lib/agent-mandate";
+import { DEFAULT_DESTRUCTIVE_ACTION_CLASSES } from "@paperclipai/shared";
 
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
 type AdapterType = string;
 
 const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the operator route work, coordinate agents, and keep the company moving forward.
@@ -171,6 +182,63 @@ function WhatHappensNext({
   );
 }
 
+/** One numbered question on the mandate step. */
+function MandateQuestion({
+  number,
+  question,
+  hint,
+  children
+}: {
+  number: number;
+  question: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium">
+        <span className="text-muted-foreground">{number}.</span> {question}
+      </p>
+      {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * A checkbox row. `detail` carries the classifier's own rationale and example,
+ * which is the difference between an owner ticking a box they half-understand
+ * and one who can see what it would stop.
+ */
+function MandateCheck({
+  label,
+  detail,
+  checked,
+  onChange
+}: {
+  label: string;
+  detail?: string;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
+      <input
+        type="checkbox"
+        className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+        checked={checked}
+        onChange={onChange}
+      />
+      <span className="min-w-0">
+        <span className="block text-xs leading-snug">{label}</span>
+        {detail && (
+          <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{detail}</span>
+        )}
+      </span>
+    </label>
+  );
+}
+
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
   const { companies, setSelectedCompanyId, loading: companiesLoading } = useCompany();
@@ -219,6 +287,13 @@ export function OnboardingWizard() {
    * screen said why those never appeared.
    */
   const [workspaceCode, setWorkspaceCode] = useState("");
+
+  // Step 3 — the mandate, and whether the owner has hand-edited it. Once they
+  // have, answering another question must not silently discard their words.
+  const [mandateAnswers, setMandateAnswers] = useState<MandateAnswers>(defaultMandateAnswers);
+  const [mandateEdited, setMandateEdited] = useState(false);
+  const [mandateDraft, setMandateDraft] = useState("");
+  const [showMandateText, setShowMandateText] = useState(false);
 
   // Step 2
   const [agentName, setAgentName] = useState("CoS");
@@ -299,7 +374,7 @@ export function OnboardingWizard() {
 
   // Resize textarea when step 3 is shown or description changes
   useEffect(() => {
-    if (step === 3) autoResizeTextarea();
+    if (step === 4) autoResizeTextarea();
   }, [step, taskDescription, autoResizeTextarea]);
 
   const {
@@ -406,6 +481,10 @@ export function OnboardingWizard() {
     setCompanyName("");
     setCompanyGoal("");
     setWorkspaceCode("");
+    setMandateAnswers(defaultMandateAnswers());
+    setMandateEdited(false);
+    setMandateDraft("");
+    setShowMandateText(false);
     setAgentName("CoS");
     setAdapterType("claude_local");
     setModel("");
@@ -511,6 +590,56 @@ export function OnboardingWizard() {
   const createdCompanyHasWorkforce =
     companies.find((candidate) => candidate.id === createdCompanyId)?.productProfile ===
     "agentdash_mk";
+
+  const createdCompanyName =
+    companies.find((candidate) => candidate.id === createdCompanyId)?.name ?? companyName;
+
+  /**
+   * The owner's own first name, because a mandate that says "Titus decides" is
+   * followed more reliably than one that says "your owner decides" — and the
+   * person reading it back should recognise themselves in it.
+   */
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+    enabled: effectiveOnboardingOpen
+  });
+  const ownerFirstName = (session?.user.name?.trim().split(/\s+/)[0] || "your owner").trim();
+
+  /**
+   * The mandate as it currently stands: generated from the answers, unless the
+   * owner has opened the text and changed it, in which case their words win.
+   * Regenerating over a hand-edit would delete work someone chose to do by hand
+   * — the one case where they cared most.
+   */
+  const mandateText = mandateEdited
+    ? mandateDraft
+    : buildMandateMarkdown({
+        agentName: agentName.trim() || "Your agent",
+        companyName: createdCompanyName,
+        ownerName: ownerFirstName,
+        answers: mandateAnswers
+      });
+
+  const setAnswer = <K extends keyof MandateAnswers>(key: K, value: MandateAnswers[K]) =>
+    setMandateAnswers((previous) => ({ ...previous, [key]: value }));
+
+  const toggleAnswer = (key: "autonomous" | "never", optionKey: string) =>
+    setMandateAnswers((previous) => ({
+      ...previous,
+      [key]: previous[key].includes(optionKey)
+        ? previous[key].filter((entry) => entry !== optionKey)
+        : [...previous[key], optionKey]
+    }));
+
+  const toggleCheckFirst = (optionKey: (typeof DEFAULT_DESTRUCTIVE_ACTION_CLASSES)[number]["key"]) =>
+    setMandateAnswers((previous) => ({
+      ...previous,
+      checkFirst: previous.checkFirst.includes(optionKey)
+        ? previous.checkFirst.filter((entry) => entry !== optionKey)
+        : [...previous.checkFirst, optionKey]
+    }));
 
   async function handleStep1Next() {
     setLoading(true);
@@ -689,10 +818,17 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep3Next() {
+  /** Mandate step → task step. Nothing is written yet; launch does that. */
+  function handleStep3Next() {
     if (!createdCompanyId || !createdAgentId) return;
     setError(null);
     setStep(4);
+  }
+
+  async function handleStep4Next() {
+    if (!createdCompanyId || !createdAgentId) return;
+    setError(null);
+    setStep(5);
   }
 
   async function handleLaunch() {
@@ -700,6 +836,22 @@ export function OnboardingWizard() {
     setLoading(true);
     setError(null);
     try {
+      /**
+       * Write the mandate before anything else in the launch.
+       *
+       * The task is created assigned to this agent, so from that moment a run
+       * could pick it up — and an agent that starts work before its mandate
+       * exists is running with no stated limits at exactly the moment the owner
+       * believes they have just set some. Doing it first also means a failure
+       * here stops the launch loudly instead of producing an unconstrained agent
+       * with a task waiting for it.
+       */
+      await agentsApi.saveInstructionsFile(
+        createdAgentId,
+        { path: "AGENTS.md", content: mandateText },
+        createdCompanyId
+      );
+
       let goalId = createdCompanyGoalId;
       if (!goalId) {
         const goals = await goalsApi.list(createdCompanyId);
@@ -759,8 +911,9 @@ export function OnboardingWizard() {
       e.preventDefault();
       if (step === 1 && companyName.trim()) handleStep1Next();
       else if (step === 2 && agentName.trim()) handleStep2Next();
-      else if (step === 3 && taskTitle.trim()) handleStep3Next();
-      else if (step === 4) handleLaunch();
+      else if (step === 3) handleStep3Next();
+      else if (step === 4 && taskTitle.trim()) handleStep4Next();
+      else if (step === 5) handleLaunch();
     }
   }
 
@@ -805,8 +958,9 @@ export function OnboardingWizard() {
                   [
                     { step: 1 as Step, label: "Company", icon: Building2 },
                     { step: 2 as Step, label: "Agent", icon: Bot },
-                    { step: 3 as Step, label: "Task", icon: ListTodo },
-                    { step: 4 as Step, label: "Launch", icon: Rocket }
+                    { step: 3 as Step, label: "Mandate", icon: ScrollText },
+                    { step: 4 as Step, label: "Task", icon: ListTodo },
+                    { step: 5 as Step, label: "Launch", icon: Rocket }
                   ] as const
                 ).map(({ step: s, label, icon: Icon }) => (
                   <button
@@ -1279,6 +1433,256 @@ export function OnboardingWizard() {
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
+                      <ScrollText className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-medium">
+                        Set the rules for {agentName.trim() || "your agent"}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        Answer these and we write its mandate — the file it reads
+                        before every piece of work. Every answer is already set
+                        to the careful option, so you can change what matters and
+                        skip the rest.
+                      </p>
+                    </div>
+                  </div>
+
+                  <MandateQuestion
+                    number={1}
+                    question="What is this agent for?"
+                    hint="Sets what it pays attention to and how it breaks a tie between two urgent things."
+                  >
+                    <div className="space-y-1.5">
+                      {MANDATE_JOBS.map((job) => (
+                        <label
+                          key={job.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-job"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.jobKey === job.key}
+                            onChange={() => setAnswer("jobKey", job.key)}
+                          />
+                          <span className="text-xs leading-snug">{job.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {mandateAnswers.jobKey === "other" && (
+                      <textarea
+                        className="mt-2 w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring"
+                        rows={2}
+                        placeholder="In one or two sentences: what is this agent for?"
+                        value={mandateAnswers.jobOther}
+                        onChange={(e) => setAnswer("jobOther", e.target.value)}
+                      />
+                    )}
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={2}
+                    question="What can it get on with by itself?"
+                    hint="Everything here is reversible or read-only. Uncheck anything you would rather see first."
+                  >
+                    <div className="space-y-1">
+                      {AUTONOMOUS_ACTIONS.map((option) => (
+                        <MandateCheck
+                          key={option.key}
+                          label={option.label}
+                          checked={mandateAnswers.autonomous.includes(option.key)}
+                          onChange={() => toggleAnswer("autonomous", option.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={3}
+                    question={`What must it check with ${ownerFirstName} before doing?`}
+                    hint="These are the actions that cannot be taken back. All of them are ticked — leave them that way unless you have a reason."
+                  >
+                    <div className="space-y-1">
+                      {DEFAULT_DESTRUCTIVE_ACTION_CLASSES.map((entry) => (
+                        <MandateCheck
+                          key={entry.key}
+                          label={entry.label}
+                          detail={`${entry.rationale} e.g. ${entry.example}`}
+                          checked={mandateAnswers.checkFirst.includes(entry.key)}
+                          onChange={() => toggleCheckFirst(entry.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={4}
+                    question="What must it never do, even if you approve it?"
+                    hint="Work a person does, full stop. The agent prepares it and hands it over."
+                  >
+                    <div className="space-y-1">
+                      {NEVER_ACTIONS.map((option) => (
+                        <MandateCheck
+                          key={option.key}
+                          label={option.label}
+                          checked={mandateAnswers.never.includes(option.key)}
+                          onChange={() => toggleAnswer("never", option.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={5}
+                    question="Two people tell it different things. Who wins?"
+                  >
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          { key: "owner", label: `${ownerFirstName} decides — it works for you` },
+                          {
+                            key: "work_owner",
+                            label: "Whoever owns that piece of work decides"
+                          },
+                          {
+                            key: "back_to_owner",
+                            label: `Neither — it brings both answers back to ${ownerFirstName}`
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-tiebreak"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.tieBreak === option.key}
+                            onChange={() => setAnswer("tieBreak", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion number={6} question="When it is not sure?">
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          { key: "always_ask", label: "Ask me — I would rather be interrupted" },
+                          {
+                            key: "small_things_flag",
+                            label:
+                              "Decide small reversible things itself, and tell me what it assumed"
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-unsure"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.whenUnsure === option.key}
+                            onChange={() => setAnswer("whenUnsure", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion number={7} question="Numbers it cannot check?">
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          {
+                            key: "must_source",
+                            label: "Never state one — say where it came from or say it does not have it"
+                          },
+                          {
+                            key: "estimate_labelled",
+                            label: "It may estimate, as long as it says so every time"
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-numbers"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.numbers === option.key}
+                            onChange={() => setAnswer("numbers", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <div className="rounded-md border border-border bg-muted/30 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">
+                          {mandateEdited ? "Your mandate (edited by hand)" : "The mandate we will write"}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Saved as AGENTS.md on {agentName.trim() || "your agent"}. You can change
+                          it any time.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (!showMandateText && !mandateEdited) setMandateDraft(mandateText);
+                          setShowMandateText(!showMandateText);
+                        }}
+                      >
+                        {showMandateText ? "Hide" : "Read it"}
+                      </Button>
+                    </div>
+                    {showMandateText && (
+                      <>
+                        <textarea
+                          className="mt-2.5 max-h-[320px] min-h-[220px] w-full overflow-y-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
+                          value={mandateEdited ? mandateDraft : mandateText}
+                          onChange={(e) => {
+                            setMandateEdited(true);
+                            setMandateDraft(e.target.value);
+                          }}
+                        />
+                        {mandateEdited && (
+                          <button
+                            type="button"
+                            className="mt-1.5 cursor-pointer text-xs text-muted-foreground underline hover:text-foreground"
+                            onClick={() => {
+                              setMandateEdited(false);
+                              setMandateDraft("");
+                            }}
+                          >
+                            Discard my edits and go back to the answers above
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {step === 4 && (
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="bg-muted/50 p-2">
                       <ListTodo className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
@@ -1321,7 +1725,7 @@ export function OnboardingWizard() {
                 </div>
               )}
 
-              {step === 4 && (
+              {step === 5 && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1357,6 +1761,17 @@ export function OnboardingWizard() {
                         <p className="text-xs text-muted-foreground">
                           {getUIAdapter(adapterType).label}
                         </p>
+                      </div>
+                      <Check className="h-4 w-4 text-green-500 shrink-0" />
+                    </div>
+                    <div className="flex items-center gap-3 px-3 py-2.5">
+                      <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {mandateAnswers.never.length} things it will never do,{" "}
+                          {mandateAnswers.checkFirst.length} it must ask about first
+                        </p>
+                        <p className="text-xs text-muted-foreground">Mandate</p>
                       </div>
                       <Check className="h-4 w-4 text-green-500 shrink-0" />
                     </div>
@@ -1428,10 +1843,16 @@ export function OnboardingWizard() {
                     </Button>
                   )}
                   {step === 3 && (
+                    <Button size="sm" disabled={loading} onClick={handleStep3Next}>
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Next
+                    </Button>
+                  )}
+                  {step === 4 && (
                     <Button
                       size="sm"
                       disabled={!taskTitle.trim() || loading}
-                      onClick={handleStep3Next}
+                      onClick={handleStep4Next}
                     >
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -1441,7 +1862,7 @@ export function OnboardingWizard() {
                       {loading ? "Creating..." : "Next"}
                     </Button>
                   )}
-                  {step === 4 && (
+                  {step === 5 && (
                     <Button size="sm" disabled={loading} onClick={handleLaunch}>
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
