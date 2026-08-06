@@ -194,6 +194,32 @@ describe("MKThink: six months free", () => {
   });
 });
 
+describe("the public key survives an env file", () => {
+  beforeEach(() => {
+    process.env[ENFORCE] = "true";
+    process.env[KIND] = "on_prem";
+  });
+
+  it("accepts a PEM carried on one line with escaped newlines", async () => {
+    // What agentdash.env.template ships. Before normalisation this reached
+    // crypto.createPublicKey verbatim and threw, so every gated route answered
+    // 402 bad_key_or_signature no matter how good the licence was.
+    const { token, publicKeyPem } = mintLicense({ customer: "MKThink", plan: "on_prem" });
+    process.env[TOKEN] = token;
+    process.env[PUBKEY] = publicKeyPem.replace(/\n/g, "\\n");
+    const res = await request(appWithGate()).get("/api/companies");
+    expect(res.status).toBe(200);
+  });
+
+  it("still accepts a PEM with real newlines", async () => {
+    const { token, publicKeyPem } = mintLicense({ customer: "MKThink", plan: "on_prem" });
+    process.env[TOKEN] = token;
+    process.env[PUBKEY] = publicKeyPem;
+    const res = await request(appWithGate()).get("/api/companies");
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("wiring guard — the mount order is the whole contract", () => {
   const source = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
 
