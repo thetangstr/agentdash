@@ -129,11 +129,18 @@ describeEmbeddedPostgres("billing trial lifecycle (integration)", () => {
     // Inject a board actor that is a member of every company so the protected
     // checkout-session route passes its authz guard. The webhook route does
     // not consult req.actor.
+    //
+    // `isInstanceAdmin` is required, not incidental: subscription mutations are
+    // owner/admin-only, and this harness user has no membership row in the real
+    // database it runs against. Marking it an admin says plainly that
+    // authorization is not what these cases are testing — the trial lifecycle is
+    // — rather than quietly widening the gate to keep them green.
     app.use((req, _res, next) => {
       (req as unknown as { actor: unknown }).actor = {
         type: "board",
         userId: "user-trial-test",
         companyIds: ALL_COMPANY_IDS,
+        isInstanceAdmin: true,
       };
       next();
     });

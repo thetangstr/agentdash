@@ -18,6 +18,13 @@ const mockAgentService = vi.hoisted(() => ({
   list: vi.fn(),
 }));
 
+// Subscription mutations are owner/admin-only, so these routes now resolve the
+// caller's membership role. Default to owner: the pre-existing cases here are
+// about what Stripe receives, not about authorization.
+const mockAccessService = vi.hoisted(() => ({
+  getMembership: vi.fn(),
+}));
+
 vi.mock("../services/companies.js", () => ({
   companyService: () => mockCompanyService,
 }));
@@ -28,6 +35,10 @@ vi.mock("../services/conversations.js", () => ({
 
 vi.mock("../services/agents.js", () => ({
   agentService: () => mockAgentService,
+}));
+
+vi.mock("../services/access.js", () => ({
+  accessService: () => mockAccessService,
 }));
 
 function makeStripe() {
@@ -51,7 +62,11 @@ function makeStripe() {
   };
 }
 
-async function createApp(stripe: ReturnType<typeof makeStripe>, trialDays = 14) {
+async function createApp(
+  stripe: ReturnType<typeof makeStripe>,
+  trialDays = 14,
+  actorOverrides: Record<string, unknown> = {},
+) {
   const { billingRoutes } = await import("../routes/billing.js");
   const app = express();
   app.use(express.json());
@@ -61,6 +76,7 @@ async function createApp(stripe: ReturnType<typeof makeStripe>, trialDays = 14) 
       userId: "user-1",
       companyIds: ["company-1"],
       source: "session",
+      ...actorOverrides,
     };
     next();
   });
@@ -92,6 +108,10 @@ describe("POST /api/billing/checkout-session", () => {
     mockCompanyService.update.mockResolvedValue(null);
     mockCompanyService.findByStripeSubscriptionId.mockResolvedValue(null);
     mockCompanyService.findByStripeCustomerId.mockResolvedValue(null);
+    mockAccessService.getMembership.mockResolvedValue({
+      status: "active",
+      membershipRole: "owner",
+    });
   });
 
   it("opens Stripe Checkout for the Pro trial with the configured price and redirect URLs", async () => {
@@ -142,5 +162,152 @@ describe("POST /api/billing/checkout-session", () => {
         subscription_data: expect.objectContaining({ trial_period_days: 180 }),
       }),
     );
+  });
+});
+
+/**
+ * Subscription mutations are owner decisions.
+ *
+ * Both of these routes authorized on `companyIds.includes(companyId)` — bare
+ * membership. The portal route is the whole subscription: change the plan, change
+ * the card, cancel outright. So any member of a workspace, including a viewer,
+ * could cancel the company's subscription, and the first anyone would learn of it
+ * is when the plan lapsed.
+ *
+ * Membership and administration are different questions. `companyIds` answers
+ * "may this person see this company"; it was being used to answer "may they
+ * decide what it pays for".
+ */
+describe("billing mutations require owner or admin", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockCompanyService.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Acme",
+      stripeCustomerId: "cus_existing",
+      planTier: "pro_active",
+      planSeatsPaid: 3,
+      planPeriodEnd: null,
+    });
+    mockCompanyService.update.mockResolvedValue(null);
+    mockCompanyService.findByStripeSubscriptionId.mockResolvedValue(null);
+    mockCompanyService.findByStripeCustomerId.mockResolvedValue(null);
+  });
+
+  const asRole = (membershipRole: string | null, status = "active") =>
+    mockAccessService.getMembership.mockResolvedValue(
+      membershipRole === null ? null : { status, membershipRole },
+    );
+
+  it("refuses the Stripe portal to a plain member, and never calls Stripe", async () => {
+    asRole("member");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(403);
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses the portal to a viewer", async () => {
+    asRole("viewer");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(403);
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member who is no longer active", async () => {
+    asRole("owner", "revoked");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses starting a subscription as a plain member", async () => {
+    // Committing the company to a paid plan is the same class of decision as
+    // cancelling one.
+    asRole("member");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/checkout-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(403);
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("allows an owner", async () => {
+    asRole("owner");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(200);
+    expect(stripe.billingPortal.sessions.create).toHaveBeenCalled();
+  });
+
+  it("allows an admin", async () => {
+    asRole("admin");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("allows the founder's own machine without a membership row", async () => {
+    // local_implicit is the single-user local install: there is no membership to
+    // resolve, and refusing it would lock the owner out of their own billing.
+    asRole(null);
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, { source: "local_implicit" });
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("allows an instance admin", async () => {
+    asRole(null);
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, { isInstanceAdmin: true });
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("still refuses a non-member outright, before any role question", async () => {
+    asRole("owner");
+    const stripe = makeStripe();
+    const app = await createApp(stripe, 14, { companyIds: ["other-company"] });
+
+    const res = await request(app).post("/api/billing/portal-session").send({ companyId: "company-1" });
+
+    expect(res.status).toBe(403);
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("leaves reading the plan open to any member", async () => {
+    // Seeing which plan you are on is not a decision. Hiding it would just drive
+    // people to ask an owner what should be on their own screen.
+    asRole("member");
+    const stripe = makeStripe();
+    const app = await createApp(stripe);
+
+    const res = await request(app).get("/api/billing/status?companyId=company-1");
+
+    expect(res.status).toBe(200);
   });
 });

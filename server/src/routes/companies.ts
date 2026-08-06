@@ -29,7 +29,13 @@ import {
 } from "../services/index.js";
 import { DomainAlreadyClaimedError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import {
+  assertBoard,
+  assertCompanyAccess,
+  assertCompanyAdministrator,
+  assertInstanceAdmin,
+  getActorInfo,
+} from "./authz.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
 
 // AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
@@ -118,17 +124,15 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   async function assertCanUpdateProductProfile(req: Request, companyId: string) {
     assertBoard(req);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-    const membership = req.actor.userId
-      ? await access.getMembership(companyId, "user", req.actor.userId)
-      : null;
-    if (
-      membership?.status === "active" &&
-      (membership.membershipRole === "owner" || membership.membershipRole === "admin")
-    ) {
-      return;
-    }
-    throw forbidden("Company owner or admin access required to change product profile");
+    // Delegates to the shared predicate rather than repeating it: this same
+    // owner-or-admin question is asked by the billing routes, and a security
+    // check with two copies is one that will eventually disagree with itself.
+    await assertCompanyAdministrator(
+      access,
+      req,
+      companyId,
+      "Company owner or admin access required to change product profile",
+    );
   }
 
   async function assertCanManagePortability(req: Request, companyId: string, capability: "imports" | "exports") {
