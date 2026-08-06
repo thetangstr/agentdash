@@ -32,7 +32,7 @@ import { readConfigFromEnv, type PaperclipMcpConfig } from "./config.js";
 import { createJourneyToolDefinitions } from "./journey.js";
 import { bridgeTools } from "./bridge.js";
 import { harnessTools } from "./harness.js";
-import { PLAYBOOK } from "./playbook.js";
+import { selectPlaybook } from "./playbook.js";
 import { RESOURCE_TEMPLATES, listResources, readAgentDashResource } from "./resources.js";
 import { toolInputSchema } from "./schema.js";
 import { createToolDefinitions, type ToolDefinition } from "./tools.js";
@@ -54,7 +54,10 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
       capabilities: { resources: {}, tools: {} },
-      instructions: PLAYBOOK,
+      // Scoped to one agent → that agent's own contract; otherwise the
+      // operator's. Serving the operator's playbook to a person's harness tells
+      // it to go provision a company instead of doing the work it was given.
+      instructions: selectPlaybook(config),
     },
   );
 
@@ -103,7 +106,7 @@ export function createAgentDashServer(config: PaperclipMcpConfig): Server {
     if (derivation) return derivation;
     if (uri === "agentdash://playbook") {
       return {
-        contents: [{ uri, mimeType: "text/markdown", text: PLAYBOOK }],
+        contents: [{ uri, mimeType: "text/markdown", text: selectPlaybook(config) }],
       };
     }
     if (uri === "agentdash://dashboard") {

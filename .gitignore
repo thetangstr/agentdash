@@ -90,3 +90,8 @@ worktrees/
 # Playwright run artifacts
 test-results/
 tests/e2e/test-results/
+
+# Packed MCP client, produced by `pnpm mcp:pack` and served at
+# /downloads/agentdash-mcp-server.tgz. A build artifact, not a source file.
+packages/mcp-server/*.tgz
+server/mcp-dist/

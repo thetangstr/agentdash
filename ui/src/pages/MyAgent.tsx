@@ -6,6 +6,7 @@ import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
+import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
 import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
@@ -120,6 +121,12 @@ export default function MyAgent() {
             : "Failed to load authority"}
         </p>
       ) : null}
+
+      <ConnectYourHarness
+        agentId={agent.id}
+        agentName={agent.name}
+        companyId={selectedCompanyId!}
+      />
 
       <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
 

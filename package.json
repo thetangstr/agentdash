@@ -55,7 +55,8 @@
     "test:release-smoke:headed": "npx playwright test --config tests/release-smoke/playwright.config.ts --headed",
     "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts",
     "perf:issue-chat-long-thread": "node scripts/measure-issue-chat-long-thread.mjs",
-    "audit:deps": "pnpm audit --audit-level=high --prod"
+    "audit:deps": "pnpm audit --audit-level=high --prod",
+    "mcp:pack": "node scripts/pack-mcp-server.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
