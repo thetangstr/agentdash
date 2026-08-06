@@ -615,11 +615,46 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     } else {
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
+
+      // The code is an authorization input, never company data — stripped here
+      // for the same reason `POST /companies` strips it, so it cannot land in a
+      // row that a portability export would later carry. Update accepted it
+      // (the schema extends create's) and did NOT strip it, which was its own
+      // small leak independent of the gate below.
+      const suppliedInviteCode =
+        typeof body.inviteCode === "string" ? body.inviteCode : undefined;
+      delete body.inviteCode;
+
       if (
         body.productProfile !== undefined &&
         body.productProfile !== existingCompany.productProfile
       ) {
         await assertCanUpdateProductProfile(req, companyId);
+
+        // AgentDash-MK: the same invite-code gate `POST /companies` applies.
+        //
+        // Without this, the create-time gate was decorative: an owner refused a
+        // profile at creation could set `name` then immediately PATCH the
+        // profile in, because update only checked role. Role answers "may this
+        // person configure the company", which is not the same question as "is
+        // this workspace entitled to the profile" — and only the second one is
+        // what a code grants. Both must hold.
+        //
+        // Scoped to `authenticated` exactly as create is: `local_trusted` is the
+        // founder's own machine, and the MK acceptance specs create profiled
+        // companies over raw HTTP there by design.
+        if (
+          body.productProfile !== "default" &&
+          options.deploymentMode === "authenticated" &&
+          !isMkInviteCode(suppliedInviteCode)
+        ) {
+          res.status(403).json({
+            code: "mk_invite_code_required",
+            error:
+              "This workspace profile requires an invite code. Ask the AgentDash team for one.",
+          });
+          return;
+        }
       }
 
       if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
