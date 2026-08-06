@@ -209,6 +209,16 @@ export function OnboardingWizard() {
   // Step 1
   const [companyName, setCompanyName] = useState("");
   const [companyGoal, setCompanyGoal] = useState("");
+  /**
+   * The workspace code that grants the `agentdash_mk` profile.
+   *
+   * Without it this wizard could only ever produce a plain workspace, because
+   * the create call sent a name and nothing else — so the one route a person
+   * clicks when they want to do it by hand silently produced the version of the
+   * product without teammates, agent-to-agent asks, or the bridge, and no
+   * screen said why those never appeared.
+   */
+  const [workspaceCode, setWorkspaceCode] = useState("");
 
   // Step 2
   const [agentName, setAgentName] = useState("CoS");
@@ -395,6 +405,7 @@ export function OnboardingWizard() {
     setError(null);
     setCompanyName("");
     setCompanyGoal("");
+    setWorkspaceCode("");
     setAgentName("CoS");
     setAdapterType("claude_local");
     setModel("");
@@ -505,7 +516,15 @@ export function OnboardingWizard() {
     setLoading(true);
     setError(null);
     try {
-      const company = await companiesApi.create({ name: companyName.trim() });
+      // The profile and the code have to travel together: the server refuses a
+      // non-default profile without a valid code, and ignores a code that comes
+      // with no profile. Sending one alone is the quiet failure that leaves a
+      // workspace looking fine and missing every workforce surface.
+      const code = workspaceCode.trim();
+      const company = await companiesApi.create({
+        name: companyName.trim(),
+        ...(code ? { productProfile: "agentdash_mk" as const, inviteCode: code } : {}),
+      });
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
@@ -536,7 +555,14 @@ export function OnboardingWizard() {
 
       setStep(2);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create company");
+      const message = err instanceof Error ? err.message : "Failed to create company";
+      // The server's wording assumes a missing code, so it reads as nonsense to
+      // someone who just typed one — they reread the field instead of the value.
+      setError(
+        workspaceCode.trim() && /invite code/i.test(message)
+          ? `That workspace code was not accepted. Check "${workspaceCode.trim()}" for typos, or clear the field to create a workspace without the team features.`
+          : message
+      );
     } finally {
       setLoading(false);
     }
@@ -850,6 +876,30 @@ export function OnboardingWizard() {
                       value={companyGoal}
                       onChange={(e) => setCompanyGoal(e.target.value)}
                     />
+                  </div>
+                  <div className="group">
+                    <label
+                      className={cn(
+                        "text-xs mb-1 block transition-colors",
+                        workspaceCode.trim()
+                          ? "text-foreground"
+                          : "text-muted-foreground group-focus-within:text-foreground"
+                      )}
+                    >
+                      Workspace code (optional)
+                    </label>
+                    <input
+                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                      placeholder="e.g. MK-LANTEST"
+                      value={workspaceCode}
+                      onChange={(e) => setWorkspaceCode(e.target.value)}
+                    />
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      If you were given a code, enter it here and this workspace
+                      can give everyone their own agent — agents asking each
+                      other for things, and reaching people on their own
+                      machines. Leave it blank and your agent works on its own.
+                    </p>
                   </div>
                 </div>
               )}
