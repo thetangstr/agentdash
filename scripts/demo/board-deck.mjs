@@ -28,6 +28,10 @@
 //     (packages/shared/src/mention-parser.ts). An agent called "product agent"
 //     can never be reached as @product, so the agents here are named in one word.
 const BASE = (process.env.BASE ?? "http://127.0.0.1:3100").replace(/\/$/, "");
+// An authenticated instance needs a board key; local_trusted ignores it. Passing
+// it always means this demo runs against either kind without a second variant.
+const API_KEY = process.env.AGENTDASH_API_KEY;
+const MK_CODE = process.env.AGENTDASH_MK_INVITE_CODE ?? "MK-LANTEST";
 const REPO = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 
 const log = [];
@@ -38,7 +42,17 @@ const say = (ok, what, detail = "") => {
 async function api(method, path, body, headers = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+    // Only fall back to the board key when the caller has not supplied its own
+    // identity. The actor middleware prefers Authorization over x-agent-key, so
+    // injecting the board key unconditionally would silently re-authenticate
+    // every agent call as the owner — and agent-only routes then answer 403.
+    headers: {
+      ...(API_KEY && !headers["x-agent-key"] && !headers.authorization
+        ? { authorization: `Bearer ${API_KEY}` }
+        : {}),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...headers,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -70,7 +84,9 @@ if (health.status !== 200) {
 
 // ── the workspace ───────────────────────────────────────────────────────────
 const stamp = Date.now();
-const company = await api("post", "/api/companies", { name: `Board Deck Demo ${stamp}`, productProfile: "agentdash_mk" });
+const company = await api("post", "/api/companies", {
+  name: `Board Deck Demo ${stamp}`, productProfile: "agentdash_mk", inviteCode: MK_CODE,
+});
 const companyId = company.body?.id;
 say(company.status < 300, `workspace created on the agentdash_mk profile`, `id=${companyId}`);
 if (!companyId) process.exit(1);
