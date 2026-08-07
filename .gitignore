@@ -95,3 +95,8 @@ tests/e2e/test-results/
 # /downloads/agentdash-mcp-server.tgz. A build artifact, not a source file.
 packages/mcp-server/*.tgz
 server/mcp-dist/
+
+# Next.js build output for the standalone docs site. `sites/` is deliberately
+# outside the pnpm workspace, so nothing else ignores these for us.
+sites/*/.next/
+sites/*/out/
