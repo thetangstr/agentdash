@@ -27,42 +27,60 @@ export function FirstRunStart({
   baseUrl?: string;
   workspaceCode?: string;
 }) {
-  const [copied, setCopied] = useState<"prompt" | null>(null);
+  const [copied, setCopied] = useState<"connect" | "prompt" | null>(null);
 
   const origin = baseUrl ?? (typeof window !== "undefined" ? window.location.origin : "");
   const code = workspaceCode ?? "<your workspace code>";
   const brief =
     companyBrief ??
-    `I run a consultancy. Set up my AgentDash workspace with a Chief of Staff for me
-and one agent for each of my leads.`;
+    `I run a consultancy. Set up my workspace with a Chief of Staff that is my own
+agent and also the company's, plus one agent for each of my leads.`;
 
-  const prompt = `Set up my AgentDash workspace.
+  /**
+   * The connect command, which is the only place the runtime address exists.
+   *
+   * Without this the first screen handed someone an API key and no way to use
+   * it: the connect command lives on My Agent, which needs a workspace and a
+   * stewardship, and on day one neither exists. So the person holding a key had
+   * nowhere to put it.
+   *
+   * `npx` installs the client from this instance rather than npm — the box is
+   * already reachable from every machine that needs it, which is also true when
+   * there is no outbound network at all.
+   */
+  const connectCommand = [
+    "claude mcp add agentdash \\",
+    `  --env PAPERCLIP_API_URL=${origin} \\`,
+    "  --env PAPERCLIP_API_KEY=<paste the key from your setup link> \\",
+    `  -- npx -y ${origin}/downloads/agentdash-mcp-server.tgz`,
+  ].join("\n");
 
-My AgentDash runtime is at ${origin}
-My API key is: <paste the key from your setup link>
-My workspace code is: ${code}
+  /**
+   * What to say once connected.
+   *
+   * Deliberately short. This used to spell out endpoints, the profile/code
+   * trap, mandates and pairing — all of which are product knowledge that now
+   * travels in the MCP server's operating playbook, delivered to the harness on
+   * connect. A prompt that repeats it is one the customer has to maintain, and
+   * one that is wrong the moment an endpoint moves.
+   */
+  const prompt = `Set up my company in AgentDash and then run the first piece of work.
 
 ${brief}
 
-Create the workspace with productProfile "agentdash_mk" and that workspace code in
-the SAME request — both together, or the workforce features will be missing. Then
-confirm GET /api/companies/<id>/connector-send-executions?status=outcome_unknown
-returns 200 and not 404; a 404 means it landed on the wrong profile.
+My workspace code is ${code}.
 
-Give every agent a mandate as an AGENTS.md instruction file saying who it is, what
-it must not do, how it prioritises, and whose direction wins when two people
-disagree.
+Invite my leads so they can sign in and collect their own agent's key. Give every
+agent a mandate — ask me what each one must never do.
 
-Invite each teammate with auto-approve on — pairing a person with an agent is
-refused unless they are already an active member — then pair each person with
-their agent, one person to one agent.
+Then set our first goal and actually run it, so I can watch how it works.
 
-Finally print each agent's own key next to its person, and the invite links.`;
+Ask me anything you need. Don't invent names, emails or numbers.`;
 
-  const copyPrompt = async () => {
+  const copy = async (what: "connect" | "prompt", text: string) => {
     try {
-      await navigator.clipboard.writeText(prompt);
-      setCopied("prompt");
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
       window.setTimeout(() => setCopied(null), 2200);
     } catch {
       setCopied(null);
@@ -89,17 +107,37 @@ Finally print each agent's own key next to its person, and the invite links.`;
 
         <div className="mt-5">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">2. Paste this into your coding agent</h2>
-            <Button variant="outline" size="sm" onClick={copyPrompt}>
-              {copied === "prompt" ? "Copied" : "Copy prompt"}
+            <h2 className="text-sm font-semibold">2. Connect your coding agent — once</h2>
+            <Button variant="outline" size="sm" onClick={() => copy("connect", connectCommand)}>
+              {copied === "connect" ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Run this in your terminal, with your key pasted in, then restart Claude Code. It
+            tells your agent where this instance is and how to work with it.
+          </p>
+          <pre className="mt-2 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+            <code>{connectCommand}</code>
+          </pre>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Using Codex instead? The same four values go in{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">~/.codex/config.toml</code>.
+          </p>
+        </div>
+
+        <div className="mt-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">3. Then just say what you want</h2>
+            <Button variant="outline" size="sm" onClick={() => copy("prompt", prompt)}>
+              {copied === "prompt" ? "Copied" : "Copy"}
             </Button>
           </div>
           <pre className="mt-2 max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
             <code>{prompt}</code>
           </pre>
           <p className="mt-2 text-xs text-muted-foreground">
-            It will create your agents, invite your teammates, pair each person with their
-            agent, and hand you back a key per agent for their own desktop.
+            Short on purpose. Your agent learns how AgentDash works when it connects, so you
+            describe your company rather than its API. It will ask you for anything it needs.
           </p>
         </div>
       </div>
