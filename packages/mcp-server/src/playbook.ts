@@ -52,6 +52,75 @@ REQUIRES agentdash_request_approval FIRST — then WAIT until agentdash_check_ap
 
 ## Install
 agentdash_install_checklist returns steps only — it never executes anything. Steps run in YOUR shell, with the human's consent, one at a time, verifying each before the next.
+
+## Standing up a company
+
+"Set up my company" is the most common thing you will be asked. The human should
+not have to tell you any of the following — it is yours to know.
+
+Ask them only for what you cannot know: their teammates' names and emails, what
+each person owns, and what each agent must NEVER do. Never invent an email, a
+name, a number, or a workspace code.
+
+1. **Workspace.** POST /companies with \`productProfile\` and \`inviteCode\` in the
+   SAME request. Sending the profile without the code is refused; sending the
+   code without the profile is silently ignored and you get an ordinary
+   workspace where every workforce surface 404s with nothing explaining why.
+   Verify before building on it: GET
+   /companies/<id>/connector-send-executions?status=outcome_unknown must answer
+   200. A 404 means the profile did not apply — recreate rather than continue.
+
+2. **Their own agent.** Use a SINGLE-WORD name: an @mention resolves on one
+   token, so "Chief" can be reached and "Chief of Staff" can never be.
+
+3. **The mandate is AGENTS.md.** PUT /agents/<id>/instructions-bundle/file with
+   path "AGENTS.md". This is the file read as the agent's system prompt when it
+   answers, so it is what actually governs behaviour. \`agentdashPushAgentDirectives\`
+   is NOT this — directives are a separate steward-provenance store, and a
+   mandate pushed there looks saved and changes nothing.
+   A mandate states: who the agent is and whose it is, what it is for, how it
+   prioritises, whose direction wins when two people disagree, and what it must
+   never do.
+
+4. **Make the human the steward of their own agent.** POST
+   /companies/<id>/agent-stewardships { agentId, userId }. Skip it and they are
+   the one person who cannot reach their own agent: their My Agent page, the
+   connect command for their harness, and every escalation to them all key off an
+   active stewardship. Resolve their userId from GET /api/auth/get-session.
+
+5. **Invites.** POST /onboarding/invites { companyId, emails, autoApprove: true }.
+   Each entry carries \`inviteUrl\` — hand those to the human, because no email
+   provider is configured and \`emailStatus: "skipped"\` is the expected, correct
+   outcome. Handing over the links IS the delivery.
+   Do NOT pair a teammate with an agent before they accept: it is refused with
+   "Steward user must be an active company member", which reads like a bug and is
+   not one. Say pairing is pending and move on.
+
+6. **Keys.** POST /agents/<id>/keys — the key comes back in \`token\`, not \`key\`
+   or \`apiKey\`, and is shown once. Print each next to the person it belongs to.
+
+7. **Goals and tasks.** A goal takes \`level: "company"\`, \`status: "active"\` and
+   an \`ownerAgentId\`. EVERY task under it must carry \`goalId\`, or the task is
+   created loose while everything still reports it as being under the goal — a
+   goal that reads as populated and is actually empty.
+
+8. **Agent-to-agent work.** A fact request needs all five of \`targetAgentId\`,
+   \`factKey\`, \`runId\`, \`pipelineId\`, \`question\` — the validator is strict.
+   \`runId\` + \`factKey\` is the dedup key, on purpose: a person asked the same
+   question three times in one cycle stops answering. Answers carry a
+   \`sourceKind\` from a closed set: connector | harness | human | agent | external.
+   The answer, decline and escalate routes are AGENT-only. Your board key gets
+   403 on them, correctly — an action recorded as the owner when an agent did it
+   is a lie in the audit trail. Use that agent's own key as \`x-agent-key\`.
+
+9. **Honesty outranks completeness.** A new workspace has no connectors, so its
+   agents genuinely cannot source most figures. A truthful "I cannot source this,
+   here is what I would need" is the successful outcome. An invented figure is
+   the one failure that cannot be walked back, because it travels — into a board
+   pack, into a decision. Never fill a gap to make output look finished.
+
+Model replies take 20-110 seconds when the instance runs a local CLI adapter.
+Wait for them; do not call something broken before two minutes.
 `;
 
 /**
