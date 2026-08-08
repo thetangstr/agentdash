@@ -114,6 +114,13 @@ export function agentFactRequestService(db: Db) {
           : null,
       provenance: {
         answeredByAgentId: row.answeredByAgentId,
+        /**
+         * Exposed, not just stored. A figure whose author cannot be read back is
+         * a figure nobody can check — which is the thing this whole table exists
+         * to prevent — and the agent assembling a deliverable needs it to write
+         * "Titus said" rather than an unattributed line.
+         */
+        answeredByUserId: row.answeredByUserId,
         sourceKind: (row.answerSourceKind as AgentFactSourceKind | null) ?? null,
         answeredAt: row.answeredAt ? row.answeredAt.toISOString() : null,
       },

@@ -41,9 +41,36 @@ export interface PersonalInboxResponse {
   items: InboxItem[];
 }
 
+export interface StewardFactRequest {
+  id: string;
+  factKey: string;
+  question: string;
+  pipelineId: string;
+  runId: string;
+  status: string;
+  /** Set once escalation reached (or tried to reach) this person. */
+  escalatedAt?: string | null;
+  createdAt?: string;
+}
+
 export const stewardshipsApi = {
   /** The signed-in user's own agent. The server derives identity from the session. */
   getMyAgent: (companyId: string) => api.get<MyAgentResponse>(`/companies/${companyId}/me/agent`),
+  /**
+   * Questions my agent could not answer without me.
+   *
+   * Open rows only, scoped to the agent I steward — the server derives both from
+   * the session, so there is no id here to point at a colleague.
+   */
+  myFactRequests: (companyId: string) =>
+    api.get<{ factRequests: StewardFactRequest[] }>(
+      `/companies/${companyId}/me/fact-requests`,
+    ),
+  /** Answer one myself. `sourceKind` is not sent: the server forces "human". */
+  answerFactRequest: (companyId: string, id: string, answer: string) =>
+    api.post<StewardFactRequest>(`/companies/${companyId}/me/fact-requests/${id}/answer`, {
+      answer,
+    }),
   /**
    * Pair a person with an agent they will look after.
    *

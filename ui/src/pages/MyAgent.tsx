@@ -8,6 +8,7 @@ import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
 import { ConnectYourMachine } from "../components/agent/ConnectYourMachine";
+import { QuestionsForYou } from "../components/agent/QuestionsForYou";
 import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
@@ -103,6 +104,8 @@ export default function MyAgent() {
           <span className="text-muted-foreground"> · {agent.role} · {agent.status}</span>
         </p>
       </header>
+
+      <QuestionsForYou companyId={selectedCompanyId!} agentName={agent.name} />
 
       {governance.data ? (
         // On this page the viewer is, by construction, the agent's own
