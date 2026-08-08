@@ -8,6 +8,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { requireLicense } from "./middleware/require-license.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
@@ -313,6 +314,24 @@ export async function createApp(
       companyDeletionEnabled: opts.companyDeletionEnabled,
     }),
   );
+  // AgentDash on-prem SKU: the license gate, deliberately mounted HERE.
+  //
+  // Everything registered after this line is gated; everything before it is not.
+  // Two exemptions are load-bearing and must stay that way:
+  //
+  //   /api/health   — mounted immediately above. The install runbooks and the
+  //                   launchd service both poll it to decide whether the server
+  //                   came up, so gating it would make an unlicensed box look
+  //                   like a boot failure instead of a licensing problem.
+  //   /api/auth/*   — mounted on `app` before this router exists, so it is out
+  //                   of reach here by construction. An operator locked out of
+  //                   sign-in could never reach the UI to fix their license.
+  //
+  // The middleware itself no-ops unless AGENTDASH_ENFORCE_LICENSE=true AND this
+  // process is an on_prem deployment, so wiring it changes nothing for cloud or
+  // for any existing self-hoster who has not opted in. `license-enforcement.test.ts`
+  // pins both the behaviour and this ordering.
+  api.use(requireLicense);
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,
@@ -556,6 +575,44 @@ export async function createApp(
   }));
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+  /**
+   * Serve the MCP server as an installable tarball.
+   *
+   * This is how a person on their own laptop connects their Claude Code or Codex
+   * to their agent. `npx -y <this url>` installs and runs it in one step, which
+   * is the whole turnkey path — verified end to end against a live instance.
+   *
+   * Why serve it rather than publish it: `@agentdash/mcp-server` is not on npm,
+   * and an on-prem customer is exactly the person who should not need it to be.
+   * The AgentDash box is already reachable from every machine that needs this —
+   * it is where they got their key — so it is also the right place to get the
+   * client. An air-gapped install keeps working for the same reason.
+   *
+   * Unauthenticated on purpose: it is a public client package with no secrets in
+   * it, and requiring a token to fetch the thing that consumes the token is a
+   * loop with no entry point. The key is what grants access, and the key is
+   * issued elsewhere.
+   */
+  const mcpTarballCandidates = [
+    path.resolve(__dirname, "../mcp-dist/agentdash-mcp-server.tgz"),
+    path.resolve(__dirname, "../../packages/mcp-server/agentdash-mcp-server.tgz"),
+  ];
+  app.get("/downloads/agentdash-mcp-server.tgz", (_req, res) => {
+    const tarball = mcpTarballCandidates.find((candidate) => fs.existsSync(candidate));
+    if (!tarball) {
+      // Say which command produces it. A bare 404 here sends someone hunting
+      // through their own MCP config for a mistake that is not there.
+      res.status(404).json({
+        error: "MCP client package is not built on this instance.",
+        hint: "Run `pnpm mcp:pack` where the server is installed, then retry.",
+      });
+      return;
+    }
+    res.type("application/gzip");
+    res.sendFile(tarball);
+  });
+
   if (opts.uiMode === "static") {
     // Try published location first (server/ui-dist/), then monorepo dev location (../../ui/dist)
     const candidates = [

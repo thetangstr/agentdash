@@ -747,9 +747,11 @@ export {
 
 export {
   answerAgentFactSchema,
+  answerAsStewardSchema,
   askAgentFactSchema,
   declineAgentFactSchema,
   type AnswerAgentFact,
+  type AnswerAsSteward,
   type AskAgentFact,
   type DeclineAgentFact,
 } from "./validators/agent-facts.js";

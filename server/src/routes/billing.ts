@@ -15,6 +15,8 @@ import { agentService } from "../services/agents.js";
 import { logger } from "../middleware/logger.js";
 import { sendEmail } from "../auth/email.js";
 import { unauthorized, forbidden } from "../errors.js";
+import { assertCompanyAdministrator } from "./authz.js";
+import { accessService } from "../services/access.js";
 
 interface RoutesConfig {
   stripe: any;
@@ -34,6 +36,7 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   });
   // AgentDash (Cloud SKU, G4): usage-based billing aggregator over cost_events.
   const usage = usageBillingService(db);
+  const access = accessService(db);
   // AgentDash (#249): downgrade notifier — when a company drops from
   // pro_active/pro_trial to pro_canceled/pro_past_due, post a CoS chat
   // message into the company's primary conversation explaining what
@@ -155,18 +158,46 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
     onTrialWillEnd: notifyTrialWillEnd,
   });
 
+  /**
+   * Starting a subscription is an owner decision, not a member action.
+   *
+   * This checked membership only, so anyone in the workspace — including a
+   * viewer — could commit the company to a paid plan.
+   */
   router.post("/checkout-session", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) throw unauthorized("Sign-in required");
     const { companyId } = req.body as { companyId: string };
     if (!req.actor.companyIds?.includes(companyId)) throw forbidden("Not a member of this company");
+    await assertCompanyAdministrator(
+      access,
+      req,
+      companyId,
+      "Company owner or admin access required to change the subscription",
+    );
     const r = await svc.createCheckoutSession(companyId);
     res.json(r);
   });
 
+  /**
+   * The Stripe portal is the whole subscription: change the plan, change the
+   * card, cancel outright. Handing that to bare membership meant any member
+   * could cancel the company's subscription, and the first anyone would know is
+   * when the plan lapsed.
+   *
+   * Reads (`/status`, `/usage`) stay open to members deliberately — seeing which
+   * plan you are on is not a decision, and hiding it drives people to ask an
+   * owner what should be on screen.
+   */
   router.post("/portal-session", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) throw unauthorized("Sign-in required");
     const { companyId } = req.body as { companyId: string };
     if (!req.actor.companyIds?.includes(companyId)) throw forbidden("Not a member of this company");
+    await assertCompanyAdministrator(
+      access,
+      req,
+      companyId,
+      "Company owner or admin access required to manage billing",
+    );
     const r = await svc.createPortalSession(companyId);
     res.json(r);
   });

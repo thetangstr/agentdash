@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { anthropicLLM } from "./anthropic-llm.js";
 import { minimaxLLM } from "./minimax-llm.js";
 import { openaiCompatLLMDetailed, type OpenAICompatUsage } from "./openai-compat-llm.js";
@@ -46,7 +48,16 @@ function emitTokenBudget(adapterName: string, input: LLMInput): void {
 }
 
 /** Timeout for local adapter spawns in milliseconds. */
-const ADAPTER_TIMEOUT_MS = 45_000;
+/**
+ * How long a locally-spawned adapter gets before it is killed.
+ *
+ * Was 45s, which a real `claude --print` exceeds on a busy machine — observed
+ * during a cold end-to-end run, where the timeout was the first domino in an
+ * agent posting placeholder text to a colleague. A local CLI doing genuine work
+ * is routinely slower than a hosted API call, so the default is generous and the
+ * env var exists for operators who would rather fail fast.
+ */
+const ADAPTER_TIMEOUT_MS = Number(process.env.AGENTDASH_ADAPTER_TIMEOUT_MS ?? 120_000);
 
 interface LLMInput {
   system: string;
@@ -105,6 +116,32 @@ async function recordOpenAICompatUsage(
  * Run a child process with a timeout, collecting stdout.
  * Rejects if the process exits non-zero or the timeout fires.
  */
+/**
+ * A neutral working directory for locally-spawned adapters.
+ *
+ * `claude --print` starts a full Claude Code session, which reads the project it
+ * is launched in: CLAUDE.md, the git branch, the files around it. Inheriting the
+ * server's cwd therefore hands every agent the operator's repository as context.
+ *
+ * Observed for real: asked "what should I focus on this week?", an agent in a
+ * consultancy workspace answered "getting license enforcement finished and
+ * merged — it's the branch you're on". That is the server's git branch, not
+ * anything about the company. Beyond being wrong, it means an agent answering a
+ * colleague can quote whatever repository the server happens to run inside.
+ *
+ * An empty scratch directory gives the model nothing to absorb but the prompt it
+ * was given — which is the mandate and the conversation, and should be all of it.
+ */
+function neutralSpawnCwd(): string {
+  const dir = path.join(os.tmpdir(), "agentdash-adapter-cwd");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return os.tmpdir();
+  }
+}
+
 function spawnWithTimeout(
   command: string,
   args: string[],
@@ -112,7 +149,10 @@ function spawnWithTimeout(
   timeoutMs = ADAPTER_TIMEOUT_MS,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: neutralSpawnCwd(),
+    });
 
     let stdout = "";
     let stderr = "";
@@ -285,6 +325,40 @@ export interface DispatchOptions {
   adapter?: string;
 }
 
+/**
+ * Fall back to `claude_api` after another adapter failed — but only when
+ * `claude_api` can actually answer.
+ *
+ * Without `ANTHROPIC_API_KEY`, `anthropicLLM` returns a canned "set
+ * ANTHROPIC_API_KEY" line. That is a reasonable placeholder for someone poking
+ * at chat locally with no keys configured, and a serious bug as a FALLBACK: it
+ * converts a failed adapter into a plausible-looking agent turn, posted in a
+ * team thread as though the agent had answered.
+ *
+ * Seen for real: `claude_local` hit its 45s timeout on a busy machine, fell
+ * through to here, and an agent replied "Got it. (stub reply — set
+ * ANTHROPIC_API_KEY…)" to a colleague's question. Nothing surfaced the timeout,
+ * because the thread looked like it had worked.
+ *
+ * So: fall back when there is something to fall back to, and otherwise rethrow
+ * and let the caller fail loudly.
+ */
+function fallbackToClaudeApi(
+  input: LLMInput,
+  adapter: string,
+  cause: unknown,
+): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `Adapter "${adapter}" failed (${reason}) and no ANTHROPIC_API_KEY is set to fall back to. ` +
+        "Refusing to answer with placeholder text.",
+    );
+  }
+  logger.info({ adapter }, "[dispatch-llm] falling back to claude_api");
+  return anthropicLLM(input);
+}
+
 export async function dispatchLLM(
   input: LLMInput,
   meter?: DispatchMeter,
@@ -316,12 +390,12 @@ export async function dispatchLLM(
       const reply = await minimaxLLM(input);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] minimax returned empty reply, using fallback");
-        return anthropicLLM(input);
+        return fallbackToClaudeApi(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back to claude_api");
-      return anthropicLLM(input);
+      return fallbackToClaudeApi(input, adapter, err);
     }
   }
 
@@ -339,7 +413,7 @@ export async function dispatchLLM(
           { adapter },
           "[dispatch-llm] openai_compat returned empty reply, using fallback",
         );
-        return anthropicLLM(input);
+        return fallbackToClaudeApi(input, adapter, "empty reply");
       }
       return text;
     } catch (err) {
@@ -347,7 +421,7 @@ export async function dispatchLLM(
         { err, adapter },
         "[dispatch-llm] openai_compat failed, falling back to claude_api",
       );
-      return anthropicLLM(input);
+      return fallbackToClaudeApi(input, adapter, err);
     }
   }
 
@@ -360,12 +434,12 @@ export async function dispatchLLM(
       const reply = await spawnWithTimeout(hermesCmd, ["chat", "-q", prompt, "-Q"]);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
-        return anthropicLLM(input);
+        return fallbackToClaudeApi(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back to claude_api");
-      return anthropicLLM(input);
+      return fallbackToClaudeApi(input, adapter, err);
     }
   }
 
@@ -376,12 +450,12 @@ export async function dispatchLLM(
       const reply = await spawnWithTimeout("claude", ["--print", "-"], prompt);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] claude_local returned empty reply, using fallback");
-        return anthropicLLM(input);
+        return fallbackToClaudeApi(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] claude_local failed, falling back to claude_api");
-      return anthropicLLM(input);
+      return fallbackToClaudeApi(input, adapter, err);
     }
   }
 

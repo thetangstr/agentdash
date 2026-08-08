@@ -1,4 +1,4 @@
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, inArray, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentFactRequests, agents, approvals } from "@paperclipai/db";
 import type {
@@ -114,6 +114,13 @@ export function agentFactRequestService(db: Db) {
           : null,
       provenance: {
         answeredByAgentId: row.answeredByAgentId,
+        /**
+         * Exposed, not just stored. A figure whose author cannot be read back is
+         * a figure nobody can check — which is the thing this whole table exists
+         * to prevent — and the agent assembling a deliverable needs it to write
+         * "Titus said" rather than an unattributed line.
+         */
+        answeredByUserId: row.answeredByUserId,
         sourceKind: (row.answerSourceKind as AgentFactSourceKind | null) ?? null,
         answeredAt: row.answeredAt ? row.answeredAt.toISOString() : null,
       },
@@ -307,7 +314,13 @@ export function agentFactRequestService(db: Db) {
    */
   async function holdAnswer(
     row: FactRow,
-    input: { answeringAgentId: string; answer: string; sourceKind: AgentFactSourceKind },
+    input: {
+      answeringAgentId: string;
+      answer: string;
+      sourceKind: AgentFactSourceKind;
+      /** Set when a person supplied this answer; the filter path must carry it too. */
+      answeredByUserId: string | null;
+    },
     filter: ReturnType<typeof classifyInboundContent>,
     now: Date,
   ): Promise<AgentFactRequestView> {
@@ -352,6 +365,9 @@ export function agentFactRequestService(db: Db) {
         filterApprovalId: approval.id,
         answerSourceKind: input.sourceKind,
         answeredByAgentId: input.answeringAgentId,
+        // A held human answer still names its human. Without this the hold
+        // would violate the provenance check and fail the request outright.
+        answeredByUserId: input.answeredByUserId,
         answeredAt: now,
         leaseExpiresAt: null,
         // Flagged immediately, not on release. A deliverable assembled while
@@ -535,6 +551,58 @@ export function agentFactRequestService(db: Db) {
     const row = await getById(companyId, id);
     requireTarget(row, input.answeringAgentId);
     requireOpen(row);
+    return writeAnswer(companyId, row, { ...input, answeredByUserId: null });
+  }
+
+  /**
+   * The steward of the asked-of agent answers it themselves.
+   *
+   * The other half of escalation, which was never built. An agent could reach a
+   * person's machine, and that machine could reply — but the person could not.
+   * The no-endpoint fallback says as much in its own comment: "a notice, not a
+   * decision surface". So when an agent was asked something only its steward
+   * knew, the steward was structurally unable to say it, and the fact aged out
+   * as `missing` no matter how available they were.
+   *
+   * Only the steward, and only of the agent the question was asked OF. An
+   * administrator answering on someone's behalf would put that person's name on
+   * a figure they never gave — which is worse than a missing fact, because it is
+   * a missing fact wearing an attribution.
+   *
+   * `sourceKind` is forced to "human" rather than accepted: a caller that could
+   * choose would be a caller that could label a guess as a connector reading.
+   */
+  async function answerAsSteward(
+    companyId: string,
+    id: string,
+    input: { userId: string; answer: string },
+  ): Promise<AgentFactRequestView> {
+    const row = await getById(companyId, id);
+    requireOpen(row);
+
+    const steward = await stewardships.activeByAgent(companyId, row.targetAgentId);
+    if (!steward || steward.userId !== input.userId) {
+      throw forbidden("Only the steward of the agent this was asked of can answer it");
+    }
+
+    return writeAnswer(companyId, row, {
+      answeringAgentId: row.targetAgentId,
+      answer: input.answer,
+      sourceKind: "human",
+      answeredByUserId: input.userId,
+    });
+  }
+
+  async function writeAnswer(
+    companyId: string,
+    row: FactRow,
+    input: {
+      answeringAgentId: string;
+      answer: string;
+      sourceKind: AgentFactSourceKind;
+      answeredByUserId: string | null;
+    },
+  ): Promise<AgentFactRequestView> {
 
     /**
      * AgentDash-MK Slice E: the standing filter on the return path.
@@ -573,6 +641,7 @@ export function agentFactRequestService(db: Db) {
         answer: frameUntrustedAgentAnswer(input.answer),
         answerSourceKind: input.sourceKind,
         answeredByAgentId: input.answeringAgentId,
+        answeredByUserId: input.answeredByUserId,
         answeredAt: now,
         // An answered fact is no longer stalled, so it no longer holds a lease.
         leaseExpiresAt: null,
@@ -584,8 +653,10 @@ export function agentFactRequestService(db: Db) {
 
     await logActivity(db, {
       companyId,
-      actorType: "agent",
-      actorId: input.answeringAgentId,
+      // Named for who actually answered. Recording a steward's answer as the
+      // agent's would hide the one thing a reader of a figure needs to know.
+      actorType: input.answeredByUserId ? "user" : "agent",
+      actorId: input.answeredByUserId ?? input.answeringAgentId,
       agentId: input.answeringAgentId,
       action: "agent_fact.answered",
       entityType: "agent_fact_request",
@@ -825,6 +896,33 @@ export function agentFactRequestService(db: Db) {
     return lapsed.length;
   }
 
+  /**
+   * What is waiting on this person, as a person.
+   *
+   * Scoped to the agent they steward and to open rows only. A steward looking at
+   * this is deciding what to type, so a list that included answered and declined
+   * history would bury the two things they can still act on — and an inbox that
+   * has to be filtered before it can be used stops being read.
+   */
+  async function listForSteward(
+    companyId: string,
+    userId: string,
+  ): Promise<AgentFactRequestView[]> {
+    const stewardship = await stewardships.activeByUser(companyId, userId);
+    if (!stewardship) return [];
+    const rows = await db
+      .select()
+      .from(agentFactRequests)
+      .where(
+        and(
+          eq(agentFactRequests.companyId, companyId),
+          eq(agentFactRequests.targetAgentId, stewardship.agentId),
+          inArray(agentFactRequests.status, ["asked", "escalated"]),
+        ),
+      );
+    return rows.map(toView);
+  }
+
   async function listForAgent(
     companyId: string,
     agentId: string,
@@ -851,9 +949,11 @@ export function agentFactRequestService(db: Db) {
   return {
     ask,
     answer,
+    answerAsSteward,
     decline,
     escalate,
     listForAgent,
+    listForSteward,
     sweepExpiredFactLeases,
     // Slice E. Both are called from the approvals routes, on the same branches
     // that already settle a gated bridge task — a held answer and a held task

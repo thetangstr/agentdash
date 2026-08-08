@@ -28,6 +28,10 @@
 //     (packages/shared/src/mention-parser.ts). An agent called "product agent"
 //     can never be reached as @product, so the agents here are named in one word.
 const BASE = (process.env.BASE ?? "http://127.0.0.1:3100").replace(/\/$/, "");
+// An authenticated instance needs a board key; local_trusted ignores it. Passing
+// it always means this demo runs against either kind without a second variant.
+const API_KEY = process.env.AGENTDASH_API_KEY;
+const MK_CODE = process.env.AGENTDASH_MK_INVITE_CODE ?? "MK-LANTEST";
 const REPO = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 
 const log = [];
@@ -38,7 +42,17 @@ const say = (ok, what, detail = "") => {
 async function api(method, path, body, headers = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+    // Only fall back to the board key when the caller has not supplied its own
+    // identity. The actor middleware prefers Authorization over x-agent-key, so
+    // injecting the board key unconditionally would silently re-authenticate
+    // every agent call as the owner — and agent-only routes then answer 403.
+    headers: {
+      ...(API_KEY && !headers["x-agent-key"] && !headers.authorization
+        ? { authorization: `Bearer ${API_KEY}` }
+        : {}),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...headers,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -70,7 +84,9 @@ if (health.status !== 200) {
 
 // ── the workspace ───────────────────────────────────────────────────────────
 const stamp = Date.now();
-const company = await api("post", "/api/companies", { name: `Board Deck Demo ${stamp}`, productProfile: "agentdash_mk" });
+const company = await api("post", "/api/companies", {
+  name: `Board Deck Demo ${stamp}`, productProfile: "agentdash_mk", inviteCode: MK_CODE,
+});
 const companyId = company.body?.id;
 say(company.status < 300, `workspace created on the agentdash_mk profile`, `id=${companyId}`);
 if (!companyId) process.exit(1);
@@ -117,12 +133,45 @@ say(inbox.status === 200 && !!convId, `Titus opens the company conversation`, `c
 const sent = await api("post", `/api/conversations/${convId}/messages`, {
   companyId, body: "@Product what should the board know about product this week?" });
 say(sent.status < 300, `Titus addresses the Product agent by name`, `status=${sent.status}`);
-await sleep(2500);
-const thread = await api("get", `/api/conversations/${convId}/messages?limit=20`);
-const msgs = thread.body?.messages ?? thread.body ?? [];
-const replied = msgs.filter((m) => m.role === "agent");
-say(replied.length >= 1, `the agent replies in the thread`,
-  replied.length ? `"${String(replied[0].content ?? "").slice(0, 90)}"` : `no reply`);
+// Wait for a real reply, rather than for a fixed 2.5s.
+//
+// That sleep was calibrated against a stub that answered instantly. A summoned
+// agent now calls a model — 60-90s through `claude_local`, which spawns a whole
+// CLI — so the old wait reported "no reply" on a system that was working, and a
+// test that cries wolf on a healthy path is worse than no test.
+//
+// Poll to a generous ceiling and report how long it took, so a slow reply reads
+// as slow instead of broken.
+const REPLY_CEILING_MS = Number(process.env.REPLY_CEILING_MS ?? 180_000);
+const replyStartedAt = Date.now();
+let msgs = [];
+let replied = [];
+while (Date.now() - replyStartedAt < REPLY_CEILING_MS) {
+  const poll = await api("get", `/api/conversations/${convId}/messages?limit=20`);
+  msgs = poll.body?.messages ?? poll.body ?? [];
+  replied = msgs.filter((m) => m.role === "agent");
+  if (replied.length >= 1) break; // includes a failure notice: either way, done waiting
+  await sleep(5000);
+}
+const replyWaitedS = Math.round((Date.now() - replyStartedAt) / 1000);
+// A failure notice is an agent message too.
+//
+// When a summon fails the agent now posts "I could not answer this — my model
+// call failed…", which is the right product behaviour and would otherwise make
+// this check pass on a run where no question was answered. Counting any agent
+// message as a reply would turn the honest failure into a green tick.
+const realAnswers = replied.filter(
+  (m) => !/could not answer this/i.test(String(m.content ?? "")),
+);
+const failureNotice = replied.find((m) =>
+  /could not answer this/i.test(String(m.content ?? "")),
+);
+say(realAnswers.length >= 1, `the agent replies in the thread`,
+  realAnswers.length
+    ? `after ${replyWaitedS}s — "${String(realAnswers[0].content ?? "").slice(0, 80)}"`
+    : failureNotice
+      ? `the agent reported a failure instead of answering: "${String(failureNotice.content ?? "").slice(0, 120)}"`
+      : `no reply within ${Math.round(REPLY_CEILING_MS / 1000)}s`);
 if (replied.some((m) => /stub/i.test(String(m.content ?? "")))) {
   say(null, `replies are STUB text`, `the conversation path works; the words need a model — set ANTHROPIC_API_KEY or use claude_local`);
 }

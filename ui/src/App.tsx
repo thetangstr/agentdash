@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
+import { FirstRunStart } from "./components/FirstRunStart";
 // Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
 import { Overview } from "./pages/Overview";
 import { DashboardLive } from "./pages/DashboardLive";
@@ -281,19 +282,28 @@ function UnprefixedBoardRedirect() {
 function NoCompaniesStartPage() {
   const { openOnboarding } = useDialogActions();
 
-  return (
-    <div className="mx-auto max-w-xl py-10">
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h1 className="text-xl font-semibold">Create your first company</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Get started by creating a company.
-        </p>
-        <div className="mt-4">
-          <Button onClick={() => openOnboarding()}>New Company</Button>
-        </div>
-      </div>
-    </div>
-  );
+  // MKThink is the first customer, so their brief is the default prose. Any
+  // other instance still gets a working prompt — just a generic description.
+  const brief = `MKThink is a strategy, design and innovation consultancy. We help
+organizations solve complex problems.
+
+I want a Chief of Staff for myself, plus three agents each belonging to one of my
+leads: Delivery (live client project status and commitments at risk), Platform
+(our SharePoint estate and code repositories), and People (recruiting pipeline
+and who is waiting on us).
+
+Set up three goals with tasks under them:
+  1. Monthly board pack, assembled without a fire drill — the Chief assembles it
+     and the other three each contribute their part, attributed.
+  2. SharePoint and repository cleanup — inventory what is stale, then a deletion
+     proposal a human approves. An agent must NEVER delete anything itself.
+  3. Recruiting pipeline that never silently stalls — weekly review of who is
+     waiting on us and which roles block delivery.
+
+No agent may contact a client or a candidate directly; they draft and a human
+sends. No agent reports a number it cannot source.`;
+
+  return <FirstRunStart onCreateManually={() => openOnboarding()} companyBrief={brief} />;
 }
 
 export function App() {
