@@ -30,7 +30,7 @@ vi.mock("../services/costs.js", () => ({
   costService,
 }));
 
-import { dispatchLLM } from "../services/dispatch-llm.js";
+import { dispatchLLM, stripHermesChatter } from "../services/dispatch-llm.js";
 
 const originalAdapter = process.env.AGENTDASH_DEFAULT_ADAPTER;
 const originalHermesCommand = process.env.AGENTDASH_HERMES_COMMAND;
@@ -399,5 +399,46 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_api";
 
     await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
+  });
+});
+
+/**
+ * Hermes writes status lines to stdout, not stderr, even under `-Q`.
+ *
+ * The first string below is the one that actually reached a colleague's thread
+ * on the mkboard instance: a correct answer wearing a security-scanner warning,
+ * because the adapter treats all of stdout as the agent's words.
+ */
+describe("stripHermesChatter", () => {
+  it("drops the warning Hermes printed into a real agent reply", () => {
+    const observed =
+      "  ⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only\r\n" +
+      "Put weekly revenue versus plan on the board deck; what outcome must MKThink achieve in the next 0–3 months?";
+
+    expect(stripHermesChatter(observed)).toBe(
+      "Put weekly revenue versus plan on the board deck; what outcome must MKThink achieve in the next 0–3 months?",
+    );
+  });
+
+  it("leaves an ordinary answer untouched", () => {
+    expect(stripHermesChatter("Revenue versus plan.")).toBe("Revenue versus plan.");
+  });
+
+  it("keeps a status glyph that appears inside the answer body", () => {
+    // Only a LEADING run is chatter. An answer that discusses a warning is
+    // still the answer, and truncating it would be worse than the noise.
+    const reply = "Two risks:\n⚠ schedule slip on Northgate\n✓ Riverside on track";
+    expect(stripHermesChatter(reply)).toBe(reply);
+  });
+
+  it("strips several leading status lines but stops at the answer", () => {
+    const out = "✓ loaded config\r\n  ⚠ scanner unavailable\r\nThe answer.\n⚠ not chatter";
+    expect(stripHermesChatter(out)).toBe("The answer.\n⚠ not chatter");
+  });
+
+  it("returns empty when Hermes emitted only chatter, so the caller can fail loudly", () => {
+    // Empty routes to the existing empty-reply path rather than posting a
+    // warning as though it were the agent's turn.
+    expect(stripHermesChatter("  ⚠ scanner unavailable\r\n")).toBe("");
   });
 });
