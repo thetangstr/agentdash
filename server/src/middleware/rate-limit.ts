@@ -100,6 +100,29 @@ function isHealthPath(req: Request): boolean {
   return req.path === "/health" || req.path === "/health/";
 }
 
+/**
+ * The bridge worker's poll for queued work.
+ *
+ * A POST by verb but a read by intent: it asks "is there anything for me?" and
+ * changes nothing when the answer is no. It is also on a fixed timer, so it is
+ * self-limiting in a way user traffic is not.
+ *
+ * It must be skipped, because the arithmetic does not work otherwise. The
+ * worker polls every 5 seconds — 180 requests per 15-minute window — against a
+ * 200-request budget shared with everything else that actor does. A laptop
+ * simply being connected consumed 90% of its own rate limit, and anything real
+ * (creating issues, answering fact requests, running a pipeline) tipped it into
+ * 429s. That is the "connection bumps all the time" symptom: the bridge gets
+ * rate limited, the poll fails, the worker looks disconnected.
+ *
+ * Skipping does not remove the ceiling that matters. /bridge/result and
+ * /bridge/decline — the calls that actually write — stay limited, as does every
+ * other mutation.
+ */
+function isBridgePollPath(req: Request): boolean {
+  return req.path === "/bridge/poll";
+}
+
 export function createAuthRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_AUTH_MAX", 10), {
@@ -120,6 +143,7 @@ export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}
     skip(req) {
       if (isHealthPath(req)) return true;
       if (isPreflightMethod(req.method)) return true;
+      if (isBridgePollPath(req) && hasAuthenticatedActor(req)) return true;
       return isSafeReadMethod(req.method) && hasAuthenticatedActor(req);
     },
   });

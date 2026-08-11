@@ -227,3 +227,94 @@ describe("rate-limit middleware (#160)", () => {
     expect(aliceBlocked.status).toBe(429);
   });
 });
+
+/**
+ * The bridge poll must not consume the mutation budget.
+ *
+ * The worker polls every 5 seconds. Over a 15-minute window that is 180
+ * requests against a 200-request ceiling shared with everything else the same
+ * actor does — so a laptop merely being connected spent 90% of its own quota,
+ * and any real work tipped it into 429s. The reported symptom was "the
+ * connection bumps all the time": the poll gets rate limited, the worker looks
+ * disconnected, and nothing in the product explains why.
+ *
+ * The numbers below are deliberate rather than round. If someone later "fixes"
+ * a rate-limit complaint by raising the ceiling, these still fail at whatever
+ * the new poll cadence implies, which is the honest signal.
+ */
+describe("bridge poll is exempt from the mutation limiter", () => {
+  const POLLS_PER_WINDOW = 180; // 15 min / 5 s
+
+  function buildBridgeApp(mw: express.RequestHandler): Express {
+    const app = express();
+    app.set("trust proxy", true);
+    // The real stack resolves the actor before the limiter; the exemption is
+    // deliberately conditional on an authenticated actor, so mirror that.
+    app.use((req, _res, next) => {
+      (req as unknown as { actor: unknown }).actor = { type: "agent", agentId: "agent-1" };
+      next();
+    });
+    app.use(mw);
+    app.post("/bridge/poll", (_req, res) => res.json({ ok: true }));
+    app.post("/bridge/result", (_req, res) => res.json({ ok: true }));
+    app.post("/companies/c1/issues", (_req, res) => res.json({ ok: true }));
+    return app;
+  }
+
+  it("keeps polling past a ceiling that would otherwise stop it", async () => {
+    // Ceiling deliberately BELOW the poll count. At the real 200 this assertion
+    // could not fail — 180 polls never reach 200 — so the test would pass with
+    // or without the exemption and prove nothing.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "50";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    for (let i = 0; i < POLLS_PER_WINDOW; i += 1) {
+      const res = await request(app).post("/bridge/poll");
+      expect(res.status, `poll ${i + 1} of ${POLLS_PER_WINDOW} was rate limited`).toBe(200);
+    }
+  });
+
+  it("leaves the real mutation budget intact after a window of polling", async () => {
+    // The point of the exemption: polling must not spend the quota that actual
+    // work needs. After a full window of polls, a real mutation still succeeds.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "200";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    for (let i = 0; i < POLLS_PER_WINDOW; i += 1) {
+      await request(app).post("/bridge/poll");
+    }
+    // 180 polls + 30 mutations = 210 against a 200 ceiling. If polls counted,
+    // the tail of these would 429 — which is precisely the reported failure:
+    // a connected laptop, then real work, then everything starts bumping.
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      statuses.push((await request(app).post("/companies/c1/issues")).status);
+    }
+    expect(
+      statuses.filter((code) => code === 429).length,
+      "polling ate the mutation budget",
+    ).toBe(0);
+  });
+
+  it("still limits the bridge calls that actually write", async () => {
+    // /bridge/result and /bridge/decline change state. The exemption is for the
+    // poll only — this is what stops it becoming a hole.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "5";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      statuses.push((await request(app).post("/bridge/result")).status);
+    }
+    expect(statuses.filter((s) => s === 429).length, "bridge/result was not limited").toBeGreaterThan(0);
+  });
+});
