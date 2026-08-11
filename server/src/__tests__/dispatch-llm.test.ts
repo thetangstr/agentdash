@@ -39,9 +39,10 @@ const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
 
 describe("dispatchLLM", () => {
   beforeEach(() => {
-    // A fallback to claude_api only happens when claude_api can actually
-    // answer. These cases are about routing, so give them a key; the cases that
-    // are about the missing-key behaviour clear it explicitly.
+    // A fallback happens only when one is configured AND it can actually
+    // answer. These cases are about routing, so name a fallback and give it a
+    // key; the cases about the refusing-to-stub behaviour clear them explicitly.
+    process.env.AGENTDASH_FALLBACK_ADAPTER = "claude_api";
     process.env.ANTHROPIC_API_KEY = "sk-test-key";
     anthropicLLM.mockClear();
     minimaxLLM.mockClear();
@@ -306,10 +307,18 @@ describe("dispatchLLM", () => {
 describe("dispatchLLM refuses to answer with placeholder text", () => {
   const originalKey = process.env.ANTHROPIC_API_KEY;
   const originalAdapterEnv = process.env.AGENTDASH_DEFAULT_ADAPTER;
+  const originalFallbackEnv = process.env.AGENTDASH_FALLBACK_ADAPTER;
 
   beforeEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.AGENTDASH_FALLBACK_ADAPTER;
     anthropicLLM.mockClear();
+    // This block previously left `minimaxLLM` alone, so its call count and any
+    // queued rejection leaked between cases here. Harmless while no assertion
+    // counted minimax calls; not harmless for the loop guard below, which is
+    // precisely a claim about how many times an adapter is invoked.
+    minimaxLLM.mockClear();
+    minimaxLLM.mockResolvedValue("minimax reply");
     spawnMock.mockReset();
   });
 
@@ -318,18 +327,40 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     else process.env.ANTHROPIC_API_KEY = originalKey;
     if (originalAdapterEnv === undefined) delete process.env.AGENTDASH_DEFAULT_ADAPTER;
     else process.env.AGENTDASH_DEFAULT_ADAPTER = originalAdapterEnv;
+    if (originalFallbackEnv === undefined) delete process.env.AGENTDASH_FALLBACK_ADAPTER;
+    else process.env.AGENTDASH_FALLBACK_ADAPTER = originalFallbackEnv;
   });
 
   const input = { system: "s", messages: [{ role: "user" as const, content: "hi" }] };
 
-  it("throws instead of stubbing when a local adapter fails and there is no key", async () => {
+  it("throws instead of stubbing when an adapter fails and no fallback is named", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_local";
     spawnMock.mockImplementation(() => {
       throw new Error("spawn ENOENT");
     });
 
-    await expect(dispatchLLM(input)).rejects.toThrow(/no ANTHROPIC_API_KEY is set to fall back to/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/no AGENTDASH_FALLBACK_ADAPTER/);
     expect(anthropicLLM, "the stub was reached anyway").not.toHaveBeenCalled();
+  });
+
+  it("does not reach for Anthropic when no fallback was configured", async () => {
+    // The point of the change: a deployment that chose MiniMax and said nothing
+    // about a fallback must not quietly answer from Claude on someone's key.
+    process.env.ANTHROPIC_API_KEY = "sk-test-key";
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/no AGENTDASH_FALLBACK_ADAPTER/);
+    expect(anthropicLLM, "fell through to Anthropic unasked").not.toHaveBeenCalled();
+  });
+
+  it("refuses a fallback that names the failed adapter, rather than looping", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_ADAPTER = "minimax";
+    minimaxLLM.mockRejectedValue(new Error("minimax 500"));
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/same adapter/);
+    expect(minimaxLLM, "retried the adapter that just failed").toHaveBeenCalledTimes(1);
   });
 
   it("names the adapter and the underlying cause, so the log says what broke", async () => {
@@ -342,7 +373,7 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     await expect(dispatchLLM(input)).rejects.toThrow(/timed out/);
   });
 
-  it("throws when a hosted adapter fails with no key to fall back to", async () => {
+  it("throws when a hosted adapter fails with nothing to fall back to", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
 
@@ -350,9 +381,10 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("still falls back normally once a key exists", async () => {
+  it("still falls back normally once one is configured and usable", async () => {
     // The fallback is useful when there is something to fall back to — this
     // guards against over-correcting into "never fall back".
+    process.env.AGENTDASH_FALLBACK_ADAPTER = "claude_api";
     process.env.ANTHROPIC_API_KEY = "sk-test-key";
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));

@@ -326,37 +326,54 @@ export interface DispatchOptions {
 }
 
 /**
- * Fall back to `claude_api` after another adapter failed — but only when
- * `claude_api` can actually answer.
+ * Try a second adapter after the configured one failed.
  *
- * Without `ANTHROPIC_API_KEY`, `anthropicLLM` returns a canned "set
- * ANTHROPIC_API_KEY" line. That is a reasonable placeholder for someone poking
- * at chat locally with no keys configured, and a serious bug as a FALLBACK: it
- * converts a failed adapter into a plausible-looking agent turn, posted in a
- * team thread as though the agent had answered.
+ * This used to be hardwired to `claude_api`, which made Anthropic an implicit
+ * dependency of every other adapter: a deployment that had deliberately chosen
+ * MiniMax or Hermes still reached for Claude the moment its own provider
+ * hiccuped. The fallback is now named by `AGENTDASH_FALLBACK_ADAPTER`, and
+ * **unset means do not fall back** — a deployment that has not said where to go
+ * next should fail loudly rather than silently route a colleague's question to a
+ * provider nobody configured, on someone's credential.
  *
- * Seen for real: `claude_local` hit its 45s timeout on a busy machine, fell
- * through to here, and an agent replied "Got it. (stub reply — set
- * ANTHROPIC_API_KEY…)" to a colleague's question. Nothing surfaced the timeout,
- * because the thread looked like it had worked.
+ * The hard part is not the routing, it is refusing to answer. An unconfigured
+ * adapter that returns cheerful placeholder text turns a failure into a
+ * plausible-looking agent turn in a team thread. Seen for real: `claude_local`
+ * hit its 45s timeout on a busy machine, fell through to here, and an agent
+ * replied "Got it. (stub reply — set ANTHROPIC_API_KEY…)" to a colleague's
+ * question. Nothing surfaced the timeout, because the thread looked like it had
+ * worked. Every adapter now throws on missing configuration for this reason.
  *
- * So: fall back when there is something to fall back to, and otherwise rethrow
- * and let the caller fail loudly.
+ * One hop only. If the fallback also fails it lands back here with
+ * `failedAdapter` equal to the configured fallback, which is refused below —
+ * so a misconfigured pair cannot ping-pong.
  */
-function fallbackToClaudeApi(
+function runFallbackAdapter(
   input: LLMInput,
-  adapter: string,
+  failedAdapter: string,
   cause: unknown,
 ): Promise<string> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
+  const fallback = (process.env.AGENTDASH_FALLBACK_ADAPTER ?? "").trim();
+  const reason = cause instanceof Error ? cause.message : String(cause);
+
+  if (!fallback) {
     throw new Error(
-      `Adapter "${adapter}" failed (${reason}) and no ANTHROPIC_API_KEY is set to fall back to. ` +
+      `Adapter "${failedAdapter}" failed (${reason}) and no AGENTDASH_FALLBACK_ADAPTER ` +
+        "is configured. Refusing to answer with placeholder text.",
+    );
+  }
+  if (fallback === failedAdapter) {
+    throw new Error(
+      `Adapter "${failedAdapter}" failed (${reason}) and AGENTDASH_FALLBACK_ADAPTER ` +
+        "names that same adapter, so there is nothing to fall back to. " +
         "Refusing to answer with placeholder text.",
     );
   }
-  logger.info({ adapter }, "[dispatch-llm] falling back to claude_api");
-  return anthropicLLM(input);
+
+  logger.info({ failedAdapter, fallback }, "[dispatch-llm] falling back");
+  // Deliberately no meter: a fallback reply is not the billable call the caller
+  // asked for, and double-metering one answer would overstate usage.
+  return dispatchLLM(input, undefined, { adapter: fallback });
 }
 
 export async function dispatchLLM(
@@ -364,7 +381,16 @@ export async function dispatchLLM(
   meter?: DispatchMeter,
   options?: DispatchOptions,
 ): Promise<string> {
-  const adapter = (options?.adapter ?? process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim();
+  // Default is `minimax`, not `claude_api`. Anthropic's consumer terms make a
+  // subscription login individual-use only, and the Agent SDK docs are explicit
+  // that products must authenticate with a Console API key rather than a
+  // claude.ai login — so "Claude by default" quietly pushed every unconfigured
+  // deployment toward either a key nobody had budgeted or a seat nobody should
+  // have been sharing. `claude_api` remains fully supported; it is now a choice.
+  // `|| "minimax"` rather than `?? "minimax"`: an env var set to the empty
+  // string is an unconfigured deployment, not a request for a nameless adapter.
+  const adapter =
+    (options?.adapter ?? process.env.AGENTDASH_DEFAULT_ADAPTER ?? "").trim() || "minimax";
 
   // AgentDash (Phase G): E2E deterministic stub — bypass ALL real LLM calls
   // when PAPERCLIP_E2E_SKIP_LLM=true. The deep-interview engine and CoS
@@ -377,9 +403,9 @@ export async function dispatchLLM(
   }
 
   // AgentDash (Phase G): emit token-budget instrumentation line.
-  emitTokenBudget(adapter || "claude_api", input);
+  emitTokenBudget(adapter, input);
 
-  if (adapter === "claude_api" || adapter === "") {
+  if (adapter === "claude_api") {
     return anthropicLLM(input);
   }
 
@@ -390,12 +416,12 @@ export async function dispatchLLM(
       const reply = await minimaxLLM(input);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] minimax returned empty reply, using fallback");
-        return fallbackToClaudeApi(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back to claude_api");
-      return fallbackToClaudeApi(input, adapter, err);
+      logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back");
+      return runFallbackAdapter(input, adapter, err);
     }
   }
 
@@ -413,7 +439,7 @@ export async function dispatchLLM(
           { adapter },
           "[dispatch-llm] openai_compat returned empty reply, using fallback",
         );
-        return fallbackToClaudeApi(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply");
       }
       return text;
     } catch (err) {
@@ -421,7 +447,7 @@ export async function dispatchLLM(
         { err, adapter },
         "[dispatch-llm] openai_compat failed, falling back to claude_api",
       );
-      return fallbackToClaudeApi(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err);
     }
   }
 
@@ -434,12 +460,12 @@ export async function dispatchLLM(
       const reply = await spawnWithTimeout(hermesCmd, ["chat", "-q", prompt, "-Q"]);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
-        return fallbackToClaudeApi(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back to claude_api");
-      return fallbackToClaudeApi(input, adapter, err);
+      logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back");
+      return runFallbackAdapter(input, adapter, err);
     }
   }
 
@@ -450,12 +476,12 @@ export async function dispatchLLM(
       const reply = await spawnWithTimeout("claude", ["--print", "-"], prompt);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] claude_local returned empty reply, using fallback");
-        return fallbackToClaudeApi(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply");
       }
       return reply;
     } catch (err) {
-      logger.error({ err, adapter }, "[dispatch-llm] claude_local failed, falling back to claude_api");
-      return fallbackToClaudeApi(input, adapter, err);
+      logger.error({ err, adapter }, "[dispatch-llm] claude_local failed, falling back");
+      return runFallbackAdapter(input, adapter, err);
     }
   }
 
