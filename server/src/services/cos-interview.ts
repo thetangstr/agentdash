@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FIXED_QUESTIONS, type InterviewState } from "@paperclipai/shared";
 
 interface Deps {
@@ -58,21 +61,33 @@ export function cosInterview(deps: Deps) {
   };
 }
 
+/**
+ * The Chief of Staff's interview prompt, read from INTERVIEW.md.
+ *
+ * This used to call bare `require("node:fs")`. The server runs as ESM, where
+ * `require` is not defined, so the call threw ReferenceError on the very first
+ * invocation, the bare `catch` swallowed it, and every interview since has run
+ * on the one-sentence fallback below instead of the 1.1KB of actual guidance in
+ * INTERVIEW.md. Nothing surfaced it: the stub is a plausible instruction, so the
+ * model still asked plausible-looking questions — it simply never had the rules
+ * about what "enough to propose an agent" means, which is the part that decides
+ * whether the interview ever crystallizes into a usable plan.
+ *
+ * Identical in shape to the `hasBinary` bug in adapter-presets.ts: correct-looking
+ * code, a swallowed runtime error, and a degraded path that reads as success. The
+ * imports are static now, so a missing file is a startup failure rather than a
+ * silent downgrade discovered months later.
+ */
 let _systemPrompt: string | null = null;
 function systemPrompt(): string {
   if (_systemPrompt) return _systemPrompt;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs") as typeof import("node:fs");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require("node:path") as typeof import("node:path");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { fileURLToPath } = require("node:url") as typeof import("node:url");
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const promptPath = path.resolve(here, "../onboarding-assets/chief_of_staff/INTERVIEW.md");
-    _systemPrompt = fs.readFileSync(promptPath, "utf8");
-  } catch {
-    _systemPrompt = "You are CoS. Ask one short follow-up question that helps you understand the user's bottleneck. Set readyToPropose=true when you can write a one-line agent role.";
-  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  const promptPath = resolve(here, "../onboarding-assets/chief_of_staff/INTERVIEW.md");
+  _systemPrompt = readFileSync(promptPath, "utf8");
   return _systemPrompt;
+}
+
+/** Exported for tests: proves the real asset loads rather than a stub. */
+export function __systemPromptForTest(): string {
+  return systemPrompt();
 }
