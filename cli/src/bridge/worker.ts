@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,6 +9,40 @@ import {
   type EgressPolicy,
   type TaskExecutor,
 } from "./sandbox.js";
+
+/**
+ * Every path the sandbox must re-open so the agent binary can actually start.
+ *
+ * Both the name on PATH and what it resolves to: Claude Code installs a symlink
+ * at `~/.local/bin/claude` pointing into `~/.local/share/claude/versions/…`, and
+ * `sandbox-exec` needs the real file, not the link. Both live inside the home
+ * directory the profile denies, so without this every task dies with
+ * `execvp() of 'claude' failed: No such file or directory` — which reads like a
+ * PATH problem and is not one.
+ *
+ * Best-effort by design. A binary that cannot be resolved here is one the
+ * sandbox will refuse in a moment anyway, and failing the whole worker at
+ * startup over a lookup would be a worse outcome than the error the task gives.
+ */
+export function resolveExecPaths(claudeBin: string): string[] {
+  const found = new Set<string>();
+  let absolute = claudeBin;
+  if (!path.isAbsolute(claudeBin)) {
+    try {
+      absolute = execFileSync("/usr/bin/which", [claudeBin], { encoding: "utf8" }).trim();
+    } catch {
+      return [];
+    }
+  }
+  if (!absolute) return [];
+  found.add(absolute);
+  try {
+    found.add(realpathSync(absolute));
+  } catch {
+    // The link target is unreadable; the direct path is still worth allowing.
+  }
+  return [...found];
+}
 
 /**
  * The poll loop.
@@ -131,6 +167,7 @@ export async function runBridgeWorker(config: BridgeWorkerConfig): Promise<void>
           homeDir: config.homeDir,
           workspaceDir,
           egress: config.egress,
+          execPaths: resolveExecPaths(config.claudeBin),
         }),
         { mode: 0o600 },
       );

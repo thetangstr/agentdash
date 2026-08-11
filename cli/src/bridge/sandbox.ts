@@ -125,9 +125,29 @@ export function buildSandboxProfile(opts: {
   homeDir: string;
   workspaceDir: string;
   egress: EgressPolicy;
+  /**
+   * Absolute paths of the agent binary, symlinks resolved.
+   *
+   * Without these the worker cannot run at all on a standard install. Claude
+   * Code puts its binary at `~/.local/bin/claude`, a symlink into
+   * `~/.local/share/claude/versions/…` — both inside the home directory this
+   * profile denies. The result is `execvp() of 'claude' failed: No such file or
+   * directory` on every task, which reads like a PATH problem and is not one.
+   *
+   * Re-opening exactly the binary we were told to execute widens nothing: the
+   * task was always going to run that program. What stays denied is everything
+   * it might have read — documents, keys, repositories, the rest of home.
+   */
+  execPaths?: string[];
 }): string {
   const home = sbplLiteralPath("homeDir", opts.homeDir);
   const workspace = sbplLiteralPath("workspaceDir", opts.workspaceDir);
+  const execAllows = (opts.execPaths ?? [])
+    .map((candidate, index) => sbplLiteralPath(`execPaths[${index}]`, candidate))
+    .flatMap((literal) => [
+      `(allow file-read* (literal "${literal}"))`,
+      `(allow process-exec (literal "${literal}"))`,
+    ]);
 
   const egressLines =
     opts.egress === "loopback"
@@ -164,6 +184,15 @@ export function buildSandboxProfile(opts: {
     ";; every egress policy, always.",
     `(deny file-read* file-write* (subpath "${home}"))`,
     `(allow file-read* file-write* (subpath "${workspace}"))`,
+    ...(execAllows.length
+      ? [
+          "",
+          ";; The agent binary itself, symlinks resolved. It usually lives inside the",
+          ";; home directory denied above, and denying the program we were asked to run",
+          ";; makes every task fail before it starts.",
+          ...execAllows,
+        ]
+      : []),
     "",
     ...egressLines,
     "",
@@ -235,6 +264,35 @@ export const defaultExecutor: TaskExecutor = (ctx) =>
       }
       const how = signal ? `killed by signal ${signal}` : `exited with code ${code ?? "unknown"}`;
       const tail = stderr.text().trim();
-      reject(new Error(`${ctx.claudeBin} ${how}${tail ? `: ${tail}` : ""}`));
+      const out = stdout.text();
+
+      /**
+       * The one failure everybody hits first, translated.
+       *
+       * The sandbox denies the home directory, so the agent cannot read the
+       * desktop login in `~/.claude` — that deny is the whole point of running
+       * agent-authored instructions in here, and it is not a dial. Claude then
+       * prints "Not logged in · Please run /login" on stdout and exits 1, so the
+       * raw failure is an exit code with an empty stderr, which sends people
+       * looking at the sandbox, the token, and the network in that order.
+       *
+       * Running `/login` cannot fix it: the credential it writes lands in the
+       * directory this profile denies. An API key in the worker's environment
+       * can, because it never touches the filesystem.
+       */
+      if (/not logged in|please run \/login/i.test(out)) {
+        reject(
+          new Error(
+            "the agent is not authenticated inside the sandbox. Its desktop login lives in " +
+              "the home directory this profile denies, and that deny is deliberate. Set " +
+              "ANTHROPIC_API_KEY in the environment you start `agentdash bridge run` from — " +
+              "an env credential needs no filesystem access. Running `claude /login` will not " +
+              "help: it writes to the directory the sandbox is refusing.",
+          ),
+        );
+        return;
+      }
+
+      reject(new Error(`${ctx.claudeBin} ${how}${tail ? `: ${tail}` : ""}${!tail && out ? `: ${out.trim().slice(0, 200)}` : ""}`));
     });
   });
