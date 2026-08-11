@@ -115,9 +115,85 @@ describe("dispatchLLM", () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       "hermes",
-      ["chat", "-q", expect.stringContaining("Draft a rollout plan."), "-Q"],
+      expect.arrayContaining(["chat", "-q", expect.stringContaining("Draft a rollout plan."), "-Q"]),
       expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
     );
+  });
+
+  /**
+   * Least privilege for a process that reads untrusted agent output.
+   *
+   * The prompt handed to Hermes contains other agents' answers — text this
+   * system wraps in `<untrusted-agent-answer>` because it may be adversarial.
+   * Hermes enables terminal, file, code_execution, browser and computer_use by
+   * default, and `spawn` inherits the server's environment unless told not to.
+   * Together that made one prompt injection equal to code execution on the
+   * AgentDash host holding the agent-JWT signing secret.
+   */
+  describe("hermes_local runs with least privilege", () => {
+    function spawnArgs(): string[] {
+      return spawnMock.mock.calls[0][1] as string[];
+    }
+    function spawnEnv(): Record<string, string | undefined> {
+      return (spawnMock.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+    }
+
+    it("grants only a restricted toolset, never the default shell-capable set", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const args = spawnArgs();
+      expect(args, "no toolset restriction was passed").toContain("-t");
+      const granted = args[args.indexOf("-t") + 1]!.split(",");
+      for (const dangerous of ["terminal", "file", "code_execution", "browser", "computer_use"]) {
+        expect(granted, `granted the ${dangerous} toolset`).not.toContain(dangerous);
+      }
+    });
+
+    it("does not inject AGENTS.md, memory or skills into an untrusted context", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+      expect(spawnArgs()).toContain("--ignore-rules");
+    });
+
+    it("does not hand the server's secrets to the child process", async () => {
+      // The specific secrets that made this severe: the JWT secret mints a token
+      // for any agent, and DATABASE_URL carries credentials.
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.PAPERCLIP_AGENT_JWT_SECRET = "jwt-secret-value";
+      process.env.DATABASE_URL = "postgres://user:pw@127.0.0.1:5432/db";
+      process.env.BETTER_AUTH_SECRET = "auth-secret-value";
+      process.env.MINIMAX_API_KEY = "sk-cp-should-not-travel";
+      try {
+        await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+        const env = spawnEnv();
+        for (const leaked of [
+          "PAPERCLIP_AGENT_JWT_SECRET",
+          "DATABASE_URL",
+          "BETTER_AUTH_SECRET",
+          "MINIMAX_API_KEY",
+        ]) {
+          expect(env[leaked], `${leaked} reached the spawned CLI`).toBeUndefined();
+        }
+      } finally {
+        delete process.env.PAPERCLIP_AGENT_JWT_SECRET;
+        delete process.env.DATABASE_URL;
+        delete process.env.BETTER_AUTH_SECRET;
+        delete process.env.MINIMAX_API_KEY;
+      }
+    });
+
+    it("still passes what the CLI needs to run and find its own config", async () => {
+      // Over-tightening is its own outage: without HOME, Hermes cannot read
+      // ~/.hermes and every reply fails.
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const env = spawnEnv();
+      expect(env.PATH, "no PATH: the binary cannot be found").toBeTruthy();
+      expect(env.HOME, "no HOME: the CLI cannot read its own credentials").toBeTruthy();
+    });
   });
 
   /**

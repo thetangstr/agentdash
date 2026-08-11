@@ -14,6 +14,15 @@ import type { Db } from "@paperclipai/db";
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
 const DEFAULT_HERMES_COMMAND = "hermes";
 
+/**
+ * Toolsets granted to Hermes when it answers a chat turn. `clarify` (ask a
+ * clarifying question) is the least-privilege set that still leaves it able to
+ * do the job, which is to produce words. Override with
+ * AGENTDASH_HERMES_TOOLSETS only with a clear reason — every name added here is
+ * a capability handed to a model reading untrusted agent output.
+ */
+const DEFAULT_HERMES_TOOLSETS = "clarify";
+
 // ---------------------------------------------------------------------------
 // AgentDash (Phase G): token-budget instrumentation
 //
@@ -142,6 +151,38 @@ function neutralSpawnCwd(): string {
   }
 }
 
+/**
+ * The environment a locally-spawned adapter is allowed to see.
+ *
+ * `spawn` inherits the parent environment by default, and the parent here is
+ * the AgentDash server. That handed every spawned CLI `PAPERCLIP_AGENT_JWT_SECRET`
+ * (mint a token for any agent), `DATABASE_URL` with credentials, `BETTER_AUTH_SECRET`,
+ * `AGENTDASH_LICENSE_KEY`, and every provider key — to a process whose prompt
+ * contains text written by other agents, which this system explicitly treats as
+ * untrusted and wraps in `<untrusted-agent-answer>` for exactly that reason.
+ *
+ * So the blast radius of a successful prompt injection was not "runs a command".
+ * It was: read `env`, forge agent JWTs, connect to Postgres directly.
+ *
+ * Allowlist, not denylist. A denylist silently leaks the next secret someone
+ * adds. These adapters need to find their binary and their own config, and
+ * nothing else — the CLIs hold their own credentials under `$HOME` (`~/.hermes/.env`,
+ * `~/.claude`), so no provider key needs to be passed through from here.
+ */
+function adapterChildEnv(): NodeJS.ProcessEnv {
+  const allowed = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "LOGNAME", "TZ"];
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of allowed) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // The harnesses' own knobs travel; AgentDash's secrets do not.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("HERMES_") && value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 function spawnWithTimeout(
   command: string,
   args: string[],
@@ -152,6 +193,7 @@ function spawnWithTimeout(
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: neutralSpawnCwd(),
+      env: adapterChildEnv(),
     });
 
     let stdout = "";
@@ -489,8 +531,36 @@ export async function dispatchLLM(
     const prompt = buildFlatPrompt(input);
     logger.info({ adapter, hermesCmd }, "[dispatch-llm] routing CoS reply through hermes_local");
     try {
+      // Answering a question needs no tools.
+      //
+      // Hermes ships `terminal`, `file`, `code_execution`, `browser` and
+      // `computer_use` enabled by default. The prompt handed to it here contains
+      // other agents' output — content this system wraps in
+      // `<untrusted-agent-answer>` precisely because it may be adversarial. Full
+      // tool access over untrusted text is arbitrary code execution on the
+      // AgentDash host, one prompt injection away.
+      //
+      // `-t` is an allowlist of toolsets to ENABLE, so this grants a single
+      // harmless one and nothing else; verified by asking a restricted Hermes to
+      // run `id -un`, which answers that it cannot. `--ignore-rules` additionally
+      // stops AGENTS.md, memory and preloaded skills being injected into a
+      // context built from untrusted input.
+      //
+      // Deliberately NOT `--safe-mode`: it implies `--ignore-user-config`, which
+      // would discard ~/.hermes/config.yaml and with it the provider settings
+      // that make inference work at all.
+      const toolsets =
+        (process.env.AGENTDASH_HERMES_TOOLSETS ?? "").trim() || DEFAULT_HERMES_TOOLSETS;
       const reply = stripHermesChatter(
-        await spawnWithTimeout(hermesCmd, ["chat", "-q", prompt, "-Q"]),
+        await spawnWithTimeout(hermesCmd, [
+          "chat",
+          "-q",
+          prompt,
+          "-Q",
+          "-t",
+          toolsets,
+          "--ignore-rules",
+        ]),
       );
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
