@@ -12,7 +12,7 @@
 // a root/local env file, and is NEVER written to the DB. Founding board user
 // only (enforced in the route).
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { logger } from "../middleware/logger.js";
@@ -81,13 +81,48 @@ export interface AdapterStatus {
   reason: string | null;
 }
 
+/**
+ * Is `cmd` a runnable program?
+ *
+ * This used to be `require("node:child_process").execSync("command -v " + cmd)`.
+ * The server runs as ESM, where `require` is not defined — so the call threw
+ * `ReferenceError` on every invocation, the bare `catch` swallowed it, and the
+ * function returned false for everything. Not just for a missing binary: for
+ * `sh` too. `readAdapterStatus` therefore reported
+ * `ready: false, reason: "hermes binary not found on PATH"` for `hermes_local`
+ * and `claude_local` unconditionally.
+ *
+ * That is worse than a cosmetic bug, because `/health` and onboarding both read
+ * it: an on-prem box answered "am I working?" with *no* while it was happily
+ * serving replies through that exact binary. Caught on the mkboard instance,
+ * which was mid-conversation over Hermes at the time. The existing tests only
+ * exercised the stub/openai/gemini presets, so nothing covered the two adapters
+ * this actually broke.
+ *
+ * Resolved without a shell. The old string was interpolated straight into a
+ * shell command, so an operator's `AGENTDASH_HERMES_COMMAND` containing a
+ * semicolon would have been executed — a real hole in a value that is meant to
+ * be nothing but a path.
+ */
 function hasBinary(cmd: string): boolean {
-  try {
-    require("node:child_process").execSync(`command -v ${cmd} 2>/dev/null`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  const candidate = cmd.trim();
+  if (!candidate) return false;
+
+  const isExecutable = (p: string): boolean => {
+    try {
+      accessSync(p, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // A path (absolute or relative) is checked directly — PATH does not apply.
+  if (candidate.includes("/")) return isExecutable(candidate);
+
+  // A bare name is resolved against PATH, the same lookup a shell would do.
+  const pathEntries = (process.env.PATH ?? "").split(":").filter(Boolean);
+  return pathEntries.some((dir) => isExecutable(join(dir, candidate)));
 }
 
 export function readAdapterStatus(): AdapterStatus {

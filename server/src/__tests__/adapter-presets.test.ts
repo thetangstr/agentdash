@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ADAPTER_PRESETS,
@@ -20,6 +20,7 @@ const KEYS = [
   "MINIMAX_API_KEY",
   "PAPERCLIP_E2E_SKIP_LLM",
   "AGENTDASH_ENV_FILE",
+  "AGENTDASH_HERMES_COMMAND",
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -143,5 +144,66 @@ describe("adapter-presets", () => {
     // hot-set still took effect
     expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-y");
     expect(r.status.ready).toBe(true);
+  });
+});
+
+/**
+ * Readiness for the adapters that shell out to a local binary.
+ *
+ * These two were the only presets with no coverage, and they were the only two
+ * that were broken. `hasBinary` used `require("node:child_process")`; the server
+ * runs as ESM, so that threw ReferenceError on every call, the bare catch
+ * swallowed it, and readiness was false for everything — including binaries that
+ * plainly exist. `/health` and onboarding both surface this, so an on-prem box
+ * reported "not ready" while it was actively serving replies through Hermes.
+ */
+describe("readAdapterStatus for local-binary adapters", () => {
+  it("reports ready when AGENTDASH_HERMES_COMMAND is an executable path", () => {
+    // /bin/sh rather than a fixture: it is executable on every machine that can
+    // run this suite, so the case cannot pass for the wrong reason.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_HERMES_COMMAND = "/bin/sh";
+
+    expect(readAdapterStatus()).toMatchObject({
+      adapter: "hermes_local",
+      ready: true,
+      reason: null,
+    });
+  });
+
+  it("reports not ready when the configured path does not exist", () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_HERMES_COMMAND = "/nonexistent/definitely/not/hermes";
+
+    const status = readAdapterStatus();
+    expect(status.ready).toBe(false);
+    expect(status.reason).toMatch(/not found/i);
+  });
+
+  it("resolves a bare command name against PATH", () => {
+    // The default is the bare name "hermes"; a bare name must be looked up the
+    // way a shell would, not treated as a relative path.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_local";
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/bin:/usr/bin";
+    try {
+      // "claude_local" hardcodes the name "claude", so assert the resolver
+      // directly through a preset whose command we control instead.
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+      process.env.AGENTDASH_HERMES_COMMAND = "sh";
+      expect(readAdapterStatus()).toMatchObject({ ready: true });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("does not run the configured value through a shell", () => {
+    // The old implementation interpolated this straight into `command -v ...`.
+    // A value with a semicolon must be treated as a (missing) path, not run.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_HERMES_COMMAND = "/bin/sh; touch /tmp/agentdash-pwned";
+
+    expect(readAdapterStatus().ready).toBe(false);
+    expect(existsSync("/tmp/agentdash-pwned"), "the value reached a shell").toBe(false);
   });
 });
