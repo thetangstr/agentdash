@@ -93,7 +93,15 @@ if (!companyId) process.exit(1);
 
 const agents = {};
 for (const t of TEAM) {
-  const a = await api("post", `/api/companies/${companyId}/agents`, { name: t.agent, role: t.role, adapterType: "process" });
+  // These agents are driven directly over the API with their own keys and never
+  // execute a heartbeat. They still need a runnable command: a process agent
+  // without one can never run, and creation now rejects that outright rather
+  // than accepting it and failing every run afterwards. /usr/bin/true is the
+  // honest no-op for an agent that exists to be addressed, not executed.
+  const a = await api("post", `/api/companies/${companyId}/agents`, {
+    name: t.agent, role: t.role, adapterType: "process",
+    adapterConfig: { command: "/usr/bin/true" },
+  });
   agents[t.agent] = a.body?.id;
   if (a.status >= 300) say(false, `create the ${t.agent} agent`, `${a.status} ${S(a.body)}`);
 }

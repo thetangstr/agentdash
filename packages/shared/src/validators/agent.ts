@@ -92,20 +92,62 @@ const createAgentBaseSchema = z.object({
   instructionsBundle: createAgentInstructionsBundleSchema.optional(),
   runtimeConfig: agentRuntimeConfigSchema.optional().default({}),
   defaultEnvironmentId: z.string().uuid().optional().nullable(),
+  /**
+   * Run the adapter's ENVIRONMENT preflight before creating the agent.
+   *
+   * Stays opt-in, deliberately. Defaulting it on looks right and is not:
+   * preflight probes the machine, and "the claude binary is not on this host"
+   * is a legitimate state at creation time — you configure an agent before
+   * installing its harness, or the harness lives on a different machine
+   * entirely. Turning it on by default broke twenty tests that assert exactly
+   * those flows, which is the product telling you the default is wrong.
+   *
+   * Environment readiness and configuration completeness are different
+   * questions. A missing `command` on a process agent is not an environment
+   * condition that might resolve later — it is an agent that can never run, and
+   * that is enforced unconditionally by the refinement below.
+   */
   requireHarnessPreflight: z.boolean().optional().default(false),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
   metadata: z.record(z.unknown()).optional().nullable(),
 });
 
-export const createAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema);
+
+/**
+ * Configuration completeness, checked on every creation path.
+ *
+ * Distinct from the environment preflight above: this asks "could this agent
+ * ever run", not "can it run on this machine right now". A process agent with
+ * no command is the former. It used to be accepted, and then failed every
+ * heartbeat forever with "Process adapter missing command" — visible only in
+ * the server log, never to the person who created it. The adapter's own
+ * testEnvironment already flagged it; nothing ran that check by default.
+ */
+function assertAdapterConfigComplete(value: unknown, ctx: z.RefinementCtx): void {
+  if (!isPlainRecord(value)) return;
+  if (value.adapterType !== "process") return;
+  const config = isPlainRecord(value.adapterConfig) ? value.adapterConfig : {};
+  const command = typeof config.command === "string" ? config.command.trim() : "";
+  if (command) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message:
+      "A process agent needs adapterConfig.command — without it every run fails. "
+      + "Set the command to execute, or create the agent with a different adapter.",
+    path: ["adapterConfig", "command"],
+  });
+}
+
+export const createAgentSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema)
+  .superRefine(assertAdapterConfigComplete);
 
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const createAgentHireSchema = z.preprocess(normalizeAgentAdapterAliases, createAgentBaseSchema.extend({
   sourceIssueId: z.string().uuid().optional().nullable(),
   sourceIssueIds: z.array(z.string().uuid()).optional(),
-}));
+})).superRefine(assertAdapterConfigComplete);
 
 export type CreateAgentHire = z.infer<typeof createAgentHireSchema>;
 

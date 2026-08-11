@@ -2121,6 +2121,8 @@ export function agentRoutes(
       instructionsBundle,
       sourceIssueId: _sourceIssueId,
       sourceIssueIds: _sourceIssueIds,
+      // Defaults true — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why.
       requireHarnessPreflight,
       ...hireInput
     } = req.body;
@@ -2326,6 +2328,8 @@ export function agentRoutes(
     const {
       desiredSkills: requestedDesiredSkills,
       instructionsBundle,
+      // Defaults true — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why.
       requireHarnessPreflight,
       ...createInput
     } = req.body;
