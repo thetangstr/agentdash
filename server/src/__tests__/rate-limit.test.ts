@@ -278,22 +278,24 @@ describe("bridge poll is exempt from the mutation limiter", () => {
   });
 
   it("leaves the real mutation budget intact after a window of polling", async () => {
-    // The point of the exemption: polling must not spend the quota that actual
-    // work needs. After a full window of polls, a real mutation still succeeds.
+    // Scaled down deliberately. Proving this with 180 polls plus 30 mutations
+    // meant 210 sequential HTTP calls, which turned out to be flaky under full
+    // parallel-suite load ("socket hang up") — a volume problem, not a logic
+    // one. The property is a ratio: polls must not consume the budget that real
+    // work needs. A ceiling of 10 with 20 polls exercises the same relationship
+    // (polls exceed the ceiling on their own) at a tenth of the cost.
     process.env.NODE_ENV = "production";
     delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
-    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "200";
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "10";
     const { createDefaultApiRateLimiter } = await loadFactories();
     const app = buildBridgeApp(createDefaultApiRateLimiter());
 
-    for (let i = 0; i < POLLS_PER_WINDOW; i += 1) {
+    for (let i = 0; i < 20; i += 1) {
       await request(app).post("/bridge/poll");
     }
-    // 180 polls + 30 mutations = 210 against a 200 ceiling. If polls counted,
-    // the tail of these would 429 — which is precisely the reported failure:
-    // a connected laptop, then real work, then everything starts bumping.
+    // If polling counted, the budget of 10 is long gone and these all 429.
     const statuses: number[] = [];
-    for (let i = 0; i < 30; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       statuses.push((await request(app).post("/companies/c1/issues")).status);
     }
     expect(

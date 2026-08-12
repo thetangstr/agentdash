@@ -45,6 +45,11 @@ test("CEO consolidates three stewarded contributions with web and Telegram appro
       name: `${role} Agent`,
       role: role === "CEO" ? "ceo" : "engineer",
       adapterType: "process",
+      // A process agent needs a command: without one it is rejected at creation,
+      // because such an agent is accepted and then fails every run. These are
+      // addressed over the API rather than executed; process.execPath is the
+      // convention already used by the sibling specs.
+      adapterConfig: { command: process.execPath },
     });
     expect(created.status, `${role}: ${JSON.stringify(created.body)}`).toBeLessThan(300);
     agentIds[role] = created.body.id as string;

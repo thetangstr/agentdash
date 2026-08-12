@@ -1,7 +1,7 @@
 // AgentDash: onboarding-driven model adapter setup.
 //
-// Lets a customer pick their agent "brain" during onboarding (claude / openai /
-// gemini / stub) without hand-editing env files. A preset maps to a small set of
+// Lets a customer pick their agent "brain" during onboarding (claude / minimax /
+// hermes / openai / gemini / stub) without hand-editing env files. A preset maps to a small set of
 // process.env vars that dispatchLLM + the provider clients (anthropic-llm,
 // openai-compat-llm, minimax-llm) already read. applyAdapterPreset sets them
 // HOT (in the running process — the LLM clients re-read env per call, so no
@@ -22,9 +22,9 @@ import { badRequest } from "../errors.js";
 // Presets
 // ---------------------------------------------------------------------------
 
-export type AdapterPreset = "claude" | "openai" | "gemini" | "stub";
+export type AdapterPreset = "claude" | "minimax" | "hermes" | "openai" | "gemini" | "stub";
 
-export const ADAPTER_PRESETS: AdapterPreset[] = ["claude", "openai", "gemini", "stub"];
+export const ADAPTER_PRESETS: AdapterPreset[] = ["claude", "minimax", "hermes", "openai", "gemini", "stub"];
 
 /**
  * Each preset resolves to a set of env assignments. Values are literal except
@@ -46,6 +46,18 @@ const PRESET_ENV: Record<AdapterPreset, Array<{ key: string; value: string }>> =
     { key: "OPENAI_COMPAT_BASE_URL", value: "https://generativelanguage.googleapis.com/v1beta/openai" },
     { key: "OPENAI_COMPAT_MODEL", value: "gemini-2.0-flash" },
   ],
+  // api.minimaxi.com is CHINA Mainland; api.minimax.io is INTERNATIONAL. The
+  // hostnames read backwards, so the region is pinned explicitly rather than
+  // left to a default that looks like it means the opposite.
+  minimax: [
+    { key: "AGENTDASH_DEFAULT_ADAPTER", value: "minimax" },
+    { key: "MINIMAX_API_KEY", value: "{KEY}" },
+    { key: "MINIMAX_BASE_URL", value: "https://api.minimaxi.com/anthropic" },
+    { key: "MINIMAX_MODEL", value: "MiniMax-M3" },
+  ],
+  // Hermes holds its own provider credentials under ~/.hermes, so there is no
+  // key to collect here — readiness is whether the binary exists.
+  hermes: [{ key: "AGENTDASH_DEFAULT_ADAPTER", value: "hermes_local" }],
   stub: [{ key: "PAPERCLIP_E2E_SKIP_LLM", value: "true" }],
 };
 
@@ -60,6 +72,8 @@ export interface AdapterPresetOption {
 export function adapterPresetOptions(): AdapterPresetOption[] {
   return [
     { preset: "claude", label: "Claude (Anthropic)", requiresKey: true, description: "ANTHROPIC_API_KEY" },
+    { preset: "minimax", label: "MiniMax (China)", requiresKey: true, description: "MINIMAX_API_KEY (api.minimaxi.com)" },
+    { preset: "hermes", label: "Hermes (local harness)", requiresKey: false, description: "hermes CLI on PATH; it holds its own provider credentials" },
     { preset: "openai", label: "OpenAI", requiresKey: true, description: "OPENAI_COMPAT_API_KEY (api.openai.com)" },
     { preset: "gemini", label: "Gemini (Google)", requiresKey: true, description: "OPENAI_COMPAT_API_KEY (Gemini OpenAI-compat)" },
     { preset: "stub", label: "Stub (no key — placeholder plans)", requiresKey: false, description: "Canned responses; wire a real model later" },
@@ -130,7 +144,10 @@ export function readAdapterStatus(): AdapterStatus {
   if (process.env.PAPERCLIP_E2E_SKIP_LLM === "true") {
     return { adapter: "stub", ready: true, preset: "stub", reason: null };
   }
-  const adapter = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "claude_api").trim() || "claude_api";
+  // Mirrors dispatchLLM's default, which is `minimax`. These disagreed: this
+  // file said claude_api while dispatch actually routed to minimax, so an
+  // unconfigured install reported readiness for a provider it would not use.
+  const adapter = (process.env.AGENTDASH_DEFAULT_ADAPTER ?? "").trim() || "minimax";
   switch (adapter) {
     case "claude_api":
       return process.env.ANTHROPIC_API_KEY
@@ -142,12 +159,12 @@ export function readAdapterStatus(): AdapterStatus {
         : { adapter, ready: false, preset: recognizeOpenAiPreset(), reason: "OPENAI_COMPAT_API_KEY not set" };
     case "minimax":
       return process.env.MINIMAX_API_KEY
-        ? { adapter, ready: true, preset: "custom", reason: null }
-        : { adapter, ready: false, preset: "custom", reason: "MINIMAX_API_KEY not set" };
+        ? { adapter, ready: true, preset: "minimax", reason: null }
+        : { adapter, ready: false, preset: "minimax", reason: "MINIMAX_API_KEY not set" };
     case "hermes_local":
       return hasBinary(process.env.AGENTDASH_HERMES_COMMAND || "hermes")
-        ? { adapter, ready: true, preset: "custom", reason: null }
-        : { adapter, ready: false, preset: "custom", reason: "hermes binary not found on PATH" };
+        ? { adapter, ready: true, preset: "hermes", reason: null }
+        : { adapter, ready: false, preset: "hermes", reason: "hermes binary not found on PATH" };
     case "claude_local":
       return hasBinary("claude")
         ? { adapter, ready: true, preset: "custom", reason: null }

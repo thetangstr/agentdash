@@ -102,7 +102,10 @@ describe("GET /health", () => {
       selfServeBootstrap: false,
       instanceHasCompany: true,
       adapterReady: false,
-      adapterPreset: "claude",
+      // "minimax" now: adapter-presets defaults to the same adapter
+      // dispatchLLM actually routes to. The two disagreed, so /health
+      // named a provider the server would never call.
+      adapterPreset: "minimax",
     });
   });
 
@@ -140,7 +143,10 @@ describe("GET /health", () => {
       selfServeBootstrap: false,
       instanceHasCompany: true,
       adapterReady: false,
-      adapterPreset: "claude",
+      // "minimax" now: adapter-presets defaults to the same adapter
+      // dispatchLLM actually routes to. The two disagreed, so /health
+      // named a provider the server would never call.
+      adapterPreset: "minimax",
     });
   });
 

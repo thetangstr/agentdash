@@ -101,7 +101,10 @@ describe("GET /health dev-server supervisor access", () => {
         selfServeBootstrap: false,
         instanceHasCompany: false,
         adapterReady: false,
-        adapterPreset: "claude",
+        // "minimax" now: adapter-presets defaults to the same adapter
+        // dispatchLLM actually routes to. The two disagreed, so /health
+        // named a provider the server would never call.
+        adapterPreset: "minimax",
         devServer: {
           enabled: true,
           restartRequired: true,

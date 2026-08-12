@@ -130,8 +130,12 @@ const gate = await api("get", `/api/companies/${companyId}/connector-send-execut
 say(gate.status === 200, `workforce features confirmed present`,
   gate.status === 404 ? `404 — wrong profile, recreate the workspace` : `gate check ${gate.status}`);
 
+// A process agent needs a command: without one it is accepted and then fails
+// every run, so creation now rejects it outright. This agent is addressed over
+// the API rather than executed, and /usr/bin/true is the honest no-op for that.
 const cos = await api("post", `/api/companies/${companyId}/agents`, {
   name: "Chief", role: "chief_of_staff", adapterType: "process",
+  adapterConfig: { command: "/usr/bin/true" },
 });
 const cosId = cos.body?.id;
 say(cos.status < 300, `Chief of Staff created — ${OWNER}'s own agent AND the company's`, `id=${cosId}`);
@@ -274,7 +278,12 @@ WHAT I WANT YOU TO DO
 
 2. For each lead, create an agent. Use a SINGLE-WORD name (an @mention resolves
    on one token, so "Delivery" works and "delivery agent" can never be reached).
-     agentdashHireAgent { name: "Delivery", role: "engineer", adapterType: "process" }
+     agentdashHireAgent { name: "Delivery", role: "engineer", adapterType: "process",
+                          adapterConfig: { command: "/usr/bin/true" } }
+   adapterConfig.command is required for a process agent. Without it the create
+   is rejected — deliberately, because such an agent is accepted and then fails
+   every run afterwards. Use the real harness command when the agent is meant to
+   execute; /usr/bin/true when it exists to be addressed, as these do.
 
 3. Write each agent a mandate at AGENTS.md covering: who it is and whose agent it
    is, what it is for, who it listens to when two people disagree, how it

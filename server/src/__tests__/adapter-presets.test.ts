@@ -47,11 +47,33 @@ function useTempEnvFile(): string {
 }
 
 describe("adapter-presets", () => {
-  it("advertises the four customer-facing presets", () => {
-    expect(adapterPresetOptions().map((o) => o.preset).sort()).toEqual(
-      ["claude", "gemini", "openai", "stub"],
-    );
-    expect(ADAPTER_PRESETS.sort()).toEqual(["claude", "gemini", "openai", "stub"]);
+  it("advertises every customer-facing preset, including the adapters actually in use", () => {
+    // minimax and hermes were missing while both were the shipped configuration:
+    // status reported them correctly as ready, but a user who opened the model
+    // screen and picked anything was moved back onto Claude.
+    const expected = ["claude", "gemini", "hermes", "minimax", "openai", "stub"];
+    expect(adapterPresetOptions().map((o) => o.preset).sort()).toEqual(expected);
+    expect([...ADAPTER_PRESETS].sort()).toEqual(expected);
+  });
+
+  it("names minimax and hermes rather than reporting them as custom", () => {
+    // A screen that calls the running configuration "custom" invites someone to
+    // replace it with a listed option.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.MINIMAX_API_KEY = "mm-key";
+    expect(readAdapterStatus()).toMatchObject({ ready: true, preset: "minimax" });
+
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_HERMES_COMMAND = "/bin/sh";
+    expect(readAdapterStatus()).toMatchObject({ ready: true, preset: "hermes" });
+  });
+
+  it("pins the MiniMax preset to the China endpoint", () => {
+    // api.minimaxi.com is China; api.minimax.io is international. The hostnames
+    // read backwards, so a wrong default 401s with a confusing message.
+    const applied = applyAdapterPreset({ preset: "minimax", apiKey: "mm-key" });
+    expect(applied.status.adapter).toBe("minimax");
+    expect(process.env.MINIMAX_BASE_URL).toContain("api.minimaxi.com");
   });
 
   it("claude_api without a key is NOT ready (degrades to stub replies, no crash)", () => {
