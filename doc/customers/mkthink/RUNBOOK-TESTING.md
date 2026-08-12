@@ -22,9 +22,53 @@ e2e **20 passed / 2 skipped**, journey gate **exit 0**.
 1. Open `http://mkmini.local:3102` — this is the clean MKThink instance.
    `:3100` and `:3101` are separate, older, still on Claude. **Do not restart
    `:3100`** — it owns the Postgres process for all three.
-2. Sign in as `owner@example.com`. **The password link has expired** (issued
-   Aug 7, ~1 hour TTL). Ask for a fresh one before starting.
-3. Optional, for the command-line steps below:
+2. Sign in as `owner@example.com`. Reset links expire after **one hour**, so
+   you will usually need a fresh one. Minting it is two steps, because the mail
+   sender is not wired (`RESEND_API_KEY` unset) and the token only ever goes
+   into the email body — it is never logged:
+
+   ```sh
+   # 1. generate the token (note: request-password-reset, NOT forget-password,
+   #    which 404s on this Better Auth version)
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -X POST http://mkmini.local:3102/api/auth/request-password-reset \
+     -H "content-type: application/json" \
+     -H "Origin: http://mkmini.local:3102" \
+     -d '{"email":"owner@example.com","redirectTo":"http://mkmini.local:3102/reset-password"}'
+
+   # 2. read it out of the verification table (columns are snake_case)
+   cd cli && pnpm exec tsx -e '
+     import postgres from "postgres";
+     const sql = postgres("postgres://paperclip:paperclip@127.0.0.1:54329/mkboard");
+     const r = await sql`select identifier, expires_at from verification order by created_at desc limit 1`;
+     console.log("http://mkmini.local:3102/reset-password?token=" +
+       r[0].identifier.replace("reset-password:", ""), "expires", r[0].expires_at);
+     await sql.end();'
+   ```
+3. **If nothing responds, the stack is down.** Start order matters: the
+   embedded Postgres lives in `:3100`'s cluster
+   (`~/.paperclip/instances/lantest/db`) and every instance connects to it on
+   54329, so `:3100` comes up first or `:3102` dies with `ECONNREFUSED`.
+
+   ```sh
+   # 1. Postgres host
+   cd server && PAPERCLIP_INSTANCE_ID=lantest PORT=3100 \
+     PAPERCLIP_DEPLOYMENT_MODE=local_trusted PAPERCLIP_BIND=loopback \
+     BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+     PAPERCLIP_AGENT_JWT_SECRET=$(openssl rand -hex 32) \
+     pnpm exec tsx src/index.ts > ~/.local/state/agentdash-logs/lantest.log 2>&1 &
+
+   # 2. MKThink instance, from the durable env
+   cd server && bash -c 'set -a; source ~/.config/agentdash/mkboard.env; set +a; \
+     exec pnpm exec tsx src/index.ts' > ~/.local/state/agentdash-logs/mkboard.log 2>&1 &
+   ```
+
+   `:3100`'s throwaway secrets only affect `:3100` — it is acting as the
+   database host. `:3102`'s real secrets live in
+   `~/.config/agentdash/mkboard.env` (mode 600), which is why a restart does not
+   lose them. Logs go to `~/.local/state/agentdash-logs/`, not a temp directory.
+
+4. Optional, for the command-line steps below:
    ```sh
    export BASE=http://127.0.0.1:3102
    export AGENTDASH_API_KEY=<the pcp_board_… key>
