@@ -98,7 +98,7 @@ and **200 on `api.minimaxi.com`** (China).
    modules once. Subsequent replies are ~12s.
 4. To confirm the provider from the box:
    ```sh
-   grep -o '"adapter":"[a-z_]*"' ~/…/mkboard/server*.log | tail -1
+   grep -o '"adapter":"[a-z_]*"' ~/.local/state/agentdash-logs/mkboard.log | tail -1
    ```
 
 ---
