@@ -245,6 +245,26 @@ run"), **not** *environment readiness* ("is the binary on this machine"). You ca
 still create a `claude_local` agent on a box without Claude — deliberately, since
 configure-then-install is a real flow.
 
+**The gap this did not close, and now does.** The rule above only applies at
+*creation*. Chief and Delivery were seeded on 2026-08-08, before it existed, and
+sat unrunnable for four days: every heartbeat threw `Process adapter missing
+command` into the server log, while the whole suite passed and the demo deck
+reported `ok=26 broken=0`. Nothing in the suite had ever *executed* an agent —
+the deck drives agents over the API with their keys, which never spawns an
+adapter.
+
+`server/src/__tests__/agent-execution.test.ts` now does. It spawns real child
+processes through the real adapter registry (hermetic — the only binary it needs
+is the Node already running it) and asserts a working agent produces streamed
+output, a commandless one **throws** rather than resolving, and a non-zero exit
+is reported as a failure instead of a successful run. It also guards the
+first-run seed against reintroducing the original defect; that guard was
+falsified before being trusted — reverting the seed fix makes it fail with
+`expected 1 to be +0`, and restoring it makes it pass.
+
+Both live agents were repaired to `hermes_local` and audited clean
+(`total=2 broken=0`).
+
 ---
 
 ## 8. Readiness reporting tells the truth — **VERIFIED LIVE**
@@ -334,6 +354,189 @@ and failed; every real deployment path had quietly worked around it.
 ```sh
 cd server && PORT=3197 PAPERCLIP_DEPLOYMENT_MODE=local_trusted pnpm start
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3197/api/health
+```
+
+---
+
+## 13. The five critical-path runs — **VERIFIED LIVE, 2026-08-12**
+
+Before this, `agent_runs`, `heartbeat_runs`, `deliverable_runs` and
+`issue_work_products` were all **0**. No agent had ever executed in this
+install; the four board-pack issues had sat in `backlog` since 2026-08-08. The
+suite passed and the demo deck reported `ok=26 broken=0` because neither ever
+spawns an adapter. All five runs below were then executed against the live
+instance on `:3102`.
+
+**1. An agent executes assigned work.** `POST /api/agents/<chief>/wakeup` → 202.
+Run `e8a68bdf` **succeeded**, exit 0, 115s, through
+`[hermes] Starting Hermes Agent (model=MiniMax-M3)`. Its stdout ends
+`MKT-2 is now done`.
+
+**2. The work is real, and sourced.** The Chief posted a 3,369-character
+delivery-status section, having queried `/api/companies/…/issues` and
+`/dashboard` for its own figures — it correctly reported 4 issues, 1 in
+progress, 3 in backlog.
+
+**3. The backlog clears autonomously.** Four runs succeeded (58s, 115s, 205s,
+227s) and **MKT-1, MKT-2, MKT-3, MKT-4 all reached `done`** without further
+prompting.
+
+**4. The deliverable exists on disk.**
+`~/.paperclip/instances/mkboard/workspaces/<chief>/board-pack-week-1/BOARD-PACK.md`,
+151 lines, leading with the sourced fact — Northgate schematic set, bond vote
+pulled forward, attributed to Titus, captured 2026-08-08 — and stating plainly
+that it is *"the only fact I could source this cycle that is signed off"*, with
+an attribution table naming each section's status.
+
+**5. Hire → run.** The Chief created the `Platform` agent (**201**), preflight
+returned `status: pass` (Hermes v0.20.0, Python 3.11.15), and that brand-new
+agent then executed its own run: **succeeded, exit 0, 36s**, correctly reporting
+that nothing was assigned to it.
+
+**Security boundaries held under test, unprompted.** An agent key was refused
+when it tried to raise its own permissions (`Only CEO can manage permissions`)
+and when it tried to wake a different agent (`Agent can only invoke itself`). A
+`process` agent with no command was refused at create with **400** and the exact
+remediation text.
+
+### Two defects this surfaced, both fixed
+
+**The Chief could not hire.** Agents are created with
+`canCreateAgents: false`, only the CEO can change it, and the seed never did —
+so step 2 of the first-run brief ("For each lead, create an agent") was an
+instruction the API would always refuse with *"Agent Chief lacks the
+agents:create capability"*. `first-run.mjs` now grants `canCreateAgents` and
+`canAssignTasks` immediately after creating the Chief.
+
+**A malformed run id returned 500.** Found by the agent, not by the suite: the
+Chief called assemble with the slug it had been given, `board-pack-week-1`, and
+got `500 Internal server error`, because the raw path segment went into a query
+against a uuid column. It worked around the failure and reported it inside the
+deliverable, which is the only reason it was noticed. Reproduced exactly —
+non-uuid → 500, well-formed-but-missing uuid → correct 404 — and fixed with a
+`router.param` guard covering every `:runId` route.
+`server/src/__tests__/deliverable-run-id-guard.test.ts` pins it, and was
+falsified first: neutering the guard fails 2 of its 3 tests.
+
+### Still open from these runs
+
+- **Usage metering reads zero.** The 115s run recorded
+  `token_count=0, cost_cents=0`. Budgets and cost reporting cannot work until
+  MiniMax usage is captured.
+- **One orphaned run.** `3f26126c` has been `running` since 15:01 with no
+  process behind it. The watchdog did not reap it.
+- **`Platform` is a real agent now.** Created during run 5; delete it if you
+  want the roster back to Chief + Delivery.
+
+---
+
+## 14. Agents no longer inherit the server's secrets — **FIXED AND VERIFIED LIVE**
+
+**What was wrong.** `runChildProcess` — the single spawn path used by both the
+`process` adapter and the Hermes adapter — inherited the server's whole
+environment, stripping only names prefixed `PAPERCLIP_`. Every agent harness
+therefore received `DATABASE_URL` with live credentials, `BETTER_AUTH_SECRET`
+(enough to forge a session for any user), `MINIMAX_API_KEY` and
+`AGENTDASH_LICENSE_KEY`. Confirmed against the running server's own environment,
+not inferred.
+
+That matters because the process receiving them is built from issue text, other
+agents' output and anything it fetches — content this system wraps in
+`<untrusted-agent-answer>` precisely because it is untrusted. The blast radius of
+one prompt injection was direct Postgres access, not "runs a command".
+
+The prefix rule hid it in the most ordinary way: `PAPERCLIP_AGENT_JWT_SECRET`
+was stripped and `BETTER_AUTH_SECRET` was not, because one carried the prefix
+and the other did not.
+
+**The fix.** `inheritableAdapterEnv` in
+`packages/adapter-utils/src/server-utils.ts` is an allowlist: enough to find a
+binary, write to scratch, and read the harness's own per-user config, and
+nothing else. Anything an adapter genuinely needs beyond it goes in that agent's
+`adapterConfig.env`, which is merged afterwards and always wins — an explicit,
+per-agent, visible escape hatch instead of whatever the server happened to be
+started with.
+
+This works because the harnesses hold their own credentials under `$HOME`:
+`MINIMAX_API_KEY` lives in `~/.hermes/.env` (mode 0600), so Hermes still
+authenticates with `HOME` alone.
+
+**How to test.** `server/src/__tests__/adapter-env-isolation.test.ts` spawns a
+real child and asks what it can see. Both halves matter — secrets must not
+cross, and `PATH`/`HOME` must, or nothing runs. Falsified before being trusted:
+restoring the old inherit-everything behaviour fails 3 of its 4 tests.
+
+**Verified live after the fix**, on the restarted `:3102`:
+- Chief woke, ran, and **succeeded, exit 0, 25s**, through
+  `[hermes] Starting Hermes Agent (model=MiniMax-M3)` with a coherent reply —
+  so the allowlist does not break real execution.
+- The `board-pack-week-1` slug that used to return **500** now returns **404**,
+  matching the well-formed-but-missing control exactly.
+
+### Two things left open, deliberately
+
+- **Hermes prompts are visible in `ps`.** `hermes chat -q <prompt>` passes the
+  prompt in argv, and the Hermes CLI has no stdin input — so this is a property
+  of the harness, not something AgentDash can fix. `claude_local` already uses
+  stdin. Do not run this on a shared host with real content.
+- **`claude_local` has no toolset restriction.** `hermes_local` runs with
+  `-t clarify --ignore-rules`; `claude_local` runs `claude --print -` with
+  default tool access over the same untrusted input.
+
+---
+
+## 15. Onboarding, end to end — **VERIFIED LIVE, 2026-08-12**
+
+The one gap that had stayed NOT VERIFIED all along was the plan card becoming
+real agents. It works.
+
+1. `POST /api/onboarding/bootstrap` → **200**. Note it is **idempotent per
+   installation**: it returns the existing workspace rather than making a new
+   one. AgentDash is one workspace per install; a "fresh company" means a fresh
+   instance, not a second workspace.
+2. `POST /api/onboarding/interview/turn` × 6. The three fixed questions return
+   instantly with no model call; the adaptive turns ran on real MiniMax
+   (**47s, 38s, 9s**) and produced a coherent two-agent proposal.
+3. A `agent_plan_proposal_v1` card was written, carrying each agent's name,
+   role, responsibilities, KPIs and `adapterType: "hermes_local"`.
+4. `POST /api/onboarding/confirm-plan` → **201**, materializing three agents
+   (Aria, Dex, Quinn). All three are `hermes_local` with runnable configuration
+   — none of the commandless-`process` shape that broke Chief and Delivery.
+5. Waking Aria with the owner's key → **succeeded, exit 0, 29s**, through
+   `[hermes] Starting Hermes Agent (model=MiniMax-M3)`.
+
+**Not covered:** account signup itself, which needs a real email address. That
+is the first step of a cold install and is left for the human tester.
+
+**One fidelity gap:** the plan card proposed Aria as `operations_lead`, and the
+agent materialized with role `general`. The proposed role is not carried
+through — cosmetic today, but it means org structure in the proposal is not the
+org structure you get.
+
+## 16. The clean instance for acceptance testing
+
+A second, empty installation for testing onboarding from zero, so the MKThink
+workspace is not disturbed.
+
+| | |
+|---|---|
+| URL | `http://mkmini.local:3103` (loopback: `http://127.0.0.1:3103`) |
+| Instance | `uat` |
+| Database | `uat` on the existing Postgres at `127.0.0.1:54329` |
+| State | 0 companies, 0 agents, 0 issues, 0 users |
+| Signup | self-serve on, invite validation off — first account claims the install |
+
+Start it again after a reboot with the mkboard env plus these overrides:
+
+```sh
+cd ~/agentdash/server
+set -a; . ~/.config/agentdash/mkboard.env
+DATABASE_URL="postgres://paperclip:paperclip@127.0.0.1:54329/uat"
+PORT=3103 PAPERCLIP_INSTANCE_ID=uat
+PAPERCLIP_PUBLIC_URL=http://mkmini.local:3103
+PAPERCLIP_API_URL=http://127.0.0.1:3103
+PAPERCLIP_AUTH_PUBLIC_BASE_URL=http://mkmini.local:3103
+set +a; pnpm exec tsx src/index.ts
 ```
 
 ---
