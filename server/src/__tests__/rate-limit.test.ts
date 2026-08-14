@@ -245,13 +245,28 @@ describe("rate-limit middleware (#160)", () => {
 describe("bridge poll is exempt from the mutation limiter", () => {
   const POLLS_PER_WINDOW = 180; // 15 min / 5 s
 
-  function buildBridgeApp(mw: express.RequestHandler): Express {
+  /**
+   * The actor auth.ts actually builds for a bridge credential.
+   *
+   * `type: "none"` is deliberate there — a bridge token must not satisfy any
+   * ordinary guard — and this test previously stubbed `{ type: "agent" }`
+   * instead, a shape production never produces for this route. The exemption
+   * was keyed on type, so the test passed against an actor that could not
+   * exist while every real laptop still collected 429s. Use the real shape.
+   */
+  const BRIDGE_ACTOR = {
+    type: "none",
+    companyId: "c1",
+    bridgeEndpointId: "endpoint-1",
+    source: "bridge_endpoint",
+  };
+
+  function buildBridgeApp(mw: express.RequestHandler, actor: unknown = BRIDGE_ACTOR): Express {
     const app = express();
     app.set("trust proxy", true);
-    // The real stack resolves the actor before the limiter; the exemption is
-    // deliberately conditional on an authenticated actor, so mirror that.
+    // The real stack resolves the actor before the limiter.
     app.use((req, _res, next) => {
-      (req as unknown as { actor: unknown }).actor = { type: "agent", agentId: "agent-1" };
+      (req as unknown as { actor: unknown }).actor = actor;
       next();
     });
     app.use(mw);
@@ -302,6 +317,28 @@ describe("bridge poll is exempt from the mutation limiter", () => {
       statuses.filter((code) => code === 429).length,
       "polling ate the mutation budget",
     ).toBe(0);
+  });
+
+  /**
+   * The regression that made this whole block worthless: an actor with an
+   * ordinary type must NOT be exempt on the poll path. Only an enrolled bridge
+   * endpoint is, and the route rejects everyone else anyway.
+   */
+  it("does not exempt a non-endpoint actor on the poll path", async () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "20";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter(), { type: "agent", agentId: "agent-1" });
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      statuses.push((await request(app).post("/bridge/poll")).status);
+    }
+    expect(
+      statuses.filter((s) => s === 429).length,
+      "an agent-typed actor should not inherit the endpoint exemption",
+    ).toBeGreaterThan(0);
   });
 
   it("still limits the bridge calls that actually write", async () => {

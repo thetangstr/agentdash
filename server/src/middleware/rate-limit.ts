@@ -123,6 +123,28 @@ function isBridgePollPath(req: Request): boolean {
   return req.path === "/bridge/poll";
 }
 
+/**
+ * An enrolled bridge endpoint, polling.
+ *
+ * Checked by `source`, not by `type`, and that distinction is the whole bug
+ * this replaced. A bridge credential is deliberately given `type: "none"` in
+ * auth.ts so it cannot pass any ordinary guard by accident — good design, and
+ * it meant `hasAuthenticatedActor` (which accepts only `board` and `agent`)
+ * was false for every real bridge client. The exemption below therefore never
+ * fired for the one population it was written for: a laptop polling every five
+ * seconds still spent its whole budget and still got 429s.
+ *
+ * Confirmed against a live server before and after: 220 polls returned 76
+ * `429`s with the type check, and none with this one.
+ *
+ * Still not open to anonymous callers — an endpoint id is only present after
+ * the token has been verified and matched to an enrolled, approved endpoint.
+ */
+function isEnrolledBridgeEndpoint(req: Request): boolean {
+  const actor = (req as { actor?: { source?: string; bridgeEndpointId?: string } }).actor;
+  return actor?.source === "bridge_endpoint" && typeof actor?.bridgeEndpointId === "string";
+}
+
 export function createAuthRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
   if (isDisabled(opts)) return noopMiddleware;
   return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_AUTH_MAX", 10), {
@@ -143,7 +165,7 @@ export function createDefaultApiRateLimiter(opts: RateLimiterFactoryOptions = {}
     skip(req) {
       if (isHealthPath(req)) return true;
       if (isPreflightMethod(req.method)) return true;
-      if (isBridgePollPath(req) && hasAuthenticatedActor(req)) return true;
+      if (isBridgePollPath(req) && isEnrolledBridgeEndpoint(req)) return true;
       return isSafeReadMethod(req.method) && hasAuthenticatedActor(req);
     },
   });
