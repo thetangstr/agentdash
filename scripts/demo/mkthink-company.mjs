@@ -245,8 +245,20 @@ say(inv.status < 300, `${STAKEHOLDERS.length} teammates invited (auto-approved)`
 
 const agents = {};
 for (const t of TEAM) {
+  // `hermes_local`, not `process`.
+  //
+  // This asked for a `process` agent and sent no `adapterConfig`, so every
+  // agent it created had no command to run — accepted at the time, and then
+  // failing every heartbeat forever with "Process adapter missing command",
+  // visible only in the server log. That is exactly how the Chief and Delivery
+  // agents sat unrunnable for four days. Creation now rejects a commandless
+  // process agent outright, so this script would have failed at the first
+  // agent, on a customer's machine, during an install.
+  //
+  // `hermes_local` resolves its own harness and needs no command, and it is the
+  // adapter the tested workspace actually runs on.
   const a = await api("post", `/api/companies/${companyId}/agents`, {
-    name: t.agent, role: t.role, adapterType: "process",
+    name: t.agent, role: t.role, adapterType: "hermes_local", adapterConfig: {},
   });
   agents[t.agent] = a.body?.id;
   if (a.status >= 300) { say(false, `create ${t.agent}`, S(a.body)); continue; }
@@ -257,6 +269,22 @@ for (const t of TEAM) {
   });
   say(m.status < 300, `${t.agent} agent created, with a mandate for ${t.person}`,
     `${t.mandate.split("\n").length} lines — identity, limits, priorities, who it listens to`);
+
+  // The Chief of Staff needs agents:create; nothing else does.
+  //
+  // Agents are created with canCreateAgents:false and only the CEO can change
+  // it, so an agent cannot grant it to itself — correct, and this script is the
+  // right place to work around it because it runs as the owner. Without it the
+  // Chief is refused with "Agent Chief lacks the agents:create capability" the
+  // moment it tries to hire anyone, and — less obviously — the same capability
+  // gates the adapter environment test, so preflight from the Chief fails too.
+  if (t.role === "chief_of_staff") {
+    const perms = await api("patch", `/api/agents/${a.body.id}/permissions`, {
+      canCreateAgents: true, canAssignTasks: true,
+    });
+    say(perms.status < 300, `${t.agent} may hire and assign`,
+      perms.status < 300 ? `canCreateAgents + canAssignTasks granted` : `grant failed ${perms.status}`);
+  }
 }
 
 // Create the teammates' accounts and join them to the workspace.

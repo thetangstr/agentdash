@@ -130,12 +130,18 @@ const gate = await api("get", `/api/companies/${companyId}/connector-send-execut
 say(gate.status === 200, `workforce features confirmed present`,
   gate.status === 404 ? `404 — wrong profile, recreate the workspace` : `gate check ${gate.status}`);
 
-// A process agent needs a command: without one it is accepted and then fails
-// every run, so creation now rejects it outright. This agent is addressed over
-// the API rather than executed, and /usr/bin/true is the honest no-op for that.
+// Seed the Chief on the harness it will actually think with.
+//
+// This was `process` + /usr/bin/true — a command that satisfies every check and
+// does nothing. That is the failure mode one step removed from the original
+// one: the first seed had no command and failed loudly on every heartbeat, and
+// the fix made it runnable-and-inert instead of broken-and-loud, which is
+// harder to notice, not easier. `hermes_local` needs no command in config (it
+// resolves the hermes binary itself) and is the adapter the live workspace
+// runs, so a reseeded install matches the one that has been tested.
 const cos = await api("post", `/api/companies/${companyId}/agents`, {
-  name: "Chief", role: "chief_of_staff", adapterType: "process",
-  adapterConfig: { command: "/usr/bin/true" },
+  name: "Chief", role: "chief_of_staff", adapterType: "hermes_local",
+  adapterConfig: {},
 });
 const cosId = cos.body?.id;
 say(cos.status < 300, `Chief of Staff created — ${OWNER}'s own agent AND the company's`, `id=${cosId}`);
@@ -145,6 +151,21 @@ const mandate = await api("put", `/api/agents/${cosId}/instructions-bundle/file`
 });
 say(mandate.status < 300, `its mandate is written`,
   `dual role stated explicitly, plus the four things it watches unprompted`);
+
+// Grant the capability the brief above tells it to use.
+//
+// Agents are created with canCreateAgents:false, and only the CEO can change
+// that — an agent cannot grant it to itself, which is correct and which this
+// script is the right place to work around, because it runs as the owner.
+// Without this the Chief is instructed to hire the leads and then refused by
+// the API when it tries: "Agent Chief lacks the agents:create capability".
+// The instruction and the permission shipped in different states, so step 2 of
+// the first-run brief could never complete.
+const perms = await api("patch", `/api/agents/${cosId}/permissions`, {
+  canCreateAgents: true, canAssignTasks: true,
+});
+say(perms.status < 300, `it may hire the leads and assign them work`,
+  perms.status < 300 ? `canCreateAgents + canAssignTasks granted` : `grant failed ${perms.status}`);
 
 const cosKey = (await api("post", `/api/agents/${cosId}/keys`, { name: `${OWNER} desktop` })).body?.token;
 say(!!cosKey, `it has its own key for ${OWNER}'s desktop harness`);
@@ -278,12 +299,13 @@ WHAT I WANT YOU TO DO
 
 2. For each lead, create an agent. Use a SINGLE-WORD name (an @mention resolves
    on one token, so "Delivery" works and "delivery agent" can never be reached).
-     agentdashHireAgent { name: "Delivery", role: "engineer", adapterType: "process",
-                          adapterConfig: { command: "/usr/bin/true" } }
-   adapterConfig.command is required for a process agent. Without it the create
-   is rejected — deliberately, because such an agent is accepted and then fails
-   every run afterwards. Use the real harness command when the agent is meant to
-   execute; /usr/bin/true when it exists to be addressed, as these do.
+     agentdashHireAgent { name: "Delivery", role: "engineer", adapterType: "hermes_local",
+                          adapterConfig: {} }
+   hermes_local needs no command — it resolves the harness itself, and it is the
+   adapter this workspace runs on. Use adapterType "process" only for an agent
+   with a real executable to run, and then adapterConfig.command is REQUIRED: a
+   process agent without one is rejected at create, deliberately, because it
+   would otherwise be accepted and then fail every run afterwards.
 
 3. Write each agent a mandate at AGENTS.md covering: who it is and whose agent it
    is, what it is for, who it listens to when two people disagree, how it

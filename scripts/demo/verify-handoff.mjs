@@ -83,10 +83,14 @@ if (!chief) {
 }
 
 console.log("── step 2/3 · create an agent and write its mandate ──");
+// `hermes_local` with no command, like every other seed here: a `process`
+// agent with no `adapterConfig.command` is refused at create, so this
+// verification script would have failed on the step it exists to verify.
 const made = await api("post", `/api/companies/${COMPANY_ID}/agents`, {
   name: "Verify",
   role: "engineer",
-  adapterType: "process",
+  adapterType: "hermes_local",
+  adapterConfig: {},
 });
 const agentId = made.body?.id;
 say(made.status === 201 && !!agentId, "POST /companies/:id/agents", `${made.status}`);
