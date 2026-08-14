@@ -17,8 +17,16 @@ function createInviteToken() {
 
 function resolveDbUrl(configPath?: string, explicitDbUrl?: string) {
   if (explicitDbUrl) return explicitDbUrl;
-  const config = readConfig(configPath);
+  // Env before config, matching resolveBaseUrl below.
+  //
+  // `readConfig` used to run first and hard-fail with "No config found — run
+  // paperclip onboard first" on any instance configured purely by an env file,
+  // which is how a deployed install works. The bootstrap invite is the one
+  // command you need when nobody can sign in, so requiring an onboarding
+  // artefact that a deployed instance never had made it unavailable at exactly
+  // the moment it exists for.
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  const config = readConfig(configPath);
   if (config?.database.mode === "postgres" && config.database.connectionString) {
     return config.database.connectionString;
   }
@@ -68,12 +76,24 @@ export async function bootstrapCeoInvite(opts: {
   const configPath = resolveConfigPath(opts.config);
   loadPaperclipEnvFile(configPath);
   const config = readConfig(configPath);
-  if (!config) {
-    p.log.error(`No config found at ${configPath}. Run ${pc.cyan("paperclip onboard")} first.`);
+  // A deployed instance is configured by an env file, not by an onboarding
+  // artefact — so `config` is legitimately absent there. Only the deployment
+  // mode is needed from it, and the env carries that too.
+  //
+  // This command is the one thing you reach for when nobody can sign in.
+  // Refusing to run without a config.json made it unavailable in precisely the
+  // situation it exists for.
+  const deploymentMode =
+    config?.server.deploymentMode ?? process.env.PAPERCLIP_DEPLOYMENT_MODE?.trim();
+  if (!deploymentMode) {
+    p.log.error(
+      `No config at ${configPath} and PAPERCLIP_DEPLOYMENT_MODE is unset. `
+      + `Run ${pc.cyan("paperclip onboard")}, or point this at the instance env file.`,
+    );
     return { status: "error", reason: "no_config" };
   }
 
-  if (config.server.deploymentMode !== "authenticated") {
+  if (deploymentMode !== "authenticated") {
     p.log.info("Deployment mode is local_trusted. Bootstrap CEO invite is only required for authenticated mode.");
     return { status: "skipped_local_trusted" };
   }
