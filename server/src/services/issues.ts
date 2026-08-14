@@ -3719,6 +3719,24 @@ export function issueService(db: Db) {
           return comment ? redactIssueComment(comment, censorUsernameInLogs) : null;
         })),
 
+    /**
+     * The body of the newest comment this agent left on this issue.
+     *
+     * Exists so a status change can be checked against what the agent just
+     * said. Agents post the comment and set the status in two separate calls,
+     * so the comment is not in hand when the update arrives — see
+     * `resolveAgentClosingStatus` in issue-blocked-declaration.ts for why that
+     * disagreement matters.
+     */
+    latestAgentCommentBody: (issueId: string, agentId: string): Promise<string | null> =>
+      db
+        .select({ body: issueComments.body })
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, issueId), eq(issueComments.authorAgentId, agentId)))
+        .orderBy(desc(issueComments.createdAt))
+        .limit(1)
+        .then((rows) => rows[0]?.body ?? null),
+
     removeComment: async (commentId: string) => {
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,

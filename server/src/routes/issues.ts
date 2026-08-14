@@ -37,6 +37,7 @@ import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import type { StorageService } from "../storage/types.js";
+import { resolveAgentClosingStatus } from "../services/issue-blocked-declaration.js";
 import { validate } from "../middleware/validate.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
@@ -2089,6 +2090,36 @@ export function issueRoutes(
         : previousExecutionPolicy;
     if (normalizedAssigneeAgentId !== undefined) {
       updateFields.assigneeAgentId = normalizedAssigneeAgentId;
+    }
+
+    // An agent that just said "BLOCKED" does not get to also say "done".
+    //
+    // The two arrive as separate calls — comment, then status — so the comment
+    // has to be read back rather than taken from this request. Only an agent
+    // closing an issue is checked; a person closing one an agent called blocked
+    // is overruling it knowingly, which is theirs to do.
+    if (actor.actorType === "agent" && actor.agentId && updateFields.status === "done") {
+      // Optional call, not optional behaviour: this route takes an injected
+      // service, so a caller with a partial one must still be able to update an
+      // issue. The guard degrades to the comment on this request rather than
+      // failing the write it was only meant to correct.
+      const latestOwnCommentBody =
+        typeof svc.latestAgentCommentBody === "function"
+          ? await svc.latestAgentCommentBody(existing.id, actor.agentId).catch(() => null)
+          : null;
+      const resolved = resolveAgentClosingStatus({
+        actorIsAgent: true,
+        requestedStatus: "done",
+        commentBody,
+        latestOwnCommentBody,
+      });
+      if (resolved.overridden) {
+        updateFields.status = "blocked";
+        logger.info(
+          { issueId: existing.id, agentId: actor.agentId },
+          "issue.update: agent declared blocked, refusing to close",
+        );
+      }
     }
 
     const transition = applyIssueExecutionPolicyTransition({
