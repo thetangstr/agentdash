@@ -68,7 +68,16 @@ test.describe("Onboarding wizard", () => {
     await expect(
       page.locator("h3", { hasText: "Your first goal" })
     ).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Next" }).click();
+    // The goal is now a decision, not a default. Nothing is pre-selected, so
+    // Next stays disabled until the owner picks an example, writes their own,
+    // or explicitly skips — a workspace used to ship a goal written for a
+    // different company purely because clicking through was easier than
+    // reading. Assert the gate, then make a choice like a person would.
+    const goalNext = page.getByRole("button", { name: "Next" });
+    await expect(goalNext).toBeDisabled();
+    await page.getByText("A recurring pack or report that takes days of chasing").click();
+    await expect(goalNext).toBeEnabled();
+    await goalNext.click();
 
     await expect(
       page.locator("h3", { hasText: "Give it something to do" })

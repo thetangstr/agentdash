@@ -36,6 +36,7 @@ import {
   assertInstanceAdmin,
   getActorInfo,
 } from "./authz.js";
+import { deploymentKind } from "../services/license.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
 
 // AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
@@ -346,10 +347,25 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     // company portability would later export.
     delete req.body.inviteCode;
 
+    // On-prem is exempt, like `local_trusted`, and for the same reason.
+    //
+    // The invite code exists to stop a stranger on the managed service granting
+    // themselves the governance profile. On a self-hosted install there is no
+    // stranger: the operator owns the box, the database and this process, and
+    // could set the column by hand in less time than asking us for a code.
+    //
+    // Leaving it gated there had a cost that was invisible until a real cold
+    // install: a workspace created without a code silently became `default`,
+    // and `default` turns off fact requests, deliverables, directives and
+    // governance — while onboarding still seeded a board-pack goal whose every
+    // task depends on exactly those surfaces. The operator got four collection
+    // tasks and no mechanism to collect with, and nothing anywhere said why.
+    const selfHosted = deploymentKind() === "on_prem";
     if (
       requestedProfile
       && requestedProfile !== "default"
       && options.deploymentMode === "authenticated"
+      && !selfHosted
       && !isMkInviteCode(suppliedInviteCode)
     ) {
       res.status(403).json({

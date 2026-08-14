@@ -146,3 +146,48 @@ describe("the option catalogues", () => {
     }
   });
 });
+
+describe("the owner's own words", () => {
+  /**
+   * The seven questions cover the shapes we have seen; every real company has
+   * something they do not. Without this the knowledge is either lost or the
+   * owner hand-edits the Markdown, which detaches the file from the answers.
+   */
+  it("carries the owner's addition into the mandate verbatim", () => {
+    const note = "Never contact anyone at our largest client directly — it goes through me.";
+    expect(build({ additional: note })).toContain(note);
+  });
+
+  it("attributes the addition to the owner so the agent knows who wrote it", () => {
+    expect(build({ additional: "Fridays are for the weekly pack." })).toContain("## Also from Titus");
+  });
+
+  /**
+   * Free text sits directly beside a list of hard prohibitions. "You may delete
+   * the old exports", written in good faith, must not read as a licence that
+   * overrides them — so the section says which wins and tells the agent to
+   * report the clash rather than silently choose.
+   */
+  it("states that the addition does not relax the limits above it", () => {
+    const mandate = build({ additional: "You may tidy up the old exports." });
+    expect(mandate).toMatch(/does not relax it/);
+    expect(mandate).toMatch(/follow the limit and tell Titus/);
+  });
+
+  it("keeps the addition ahead of the closing rules, where a model weights it", () => {
+    const mandate = build({ additional: "Fridays are for the weekly pack." });
+    const addition = mandate.indexOf("## Also from Titus");
+    const closer = mandate.indexOf("## Two things that are always true");
+    // Both must be present: `indexOf` returns -1 for a missing section, so
+    // asserting only the ordering would pass when the section is not written
+    // at all — which is exactly the regression this guards against.
+    expect(addition).toBeGreaterThan(-1);
+    expect(closer).toBeGreaterThan(-1);
+    expect(addition).toBeLessThan(closer);
+  });
+
+  it("writes no section at all when the owner adds nothing", () => {
+    expect(build()).not.toContain("## Also from");
+    expect(build({ additional: "   \n  " })).not.toContain("## Also from");
+  });
+});

@@ -307,14 +307,52 @@ export function OnboardingWizard() {
   // Step 4 — the first goal. Pre-filled with a worked example so the step can be
   // accepted rather than composed; `goalSkipped` records a deliberate decline,
   // which is different from an empty draft.
-  const [goalDraft, setGoalDraft] = useState<FirstGoalDraft>(() => defaultFirstGoal(""));
-  const [goalExampleKey, setGoalExampleKey] = useState("board_pack");
+  /**
+   * No goal is chosen until the owner chooses one.
+   *
+   * This used to start on the `board_pack` example, fully filled in, so an
+   * owner who clicked through shipped a goal written for a different company —
+   * "Weekly board pack, assembled without a fire drill", with four collection
+   * tasks addressed to delivery, platform and hiring leads. On a workspace with
+   * one agent and no leads, that produced four tasks nobody could do, closed
+   * themselves, and taught the owner that the interview they had just sat
+   * through did not matter.
+   *
+   * Starting empty costs nothing: the Continue button is already disabled until
+   * there is a title or the owner has explicitly ticked skip, so the existing
+   * gate now enforces a decision instead of rubber-stamping a default. The
+   * examples are still one click away — they just have to be picked.
+   */
+  const [goalDraft, setGoalDraft] = useState<FirstGoalDraft>(() => ({
+    title: "",
+    description: "",
+    tasks: [],
+  }));
+  const [goalExampleKey, setGoalExampleKey] = useState("");
   const [goalSkipped, setGoalSkipped] = useState(false);
   const [goalTouched, setGoalTouched] = useState(false);
 
   // Step 2
   const [agentName, setAgentName] = useState("CoS");
-  const [adapterType, setAdapterType] = useState<AdapterType>("claude_local");
+  /**
+   * The first agent's harness. `hermes_local`, not `claude_local`.
+   *
+   * Two reasons, and the second is the serious one.
+   *
+   * It has to be able to run. This defaulted to Claude Code on installs where
+   * Claude is not installed — verified on the deployment machine, where
+   * `claude` is absent, Hermes is present, and the server's own
+   * `AGENTDASH_DEFAULT_ADAPTER` is already `hermes_local`. The wizard was
+   * handing every new workspace an agent that could never start.
+   *
+   * And `claude_local` sets `dangerouslySkipPermissions` below, which becomes
+   * the literal `--dangerously-skip-permissions` flag on the CLI. That made the
+   * default path the one that runs a harness with its permission system
+   * switched off, over prompts built from issue text and other agents' output —
+   * content this system treats as untrusted everywhere else. Choosing Claude
+   * Code is still supported; it is no longer what happens by not choosing.
+   */
+  const [adapterType, setAdapterType] = useState<AdapterType>("hermes_local");
   const [model, setModel] = useState("");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
@@ -498,8 +536,8 @@ export function OnboardingWizard() {
     setCompanyName("");
     setCompanyGoal("");
     setWorkspaceCode("");
-    setGoalDraft(defaultFirstGoal(""));
-    setGoalExampleKey("board_pack");
+    setGoalDraft({ title: "", description: "", tasks: [] });
+    setGoalExampleKey("");
     setGoalSkipped(false);
     setGoalTouched(false);
     setMandateAnswers(defaultMandateAnswers());
@@ -507,7 +545,10 @@ export function OnboardingWizard() {
     setMandateDraft("");
     setShowMandateText(false);
     setAgentName("CoS");
-    setAdapterType("claude_local");
+    // Same default as the initial state above — a reset that quietly restored
+    // `claude_local` would reintroduce the unrunnable agent for anyone who
+    // started the wizard over.
+    setAdapterType("hermes_local");
     setModel("");
     setCommand("");
     setArgs("");
@@ -692,10 +733,29 @@ export function OnboardingWizard() {
       // with no profile. Sending one alone is the quiet failure that leaves a
       // workspace looking fine and missing every workforce surface.
       const code = workspaceCode.trim();
-      const company = await companiesApi.create({
-        name: companyName.trim(),
-        ...(code ? { productProfile: "agentdash_mk" as const, inviteCode: code } : {}),
-      });
+      // Ask for the workforce profile every time, code or not.
+      //
+      // `default` silently disables fact requests, deliverables, directives and
+      // governance — the machinery the very next step's goal is built out of.
+      // A workspace created without a code used to land there quietly and then
+      // hand the owner four collection tasks with nothing to collect through.
+      //
+      // Self-hosted installs are allowed the profile without a code (see the
+      // on-prem exemption in routes/companies.ts). The managed service still
+      // requires one, so a refusal there is expected rather than an error: fall
+      // back to `default` and carry on, because failing company creation over
+      // an optional profile would be worse than the profile being absent.
+      const company = await companiesApi
+        .create({
+          name: companyName.trim(),
+          productProfile: "agentdash_mk" as const,
+          ...(code ? { inviteCode: code } : {}),
+        })
+        .catch(async (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/invite code/i.test(message)) throw err;
+          return companiesApi.create({ name: companyName.trim() });
+        });
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
@@ -800,6 +860,20 @@ export function OnboardingWizard() {
       }
       const agent = hire.agent;
       setCreatedAgentId(agent.id);
+      // Give the new agent a key straight away.
+      //
+      // `onboarding-orchestrator` bootstrap does this at its step 4, but this
+      // path — the wizard's own hire — never did, so a workspace created
+      // through the UI got a Chief of Staff that no harness could authenticate
+      // as. Reaching it from the bridge is most of the point of having it, and
+      // "should this agent have a key" is not a question the owner has any
+      // information to answer at this moment.
+      //
+      // Best-effort on purpose: an agent without a key is recoverable in one
+      // click from its own page, so a failure here must not strand onboarding.
+      await agentsApi
+        .createKey(agent.id, `${agent.name} — my machine`, createdCompanyId)
+        .catch(() => undefined);
       queryClient.invalidateQueries({
         queryKey: queryKeys.agents.list(createdCompanyId)
       });
@@ -1733,6 +1807,21 @@ export function OnboardingWizard() {
                         </label>
                       ))}
                     </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={8}
+                    question="Anything else it should know?"
+                    hint="Optional, and in your own words — a client it must never contact, a standing commitment, whose word settles a particular argument. This is added to the mandate as written; it does not override the limits above."
+                  >
+                    <textarea
+                      className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring"
+                      rows={4}
+                      aria-label="Anything else the agent should know"
+                      placeholder="e.g. Never contact anyone at our largest client directly — everything goes through me first."
+                      value={mandateAnswers.additional}
+                      onChange={(e) => setAnswer("additional", e.target.value)}
+                    />
                   </MandateQuestion>
 
                   <div className="rounded-md border border-border bg-muted/30 p-3">
