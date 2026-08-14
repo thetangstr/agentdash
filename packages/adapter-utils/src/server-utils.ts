@@ -931,14 +931,63 @@ export function applyPaperclipWorkspaceEnv(
   return env;
 }
 
-export function sanitizeInheritedPaperclipEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const key of Object.keys(env)) {
-    if (!key.startsWith("PAPERCLIP_")) continue;
-    if (key === "PAPERCLIP_RUNTIME_API_URL") continue;
-    if (key === "PAPERCLIP_LISTEN_HOST") continue;
-    if (key === "PAPERCLIP_LISTEN_PORT") continue;
-    delete env[key];
+/**
+ * The slice of the server's environment a spawned adapter may see.
+ *
+ * Enough to find a binary, write to scratch space, and read the harness's own
+ * per-user config. Nothing else.
+ */
+const INHERITED_ENV_KEYS = new Set([
+  // Finding and starting a binary at all. Both cases of PATH: names are
+  // case-insensitive on Windows and Node preserves whichever case it was given.
+  "PATH", "Path", "PATHEXT", "SHELL", "COMSPEC", "SystemRoot", "SystemDrive", "windir",
+  // Per-user roots. The harnesses keep their own credentials under here
+  // (~/.hermes/.env, ~/.claude), which is why none need to be passed through.
+  "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+  // Scratch space.
+  "TMPDIR", "TEMP", "TMP",
+  // Identity, locale and terminal shape — read by CLIs for config paths and
+  // output formatting.
+  "USER", "LOGNAME", "USERNAME", "LANG", "TZ", "TERM",
+  // Where the harness reports back to. Not secrets: an address and a port.
+  "PAPERCLIP_RUNTIME_API_URL", "PAPERCLIP_LISTEN_HOST", "PAPERCLIP_LISTEN_PORT",
+]);
+
+/** `HERMES_*` is the harness's own configuration; `LC_*`/`XDG_*` are locale and config roots. */
+const INHERITED_ENV_PREFIXES = ["HERMES_", "LC_", "XDG_"];
+
+/**
+ * Allowlist, not denylist.
+ *
+ * This used to strip `PAPERCLIP_*` and pass everything else through, which
+ * meant a spawned agent harness received the server's whole environment. On a
+ * real deployment that was `DATABASE_URL` with live credentials,
+ * `BETTER_AUTH_SECRET` (forge a session for any user), the provider API key and
+ * the license key — handed to a process whose prompt is built from issue text,
+ * other agents' output and anything it fetches, all of which this system treats
+ * as untrusted and wraps in `<untrusted-agent-answer>` for exactly that reason.
+ * The blast radius of one prompt injection was not "runs a command"; it was
+ * direct Postgres access and the ability to mint sessions.
+ *
+ * The prefix rule hid it in the most ordinary way: `PAPERCLIP_AGENT_JWT_SECRET`
+ * was stripped and `BETTER_AUTH_SECRET` was not, because one happened to carry
+ * the prefix and the other did not. A denylist protects the secrets someone
+ * thought of, and silently leaks the next one added — which is precisely what
+ * happened here, and why the CoS chat path (`adapterChildEnv` in
+ * dispatch-llm.ts) was already written this way.
+ *
+ * Anything an adapter genuinely needs beyond this list goes in its own
+ * `adapterConfig.env`, which is merged after this and always wins. That keeps
+ * the escape hatch explicit, per-agent and visible in the agent's configuration
+ * rather than implicit in whatever the server happened to be started with.
+ */
+export function inheritableAdapterEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value === undefined) continue;
+    if (INHERITED_ENV_KEYS.has(key) || INHERITED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      env[key] = value;
+    }
   }
   return env;
 }
@@ -1720,7 +1769,7 @@ export async function runChildProcess(
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = {
-      ...sanitizeInheritedPaperclipEnv(process.env),
+      ...inheritableAdapterEnv(process.env),
       ...opts.env,
     };
 
