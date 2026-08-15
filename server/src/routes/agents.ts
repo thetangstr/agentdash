@@ -2,8 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -31,6 +31,14 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
+import {
+  CONNECT_CODE_MAX_RETRIES,
+  CONNECT_CODE_TTL_MS,
+  createConnectCode,
+  formatConnectCode,
+  hashConnectCode,
+  isConnectCodeHashCollisionError,
+} from "../lib/connect-codes.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import {
   freeTierCapExceededPayload,
@@ -3163,6 +3171,86 @@ export function agentRoutes(
     });
 
     res.status(201).json(key);
+  });
+
+  /**
+   * Mint a short, single-use code that pairs one machine with this agent.
+   *
+   * This is the thing a steward hands to a colleague instead of a raw agent
+   * key. Same access check as minting a key, because it *is* minting a key —
+   * just deferred, scoped to one device, and worthless ten minutes from now.
+   *
+   * Any unredeemed codes for this agent are revoked first. Two live codes for
+   * one agent means a screen showing a stale one still works, which is exactly
+   * the confusion this flow exists to remove.
+   */
+  router.post("/agents/:id/connect-codes", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await getAccessibleAgent(req, res, id);
+    if (!agent) return;
+
+    if (agent.status === "terminated" || agent.status === "pending_approval") {
+      res.status(409).json({ error: "This agent cannot be connected to yet." });
+      return;
+    }
+
+    const now = new Date();
+    await db
+      .update(agentConnectCodes)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(agentConnectCodes.agentId, agent.id),
+          isNull(agentConnectCodes.redeemedAt),
+          isNull(agentConnectCodes.revokedAt),
+        ),
+      );
+
+    // Retry on hash collision the way invite tokens do. It will not happen;
+    // silently handing back a code that belongs to another agent, if it ever
+    // did, would be a cross-tenant credential leak.
+    let code: string | null = null;
+    let expiresAt: Date | null = null;
+    for (let attempt = 0; attempt < CONNECT_CODE_MAX_RETRIES; attempt += 1) {
+      const candidate = createConnectCode();
+      const candidateExpiry = new Date(Date.now() + CONNECT_CODE_TTL_MS);
+      try {
+        await db.insert(agentConnectCodes).values({
+          companyId: agent.companyId,
+          agentId: agent.id,
+          codeHash: hashConnectCode(candidate),
+          expiresAt: candidateExpiry,
+          createdByUserId: req.actor.userId ?? null,
+        });
+        code = candidate;
+        expiresAt = candidateExpiry;
+        break;
+      } catch (err) {
+        if (!isConnectCodeHashCollisionError(err)) throw err;
+      }
+    }
+
+    if (!code || !expiresAt) {
+      res.status(500).json({ error: "Could not create a connect code. Try again." });
+      return;
+    }
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "agent.connect_code_created",
+      entityType: "agent",
+      entityId: agent.id,
+      details: { expiresAt: expiresAt.toISOString() },
+    });
+
+    res.status(201).json({
+      code: formatConnectCode(code),
+      expiresAt: expiresAt.toISOString(),
+      expiresInSeconds: Math.round(CONNECT_CODE_TTL_MS / 1000),
+    });
   });
 
   router.delete("/agents/:id/keys/:keyId", async (req, res) => {

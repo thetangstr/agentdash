@@ -10,6 +10,7 @@ import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
 import { mcpRoutes } from "./routes/mcp.js";
+import { connectCodeRoutes } from "./routes/connect-codes.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
@@ -375,6 +376,12 @@ export async function createApp(
   // Mounted after the license gate on purpose — an unlicensed box should say
   // so to a connecting harness, not serve it tools.
   api.use(mcpRoutes());
+  // Redeeming a connect code: PUBLIC by necessity — the caller has no
+  // credential yet and is asking for one. Safety comes from the secret being
+  // ten-minute, single-use and rate-limited, not from authentication. Mounted
+  // beside the MCP endpoint because it serves the same machine, one step
+  // earlier in the same journey.
+  api.use(connectCodeRoutes(db, { deploymentMode: opts.deploymentMode }));
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,

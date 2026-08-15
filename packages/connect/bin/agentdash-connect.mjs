@@ -7,6 +7,7 @@
  * left running. `--remove` reverses all of it.
  */
 
+import os from "node:os";
 import process from "node:process";
 import readline from "node:readline";
 
@@ -20,7 +21,8 @@ import {
   removeConnection,
   verifyConnection,
 } from "../src/index.mjs";
-import { VerifyError } from "../src/verify.mjs";
+import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
+import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
 
 const out = (line = "") => process.stdout.write(`${line}\n`);
 const bad = (line = "") => process.stderr.write(`${line}\n`);
@@ -45,7 +47,8 @@ function parseArgs(argv) {
 function usage() {
   out(`agentdash-connect — connect this machine's coding agent to an AgentDash agent
 
-  npx agentdash-connect                  interactive: asks for the link and key
+  npx agentdash-connect KVTX-8F02        redeem a connect code
+  npx agentdash-connect                  interactive: asks for the link and code
   npx agentdash-connect --url <url>      skip the URL question
   npx agentdash-connect --check          is the existing connection still good?
   npx agentdash-connect --remove         undo everything this wrote
@@ -55,8 +58,9 @@ Options
   --version       print the version
   --help          this
 
-The key is read from the terminal, never from an argument, so it stays out of
-your shell history and out of the process list.`);
+A connect code expires in ten minutes and works once, so it is safe to type on
+a command line. An agent key is not: if you give one instead, it is read from
+the terminal with echo off so it stays out of your shell history.`);
 }
 
 function ask(question, { silent = false } = {}) {
@@ -166,10 +170,59 @@ async function main() {
     return 1;
   }
 
-  const key = await ask("Agent key (input hidden): ", { silent: true });
-  if (!key) {
-    bad("No key given — nothing was changed.");
-    return 1;
+  // A connect code is short-lived and single-use, so unlike an agent key it is
+  // safe as an argument. Anything that is not code-shaped is treated as a key
+  // and read from the terminal instead.
+  const positional = args._[0];
+  let key;
+  let pairedWith = null;
+
+  if (positional && looksLikeConnectCode(positional)) {
+    out("");
+    out(`Redeeming code ${formatConnectCode(positional)} …`);
+    try {
+      const paired = await redeemConnectCode(instanceUrl, positional, os.hostname());
+      key = paired.apiKey;
+      pairedWith = paired;
+    } catch (error) {
+      bad("");
+      bad(error instanceof VerifyError ? error.message : String(error?.message ?? error));
+      if (error instanceof VerifyError && error.hint) bad(error.hint);
+      bad("");
+      bad("Nothing was written.");
+      return 1;
+    }
+    out(
+      `Paired as ${pairedWith.agentName}${pairedWith.companyName ? ` at ${pairedWith.companyName}` : ""}` +
+        `, for this machine (${pairedWith.deviceName}).`,
+    );
+  } else {
+    key = await ask("Agent key or connect code (input hidden): ", { silent: true });
+    if (!key) {
+      bad("Nothing given — nothing was changed.");
+      return 1;
+    }
+    // Someone can paste a code at the key prompt; take it as one.
+    if (looksLikeConnectCode(key)) {
+      out("");
+      out("That looks like a connect code — redeeming it.");
+      try {
+        const paired = await redeemConnectCode(instanceUrl, key, os.hostname());
+        key = paired.apiKey;
+        pairedWith = paired;
+        out(
+          `Paired as ${paired.agentName}${paired.companyName ? ` at ${paired.companyName}` : ""}` +
+            `, for this machine (${paired.deviceName}).`,
+        );
+      } catch (error) {
+        bad("");
+        bad(error instanceof VerifyError ? error.message : String(error?.message ?? error));
+        if (error instanceof VerifyError && error.hint) bad(error.hint);
+        bad("");
+        bad("Nothing was written.");
+        return 1;
+      }
+    }
   }
 
   const endpoint = mcpEndpointFor(instanceUrl);

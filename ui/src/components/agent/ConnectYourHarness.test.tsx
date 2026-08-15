@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * browser origin is the fallback rather than the source of truth.
  */
 
-const mockAgentsApi = vi.hoisted(() => ({ createKey: vi.fn() }));
+const mockAgentsApi = vi.hoisted(() => ({ createKey: vi.fn(), createConnectCode: vi.fn() }));
 const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock("../../api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -100,9 +100,13 @@ describe("ConnectYourHarness", () => {
     mockAgentsApi.createKey.mockResolvedValue({ token: "pcp_visible_key_for_the_person" });
 
     await render();
-    await act(async () => {
-      (container.querySelector("button") as HTMLButtonElement).click();
-    });
+    // Target the key button by name: the first button on the page is now
+    // "Create a connect code", and clicking blindly tested the wrong flow.
+    const keyButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      /create .*key/i.test(b.textContent ?? ""),
+    ) as HTMLButtonElement;
+    expect(keyButton, "the direct-key fallback must still be reachable").toBeTruthy();
+    await act(async () => keyButton.click());
     for (let i = 0; i < 20; i += 1) {
       await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
       if ((container.textContent ?? "").includes("pcp_visible_key_for_the_person")) break;
@@ -113,6 +117,40 @@ describe("ConnectYourHarness", () => {
       "pcp_visible_key_for_the_person",
     );
     expect(text).toMatch(/copy key/i);
+  });
+
+  /**
+   * The connect code is now the path people are given, so it gets the same
+   * scrutiny the raw key did: it must be legible on screen, and the command
+   * next to it must carry both the address and the code. A code shown without
+   * a runnable command sends someone to a terminal to improvise.
+   */
+  it("shows the connect code and the exact command to run", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok", publicBaseUrl: "http://mkmini.local:3103" });
+    mockAgentsApi.createConnectCode.mockResolvedValue({
+      code: "KVTX-8F02",
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresInSeconds: 600,
+    });
+
+    await render();
+    const codeButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      /connect code/i.test(b.textContent ?? ""),
+    ) as HTMLButtonElement;
+    expect(codeButton, "creating a connect code must be the offered action").toBeTruthy();
+    await act(async () => codeButton.click());
+    for (let i = 0; i < 20; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      if ((container.textContent ?? "").includes("KVTX-8F02")) break;
+    }
+
+    const text = container.textContent ?? "";
+    expect(text, "the code must be readable on screen").toContain("KVTX-8F02");
+    expect(text, "the command must carry the address and the code").toContain(
+      "npx agentdash-connect --url http://mkmini.local:3103 KVTX-8F02",
+    );
+    // Nobody should be told to hurry without being told how long they have.
+    expect(text).toMatch(/expires in/i);
   });
 
   /**

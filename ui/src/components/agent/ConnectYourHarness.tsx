@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { agentsApi } from "../../api/agents";
@@ -46,6 +46,8 @@ export function ConnectYourHarness({
 }) {
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(null);
+  const [codeExpiresAt, setCodeExpiresAt] = useState<number | null>(null);
 
   /**
    * The address baked into the config someone pastes on their own laptop.
@@ -74,6 +76,39 @@ export function ConnectYourHarness({
     mutationFn: () => agentsApi.createKey(agentId, `${agentName} — my machine`, companyId),
     onSuccess: (created) => setToken(created.token),
   });
+
+  /**
+   * The code is the path people are given; the raw key below it is the
+   * fallback.
+   *
+   * Handing someone a `pcp_<48hex>` key means handing them a long-lived
+   * credential that is identical on every machine it reaches, so it gets
+   * pasted into chat, cannot be revoked for one laptop, and nobody can say
+   * afterwards which machines hold it. A code expires in ten minutes, works
+   * once, and what it produces is a key named for the machine that redeemed
+   * it.
+   */
+  const connectCode = useMutation({
+    mutationFn: () => agentsApi.createConnectCode(agentId, companyId),
+    onSuccess: (created) => {
+      setCode(created.code);
+      setCodeExpiresAt(new Date(created.expiresAt).getTime());
+    },
+  });
+
+  // A code that has quietly expired while the page sat open is worse than no
+  // code: it sends someone to a terminal to be told "not valid". Tick so the
+  // screen can say so first.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!codeExpiresAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [codeExpiresAt]);
+
+  const secondsLeft = codeExpiresAt ? Math.max(0, Math.round((codeExpiresAt - now) / 1000)) : 0;
+  const codeExpired = Boolean(codeExpiresAt) && secondsLeft <= 0;
+  const connectCommand = `npx agentdash-connect --url ${origin} ${code ?? "CODE"}`;
 
   const key = token ?? "<paste your agent key here>";
 
@@ -115,9 +150,79 @@ export function ConnectYourHarness({
       <h2 className="text-sm font-semibold">Work with {agentName} from your own terminal</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Whatever coding agent you already use — Claude Code, Codex, something else — can connect
-        itself. Create the key, copy the prompt, paste it in. {agentName} then shows up there with
-        its own work, its mandate, and the ability to answer colleagues waiting on it.
+        itself. Create a short code, send it to whoever needs it, and they run one command.{" "}
+        {agentName} then shows up there with its own work, its mandate, and the ability to answer
+        colleagues waiting on it.
       </p>
+
+      <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-3">
+        <h3 className="text-xs font-semibold">Connect a machine</h3>
+        {!code ? (
+          <>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Gives you a short code to read out or send. Whoever has it runs one command on their
+              own machine and is paired with {agentName} — no key changes hands, and the code stops
+              working ten minutes from now.
+            </p>
+            <Button
+              className="mt-2"
+              size="sm"
+              disabled={connectCode.isPending}
+              onClick={() => connectCode.mutate()}
+            >
+              {connectCode.isPending ? "Creating…" : "Create a connect code"}
+            </Button>
+            {connectCode.error ? (
+              <p className="mt-2 text-xs text-destructive" role="alert">
+                {connectCode.error instanceof Error
+                  ? connectCode.error.message
+                  : "Could not create a connect code"}
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="mt-1.5 flex items-center gap-3">
+              <code className="font-mono text-2xl font-semibold tracking-[0.2em]">{code}</code>
+              <Button variant="outline" size="sm" onClick={() => copy("code", code)}>
+                {copied === "code" ? "Copied" : "Copy"}
+              </Button>
+            </div>
+            <p className={`mt-1 text-xs ${codeExpired ? "text-destructive" : "text-muted-foreground"}`}>
+              {codeExpired
+                ? "This code has expired. Create another."
+                : `Works once, and expires in ${Math.floor(secondsLeft / 60)}m ${String(secondsLeft % 60).padStart(2, "0")}s.`}
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-xs font-medium">They run this:</span>
+              <Button variant="outline" size="sm" onClick={() => copy("command", connectCommand)}>
+                {copied === "command" ? "Copied" : "Copy command"}
+              </Button>
+            </div>
+            <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-background p-2.5 text-xs">
+              <code>{connectCommand}</code>
+            </pre>
+            <Button
+              className="mt-2"
+              variant="ghost"
+              size="sm"
+              disabled={connectCode.isPending}
+              onClick={() => connectCode.mutate()}
+            >
+              {connectCode.isPending ? "Creating…" : "Create another"}
+            </Button>
+          </>
+        )}
+      </div>
+
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+          Or hand over a key directly
+        </summary>
+        <p className="mt-2 text-xs text-muted-foreground">
+          For a tool that cannot run <code className="font-mono">npx</code>. A key does not expire
+          and is the same on every machine it reaches, so prefer a code where you can.
+        </p>
 
       {!token ? (
         <div className="mt-3">
@@ -189,6 +294,7 @@ export function ConnectYourHarness({
         starts talking about setting up a company instead, it connected as nobody in particular —
         check the <code className="font-mono">PAPERCLIP_AGENT_ID</code> line survived the paste.
       </p>
+      </details>
     </section>
   );
 }

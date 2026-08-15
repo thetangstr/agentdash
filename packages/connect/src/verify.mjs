@@ -109,6 +109,50 @@ async function rpc(endpoint, key, method, params, { timeoutMs = 15_000 } = {}) {
   }
 }
 
+/**
+ * Trade a connect code for a device-scoped key.
+ *
+ * The code is short-lived and single-use, so it is safe to pass on a command
+ * line in a way an agent key never is — which is the whole reason this exists.
+ * The key that comes back is named for this machine, so it can be revoked here
+ * without cutting off anyone else.
+ */
+export async function redeemConnectCode(instanceUrl, code, deviceName) {
+  const endpoint = `${instanceUrl.replace(/\/+$/, "")}/api/connect/redeem`;
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, deviceName }),
+    });
+  } catch (error) {
+    throw new VerifyError(`Could not reach ${instanceUrl}: ${error?.message ?? error}`, {
+      hint: "Check the address. On a LAN this is usually a .local name, not an IP.",
+    });
+  }
+
+  if (response.status === 404) {
+    throw new VerifyError("This instance does not support connect codes.", {
+      hint: "It may be running an older version. Ask for an agent key instead.",
+    });
+  }
+  if (response.status === 429) {
+    throw new VerifyError("Too many attempts. Wait a minute and try again.");
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new VerifyError(body?.error ?? `The instance refused the code (HTTP ${response.status}).`, {
+      hint: "Codes expire after ten minutes and work only once. Ask for a fresh one.",
+    });
+  }
+  if (!body?.apiKey) {
+    throw new VerifyError("The instance accepted the code but returned no key.");
+  }
+  return body;
+}
+
 export class VerifyError extends Error {
   constructor(message, { hint } = {}) {
     super(message);
