@@ -11,12 +11,12 @@ Where something is still a stub, it says so.
 >
 > Hi Titus,
 >
-> Your AgentDash runtime is running on the Mac mini at **http://192.168.86.57:3100**.
+> Your AgentDash runtime is running on the Mac mini at **http://mkmini.local:3100**.
 >
 > Open this link to set your password and sign in — it works once and expires in about
 > an hour:
 >
-> **http://192.168.86.57:3100/reset-password?token=…**
+> **http://mkmini.local:3100/reset-password?token=…**
 >
 > Once you're in, go to **Settings → API keys** and copy your key. You'll paste it into
 > Claude Code or Codex in step 3.
@@ -44,7 +44,7 @@ AgentDash API.
 ```text
 I run MKThink, a strategy and design consultancy. Set up my AgentDash workspace.
 
-My AgentDash runtime is at http://192.168.86.57:3100
+My AgentDash runtime is at http://mkmini.local:3100
 My API key is: <paste the key from step 2>
 My workspace code is: MK-LANTEST
 
@@ -86,7 +86,7 @@ send them out.
 The reference implementation of exactly that is `scripts/demo/mkthink-company.mjs`:
 
 ```sh
-AGENTDASH_API_KEY=pcp_board_… BASE=http://192.168.86.57:3100 \
+AGENTDASH_API_KEY=pcp_board_… BASE=http://mkmini.local:3100 \
   node scripts/demo/mkthink-company.mjs
 ```
 
@@ -103,7 +103,7 @@ From that point their agent is theirs — and it can be called on by the Chief o
 
 ```sh
 DATABASE_URL=<the instance's database> AGENTDASH_API_KEY=pcp_board_… \
-  BASE=http://192.168.86.57:3100 node scripts/demo/board-deck.mjs
+  BASE=http://mkmini.local:3100 node scripts/demo/board-deck.mjs
 ```
 
 Verified: `ok=26 broken=0`. The Chief agent opens the board item, calls all three
