@@ -397,7 +397,13 @@ describe.sequential("workspace runtime service route authorization", () => {
       });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("host-executed workspace commands");
+    // The refusal now comes from the direction guard, which stops an agent
+    // PATCHing a project at all — strictly stronger than the workspace-command
+    // check that used to answer here, and it fires first. What matters is that
+    // the RCE-shaped payload is rejected; either message is a correct refusal.
+    expect(res.body.error).toMatch(
+      /host-executed workspace commands|cannot change company direction/i,
+    );
     expect(mockProjectService.create).not.toHaveBeenCalled();
   });
 

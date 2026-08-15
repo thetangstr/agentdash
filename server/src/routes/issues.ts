@@ -68,7 +68,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   assertHostWorkspaceCommandAuthority,
   collectIssueWorkspaceCommandPaths,
@@ -4051,7 +4051,9 @@ export function issueRoutes(
       try {
         const companyId = req.params.companyId as string;
         const issueId = req.params.issueId as string;
-        assertCompanyAccess(req, companyId);
+        // The DoD is what this agent's own work is judged against. Same argument
+          // as the goal one level up: an agent that can move the bar can clear it.
+          assertCanSetCompanyDirection(req, companyId);
         const parsed = definitionOfDoneSchema.safeParse(req.body);
         if (!parsed.success) {
           res.status(400).json({

@@ -19,7 +19,7 @@ import { projectService, logActivity, workspaceOperationService } from "../servi
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest, conflict, forbidden } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
   listConfiguredRuntimeServiceEntries,
@@ -123,7 +123,7 @@ export function projectRoutes(db: Db) {
 
   router.post("/companies/:companyId/projects", validate(createProjectSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCanSetCompanyDirection(req, companyId);
     type CreateProjectPayload = Parameters<typeof svc.create>[1] & {
       workspace?: Parameters<typeof svc.createWorkspace>[1];
     };
@@ -191,7 +191,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    assertCanSetCompanyDirection(req, existing.companyId);
     const body = { ...req.body };
     await assertHostWorkspaceCommandAuthority(
       db,
@@ -657,7 +657,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    assertCanSetCompanyDirection(req, existing.companyId);
     const project = await svc.remove(id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
@@ -685,7 +685,7 @@ export function projectRoutes(db: Db) {
       try {
         const companyId = req.params.companyId as string;
         const projectId = req.params.projectId as string;
-        assertCompanyAccess(req, companyId);
+        assertCanSetCompanyDirection(req, companyId);
         const parsed = definitionOfDoneSchema.safeParse(req.body);
         if (!parsed.success) {
           throw badRequest("Invalid definition of done", {

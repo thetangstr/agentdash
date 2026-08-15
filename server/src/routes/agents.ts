@@ -725,7 +725,21 @@ export function agentRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    if (actorAgent.id === targetAgent.id) return "agent";
+    if (actorAgent.id === targetAgent.id) {
+      // Self-update is allowed, but not of the things that bound it. Verified
+      // live: an agent PATCHed its own budgetMonthlyCents from 0 to 99,999,999
+      // and got 200. The spend cap is the brake; an agent that can release its
+      // own brake has no cap. `reportsTo` goes with it — rewriting your own
+      // chain of command is the same move.
+      for (const field of ["budgetMonthlyCents", "reportsTo"] as const) {
+        if (req.body && Object.prototype.hasOwnProperty.call(req.body, field)) {
+          throw forbidden(
+            `An agent cannot change its own ${field}. Ask an owner, admin or operator.`,
+          );
+        }
+      }
+      return "agent";
+    }
     if (actorAgent.role === "ceo") return "agent";
     const allowedByGrant = await access.hasPermission(
       targetAgent.companyId,

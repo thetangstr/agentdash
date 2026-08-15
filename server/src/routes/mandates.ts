@@ -4,7 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { createMandateSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { mandatesService } from "../services/mandates.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCanSetCompanyDirection, assertCompanyAccess } from "./authz.js";
 
 const publishMandateSchema = z.object({
   counterpartyCompanyId: z.string().uuid(),
@@ -23,7 +23,7 @@ export function mandateRoutes(db: Db) {
 
   router.post("/companies/:companyId/mandates", validate(createMandateSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCanSetCompanyDirection(req, companyId);
     const b = req.body as import("@paperclipai/shared").CreateMandateRequest;
     const mandate = await svc.createMandate({
       companyId,
@@ -40,7 +40,7 @@ export function mandateRoutes(db: Db) {
   // Publish a mandate's terms to a counterparty company.
   router.post("/companies/:companyId/mandates/:mandateId/publish", validate(publishMandateSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCanSetCompanyDirection(req, companyId);
     try {
       const row = await svc.publishMandate(companyId, req.params.mandateId as string, req.body.counterpartyCompanyId);
       res.json(row);
@@ -60,7 +60,7 @@ export function mandateRoutes(db: Db) {
   // Counterparty acceptance — "we can transact".
   router.post("/companies/:companyId/incoming-mandates/:mandateId/accept", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCanSetCompanyDirection(req, companyId);
     try {
       const row = await svc.acceptMandate(companyId, req.params.mandateId as string);
       res.json(row);
