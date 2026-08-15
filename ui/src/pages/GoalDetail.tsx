@@ -6,6 +6,7 @@ import { projectsApi } from "../api/projects";
 import { assetsApi } from "../api/assets";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
+import { useCapability } from "../hooks/useCapability";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
@@ -79,6 +80,19 @@ export function GoalDetail() {
     enabled: !!goalId
   });
   const resolvedCompanyId = goal?.companyId ?? selectedCompanyId;
+
+  /**
+   * A goal is company direction, so only an owner, admin or operator may change
+   * it. Members read it — which they must, since it is what their work is aimed
+   * at — and see no controls at all.
+   *
+   * While this is still loading we render read-only. Guessing "editable" would
+   * flash an editor and then take it away, which is the worse of the two wrong
+   * answers: the API refuses regardless, so an optimistic control can only ever
+   * become a 403.
+   */
+  const direction = useCapability(resolvedCompanyId, "direction:set");
+  const canEditGoal = direction.allowed && !direction.isLoading;
 
   const { data: allGoals } = useQuery({
     queryKey: queryKeys.goals.list(resolvedCompanyId!),
@@ -183,16 +197,20 @@ export function GoalDetail() {
           </span>
           <StatusBadge status={goal.status} />
           <div className="ml-auto flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-muted-foreground hover:text-destructive shrink-0"
-              onClick={() => setDeleteDialogOpen(true)}
-              title="Delete goal"
-              data-testid="delete-goal-button"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {/* Offered only to those who may act on it: a delete button that
+                 403s teaches people the product is unreliable. */}
+            {canEditGoal ? (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-destructive shrink-0"
+                onClick={() => setDeleteDialogOpen(true)}
+                title="Delete goal"
+                data-testid="delete-goal-button"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ) : null}
             <GoalPropertiesToggleButton
               panelVisible={panelVisible}
               onShowProperties={() => setPanelVisible(true)}
@@ -203,6 +221,7 @@ export function GoalDetail() {
         <InlineEditor
           value={goal.title}
           onSave={(title) => updateGoal.mutate({ title })}
+          readOnly={!canEditGoal}
           as="h2"
           className="text-xl font-bold"
         />
@@ -210,6 +229,7 @@ export function GoalDetail() {
         <InlineEditor
           value={goal.description ?? ""}
           onSave={(description) => updateGoal.mutate({ description })}
+          readOnly={!canEditGoal}
           as="p"
           className="text-sm text-muted-foreground"
           placeholder="Add a description..."
