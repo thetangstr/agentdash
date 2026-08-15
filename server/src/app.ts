@@ -169,6 +169,44 @@ export function shouldEnablePrivateHostnameGuard(opts: {
   );
 }
 
+
+/**
+ * Serve the SPA shell as it is on disk, not as it was at startup.
+ *
+ * `index.html` used to be read ONCE into a variable and served from memory by
+ * the SPA fallback, while `/` was served from disk by express.static. After any
+ * UI rebuild the asset hashes change, so every deep link (/auth, /agents,
+ * /issues) handed the browser a shell pointing at a bundle that no longer
+ * existed: the page rendered zero characters, with no error, while `/` kept
+ * working — which made it look like a routing bug. Observed repeatedly,
+ * including on the sign-in page, and rediscovered by a navigation sweep.
+ *
+ * The `no-cache` header on that response was always honest; the bytes behind it
+ * were not. Cached on mtime, so this costs a stat() per navigation rather than
+ * a read, and a rebuild is picked up without restarting the server.
+ *
+ * Returns the last good shell if the file is briefly unreadable — a rebuild
+ * replaces it non-atomically, and serving the previous shell beats serving
+ * nothing.
+ */
+export function createStaticShellReader(
+  indexHtmlPath: string,
+  transform: (html: string) => string,
+): () => string {
+  let cache: { mtimeMs: number; html: string } | null = null;
+  return () => {
+    try {
+      const { mtimeMs } = fs.statSync(indexHtmlPath);
+      if (!cache || cache.mtimeMs !== mtimeMs) {
+        cache = { mtimeMs, html: transform(fs.readFileSync(indexHtmlPath, "utf-8")) };
+      }
+    } catch {
+      // Keep the last good shell.
+    }
+    return cache?.html ?? "";
+  };
+}
+
 export async function createApp(
   db: Db,
   opts: {
@@ -626,7 +664,26 @@ export async function createApp(
     ];
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      const indexHtmlPath = path.join(uiDist, "index.html");
+      /**
+       * Re-read the shell when it changes on disk.
+       *
+       * This used to be read ONCE into a variable at startup and served from
+       * memory by the SPA fallback below — while `/` was served from disk by
+       * express.static. After any UI rebuild the asset hashes change, so every
+       * deep link (/auth, /agents, /issues) handed the browser a shell pointing
+       * at a bundle that no longer existed: the page rendered zero characters,
+       * with no error, while `/` kept working and made it look like a routing
+       * problem. Observed repeatedly, including on the sign-in page.
+       *
+       * The `no-cache` header below was always honest; the bytes behind it were
+       * not. Cached on mtime, so this is a stat() per navigation rather than a
+       * read, and a rebuild is picked up without restarting the server.
+       */
+      const currentIndexHtml = createStaticShellReader(indexHtmlPath, applyUiBranding);
+      // Fail fast at boot if the shell is unreadable, rather than at the first
+      // request from a person.
+      currentIndexHtml();
       // Hashed asset files (Vite emits them under /assets/<name>.<hash>.<ext>)
       // never change once built, so they can be cached aggressively.
       app.use(
@@ -666,7 +723,7 @@ export async function createApp(
           .status(200)
           .set("Content-Type", "text/html")
           .set("Cache-Control", "no-cache")
-          .end(indexHtml);
+          .end(currentIndexHtml());
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");
