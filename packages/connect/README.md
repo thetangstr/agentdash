@@ -1,10 +1,10 @@
-# @agentdash/connect
+# agentdash-connect
 
 Connect the coding agent on your machine — Claude Code or Codex — to your
 AgentDash agent.
 
 ```sh
-npx @agentdash/connect
+npx agentdash-connect
 ```
 
 It asks for two things, a link and a key, and does the rest.
@@ -63,18 +63,18 @@ to `~/.agentdash/<name>.key` at mode 600 and tells you it did.
 ## Commands
 
 ```sh
-npx @agentdash/connect                  # interactive
-npx @agentdash/connect --url <url>      # skip the URL question
-npx @agentdash/connect --check          # is the connection still good?
-npx @agentdash/connect --remove         # undo everything it wrote
-npx @agentdash/connect --name <name>    # use a different MCP server name
+npx agentdash-connect                  # interactive
+npx agentdash-connect --url <url>      # skip the URL question
+npx agentdash-connect --check          # is the connection still good?
+npx agentdash-connect --remove         # undo everything it wrote
+npx agentdash-connect --name <name>    # use a different MCP server name
 ```
 
 `--check` exits non-zero when the connection is broken, so it works in a
 monitoring script. Piping the key on stdin works too, for scripted installs:
 
 ```sh
-printf '%s\n' "$KEY" | npx @agentdash/connect --url https://your-instance
+printf '%s\n' "$KEY" | npx agentdash-connect --url https://your-instance
 ```
 
 ## Requirements

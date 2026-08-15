@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * npx @agentdash/connect
+ * npx agentdash-connect
  *
  * Asks for a link and a key, proves they work, then writes native MCP config
  * for whichever harnesses are installed. No daemon, no directories, nothing
@@ -45,10 +45,10 @@ function parseArgs(argv) {
 function usage() {
   out(`agentdash-connect — connect this machine's coding agent to an AgentDash agent
 
-  npx @agentdash/connect                  interactive: asks for the link and key
-  npx @agentdash/connect --url <url>      skip the URL question
-  npx @agentdash/connect --check          is the existing connection still good?
-  npx @agentdash/connect --remove         undo everything this wrote
+  npx agentdash-connect                  interactive: asks for the link and key
+  npx agentdash-connect --url <url>      skip the URL question
+  npx agentdash-connect --check          is the existing connection still good?
+  npx agentdash-connect --remove         undo everything this wrote
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -205,7 +205,7 @@ async function main() {
     out(`Note: no OS keychain was available, so the key is in ~/.agentdash/${account}.key (mode 600).`);
   }
   out(`Start a new session and ask your agent to list its AgentDash tools.`);
-  out(`Undo any time with:  npx @agentdash/connect --remove${args.name ? ` --name ${serverName}` : ""}`);
+  out(`Undo any time with:  npx agentdash-connect --remove${args.name ? ` --name ${serverName}` : ""}`);
   if (harnesses.codex) out(`Codex needs a new terminal so ${envVar} is set.`);
   return 0;
 }

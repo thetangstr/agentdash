@@ -40,13 +40,13 @@ Three layers. Each is independently useful, each ships on its own, and **layer 1
 alone closes the gap the user is describing.** Nothing here runs in the
 background on anyone's machine.
 
-### Layer 1 — `npx @agentdash/connect` (the connector CLI) — *build first*
+### Layer 1 — `npx agentdash-connect` (the connector CLI) — *build first*
 
 One command, no install, no directories, no daemon. It replaces the prompt with
 a config write.
 
 ```
-npx @agentdash/connect KVTX-8F2Q
+npx agentdash-connect KVTX-8F2Q
 ```
 
 That argument is **a connect code, not the key** — short-lived, single-use,
@@ -104,7 +104,7 @@ loses a laptop there is no story.
 
 - list connected devices per agent: name, last used, created
 - revoke one device without disturbing the others (`DELETE` route already exists)
-- rotate in place — `npx @agentdash/connect --rotate` — no re-onboarding
+- rotate in place — `npx agentdash-connect --rotate` — no re-onboarding
 - surface `lastUsedAt` so a dead connection is visible before someone reports it
 
 **Cost: ~1–2 days.**
@@ -124,7 +124,7 @@ loses a laptop there is no story.
 
 1. Server: connect-code endpoints (issue + redeem → named device key)
 2. UI: "Connect this machine" shows a code, not a key
-3. `@agentdash/connect` CLI, published to npm
+3. `agentdash-connect` CLI, published to npm
 4. Layer 3 device list — small, and it makes layer 1 supportable
 5. Layer 2 plugin, once the connection itself is boring
 
