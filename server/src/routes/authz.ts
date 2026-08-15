@@ -130,9 +130,11 @@ export function assertCompanyAccess(req: Request, companyId: string) {
  *    goal can report success by moving it, and the audit trail will faithfully
  *    record that the goal simply changed.
  *
- * So: agents are refused outright, and humans need owner or admin. Instance
- * admins pass, as they do everywhere. Read paths are untouched — everyone who
- * can see the company can still see its goals.
+ * So: agents are refused outright, and humans need owner, admin or operator.
+ * Operator is included deliberately — it sits between admin and member and
+ * names someone who runs the company day to day, which is exactly who adjusts a
+ * goal. Instance admins pass, as they do everywhere. Read paths are untouched —
+ * everyone who can see the company can still see its goals.
  */
 export function assertCanSetCompanyDirection(req: Request, companyId: string) {
   assertCompanyAccess(req, companyId);
@@ -152,9 +154,9 @@ export function assertCanSetCompanyDirection(req: Request, companyId: string) {
     ? req.actor.memberships.find((item) => item.companyId === companyId)
     : undefined;
   const role = membership?.membershipRole;
-  if (role === "owner" || role === "admin") return;
+  if (role === "owner" || role === "admin" || role === "operator") return;
 
-  throw forbidden("Only an owner or admin can change company direction.");
+  throw forbidden("Only an owner, admin or operator can change company direction.");
 }
 
 export function getActorInfo(req: Request) {

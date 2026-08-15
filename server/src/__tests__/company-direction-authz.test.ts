@@ -54,14 +54,12 @@ describe("assertCanSetCompanyDirection", () => {
     // The case that prompted this: someone invited to work toward the goals
     // should not be able to redefine them.
     expect(() => assertCanSetCompanyDirection(req(human("member")), COMPANY)).toThrow(
-      /Only an owner or admin/,
+      /Only an owner, admin or operator/,
     );
   });
 
-  it("refuses an operator", () => {
-    expect(() => assertCanSetCompanyDirection(req(human("operator")), COMPANY)).toThrow(
-      /Only an owner or admin/,
-    );
+  it("lets an operator set direction — they run the company day to day", () => {
+    expect(() => assertCanSetCompanyDirection(req(human("operator")), COMPANY)).not.toThrow();
   });
 
   it("refuses a viewer, as read-only already did", () => {

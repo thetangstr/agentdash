@@ -179,6 +179,27 @@ export const createIssueLabelSchema = z.object({
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
 export const updateIssueSchema = createIssueSchema.omit({ definitionOfDone: true }).partial().extend({
+  /**
+   * Refuse it loudly instead of dropping it on the floor.
+   *
+   * `.omit()` above removes the field, and zod strips unknown keys by default,
+   * so a caller that sent `definitionOfDone` here got HTTP 200 and no change —
+   * the response even echoed `definitionOfDone: null`. An agent probing this
+   * reported "create-only, cannot backfill" and moved on, which was wrong on
+   * both counts: the rubric CAN be set later, through
+   * `PUT /companies/:companyId/issues/:issueId/dod`.
+   *
+   * Silently discarding part of a request is worse than rejecting it. The
+   * caller believes it worked, and the definition of done — the thing that
+   * decides whether work counts as finished — quietly stays empty.
+   */
+  definitionOfDone: z
+    .unknown()
+    .optional()
+    .refine((value) => value === undefined, {
+      message:
+        "definitionOfDone cannot be set here. Use PUT /companies/:companyId/issues/:issueId/dod instead.",
+    }),
   requestDepth: issueRequestDepthInputSchema.optional(),
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),
   comment: multilineTextSchema.pipe(z.string().min(1)).optional(),

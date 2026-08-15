@@ -70,19 +70,40 @@ function assertTransition(from: string, to: string) {
   }
 }
 
+/**
+ * Stamp the moment an issue ENTERS a state, not every time it is touched while
+ * in it.
+ *
+ * `completedAt` and `cancelledAt` were set unconditionally whenever an update
+ * carried the matching status, while `startedAt` beside them was guarded. So
+ * any edit to an already-done issue — a label, a description, a probe that
+ * echoes the status back — rewrote when the work finished.
+ *
+ * Observed on the UAT instance: two issues completed on 2026-08-14 at 16:47
+ * showed 2026-08-15 14:46 after someone PATCHed them, and nothing in the
+ * response suggested a timestamp had moved. Completion times feed "how long did
+ * this take" and anything cycle-shaped, so silently rewriting them corrupts the
+ * record while looking like a successful edit.
+ *
+ * A missing timestamp is still filled in, so an issue that somehow reached
+ * `done` without one is repaired rather than left blank.
+ */
 function applyStatusSideEffects(
   status: string | undefined,
   patch: Partial<typeof issues.$inferInsert>,
+  existing?: { status?: string | null; startedAt?: Date | null; completedAt?: Date | null; cancelledAt?: Date | null } | null,
 ): Partial<typeof issues.$inferInsert> {
   if (!status) return patch;
 
-  if (status === "in_progress" && !patch.startedAt) {
+  const entering = !existing || existing.status !== status;
+
+  if (status === "in_progress" && !patch.startedAt && (entering || !existing?.startedAt)) {
     patch.startedAt = new Date();
   }
-  if (status === "done") {
+  if (status === "done" && (entering || !existing?.completedAt)) {
     patch.completedAt = new Date();
   }
-  if (status === "cancelled") {
+  if (status === "cancelled" && (entering || !existing?.cancelledAt)) {
     patch.cancelledAt = new Date();
   }
   return patch;
@@ -3095,7 +3116,7 @@ export function issueService(db: Db) {
         await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
       }
 
-      applyStatusSideEffects(issueData.status, patch);
+      applyStatusSideEffects(issueData.status, patch, existing);
       if (issueData.status && issueData.status !== "done") {
         patch.completedAt = null;
       }
