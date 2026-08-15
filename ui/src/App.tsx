@@ -406,8 +406,19 @@ export function App() {
           <Route path="goals/*" element={<UnprefixedBoardRedirect />} />
           <Route path="activity" element={<UnprefixedBoardRedirect />} />
           <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
+          {/* Explicit, not a splat. React Router ranks a dynamic+static pair
+              (":companyPrefix/settings") above a splat ("company/*"), so the
+              wildcard lost and /company/settings was read as a company called
+              COMPANY. Static segments outrank the dynamic prefix, so these
+              must be spelled out. */}
           <Route path="company" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/health" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/export/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/import" element={<UnprefixedBoardRedirect />} />
           <Route path="design-guide" element={<UnprefixedBoardRedirect />} />
           <Route path="design-guide/*" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
