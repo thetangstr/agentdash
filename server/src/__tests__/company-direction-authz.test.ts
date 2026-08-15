@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import { describe, expect, it } from "vitest";
-import { assertCanSetCompanyDirection } from "../routes/authz.js";
+import { assertCanSetCompanyDirection, assertCompanyAccess } from "../routes/authz.js";
 
 /**
  * Who may move the goalposts.
@@ -86,5 +86,55 @@ describe("assertCanSetCompanyDirection", () => {
         COMPANY,
       ),
     ).toThrow(/another company/);
+  });
+});
+
+/**
+ * The role model Titus decided, written down so onboarding has a spec.
+ *
+ *   Titus                 owner + instance admin — everything
+ *   His three colleagues  member — their OWN agent, read-only on goals/projects
+ *   Agents                work only, never direction
+ *
+ * "Their own agent" is stewardship, not a membership role: a member who stewards
+ * an agent may configure that agent, and no other. That path is gated on the
+ * company being on the `agentdash_mk` profile — both live companies are, and
+ * each has an active stewardship, so the mechanism is in place rather than
+ * hypothetical.
+ *
+ * The half that lives here is the read-only half. A colleague must be able to
+ * SEE the goals and projects they are working toward, and must not be able to
+ * change them — including by accident, on a page that offered them a control.
+ */
+describe("the MKThink role model", () => {
+  it("lets a member read direction — they must see what they are working toward", () => {
+    // The read path is `assertCompanyAccess`, not the direction guard, so that
+    // is what gets asserted here. Pinned because a colleague who cannot see the
+    // goals they are working toward has been locked out of the point of the
+    // product, and a later tightening could do that silently.
+    expect(() => assertCompanyAccess(req(human("member"), "GET"), COMPANY)).not.toThrow();
+    expect(() => assertCompanyAccess(req(human("member"), "HEAD"), COMPANY)).not.toThrow();
+  });
+
+  it("stops a member changing goals, projects or mandates", () => {
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"]) {
+      expect(
+        () => assertCanSetCompanyDirection(req(human("member"), method), COMPANY),
+        `${method} must be refused for a member`,
+      ).toThrow(/Only an owner, admin or operator/);
+    }
+  });
+
+  it("gives Titus everything, as owner and instance admin", () => {
+    expect(() => assertCanSetCompanyDirection(req(human("owner")), COMPANY)).not.toThrow();
+    expect(() =>
+      assertCanSetCompanyDirection(req(human(null, { instanceAdmin: true })), COMPANY),
+    ).not.toThrow();
+  });
+
+  it("never lets an agent set direction, whatever its company role", () => {
+    expect(() =>
+      assertCanSetCompanyDirection(req({ type: "agent", agentId: "a", companyId: COMPANY }), COMPANY),
+    ).toThrow(/Agents cannot change company direction/);
   });
 });

@@ -144,19 +144,37 @@ export function assertCanSetCompanyDirection(req: Request, companyId: string) {
       "Agents cannot change company direction. Ask an owner or admin to change the goal.",
     );
   }
+  if (canSetCompanyDirection(req, companyId)) return;
 
+  throw forbidden("Only an owner, admin or operator can change company direction.");
+}
+
+/**
+ * The same question as `assertCanSetCompanyDirection`, answered instead of
+ * thrown — so the UI can ask before it offers a control.
+ *
+ * One predicate, two callers, deliberately. The client must never re-derive
+ * this rule: a UI that decides for itself who may edit a goal will disagree
+ * with the server eventually, and the disagreement shows up as either a control
+ * that 403s or a control that should have been there and wasn't. Both read as a
+ * broken product.
+ *
+ * Note this does NOT include the company-access check — callers that enforce
+ * use the assert above, which runs it first. This form is for a caller that has
+ * already established access and only wants the answer.
+ */
+export function canSetCompanyDirection(req: Request, companyId: string): boolean {
+  if (req.actor.type === "agent") return false;
   // A local_trusted board with no real user is the operator at their own
   // machine; there is no one else to defer to.
-  if (req.actor.type === "board" && req.actor.source === "local_implicit") return;
-  if (req.actor.isInstanceAdmin) return;
+  if (req.actor.type === "board" && req.actor.source === "local_implicit") return true;
+  if (req.actor.isInstanceAdmin) return true;
 
   const membership = Array.isArray(req.actor.memberships)
     ? req.actor.memberships.find((item) => item.companyId === companyId)
     : undefined;
   const role = membership?.membershipRole;
-  if (role === "owner" || role === "admin" || role === "operator") return;
-
-  throw forbidden("Only an owner, admin or operator can change company direction.");
+  return role === "owner" || role === "admin" || role === "operator";
 }
 
 export function getActorInfo(req: Request) {

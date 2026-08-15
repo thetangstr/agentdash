@@ -11,6 +11,7 @@ import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { connectCodeRoutes } from "./routes/connect-codes.js";
+import { meCapabilityRoutes } from "./routes/me-capabilities.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
@@ -429,6 +430,8 @@ export async function createApp(
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));
+  // What the signed-in person may do here. The UI asks; it never decides.
+  api.use(meCapabilityRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
