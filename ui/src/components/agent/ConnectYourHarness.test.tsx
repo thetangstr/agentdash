@@ -72,7 +72,7 @@ describe("ConnectYourHarness", () => {
 
     const text = await render();
 
-    expect(text).toContain("http://mkmini.example.test:3103");
+    expect(text).toContain("http://mkmini.example.test:3103/api/mcp");
     // jsdom's origin is localhost; it must not reach the generated config.
     expect(text).not.toContain("http://localhost:3000");
   });
@@ -86,6 +86,33 @@ describe("ConnectYourHarness", () => {
     const text = await render();
 
     expect(text).toMatch(/not the address you are browsing/i);
+  });
+
+
+  /**
+   * The screen said "Copy the key now — it is shown once and never again" and
+   * then showed no key: the token lived only inside the command blocks. A
+   * person following that instruction had nothing to copy, on the screen that
+   * decides whether they can use their agent at all.
+   */
+  it("shows the key itself once it has been created", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok" });
+    mockAgentsApi.createKey.mockResolvedValue({ token: "pcp_visible_key_for_the_person" });
+
+    await render();
+    await act(async () => {
+      (container.querySelector("button") as HTMLButtonElement).click();
+    });
+    for (let i = 0; i < 20; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      if ((container.textContent ?? "").includes("pcp_visible_key_for_the_person")) break;
+    }
+
+    const text = container.textContent ?? "";
+    expect(text, "the minted key must be on screen, not only inside a command").toContain(
+      "pcp_visible_key_for_the_person",
+    );
+    expect(text).toMatch(/copy key/i);
   });
 
   /**

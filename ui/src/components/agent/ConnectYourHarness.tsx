@@ -7,7 +7,7 @@ import { queryKeys } from "../../lib/queryKeys";
 import { Button } from "../ui/button";
 
 /**
- * Connecting a person's own Claude Code or Codex to their agent.
+ * Connecting a person's own coding agent to their AgentDash agent.
  *
  * The MCP server, the tools, and the per-agent keys have all existed for a
  * while, and a harness pointed at them works — `paperclipMe` with an agent key
@@ -75,26 +75,30 @@ export function ConnectYourHarness({
     onSuccess: (created) => setToken(created.token),
   });
 
-  const key = token ?? "<your agent key>";
+  const key = token ?? "<paste your agent key here>";
 
-  const claudeCommand = [
-    "claude mcp add agentdash",
-    `  --env PAPERCLIP_API_URL=${origin}`,
-    `  --env PAPERCLIP_API_KEY=${key}`,
-    `  --env PAPERCLIP_COMPANY_ID=${companyId}`,
-    `  --env PAPERCLIP_AGENT_ID=${agentId}`,
-    `  -- npx -y ${origin}/downloads/agentdash-mcp-server.tgz`,
-  ].join(" \\\n");
-
-  const codexConfig = `[mcp_servers.agentdash]
-command = "npx"
-args = ["-y", "${origin}/downloads/agentdash-mcp-server.tgz"]
-
-[mcp_servers.agentdash.env]
-PAPERCLIP_API_URL = "${origin}"
-PAPERCLIP_API_KEY = "${key}"
-PAPERCLIP_COMPANY_ID = "${companyId}"
-PAPERCLIP_AGENT_ID = "${agentId}"`;
+  /**
+   * One short statement: the endpoint and the key. Nothing else exists to
+   * configure.
+   *
+   * The instance now serves MCP over streamable HTTP at /api/mcp, and the
+   * bearer key alone identifies which agent this is — the server resolves
+   * agent and company from it and greets the harness with that agent's own
+   * playbook as its instructions. The earlier npx-tarball-plus-four-env-vars
+   * form survives for anything that cannot speak HTTP MCP, but this is the
+   * path people are given.
+   */
+  const connectPrompt = [
+    `I use AgentDash. Connect to my agent "${agentName}" over MCP:`,
+    ``,
+    `  Endpoint: ${origin}/api/mcp   (transport: streamable HTTP)`,
+    `  Header:   Authorization: Bearer ${key}`,
+    ``,
+    `Add it as an MCP server named "agentdash" using your tool's own mechanism`,
+    `and reconnect. Then tell me who I am and what is assigned to me — the`,
+    `server will brief you as ${agentName}. Do not start any of that work until`,
+    `I ask.`,
+  ].join("\n");
 
   const copy = async (what: string, text: string) => {
     try {
@@ -110,8 +114,9 @@ PAPERCLIP_AGENT_ID = "${agentId}"`;
     <section className="rounded-lg border border-border bg-card p-4">
       <h2 className="text-sm font-semibold">Work with {agentName} from your own terminal</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Connect the Claude Code or Codex you already use. {agentName} then shows up there with
-        its own work, its mandate, and the ability to answer colleagues who are waiting on it.
+        Whatever coding agent you already use — Claude Code, Codex, something else — can connect
+        itself. Create the key, copy the prompt, paste it in. {agentName} then shows up there with
+        its own work, its mandate, and the ability to answer colleagues waiting on it.
       </p>
 
       {!token ? (
@@ -130,10 +135,31 @@ PAPERCLIP_AGENT_ID = "${agentId}"`;
           ) : null}
         </div>
       ) : (
-        <p className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
-          <span className="font-medium">Copy the key now.</span> It is shown once and never again.
-          If you lose it, create another — old keys keep working until you delete them.
-        </p>
+        /*
+         * Show the key itself.
+         *
+         * This said "Copy the key now — it is shown once and never again" and
+         * then never showed a key: the token existed only inside the two
+         * command blocks further down. Someone following the instruction
+         * literally looked for something to copy and found nothing, on the one
+         * screen that decides whether a person can use their agent at all.
+         */
+        <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-semibold">{agentName}&rsquo;s key</h3>
+            <Button variant="outline" size="sm" onClick={() => copy("key", token)}>
+              {copied === "key" ? "Copied" : "Copy key"}
+            </Button>
+          </div>
+          <code className="mt-1.5 block overflow-x-auto whitespace-nowrap font-mono text-xs">
+            {token}
+          </code>
+          <p className="mt-2 text-xs text-muted-foreground">
+            <span className="font-medium">Copy it now.</span> It is shown once and never again. If
+            you lose it, create another — old keys keep working until you delete them. It is
+            already filled into both snippets below, so copying either of those is enough.
+          </p>
+        </div>
       )}
 
       {originDiffersFromBrowser ? (
@@ -146,34 +172,22 @@ PAPERCLIP_AGENT_ID = "${agentId}"`;
 
       <div className="mt-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold">Claude Code — run this once</h3>
-          <Button variant="outline" size="sm" onClick={() => copy("claude", claudeCommand)}>
-            {copied === "claude" ? "Copied" : "Copy"}
-          </Button>
-        </div>
-        <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-          <code>{claudeCommand}</code>
-        </pre>
-      </div>
-
-      <div className="mt-4">
-        <div className="flex items-center justify-between gap-3">
           <h3 className="text-xs font-semibold">
-            Codex — add to <code className="text-[11px]">~/.codex/config.toml</code>
+            Paste this into Claude Code, Codex, or whatever you use
           </h3>
-          <Button variant="outline" size="sm" onClick={() => copy("codex", codexConfig)}>
-            {copied === "codex" ? "Copied" : "Copy"}
+          <Button variant="outline" size="sm" onClick={() => copy("prompt", connectPrompt)}>
+            {copied === "prompt" ? "Copied" : "Copy prompt"}
           </Button>
         </div>
         <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-          <code>{codexConfig}</code>
+          <code>{connectPrompt}</code>
         </pre>
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Then ask it <span className="font-medium">"who am I and what is assigned to me?"</span> — it
-        should answer as {agentName}. If it talks about setting up a company instead, the
-        PAPERCLIP_AGENT_ID line is missing.
+        It should come back as {agentName} and tell you what {agentName} has been assigned. If it
+        starts talking about setting up a company instead, it connected as nobody in particular —
+        check the <code className="font-mono">PAPERCLIP_AGENT_ID</code> line survived the paste.
       </p>
     </section>
   );
