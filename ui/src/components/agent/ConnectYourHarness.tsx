@@ -5,6 +5,7 @@ import { agentsApi } from "../../api/agents";
 import { healthApi } from "../../api/health";
 import { queryKeys } from "../../lib/queryKeys";
 import { Button } from "../ui/button";
+import { copyToClipboard } from "../../lib/clipboard";
 
 /**
  * Connecting a person's own coding agent to their AgentDash agent.
@@ -135,15 +136,27 @@ export function ConnectYourHarness({
     `I ask.`,
   ].join("\n");
 
+  /**
+   * Say when copying failed.
+   *
+   * This swallowed the error and reset the label, so on an on-prem instance
+   * over plain HTTP — where there is no Clipboard API at all — the button
+   * looked like it had worked and the clipboard was empty. Silence is the
+   * worst possible answer here: the whole point of the button is that you are
+   * about to paste something somewhere else.
+   */
   const copy = async (what: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(what);
-      window.setTimeout(() => setCopied(null), 2200);
-    } catch {
-      setCopied(null);
-    }
+    const ok = await copyToClipboard(text);
+    setCopied(ok ? what : `${what}:failed`);
+    window.setTimeout(() => setCopied(null), 2200);
   };
+
+  /**
+   * Three states, not two. "Copy" that silently means "did nothing" is how the
+   * on-prem clipboard bug went unnoticed.
+   */
+  const copyLabel = (what: string, idle = "Copy") =>
+    copied === what ? "Copied" : copied === `${what}:failed` ? "Copy failed" : idle;
 
   return (
     <section className="rounded-lg border border-border bg-card p-4">
@@ -182,7 +195,7 @@ export function ConnectYourHarness({
             <div className="mt-1.5 flex items-center gap-3">
               <code className="font-mono text-2xl font-semibold tracking-[0.2em]">{code}</code>
               <Button variant="outline" size="sm" onClick={() => copy("code", code)}>
-                {copied === "code" ? "Copied" : "Copy"}
+                {copyLabel("code")}
               </Button>
             </div>
             <p className={`mt-1 text-xs ${codeExpired ? "text-destructive" : "text-muted-foreground"}`}>
@@ -193,7 +206,7 @@ export function ConnectYourHarness({
             <div className="mt-3 flex items-center justify-between gap-3">
               <span className="text-xs font-medium">They run this:</span>
               <Button variant="outline" size="sm" onClick={() => copy("command", connectCommand)}>
-                {copied === "command" ? "Copied" : "Copy command"}
+                {copyLabel("command", "Copy command")}
               </Button>
             </div>
             <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-background p-2.5 text-xs">
@@ -250,7 +263,7 @@ export function ConnectYourHarness({
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-xs font-semibold">{agentName}&rsquo;s key</h3>
             <Button variant="outline" size="sm" onClick={() => copy("key", token)}>
-              {copied === "key" ? "Copied" : "Copy key"}
+              {copyLabel("key", "Copy key")}
             </Button>
           </div>
           <code className="mt-1.5 block overflow-x-auto whitespace-nowrap font-mono text-xs">
@@ -278,7 +291,7 @@ export function ConnectYourHarness({
             Paste this into Claude Code, Codex, or whatever you use
           </h3>
           <Button variant="outline" size="sm" onClick={() => copy("prompt", connectPrompt)}>
-            {copied === "prompt" ? "Copied" : "Copy prompt"}
+            {copyLabel("prompt", "Copy prompt")}
           </Button>
         </div>
         <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { bridgeApi, type BridgeEndpoint } from "../../api/bridge";
 import { Button } from "../ui/button";
+import { copyToClipboard } from "../../lib/clipboard";
 
 /**
  * Enrolling your own machine so your agent can reach you.
@@ -84,14 +85,19 @@ export function ConnectYourMachine({
     : "";
 
   const copy = async (what: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(what);
-      window.setTimeout(() => setCopied(null), 2200);
-    } catch {
-      setCopied(null);
-    }
+    // See ConnectYourHarness: no Clipboard API exists over plain HTTP, and a
+    // silent failure here leaves someone pasting an empty token.
+    const ok = await copyToClipboard(text);
+    setCopied(ok ? what : `${what}:failed`);
+    window.setTimeout(() => setCopied(null), 2200);
   };
+
+  /**
+   * Three states, not two. "Copy" that silently means "did nothing" is how the
+   * on-prem clipboard bug went unnoticed.
+   */
+  const copyLabel = (what: string, idle = "Copy") =>
+    copied === what ? "Copied" : copied === `${what}:failed` ? "Copy failed" : idle;
 
   return (
     <section className="rounded-lg border border-border bg-card p-4">
@@ -170,7 +176,7 @@ export function ConnectYourMachine({
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-xs font-semibold">1. Save the token on this machine</h3>
               <Button variant="outline" size="sm" onClick={() => copy("token", saveToken)}>
-                {copied === "token" ? "Copied" : "Copy"}
+                {copyLabel("token")}
               </Button>
             </div>
             <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
@@ -182,7 +188,7 @@ export function ConnectYourMachine({
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-xs font-semibold">2. Leave this running</h3>
               <Button variant="outline" size="sm" onClick={() => copy("command", command)}>
-                {copied === "command" ? "Copied" : "Copy"}
+                {copyLabel("command")}
               </Button>
             </div>
             <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
