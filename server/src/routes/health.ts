@@ -37,6 +37,28 @@ function hasDevServerStatusToken(providedToken: string | undefined) {
   return timingSafeEqual(expected, provided);
 }
 
+/**
+ * The address this instance calls itself, when its operator has said one.
+ *
+ * Exposed so the UI can generate harness configuration against a stable host
+ * rather than `window.location.origin`. That origin is whatever URL happened to
+ * be in the browser when someone pressed Copy — so a command copied from a LAN
+ * address bakes that address into `~/.codex/config.toml` on a colleague's
+ * laptop, and silently stops working the moment they are on a different
+ * network. A config that persists on someone else's machine is the worst place
+ * for that footgun.
+ *
+ * Not a secret: it is by definition the address people are told to use, and
+ * this endpoint already reports deployment mode and bootstrap state. Absent
+ * when unset, and callers fall back to their own origin.
+ */
+function configuredPublicBaseUrl(): string | undefined {
+  const raw =
+    process.env.PAPERCLIP_PUBLIC_URL?.trim()
+    || process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim();
+  return raw ? raw.replace(/\/+$/, "") : undefined;
+}
+
 export function healthRoutes(
   db?: Db,
   opts: {
@@ -154,6 +176,7 @@ export function healthRoutes(
         instanceHasCompany,
         adapterReady: adapter.ready,
         adapterPreset: adapter.preset,
+        ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
         ...(devServer ? { devServer } : {}),
       });
       return;
@@ -172,6 +195,7 @@ export function healthRoutes(
       adapterReady: adapter.ready,
       adapterPreset: adapter.preset,
       adapterReason: adapter.reason,
+      ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },

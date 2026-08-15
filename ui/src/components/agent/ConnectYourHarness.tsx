@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { agentsApi } from "../../api/agents";
+import { healthApi } from "../../api/health";
+import { queryKeys } from "../../lib/queryKeys";
 import { Button } from "../ui/button";
 
 /**
@@ -45,7 +47,28 @@ export function ConnectYourHarness({
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  /**
+   * The address baked into the config someone pastes on their own laptop.
+   *
+   * Prefers the operator's configured public URL over `window.location.origin`,
+   * because the origin is merely whichever URL happened to be in the browser
+   * when Copy was pressed. Copy from a LAN address and that address is written
+   * into `~/.codex/config.toml` on a colleague's machine, where it works in
+   * this office and silently stops working in any other — and fixing it means
+   * finding a file on someone else's laptop.
+   *
+   * Falls back to the origin when unset, which is correct for a single-network
+   * install and matches the previous behaviour exactly.
+   */
+  const { data: health } = useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => healthApi.get(),
+    staleTime: 5 * 60_000,
+  });
+  const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const origin = health?.publicBaseUrl?.trim() || browserOrigin;
+  const originDiffersFromBrowser =
+    Boolean(health?.publicBaseUrl) && origin !== browserOrigin;
 
   const mint = useMutation({
     mutationFn: () => agentsApi.createKey(agentId, `${agentName} — my machine`, companyId),
@@ -112,6 +135,14 @@ PAPERCLIP_AGENT_ID = "${agentId}"`;
           If you lose it, create another — old keys keep working until you delete them.
         </p>
       )}
+
+      {originDiffersFromBrowser ? (
+        <p className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+          These point at <code className="font-mono">{origin}</code>, not the address you are
+          browsing. That is deliberate — it is the address this instance is reachable at from
+          anywhere, so the config keeps working when the laptop moves network.
+        </p>
+      ) : null}
 
       <div className="mt-4">
         <div className="flex items-center justify-between gap-3">
