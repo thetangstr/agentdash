@@ -17,6 +17,39 @@ interface Props {
  * and mode are administrator-controlled, because an external root is an
  * arbitrary host directory the server writes into.
  */
+/**
+ * Says what a mandate IS, before anything about editing one.
+ *
+ * The panel was headed "Mandate" with one line about version history — vocabulary
+ * from this product's design, presented as if self-evident. It is not: a person
+ * meeting this page cold has no reason to know the word means "the instruction
+ * file that steers my agent". Deliberately over-explained, because this text is
+ * the single highest-leverage thing a steward can change and the page gave them
+ * no reason to think so.
+ */
+function MandateExplainer({ entryFile }: { entryFile: string | null }) {
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+      <p>
+        <span className="font-medium text-foreground">The mandate is your agent&rsquo;s job
+        description and rulebook, in plain text.</span> It is a file
+        ({entryFile ?? "AGENTS.md"}) the agent reads before every piece of work — the same way a
+        CLAUDE.md or AGENTS.md file steers a coding agent.
+      </p>
+      <p className="mt-1.5">
+        It says who the agent is and whose agent it is, what it may do on its own, what it must
+        check with a person first, what it must never do, and whose word wins when two people
+        disagree. When the agent runs — from here, or from a Claude Code or Codex connected with
+        its key — this text is what it follows.
+      </p>
+      <p className="mt-1.5">
+        Edit it in your own words. Changes are versioned and take effect from the agent&rsquo;s
+        next run.
+      </p>
+    </div>
+  );
+}
+
 export function AgentMandateEditor({ agentId, companyId }: Props) {
   const queryClient = useQueryClient();
   // Keyed by agent: the component is re-rendered rather than remounted when the
@@ -88,10 +121,11 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
         <h2 id="mandate-heading" className="text-sm font-semibold">
           Mandate
         </h2>
+        <MandateExplainer entryFile={entryFile} />
         <p className="mt-2 text-xs text-muted-foreground">
           {bundle.error instanceof Error
             ? bundle.error.message
-            : "This agent uses an externally managed instructions bundle. An administrator configures where instructions live."}
+            : "This agent's mandate lives in an externally managed location; an administrator configures where. You can read the concepts above, but editing happens where the administrator keeps the file."}
         </p>
       </section>
     );
@@ -102,8 +136,9 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
       <h2 id="mandate-heading" className="text-sm font-semibold">
         Mandate
       </h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Editing {entryFile}. Changes are versioned by the instruction-bundle history.
+      <MandateExplainer entryFile={entryFile} />
+      <p className="mt-2 text-xs text-muted-foreground">
+        Editing {entryFile}. Every save is versioned, so nothing is lost by changing it.
       </p>
 
       {error ? (
