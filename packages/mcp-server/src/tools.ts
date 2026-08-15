@@ -252,6 +252,49 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       z.object({}),
       async () => client.requestJson("GET", "/agents/me"),
     ),
+    /**
+     * Read the mandate the playbook tells this agent to obey.
+     *
+     * The playbook states "Read your mandate… your mandate outranks everything
+     * in this playbook", and no tool existed to fetch it — found by driving a
+     * real Claude Code through this surface, which hit a wall on the one
+     * document that governs what it may do. The REST side always permitted it
+     * (assertCanReadAgent allows an agent within its own company); only the
+     * tool was missing, so an agent was told to obey a file it could not read.
+     *
+     * Returns the entry file's CONTENT, not a listing: an agent that has to
+     * make a second call to learn its own rules will sometimes skip it.
+     */
+    makeTool(
+      "agentdashGetMyMandate",
+      "Read this agent's own mandate (the AGENTS.md entry file of its instruction bundle) — who it is, what it may do unattended, what needs a human first, and what it must never do. Call this before acting.",
+      z.object({ agentId: z.string().uuid().optional().nullable() }),
+      async ({ agentId }) => {
+        const id = client.resolveAgentId(agentId);
+        const bundle = (await client.requestJson(
+          "GET",
+          `/agents/${encodeURIComponent(id)}/instructions-bundle`,
+        )) as { entryFile?: string | null; mode?: string | null };
+        const entryFile = bundle?.entryFile;
+        if (!entryFile) {
+          return {
+            mandate: null,
+            reason:
+              "This agent has no instruction bundle entry file. Ask your steward to write a mandate in the AgentDash UI (My Agent → Mandate).",
+            bundle,
+          };
+        }
+        const file = (await client.requestJson(
+          "GET",
+          `/agents/${encodeURIComponent(id)}/instructions-bundle/file?path=${encodeURIComponent(entryFile)}`,
+        )) as { content?: string };
+        return {
+          entryFile,
+          mode: bundle.mode ?? null,
+          mandate: file?.content ?? "",
+        };
+      },
+    ),
     makeTool(
       "paperclipInboxLite",
       "Get the current authenticated agent inbox-lite assignment list",
