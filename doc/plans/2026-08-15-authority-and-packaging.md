@@ -1,6 +1,6 @@
 # Authority, and what we ship to a client
 
-**Status:** proposal
+**Status:** revised after a Fable 5 adversarial audit; Part 1 largely landed
 **Written:** 2026-08-15, before the MKThink Mac Mini install
 
 Two problems, found by asking rather than assuming, and both verified on the
@@ -71,6 +71,30 @@ do this" is a judgement per endpoint and a wrong `403` is as damaging as a wrong
 Each one gets the same treatment goals got: a probe against a live instance
 proving the old behaviour, the guard, then the probe returning 403.
 
+**Found by audit, verified live, and since fixed** — the original inventory
+missed all of these, which is the strongest argument against trusting a
+route-by-route sweep:
+
+| route | before | now |
+|---|---|---|
+| `PUT /companies/:c/issues/:i/dod` | 200, persisted | 403 |
+| `POST /companies/:c/routines` | 201, ACTIVE, self-assigned | 403 |
+| `PATCH /agents/:id` (`budgetMonthlyCents`) | 200, 0 → 99,999,999 | 403 |
+
+**Still open, ranked:** the plugin host exposes `goals.create/update` with no
+capability enforcement at dispatch; `assertInviteRoleCeiling` exempts agents, so
+an agent with `users:invite` can invite a human as **owner**; a CEO-role agent
+can `PATCH /companies/:id` name and description.
+
+**The honest caveat this plan owed you.** Route-by-route guarding of a ~67-route
+surface, against agents holding a generic `paperclipApiRequest` HTTP tool, means
+one missed route is a full bypass — and the first audit found four. A
+deny-by-default middleware over direction-shaped writes would fail closed
+instead. Route-by-route is still the choice here, because a wrong 403 is as
+damaging as a wrong 200 and the surface is well understood — but that is a
+**rejection of the safer default**, and the missed-route risk is owned rather
+than hidden.
+
 **Cost: ~1 day**, most of it deciding rather than typing.
 
 ### UI — currently has no idea
@@ -115,8 +139,16 @@ Verified on the Mini:
 - **191 MB of git history**, plus 2,329 TypeScript/TSX source files
 - Started with `pnpm exec tsx src/index.ts` — it runs *from source*
 - The server runs as `yang`; the source is owned by `yang` and **writable**
-- **No sandbox of any kind.** No `sandbox-exec`, no seatbelt profile, no uid
-  separation — searched for all three
+- **No sandbox on the server-side execution path** — but a complete, tested
+  seatbelt implementation already exists at `cli/src/bridge/sandbox.ts`
+  (profile builder, egress policies, `sandbox-exec` spawn). An earlier draft of
+  this plan said "no sandbox of any kind"; that was **wrong**, and it matters,
+  because the job is to route server-side agent execution through the sandbox
+  that exists rather than build one.
+- Agents do **not** reliably run in `workspaces/<agent>`: `heartbeat.ts` resolves
+  configured project cwd → managed workspace → previous session cwd → fallback.
+  A profile pinned to `workspaces/<agent>` would break every real project run,
+  so the profile must key off the *resolved* cwd.
 
 A local agent runs as the same user that owns the code, unconfined. It can
 rewrite the server it is running under, and nothing would notice.
@@ -127,9 +159,15 @@ is not true today.
 
 ### What to ship instead
 
-1. **Build, do not ship source.** `tsc` the server, `vite build` the UI, publish
-   a tarball or an npm package of `dist` + `package.json` + migrations. No
-   `.git`, no `src`, no tests. Ships as maybe 10–20 MB instead of 191.
+1. **Build, do not ship source — but the 10–20 MB figure was wrong.** All 12
+   workspace packages export TypeScript directly (`@paperclipai/db` exports
+   `./src/index.ts`), so a compiled `server/dist` still loads `.ts` out of
+   `node_modules` and still needs `tsx`. And `@embedded-postgres/darwin-arm64`
+   alone is **145 MB** and is load-bearing. Pick one: (a) build all 12 packages
+   and rewrite their `exports` maps, (b) esbuild-bundle the server the way
+   `cli` already is in `scripts/build-npm.sh`, or (c) keep `tsx` and drop the
+   "no src" claim. The honest win is dropping `.git` (191 MB) and dev
+   dependencies — not a 10 MB artefact.
 2. **Run as a user that cannot write the install.** A dedicated `agentdash`
    account owning `~/Library/Application Support/AgentDash` (data, logs,
    workspaces) while the install directory is owned by root and read-only to it.
@@ -144,13 +182,37 @@ is not true today.
 5. **One artefact, one command.** `install.sh` already does the launchd and
    Postgres work; it should consume a built artefact rather than a git checkout.
 
-Order matters: **(2) is most of the security for the least work** and does not
-require the packaging to land first. If time is short before the install, do (2)
-alone.
+Order matters: **(2) is still the highest value per unit of work**, but it is
+not two hours. Every runtime path derives from `os.homedir()`
+(`server/src/home-paths.ts`): the Postgres cluster, the secrets master key,
+agent workspaces, plugins, and *two* backup trees — the launchd nightly one and
+an in-server hourly one that defaults on and this plan did not know existed
+(`server/src/config.ts`). A service-account switch silently relocates all of it,
+Postgres refuses a cluster it does not own, and the harness credentials
+(`~/.hermes`, `~/.claude`) must be re-established under the new uid. There is
+also a LaunchAgent-vs-LaunchDaemon fork: Agents need a logged-in user, Daemons
+break the harnesses — `deploy/install.sh` documents both.
 
-**Cost: ~2 days for all five; ~2 hours for (2) on its own.**
+Treat it as a migration with a checklist, not a chown. **Cost: a day, not two
+hours**, and it should be rehearsed before install day rather than attempted on
+it.
+
+**Cost: ~3 days for all five.**
 
 ---
+
+### What Part 1 does not protect against
+
+Until confinement lands, these guards are **API-level only**. The database
+credentials are `paperclip:paperclip` on loopback and agents currently run as
+the same uid as the server, so an off-mandate local agent does not need
+`PATCH /goals/:id` — it can `UPDATE goals` directly at `127.0.0.1:54329`.
+
+That does not make Part 1 pointless: it closes the path for remote keys, for the
+MCP endpoint, and for honest-but-curious agents, which is most of the real risk.
+But the guarantee should be stated as what it is, and DB-credential rotation
+plus loopback restriction should move into install week rather than "after the
+first real week".
 
 ## Sequencing
 
