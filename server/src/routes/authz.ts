@@ -111,6 +111,52 @@ export function assertCompanyAccess(req: Request, companyId: string) {
   }
 }
 
+/**
+ * Who may change what the company is trying to do.
+ *
+ * `assertCompanyAccess` answers "does this caller belong here", which is the
+ * right question for ordinary work and the wrong one for direction. Under it,
+ * any active non-viewer member could rewrite a company goal, and so could any
+ * agent holding a key for the company — verified against a live instance, where
+ * an agent PATCHed the goal it had been given and got HTTP 200.
+ *
+ * Two separate problems, and the agent one is the sharper of them:
+ *
+ *  - A colleague invited to help should not be able to redefine the objectives
+ *    they were invited to work toward.
+ *  - An agent must never edit its own objectives. Everything downstream —
+ *    whether work is on-track, whether a mandate was honoured, what the board
+ *    pack reports — is measured against the goal. An agent that can move the
+ *    goal can report success by moving it, and the audit trail will faithfully
+ *    record that the goal simply changed.
+ *
+ * So: agents are refused outright, and humans need owner or admin. Instance
+ * admins pass, as they do everywhere. Read paths are untouched — everyone who
+ * can see the company can still see its goals.
+ */
+export function assertCanSetCompanyDirection(req: Request, companyId: string) {
+  assertCompanyAccess(req, companyId);
+
+  if (req.actor.type === "agent") {
+    throw forbidden(
+      "Agents cannot change company direction. Ask an owner or admin to change the goal.",
+    );
+  }
+
+  // A local_trusted board with no real user is the operator at their own
+  // machine; there is no one else to defer to.
+  if (req.actor.type === "board" && req.actor.source === "local_implicit") return;
+  if (req.actor.isInstanceAdmin) return;
+
+  const membership = Array.isArray(req.actor.memberships)
+    ? req.actor.memberships.find((item) => item.companyId === companyId)
+    : undefined;
+  const role = membership?.membershipRole;
+  if (role === "owner" || role === "admin") return;
+
+  throw forbidden("Only an owner or admin can change company direction.");
+}
+
 export function getActorInfo(req: Request) {
   assertAuthenticated(req);
   if (req.actor.type === "agent") {
