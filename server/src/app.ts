@@ -9,6 +9,7 @@ import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { requireLicense } from "./middleware/require-license.js";
+import { mcpRoutes } from "./routes/mcp.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
@@ -332,6 +333,10 @@ export async function createApp(
   // for any existing self-hoster who has not opted in. `license-enforcement.test.ts`
   // pins both the behaviour and this ordering.
   api.use(requireLicense);
+  // The turnkey harness endpoint: POST /api/mcp with an agent key as bearer.
+  // Mounted after the license gate on purpose — an unlicensed box should say
+  // so to a connecting harness, not serve it tools.
+  api.use(mcpRoutes());
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,

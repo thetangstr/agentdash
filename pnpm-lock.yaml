@@ -546,6 +546,9 @@ importers:
 
   server:
     dependencies:
+      '@agentdash/mcp-server':
+        specifier: workspace:*
+        version: link:../packages/mcp-server
       '@anthropic-ai/sdk':
         specifier: ^0.92.0
         version: 0.92.0(zod@3.25.76)
@@ -555,6 +558,9 @@ importers:
       '@microsoft/teams.apps':
         specifier: ^2.0.14
         version: 2.0.14
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
       '@paperclipai/adapter-acpx-local':
         specifier: workspace:*
         version: link:../packages/adapters/acpx-local
