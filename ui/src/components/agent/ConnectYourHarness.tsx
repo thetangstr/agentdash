@@ -149,20 +149,17 @@ export function ConnectYourHarness({
     <section className="rounded-lg border border-border bg-card p-4">
       <h2 className="text-sm font-semibold">Work with {agentName} from your own terminal</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Whatever coding agent you already use — Claude Code, Codex, something else — can connect
-        itself. Create a short code, send it to whoever needs it, and they run one command.{" "}
-        {agentName} then shows up there with its own work, its mandate, and the ability to answer
-        colleagues waiting on it.
+        Whatever coding agent you already use — Claude Code, Codex, something else — can connect to{" "}
+        {agentName}. Create a short code, send it to whoever needs it, and they run one command on
+        their own machine. {agentName} then shows up there with its own work, its mandate, and the
+        ability to answer colleagues waiting on it.
       </p>
 
-      <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-3">
-        <h3 className="text-xs font-semibold">Connect a machine</h3>
+      <div className="mt-3">
         {!code ? (
           <>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Gives you a short code to read out or send. Whoever has it runs one command on their
-              own machine and is paired with {agentName} — no key changes hands, and the code stops
-              working ten minutes from now.
+            <p className="text-xs text-muted-foreground">
+              No key changes hands, and the code stops working ten minutes from now.
             </p>
             <Button
               className="mt-2"

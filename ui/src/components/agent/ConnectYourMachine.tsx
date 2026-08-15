@@ -145,7 +145,17 @@ export function ConnectYourMachine({
             />
           </div>
           <Button size="sm" disabled={enroll.isPending} onClick={() => enroll.mutate()}>
-            {enroll.isPending ? "Connecting…" : "Connect this machine"}
+            {/*
+              * Named for the direction, not the act.
+              *
+              * The page also offers connecting a harness TO this agent, and
+              * both buttons read "connect ... machine" while pointing opposite
+              * ways: one lets you drive the agent, this one lets the agent ask
+              * you a question. Two identical-sounding buttons beside each other
+              * is how someone ends up enrolling the wrong thing and concluding
+              * the product is broken.
+              */}
+            {enroll.isPending ? "Setting up…" : `Let ${agentName} ask me here`}
           </Button>
         </div>
       ) : (

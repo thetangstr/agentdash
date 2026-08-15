@@ -154,6 +154,35 @@ describe("ConnectYourHarness", () => {
   });
 
   /**
+   * One card, one action.
+   *
+   * This page grew four buttons that sounded alike — "Connect a machine",
+   * "Create a connect code", "Create CoS's key", and (on the card below)
+   * "Connect this machine" — for three different things, two of which point in
+   * opposite directions. Someone reading that cannot tell which one pairs their
+   * terminal and which one lets the agent interrupt them.
+   *
+   * So: before a code exists, exactly one action is offered here. The direct-key
+   * path still exists, but inside a disclosure, where it reads as the fallback
+   * it is rather than a peer choice.
+   */
+  it("offers exactly one action until a code exists", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok" });
+    await render();
+
+    const details = container.querySelector("details");
+    expect(details, "the key fallback must be tucked behind a disclosure").toBeTruthy();
+
+    const topLevel = Array.from(container.querySelectorAll("button")).filter(
+      (b) => !details!.contains(b),
+    );
+    expect(
+      topLevel.map((b) => b.textContent?.trim()),
+      "one card, one action",
+    ).toEqual(["Create a connect code"]);
+  });
+
+  /**
    * A single-network install has no configured URL, and must behave exactly as
    * it did before — otherwise this fix breaks the common case to serve the rare
    * one.
