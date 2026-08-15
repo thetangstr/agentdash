@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import { isAllInterfacesHost } from "@paperclipai/shared";
 import type { DeploymentMode } from "@paperclipai/shared";
 
 const LOCAL_BOARD_USER_ID = "local-board";
@@ -68,7 +69,9 @@ export async function initializeBoardClaimChallenge(
 export function getBoardClaimWarningUrl(host: string, port: number): string | null {
   if (!activeChallenge) return null;
   if (activeChallenge.claimedAt || activeChallenge.expiresAt.getTime() <= Date.now()) return null;
-  const visibleHost = host === "0.0.0.0" ? "localhost" : host;
+  // An all-interfaces bind is `::` as well as `0.0.0.0`, and neither is a
+  // usable address in a link someone clicks.
+  const visibleHost = isAllInterfacesHost(host) ? "localhost" : host;
   return `http://${visibleHost}:${port}/board-claim/${activeChallenge.token}?code=${activeChallenge.code}`;
 }
 

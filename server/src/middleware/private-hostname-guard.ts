@@ -1,3 +1,4 @@
+import { isAllInterfacesHost } from "@paperclipai/shared";
 import type { Request, RequestHandler } from "express";
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -33,7 +34,11 @@ export function resolvePrivateHostnameAllowSet(opts: { allowedHostnames: string[
   const bindHost = opts.bindHost.trim().toLowerCase();
   const allowSet = new Set<string>(configuredAllow);
 
-  if (bindHost && bindHost !== "0.0.0.0") {
+  // An all-interfaces bind names no particular host, so there is nothing to
+  // add to the allow set -- and that is true of `::` exactly as it is of
+  // `0.0.0.0`. Comparing against the one literal would have quietly allowed
+  // the string "::" as a hostname once the bind became dual-stack.
+  if (bindHost && !isAllInterfacesHost(bindHost)) {
     allowSet.add(bindHost);
   }
   allowSet.add("localhost");

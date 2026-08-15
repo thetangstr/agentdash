@@ -85,12 +85,22 @@ function writeTextFile(file, text) {
   fs.writeFileSync(file, text, { mode: 0o600 });
 }
 
-/** The profile a login shell will actually read, best-effort by shell. */
-export function shellProfilePath(shell = process.env.SHELL ?? "") {
-  if (shell.includes("zsh")) return path.join(os.homedir(), ".zshrc");
-  if (shell.includes("bash")) return path.join(os.homedir(), ".bashrc");
-  if (shell.includes("fish")) return path.join(os.homedir(), ".config", "fish", "config.fish");
-  return path.join(os.homedir(), ".profile");
+/**
+ * Every startup file the user's shell might read — not just one.
+ *
+ * `.zshrc` is sourced for INTERACTIVE shells only, so a Codex started from a
+ * GUI app, a script, or an MDM task finds no key and fails in a way that looks
+ * like a bad credential rather than a missing environment. `.zprofile` covers
+ * the login case. Writing both is the difference between "works in my terminal"
+ * and "works".
+ */
+export function shellProfilePaths(shell = process.env.SHELL ?? "") {
+  const home = os.homedir();
+  if (shell.includes("zsh")) return [path.join(home, ".zshrc"), path.join(home, ".zprofile")];
+  if (shell.includes("bash")) return [path.join(home, ".bashrc"), path.join(home, ".bash_profile")];
+  // fish reads config.fish for both interactive and login shells.
+  if (shell.includes("fish")) return [path.join(home, ".config", "fish", "config.fish")];
+  return [path.join(home, ".profile")];
 }
 
 /**
@@ -120,15 +130,15 @@ export function applyConnection({ serverName, instanceUrl, key, harnesses, accou
       CODEX_CONFIG,
       upsertCodexToml(readTextFile(CODEX_CONFIG), serverName, { url: endpoint, envVar }),
     );
-    const profile = shellProfilePath();
     const line = shellProfileLine(envVar, account, backend);
-    const added = ensureProfileLine(profile, line, profileLineMarker(account));
+    const marker = profileLineMarker(account);
     written.push({
       harness: "codex",
       file: CODEX_CONFIG,
       note: `reads ${envVar} at runtime; key stored in the ${backend}`,
     });
-    if (added) {
+    for (const profile of shellProfilePaths()) {
+      if (!ensureProfileLine(profile, line, marker)) continue;
       written.push({
         harness: "codex",
         file: profile,
@@ -156,9 +166,10 @@ export function removeConnection({ serverName, account }) {
     removed.push({ harness: "codex", file: CODEX_CONFIG });
   }
 
-  const profile = shellProfilePath();
-  if (removeProfileLine(profile, profileLineMarker(account))) {
-    removed.push({ harness: "codex", file: profile });
+  for (const profile of shellProfilePaths()) {
+    if (removeProfileLine(profile, profileLineMarker(account))) {
+      removed.push({ harness: "codex", file: profile });
+    }
   }
   if (deleteSecret(account)) {
     removed.push({ harness: "codex", file: "stored key" });

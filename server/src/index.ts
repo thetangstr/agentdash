@@ -1180,15 +1180,38 @@ export async function startServer(): Promise<StartedServer> {
   }
 
   await new Promise<void>((resolveListen, rejectListen) => {
+    // An all-interfaces bind is `::`, which serves IPv4 and IPv6 on one socket
+    // and is what makes a Bonjour `.local` name reachable. Where IPv6 is
+    // disabled entirely, that bind fails outright -- fall back to IPv4 rather
+    // than refuse to start, and say so, because it silently narrows who can
+    // reach the instance.
+    let listenHost = config.host;
+    let triedIpv4Fallback = false;
+
     const onError = (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      const ipv6Unsupported = code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL" || code === "EINVAL";
+      if (!triedIpv4Fallback && ipv6Unsupported && listenHost === "::") {
+        triedIpv4Fallback = true;
+        listenHost = "0.0.0.0";
+        logger.warn(
+          { err, code },
+          "IPv6 bind unavailable on this host; falling back to 0.0.0.0. Clients resolving this host to an IPv6 address will not be able to reach it.",
+        );
+        // `once` has already removed this handler; re-arm it so a failing
+        // fallback rejects the promise instead of throwing unhandled.
+        // `triedIpv4Fallback` stops that turning into a loop.
+        server.once("error", onError);
+        server.listen(listenPort, listenHost, onListening);
+        return;
+      }
       server.off("error", onError);
       rejectListen(err);
     };
 
-    server.once("error", onError);
-    server.listen(listenPort, config.host, () => {
+    function onListening() {
       server.off("error", onError);
-      logger.info(`Server listening on ${config.host}:${listenPort}`);
+      logger.info(`Server listening on ${listenHost}:${listenPort}`);
       if (process.env.PAPERCLIP_OPEN_ON_LISTEN === "true") {
         const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
         const url = `http://${openHost}:${listenPort}`;
@@ -1243,9 +1266,12 @@ export async function startServer(): Promise<StartedServer> {
       }
 
       resolveListen();
-    });
+    }
+
+    server.once("error", onError);
+    server.listen(listenPort, listenHost, onListening);
   });
-  
+
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       // AgentDash: goals-eval-hitl

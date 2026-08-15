@@ -12,7 +12,10 @@
   },
   "files": [
     "bin",
-    "src",
+    "src/harnesses.mjs",
+    "src/index.mjs",
+    "src/secrets.mjs",
+    "src/verify.mjs",
     "README.md"
   ],
   "engines": {
