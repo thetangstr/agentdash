@@ -36,6 +36,36 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   });
   // AgentDash (Cloud SKU, G4): usage-based billing aggregator over cost_events.
   const usage = usageBillingService(db);
+  /**
+   * The running bill is an owner's business, not every member's.
+   *
+   * These read routes asked only "are you in this company", so an invited
+   * teammate could read the subscription and the running bill. A practice that
+   * invites three staff should not be publishing its cost base to them as a
+   * side effect of onboarding.
+   *
+   * Same administrator test the costs routes use — `agents:create`, plus
+   * instance admins, whom `canUser` allows unconditionally. Not a new
+   * permission key: a new key defaults to nobody holding it, which would lock
+   * owners out of their own billing on every existing install.
+   */
+  async function assertBillingVisibility(req: { actor: { type: string; userId?: string | null; companyIds?: string[] | null; isInstanceAdmin?: boolean } }, companyId: string) {
+    if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
+      throw forbidden("Not a member of this company");
+    }
+    if (req.actor.isInstanceAdmin) return;
+    // Fail closed. A permission lookup that throws must not become a 500 on a
+    // billing page — deny with something the reader can act on instead.
+    const allowed = await access
+      .canUser(companyId, req.actor.userId, "agents:create")
+      .catch(() => false);
+    if (allowed) return;
+    throw forbidden(
+      "The running bill is visible to administrators only. "
+      + "Ask an owner for the agents:create permission if you need it.",
+    );
+  }
+
   const access = accessService(db);
   // AgentDash (#249): downgrade notifier — when a company drops from
   // pro_active/pro_trial to pro_canceled/pro_past_due, post a CoS chat
@@ -204,6 +234,9 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
 
   router.get("/status", async (req, res) => {
     const companyId = String(req.query.companyId ?? "");
+    // Deliberately membership-only. Which plan you are on is not spend, and
+    // hiding it just sends people to ask an owner what is already on their own
+    // screen — see billing-checkout-routes.test.ts.
     if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
       throw forbidden("Not a member of this company");
     }
@@ -215,9 +248,7 @@ export function billingRoutes(db: Db, cfg: RoutesConfig) {
   // Aggregates metered inference (cost_events) and applies the configured markup.
   router.get("/usage", async (req, res) => {
     const companyId = String(req.query.companyId ?? "");
-    if (req.actor.type !== "board" || !req.actor.companyIds?.includes(companyId)) {
-      throw forbidden("Not a member of this company");
-    }
+    await assertBillingVisibility(req, companyId);
     const now = new Date();
     const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     const bill = await usage.currentBill(companyId, { from });
