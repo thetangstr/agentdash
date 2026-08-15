@@ -7,6 +7,7 @@
  * left running. `--remove` reverses all of it.
  */
 
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import process from "node:process";
 import readline from "node:readline";
@@ -23,6 +24,11 @@ import {
 } from "../src/index.mjs";
 import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
 import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
+
+// Read the real version rather than restating it. A CLI that misreports which
+// version it is turns "did the fix reach me?" into guesswork -- which is
+// exactly the question that matters right after a broken release.
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 const out = (line = "") => process.stdout.write(`${line}\n`);
 const bad = (line = "") => process.stderr.write(`${line}\n`);
@@ -118,7 +124,7 @@ async function main() {
   const account = serverName;
 
   if (args.help) return usage(), 0;
-  if (args.version) return out("0.1.0"), 0;
+  if (args.version) return out(pkg.version), 0;
 
   if (args.remove) {
     const { removed } = removeConnection({ serverName, account });

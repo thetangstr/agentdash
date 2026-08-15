@@ -95,3 +95,16 @@ describe("the published package", () => {
     expect(shipped.filter((f) => f.endsWith(".test.mjs"))).toEqual([]);
   });
 });
+
+describe("--version", () => {
+  it("reports the version actually published, not a hardcoded one", () => {
+    // It said 0.1.0 while the package was 0.1.3. Immediately after shipping a
+    // broken 0.1.2, "which version am I running?" is the first question asked
+    // and the CLI was answering it wrongly.
+    const root = packAndExtract();
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    const entry = path.join(root, Object.values(pkg.bin)[0]);
+    const reported = execFileSync(process.execPath, [entry, "--version"], { encoding: "utf8" }).trim();
+    expect(reported).toBe(pkg.version);
+  });
+});
