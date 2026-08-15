@@ -8,7 +8,66 @@
  * messages, delivered before anything has been changed on disk.
  */
 
+import dns from "node:dns/promises";
+import net from "node:net";
+
 const PROTOCOL_VERSION = "2024-11-05";
+
+/** Link-local addresses need a zone index; nobody dials them by name. */
+function isLinkLocal(address) {
+  return address.startsWith("fe80:") || address.startsWith("169.254.");
+}
+
+/** Can we open a TCP connection to this exact address? */
+function probeAddress(address, port, family, timeoutMs = 5_000) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (reachable, reason) => {
+      socket.destroy();
+      resolve({ address, family, reachable, reason: reason ?? null });
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false, "timed out"));
+    socket.once("error", (err) => done(false, err.code ?? err.message));
+    socket.connect({ host: address, port, family });
+  });
+}
+
+/**
+ * Probe EVERY address the hostname resolves to, not just the one this process
+ * happens to pick.
+ *
+ * This exists because of a real failure. `mkmini.local` resolves IPv6-first on
+ * macOS; the server was bound IPv4-only; Node's `fetch` quietly fell back to
+ * IPv4 and reported a healthy connection, while real Claude Code picked the
+ * IPv6 address and hung until it timed out. A checker that only proves "I could
+ * reach it somehow" will certify a host that half the clients cannot use. The
+ * question worth answering is whether EVERY address a client might choose
+ * works.
+ *
+ * @returns {Promise<{address: string, family: number, reachable: boolean, reason: string|null}[]>}
+ */
+export async function probeAllAddresses(urlString) {
+  const url = new URL(urlString);
+  const port = Number(url.port) || (url.protocol === "https:" ? 443 : 80);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+
+  if (net.isIP(host)) {
+    return [await probeAddress(host, port, net.isIP(host))];
+  }
+
+  let resolved;
+  try {
+    resolved = await dns.lookup(host, { all: true });
+  } catch (error) {
+    return [{ address: host, family: 0, reachable: false, reason: error.code ?? "DNS lookup failed" }];
+  }
+
+  const candidates = resolved.filter((entry) => !isLinkLocal(entry.address));
+  if (candidates.length === 0) return [];
+  return Promise.all(candidates.map((entry) => probeAddress(entry.address, port, entry.family)));
+}
 
 /**
  * Streamable HTTP MCP answers with either JSON or an SSE stream depending on
@@ -62,6 +121,27 @@ export class VerifyError extends Error {
  * @returns {Promise<{serverName: string|null, serverVersion: string|null, toolCount: number, hasInstructions: boolean}>}
  */
 export async function verifyConnection(endpoint, key) {
+  // Reachability across every address BEFORE the handshake: a partly-reachable
+  // host answers this process fine and strands whichever client resolves it
+  // differently, which is the exact failure that shipped once already.
+  const probes = await probeAllAddresses(endpoint);
+  const unreachable = probes.filter((probe) => !probe.reachable);
+  if (probes.length > 0 && unreachable.length === probes.length) {
+    throw new VerifyError(`Nothing is listening at ${new URL(endpoint).host}.`, {
+      hint: `Tried ${probes.map((p) => p.address).join(", ")}. Is the instance running?`,
+    });
+  }
+  if (unreachable.length > 0) {
+    const families = unreachable.map((probe) => `${probe.address} (IPv${probe.family}, ${probe.reason})`);
+    throw new VerifyError(
+      `${new URL(endpoint).host} resolves to an address that refuses connections: ${families.join(", ")}.`,
+      {
+        hint:
+          "Some clients will pick that address and hang. The server is probably bound to one address family only -- bind it to :: so it serves both.",
+      },
+    );
+  }
+
   let init;
   try {
     init = await rpc(endpoint, key, "initialize", {
