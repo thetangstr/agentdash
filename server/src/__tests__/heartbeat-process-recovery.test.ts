@@ -2398,4 +2398,120 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
     expect(runs).toHaveLength(1);
   });
+
+  /**
+   * Observed on the UAT instance, 2026-08-14. The server was restarted while two
+   * hermes_local runs were in flight. The reaper could not see their children any
+   * more and wrote `process_lost` -- but hermes runs in a detached process group,
+   * so both children survived the restart, finished the work, and reported back
+   * with exit code 0 and a complete result (one of them an entire board pack).
+   *
+   * The completion path saw a terminal status already on the row and adopted it,
+   * then -- because the adapter had reported no error to copy -- filled the reason
+   * in with the generic "Adapter failed" / `adapter_failed`. Net effect: finished
+   * work filed as a failure, the honest `process_lost` diagnosis overwritten with
+   * a misleading one, and the agent parked in `error` on the dashboard with no way
+   * back. On a box that restarts for backups or updates this is not an edge case.
+   *
+   * `process_lost` is an inference; an adapter exit code is an observation. The
+   * observation wins.
+   */
+  it("lets a clean adapter exit overturn a process_lost verdict written mid-run", async () => {
+    const { agentId, runId, issueId } = await seedQueuedIssueRunFixture();
+
+    // The reaper fires while the adapter is still working -- exactly the restart
+    // race -- and only then does the surviving child report its success.
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await db
+        .update(heartbeatRuns)
+        .set({
+          status: "failed",
+          errorCode: "process_lost",
+          error: "Process lost -- server may have restarted",
+          finishedAt: new Date(),
+        })
+        .where(eq(heartbeatRuns.id, runId));
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        summary: "Assembled the weekly board pack.",
+        provider: "test",
+        model: "test-model",
+      };
+    });
+
+    const heartbeat = heartbeatService(db);
+    await heartbeat.resumeQueuedRuns();
+    await waitForRunToSettle(heartbeat, runId);
+
+    const run = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    expect(run?.status, "work that finished was filed as a failure").toBe("succeeded");
+    expect(run?.error).toBeNull();
+    expect(run?.errorCode).toBeNull();
+
+    const agent = await waitForValue(async () =>
+      db.select().from(agents).where(eq(agents.id, agentId)).then((rows) => {
+        const row = rows[0] ?? null;
+        return row?.status === "error" ? null : row;
+      }),
+    );
+    expect(agent?.status, "a recovered agent kept reporting broken").not.toBe("error");
+
+    const issue = await db
+      .select()
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0] ?? null);
+    expect(issue?.executionRunId).toBeNull();
+  });
+
+  /**
+   * The other half of the same fix: adopting a terminal status must not invent a
+   * reason. Here the adapter genuinely fails and carries no error text of its
+   * own, so the recorded `process_lost` is the only true account of what
+   * happened -- overwriting it with `adapter_failed` sent operators looking at
+   * the adapter instead of at the restart.
+   */
+  it("keeps the recorded process_lost reason when the adapter fails without one", async () => {
+    const { runId } = await seedQueuedIssueRunFixture();
+
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await db
+        .update(heartbeatRuns)
+        .set({
+          status: "failed",
+          errorCode: "process_lost",
+          error: "Process lost -- server may have restarted",
+          finishedAt: new Date(),
+        })
+        .where(eq(heartbeatRuns.id, runId));
+      return {
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        provider: "test",
+        model: "test-model",
+      };
+    });
+
+    const heartbeat = heartbeatService(db);
+    await heartbeat.resumeQueuedRuns();
+    await waitForRunToSettle(heartbeat, runId);
+
+    const run = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("process_lost");
+    expect(run?.error).toContain("Process lost");
+  });
 });
