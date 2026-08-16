@@ -301,7 +301,31 @@ all day.
 
 ### Acceptance
 
-- [ ] Plugin host `goals.create/update` enforces capabilities at dispatch.
+- [x] Plugin host `goals.create/update` enforces capabilities at dispatch.
+      **The criterion was already met, and the note that raised it was wrong.**
+      `createHostClientHandlers` wraps every handler in `gated(method, …)` and
+      `METHOD_CAPABILITY_MAP` maps both writes to their capabilities. (I first
+      read `plugin-capability-validator.ts`, whose `assertOperation` has no
+      callers, and nearly reported that NO host operation was checked. It is a
+      second, unwired validator; the live one is in the SDK.)
+      **What was actually missing was the probe.** Nothing asserted any of it,
+      so "enforced" rested on a reading rather than a run — and this gate's own
+      rule is that an unrunnable criterion is not a criterion. Now:
+      `plugin-goals-capability.test.ts`, 6 cases, including a plugin that holds
+      `goals.read` but not `goals.create` (refusing a plugin with no
+      capabilities at all would prove much less) and controls in both
+      directions.
+      **And the probe found something worse than the thing it was written for.**
+      The first falsification FAILED to fail: deleting the gate from SDK source
+      broke no test. `@paperclipai/plugin-sdk` is consumed through its
+      `exports` map, which points at `dist`, and `ensure-plugin-build-deps.mjs`
+      checked only that `dist/index.js` EXISTED — never whether it was stale.
+      So every SDK source edit was invisible to `pnpm typecheck` AND to the
+      server suite, indefinitely. Green over an artifact nobody rebuilt: the
+      same failure as the npm package earlier today, in the other direction.
+      Fixed: the script now compares source mtimes against the output, and the
+      server's vitest runs it as `globalSetup` (typecheck already did; tests
+      did not). Re-falsified with no manual rebuild — the sabotage now fails.
 - [x] `assertInviteRoleCeiling` applies to agents. **Done.** The check compared
       the requested role against the ACTOR's human role, and an agent has none,
       so it returned early and applied no ceiling at all.
@@ -354,9 +378,18 @@ all day.
       03:38 backup. The probe agent is terminated rather than deleted —
       `activity_log` references it, and erasing that would be erasing the
       record of what happened.
-- [ ] Each has a probe showing the old behaviour and the new 403.
+- [x] Each has a probe showing the old behaviour and the new 403. *Two of the
+      three had a live before/after on uat, read back from the database. The
+      third was already enforced, so there is no "old behaviour" to show — its
+      probe is the test that was missing, plus the falsification that exposed
+      the stale-dist problem.*
 
-**Gate 5 closes when all three probes return 403.**
+**Gate 5 is CLOSED.**
+
+Two items were real privilege-escalation paths, both proven live and both now
+refused with a sentence. The third was already correct and merely unverified —
+worth saying plainly, because a gate that reports three fixes when it made two
+is the same kind of false confidence Gate 2 exists to remove.
 
 ---
 
@@ -379,4 +412,4 @@ Saying so plainly so it does not creep in:
 | 2 — no confident lies | **closed** — every criterion demonstrated |
 | 3 — four people, one week | open, may start early |
 | 4 — packaging and least privilege | open |
-| 5 — remaining authority gaps | open |
+| 5 — remaining authority gaps | **closed — 2 real gaps fixed, 1 already correct** |
