@@ -49,14 +49,18 @@ an empty table. **We do not fail to store cost. The source never reports it.**
 on a spend dashboard is the most damaging thing this product can display to
 someone deciding whether to trust it with money.
 
+### Decision — **A**, taken by the owner on 2026-08-15
+
+Label it "not measured". No cost or token figure is displayed unless we measured
+it, and no zero ever stands in for an unknown. B stays available later if Hermes
+gains a usage flag; D is rejected permanently.
+
 ### Acceptance
 
-- [ ] Owner decides A, B, or C, and the decision is written into this file.
-- [ ] If B: a 30-minute timebox establishes whether `hermes` has a usage flag at
-      all. Result recorded either way.
+- [x] Owner decides A, B, or C, and the decision is written into this file.
+- [x] Recorded above.
 
-**Gate 0 closes when the decision is recorded.** Nothing below depends on which
-option is chosen, only that one is.
+**Gate 0 is CLOSED.**
 
 ---
 
@@ -89,8 +93,11 @@ and nothing about them changed.
 - [x] Project name and the configuration/budget tabs obey it. *Done — tabs
       render an explanation instead of controls.*
 - [ ] **Mandates obey it.** Probe: an equivalent page test, falsified.
-- [ ] **A refused mutation shows the server's own sentence**, not "Error".
-      Probe: force a 403 mid-session and read the screen.
+- [x] **A refused mutation shows the server's own sentence**, not "Error".
+      `updateGoal` had NO error handler at all — a refused save rendered nothing
+      and left the stale value looking saved. Probe:
+      `GoalDetail.permissions.test.tsx` "surfaces the server's sentence",
+      falsified by gutting the handler.
 - [ ] **Walk every direction surface signed in as a `member` and meet no control
       that fails.** This is the gate's real test and it is manual.
 
@@ -230,9 +237,9 @@ Saying so plainly so it does not creep in:
 
 | gate | state |
 |---|---|
-| 0 — metering decision | **open — needs the owner** |
+| 0 — metering decision | **closed — A, label "not measured"** |
 | 1 — no refusing controls | open (4 of 7 criteria met) |
-| 2 — no confident lies | open, blocked on Gate 0 |
+| 2 — no confident lies | open — unblocked, scope is option A |
 | 3 — four people, one week | open, may start early |
 | 4 — packaging and least privilege | open |
 | 5 — remaining authority gaps | open |

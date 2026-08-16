@@ -6,7 +6,7 @@ import { projectsApi } from "../api/projects";
 import { assetsApi } from "../api/assets";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
-import { useCapability } from "../hooks/useCapability";
+import { useCapability, refusalMessage } from "../hooks/useCapability";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToastActions } from "../context/ToastContext";
@@ -123,7 +123,27 @@ export function GoalDetail() {
           queryKey: queryKeys.goals.list(resolvedCompanyId)
         });
       }
-    }
+    },
+    /**
+     * A save that fails must say so.
+     *
+     * There was no error handler here at all: the mutation rejected, nothing
+     * rendered, and the old value stayed on screen looking saved. That is the
+     * same silent-failure class as the four found elsewhere today, and the
+     * permission work makes it reachable — a role can change mid-session, so an
+     * editor that was legitimately open can still be refused.
+     *
+     * The server writes a human sentence for these ("Only an owner, admin or
+     * operator can change company direction."), so surface it rather than
+     * inventing "Error".
+     */
+    onError: (error) => {
+      pushToast({
+        title: "Goal not saved",
+        body: refusalMessage(error, "Could not save this goal."),
+        tone: "error",
+      });
+    },
   });
 
   const uploadImage = useMutation({
@@ -150,7 +170,7 @@ export function GoalDetail() {
     onError: (error) => {
       pushToast({
         title: "Failed to delete goal",
-        body: error instanceof Error ? error.message : "Could not delete goal.",
+        body: refusalMessage(error, "Could not delete goal."),
         tone: "error",
       });
       setDeleteDialogOpen(false);

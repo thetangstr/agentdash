@@ -67,7 +67,10 @@ vi.mock("../context/PanelContext", () => ({
   usePanel: () => ({ openPanel: vi.fn(), closePanel: vi.fn(), panelVisible: false, setPanelVisible: vi.fn() }),
 }));
 vi.mock("../context/BreadcrumbContext", () => ({ useBreadcrumbs: () => ({ setBreadcrumbs: vi.fn() }) }));
-vi.mock("../context/ToastContext", () => ({ useToastActions: () => ({ pushToast: vi.fn() }) }));
+const pushedToasts = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("../context/ToastContext", () => ({
+  useToastActions: () => ({ pushToast: (t: Record<string, unknown>) => pushedToasts.push(t) }),
+}));
 vi.mock("../components/GoalProperties", () => ({ GoalProperties: () => <div /> }));
 vi.mock("../components/GoalTree", () => ({ GoalTree: () => <div /> }));
 vi.mock("../components/GoalMetricTile", () => ({ GoalMetricTile: () => <div /> }));
@@ -85,6 +88,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   inlineEditorProps.length = 0;
+  pushedToasts.length = 0;
   vi.clearAllMocks();
   mockGoalsApi.get.mockResolvedValue(goal);
   mockGoalsApi.list.mockResolvedValue([]);
@@ -163,5 +167,55 @@ describe("GoalDetail permissions", () => {
       expect(props.readOnly, "must not be editable before capabilities resolve").toBe(true);
     }
     expect(container.querySelector('[data-testid="delete-goal-button"]')).toBeNull();
+  });
+});
+
+/**
+ * A save that fails must say so, in the server's own words.
+ *
+ * `updateGoal` had no error handler at all: the mutation rejected, nothing
+ * rendered, and the stale value sat on screen looking saved. The permission
+ * work makes that reachable — a role can change mid-session, so an editor that
+ * was legitimately open can still be refused — and a silent refusal is
+ * indistinguishable from a bug.
+ */
+describe("GoalDetail refusals", () => {
+  it("surfaces the server's sentence when a save is refused", async () => {
+    capabilities(true);
+    mockGoalsApi.update.mockRejectedValue(
+      new Error("Only an owner, admin or operator can change company direction."),
+    );
+    await render();
+
+    const editor = inlineEditorProps.find((p) => typeof p.onSave === "function");
+    expect(editor, "an editable editor should exist for an owner").toBeTruthy();
+    await act(async () => {
+      await (editor!.onSave as (v: string) => unknown)("New title");
+    });
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    }
+
+    expect(pushedToasts.length, "a refused save must not be silent").toBeGreaterThan(0);
+    expect(String(pushedToasts[0].body)).toMatch(/owner, admin or operator/);
+    expect(String(pushedToasts[0].tone)).toBe("error");
+  });
+
+  it("says nothing when the save succeeds", async () => {
+    // The control case: a toast on every save would be noise, and would make
+    // the assertion above pass for the wrong reason.
+    capabilities(true);
+    mockGoalsApi.update.mockResolvedValue({ ...goal, title: "New title" });
+    await render();
+
+    const editor = inlineEditorProps.find((p) => typeof p.onSave === "function");
+    await act(async () => {
+      await (editor!.onSave as (v: string) => unknown)("New title");
+    });
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    }
+
+    expect(pushedToasts).toHaveLength(0);
   });
 });
