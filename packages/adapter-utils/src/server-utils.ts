@@ -1,8 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildSshSpawnTarget, type SshRemoteExecutionSpec } from "./ssh.js";
+import {
+  SANDBOX_EXEC_PATH,
+  assertSandboxSupported,
+  buildSandboxProfile,
+  type EgressPolicy,
+} from "./seatbelt.js";
 import { redactCommandText } from "./command-redaction.js";
 import type {
   AdapterSkillEntry,
@@ -28,6 +35,26 @@ interface RunningProcess {
   child: ChildProcess;
   graceSec: number;
   processGroupId: number | null;
+}
+
+/**
+ * Ask for the spawned child to be confined by macOS Seatbelt.
+ *
+ * Absent means unconfined, and that is the default on purpose: turning this on
+ * for every existing agent at once would be a change to how seven live agents
+ * run on a client machine, made without anyone watching the first failure.
+ * Callers opt in.
+ */
+export interface LocalSandboxSpec {
+  /** The home directory to deny. Everything under it is closed to the child. */
+  homeDir: string;
+  egress: EgressPolicy;
+  /**
+   * Absolute paths re-opened read-write below the home deny — agent runtime
+   * state that lives outside the execution workspace. Keep it as narrow as the
+   * agent will tolerate; every entry is a hole.
+   */
+  readWritePaths?: string[];
 }
 
 interface SpawnTarget {
@@ -1066,6 +1093,56 @@ function resolveWindowsCmdShell(env: NodeJS.ProcessEnv): string {
   return path.join(fallbackRoot, "System32", "cmd.exe");
 }
 
+/**
+ * Resolve symlinks so an SBPL rule matches what the kernel will compare against.
+ *
+ * Falls back to the input when the path does not exist yet — the profile is
+ * then written against the literal path, which is the honest outcome: better a
+ * rule that may not match a not-yet-created directory than a silent rewrite to
+ * something else.
+ */
+async function canonicalisePath(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * The agent binary, with symlinks resolved, plus the link itself.
+ *
+ * Both are needed. A profile that allows only the resolved target still fails
+ * at `execvp` when the caller invokes the symlink, and one that allows only the
+ * symlink fails when the loader follows it. This is the failure that reads like
+ * a PATH problem and is not one.
+ */
+async function resolveSandboxExecPaths(executable: string): Promise<string[]> {
+  const paths = new Set<string>();
+  if (path.isAbsolute(executable)) paths.add(executable);
+  try {
+    const real = await fs.realpath(executable);
+    if (path.isAbsolute(real)) paths.add(real);
+  } catch {
+    // Unresolvable means we cannot widen for it. The profile is still built;
+    // the child will fail loudly at exec rather than run unconfined.
+  }
+  return [...paths];
+}
+
+/**
+ * Write the profile to a private temp file and hand back the path.
+ *
+ * Mode 0600 because the profile names the workspace and every re-opened path —
+ * a readable map of exactly where the confinement has holes.
+ */
+async function writeSandboxProfile(profile: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agentdash-sbpl-"));
+  const file = path.join(dir, "profile.sb");
+  await fs.writeFile(file, profile, { mode: 0o600 });
+  return file;
+}
+
 async function resolveSpawnTarget(
   command: string,
   args: string[],
@@ -1074,6 +1151,7 @@ async function resolveSpawnTarget(
   options: {
     remoteExecution?: RemoteExecutionSpec | null;
     remoteEnv?: Record<string, string> | null;
+    localSandbox?: LocalSandboxSpec | null;
   } = {},
 ): Promise<SpawnTarget> {
   const remote = options.remoteExecution ?? null;
@@ -1100,6 +1178,63 @@ async function resolveSpawnTarget(
 
   const resolved = await resolveCommandPath(command, cwd, env);
   const executable = resolved ?? command;
+
+  /**
+   * Local OS containment, when the caller asked for it.
+   *
+   * Same shape as the SSH rewrite above: the command we were asked to run
+   * becomes an argument to something that constrains it. Keyed to the CWD the
+   * caller resolved, not to a guessed `workspaces/<agent>` path — the heartbeat
+   * arrives at that directory four different ways (project workspace, managed
+   * checkout, prior session, default fallback) and a profile built from the
+   * wrong one denies the very directory the agent is standing in.
+   *
+   * `assertSandboxSupported` throws rather than falling back. A caller that
+   * asked for confinement and silently did not get it is worse off than one
+   * that failed to start, because it believes it is confined.
+   */
+  const sandbox = options.localSandbox ?? null;
+  if (sandbox && process.platform !== "win32") {
+    assertSandboxSupported();
+    /**
+     * Canonicalise every path before it reaches the profile.
+     *
+     * SBPL `subpath` matches the RESOLVED path, so a deny written against a
+     * symlinked path never fires. On macOS this is not an edge case: `/tmp` and
+     * `/var` are symlinks into `/private`, and a home or workspace reached
+     * through one produces a profile that parses, loads, confines nothing, and
+     * reports no error at all.
+     *
+     * Caught by a containment test that ran `cat` on a file it was supposed to
+     * be denied and got exit 0. Silent non-confinement is the worst failure
+     * available here — the operator believes the sandbox is on.
+     */
+    const [canonicalHome, canonicalCwd, canonicalExtras] = await Promise.all([
+      canonicalisePath(sandbox.homeDir),
+      canonicalisePath(cwd),
+      Promise.all((sandbox.readWritePaths ?? []).map(canonicalisePath)),
+    ]);
+    const profile = buildSandboxProfile({
+      homeDir: canonicalHome,
+      workspaceDir: canonicalCwd,
+      egress: sandbox.egress,
+      execPaths: await resolveSandboxExecPaths(executable),
+      readWritePaths: canonicalExtras,
+    });
+    const profilePath = await writeSandboxProfile(profile);
+    return {
+      command: SANDBOX_EXEC_PATH,
+      args: ["-f", profilePath, executable, ...args],
+      cwd,
+      cleanup: async () => {
+        // The DIRECTORY, not just the file. Removing only `profile.sb` left the
+        // mkdtemp directory behind on every run — caught by a test that counted
+        // them, which is the only reason a slow leak in a world-readable temp
+        // dir would ever have been noticed.
+        await fs.rm(path.dirname(profilePath), { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  }
 
   if (process.platform !== "win32") {
     return { command: executable, args };
@@ -1764,6 +1899,13 @@ export async function runChildProcess(
     terminalResultCleanup?: TerminalResultCleanupOptions;
     stdin?: string;
     remoteExecution?: RemoteExecutionSpec | null;
+    /**
+     * Confine the child with macOS Seatbelt, keyed to `opts.cwd`.
+     *
+     * Omitted means unconfined — the behaviour every caller has today. Passing
+     * it on a non-darwin host throws rather than running unconfined.
+     */
+    localSandbox?: LocalSandboxSpec | null;
   },
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
@@ -1792,6 +1934,7 @@ export async function runChildProcess(
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv, {
       remoteExecution: opts.remoteExecution ?? null,
       remoteEnv: opts.remoteExecution ? opts.env : null,
+      localSandbox: opts.localSandbox ?? null,
     })
       .then((target) => {
         const child = spawn(target.command, target.args, {

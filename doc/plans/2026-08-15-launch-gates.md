@@ -284,8 +284,41 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
 - [ ] `find <install> -name .git` returns nothing.
 - [ ] The service account cannot write the install. Probe: attempt a write as
       that user and get `EACCES`.
-- [ ] An agent cannot read `~/.config/agentdash` or write outside its workspace.
-      Probe: run one that tries.
+- [~] An agent cannot read `~/.config/agentdash` or write outside its workspace.
+      **The mechanism is built, tested and falsified. It is NOT yet switched on
+      for the live agents, and that is deliberate.**
+      The seam turned out to exist: every local adapter — including the vendored
+      `hermes-paperclip-adapter` all seven live agents use — spawns through
+      `runChildProcess` in our own `@paperclipai/adapter-utils`, and
+      `resolveSpawnTarget` there already rewrites the command for SSH. Local
+      Seatbelt confinement is the same rewrite. It is keyed to the CWD the
+      caller resolved, exactly as this gate required, not to a guessed
+      `workspaces/<agent>` path.
+      The profile MOVED to `adapter-utils/seatbelt.ts` rather than being copied
+      — the bridge worker now re-exports it, so there is one implementation. A
+      security check with two copies eventually disagrees with itself.
+      **Probe:** a real `cat` under `sandbox-exec` — reads inside the workspace
+      succeed, the same binary reading a file one directory up fails, and that
+      same read succeeds with the sandbox off (so the denial is the sandbox and
+      not a broken fixture).
+      **Two real bugs the containment test caught, both silent:**
+      1. `/var` and `/tmp` are symlinks into `/private` on macOS, and SBPL
+         `subpath` matches the RESOLVED path — so a deny written against a
+         non-canonical home parses, loads, confines nothing and reports no
+         error. The first run of this test read a file it was supposed to be
+         denied and exited 0. Paths are now canonicalised before the profile is
+         built. A profile-text assertion alone would never have found this.
+      2. Cleanup removed `profile.sb` but not its mkdtemp directory, leaking one
+         per run into a world-readable temp dir.
+      Falsified four ways: stop canonicalising, put the workspace allow above
+      the home deny (breaks BOTH the shape test and the live one, exactly as the
+      spike predicted), skip the sandbox when asked for it, and re-leak the
+      directory.
+      **Still to do, and it needs the owner:** switching it on. Default-off is
+      not timidity — enabling it means seven live agents on a client machine
+      start running confined, and the first thing to establish is which runtime
+      paths hermes actually needs re-opened (`readWritePaths` exists for that).
+      That wants one agent, on uat, watched.
 - [ ] Nightly **and** hourly backups still run afterwards. Probe: force both.
 - [ ] Database credentials are no longer `paperclip:paperclip`.
 
