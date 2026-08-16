@@ -92,7 +92,10 @@ and nothing about them changed.
       *Done.*
 - [x] Project name and the configuration/budget tabs obey it. *Done — tabs
       render an explanation instead of controls.*
-- [ ] **Mandates obey it.** Probe: an equivalent page test, falsified.
+- [x] **Mandates obey it.** The grant form is replaced by an explanation for a
+      member; the granted-mandates list stays visible, because seeing what your
+      agent may do is the point of read-only. Probe:
+      `MandatesTab.permissions.test.tsx`, falsified by removing the gate.
 - [x] **A refused mutation shows the server's own sentence**, not "Error".
       `updateGoal` had NO error handler at all — a refused save rendered nothing
       and left the stale value looking saved. Probe:
