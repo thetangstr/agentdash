@@ -370,6 +370,9 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
       | `cat ~/gate4-canary.txt` | on | exit 1, `Operation not permitted` |
       | same agent, same file | **off** | exit 0, file read |
       | `cat ~/.config/agentdash/uat.env` | on | exit 1, `Operation not permitted`, no `DATABASE_URL` in output |
+
+      All three used the **`process` adapter**. See the correction below: this
+      does not extend to the hermes adapter the live agents use.
       The control is what makes the first row mean anything: without it,
       "denied" and "the file was missing" look identical.
       **An earlier attempt at this probe was INCONCLUSIVE and is not counted.**
@@ -387,9 +390,30 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
       2. Model discovery also goes through `runChildProcess` and legitimately
          reads the operator's config. It is opted out explicitly with
          `NEVER_SANDBOX` rather than by inferring intent from a runId prefix.
-      **hermes runs fine confined**, with no extra `readWritePaths` needed:
-      20.4s unconfined → 43.6s confined, succeeded both times, reached the model
-      provider and reported back through the local API.
+      **CORRECTION — hermes is NOT confined, and my earlier claim here was
+      wrong.** I wrote "hermes runs fine confined, 20.4s → 43.6s". It ran fine
+      because it was never confined; the timing difference was variance in the
+      work it chose to do.
+      `hermes-paperclip-adapter` declares a dependency on
+      `@paperclipai/adapter-utils`, and pnpm resolves that to the **published
+      2026.325.0 from npm**, not to our workspace `0.3.1`. That published copy
+      contains **zero** mentions of `localSandbox` or `sandbox-exec` — it cannot
+      confine anything. The server resolves the workspace copy; hermes does not.
+      So the containment that IS proven covers the `process` adapter, which is
+      what the canary probe used. It does not cover the hermes adapter, which is
+      what all seven live agents actually run.
+      **How I fooled myself, recorded because the mechanism matters:** I watched
+      for `agentdash-sbpl-*` profile directories during a hermes run and saw
+      three. They were pre-existing debris from earlier test runs, re-listed by
+      the watch loop on every iteration. I later noticed their timestamps were
+      three hours stale and did not connect it. Then I proved confinement with a
+      DIFFERENT adapter and carried the conclusion across.
+      **The fix, not yet applied:** `pnpm.overrides` already exists in the root
+      manifest, and only one vendored package has this problem. Adding
+      `"@paperclipai/adapter-utils": "workspace:*"` would force hermes onto our
+      copy. It is one line and it needs care: `0.3.1` and `2026.325.0` are
+      different version lineages, so ours may not satisfy what hermes calls.
+      That needs a `pnpm install` and a hermes run to verify.
       **Left for the owner:** whether to set the same variable on mkboard. That
       is six live agents doing real MKThink work, and the honest thing is to let
       uat carry it through Gate 3's week first.

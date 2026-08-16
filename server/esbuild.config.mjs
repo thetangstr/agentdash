@@ -89,6 +89,7 @@ export function bundledWorkspacePackages() {
 export function externalDependencyUnion() {
   const deps = {};
   const conflicts = [];
+  const unresolved = [];
   for (const pkgPath of bundledWorkspacePackages()) {
     let manifest;
     try {
@@ -98,13 +99,40 @@ export function externalDependencyUnion() {
     }
     for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
       if (WORKSPACE_SCOPES.some((scope) => name.startsWith(scope))) continue;
-      if (deps[name] && deps[name] !== range) {
-        conflicts.push({ name, existing: deps[name], incoming: range, pkgPath });
+      const pinned = installedVersion(name, pkgPath);
+      if (!pinned) unresolved.push({ name, pkgPath, range });
+      const value = pinned ?? range;
+      if (deps[name] && deps[name] !== value) {
+        conflicts.push({ name, existing: deps[name], incoming: value, pkgPath });
       }
-      deps[name] = range;
+      deps[name] = value;
     }
   }
-  return { deps, conflicts };
+  return { deps, conflicts, unresolved };
+}
+
+/**
+ * The version actually installed in this workspace, not the range asked for.
+ *
+ * A shipped artefact should carry what was TESTED. Emitting `^1.2.3` lets the
+ * install on the target resolve 1.9.0 — a version nobody ran the suite against,
+ * chosen by whenever the install happened to run. Pinning removes that.
+ *
+ * It also matters because `pnpm deploy` cannot be used here: it copies the
+ * package's `.ts` sources into the output, which is precisely what a
+ * source-free install exists to avoid.
+ */
+function installedVersion(name, pkgPath) {
+  const candidates = [resolve(repoRoot, pkgPath, "node_modules", name), resolve(repoRoot, "node_modules", name)];
+  for (const dir of candidates) {
+    try {
+      const version = JSON.parse(readFileSync(resolve(dir, "package.json"), "utf8")).version;
+      if (typeof version === "string" && version.length > 0) return version;
+    } catch {
+      // Not installed here; try the next location.
+    }
+  }
+  return null;
 }
 
 /** @type {import('esbuild').BuildOptions} */

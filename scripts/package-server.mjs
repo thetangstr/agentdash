@@ -69,7 +69,12 @@ copyIfPresent(resolve(repoRoot, "ui/dist"), resolve(outDir, "ui-dist"), "ui");
 copyIfPresent(resolve(repoRoot, "packages/mcp-server/agentdash-mcp-server.tgz"), resolve(outDir, "mcp-dist/agentdash-mcp-server.tgz"), "mcp tarball");
 
 const serverManifest = JSON.parse(readFileSync(resolve(repoRoot, "server/package.json"), "utf8"));
-const { deps, conflicts } = externalDependencyUnion();
+const { deps, conflicts, unresolved } = externalDependencyUnion();
+for (const u of unresolved) {
+  // A dependency we could not pin falls back to its range, which means the
+  // target may install a version nobody tested. Say so rather than let it pass.
+  console.warn(`  NOT PINNED: ${u.name} (${u.range}) — not installed under ${u.pkgPath}`);
+}
 for (const c of conflicts) {
   // Surfaced rather than silently resolved: two workspace packages asking for
   // different ranges of the same dependency is a decision, not a detail.
