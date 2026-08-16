@@ -261,10 +261,12 @@ on the server-side execution path.
 
 ### In scope, corrected against what was verified
 
-- Ship a built artefact. **Not 10–20 MB** — all 12 workspace packages export
-  `.ts` directly and `@embedded-postgres/darwin-arm64` alone is 145 MB. Choose:
-  build all 12 and rewrite their `exports`, esbuild-bundle the server the way
-  `cli` already is, or keep `tsx` and drop the "no source" claim.
+- Ship a built artefact. **Decided by trying it: esbuild-bundle the server, the
+  way `cli` already is.** The third option — rewrite 12 packages' `exports` —
+  proved unnecessary; the bundler does not care that they export `.ts`, because
+  it compiles them in. The bundle is 5.2 MB. `@embedded-postgres/darwin-arm64`
+  is still 145 MB, but it is a `node_modules` dependency, not source, and the
+  criterion here is "no source on disk", not "small".
 - Run as an account that cannot write the install. This is a **migration**: the
   Postgres cluster, secrets master key, workspaces, plugins and *two* backup
   trees all derive from `os.homedir()`, and harness credentials must be
@@ -280,10 +282,49 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
 
 ### Acceptance
 
-- [ ] Fresh machine, one command, serving. Probe: run it on a scratch account.
-- [ ] `find <install> -name .git` returns nothing. **Probed 2026-08-15: returns
-      1, and `.git` is 192 MB.** Unchanged and blocked on the packaging decision
-      above — all 12 workspace packages export `.ts` directly.
+- [~] Fresh machine, one command, serving. **The build and layout are proven;
+      the install command is not written.** See below.
+- [~] `find <install> -name .git` returns nothing. **The packaging that makes
+      this true now exists and was proven by running it.**
+      **Why it was needed:** launchd runs `pnpm exec tsx src/index.ts` — the
+      production instances execute the TypeScript source tree. That is the
+      reason 2,329 source files and 192 MB of git history sit on the client's
+      machine, not an oversight in what gets copied.
+      **What was built:** `server/esbuild.config.mjs` and
+      `scripts/package-server.mjs`. 613 source files → one 5.2 MB bundle, 0
+      warnings. The install contains `dist/index.js`, `dist/migrations` (117
+      SQL files), `dist/onboarding-assets`, `ui-dist`, `mcp-dist` and a
+      generated `package.json` — **0 `.ts` files, 0 `.git`**.
+      **Proven by running it, not by reasoning:** the packaged install started
+      against a scratch database, applied all 117 migrations, and produced a
+      public schema of **167 tables — identical to live `uat`**. It served
+      `GET /api/health` 200 and the UI 200 with `<title>AgentDash</title>`.
+      **No source changes were needed.** `app.ts` already resolves the UI and
+      MCP assets through a packaged-path-then-repo-path candidate list, so it
+      was written anticipating this layout.
+      **Three bugs found, each of which built fine and failed at RUNTIME:**
+      1. A hand-maintained externals list (the pattern the CLI config uses)
+         covers direct dependencies only. The first transitive one — `vite`
+         dragging in `lightningcss` and a native `fsevents.node` — failed the
+         build. Replaced with a rule.
+      2. The generated manifest needs the UNION of external dependencies across
+         all 13 bundled workspace packages, not the server's own 45. An install
+         built from `server/package.json` died on `Cannot find package
+         'drizzle-orm'`, then on `'postgres'` — both belong to `packages/db`,
+         whose CODE is in the bundle but whose DEPENDENCIES are not.
+      3. The rule must know every workspace scope. Knowing only `@paperclipai/`
+         externalised `@agentdash/mcp-server`, which is `workspace:*` and never
+         published — the install would import something that cannot exist in
+         its `node_modules`.
+      Falsified three ways, one per bug; each fails its own test.
+      **What this does NOT do, and it is the remaining work:** nothing is
+      deployed. `deploy/agentdash-server.sh` still runs `tsx src/index.ts`, and
+      the trial's `node_modules` was symlinked from the dev tree rather than
+      installed, because the point was to test the runtime and not the
+      installer. A real install needs `npm install --omit=dev` (or
+      `pnpm deploy`) on the target, and switching the launchd job over. Both
+      change how the client's machine boots the product, so they are the
+      owner's to sequence.
 - [ ] The service account cannot write the install. **Probed: the server runs as
       `yang` and the install is writable by it.** This is a migration, not a
       permission flip: the Postgres cluster, secrets master key, workspaces,
