@@ -267,6 +267,24 @@ export function InlineEditor({
     };
   }, [autosaveState, commit, draft, markDirty, multiline, multilineFocused, nullable, reset, runSave, value]);
 
+  // Checked before every other branch, and the ordering is the point.
+  //
+  // Below `if (multiline)` and `if (editing)` this does nothing for a
+  // single-line field: the click sets `editing`, and the editing branch returns
+  // an editor first. The prop landed in an earlier commit while this block
+  // silently did not, and typecheck stayed green because an unused destructured
+  // variable is legal — so `readOnly` was a no-op that looked implemented.
+  if (readOnly) {
+    const ReadOnlyTag = value && multiline ? "div" : Tag;
+    return (
+      <ReadOnlyTag
+        className={cn("rounded overflow-hidden", pad, !value && "text-muted-foreground italic", className)}
+      >
+        {value || placeholder}
+      </ReadOnlyTag>
+    );
+  }
+
   if (multiline) {
     const previewValue = autosaveState === "saved" || autosaveState === "idle" ? draft : value;
     const hasValue = Boolean(previewValue.trim());
