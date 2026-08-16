@@ -281,9 +281,13 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
 ### Acceptance
 
 - [ ] Fresh machine, one command, serving. Probe: run it on a scratch account.
-- [ ] `find <install> -name .git` returns nothing.
-- [ ] The service account cannot write the install. Probe: attempt a write as
-      that user and get `EACCES`.
+- [ ] `find <install> -name .git` returns nothing. **Probed 2026-08-15: returns
+      1, and `.git` is 192 MB.** Unchanged and blocked on the packaging decision
+      above — all 12 workspace packages export `.ts` directly.
+- [ ] The service account cannot write the install. **Probed: the server runs as
+      `yang` and the install is writable by it.** This is a migration, not a
+      permission flip: the Postgres cluster, secrets master key, workspaces,
+      plugins and both backup trees all derive from `os.homedir()`.
 - [~] An agent cannot read `~/.config/agentdash` or write outside its workspace.
       **The mechanism is built, tested and falsified. It is NOT yet switched on
       for the live agents, and that is deliberate.**
@@ -320,7 +324,9 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
       paths hermes actually needs re-opened (`readWritePaths` exists for that).
       That wants one agent, on uat, watched.
 - [ ] Nightly **and** hourly backups still run afterwards. Probe: force both.
-- [ ] Database credentials are no longer `paperclip:paperclip`.
+- [ ] Database credentials are no longer `paperclip:paperclip`. **Probed: still
+      `postgres://paperclip:paperclip@`.** Rotating means editing both env files
+      and restarting both live instances together.
 
 **Gate 4 closes when a fresh install serves with no source on disk and a
 confined agent.**
