@@ -66,3 +66,33 @@ export const updateCompanyBrandingSchema = z
   );
 
 export type UpdateCompanyBranding = z.infer<typeof updateCompanyBrandingSchema>;
+
+/**
+ * What an AGENT may change about how the company presents itself.
+ *
+ * The colour and the logo, and nothing else. A company's name and description
+ * are its identity — the answer to "who are we" — and that belongs with the
+ * people who set direction, not with something acting on their behalf.
+ *
+ * This is not hypothetical. Probed on the live uat instance: a CEO-role agent
+ * PATCHed the company to "RENAMED BY CEO AGENT" and rewrote its description,
+ * both confirmed in the database, through two separate routes. The role check
+ * was there; the field list was not, so `updateCompanyBrandingSchema` — which
+ * exists for humans and legitimately carries name and description — was doing
+ * double duty as the agent's permission boundary.
+ *
+ * `.strict()` matters here: without it an agent could send `name` and have it
+ * silently pass through rather than be refused.
+ */
+export const agentCompanyBrandingSchema = z
+  .object({
+    brandColor: brandColorSchema,
+    logoAssetId: logoAssetIdSchema,
+  })
+  .strict()
+  .refine(
+    (value) => value.brandColor !== undefined || value.logoAssetId !== undefined,
+    "At least one branding field must be provided",
+  );
+
+export type AgentCompanyBranding = z.infer<typeof agentCompanyBrandingSchema>;

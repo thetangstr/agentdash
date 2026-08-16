@@ -813,6 +813,7 @@ export {
 export {
   createCompanySchema,
   updateCompanySchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,

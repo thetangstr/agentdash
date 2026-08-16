@@ -12,6 +12,7 @@ import {
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
   feedbackVoteValueSchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   updateCompanySchema,
 } from "@paperclipai/shared";
@@ -107,6 +108,34 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       return;
     }
     assertCompanyAccess(req, target.companyId);
+  }
+
+  /**
+   * A company's name and description are its identity, not its branding.
+   *
+   * A CEO agent legitimately manages the colour and the logo. Renaming the
+   * company is a different act: it is the answer to "who are we", and it
+   * belongs with the people who set direction.
+   *
+   * Parsing with a narrower schema alone would answer this with a 400
+   * "Validation error", which is precisely the unhelpful refusal Gate 1
+   * removed elsewhere — the reader cannot tell a boundary from a bug. So the
+   * refusal is explicit and says what the rule is, and the narrow schema stays
+   * behind it as the belt to that braces.
+   */
+  const AGENT_FORBIDDEN_IDENTITY_FIELDS = ["name", "description"] as const;
+
+  function assertAgentMayNotChangeIdentity(req: Request) {
+    if (req.actor.type !== "agent") return;
+    const body = req.body as Record<string, unknown> | null | undefined;
+    if (!body || typeof body !== "object") return;
+    const attempted = AGENT_FORBIDDEN_IDENTITY_FIELDS.filter((field) => field in body);
+    if (attempted.length === 0) return;
+    throw forbidden(
+      `An agent cannot change the company's ${attempted.join(" or ")}. `
+      + "The name and description are the company's identity and can only be "
+      + "changed by an owner, admin or operator.",
+    );
   }
 
   async function assertCanUpdateBranding(req: Request, companyId: string) {
@@ -631,7 +660,12 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       if (actorAgent.companyId !== companyId) {
         throw forbidden("Agent key cannot access another company");
       }
-      body = updateCompanyBrandingSchema.parse(req.body);
+      // Colour and logo only. `updateCompanyBrandingSchema` also carries name
+      // and description — that is correct for a human and was, until this was
+      // probed on a live instance, the reason a CEO agent could rename the
+      // company and rewrite its description. See `agentCompanyBrandingSchema`.
+      assertAgentMayNotChangeIdentity(req);
+      body = agentCompanyBrandingSchema.parse(req.body);
     } else {
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
@@ -712,7 +746,16 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.patch("/:companyId/branding", validate(updateCompanyBrandingSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanUpdateBranding(req, companyId);
-    const company = await svc.update(companyId, req.body);
+    /**
+     * Re-parsed after the guard, because the `validate` middleware above runs
+     * before we know who is asking. `name` is a legitimate field of the human
+     * schema, so it passed validation and reached the update — this route was
+     * the second way a CEO agent renamed the company on the live instance.
+     */
+    assertAgentMayNotChangeIdentity(req);
+    const payload =
+      req.actor.type === "agent" ? agentCompanyBrandingSchema.parse(req.body) : req.body;
+    const company = await svc.update(companyId, payload);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
       return;
@@ -727,7 +770,10 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       action: "company.branding_updated",
       entityType: "company",
       entityId: companyId,
-      details: req.body,
+      // What was applied, not what was sent. Logging the raw body would record
+      // a `name` change that the parse above refused, which is a false audit
+      // entry — the worst kind, because it is the record you reach for later.
+      details: payload,
     });
     res.json(company);
   });

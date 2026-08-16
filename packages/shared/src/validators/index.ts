@@ -21,6 +21,7 @@ export {
 export {
   createCompanySchema,
   updateCompanySchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   type CreateCompany,
   type UpdateCompany,

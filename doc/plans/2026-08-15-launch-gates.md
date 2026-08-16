@@ -304,7 +304,31 @@ all day.
 - [ ] Plugin host `goals.create/update` enforces capabilities at dispatch.
 - [ ] `assertInviteRoleCeiling` applies to agents. Today an agent holding
       `users:invite` can invite a human as **owner**.
-- [ ] A CEO-role agent cannot `PATCH /companies/:id` name or description.
+- [x] A CEO-role agent cannot `PATCH /companies/:id` name or description.
+      **Done.** The role check was already right; the FIELD LIST was the hole.
+      `updateCompanyBrandingSchema` legitimately carries name and description
+      for human callers and was doing double duty as the agent's boundary, so a
+      CEO agent could rename the company through **two** routes.
+      **Probe, before:** with a real CEO-role agent key on uat,
+      `PATCH /companies/:id {name}` → 200 and the database read back
+      `"RENAMED BY CEO AGENT"`; `PATCH /:id/branding {description}` → 200 and
+      the description was rewritten. Both confirmed by reading the row back.
+      **Probe, after:** rename → 403, description → 403, rename smuggled in
+      beside a legitimate `brandColor` → 403, and `brandColor` alone → 200 with
+      the colour applied and name and description untouched.
+      Refusal is a 403 with a sentence, not a 400 "Validation error" — a reader
+      cannot tell that from a bug, which is the Gate 1 rule.
+      Falsified four ways: remove the explicit refusal (4 route tests fail),
+      drop `description` from the forbidden list (1 fails), drop `.strict()`
+      from the agent schema (the smuggling test fails). Widening the schema
+      back to the human one alone does NOT fail a route test — the explicit
+      guard already covers it — which is why the schema is tested directly.
+      **Cost of the probe, recorded:** renaming the company on uat overwrote
+      its real description, and my first restore wrote `null` because I had not
+      captured the value before probing. Recovered byte-for-byte from the
+      03:38 backup. The probe agent is terminated rather than deleted —
+      `activity_log` references it, and erasing that would be erasing the
+      record of what happened.
 - [ ] Each has a probe showing the old behaviour and the new 403.
 
 **Gate 5 closes when all three probes return 403.**
