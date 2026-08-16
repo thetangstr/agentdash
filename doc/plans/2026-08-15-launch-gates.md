@@ -134,11 +134,22 @@ might act on.
       (`entry.costCents`, `row.inputTokens`). With no cost events there are no
       rows, so nothing renders and there is no false zero. The risk is only
       where a surface AGGREGATES to a total or defaults to 0.
-      By that test the real list was three, not thirteen:
+      By that test the real list was six, on two pages — and I found the last
+      three only by writing a test that asserts over a whole REGION rather than
+      one element at a time. Missing a surface is the failure mode here; a test
+      naming each surface reproduces the miss.
       - [x] `Costs.tsx` Inference-spend tile
       - [x] `Costs.tsx` headline spend figure — **missed on the first pass**,
             on the same page and the same value, which would have shown
             "Not measured" in one place and "$0.00" in another
+      - [x] `Costs.tsx` "usage" token box — **missed on the second pass**, in
+            the same card as the headline I had just gated
+      - [x] `Costs.tsx` budget utilisation bar and its "0% of monthly budget
+            consumed" caption. Utilisation is spend over budget, so unmeasured
+            spend makes it a green bar reporting headroom the owner does not
+            know they have — the most actionable false claim on the page
+      - [x] `Costs.tsx` Budget tile subtitle "$0.00 of $500.00". The cap is
+            real and is still stated; what is gone is not knowable
       - [x] `UserProfile.tsx` — done properly, server-side. The profile payload
             now carries `measured`, scoped to the **company** and unbounded by
             date exactly as `CostSummary.measured` is. `costEventCount` could
@@ -159,8 +170,17 @@ might act on.
       invoices and credits, not derived from tokens, so a zero there is a real
       zero and there is no evidence they cannot be measured.
 
-- [ ] Run counts, wall-clock and model/provider are shown, because those we do
-      know. Probe: the same page shows 30 runs for `uat`.
+- [~] Run counts, wall-clock and model/provider are shown, because those we do
+      know. **Partly wrong as written.** Probed `heartbeat_runs`: run counts and
+      wall-clock are complete and knowable — uat 69 runs, all with both
+      `started_at` and `finished_at`, mean 41s; mkboard 8 runs, mean 154s. But
+      there is **no `model` or `provider` column on `heartbeat_runs`**, so that
+      third of the criterion asks for something the schema does not record. It
+      is the same gap as the token counts and has the same three options as
+      Gate 0. Not silently dropped: recorded here as out of reach without a
+      schema change, and the criterion is narrowed to runs and wall-clock.
+      Still open: the profile page draws completions per day, but no surface
+      yet shows run counts or durations beside the unmeasured spend.
 - [x] A test asserts the "not measured" path, falsified by making the API return
       a zero and watching it fail. *Done — `costs-service.test.ts`,
       `user-profile-routes.test.ts` (3 cases), `UserProfile.measured.test.tsx`

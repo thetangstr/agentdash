@@ -73,14 +73,16 @@ function MetricTile({
   value,
   subtitle,
   icon: Icon,
+  testId,
 }: {
   label: string;
   value: string;
   subtitle: string;
   icon: ComponentType<{ className?: string }>;
+  testId?: string;
 }) {
   return (
-    <div className="border border-border p-4">
+    <div className="border border-border p-4" data-testid={testId}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
@@ -590,6 +592,7 @@ export function Costs() {
                 deciding whether to trust the product with money. `measured` asks
                 whether spend was EVER recorded, not whether this range was quiet. */}
             <MetricTile
+              testId="inference-spend-tile"
               label="Inference spend"
               value={spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
               subtitle={
@@ -602,7 +605,7 @@ export function Costs() {
             <MetricTile
               label="Budget"
               value={activeBudgetIncidents.length > 0 ? String(activeBudgetIncidents.length) : (
-                spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
+                spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
                   ? `${spendData.summary.utilizationPercent}%`
                   : "Open"
               )}
@@ -610,7 +613,12 @@ export function Costs() {
                 activeBudgetIncidents.length > 0
                   ? `${budgetData?.pausedAgentCount ?? 0} agents paused · ${budgetData?.pausedProjectCount ?? 0} projects paused`
                   : spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                    ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
+                    // A cap is configured and real; how much of it is gone is not
+                    // knowable without metering, and "$0.00 of $500" reads as
+                    // headroom the owner does not actually know they have.
+                    ? spendMeasured
+                      ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
+                      : `${formatCents(spendData.summary.budgetCents)} cap · usage not measured`
                     : "No monthly cap configured"
               }
               icon={Coins}
@@ -668,7 +676,7 @@ export function Costs() {
               ) : null}
 
               <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
-                <Card>
+                <Card data-testid="inference-ledger-card">
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
                     <CardDescription>
@@ -689,12 +697,17 @@ export function Costs() {
                       </div>
                       <div className="border border-border px-4 py-3 text-right">
                         <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">usage</div>
-                        <div className="mt-1 text-lg font-medium tabular-nums">
-                          {formatTokens(inferenceTokenTotal)}
+                        <div className="mt-1 text-lg font-medium tabular-nums" data-testid="inference-usage-tokens">
+                          {spendMeasured ? formatTokens(inferenceTokenTotal) : "—"}
                         </div>
                       </div>
                     </div>
-                    {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
+                    {/* Utilisation is spend divided by budget, so an unmeasured
+                        spend makes it 0% — a green bar reading "0% of monthly
+                        budget consumed" is the single most actionable false
+                        claim on this page. Withhold the whole thing rather than
+                        colour a bar from a number we do not have. */}
+                    {spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
                       <div className="space-y-2">
                         <div className="h-2 overflow-hidden bg-muted">
                           <div
