@@ -88,7 +88,7 @@ function setup(measured: boolean, budgetCents: number) {
   mockCostsApi.runActivity.mockResolvedValue({
     companyId: "company-1",
     totalRuns: 69,
-    completedRuns: 61,
+    succeededRuns: 61,
     failedRuns: 8,
     totalSeconds: 2_829,
     medianSeconds: 41,
@@ -206,7 +206,7 @@ describe("Costs shows what it does know", () => {
     mockCostsApi.runActivity.mockResolvedValue({
       companyId: "company-1",
       totalRuns: 0,
-      completedRuns: 0,
+      succeededRuns: 0,
       failedRuns: 0,
       totalSeconds: 0,
       medianSeconds: null,

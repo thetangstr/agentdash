@@ -131,7 +131,7 @@ function RunActivityStrip({ activity }: { activity?: CostRunActivity }) {
         agent {activity.totalRuns === 1 ? "run" : "runs"}
       </span>
       <span>
-        <span className="tabular-nums font-medium text-foreground">{activity.completedRuns}</span> completed
+        <span className="tabular-nums font-medium text-foreground">{activity.succeededRuns}</span> succeeded
         {activity.failedRuns > 0 ? (
           <>
             {" · "}

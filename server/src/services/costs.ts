@@ -2,6 +2,7 @@ import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql } from "drizzle-orm
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
+import type { HeartbeatRunStatus } from "@paperclipai/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
 
@@ -9,6 +10,17 @@ export interface CostDateRange {
   from?: Date;
   to?: Date;
 }
+
+/**
+ * Pinned to the shared vocabulary rather than written out as literals.
+ *
+ * `HEARTBEAT_RUN_STATUSES` is queued | scheduled_retry | running | succeeded |
+ * failed | cancelled | timed_out. "completed" is NOT one of them — it belongs
+ * to `RUN_LIVENESS_STATES`, a different column — and filtering on it returned
+ * 0 successes out of 73 real runs on the uat instance.
+ */
+const SUCCEEDED_STATUS: HeartbeatRunStatus = "succeeded";
+const FAILED_STATUSES: HeartbeatRunStatus[] = ["failed", "timed_out"];
 
 const METERED_BILLING_TYPE = "metered_api";
 const SUBSCRIPTION_BILLING_TYPES = ["subscription_included", "subscription_overage"] as const;
@@ -184,8 +196,15 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       const [row] = await db
         .select({
           totalRuns: sql<number>`count(*)::int`,
-          completedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'completed')::int`,
-          failedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'failed')::int`,
+          // Read off the shared constants, not string literals. The first
+          // version of this filtered on 'completed' and returned 0 of 73 on a
+          // live instance whose runs are all 'succeeded' — 'completed' is a
+          // RUN_LIVENESS_STATE, a different column entirely. A literal here is
+          // silently wrong; a renamed constant breaks the build.
+          succeededRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = ${SUCCEEDED_STATUS})::int`,
+          // A timeout is a failure the owner cares about. `cancelled` is
+          // neither — somebody stopped it on purpose.
+          failedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} in (${sql.join(FAILED_STATUSES.map((status) => sql`${status}`), sql`, `)}))::int`,
           totalSeconds: sql<number>`coalesce(sum(${seconds}), 0)::double precision`,
           medianSeconds: sql<number | null>`percentile_cont(0.5) within group (order by ${seconds})`,
           p90Seconds: sql<number | null>`percentile_cont(0.9) within group (order by ${seconds})`,
@@ -198,7 +217,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       return {
         companyId,
         totalRuns,
-        completedRuns: Number(row?.completedRuns ?? 0),
+        succeededRuns: Number(row?.succeededRuns ?? 0),
         failedRuns: Number(row?.failedRuns ?? 0),
         totalSeconds: Number(row?.totalSeconds ?? 0),
         // Null rather than 0 when there is nothing to average. A zero here

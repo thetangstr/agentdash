@@ -9,6 +9,7 @@ vi.mock("../services/index.js", async (importOriginal) => {
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { HEARTBEAT_RUN_STATUSES } from "@paperclipai/shared";
 import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { costService } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
@@ -81,7 +82,7 @@ const mockCostService = vi.hoisted(() => ({
   runActivity: vi.fn().mockResolvedValue({
     companyId: "company-1",
     totalRuns: 3,
-    completedRuns: 2,
+    succeededRuns: 2,
     failedRuns: 1,
     totalSeconds: 90,
     medianSeconds: 30,
@@ -284,7 +285,7 @@ describe("cost routes", () => {
     const app = await createApp();
     const res = await request(app).get("/api/companies/company-1/costs/run-activity");
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ totalRuns: 3, completedRuns: 2, failedRuns: 1, medianSeconds: 30 });
+    expect(res.body).toMatchObject({ totalRuns: 3, succeededRuns: 2, failedRuns: 1, medianSeconds: 30 });
   });
 
   it("is behind the spend-visibility guard, not merely company access", async () => {
@@ -866,16 +867,43 @@ describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () =
     it("reports counts and wall-clock, which we do record", async () => {
       const { companyId, agentId } = await seedCompany();
       const base = new Date("2026-08-14T12:00:00.000Z");
-      await seedRun(companyId, agentId, "completed", base, 10);
-      await seedRun(companyId, agentId, "completed", new Date(base.getTime() + 60_000), 30);
+      await seedRun(companyId, agentId, "succeeded", base, 10);
+      await seedRun(companyId, agentId, "succeeded", new Date(base.getTime() + 60_000), 30);
       await seedRun(companyId, agentId, "failed", new Date(base.getTime() + 120_000), 50);
 
       const activity = await costs.runActivity(companyId);
       expect(activity.totalRuns).toBe(3);
-      expect(activity.completedRuns).toBe(2);
+      expect(activity.succeededRuns).toBe(2);
       expect(activity.failedRuns).toBe(1);
       expect(activity.totalSeconds).toBe(90);
       expect(activity.medianSeconds).toBe(30);
+    });
+
+    it("classifies every status the system actually writes", async () => {
+      /**
+       * The bug this exists to prevent, found by reading the live database
+       * back rather than trusting a 200: the first version filtered on
+       * 'completed' and reported 0 successes out of 73 real runs, because
+       * `heartbeat_runs.status` is 'succeeded' — 'completed' belongs to
+       * `RUN_LIVENESS_STATES`, a different column.
+       *
+       * Seeding from HEARTBEAT_RUN_STATUSES rather than hand-written literals
+       * is the point. A test that seeds the same invented string the
+       * implementation filters on agrees with itself and proves nothing.
+       */
+      const { companyId, agentId } = await seedCompany();
+      const base = new Date("2026-08-14T12:00:00.000Z");
+      for (const [index, status] of HEARTBEAT_RUN_STATUSES.entries()) {
+        await seedRun(companyId, agentId, status, new Date(base.getTime() + index * 60_000), 10);
+      }
+
+      const activity = await costs.runActivity(companyId);
+      expect(activity.totalRuns).toBe(HEARTBEAT_RUN_STATUSES.length);
+      expect(activity.succeededRuns, "exactly one seeded run succeeded").toBe(1);
+      expect(activity.failedRuns, "'failed' and 'timed_out' both count as failure").toBe(2);
+      // Neither number may be zero: that is precisely how the bug presented.
+      expect(activity.succeededRuns).toBeGreaterThan(0);
+      expect(activity.failedRuns).toBeGreaterThan(0);
     });
 
     it("returns null durations rather than a zero when there are no runs", async () => {
@@ -892,7 +920,7 @@ describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () =
       // An in-flight run has no wall-clock yet. Counting it with a null finish
       // would either crash the percentile or silently treat it as instant.
       const { companyId, agentId } = await seedCompany();
-      await seedRun(companyId, agentId, "completed", new Date("2026-08-14T12:00:00.000Z"), 20);
+      await seedRun(companyId, agentId, "succeeded", new Date("2026-08-14T12:00:00.000Z"), 20);
       await db.insert(heartbeatRuns).values({
         companyId,
         agentId,
@@ -909,8 +937,8 @@ describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () =
 
     it("honours the date range", async () => {
       const { companyId, agentId } = await seedCompany();
-      await seedRun(companyId, agentId, "completed", new Date("2026-08-14T12:00:00.000Z"), 20);
-      await seedRun(companyId, agentId, "completed", new Date("2026-01-05T12:00:00.000Z"), 20);
+      await seedRun(companyId, agentId, "succeeded", new Date("2026-08-14T12:00:00.000Z"), 20);
+      await seedRun(companyId, agentId, "succeeded", new Date("2026-01-05T12:00:00.000Z"), 20);
 
       const activity = await costs.runActivity(companyId, {
         from: new Date("2026-08-01T00:00:00.000Z"),

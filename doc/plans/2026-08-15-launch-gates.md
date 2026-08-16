@@ -181,11 +181,22 @@ might act on.
       Deriving them from the agent's configured adapter would be a guess about
       what actually ran, which is option D from Gate 0 under another name.
       Not silently dropped; recorded here as needing a schema change.
-      **Probe:** uat 69 runs, every one with both `started_at` and
-      `finished_at`, median 41s; mkboard 8 runs, mean 154s.
-      Falsified three ways: render the strip when `totalRuns` is 0, remove the
-      strip entirely, and swap the route's guard for the weaker
-      `assertCompanyAccess`. Each fails its specific test.
+      **Probe:** uat 73 runs, every one with both `started_at` and
+      `finished_at`; median 7.98s, p90 24.8s, 2,892s total. (An earlier note in
+      this file said "median 41s" — 41s was the MEAN. Corrected.)
+      Falsified five ways: render the strip when `totalRuns` is 0, remove the
+      strip entirely, swap the route's guard for the weaker
+      `assertCompanyAccess`, restore the wrong status literal, and drop
+      `timed_out` from the failure set. Each fails its specific test.
+      **A real bug caught by reading the database back rather than trusting the
+      200.** The endpoint returned `succeededRuns: 0` and `failedRuns: 0` out of
+      73 — because the filter used `'completed'`, which is a `RUN_LIVENESS_STATE`
+      and not a `heartbeat_runs.status` value at all. The status set is
+      queued | scheduled_retry | running | succeeded | failed | cancelled |
+      timed_out. My unit test had passed because it seeded the same invented
+      literal the implementation filtered on, so it agreed with itself. Now
+      pinned to `HEARTBEAT_RUN_STATUSES` on both sides, and the test seeds every
+      status the system actually writes.
       **One caveat recorded honestly:** the route-guard test is structural, not
       behavioural. The behavioural version could not discriminate — with the
       stubbed db in that file `access.canUser` resolves truthy, so a member

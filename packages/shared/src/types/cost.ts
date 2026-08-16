@@ -51,7 +51,7 @@ export interface CostSummary {
 export interface CostRunActivity {
   companyId: string;
   totalRuns: number;
-  completedRuns: number;
+  succeededRuns: number;
   failedRuns: number;
   totalSeconds: number;
   /** Null, never 0, when there is nothing to average. */
