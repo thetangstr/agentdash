@@ -1067,6 +1067,12 @@ async function loadCompanyMemberRecords(
 
 type CompanyMemberRecord = Awaited<ReturnType<typeof loadCompanyMemberRecords>>[number];
 
+/**
+ * The highest human role an AGENT may invite someone at. See
+ * `assertInviteRoleCeiling` for why it is fixed rather than derived.
+ */
+const AGENT_MAX_INVITE_ROLE: HumanCompanyMembershipRole = "viewer";
+
 const humanRoleRank: Record<HumanCompanyMembershipRole, number> = {
   viewer: 1,
   operator: 2,
@@ -1102,7 +1108,31 @@ async function assertInviteRoleCeiling(
   requestedRole: HumanCompanyMembershipRole | null,
 ): Promise<void> {
   if (!requestedRole) return;
-  if (req.actor.type === "agent") return;
+  /**
+   * An agent has no human role, so there is no ceiling to compare it against —
+   * which is why this used to return early and let an agent mint an invite at
+   * ANY role. Probed on the live uat instance: an agent holding `users:invite`
+   * created invites at owner, admin, operator and viewer, all 201.
+   *
+   * That is a privilege-escalation path with a human in the middle. An agent
+   * cannot grant itself authority, but it could invite a person at `owner` and
+   * have that person do anything — including to the owner who created it.
+   *
+   * So an agent's ceiling is a fixed one: `viewer`. Read-only is participation;
+   * anything above it is authority, and authority should come from a person.
+   * A human can always raise an agent's invite afterwards. The reverse — an
+   * agent quietly minting an admin — is the direction that cannot be undone
+   * once the invite is accepted.
+   */
+  if (req.actor.type === "agent") {
+    if (humanRoleRank[requestedRole] > humanRoleRank[AGENT_MAX_INVITE_ROLE]) {
+      throw forbidden(
+        `An agent can only invite people as ${AGENT_MAX_INVITE_ROLE}. `
+        + `Ask an owner or admin to invite someone as ${requestedRole}.`,
+      );
+    }
+    return;
+  }
   const actorRole = await resolveActorHumanRole(req, access, companyId);
   if (!actorRole) {
     throw forbidden("Only active company members can invite users.");
@@ -3018,10 +3048,16 @@ export function accessRoutes(
       // invite/auto-approve an owner. The effective human role mirrors
       // createCompanyInviteForCompany: agent-only invites carry no human role,
       // otherwise null defaults to "operator".
+      // The default differs by who is asking, so that an agent which never
+      // named a role is not refused for a role WE chose on its behalf. An
+      // explicit request above the agent ceiling is still refused below, with
+      // a sentence saying so.
+      const defaultHumanRole: HumanCompanyMembershipRole =
+        req.actor.type === "agent" ? AGENT_MAX_INVITE_ROLE : "operator";
       const requestedHumanRole: HumanCompanyMembershipRole | null =
         allowedJoinTypes === "agent"
           ? null
-          : normalizeHumanRole(req.body.humanRole ?? "operator", "operator");
+          : normalizeHumanRole(req.body.humanRole ?? defaultHumanRole, defaultHumanRole);
       await assertInviteRoleCeiling(req, access, companyId, requestedHumanRole);
       const inviteResult = await withTierCapacityForInviteWrite(
         companyId,
@@ -3033,7 +3069,11 @@ export function accessRoutes(
             db: dbOrTx,
             companyId,
             allowedJoinTypes,
-            humanRole: req.body.humanRole ?? null,
+            // The role that was CHECKED, not the raw body. Passing the body
+            // reopened the ceiling: an agent omitting `humanRole` was checked
+            // as viewer and then stored as operator, because invite creation
+            // has its own `?? "operator"` default. One value, checked once.
+            humanRole: requestedHumanRole,
             defaultsPayload: req.body.defaultsPayload ?? null,
             agentMessage: req.body.agentMessage ?? null,
             autoApprove: req.body.autoApprove ?? false

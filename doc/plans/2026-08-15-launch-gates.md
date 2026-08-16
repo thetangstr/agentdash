@@ -302,8 +302,33 @@ all day.
 ### Acceptance
 
 - [ ] Plugin host `goals.create/update` enforces capabilities at dispatch.
-- [ ] `assertInviteRoleCeiling` applies to agents. Today an agent holding
-      `users:invite` can invite a human as **owner**.
+- [x] `assertInviteRoleCeiling` applies to agents. **Done.** The check compared
+      the requested role against the ACTOR's human role, and an agent has none,
+      so it returned early and applied no ceiling at all.
+      **Probe, before** (uat, agent key + a temporary `users:invite` grant):
+      invites created at owner, admin, operator and viewer — all 201. Reading
+      the rows back showed the owner invite carried a full grant bundle
+      including `users:manage_permissions`, `users:invite` and `joins:approve`.
+      An agent cannot grant itself authority, but it could mint a human who
+      can rewrite everyone's permissions.
+      **The fix:** a fixed ceiling of `viewer` for agents. Read-only is
+      participation; above it is authority, and authority should come from a
+      person. A human can always raise an agent's invite afterwards; the
+      reverse cannot be undone once accepted.
+      **A second hole the ceiling alone did not close:** invite creation has
+      its own `?? "operator"` default, so an agent omitting `humanRole` was
+      CHECKED as viewer and then STORED as operator — a refused role arriving
+      through the front door, at 201 both before and after. The route now
+      passes the role it checked rather than the raw body.
+      **Probe, after:** owner/admin/operator → 403 with a sentence naming the
+      rule, viewer → 201, no-role-named → 201 stored as `viewer` with empty
+      grants. Confirmed by reading `defaults_payload` back.
+      Falsified three ways: restore the early return (3 tests fail), raise the
+      ceiling to owner (4 fail), store the raw body again (the default-bypass
+      test fails, and only that one).
+      **Cleanup:** all 6 probe invites revoked (none accepted), the temporary
+      `users:invite` grant removed, the probe key revoked. uat has 0 unrevoked
+      unaccepted invites and only the 6 real CoS keys.
 - [x] A CEO-role agent cannot `PATCH /companies/:id` name or description.
       **Done.** The role check was already right; the FIELD LIST was the hole.
       `updateCompanyBrandingSchema` legitimately carries name and description

@@ -27,7 +27,7 @@ function registerModuleMocks() {
     accessService: () => ({
       isInstanceAdmin: vi.fn(),
       canUser: vi.fn(async () => true),
-      hasPermission: vi.fn(),
+      hasPermission: vi.fn(async () => true),
       getMembership: (...args: [string, string, string]) => getMembershipMock(...args),
     }),
     agentService: () => ({
@@ -300,6 +300,113 @@ describe("POST /companies/:companyId/invites", () => {
         .send({ allowedJoinTypes: "human", humanRole: "admin" });
 
       expect(res.status).toBe(201);
+    });
+
+    /**
+     * An agent has no human role, so there was no ceiling to compare against
+     * and the check returned early — letting an agent holding `users:invite`
+     * mint an invite at ANY role.
+     *
+     * Probed on the live uat instance before this fix: an agent created
+     * invites at owner, admin, operator and viewer, all 201. That is a
+     * privilege-escalation path with a person in the middle — the agent cannot
+     * grant itself authority, but it can invite a human as owner who then can.
+     */
+    describe("an agent's ceiling", () => {
+      function agentActor() {
+        return {
+          type: "agent",
+          agentId: "agent-1",
+          companyId: "company-1",
+          source: "agent_key",
+          companyIds: ["company-1"],
+        } as Record<string, unknown>;
+      }
+
+      it("refuses an agent inviting an owner", async () => {
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "owner" });
+
+        expect(res.status).toBe(403);
+        expect(res.body.error).toMatch(/agent can only invite people as viewer/i);
+      });
+
+      it("refuses an agent inviting an admin", async () => {
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "admin" });
+
+        expect(res.status).toBe(403);
+      });
+
+      it("refuses an agent inviting an operator", async () => {
+        // Operator can set company direction, so it is authority too.
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "operator" });
+
+        expect(res.status).toBe(403);
+      });
+
+      it("allows an agent inviting a viewer", async () => {
+        // The control case. Without it, a rule that refused agents outright
+        // would satisfy every assertion above.
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "viewer" });
+
+        expect(res.status).toBe(201);
+      });
+
+      it("stores viewer, not operator, when an agent names no role", async () => {
+        /**
+         * The bypass that the ceiling alone did not close. Invite CREATION has
+         * its own `?? "operator"` default, so an agent omitting `humanRole`
+         * was checked as viewer and then stored as operator — a refused role
+         * arriving through the front door.
+         *
+         * Asserting the STORED role rather than the status code is the point:
+         * this returned 201 both before and after.
+         */
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human" });
+
+        expect(res.status).toBe(201);
+        // Read through the route's OWN extractor, via the activity it logs,
+        // rather than guessing at the stored shape.
+        expect(logActivityMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            action: "invite.created",
+            details: expect.objectContaining({ humanRole: "viewer" }),
+          }),
+        );
+      });
+
+      it("still stores operator when a human names no role", async () => {
+        // The human default is unchanged; only the agent's differs.
+        getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+        const app = await createApp(boardUserActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human" });
+
+        expect(res.status).toBe(201);
+        expect(logActivityMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            action: "invite.created",
+            details: expect.objectContaining({ humanRole: "operator" }),
+          }),
+        );
+      });
     });
 
     it("still allows the local-implicit founding board owner to invite an owner", async () => {
