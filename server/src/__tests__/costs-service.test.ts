@@ -8,7 +8,8 @@ vi.mock("../services/index.js", async (importOriginal) => {
 });
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { createDb, companies, agents, costEvents, financeEvents, issues, projects } from "@paperclipai/db";
+import { readFile } from "node:fs/promises";
+import { createDb, companies, agents, costEvents, financeEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { costService } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
 import {
@@ -77,6 +78,16 @@ const mockCostService = vi.hoisted(() => ({
   }),
   windowSpend: vi.fn().mockResolvedValue([]),
   byProject: vi.fn().mockResolvedValue([]),
+  runActivity: vi.fn().mockResolvedValue({
+    companyId: "company-1",
+    totalRuns: 3,
+    completedRuns: 2,
+    failedRuns: 1,
+    totalSeconds: 90,
+    medianSeconds: 30,
+    p90Seconds: 46,
+    lastRunAt: null,
+  }),
 }));
 const mockFinanceService = vi.hoisted(() => ({
   createEvent: vi.fn(),
@@ -261,6 +272,47 @@ describe("cost routes", () => {
   it("accepts valid finance event list limits", async () => {
     const { parseCostLimit } = await loadCostParsers();
     expect(parseCostLimit({ limit: "25" })).toBe(25);
+  });
+
+  /**
+   * Run activity sits beside the spend figures and is reached from the same
+   * page, so it inherits the same visibility rule. Adding a route that reports
+   * how much work an agent did, readable by anyone who cannot see spend, would
+   * be a quiet widening of who sees operational detail.
+   */
+  it("serves run activity to an authorised reader", async () => {
+    const app = await createApp();
+    const res = await request(app).get("/api/companies/company-1/costs/run-activity");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ totalRuns: 3, completedRuns: 2, failedRuns: 1, medianSeconds: 30 });
+  });
+
+  it("is behind the spend-visibility guard, not merely company access", async () => {
+    /**
+     * Structural, and deliberately so.
+     *
+     * The behavioural version of this test did not work: with the stubbed db
+     * in this file `access.canUser` resolves truthy, so a member reaches BOTH
+     * this route and the pre-existing `/costs/summary`. Swapping the guard for
+     * the weaker `assertCompanyAccess` changed nothing observable, and the
+     * outside-the-company actor that did return 403 is refused by either guard
+     * — so the test passed for a reason unrelated to what it claimed.
+     *
+     * This asserts the thing that actually differs. It proves the guard is
+     * wired, not that the guard is correct; `assertSpendVisibility` itself is
+     * shared with every other route here and covered by their tests.
+     */
+    const source = await readFile(
+      new URL("../routes/costs.ts", import.meta.url),
+      "utf8",
+    );
+    const handler = source.slice(
+      source.indexOf('router.get("/companies/:companyId/costs/run-activity"'),
+    );
+    const body = handler.slice(0, handler.indexOf("});"));
+    expect(body).toContain("assertSpendVisibility(req, companyId)");
+    expect(body, "assertCompanyAccess alone would let a member read run counts")
+      .not.toMatch(/^\s*assertCompanyAccess\(req, companyId\);\s*$/m);
   });
 
   it("rejects company budget updates for board users outside the company", async () => {
@@ -698,6 +750,7 @@ describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () =
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(heartbeatRuns);
     await db.delete(costEvents);
     await db.delete(agents);
     await db.delete(companies);
@@ -784,6 +837,87 @@ describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () =
     });
     expect(summary.spendCents).toBe(0);
     expect(summary.measured, "a quiet range on a metered company is a real zero").toBe(true);
+  });
+
+  /**
+   * The other half of the same problem. A page that can only report what it
+   * does not know reads as though nothing is happening — untrue on both live
+   * instances, where 69 and 8 runs respectively are recorded with complete
+   * timings. These are the figures that go beside "Not measured".
+   */
+  describe("runActivity", () => {
+    async function seedRun(
+      companyId: string,
+      agentId: string,
+      status: string,
+      startedAt: Date,
+      durationSeconds: number,
+    ) {
+      await db.insert(heartbeatRuns).values({
+        companyId,
+        agentId,
+        status,
+        invocationSource: "schedule",
+        startedAt,
+        finishedAt: new Date(startedAt.getTime() + durationSeconds * 1000),
+      });
+    }
+
+    it("reports counts and wall-clock, which we do record", async () => {
+      const { companyId, agentId } = await seedCompany();
+      const base = new Date("2026-08-14T12:00:00.000Z");
+      await seedRun(companyId, agentId, "completed", base, 10);
+      await seedRun(companyId, agentId, "completed", new Date(base.getTime() + 60_000), 30);
+      await seedRun(companyId, agentId, "failed", new Date(base.getTime() + 120_000), 50);
+
+      const activity = await costs.runActivity(companyId);
+      expect(activity.totalRuns).toBe(3);
+      expect(activity.completedRuns).toBe(2);
+      expect(activity.failedRuns).toBe(1);
+      expect(activity.totalSeconds).toBe(90);
+      expect(activity.medianSeconds).toBe(30);
+    });
+
+    it("returns null durations rather than a zero when there are no runs", async () => {
+      // A "0s median" would be the same false-confidence bug the measured flag
+      // exists to remove, just moved one column across.
+      const { companyId } = await seedCompany();
+      const activity = await costs.runActivity(companyId);
+      expect(activity.totalRuns).toBe(0);
+      expect(activity.medianSeconds).toBeNull();
+      expect(activity.p90Seconds).toBeNull();
+    });
+
+    it("ignores a run that never finished", async () => {
+      // An in-flight run has no wall-clock yet. Counting it with a null finish
+      // would either crash the percentile or silently treat it as instant.
+      const { companyId, agentId } = await seedCompany();
+      await seedRun(companyId, agentId, "completed", new Date("2026-08-14T12:00:00.000Z"), 20);
+      await db.insert(heartbeatRuns).values({
+        companyId,
+        agentId,
+        status: "running",
+        invocationSource: "schedule",
+        startedAt: new Date("2026-08-14T13:00:00.000Z"),
+        finishedAt: null,
+      });
+
+      const activity = await costs.runActivity(companyId);
+      expect(activity.totalRuns).toBe(1);
+      expect(activity.totalSeconds).toBe(20);
+    });
+
+    it("honours the date range", async () => {
+      const { companyId, agentId } = await seedCompany();
+      await seedRun(companyId, agentId, "completed", new Date("2026-08-14T12:00:00.000Z"), 20);
+      await seedRun(companyId, agentId, "completed", new Date("2026-01-05T12:00:00.000Z"), 20);
+
+      const activity = await costs.runActivity(companyId, {
+        from: new Date("2026-08-01T00:00:00.000Z"),
+        to: new Date("2026-08-31T00:00:00.000Z"),
+      });
+      expect(activity.totalRuns).toBe(1);
+    });
   });
 });
 

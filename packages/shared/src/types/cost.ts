@@ -37,6 +37,29 @@ export interface CostSummary {
   measured: boolean;
 }
 
+/**
+ * What the costs page can report honestly while spend is unmeasured.
+ *
+ * Runs and their wall-clock are recorded completely — every row on both live
+ * instances carries a start and a finish — so this is the evidence that work is
+ * happening even when no cost figure can be put beside it.
+ *
+ * There is no model or provider here on purpose: `heartbeat_runs` has no such
+ * column, so they are as unavailable as the token counts, and deriving them
+ * from an agent's configured adapter would be a guess about what actually ran.
+ */
+export interface CostRunActivity {
+  companyId: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  totalSeconds: number;
+  /** Null, never 0, when there is nothing to average. */
+  medianSeconds: number | null;
+  p90Seconds: number | null;
+  lastRunAt: string | Date | null;
+}
+
 export interface IssueCostSummary {
   issueId: string;
   issueCount: number;

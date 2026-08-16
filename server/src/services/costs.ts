@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
-import { activityLog, agents, companies, costEvents, issues, projects } from "@paperclipai/db";
+import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
 
@@ -155,6 +155,57 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
         measured: Number(everMeasured) > 0,
+      };
+    },
+
+    /**
+     * What the costs page can say honestly while spend is unmeasured.
+     *
+     * Runs and their wall-clock ARE recorded, completely — every row on both
+     * live instances has both `startedAt` and `finishedAt`. A page that shows
+     * only "Not measured" invites the reading that nothing is happening; this
+     * is the evidence that something is.
+     *
+     * Note what is NOT here: model and provider. `heartbeat_runs` has no such
+     * column, so those are as unavailable as the token counts, and inventing
+     * them from the agent's configured adapter would be a guess about what
+     * actually ran.
+     */
+    runActivity: async (companyId: string, range: CostDateRange = {}) => {
+      const conditions = [
+        eq(heartbeatRuns.companyId, companyId),
+        isNotNull(heartbeatRuns.startedAt),
+        isNotNull(heartbeatRuns.finishedAt),
+      ];
+      if (range.from) conditions.push(gte(heartbeatRuns.startedAt, range.from));
+      if (range.to) conditions.push(lte(heartbeatRuns.startedAt, range.to));
+
+      const seconds = sql`extract(epoch from (${heartbeatRuns.finishedAt} - ${heartbeatRuns.startedAt}))`;
+      const [row] = await db
+        .select({
+          totalRuns: sql<number>`count(*)::int`,
+          completedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'completed')::int`,
+          failedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'failed')::int`,
+          totalSeconds: sql<number>`coalesce(sum(${seconds}), 0)::double precision`,
+          medianSeconds: sql<number | null>`percentile_cont(0.5) within group (order by ${seconds})`,
+          p90Seconds: sql<number | null>`percentile_cont(0.9) within group (order by ${seconds})`,
+          lastRunAt: sql<Date | null>`max(${heartbeatRuns.finishedAt})`,
+        })
+        .from(heartbeatRuns)
+        .where(and(...conditions));
+
+      const totalRuns = Number(row?.totalRuns ?? 0);
+      return {
+        companyId,
+        totalRuns,
+        completedRuns: Number(row?.completedRuns ?? 0),
+        failedRuns: Number(row?.failedRuns ?? 0),
+        totalSeconds: Number(row?.totalSeconds ?? 0),
+        // Null rather than 0 when there is nothing to average. A zero here
+        // would be the same false-confidence bug this endpoint exists beside.
+        medianSeconds: totalRuns > 0 && row?.medianSeconds != null ? Number(row.medianSeconds) : null,
+        p90Seconds: totalRuns > 0 && row?.p90Seconds != null ? Number(row.p90Seconds) : null,
+        lastRunAt: row?.lastRunAt ?? null,
       };
     },
 

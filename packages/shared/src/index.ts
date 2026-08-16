@@ -451,6 +451,7 @@ export type {
   BudgetIncidentResolutionInput,
   CostEvent,
   CostSummary,
+  CostRunActivity,
   IssueCostSummary,
   CostByAgent,
   CostByProviderModel,

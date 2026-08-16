@@ -228,6 +228,14 @@ export function costRoutes(
     res.json(summary);
   });
 
+  // Run counts and wall-clock, which — unlike spend — we actually record.
+  router.get("/companies/:companyId/costs/run-activity", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await assertSpendVisibility(req, companyId);
+    const range = parseCostDateRange(req.query);
+    res.json(await costs.runActivity(companyId, range));
+  });
+
   router.get("/issues/:id/cost-summary", async (req, res) => {
     const rawId = req.params.id as string;
     const issue = await resolveIssueByRef(rawId);

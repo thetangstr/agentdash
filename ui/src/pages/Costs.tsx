@@ -5,6 +5,7 @@ import type {
   CostByAgentModel,
   CostByBiller,
   CostByProviderModel,
+  CostRunActivity,
   CostWindowSpendRow,
   FinanceEvent,
   QuotaWindow,
@@ -93,6 +94,65 @@ function MetricTile({
           <Icon className="h-4 w-4 text-muted-foreground" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  if (minutes < 60) return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/**
+ * The counterweight to "Not measured".
+ *
+ * A costs page that can only say what it does not know reads as though nothing
+ * is happening — which is its own false claim, and on both live instances an
+ * untrue one. Runs and wall-clock ARE recorded completely, so they go directly
+ * beside the figure we cannot produce.
+ *
+ * Renders nothing when there are no runs: an empty strip of dashes would put
+ * the page back where it started.
+ */
+function RunActivityStrip({ activity }: { activity?: CostRunActivity }) {
+  if (!activity || activity.totalRuns === 0) return null;
+  return (
+    <div
+      className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t border-border pt-3 text-xs text-muted-foreground"
+      data-testid="run-activity-strip"
+    >
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{activity.totalRuns}</span>{" "}
+        agent {activity.totalRuns === 1 ? "run" : "runs"}
+      </span>
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{activity.completedRuns}</span> completed
+        {activity.failedRuns > 0 ? (
+          <>
+            {" · "}
+            <span className="tabular-nums font-medium text-foreground">{activity.failedRuns}</span> failed
+          </>
+        ) : null}
+      </span>
+      <span>
+        median{" "}
+        <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.medianSeconds)}</span>
+        {activity.p90Seconds != null ? (
+          <>
+            {" · p90 "}
+            <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.p90Seconds)}</span>
+          </>
+        ) : null}
+      </span>
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.totalSeconds)}</span>{" "}
+        total wall-clock
+      </span>
     </div>
   );
 }
@@ -242,6 +302,17 @@ export function Costs() {
       ]);
       return { summary, byAgent, byProject, byAgentModel };
     },
+    enabled: !!selectedCompanyId && customReady,
+  });
+
+  /**
+   * The counterweight to "Not measured". Spend is unmeasurable on this runtime,
+   * but runs and their wall-clock are recorded completely — without them the
+   * page reads as though nothing is happening, which is its own false claim.
+   */
+  const { data: runActivity } = useQuery({
+    queryKey: queryKeys.costsRunActivity(companyId, from || undefined, to || undefined),
+    queryFn: () => costsApi.runActivity(companyId, from || undefined, to || undefined),
     enabled: !!selectedCompanyId && customReady,
   });
 
@@ -702,6 +773,7 @@ export function Costs() {
                         </div>
                       </div>
                     </div>
+                    <RunActivityStrip activity={runActivity} />
                     {/* Utilisation is spend divided by budget, so an unmeasured
                         spend makes it 0% — a green bar reading "0% of monthly
                         budget consumed" is the single most actionable false

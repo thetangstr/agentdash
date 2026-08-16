@@ -170,17 +170,28 @@ might act on.
       invoices and credits, not derived from tokens, so a zero there is a real
       zero and there is no evidence they cannot be measured.
 
-- [~] Run counts, wall-clock and model/provider are shown, because those we do
-      know. **Partly wrong as written.** Probed `heartbeat_runs`: run counts and
-      wall-clock are complete and knowable — uat 69 runs, all with both
-      `started_at` and `finished_at`, mean 41s; mkboard 8 runs, mean 154s. But
-      there is **no `model` or `provider` column on `heartbeat_runs`**, so that
-      third of the criterion asks for something the schema does not record. It
-      is the same gap as the token counts and has the same three options as
-      Gate 0. Not silently dropped: recorded here as out of reach without a
-      schema change, and the criterion is narrowed to runs and wall-clock.
-      Still open: the profile page draws completions per day, but no surface
-      yet shows run counts or durations beside the unmeasured spend.
+- [x] Run counts and wall-clock are shown, because those we do know. **Done** —
+      `GET /companies/:id/costs/run-activity` and a strip inside the Inference
+      ledger card, directly beside the figure we cannot produce. It renders
+      nothing at all when there are no runs, since a row of dashes would put
+      the page back where it started.
+      **Criterion narrowed, and why:** "model/provider" was in the original
+      wording and is **not achievable** — `heartbeat_runs` has no model or
+      provider column, so those are as unavailable as the token counts.
+      Deriving them from the agent's configured adapter would be a guess about
+      what actually ran, which is option D from Gate 0 under another name.
+      Not silently dropped; recorded here as needing a schema change.
+      **Probe:** uat 69 runs, every one with both `started_at` and
+      `finished_at`, median 41s; mkboard 8 runs, mean 154s.
+      Falsified three ways: render the strip when `totalRuns` is 0, remove the
+      strip entirely, and swap the route's guard for the weaker
+      `assertCompanyAccess`. Each fails its specific test.
+      **One caveat recorded honestly:** the route-guard test is structural, not
+      behavioural. The behavioural version could not discriminate — with the
+      stubbed db in that file `access.canUser` resolves truthy, so a member
+      reaches this route *and* the pre-existing `/costs/summary`, and the
+      outside-the-company actor that does return 403 is refused by either
+      guard. It proves the guard is wired, not that the guard is correct.
 - [x] A test asserts the "not measured" path, falsified by making the API return
       a zero and watching it fail. *Done — `costs-service.test.ts`,
       `user-profile-routes.test.ts` (3 cases), `UserProfile.measured.test.tsx`
@@ -191,7 +202,13 @@ might act on.
       invoices and credits rather than token-derived, and row-driven displays
       that render nothing when there are no rows.*
 
-**Gate 2 closes when every number on screen is one we measured.**
+**Gate 2 is CLOSED.** Every number on screen is one we measured, and the two
+pages that had nothing to show now show run counts and wall-clock instead of
+nothing.
+
+**Two things this gate did not do**, stated so they do not read as covered:
+model and provider per run need a schema change, and the route-guard test above
+is structural rather than behavioural.
 
 ---
 
@@ -299,7 +316,7 @@ Saying so plainly so it does not creep in:
 |---|---|
 | 0 — metering decision | **closed — A, label "not measured"** |
 | 1 — no refusing controls | open (4 of 7 criteria met) |
-| 2 — no confident lies | open — unblocked, scope is option A |
+| 2 — no confident lies | **closed** — every criterion demonstrated |
 | 3 — four people, one week | open, may start early |
 | 4 — packaging and least privilege | open |
 | 5 — remaining authority gaps | open |

@@ -26,6 +26,7 @@ const mockCostsApi = vi.hoisted(() => ({
   byProvider: vi.fn(),
   byBiller: vi.fn(),
   windowSpend: vi.fn(),
+  runActivity: vi.fn(),
   financeSummary: vi.fn(),
   financeByBiller: vi.fn(),
   financeByKind: vi.fn(),
@@ -82,6 +83,18 @@ function setup(measured: boolean, budgetCents: number) {
   mockCostsApi.byProvider.mockResolvedValue([]);
   mockCostsApi.byBiller.mockResolvedValue([]);
   mockCostsApi.windowSpend.mockResolvedValue([]);
+  // Runs are recorded regardless of whether spend is. That is the whole point:
+  // 69 runs happened on uat while zero cost events did.
+  mockCostsApi.runActivity.mockResolvedValue({
+    companyId: "company-1",
+    totalRuns: 69,
+    completedRuns: 61,
+    failedRuns: 8,
+    totalSeconds: 2_829,
+    medianSeconds: 41,
+    p90Seconds: 96,
+    lastRunAt: null,
+  });
   // Finance is invoices and credits, not token-derived, so it is genuinely
   // measurable and stays as it is. Zeroes here are real zeroes.
   mockCostsApi.financeSummary.mockResolvedValue({
@@ -170,6 +183,38 @@ describe("Costs when nothing is metered", () => {
     // The cap itself is still stated — it is a real configured value.
     expect(text).toContain("$500.00");
     expect(text).toContain("not measured");
+  });
+});
+
+describe("Costs shows what it does know", () => {
+  it("reports run counts and wall-clock beside the unmeasured spend", async () => {
+    // Without this the page can only say what it does not know, which reads as
+    // though nothing is happening — untrue, and its own kind of false claim.
+    setup(false, 0);
+    await render();
+    const strip = container.querySelector('[data-testid="run-activity-strip"]');
+    expect(strip, "run activity should render even when spend cannot").not.toBeNull();
+    const text = strip?.textContent ?? "";
+    expect(text).toContain("69");
+    expect(text).toContain("61");
+    expect(text).toContain("41s");
+  });
+
+  it("renders nothing rather than a row of dashes when there are no runs", async () => {
+    // An empty strip would put the page back where it started.
+    setup(false, 0);
+    mockCostsApi.runActivity.mockResolvedValue({
+      companyId: "company-1",
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      totalSeconds: 0,
+      medianSeconds: null,
+      p90Seconds: null,
+      lastRunAt: null,
+    });
+    await render();
+    expect(container.querySelector('[data-testid="run-activity-strip"]')).toBeNull();
   });
 });
 
