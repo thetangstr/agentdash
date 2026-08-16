@@ -214,5 +214,125 @@ describeEmbeddedPostgres("GET /companies/:companyId/users/:userSlug/profile", ()
     expect(response.body.recentActivity[0].action).toBe("issue.updated");
     expect(response.body.topAgents[0]).toMatchObject({ agentId, agentName: "Coder", costCents: 42 });
     expect(response.body.topProviders[0]).toMatchObject({ provider: "openai", model: "gpt-test", costCents: 42 });
+    expect(response.body.measured, "a company with a cost event has been measured").toBe(true);
+  });
+
+  /**
+   * The distinction the page cannot draw for itself.
+   *
+   * On the live uat instance this user has five completed issues and zero
+   * tokens, because nothing on that instance meters anything. The profile said
+   * "0 tokens, $0.00 spent" — a confident claim about a colleague's work made
+   * out of a gap in our own instrumentation.
+   */
+  describe("measured", () => {
+    async function fetchProfile() {
+      const response = await request(createApp()).get(`/api/companies/${companyId}/users/dotta/profile`);
+      expect(response.status).toBe(200);
+      return response.body;
+    }
+
+    it("is false when the company has never recorded a cost event", async () => {
+      await db.insert(issues).values({
+        id: randomUUID(),
+        companyId,
+        title: "Real work, unmetered",
+        status: "done",
+        priority: "high",
+        createdByUserId: userId,
+        identifier: "USR-9",
+        completedAt: new Date(),
+      });
+
+      const body = await fetchProfile();
+      expect(body.measured).toBe(false);
+      // The work itself is still reported. "Not measured" is a statement about
+      // cost, not about the person.
+      expect(body.stats.find((e: { key: string }) => e.key === "all").completedIssues).toBe(1);
+    });
+
+    it("is true once the company measures anything, even work this person never touched", async () => {
+      // This is what `costEventCount` cannot tell you. Here the user's own
+      // attributed total is still zero — but it is now a REAL zero, because the
+      // instance demonstrably meters. Reporting it as "not measured" would be
+      // the opposite lie.
+      const otherUserId = randomUUID();
+      const otherIssueId = randomUUID();
+      await db.insert(authUsers).values({
+        id: otherUserId,
+        name: "Someone Else",
+        email: "else@example.com",
+        emailVerified: true,
+        image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      await db.insert(issues).values({
+        id: otherIssueId,
+        companyId,
+        title: "Not this user's issue",
+        status: "done",
+        priority: "low",
+        createdByUserId: otherUserId,
+        assigneeUserId: otherUserId,
+        identifier: "USR-10",
+        completedAt: new Date(),
+      });
+      await db.insert(costEvents).values({
+        companyId,
+        agentId,
+        issueId: otherIssueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-test",
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        outputTokens: 5,
+        costCents: 7,
+        occurredAt: new Date(),
+      });
+
+      const body = await fetchProfile();
+      expect(body.measured, "the COMPANY has measured, so this user's zero is real").toBe(true);
+      const all = body.stats.find((e: { key: string }) => e.key === "all");
+      expect(all.costEventCount, "none of it is attributed to this user").toBe(0);
+      expect(all.costCents).toBe(0);
+    });
+
+    it("stays true for an event older than every reporting window", async () => {
+      // Deliberately unbounded by date, matching CostSummary.measured. A
+      // 30-day window going quiet does not mean metering stopped existing.
+      const longAgo = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000);
+      const oldIssueId = randomUUID();
+      await db.insert(issues).values({
+        id: oldIssueId,
+        companyId,
+        title: "Ancient",
+        status: "done",
+        priority: "low",
+        createdByUserId: userId,
+        identifier: "USR-11",
+        completedAt: longAgo,
+        createdAt: longAgo,
+        updatedAt: longAgo,
+      });
+      await db.insert(costEvents).values({
+        companyId,
+        agentId,
+        issueId: oldIssueId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-test",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 1,
+        occurredAt: longAgo,
+      });
+
+      expect((await fetchProfile()).measured).toBe(true);
+    });
   });
 });

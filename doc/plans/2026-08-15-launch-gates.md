@@ -139,19 +139,37 @@ might act on.
       - [x] `Costs.tsx` headline spend figure — **missed on the first pass**,
             on the same page and the same value, which would have shown
             "Not measured" in one place and "$0.00" in another
-      - [ ] `UserProfile.tsx` "All-time tokens" and its cost hint. Needs
-            `measured` on the profile-stats endpoint; a client-side guess would
-            conflate "never measured" with "this person has done nothing".
+      - [x] `UserProfile.tsx` — done properly, server-side. The profile payload
+            now carries `measured`, scoped to the **company** and unbounded by
+            date exactly as `CostSummary.measured` is. `costEventCount` could
+            not answer this: a person with no attributed events looks identical
+            whether the instance meters or not, and calling that zero real is a
+            judgement about a colleague's work made out of a gap in our own
+            instrumentation. Three surfaces on that page were fed by the same
+            empty table — the hero stat, the per-window columns, and the
+            14-day chart — and the chart now draws completions, which we know,
+            instead of fourteen flat bars under a "tokens / day" legend.
+            **Probes:** live uat before → `measured: undefined`, tokens 0 beside
+            5 completed issues; after → `measured: false`, same 5 completed.
+            Falsified four ways: hardcode `measured: true` (server test fails),
+            scope the count to the user's own issues (only the discriminating
+            test fails), hardcode `measured = true` in the page (4 UI tests
+            fail), and loosen to `!== false` (the older-server test fails).
       Finance ledger tiles are deliberately untouched: finance events are
       invoices and credits, not derived from tokens, so a zero there is a real
       zero and there is no evidence they cannot be measured.
 
 - [ ] Run counts, wall-clock and model/provider are shown, because those we do
       know. Probe: the same page shows 30 runs for `uat`.
-- [ ] A test asserts the "not measured" path, falsified by making the API return
-      a zero and watching it fail.
-- [ ] No other surface reports a total derived from `usage_json`. Probe: grep for
-      consumers and check each.
+- [x] A test asserts the "not measured" path, falsified by making the API return
+      a zero and watching it fail. *Done — `costs-service.test.ts`,
+      `user-profile-routes.test.ts` (3 cases), `UserProfile.measured.test.tsx`
+      (7 cases). Each was run against a sabotaged implementation and failed.*
+- [x] No other surface reports a total derived from `usage_json`. Probe: grep for
+      `formatCents(… ?? 0)` and `reduce`-style aggregation, then read each hit.
+      *Done — the surviving hits are the finance ledger tiles, which are
+      invoices and credits rather than token-derived, and row-driven displays
+      that render nothing when there are no rows.*
 
 **Gate 2 closes when every number on screen is one we measured.**
 
