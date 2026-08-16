@@ -408,12 +408,36 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
       the watch loop on every iteration. I later noticed their timestamps were
       three hours stale and did not connect it. Then I proved confinement with a
       DIFFERENT adapter and carried the conclusion across.
-      **The fix, not yet applied:** `pnpm.overrides` already exists in the root
-      manifest, and only one vendored package has this problem. Adding
-      `"@paperclipai/adapter-utils": "workspace:*"` would force hermes onto our
-      copy. It is one line and it needs care: `0.3.1` and `2026.325.0` are
-      different version lineages, so ours may not satisfy what hermes calls.
-      That needs a `pnpm install` and a hermes run to verify.
+      **Tried, and it does not work as a one-liner. Reverted.**
+      `"@paperclipai/adapter-utils": "workspace:*"` in `pnpm.overrides` is
+      silently ignored — it lands in the lockfile's `overrides:` block but
+      hermes's snapshot still records `2026.325.0`. `"link:packages/adapter-utils"`
+      DOES work: hermes then resolves our copy, seatbelt and all.
+      And then **136 tests across 83 files fail**, all with one root cause:
+      `Cannot find module '.../packages/adapter-utils/src/ssh.js'`.
+      **The real root cause, which explains both problems at once.**
+      `@paperclipai/adapter-utils` exports raw TypeScript —
+      `{".": "./src/index.ts", "./*": "./src/*.ts"}` — and its own sources use
+      the TS convention of importing `./ssh.js` to mean `./ssh.ts`. That only
+      resolves under a TypeScript loader. Our server has one; a plain-JS package
+      in `node_modules` like hermes does not. So:
+      - hermes cannot consume our copy → it uses the published one → no sandbox
+      - a packaged `npm install` pulls the published one too → the artefact runs
+        code we do not test, and its esbuild postinstall fails besides
+      Both are the same defect wearing different clothes.
+      **The fix is tractable and is not a one-liner.** `adapter-utils` already
+      has a `build` script; `tsc` emits 23 `.js` and 23 `.d.ts`, including
+      `seatbelt.js`. Point its `exports` at `dist` instead of `src`, then the
+      override works and the packaged install resolves cleanly. The cost:
+      **12 workspace packages import it**, so they all switch from loading
+      source to loading a build — which reintroduces the stale-`dist` hazard
+      that `ensure-plugin-build-deps` now guards for `shared` and `plugin-sdk`
+      and would need extending here. `shared`, `db` and `plugins/sdk` export
+      raw `.ts` the same way, so the same work likely follows for them.
+      **State: reverted.** Root manifest and lockfile restored, 3,393 server
+      tests green, both instances serving. The only lockfile change kept is
+      `packages/connect`'s devDependency, which pnpm recorded correctly and was
+      missing before.
       **Left for the owner:** whether to set the same variable on mkboard. That
       is six live agents doing real MKThink work, and the honest thing is to let
       uat carry it through Gate 3's week first.
