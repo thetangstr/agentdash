@@ -36,6 +36,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
+import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -103,6 +104,17 @@ export async function startServer(): Promise<StartedServer> {
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
   }
+
+  /**
+   * Agent confinement, before anything can run an agent.
+   *
+   * Logged unconditionally, including when it is off. An operator reading a
+   * startup log should be able to tell which posture they are in without
+   * inferring it from the absence of a line — "no news" is how a security
+   * control ends up believed-on and actually-off.
+   */
+  const agentSandbox = applyAgentSandboxSettings();
+  logger.info({ agentSandbox: agentSandbox.summary }, "agent subprocess sandbox");
   
   type MigrationSummary =
     | "skipped"

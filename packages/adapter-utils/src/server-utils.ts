@@ -57,6 +57,45 @@ export interface LocalSandboxSpec {
   readWritePaths?: string[];
 }
 
+/**
+ * Opt a call OUT of the ambient sandbox default.
+ *
+ * Not every `runChildProcess` caller is agent execution. Model discovery shells
+ * out to the agent CLI to ask what models it supports, and that legitimately
+ * reads the operator's own config in their home directory — confining it would
+ * break model listing for a control aimed at something else.
+ *
+ * Spelled as a value the caller must write, rather than inferred from a runId
+ * prefix or a heuristic. A security default that can be switched off by
+ * accident is not a default; this one is greppable.
+ */
+export const NEVER_SANDBOX = "never" as const;
+export type LocalSandboxOption = LocalSandboxSpec | typeof NEVER_SANDBOX | null;
+
+/**
+ * Process-wide default, set once at server startup.
+ *
+ * The alternative was for every adapter to pass a spec, which does not work:
+ * the local adapters are separate packages — some vendored — and they call this
+ * function directly. A default here reaches all of them, including ones written
+ * later, without each having to remember.
+ */
+let ambientLocalSandbox: LocalSandboxSpec | null = null;
+
+export function configureDefaultLocalSandbox(spec: LocalSandboxSpec | null): void {
+  ambientLocalSandbox = spec;
+}
+
+export function getDefaultLocalSandbox(): LocalSandboxSpec | null {
+  return ambientLocalSandbox;
+}
+
+function resolveLocalSandbox(option: LocalSandboxOption | undefined): LocalSandboxSpec | null {
+  if (option === NEVER_SANDBOX) return null;
+  if (option) return option;
+  return ambientLocalSandbox;
+}
+
 interface SpawnTarget {
   command: string;
   args: string[];
@@ -1902,10 +1941,10 @@ export async function runChildProcess(
     /**
      * Confine the child with macOS Seatbelt, keyed to `opts.cwd`.
      *
-     * Omitted means unconfined — the behaviour every caller has today. Passing
-     * it on a non-darwin host throws rather than running unconfined.
+     * Omitted falls back to the process-wide default (off unless the server
+     * configured one). Pass `NEVER_SANDBOX` to opt a non-agent call out.
      */
-    localSandbox?: LocalSandboxSpec | null;
+    localSandbox?: LocalSandboxOption;
   },
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
@@ -1934,7 +1973,7 @@ export async function runChildProcess(
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv, {
       remoteExecution: opts.remoteExecution ?? null,
       remoteEnv: opts.remoteExecution ? opts.env : null,
-      localSandbox: opts.localSandbox ?? null,
+      localSandbox: resolveLocalSandbox(opts.localSandbox),
     })
       .then((target) => {
         const child = spawn(target.command, target.args, {

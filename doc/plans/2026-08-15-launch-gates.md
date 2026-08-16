@@ -318,11 +318,40 @@ Tamper-detection manifests. Worth doing, not worth blocking a handover.
       the home deny (breaks BOTH the shape test and the live one, exactly as the
       spike predicted), skip the sandbox when asked for it, and re-leak the
       directory.
-      **Still to do, and it needs the owner:** switching it on. Default-off is
-      not timidity — enabling it means seven live agents on a client machine
-      start running confined, and the first thing to establish is which runtime
-      paths hermes actually needs re-opened (`readWritePaths` exists for that).
-      That wants one agent, on uat, watched.
+      **Trialled on uat, and the criterion is now met as written.**
+      `AGENTDASH_AGENT_SANDBOX=direct` is set on uat only; mkboard and its six
+      real agents are untouched and still unconfined. The startup log states the
+      posture on every boot, including when it is off — "no news" is how a
+      security control ends up believed-on and actually-off.
+      **The live probe, with a control:**
+      | | sandbox | result |
+      |---|---|---|
+      | `cat ~/gate4-canary.txt` | on | exit 1, `Operation not permitted` |
+      | same agent, same file | **off** | exit 0, file read |
+      | `cat ~/.config/agentdash/uat.env` | on | exit 1, `Operation not permitted`, no `DATABASE_URL` in output |
+      The control is what makes the first row mean anything: without it,
+      "denied" and "the file was missing" look identical.
+      **An earlier attempt at this probe was INCONCLUSIVE and is not counted.**
+      Asking the hermes agent to `cat` the canary produced a run that did not
+      leak — because the agent ignored the instruction and did its usual
+      heartbeat instead. "It did not leak" and "it never tried" are the same
+      output. The probe was redone with a `process`-adapter agent whose command
+      is exactly what we set.
+      **Real bugs the trial found, both of which would have broken every run:**
+      1. Under `direct` egress the profile allowed `*:443` and DNS only — but a
+         server-side agent calls the AgentDash API back on `127.0.0.1:<port>`.
+         Every run would have failed looking like the model provider was
+         unreachable, which is the wrong thing to investigate. Loopback is now
+         allowed under both policies.
+      2. Model discovery also goes through `runChildProcess` and legitimately
+         reads the operator's config. It is opted out explicitly with
+         `NEVER_SANDBOX` rather than by inferring intent from a runId prefix.
+      **hermes runs fine confined**, with no extra `readWritePaths` needed:
+      20.4s unconfined → 43.6s confined, succeeded both times, reached the model
+      provider and reported back through the local API.
+      **Left for the owner:** whether to set the same variable on mkboard. That
+      is six live agents doing real MKThink work, and the honest thing is to let
+      uat carry it through Gate 3's week first.
 - [ ] Nightly **and** hourly backups still run afterwards. Probe: force both.
 - [ ] Database credentials are no longer `paperclip:paperclip`. **Probed: still
       `postgres://paperclip:paperclip@`.** Rotating means editing both env files

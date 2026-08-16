@@ -56,6 +56,18 @@ describe("buildSandboxProfile", () => {
     expect(buildSandboxProfile({ ...base, egress: "loopback" })).not.toContain("mDNSResponder");
   });
 
+  it("allows loopback under BOTH policies", () => {
+    // A server-side agent calls the local AgentDash API back on 127.0.0.1. The
+    // first version of the direct policy allowed only *:443 and DNS, which
+    // would have blocked that — the run fails looking like the model provider
+    // was unreachable, which is the wrong thing to go and investigate.
+    for (const egress of ["loopback", "direct"] as const) {
+      expect(buildSandboxProfile({ ...base, egress })).toContain(
+        '(allow network-outbound (remote ip "localhost:*"))',
+      );
+    }
+  });
+
   it("refuses a relative path rather than emitting a broken profile", () => {
     expect(() => buildSandboxProfile({ ...base, workspaceDir: "work" })).toThrow(/absolute path/);
   });
