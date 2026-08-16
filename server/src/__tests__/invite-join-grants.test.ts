@@ -68,6 +68,7 @@ describe("human invite roles", () => {
   it("maps owner to the full management grant set", () => {
     expect(grantsForHumanRole("owner")).toEqual([
       { permissionKey: "agents:create", scope: null },
+      { permissionKey: "projects:create", scope: null },
       { permissionKey: "users:invite", scope: null },
       { permissionKey: "users:manage_permissions", scope: null },
       { permissionKey: "tasks:assign", scope: null },
@@ -93,6 +94,7 @@ describe("human invite roles", () => {
   it("falls back to role grants when human invite defaults omit explicit grants", () => {
     expect(humanJoinGrantsFromDefaults(null, "operator")).toEqual([
       { permissionKey: "tasks:assign", scope: null },
+      { permissionKey: "projects:create", scope: null },
     ]);
   });
 

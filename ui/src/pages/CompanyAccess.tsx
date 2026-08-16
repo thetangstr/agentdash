@@ -31,6 +31,7 @@ import { queryKeys } from "@/lib/queryKeys";
 
 const permissionLabels: Record<PermissionKey, string> = {
   "agents:create": "Create agents",
+  "projects:create": "Create projects",
   "users:invite": "Invite humans and agents",
   "users:manage_permissions": "Manage members and grants",
   "tasks:assign": "Assign tasks",

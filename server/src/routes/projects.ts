@@ -15,11 +15,16 @@ import { trackProjectCreated } from "@paperclipai/shared/telemetry";
 // AgentDash: goals-eval-hitl
 import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { projectService, logActivity, workspaceOperationService } from "../services/index.js";
+import { accessService, projectService, logActivity, workspaceOperationService } from "../services/index.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest, conflict, forbidden } from "../errors.js";
-import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  assertCanSetCompanyDirection,
+  assertCompanyAccess,
+  canSetCompanyDirection,
+  getActorInfo,
+} from "./authz.js";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
   listConfiguredRuntimeServiceEntries,
@@ -45,6 +50,7 @@ const SHARED_WORKSPACE_STOP_AND_RESTART_ACTIONS = new Set(["stop", "restart"]);
 export function projectRoutes(db: Db) {
   const router = Router();
   const svc = projectService(db);
+  const access = accessService(db);
   const secretsSvc = secretService(db);
   const workspaceOperations = workspaceOperationService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
@@ -121,9 +127,42 @@ export function projectRoutes(db: Db) {
     res.json(project);
   });
 
+  /**
+   * Starting a project is WORK. Deciding the company's direction is not.
+   *
+   * This route used to require `assertCanSetCompanyDirection`, which meant the
+   * only way to let a colleague start a project was to also let them rewrite
+   * the company's goals. `viewer` could do neither. There was no role in
+   * between, so the thing an ordinary contributor most obviously needs was
+   * reachable only by handing them authority over everything.
+   *
+   * Direction-holders keep the capability implicitly, so nothing an owner,
+   * admin or operator could do yesterday is refused today. Everyone else needs
+   * an explicit `projects:create` grant.
+   */
+  async function assertCanCreateProject(req: Request, companyId: string) {
+    assertCompanyAccess(req, companyId);
+    if (canSetCompanyDirection(req, companyId)) return;
+    if (req.actor.type === "agent") {
+      // Unchanged: agents do not start projects. `canSetCompanyDirection`
+      // already refuses them, and this states it rather than relying on the
+      // permission lookup below happening to fail.
+      throw forbidden("Agents cannot create projects.");
+    }
+    const allowed = await access
+      .canUser(companyId, req.actor.userId, "projects:create")
+      .catch(() => false);
+    if (!allowed) {
+      throw forbidden(
+        "Creating a project needs the projects:create permission, or an owner, "
+        + "admin or operator role. Ask a company owner to grant it.",
+      );
+    }
+  }
+
   router.post("/companies/:companyId/projects", validate(createProjectSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCanSetCompanyDirection(req, companyId);
+    await assertCanCreateProject(req, companyId);
     type CreateProjectPayload = Parameters<typeof svc.create>[1] & {
       workspace?: Parameters<typeof svc.createWorkspace>[1];
     };

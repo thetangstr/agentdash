@@ -563,6 +563,17 @@ export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
 export const PERMISSION_KEYS = [
   "agents:create",
+  /**
+   * Create and edit your OWN projects, without company-direction authority.
+   *
+   * Added because the role matrix had no way to express what a colleague
+   * actually needs. Project creation was gated on `assertCanSetCompanyDirection`
+   * — owner, admin or operator — so the only way to let someone start a project
+   * was to also let them rewrite the company's goals. `viewer` could do neither.
+   *
+   * Direction stays where it was. This grants the work, not the say-so.
+   */
+  "projects:create",
   "environments:manage",
   "users:invite",
   "users:manage_permissions",

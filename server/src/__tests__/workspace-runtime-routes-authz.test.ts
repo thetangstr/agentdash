@@ -36,6 +36,9 @@ vi.mock("../telemetry.js", () => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  // projects.ts resolves `projects:create` for callers without direction
+  // authority, so the route module now constructs this service.
+  accessService: () => ({ canUser: async () => true }),
   agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
@@ -65,6 +68,9 @@ function registerWorkspaceRouteMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+  // projects.ts resolves `projects:create` for callers without direction
+  // authority, so the route module now constructs this service.
+  accessService: () => ({ canUser: async () => true }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
     environmentService: () => mockEnvironmentService,
@@ -397,12 +403,19 @@ describe.sequential("workspace runtime service route authorization", () => {
       });
 
     expect(res.status).toBe(403);
-    // The refusal now comes from the direction guard, which stops an agent
-    // PATCHing a project at all — strictly stronger than the workspace-command
-    // check that used to answer here, and it fires first. What matters is that
-    // the RCE-shaped payload is rejected; either message is a correct refusal.
+    // The refusal comes from whichever guard fires first, and that has moved
+    // twice now. What this test is actually for is that an RCE-shaped payload
+    // — `provisionCommand` smuggled in at project creation — never reaches
+    // execution, so the assertion is on the 403 and on the refusal being one
+    // of the known guards rather than an incidental error.
+    //
+    // Coverage of the workspace-command guard itself is not lost: the agent
+    // cases at "update project workspace cleanup commands", "patch execution
+    // workspace command config" and "smuggle execution workspace commands
+    // through metadata.config" all still reach it, on routes this change does
+    // not touch.
     expect(res.body.error).toMatch(
-      /host-executed workspace commands|cannot change company direction/i,
+      /host-executed workspace commands|cannot change company direction|cannot create projects/i,
     );
     expect(mockProjectService.create).not.toHaveBeenCalled();
   });
