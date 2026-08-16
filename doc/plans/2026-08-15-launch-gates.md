@@ -128,11 +128,24 @@ might act on.
       was ever recorded. Probe: `costs-service.test.ts` "distinguishes
       unmeasured from zero", falsified by hardcoding `measured: true`. Both live
       companies have 0 cost events, so both will show it.
-      **Remaining:** 13 other surfaces still format cost or token values —
-      BillerSpendCard, ProviderQuotaCard, BudgetIncidentCard, RunTranscriptView,
-      AgentGovernancePanel, TaskOutcomeQualityPanel, ApprovalPayload,
-      IssueDetail, AgentDetail, UserProfile, agent-config-primitives, and the
-      finance ledger tiles on this same page.
+      **Scope corrected.** "13 remaining surfaces" was wrong in both
+      directions. Most are ROW-DRIVEN — BillerSpendCard, ProviderQuotaCard,
+      BudgetIncidentCard, RunTranscriptView and the rest format values off rows
+      (`entry.costCents`, `row.inputTokens`). With no cost events there are no
+      rows, so nothing renders and there is no false zero. The risk is only
+      where a surface AGGREGATES to a total or defaults to 0.
+      By that test the real list was three, not thirteen:
+      - [x] `Costs.tsx` Inference-spend tile
+      - [x] `Costs.tsx` headline spend figure — **missed on the first pass**,
+            on the same page and the same value, which would have shown
+            "Not measured" in one place and "$0.00" in another
+      - [ ] `UserProfile.tsx` "All-time tokens" and its cost hint. Needs
+            `measured` on the profile-stats endpoint; a client-side guess would
+            conflate "never measured" with "this person has done nothing".
+      Finance ledger tiles are deliberately untouched: finance events are
+      invoices and credits, not derived from tokens, so a zero there is a real
+      zero and there is no evidence they cannot be measured.
+
 - [ ] Run counts, wall-clock and model/provider are shown, because those we do
       know. Probe: the same page shows 30 runs for `uat`.
 - [ ] A test asserts the "not measured" path, falsified by making the API return
