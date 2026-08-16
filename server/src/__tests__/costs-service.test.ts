@@ -672,3 +672,118 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byKindRow?.netCents).toBe(4_000_000_000);
   });
 });
+
+/**
+ * "Nothing was spent" and "nothing could be measured" are different claims that
+ * both arrive as `spendCents: 0`.
+ *
+ * On this deployment the second is the true one — the local Hermes adapter
+ * emits no token counts, so no cost event is ever written and the dashboard
+ * would otherwise render a confident $0.00. Verified on both live instances: 30
+ * runs, zero usage records, zero cost events.
+ *
+ * `measured` exists to separate them. It is deliberately unbounded by the date
+ * range: the question is whether metering works at all, not whether this
+ * particular window happened to be quiet.
+ */
+describeEmbeddedPostgres("cost summary distinguishes unmeasured from zero", () => {
+  let db!: ReturnType<typeof createDb>;
+  let costs!: ReturnType<typeof costService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-costs-measured-");
+    db = createDb(tempDb.connectionString);
+    costs = costService(db);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(costEvents);
+    await db.delete(agents);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function seedCompany() {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    // A cost event needs an agent to attribute the spend to.
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CoS",
+      role: "chief_of_staff",
+      status: "idle",
+      adapterType: "hermes_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    return { companyId, agentId };
+  }
+
+  it("reports measured=false when nothing has ever been recorded", async () => {
+    const { companyId } = await seedCompany();
+    const summary = await costs.summary(companyId);
+    expect(summary.spendCents).toBe(0);
+    expect(summary.measured, "an unmeasured company must not look like a zero-spend one").toBe(false);
+  });
+
+  it("reports measured=true once any cost event exists", async () => {
+    const { companyId, agentId } = await seedCompany();
+    await db.insert(costEvents).values({
+      companyId,
+      agentId,
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      outputTokens: 50,
+      provider: "test",
+      biller: "test",
+      billingType: "tokens",
+      model: "test-model",
+      costCents: 250,
+      occurredAt: new Date("2026-08-14T12:00:00.000Z"),
+    });
+
+    const summary = await costs.summary(companyId);
+    expect(summary.measured).toBe(true);
+    expect(summary.spendCents).toBe(250);
+  });
+
+  it("stays measured=true for an empty date range that legitimately has no spend", async () => {
+    // The distinction that makes this worth having: a quiet WEEK on a metered
+    // company is a real zero and must read as one. Only a company that has
+    // never recorded anything is "not measured".
+    const { companyId, agentId } = await seedCompany();
+    await db.insert(costEvents).values({
+      companyId,
+      agentId,
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      outputTokens: 50,
+      provider: "test",
+      biller: "test",
+      billingType: "tokens",
+      model: "test-model",
+      costCents: 250,
+      occurredAt: new Date("2026-08-14T12:00:00.000Z"),
+    });
+
+    const summary = await costs.summary(companyId, {
+      from: new Date("2026-01-01T00:00:00.000Z"),
+      to: new Date("2026-01-31T00:00:00.000Z"),
+    });
+    expect(summary.spendCents).toBe(0);
+    expect(summary.measured, "a quiet range on a metered company is a real zero").toBe(true);
+  });
+});
+

@@ -533,6 +533,9 @@ export function Costs() {
   }
 
   const showCustomPrompt = preset === "custom" && !customReady;
+  // Absent until the server says otherwise: an unknown must never render as
+  // a measured zero, including while the request is still in flight.
+  const spendMeasured = spendData?.summary.measured === true;
   const showOverviewLoading = (spendLoading || financeLoading) && customReady;
   const overviewError = spendError ?? financeError;
 
@@ -580,10 +583,20 @@ export function Costs() {
           ) : null}
 
           <div className="grid gap-3 lg:grid-cols-4">
+            {/* "$0.00" and "we cannot measure this" are different claims, and only
+                one is true here: the local Hermes adapter emits no token counts, so
+                nothing downstream can compute a cost. Telling an owner they spent
+                nothing is the most damaging thing this page could say to someone
+                deciding whether to trust the product with money. `measured` asks
+                whether spend was EVER recorded, not whether this range was quiet. */}
             <MetricTile
               label="Inference spend"
-              value={formatCents(spendData?.summary.spendCents ?? 0)}
-              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`}
+              value={spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
+              subtitle={
+                spendMeasured
+                  ? `${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`
+                  : "This agent runtime reports no token usage, so spend cannot be calculated"
+              }
               icon={DollarSign}
             />
             <MetricTile

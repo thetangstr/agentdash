@@ -127,11 +127,34 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           ? (spendCents / company.budgetMonthlyCents) * 100
           : 0;
 
+      /**
+       * Has this company EVER recorded a cost event, ignoring the date range?
+       *
+       * Without this, an empty result is ambiguous in the most damaging
+       * direction: "nothing was spent this month" and "we have never been able
+       * to measure spend" both arrive as 0, and the dashboard renders a
+       * confident $0.00 for both.
+       *
+       * They are not the same claim. On this deployment the second is true --
+       * the local Hermes adapter emits no token counts, so nothing downstream
+       * can compute a cost -- and telling an owner they spent nothing would be
+       * the most damaging thing this product could say to someone deciding
+       * whether to trust it with money.
+       *
+       * Deliberately unbounded by `range`: the question is whether metering
+       * works at all, not whether this window happened to be quiet.
+       */
+      const [{ everMeasured }] = await db
+        .select({ everMeasured: sql<number>`count(*)` })
+        .from(costEvents)
+        .where(eq(costEvents.companyId, companyId));
+
       return {
         companyId,
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        measured: Number(everMeasured) > 0,
       };
     },
 

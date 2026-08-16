@@ -123,10 +123,16 @@ might act on.
 
 ### Acceptance
 
-- [ ] Whatever Gate 0 decided is implemented. If A: every cost and token surface
-      reads **"not measured"** and no zero is displayed anywhere a measured value
-      would go. Probe: load the costs page against `uat`, which has zero cost
-      events, and read it.
+- [~] **Partly done.** The costs summary now carries `measured`, and the
+      Inference-spend tile reads "Not measured" instead of $0.00 when nothing
+      was ever recorded. Probe: `costs-service.test.ts` "distinguishes
+      unmeasured from zero", falsified by hardcoding `measured: true`. Both live
+      companies have 0 cost events, so both will show it.
+      **Remaining:** 13 other surfaces still format cost or token values —
+      BillerSpendCard, ProviderQuotaCard, BudgetIncidentCard, RunTranscriptView,
+      AgentGovernancePanel, TaskOutcomeQualityPanel, ApprovalPayload,
+      IssueDetail, AgentDetail, UserProfile, agent-config-primitives, and the
+      finance ledger tiles on this same page.
 - [ ] Run counts, wall-clock and model/provider are shown, because those we do
       know. Probe: the same page shows 30 runs for `uat`.
 - [ ] A test asserts the "not measured" path, falsified by making the API return

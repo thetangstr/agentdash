@@ -26,6 +26,15 @@ export interface CostSummary {
   spendCents: number;
   budgetCents: number;
   utilizationPercent: number;
+  /**
+   * Has spend for this company ever been measured at all?
+   *
+   * `spendCents: 0` is ambiguous in the most damaging direction — "nothing was
+   * spent" and "nothing could be measured" are the same number. This separates
+   * them so the UI can say which it means. False on any deployment whose
+   * adapter reports no token usage, which is the case for local Hermes today.
+   */
+  measured: boolean;
 }
 
 export interface IssueCostSummary {
