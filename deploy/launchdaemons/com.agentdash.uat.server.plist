@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AGENTDASH_APP_DIR</key>
+		<string>/Users/yang/agentdash</string>
+		<key>AGENTDASH_ENV_FILE</key>
+		<string>/Users/yang/.config/agentdash/uat.env</string>
+		<key>AGENTDASH_INSTANCE</key>
+		<string>uat</string>
+	</dict>
+	<key>GroupName</key>
+	<string>staff</string>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>Label</key>
+	<string>com.agentdash.uat.server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/yang/agentdash/deploy/agentdash-server.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/yang/Library/Logs/agentdash/uat-server.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/yang/Library/Logs/agentdash/uat-server.log</string>
+	<key>ThrottleInterval</key>
+	<integer>15</integer>
+	<key>UserName</key>
+	<string>yang</string>
+</dict>
+</plist>
