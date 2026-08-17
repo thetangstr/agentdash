@@ -33,35 +33,57 @@ never been exercised because there has never been a second user.
 
 ---
 
-## 1. You cannot add Sam and Megan today
+## 1. ~~You cannot add Sam and Megan today~~ — WRONG, retracted
 
-This is the blocker for the thing that was actually asked for, and it is not
-about roles.
+**This finding was incorrect and is retracted. I did not test it.**
 
-`mkboard` is on `plan_tier = "free"` with `AGENTDASH_ENFORCE_LICENSE=true`.
-The caps are:
+I read `FREE_HUMAN_CAP = readCap("AGENTDASH_FREE_HUMAN_CAP", 1)`, saw one human
+already present, and asserted that inviting a second returns 402. I never sent
+the request.
+
+What I missed, four lines further down the same file:
 
 ```
-FREE_HUMAN_CAP = readCap("AGENTDASH_FREE_HUMAN_CAP", 1)
-FREE_AGENT_CAP = readCap("AGENTDASH_FREE_AGENT_CAP", 1)
+export function isBillingDisabled(): boolean {
+  if (process.env.AGENTDASH_BILLING_DISABLED === "true") return true;
+  if (!process.env.STRIPE_SECRET_KEY) return true;   // <- this one
+  return false;
+}
 ```
 
-Neither variable is set in `~/.config/agentdash/mkboard.env`, so both are **1**.
-There is already one human. **Inviting Sam or Megan returns HTTP 402.**
+and in `access.ts`, `withTierCapacityForInviteWrite` opens with
+`if (isBillingDisabled()) return work(db)`. No Stripe key means the cap check
+never runs.
 
-The source comment two lines above those constants reads:
+Measured against the running server (pid 7815): no `STRIPE_SECRET_KEY`, no
+`AGENTDASH_BILLING_DISABLED`, no `AGENTDASH_FREE_*` in its environment. Then
+tested end to end — `POST /companies/:id/invites` for a second human returned
+**201**, twice.
 
-> recommended launch setting: `AGENTDASH_FREE_HUMAN_CAP=2`,
-> `AGENTDASH_FREE_AGENT_CAP=3`
-
-so the recommended launch configuration was written down and never applied. Six
-agents already exist, which is over the agent cap of 1 — they predate
-enforcement, and the cap only blocks new creation.
-
-**Decide:** raise the caps for this deployment, or put `mkboard` on a paid tier.
-Until one of those happens, the workspace is single-user by construction.
+**MKThink already has unlimited access.** There was no cap to raise and no
+decision to make. The lesson is the one this file is otherwise about: a
+constant read out of context is not a measurement.
 
 ---
+
+## 1b. Invites are bearer links, not invitations to a person
+
+Found while doing the above. `createCompanyInviteSchema` has no email field:
+
+```
+allowedJoinTypes, humanRole, defaultsPayload, agentMessage, autoApprove
+```
+
+So there is no such thing as "Sam's invite". There is a link that grants a
+role, and whoever opens it takes that role. If a link is forwarded, screenshotted
+into a group chat, or sits in a mail archive, the next person to click it is an
+operator in the MKThink workspace.
+
+Partly compensated: with `autoApprove: false` the holder lands as a pending join
+request that an owner must approve, so a leaked link costs an unwanted approval
+prompt rather than immediate access. That is the setting both colleague invites
+were created with. It is a mitigation, not a fix — the approval names whoever
+signed up, not who the link was meant for.
 
 ## 2. No role expresses "does the work, does not set the direction"
 
