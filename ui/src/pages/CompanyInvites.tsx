@@ -8,6 +8,7 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useToast } from "@/context/ToastContext";
 import { Link } from "@/lib/router";
+import { copyToClipboard } from "@/lib/clipboard";
 import { queryKeys } from "@/lib/queryKeys";
 
 const inviteRoleOptions = [
@@ -54,21 +55,27 @@ export function CompanyInvites() {
   }, [latestInviteCopied]);
 
   async function copyInviteUrl(url: string) {
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-        return true;
-      }
-    } catch {
-      // Fall through to the unavailable message below.
+    // Use the shared helper, not `navigator.clipboard` directly.
+    //
+    // The Clipboard API only exists in a SECURE CONTEXT. This instance is
+    // reached over plain HTTP on the client's LAN -- HTTPS is not an option
+    // for them yet -- so `navigator.clipboard` is simply absent and this
+    // reported "Clipboard unavailable" every time, on the one screen whose
+    // entire job is handing someone a URL.
+    //
+    // `copyToClipboard` already falls back to a hidden textarea plus
+    // `document.execCommand("copy")`, which DOES work without a secure
+    // context. That fallback was written for exactly this case; this page
+    // just never called it.
+    const ok = await copyToClipboard(url);
+    if (!ok) {
+      pushToast({
+        title: "Clipboard unavailable",
+        body: "Copy the invite URL manually from the field below.",
+        tone: "warn",
+      });
     }
-
-    pushToast({
-      title: "Clipboard unavailable",
-      body: "Copy the invite URL manually from the field below.",
-      tone: "warn",
-    });
-    return false;
+    return ok;
   }
 
   useEffect(() => {
