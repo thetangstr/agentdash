@@ -108,6 +108,33 @@ function sbplLiteralPath(label: string, value: string): string {
   return value;
 }
 
+/**
+ * Refuse a re-opening that would swallow the home deny.
+ *
+ * Later rules win in SBPL, so `readWritePaths: ["/Users/yang"]` — or a
+ * synthetic home pointed at the real one — emits a profile that parses,
+ * loads, reports no error, and confines nothing. That is the worst failure
+ * this file has: the operator believes the sandbox is on. The listed
+ * re-openings are the operator-configured surface where a typo does it, so
+ * they are checked. Throwing here is safe by construction, because there is
+ * no path that catches it and proceeds unconfined.
+ */
+function assertNotAncestorOfHome(label: string, home: string, candidate: string): void {
+  // Trailing slashes stripped on BOTH sides first. "/" would otherwise compare
+  // as "//" and the single most catastrophic value sails through, and
+  // "/Users/x/" would not equal "/Users/x".
+  const trimmedHome = home.replace(/\/+$/, "");
+  const trimmed = candidate.replace(/\/+$/, "");
+  if (trimmed === trimmedHome || trimmedHome.startsWith(`${trimmed}/`)) {
+    throw new Error(
+      `Refusing to build a sandbox profile: ${label} ("${candidate}") is the home directory ` +
+        `being denied ("${home}") or an ancestor of it. Re-opening it below the deny would ` +
+        "silently disable the confinement while still reporting success. Name the specific " +
+        "subdirectory the agent needs instead.",
+    );
+  }
+}
+
 export function buildSandboxProfile(opts: {
   homeDir: string;
   workspaceDir: string;
@@ -151,6 +178,33 @@ export function buildSandboxProfile(opts: {
    * closes the hole the agent needs without opening the one it does not.
    */
   readOnlyPaths?: string[];
+  /**
+   * A directory handed to the child as its `HOME`, re-opened read-write below
+   * the home deny.
+   *
+   * The problem this solves is narrow and was measured, not imagined. Web
+   * search runs through `mcporter`, and `mcporter` — like most CLIs — probes
+   * `$HOME` for configuration on startup. Confined, it died on
+   * `EPERM open '/Users/yang/.claude/settings.json'`: the sandbox correctly
+   * refusing the OPERATOR's personal Claude Code config to an agent. The
+   * tempting fix is to allow `~/.claude`, which hands every agent the
+   * operator's config, their MCP server list and whatever credentials sit
+   * beside it. That is a much larger hole than the one being closed.
+   *
+   * A synthetic home closes it from the other side. The child's `HOME` points
+   * at a directory that contains only what a tool legitimately needs, so the
+   * probe for `~/.claude` finds NOTHING rather than finding the operator's
+   * file — no allow rule is added, and the real home stays denied. Anything
+   * the agent genuinely needs is placed in there deliberately, by the
+   * operator, one entry at a time.
+   *
+   * Symlinks inside it resolve to their targets, and SBPL matches the
+   * RESOLVED path, so `agent-home/.hermes -> ~/.hermes` reaches the real
+   * hermes state only because `~/.hermes` is separately re-opened above.
+   * A link to something not on the allowlist stays denied — verified, not
+   * assumed.
+   */
+  syntheticHomeDir?: string;
 }): string {
   const home = sbplLiteralPath("homeDir", opts.homeDir);
   const workspace = sbplLiteralPath("workspaceDir", opts.workspaceDir);
@@ -162,13 +216,26 @@ export function buildSandboxProfile(opts: {
     ]);
   const extraWriteAllows = (opts.readWritePaths ?? [])
     .map((candidate, index) => sbplLiteralPath(`readWritePaths[${index}]`, candidate))
-    .map((literal) => `(allow file-read* file-write* (subpath "${literal}"))`);
+    .map((literal, index) => {
+      assertNotAncestorOfHome(`readWritePaths[${index}]`, home, literal);
+      return `(allow file-read* file-write* (subpath "${literal}"))`;
+    });
+  const syntheticHome = opts.syntheticHomeDir
+    ? sbplLiteralPath("syntheticHomeDir", opts.syntheticHomeDir)
+    : null;
+  if (syntheticHome) assertNotAncestorOfHome("syntheticHomeDir", home, syntheticHome);
+  const syntheticHomeAllows = syntheticHome
+    ? [`(allow file-read* file-write* (subpath "${syntheticHome}"))`]
+    : [];
   const extraReadAllows = (opts.readOnlyPaths ?? [])
     .map((candidate, index) => sbplLiteralPath(`readOnlyPaths[${index}]`, candidate))
-    .flatMap((literal) => [
-      `(allow file-read* (subpath "${literal}"))`,
-      `(allow process-exec (subpath "${literal}"))`,
-    ]);
+    .flatMap((literal, index) => {
+      assertNotAncestorOfHome(`readOnlyPaths[${index}]`, home, literal);
+      return [
+        `(allow file-read* (subpath "${literal}"))`,
+        `(allow process-exec (subpath "${literal}"))`,
+      ];
+    });
 
   /**
    * Every ancestor directory of every re-opened path, metadata only.
@@ -184,6 +251,7 @@ export function buildSandboxProfile(opts: {
       ...(opts.readOnlyPaths ?? []),
       ...(opts.readWritePaths ?? []),
       ...(opts.execPaths ?? []),
+      ...(opts.syntheticHomeDir ? [opts.syntheticHomeDir] : []),
     ].filter((value): value is string => typeof value === "string" && value.length > 0);
     const ancestors = new Set<string>();
     for (const entry of roots) {
@@ -261,6 +329,18 @@ export function buildSandboxProfile(opts: {
           ";; Runtime state the agent needs outside its execution workspace. Each of",
           ";; these is a deliberate hole in the home deny above.",
           ...extraWriteAllows,
+        ]
+      : []),
+    ...(syntheticHomeAllows.length
+      ? [
+          "",
+          ";; The child's HOME. Not the operator's — that one stays denied above.",
+          ";; A tool that probes $HOME for config (mcporter does, on every run)",
+          ";; finds this directory's contents instead of the operator's, so the",
+          ";; probe fails to find a file rather than succeeding at reading a",
+          ";; private one. Write is allowed because tools cache and lock in here;",
+          ";; what is IN it is the operator's decision, entry by entry.",
+          ...syntheticHomeAllows,
         ]
       : []),
     ...(extraReadAllows.length

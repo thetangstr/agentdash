@@ -62,6 +62,23 @@ export interface LocalSandboxSpec {
    * agent that can rewrite its own interpreter has escaped.
    */
   readOnlyPaths?: string[];
+  /**
+   * A directory handed to the child as `HOME`, instead of the operator's.
+   *
+   * Set this and the child sees a home containing only what the operator put
+   * there. The reason is a real failure, not tidiness: web search runs through
+   * `mcporter`, which probes `$HOME` on startup and died confined on
+   * `EPERM open '~/.claude/settings.json'` — the sandbox correctly refusing
+   * the operator's personal Claude Code config. Allowing `~/.claude` would
+   * have "fixed" it by handing every agent that config; repointing `HOME`
+   * fixes it by making the probe find nothing.
+   *
+   * Also re-opened read-write in the profile, since a home the child cannot
+   * write is a home half the tools will fail on. Symlinks placed inside it
+   * resolve to their targets and are matched there, so linking to something
+   * NOT on the allowlist stays denied.
+   */
+  syntheticHomeDir?: string;
 }
 
 /**
@@ -1263,6 +1280,9 @@ async function resolveSpawnTarget(
     const canonicalReadOnly = await Promise.all(
       (sandbox.readOnlyPaths ?? []).map(canonicalisePath),
     );
+    const canonicalSyntheticHome = sandbox.syntheticHomeDir
+      ? await canonicalisePath(sandbox.syntheticHomeDir)
+      : undefined;
     const profile = buildSandboxProfile({
       homeDir: canonicalHome,
       workspaceDir: canonicalCwd,
@@ -1270,6 +1290,7 @@ async function resolveSpawnTarget(
       execPaths: await resolveSandboxExecPaths(executable),
       readWritePaths: canonicalExtras,
       readOnlyPaths: canonicalReadOnly,
+      syntheticHomeDir: canonicalSyntheticHome,
     });
     const profilePath = await writeSandboxProfile(profile);
     return {
@@ -1302,6 +1323,32 @@ async function resolveSpawnTarget(
   }
 
   return { command: executable, args };
+}
+
+/**
+ * Point the child's `HOME` at the sandbox's synthetic home, if there is one.
+ *
+ * Applied LAST, after `adapterConfig.env` has been merged, so a per-agent
+ * config cannot set `HOME` back to the operator's directory. Every other
+ * variable in this system is the agent's to override; this one is part of the
+ * confinement, and a control an agent's own configuration can switch off is
+ * not a control.
+ *
+ * `HOME` alone, deliberately. `os.homedir()` reads it on POSIX, which is what
+ * the CLIs in question use, and the sandbox is macOS-only — so `USERPROFILE`
+ * and friends would be decoration. If a tool is later found reading `XDG_*`
+ * for its config root, add it here with the measurement that showed it.
+ *
+ * Exported because the interesting property — that it wins over caller env —
+ * is worth asserting in a test rather than re-deriving from the call site.
+ */
+export function applySyntheticHome(
+  env: NodeJS.ProcessEnv,
+  sandbox: LocalSandboxSpec | null,
+): NodeJS.ProcessEnv {
+  const synthetic = sandbox?.syntheticHomeDir;
+  if (!synthetic) return env;
+  return { ...env, HOME: synthetic };
 }
 
 export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -1980,11 +2027,23 @@ export async function runChildProcess(
       delete rawMerged[key];
     }
 
-    const mergedEnv = ensurePathInEnv(rawMerged);
+    const localSandbox = resolveLocalSandbox(opts.localSandbox);
+    // After the merge above, so `adapterConfig.env` cannot hand the child the
+    // operator's real home back. Before spawn AND before command resolution,
+    // so the PATH lookup and the profile agree on which home is in play.
+    //
+    // Not for remote execution: there the local child is `ssh` itself, which
+    // reads the OPERATOR's `~/.ssh` to find the key it connects with, and the
+    // synthetic home is a local path that means nothing on the far host.
+    // `resolveSpawnTarget` already skips confinement for that branch, so this
+    // matches — the two must not disagree about which world we are in.
+    const mergedEnv = opts.remoteExecution
+      ? ensurePathInEnv(rawMerged)
+      : applySyntheticHome(ensurePathInEnv(rawMerged), localSandbox);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv, {
       remoteExecution: opts.remoteExecution ?? null,
       remoteEnv: opts.remoteExecution ? opts.env : null,
-      localSandbox: resolveLocalSandbox(opts.localSandbox),
+      localSandbox,
     })
       .then((target) => {
         const child = spawn(target.command, target.args, {

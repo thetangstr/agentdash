@@ -79,6 +79,62 @@ describe("resolveAgentSandboxSettings", () => {
     expect(settings.spec?.readWritePaths).toEqual(["/opt/a"]);
   });
 
+  it("carries a synthetic HOME through, and names it in the summary", () => {
+    // The point of the setting: a tool that probes $HOME on startup (mcporter
+    // does, and died confined on the operator's ~/.claude/settings.json) finds
+    // this directory instead. Named in the summary because a child running
+    // with a different home than the server is exactly the kind of surprise an
+    // operator should read at startup, not discover while debugging.
+    const settings = resolveAgentSandboxSettings(
+      {
+        AGENTDASH_AGENT_SANDBOX: "direct",
+        AGENTDASH_AGENT_SANDBOX_HOME: "/opt/agent-home",
+      },
+      "darwin",
+    );
+    expect(settings.spec?.syntheticHomeDir).toBe("/opt/agent-home");
+    expect(settings.summary).toContain("/opt/agent-home");
+  });
+
+  it("leaves the synthetic home unset when the variable is absent or blank", () => {
+    // Absent must mean "the child keeps the real HOME", not "the child gets an
+    // empty string as its home" — an empty HOME makes every tool resolve `~`
+    // to the process cwd and fail somewhere unrelated.
+    for (const env of [{}, { AGENTDASH_AGENT_SANDBOX_HOME: "   " }]) {
+      const settings = resolveAgentSandboxSettings(
+        { AGENTDASH_AGENT_SANDBOX: "loopback", ...env },
+        "darwin",
+      );
+      expect(settings.spec).not.toHaveProperty("syntheticHomeDir");
+    }
+  });
+
+  it("refuses a relative synthetic home", () => {
+    expect(() =>
+      resolveAgentSandboxSettings(
+        { AGENTDASH_AGENT_SANDBOX: "loopback", AGENTDASH_AGENT_SANDBOX_HOME: "agent-home" },
+        "darwin",
+      ),
+    ).toThrow(/absolute path/);
+  });
+
+  it("refuses a synthetic home that would swallow the home deny", () => {
+    // The dangerous typo. The synthetic home is re-opened READ-WRITE below the
+    // `(deny ... (subpath "$HOME"))` rule, and later rules win in SBPL — so
+    // pointing it at the real home (or any ancestor) emits a profile that
+    // parses, loads, reports success and confines nothing. Refuse at startup,
+    // where the variable's own name is in the message.
+    const home = os.homedir();
+    for (const candidate of [home, "/", home.slice(0, home.lastIndexOf("/")) || "/"]) {
+      expect(() =>
+        resolveAgentSandboxSettings(
+          { AGENTDASH_AGENT_SANDBOX: "direct", AGENTDASH_AGENT_SANDBOX_HOME: candidate },
+          "darwin",
+        ),
+      ).toThrow(/silently disable the sandbox/);
+    }
+  });
+
   it("does not check the platform when the sandbox is off", () => {
     // A Linux host with the sandbox off is a supported configuration; only
     // ASKING for confinement there is an error.

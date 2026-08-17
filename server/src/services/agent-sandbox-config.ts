@@ -42,6 +42,24 @@ const ENV_ALLOW = "AGENTDASH_AGENT_SANDBOX_ALLOW";
  * interpreter every later run uses.
  */
 const ENV_READONLY = "AGENTDASH_AGENT_SANDBOX_READONLY";
+/**
+ * A synthetic `HOME` for agent subprocesses.
+ *
+ * The one measurement behind this: web search runs through `mcporter`, which
+ * probes `$HOME` on startup, and confined it failed with
+ * `EPERM open '~/.claude/settings.json'` — the sandbox correctly refusing the
+ * operator's personal Claude Code config. The cheap fix is to add `~/.claude`
+ * to ENV_ALLOW, and it is the wrong one: it hands every agent on the host the
+ * operator's config and whatever sits beside it, to make one tool stop
+ * probing. Pointing `HOME` at a directory the operator populated instead
+ * turns the probe into a miss and opens nothing.
+ *
+ * What goes in that directory is the operator's call, and symlinks are the
+ * intended tool: `agent-home/.mcporter -> ~/.mcporter` works only because
+ * `~/.mcporter` is ALSO listed in ENV_READONLY — SBPL matches the resolved
+ * path, so a link to something unlisted stays denied.
+ */
+const ENV_HOME = "AGENTDASH_AGENT_SANDBOX_HOME";
 
 export function resolveAgentSandboxSettings(
   env: NodeJS.ProcessEnv = process.env,
@@ -83,17 +101,46 @@ export function resolveAgentSandboxSettings(
   const allow = splitPaths(env[ENV_ALLOW], ENV_ALLOW);
   const readOnly = splitPaths(env[ENV_READONLY], ENV_READONLY);
 
+  const syntheticHomeRaw = (env[ENV_HOME] ?? "").trim();
+  const syntheticHome = syntheticHomeRaw.length > 0 ? syntheticHomeRaw : undefined;
+  if (syntheticHome && !path.isAbsolute(syntheticHome)) {
+    throw new Error(`${ENV_HOME} must be an absolute path; got "${syntheticHome}".`);
+  }
+  // Refuse the setting that would look like confinement and be none. A
+  // synthetic home equal to (or above) the real one is re-opened read-write
+  // BELOW the home deny, and later rules win in SBPL — the profile would load
+  // cleanly and protect nothing. `buildSandboxProfile` refuses this too; the
+  // check is here as well so it fails at startup with the variable's name in
+  // the message, not on the first agent run with a profile-builder error.
+  const realHome = os.homedir();
+  // Trailing slashes stripped first, or "/" compares as "//" and the most
+  // catastrophic value of all sails through the check.
+  const syntheticHomeTrimmed = (syntheticHome ?? "").replace(/\/+$/, "");
+  if (
+    syntheticHome &&
+    (syntheticHomeTrimmed === realHome.replace(/\/+$/, "") ||
+      realHome.startsWith(`${syntheticHomeTrimmed}/`))
+  ) {
+    throw new Error(
+      `${ENV_HOME}="${syntheticHome}" is the operator's home directory ("${realHome}") or an ` +
+        "ancestor of it. Re-opening that below the home deny would silently disable the " +
+        "sandbox. Use a dedicated directory, e.g. ~/.paperclip/agent-home.",
+    );
+  }
+
   return {
     spec: {
-      homeDir: os.homedir(),
+      homeDir: realHome,
       egress: raw as EgressPolicy,
       readWritePaths: allow,
       readOnlyPaths: readOnly,
+      ...(syntheticHome ? { syntheticHomeDir: syntheticHome } : {}),
     },
     summary:
       `on (egress=${raw})` +
       (allow.length > 0 ? `, ${allow.length} rw path(s): ${allow.join(", ")}` : "") +
-      (readOnly.length > 0 ? `, ${readOnly.length} read-only path(s): ${readOnly.join(", ")}` : ""),
+      (readOnly.length > 0 ? `, ${readOnly.length} read-only path(s): ${readOnly.join(", ")}` : "") +
+      (syntheticHome ? `, child HOME: ${syntheticHome}` : ""),
   };
 }
 
