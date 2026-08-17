@@ -136,6 +136,21 @@ export function buildSandboxProfile(opts: {
    * the list is written into the profile where an operator can read it back.
    */
   readWritePaths?: string[];
+  /**
+   * Extra absolute paths re-opened READ-ONLY (and executable) below the home
+   * deny — an agent's own runtime: its interpreter, its libraries, its entry
+   * script.
+   *
+   * Separate from `readWritePaths` on purpose, and the distinction is the
+   * whole point. The hermes wrapper at `~/.local/bin/hermes` execs a Python
+   * venv under `~/.hermes/`, so confinement without this fails at exec with
+   * code 126 — measured on uat, not predicted. The lazy fix is to add that
+   * tree to `readWritePaths`; that would hand the agent WRITE access to the
+   * interpreter it is about to run, so a compromised run could rewrite its
+   * own runtime and every later run would execute the result. Read-only
+   * closes the hole the agent needs without opening the one it does not.
+   */
+  readOnlyPaths?: string[];
 }): string {
   const home = sbplLiteralPath("homeDir", opts.homeDir);
   const workspace = sbplLiteralPath("workspaceDir", opts.workspaceDir);
@@ -148,6 +163,12 @@ export function buildSandboxProfile(opts: {
   const extraWriteAllows = (opts.readWritePaths ?? [])
     .map((candidate, index) => sbplLiteralPath(`readWritePaths[${index}]`, candidate))
     .map((literal) => `(allow file-read* file-write* (subpath "${literal}"))`);
+  const extraReadAllows = (opts.readOnlyPaths ?? [])
+    .map((candidate, index) => sbplLiteralPath(`readOnlyPaths[${index}]`, candidate))
+    .flatMap((literal) => [
+      `(allow file-read* (subpath "${literal}"))`,
+      `(allow process-exec (subpath "${literal}"))`,
+    ]);
 
   const egressLines =
     opts.egress === "loopback"
@@ -199,6 +220,16 @@ export function buildSandboxProfile(opts: {
           ";; Runtime state the agent needs outside its execution workspace. Each of",
           ";; these is a deliberate hole in the home deny above.",
           ...extraWriteAllows,
+        ]
+      : []),
+    ...(extraReadAllows.length
+      ? [
+          "",
+          ";; The agent's own runtime — interpreter, libraries, entry script — read",
+          ";; and execute but NEVER write. Deliberately not folded into the",
+          ";; read-write list above: an agent that can rewrite the interpreter it is",
+          ";; about to run has escaped, slowly.",
+          ...extraReadAllows,
         ]
       : []),
     ...(execAllows.length

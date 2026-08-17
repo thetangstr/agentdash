@@ -55,6 +55,13 @@ export interface LocalSandboxSpec {
    * agent will tolerate; every entry is a hole.
    */
   readWritePaths?: string[];
+  /**
+   * Absolute paths re-opened READ-ONLY (and executable) below the home deny —
+   * the agent's own runtime (interpreter, libraries, entry script), which for
+   * hermes lives under `~/.hermes/`. Read-only rather than read-write: an
+   * agent that can rewrite its own interpreter has escaped.
+   */
+  readOnlyPaths?: string[];
 }
 
 /**
@@ -1253,12 +1260,16 @@ async function resolveSpawnTarget(
       canonicalisePath(cwd),
       Promise.all((sandbox.readWritePaths ?? []).map(canonicalisePath)),
     ]);
+    const canonicalReadOnly = await Promise.all(
+      (sandbox.readOnlyPaths ?? []).map(canonicalisePath),
+    );
     const profile = buildSandboxProfile({
       homeDir: canonicalHome,
       workspaceDir: canonicalCwd,
       egress: sandbox.egress,
       execPaths: await resolveSandboxExecPaths(executable),
       readWritePaths: canonicalExtras,
+      readOnlyPaths: canonicalReadOnly,
     });
     const profilePath = await writeSandboxProfile(profile);
     return {

@@ -32,6 +32,16 @@ export interface AgentSandboxSettings {
 
 const ENV_MODE = "AGENTDASH_AGENT_SANDBOX";
 const ENV_ALLOW = "AGENTDASH_AGENT_SANDBOX_ALLOW";
+/**
+ * Read-only (and executable) re-openings — the agent's own runtime.
+ *
+ * Separate from ENV_ALLOW because the distinction is a security boundary, not
+ * a convenience: the hermes wrapper execs a Python venv under `~/.hermes/`,
+ * and confinement without it fails at exec with code 126 (measured on uat).
+ * Putting that tree in the read-WRITE list would let a run rewrite the
+ * interpreter every later run uses.
+ */
+const ENV_READONLY = "AGENTDASH_AGENT_SANDBOX_READONLY";
 
 export function resolveAgentSandboxSettings(
   env: NodeJS.ProcessEnv = process.env,
@@ -60,26 +70,30 @@ export function resolveAgentSandboxSettings(
     );
   }
 
-  const allow = (env[ENV_ALLOW] ?? "")
-    .split(":")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  const relative = allow.filter((entry) => !path.isAbsolute(entry));
-  if (relative.length > 0) {
-    throw new Error(
-      `${ENV_ALLOW} must contain absolute paths; got ${relative.map((e) => `"${e}"`).join(", ")}.`,
-    );
-  }
+  const splitPaths = (raw: string | undefined, name: string) => {
+    const list = (raw ?? "").split(":").map((entry) => entry.trim()).filter(Boolean);
+    const relative = list.filter((entry) => !path.isAbsolute(entry));
+    if (relative.length > 0) {
+      throw new Error(
+        `${name} must contain absolute paths; got ${relative.map((e) => `"${e}"`).join(", ")}.`,
+      );
+    }
+    return list;
+  };
+  const allow = splitPaths(env[ENV_ALLOW], ENV_ALLOW);
+  const readOnly = splitPaths(env[ENV_READONLY], ENV_READONLY);
 
   return {
     spec: {
       homeDir: os.homedir(),
       egress: raw as EgressPolicy,
       readWritePaths: allow,
+      readOnlyPaths: readOnly,
     },
     summary:
       `on (egress=${raw})` +
-      (allow.length > 0 ? `, ${allow.length} extra path(s) re-opened: ${allow.join(", ")}` : ""),
+      (allow.length > 0 ? `, ${allow.length} rw path(s): ${allow.join(", ")}` : "") +
+      (readOnly.length > 0 ? `, ${readOnly.length} read-only path(s): ${readOnly.join(", ")}` : ""),
   };
 }
 

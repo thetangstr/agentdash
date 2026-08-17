@@ -56,6 +56,20 @@ describeEmbeddedPostgres("pre-run checks (M3 budget, M4 daily cap)", () => {
     }
   }
 
+  it("the DEFAULT cap does not refuse a legitimately busy agent", async () => {
+    /**
+     * Regression for a defect this file's first version shipped: the default
+     * was 100/day, and the live uat chief-of-staff had legitimately created
+     * 210 runs by mid-afternoon on a ~5-minute cadence. The guard would have
+     * shut down a healthy agent. Pinned at the measured busiest real
+     * workload, so lowering the default again fails here rather than in
+     * production.
+     */
+    const { dailyRunCap } = await import("../observability/pre-run-checks.js");
+    const BUSIEST_REAL_DAILY_RUNS = 288; // 5-minute cadence, all day
+    expect(dailyRunCap({} as NodeJS.ProcessEnv)).toBeGreaterThan(BUSIEST_REAL_DAILY_RUNS * 2);
+  });
+
   it("allows a run under the cap and says nothing", async () => {
     process.env.AGENTDASH_AGENT_DAILY_RUN_CAP = "5";
     await seedRuns(4);

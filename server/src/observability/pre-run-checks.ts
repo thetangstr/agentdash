@@ -20,7 +20,22 @@ import { emitSignal } from "./signals.js";
  *    Flipping it on is on M1's checklist.
  */
 
-const DEFAULT_DAILY_RUN_CAP = 100;
+/**
+ * Measured, not guessed — and the first value was wrong.
+ *
+ * 100 was chosen off the top of my head and would have refused a HEALTHY
+ * agent: the uat chief-of-staff runs on a 30-second heartbeat tick with a
+ * ~5-minute effective cadence and had legitimately created 210 runs by
+ * mid-afternoon, heading for ~288 in a day. A runaway-loop guard set below
+ * normal operation is not protection, it is an outage with a good excuse.
+ *
+ * 1000/agent/day allows a sustained run every ~86 seconds — roughly 3.5x the
+ * busiest real cadence observed — while still catching the failure this
+ * exists for: a loop spinning many runs per minute. Operators with faster
+ * agents should raise AGENTDASH_AGENT_DAILY_RUN_CAP; the signal names the
+ * cap so the alert says what to change.
+ */
+const DEFAULT_DAILY_RUN_CAP = 1000;
 
 export function dailyRunCap(env: NodeJS.ProcessEnv = process.env): number {
   const raw = Number(env.AGENTDASH_AGENT_DAILY_RUN_CAP);
