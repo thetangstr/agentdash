@@ -3,7 +3,7 @@ import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
 import { trackErrorHandlerCrash } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
-import { captureServerError } from "../observability/sentry.js";
+import { recordServerError } from "../observability/error-sink.js";
 
 export interface ErrorContext {
   error: { message: string; stack?: string; name?: string; details?: unknown; raw?: unknown };
@@ -49,8 +49,8 @@ export function errorHandler(
       );
       const tc = getTelemetryClient();
       if (tc) trackErrorHandlerCrash(tc, { errorCode: err.name });
-      // AgentDash: remote error tracking — no-op unless SENTRY_DSN is set.
-      captureServerError(err, { method: req.method, url: req.originalUrl, status: err.status });
+      // Local error sink (2026-08-16) — persists on the box, alerts by signal.
+      recordServerError(err, { method: req.method, url: req.originalUrl, status: err.status });
     }
     res.status(err.status).json({
       error: err.message,
@@ -76,8 +76,8 @@ export function errorHandler(
 
   const tc = getTelemetryClient();
   if (tc) trackErrorHandlerCrash(tc, { errorCode: rootError.name });
-  // AgentDash: remote error tracking — no-op unless SENTRY_DSN is set.
-  captureServerError(rootError, { method: req.method, url: req.originalUrl, status: 500 });
+  // Local error sink (2026-08-16) — persists on the box, alerts by signal.
+  recordServerError(rootError, { method: req.method, url: req.originalUrl, status: 500 });
 
   res.status(500).json({ error: "Internal server error" });
 }

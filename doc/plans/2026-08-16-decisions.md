@@ -147,7 +147,18 @@ people working around it by adding a suffix.
 
 ## D4 — Five of six agents have no steward (review §4)
 
-**Decision: who is answerable for each agent?**
+> **RESOLVED 2026-08-16, and my recommendation was impossible.** The database
+> refused it: `agent_stewardships` is unique on `(company_id, user_id)` AND on
+> `(company_id, agent_id)` for active rows — stewardship is a deliberate
+> **1:1 pairing**, one agent per person, consumed by approval delivery, human
+> channel bindings and the steward-agent replier. It is "the human this agent
+> talks to", not a governance roster. Titus↔Chief is already the correct and
+> only possible configuration for one human. "Who answers for each agent" is
+> instead answered by agent ownership (`created_by`, lane A3/A4): the five
+> are Titus's because he created them. When Sam and Megan join, each can pair
+> with one agent of their own.
+
+**Original decision text, kept for the record:**
 
 This is not a code question — the mechanism exists and works. It is a naming
 question, and only you can answer it. Platform, Delivery, Dex, Quinn and Aria

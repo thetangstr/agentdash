@@ -45,7 +45,8 @@ import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
-import { initSentry, captureServerError } from "./observability/sentry.js";
+import { initErrorSink, recordServerError } from "./observability/error-sink.js";
+import { startAlerter } from "./observability/alerter.js";
 import { conflict } from "./errors.js";
 import type {
   InstanceDatabaseBackupRunResult,
@@ -90,9 +91,6 @@ export interface StartedServer {
 }
 
 export async function startServer(): Promise<StartedServer> {
-  // AgentDash: initialize remote error tracking as early as possible so any
-  // startup failure below is captured. No-op unless SENTRY_DSN is set.
-  initSentry();
   let config = loadConfig();
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
@@ -272,7 +270,7 @@ export async function startServer(): Promise<StartedServer> {
         principalType: "user",
         principalId: LOCAL_BOARD_USER_ID,
         status: "active",
-        membershipRole: "owner",
+        membershipRole: "admin",
       });
     }
   }
@@ -461,6 +459,12 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
+  // O1/O3 (2026-08-16): both database branches have run — the sink can
+  // persist and the alerter can subscribe. Order matters: the sink first, so
+  // an alerter failure during startup has somewhere to be recorded.
+  initErrorSink(db);
+  startAlerter();
+
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
@@ -1365,19 +1369,19 @@ function isMainModule(metaUrl: string): boolean {
 }
 
 if (isMainModule(import.meta.url)) {
-  // AgentDash: initialize Sentry before anything else so process-level
-  // crashes during startup are captured. No-op unless SENTRY_DSN is set.
-  initSentry();
-  // Capture otherwise-unhandled crashes. These guards only run when the
-  // server is launched as the main process (not when startServer is imported
-  // by tests), and each capture is a no-op unless SENTRY_DSN is set. We keep
-  // the existing logging behavior and do not change process lifecycle.
+  // Capture otherwise-unhandled crashes into the LOCAL error sink (2026-08-16:
+  // the remote Sentry transport is gone — it was measured to drop every event
+  // because nothing ever configured it, and error payloads must not leave a
+  // client box). Before the sink is initialised in startServer(), the record
+  // call degrades to stderr — which is where a pre-database crash belongs
+  // anyway. These guards only run when the server is launched as the main
+  // process; process lifecycle is unchanged.
   process.on("uncaughtException", (err) => {
-    captureServerError(err, { kind: "uncaughtException" });
+    recordServerError(err, { kind: "uncaughtException" });
     logger.error({ err }, "uncaught exception");
   });
   process.on("unhandledRejection", (reason) => {
-    captureServerError(reason, { kind: "unhandledRejection" });
+    recordServerError(reason, { kind: "unhandledRejection" });
     logger.error({ err: reason }, "unhandled promise rejection");
   });
   void startServer().catch((err) => {

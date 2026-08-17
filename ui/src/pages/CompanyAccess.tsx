@@ -47,10 +47,10 @@ function formatGrantSummary(member: CompanyMember) {
 }
 
 const implicitRoleGrantMap: Record<NonNullable<CompanyMember["membershipRole"]>, PermissionKey[]> = {
-  owner: ["agents:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
-  admin: ["agents:create", "users:invite", "tasks:assign", "joins:approve"],
-  operator: ["tasks:assign"],
-  viewer: [],
+  // Mirrors grantsForHumanRole on the server — the server is the authority;
+  // this map only decides which checkboxes render as "included by role".
+  admin: ["agents:create", "projects:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
+  member: ["projects:create", "tasks:assign"],
 };
 
 const reassignmentIssueStatuses = "backlog,todo,in_progress,in_review,blocked,failed,timed_out";

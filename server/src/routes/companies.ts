@@ -558,7 +558,7 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         {
           principalType: "user",
           principalId: ownerPrincipalId,
-          membershipRole: "owner",
+          membershipRole: "admin",
         },
       );
     } catch (err) {

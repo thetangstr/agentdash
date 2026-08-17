@@ -531,19 +531,29 @@ export const COMPANY_MEMBERSHIP_ROLES = [
 ] as const;
 export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
 
-export const HUMAN_COMPANY_MEMBERSHIP_ROLES = [
-  "owner",
-  "admin",
-  "operator",
-  "viewer",
-] as const;
+/**
+ * Exactly two human roles, decided 2026-08-16: `admin` sets direction and can
+ * change anything; `member` does the work and owns what they create.
+ *
+ * The strings in LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES existed before the
+ * collapse and may still appear in stored rows, invite payloads, and older
+ * clients. They are accepted on read and normalized away by
+ * `normalizeHumanRole` — never written back, never compared against directly.
+ * `owner` folds into `admin`; `operator` and `viewer` fold into `member`.
+ * Note the viewer→member mapping is a power UPGRADE (viewer was read-only
+ * everywhere): measured before shipping, the only viewer rows in existence
+ * were uat test users.
+ */
+export const HUMAN_COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
 export type HumanCompanyMembershipRole = (typeof HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
 
+export const LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES = ["owner", "operator", "viewer"] as const;
+export type LegacyHumanCompanyMembershipRole =
+  (typeof LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
+
 export const HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS: Record<HumanCompanyMembershipRole, string> = {
-  owner: "Owner",
   admin: "Admin",
-  operator: "Operator",
-  viewer: "Viewer",
+  member: "Member",
 };
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;

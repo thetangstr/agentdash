@@ -138,3 +138,5 @@ export {
   factCorrections,
   factValues,
 } from "./deliverables.js";
+// O1 (2026-08-16): the local error sink — one row per fingerprint, counted.
+export { serverErrors } from "./server_errors.js";

@@ -12,28 +12,16 @@ import { queryKeys } from "@/lib/queryKeys";
 
 const inviteRoleOptions = [
   {
-    value: "viewer",
-    label: "Viewer",
-    description: "Can view company work and follow along without operational permissions.",
-    gets: "No built-in grants.",
-  },
-  {
-    value: "operator",
-    label: "Operator",
-    description: "Recommended for people who need to help run work without managing access.",
-    gets: "Can assign tasks.",
+    value: "member",
+    label: "Member",
+    description: "Recommended for colleagues. Does the work and owns what they create.",
+    gets: "Can create projects and agents, and assign tasks. Cannot change company goals.",
   },
   {
     value: "admin",
     label: "Admin",
-    description: "Recommended for operators who need to invite people, create agents, and approve joins.",
-    gets: "Can create agents, invite users, assign tasks, and approve join requests.",
-  },
-  {
-    value: "owner",
-    label: "Owner",
-    description: "Full company access, including membership and permission management.",
-    gets: "Everything in Admin, plus managing members and permission grants.",
+    description: "Sets company direction and manages everything, including access.",
+    gets: "Everything in Member, plus goals, invites, permissions, and join approval.",
   },
 ] as const;
 
@@ -49,7 +37,7 @@ export function CompanyInvites() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
-  const [humanRole, setHumanRole] = useState<"owner" | "admin" | "operator" | "viewer">("operator");
+  const [humanRole, setHumanRole] = useState<"admin" | "member">("member");
   // AgentDash: auto-approve invited teammates by default so they join the
   // workspace instantly on accept (no admin approval click). Uncheck to fall
   // back to the approval queue.
@@ -214,7 +202,7 @@ export function CompanyInvites() {
                   <span className="min-w-0 space-y-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">{option.label}</span>
-                      {option.value === "operator" ? (
+                      {option.value === "member" ? (
                         <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
                           Default
                         </span>

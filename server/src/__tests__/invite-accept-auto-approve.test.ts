@@ -137,7 +137,7 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       .then((rows) => rows[0] ?? null);
     expect(membership).not.toBeNull();
     expect(membership?.status).toBe("active");
-    expect(membership?.membershipRole).toBe("operator");
+    expect(membership?.membershipRole).toBe("member");
 
     // Join request is already approved — never pending.
     const allRequests = await db

@@ -820,6 +820,20 @@
       "when": 1786827613105,
       "tag": "0116_lumpy_changeling",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1786929248978,
+      "tag": "0117_role_collapse_admin_member",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1786932126108,
+      "tag": "0118_real_wendigo",
+      "breakpoints": true
     }
   ]
 }

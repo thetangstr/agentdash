@@ -293,13 +293,16 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
   });
 
   // AgentDash: invite-role-ceiling (P0.5) — privilege-escalation guard.
-  it("rejects an admin approving a join request that would grant owner with 403", async () => {
+  it("rejects a member approving a join request that would grant admin with 403", async () => {
+    // The old case here was admin-approving-owner; owner now normalizes to
+    // admin, making that equal rank and legitimate. The rank rule that
+    // remains is that a member may not hand out admin.
     delete process.env.STRIPE_SECRET_KEY;
     process.env.AGENTDASH_BILLING_DISABLED = "true";
-    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+    getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "member" });
     const db = createDbStub(
       joinRequestRow({ requestType: "human" }),
-      { inviteDefaultsPayload: { human: { role: "owner" } } },
+      { inviteDefaultsPayload: { human: { role: "admin" } } },
     );
     const app = await createApp(db, boardUserActor());
 
@@ -312,13 +315,13 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
     expect(ensureMembershipMock).not.toHaveBeenCalled();
   });
 
-  it("allows an admin approving a join request that grants operator", async () => {
+  it("allows an admin approving a join request whose legacy operator payload lands as member", async () => {
     delete process.env.STRIPE_SECRET_KEY;
     process.env.AGENTDASH_BILLING_DISABLED = "true";
     getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
     const db = createDbStub(
       joinRequestRow({ requestType: "human" }),
-      { inviteDefaultsPayload: { human: { role: "operator" } } },
+      { inviteDefaultsPayload: { human: { role: "operator" } } }, // legacy payload, normalized on approval
     );
     const app = await createApp(db, boardUserActor());
 
@@ -331,7 +334,7 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
       "company-1",
       "user",
       "user-2",
-      "operator",
+      "member",
       "active",
     );
   });

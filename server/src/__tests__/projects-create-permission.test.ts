@@ -73,35 +73,21 @@ beforeEach(() => {
 
 describe("who may create a project", () => {
   /**
-   * The remaining gap, pinned as a test rather than left as a note.
-   *
-   * `assertCompanyAccess` refuses a `viewer` ANY non-GET request outright —
-   * "Viewer access is read-only" — before this route's own guard is consulted.
-   * So `projects:create` cannot currently be reached by the one role that has
-   * no direction authority, which is exactly the role a colleague should hold.
-   *
-   * That makes the role model effectively two-tier: read-only observer, or full
-   * participant who can also rewrite the company's goals. There is no
-   * contributor in between. Separating project creation from direction, which
-   * this file's other cases cover, is necessary for a fix and is not
-   * sufficient on its own.
+   * 2026-08-16, the role collapse: exactly two roles. `admin` sets direction;
+   * `member` does the work and owns what they create. The old four-tier model
+   * — where the only role without direction authority was refused every write
+   * — is gone, and with it the gap these tests used to pin. Legacy role
+   * strings still appear in stored rows and older clients; they normalize
+   * (owner→admin, operator/viewer→member) and are covered below so the
+   * mapping cannot silently change.
    */
-  it("is still blocked for a viewer by the blanket read-only rule", async () => {
-    canUser.mockResolvedValue(true);
-    const res = await request(await createApp(member("viewer")))
-      .post("/api/companies/company-1/projects")
-      .send({ name: "Sam's first project" });
-
-    expect(res.status).toBe(403);
-    expect(String(res.body.error)).toMatch(/viewer access is read-only/i);
-    expect(mockProjectService.create).not.toHaveBeenCalled();
-  });
-
-  it("refuses a non-viewer without the grant, and names what is missing", async () => {
-    // A refusal has to say what would fix it. `assertCompanyAccess` lets a
-    // non-viewer member through, so this route's own guard is what answers.
+  it("refuses a member when the permission lookup says no", async () => {
+    // In production a member's role grants include projects:create, so this
+    // arises only if the lookup itself denies or fails — but the route's
+    // contract is the same either way: lookup false means 403, and the
+    // refusal names what is missing.
     canUser.mockResolvedValue(false);
-    const res = await request(await createApp(member("contributor")))
+    const res = await request(await createApp(member("member")))
       .post("/api/companies/company-1/projects")
       .send({ name: "Sam's first project" });
 
@@ -110,10 +96,10 @@ describe("who may create a project", () => {
     expect(mockProjectService.create, "a refusal must not write").not.toHaveBeenCalled();
   });
 
-  it("allows a non-direction member WITH the grant", async () => {
-    // The point of the change: work without direction authority.
+  it("allows a member with the grant", async () => {
+    // The point of the model: work without direction authority.
     canUser.mockResolvedValue(true);
-    const res = await request(await createApp(member("contributor")))
+    const res = await request(await createApp(member("member")))
       .post("/api/companies/company-1/projects")
       .send({ name: "Sam's first project" });
 
@@ -121,25 +107,40 @@ describe("who may create a project", () => {
     expect(mockProjectService.create).toHaveBeenCalledTimes(1);
   });
 
-  it("still allows an owner with no explicit grant", async () => {
-    // Direction-holders keep the capability implicitly. Nothing an owner could
-    // do yesterday may be refused today.
+  it("allows an admin with no explicit grant", async () => {
+    // Direction-holders keep the capability implicitly.
     canUser.mockResolvedValue(false);
-    const res = await request(await createApp(member("owner")))
+    const res = await request(await createApp(member("admin")))
       .post("/api/companies/company-1/projects")
       .send({ name: "Leadership project" });
 
     expect(res.status).toBe(201);
-    expect(canUser, "an owner should not need a permission lookup").not.toHaveBeenCalled();
+    expect(canUser, "an admin should not need a permission lookup").not.toHaveBeenCalled();
   });
 
-  it("still allows an operator with no explicit grant", async () => {
+  it("treats a legacy owner row as admin", async () => {
+    // Stored rows may still say "owner" until the data migration runs, and an
+    // older client may send it afterwards. It must mean admin, not member.
     canUser.mockResolvedValue(false);
-    const res = await request(await createApp(member("operator")))
+    const res = await request(await createApp(member("owner")))
       .post("/api/companies/company-1/projects")
-      .send({ name: "Operator project" });
+      .send({ name: "Legacy owner project" });
 
     expect(res.status).toBe(201);
+    expect(canUser).not.toHaveBeenCalled();
+  });
+
+  it("treats legacy operator and viewer rows as members", async () => {
+    // operator loses its old direction authority; viewer GAINS write access.
+    // Both are deliberate — the viewer upgrade was measured to affect only
+    // uat test users before this shipped.
+    canUser.mockResolvedValue(true);
+    for (const legacy of ["operator", "viewer"]) {
+      const res = await request(await createApp(member(legacy)))
+        .post("/api/companies/company-1/projects")
+        .send({ name: `Legacy ${legacy} project` });
+      expect(res.status, `${legacy} with the grant`).toBe(201);
+    }
   });
 
   it("refuses an agent even if the permission lookup would say yes", async () => {
@@ -169,11 +170,15 @@ describe("who may create a project", () => {
   });
 
   it("does not grant direction along with the project", async () => {
-    // The separation, stated as a property: holding `projects:create` must not
-    // make someone able to set direction. Asserted against the predicate the
-    // goal and mandate routes actually use.
+    // The separation, stated as a property: creating projects must not make
+    // someone able to set direction. Asserted against the predicate the goal
+    // and mandate routes actually use — including the A1 flip itself: a
+    // legacy operator, who COULD set direction until 2026-08-16, now cannot.
     const { canSetCompanyDirection } = await import("../routes/authz.js");
+    expect(canSetCompanyDirection({ actor: member("member") } as never, "company-1")).toBe(false);
+    expect(canSetCompanyDirection({ actor: member("operator") } as never, "company-1")).toBe(false);
     expect(canSetCompanyDirection({ actor: member("viewer") } as never, "company-1")).toBe(false);
-    expect(canSetCompanyDirection({ actor: member("operator") } as never, "company-1")).toBe(true);
+    expect(canSetCompanyDirection({ actor: member("admin") } as never, "company-1")).toBe(true);
+    expect(canSetCompanyDirection({ actor: member("owner") } as never, "company-1")).toBe(true);
   });
 });

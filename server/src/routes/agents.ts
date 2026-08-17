@@ -61,7 +61,7 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
@@ -519,6 +519,14 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
+      // Every active human member may create agents — decided 2026-08-16
+      // ("they can create their own agents if they want"). Deliberately a
+      // role check and NOT an implicit `agents:create` grant: that permission
+      // key doubles as the agent-ADMINISTRATOR predicate across governance,
+      // connectors and stewardship, and granting it to members was measured
+      // to open all of them. Creation is role-given; administration stays a
+      // grant.
+      if (actorHumanRole(req, companyId) !== null) return null;
       const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
       if (!allowed) {
         throw forbidden(

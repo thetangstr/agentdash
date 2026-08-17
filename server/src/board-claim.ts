@@ -129,7 +129,7 @@ export async function claimBoardOwnership(
           principalType: "user",
           principalId: opts.userId,
           status: "active",
-          membershipRole: "owner",
+          membershipRole: "admin",
         });
         continue;
       }
@@ -137,7 +137,7 @@ export async function claimBoardOwnership(
       if (existing.status !== "active") {
         await tx
           .update(companyMemberships)
-          .set({ status: "active", membershipRole: "owner", updatedAt: new Date() })
+          .set({ status: "active", membershipRole: "admin", updatedAt: new Date() })
           .where(eq(companyMemberships.id, existing.id));
       }
     }

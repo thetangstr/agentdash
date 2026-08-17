@@ -68,7 +68,7 @@ describe("CompanyInvites", () => {
       createdAt: `2026-04-${String(inviteNumber).padStart(2, "0")}T00:00:00.000Z`,
       updatedAt: `2026-04-${String(inviteNumber).padStart(2, "0")}T00:00:00.000Z`,
       companyName: "Paperclip",
-      humanRole: isActive ? "operator" : "viewer",
+      humanRole: isActive ? "member" : "admin",
       inviteMessage: null,
       state: isActive ? "active" : "accepted",
       invitedByUser: {
@@ -97,7 +97,7 @@ describe("CompanyInvites", () => {
       inviteUrl: "https://paperclip.local/invite/new-token",
       onboardingTextUrl: null,
       onboardingTextPath: null,
-      humanRole: "viewer",
+      humanRole: "admin",
       allowedJoinTypes: "human",
     });
 
@@ -151,8 +151,8 @@ describe("CompanyInvites", () => {
 
     expect(container.textContent).toContain("Choose a role");
     expect(container.textContent).toContain("Each invite link is single-use.");
-    expect(container.textContent).toContain("Can create agents, invite users, assign tasks, and approve join requests.");
-    expect(container.textContent).toContain("Everything in Admin, plus managing members and permission grants.");
+    expect(container.textContent).toContain("Can create projects and agents, and assign tasks. Cannot change company goals.");
+    expect(container.textContent).toContain("Everything in Member, plus goals, invites, permissions, and join approval.");
     expect(listInvitesMock).toHaveBeenCalledWith("company-1", { limit: 5, offset: 0 });
 
     const viewMoreButton = Array.from(container.querySelectorAll("button")).find(
@@ -171,9 +171,9 @@ describe("CompanyInvites", () => {
     expect(container.textContent).toContain("View more");
 
     await act(async () => {
-      const viewerRadio = container.querySelector('input[type="radio"][value="viewer"]') as HTMLInputElement | null;
-      viewerRadio?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      viewerRadio?.dispatchEvent(new Event("change", { bubbles: true }));
+      const adminRadio = container.querySelector('input[type="radio"][value="admin"]') as HTMLInputElement | null;
+      adminRadio?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      adminRadio?.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
     const buttons = Array.from(container.querySelectorAll("button"));
@@ -191,7 +191,7 @@ describe("CompanyInvites", () => {
 
     expect(createCompanyInviteMock).toHaveBeenCalledWith("company-1", {
       allowedJoinTypes: "human",
-      humanRole: "viewer",
+      humanRole: "admin",
       agentMessage: null,
       autoApprove: true,
     });
@@ -269,7 +269,7 @@ describe("CompanyInvites", () => {
 
     expect(createCompanyInviteMock).toHaveBeenCalledWith("company-1", {
       allowedJoinTypes: "human",
-      humanRole: "operator",
+      humanRole: "member",
       agentMessage: null,
       autoApprove: false,
     });

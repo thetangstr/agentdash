@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import { forbidden, unauthorized } from "../errors.js";
+import { normalizeHumanRole } from "../services/company-member-roles.js";
 
 export function assertAuthenticated(req: Request) {
   if (req.actor.type === "none") {
@@ -65,7 +66,7 @@ export async function isCompanyAdministrator(
   const membership = await access.getMembership(companyId, "user", req.actor.userId);
   return (
     membership?.status === "active" &&
-    (membership.membershipRole === "owner" || membership.membershipRole === "admin")
+    normalizeHumanRole(membership.membershipRole) === "admin"
   );
 }
 
@@ -104,9 +105,9 @@ export function assertCompanyAccess(req: Request, companyId: string) {
       if (!membership || membership.status !== "active") {
         throw forbidden("User does not have active company access");
       }
-      if (membership.membershipRole === "viewer") {
-        throw forbidden("Viewer access is read-only");
-      }
+      // The viewer read-only branch lived here until 2026-08-16. It is gone
+      // with the role itself: `viewer` normalizes to `member` now, and a
+      // guard for a role that cannot exist is a guard that only misleads.
     }
   }
 }
@@ -130,11 +131,14 @@ export function assertCompanyAccess(req: Request, companyId: string) {
  *    goal can report success by moving it, and the audit trail will faithfully
  *    record that the goal simply changed.
  *
- * So: agents are refused outright, and humans need owner, admin or operator.
- * Operator is included deliberately — it sits between admin and member and
- * names someone who runs the company day to day, which is exactly who adjusts a
- * goal. Instance admins pass, as they do everywhere. Read paths are untouched —
- * everyone who can see the company can still see its goals.
+ * So: agents are refused outright, and humans need `admin`. Operator was
+ * included here until 2026-08-16, on the theory that whoever runs the company
+ * day to day adjusts its goals — that reversed once the first two colleagues
+ * were invited as operators and it turned out "colleague who does the work"
+ * and "person who may rewrite the goals" had been the same role. Two roles
+ * now: admin sets direction, member does the work. Instance admins pass, as
+ * they do everywhere. Read paths are untouched — everyone who can see the
+ * company can still see its goals.
  */
 export function assertCanSetCompanyDirection(req: Request, companyId: string) {
   assertCompanyAccess(req, companyId);
@@ -146,7 +150,7 @@ export function assertCanSetCompanyDirection(req: Request, companyId: string) {
   }
   if (canSetCompanyDirection(req, companyId)) return;
 
-  throw forbidden("Only an owner, admin or operator can change company direction.");
+  throw forbidden("Only an admin can change company direction.");
 }
 
 /**
@@ -173,8 +177,26 @@ export function canSetCompanyDirection(req: Request, companyId: string): boolean
   const membership = Array.isArray(req.actor.memberships)
     ? req.actor.memberships.find((item) => item.companyId === companyId)
     : undefined;
-  const role = membership?.membershipRole;
-  return role === "owner" || role === "admin" || role === "operator";
+  if (membership?.status !== "active") return false;
+  return normalizeHumanRole(membership.membershipRole) === "admin";
+}
+
+/**
+ * The actor's normalized role in this company, or null for agents, inactive
+ * memberships, and strangers. The one reader of `req.actor.memberships` for
+ * role purposes — route guards ask this instead of poking at the array, so
+ * legacy role strings cannot leak past normalization.
+ */
+export function actorHumanRole(
+  req: Request,
+  companyId: string,
+): ReturnType<typeof normalizeHumanRole> | null {
+  if (req.actor.type !== "board") return null;
+  const membership = Array.isArray(req.actor.memberships)
+    ? req.actor.memberships.find((item) => item.companyId === companyId)
+    : undefined;
+  if (membership?.status !== "active") return null;
+  return normalizeHumanRole(membership.membershipRole);
 }
 
 export function getActorInfo(req: Request) {

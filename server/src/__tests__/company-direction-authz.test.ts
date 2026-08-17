@@ -54,15 +54,22 @@ describe("assertCanSetCompanyDirection", () => {
     // The case that prompted this: someone invited to work toward the goals
     // should not be able to redefine them.
     expect(() => assertCanSetCompanyDirection(req(human("member")), COMPANY)).toThrow(
-      /Only an owner, admin or operator/,
+      /Only an admin/,
     );
   });
 
-  it("lets an operator set direction — they run the company day to day", () => {
-    expect(() => assertCanSetCompanyDirection(req(human("operator")), COMPANY)).not.toThrow();
+  it("refuses a legacy operator — the 2026-08-16 reversal, pinned", () => {
+    // Operator DID set direction until the role collapse. Sam and Megan were
+    // invited at operator, which meant "colleague who does the work" and
+    // "person who may rewrite the goals" were the same role. They are not
+    // anymore: operator normalizes to member, and members do not set
+    // direction.
+    expect(() => assertCanSetCompanyDirection(req(human("operator")), COMPANY)).toThrow(
+      /Only an admin/,
+    );
   });
 
-  it("refuses a viewer, as read-only already did", () => {
+  it("refuses a legacy viewer, who normalizes to member", () => {
     expect(() => assertCanSetCompanyDirection(req(human("viewer")), COMPANY)).toThrow();
   });
 
@@ -121,7 +128,7 @@ describe("the MKThink role model", () => {
       expect(
         () => assertCanSetCompanyDirection(req(human("member"), method), COMPANY),
         `${method} must be refused for a member`,
-      ).toThrow(/Only an owner, admin or operator/);
+      ).toThrow(/Only an admin/);
     }
   });
 
