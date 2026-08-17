@@ -177,6 +177,32 @@ export function projectRoutes(db: Db) {
     };
 
     const { workspace, ...projectData } = req.body as CreateProjectPayload;
+    // A6 (2026-08-16): collision guard, two layers. Exact case-insensitive
+    // collision is refused by the partial unique index (409 below). A NEAR
+    // miss — same letters ignoring spacing/punctuation, or one name starting
+    // with the other — warns once and is overridable with confirmSimilarName,
+    // because the failure this prevents is someone dodging the hard rule by
+    // adding a suffix.
+    const { confirmSimilarName, ...cleanProjectData } =
+      projectData as CreateProjectPayload & { confirmSimilarName?: boolean };
+    if (confirmSimilarName !== true && typeof cleanProjectData.name === "string") {
+      const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const candidate = squash(cleanProjectData.name);
+      // Scanned through the actor's OWN visibility — naming a restricted
+      // project in an error message would leak the thing A5 hides.
+      const visible = await svc.list(companyId, projectVisibilityCondition(req, companyId));
+      const similar = visible.find((p) => {
+        if (p.archivedAt) return false;
+        const other = squash(p.name);
+        return other === candidate || other.startsWith(candidate) || candidate.startsWith(other);
+      });
+      if (similar) {
+        throw conflict(
+          `A project named "${similar.name}" already exists in this company. ` +
+            "Pick a different name, or resend with confirmSimilarName: true to create it anyway.",
+        );
+      }
+    }
     await assertProjectEnvironmentSelection(
       companyId,
       readProjectPolicyEnvironmentId(projectData.executionWorkspacePolicy),
@@ -201,7 +227,7 @@ export function projectRoutes(db: Db) {
     // name its own creator could gift the project to someone else's quota of
     // authority. Agents cannot reach this line (refused above).
     const project = await svc.create(companyId, {
-      ...projectData,
+      ...cleanProjectData,
       createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     });
     let createdWorkspaceId: string | null = null;

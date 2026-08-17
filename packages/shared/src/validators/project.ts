@@ -117,6 +117,8 @@ const projectFields = {
 export const createProjectSchema = z.object({
   ...projectFields,
   workspace: createProjectWorkspaceSchema.optional(),
+  // A6: acknowledges the near-miss warning; read by the route, never stored.
+  confirmSimilarName: z.boolean().optional(),
 });
 
 export type CreateProject = z.infer<typeof createProjectSchema>;

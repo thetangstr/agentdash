@@ -19,6 +19,7 @@ import {
   heartbeatService,
   logActivity,
 } from "../services/index.js";
+import { assertProjectIdVisible } from "./visibility.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 import { accessService } from "../services/access.js";
@@ -244,6 +245,8 @@ export function costRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
+    // A5: an issue in a restricted project does not exist for off-list actors.
+    await assertProjectIdVisible(db, req, issue.companyId, issue.projectId);
     const summary = await costs.issueTreeSummary(issue.companyId, issue.id);
     res.json(summary);
   });
