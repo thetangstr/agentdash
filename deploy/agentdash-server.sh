@@ -15,7 +15,17 @@ ENV_FILE="${AGENTDASH_ENV_FILE:-$HOME/.config/agentdash/${INSTANCE}.env}"
 APP_DIR="${AGENTDASH_APP_DIR:-$HOME/agentdash}"
 
 # Homebrew node is not on launchd's PATH; launchd starts with a minimal one.
-export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+#
+# `$HOME/.local/bin` is listed explicitly because that is where `hermes` lives,
+# and hermes is what every agent run actually executes.
+#
+# It already worked without this line, and the reason is worth writing down so
+# nobody "cleans up" the redundancy: `~/.zshenv` also exports it, and zsh
+# sources .zshenv on EVERY invocation -- including a non-interactive script run
+# by launchd. So the dependency was real but invisible, resting on one line in
+# a personal dotfile that any tidy-up would take with it. Naming it here makes
+# the wrapper self-contained; it is belt-and-braces, not a bug fix.
+export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "agentdash: no env file at $ENV_FILE" >&2
