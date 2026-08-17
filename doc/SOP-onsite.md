@@ -23,7 +23,7 @@ all about **people**, not machines.
 |---|---|---|
 | 1 | `./deploy/relocate.sh --check` at home | Confirms the script runs clean on a network you know. Changes nothing. |
 | 2 | Copy the CA to a USB stick or somewhere you can reach it | `~/Library/Application Support/mkcert/rootCA.pem`. Without it, every browser shows a warning. |
-| 3 | Decide about the test data — see **"What Titus will see"** below | Easier to decide now than in front of him. |
+| 3 | Confirm you can sign in as Titus, or run `deploy/set-password.mjs` | **The one thing that locks you out.** See "How you log in" below. |
 | 4 | `sudo scutil --set ComputerName "MKThink Mac Mini"` | Still says *yang's Mac mini* in Finder and AirDrop. Needs your password, so do it while you have a keyboard. |
 
 ---
@@ -80,14 +80,40 @@ expected, not a fault.
 
 ---
 
-## Getting people in — the part no script can do
+## How you log in — read this before you drive over
 
-**Right now only Titus can sign in.** Sam and Megan exist in the database with
-memberships, and **no password and no credential of any kind**. They cannot log
-in, and nothing on screen says so until they try.
+The instance runs in `authenticated` mode. **There is no local bypass**, no
+"admin console on localhost", no way in without a password. Exactly one account
+exists on the real workspace:
 
-There are two open invites, but **their links cannot be recovered** — only a
-hash is stored. If you do not still have those URLs, they are dead. Reissue.
+```
+titus@mkthink.com   admin   password set 2026-08-12
+```
+
+**If nobody remembers that password, there is no way in at all.** Password
+reset does not help either: better-auth mails a link, and nothing on this box
+is wired to send auth email — Resend is configured for error alerts only.
+
+So settle this at home, not in their server room. Either confirm you can sign
+in as Titus, or set the password now:
+
+```
+node ~/agentdash/deploy/set-password.mjs mkboard titus@mkthink.com
+```
+
+It prompts (never takes the password as an argument — that lands in `ps` and
+shell history), uses better-auth's own hasher so the credential is exactly what
+a normal sign-up would write, and **verifies the result with better-auth's own
+checker** before saying it worked. Leave the prompt blank and it generates
+something readable enough to say out loud.
+
+Proven end to end on `uat` before it went near the real workspace: the right
+password signs in **200**, the wrong one **401**.
+
+## Getting other people in
+
+Once you are in as Titus, everyone else goes through invites — and **only Titus
+exists right now**. The stand-in accounts used for testing have been removed.
 
 For each person:
 
@@ -107,24 +133,26 @@ direction — verified, it returns 403, not a hidden button.
 
 ---
 
-## What Titus will see, and a decision to make first
+## What Titus will see
 
-The real workspace is **not empty**. It contains last night's two test runs:
+**The test data is gone.** Cleared 2026-08-17 with
+`deploy/clean-test-data.mjs --apply`, read back from the database afterwards:
 
-- **"RFP response — Lakeway TX civil engineering"** — three agents, a real
-  approval, and honest refusals to fabricate.
-- **"Board pack — week of 17 Aug 2026"** — the laptop-bridge run, where a
-  confidential figure reached the board only after Megan approved it.
-- **6 synthetic company-context rows**, each labelled `SEED — synthetic ... NOT
-  real MKThink project history`.
+```
+projects 0   users 1 (Titus)   synthetic context rows 0   agents 6
+```
 
-Both stories are genuinely good demo material, and the labelling is honest. But
-decide **before** you show anyone whether you want them there, because
-"why does our board think we have a water campus project" is a bad question to
-field live. Delete the synthetic context rows if in doubt; the projects
-themselves are worth keeping.
+Removed: both test projects with their issues and comments, the six
+`SEED — synthetic` company-context rows, and the two stand-in people. Kept: the
+six agents, the company goal, and the four `MKT-1`–`MKT-4` issues, which
+predate the testing and are yours.
 
-The `uat` instance also has two agents literally named **"Gate4 containment
+So Titus opens a workspace with his six agents and a clean board. If you want
+the RFP or board-pack runs back as a demo, they are described in
+`doc/plans/2026-08-17-uat-result.md` and `2026-08-17-board-pack-result.md` and
+can be re-run.
+
+The `uat` instance still has two agents literally named **"Gate4 containment
 probe (delete me)"** and **"Gate5 CEO probe (delete me)"**. Do not screen-share
 3113.
 
