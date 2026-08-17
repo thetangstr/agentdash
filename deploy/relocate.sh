@@ -17,9 +17,19 @@
 # "run it and read the table" is always a correct thing to do, including as a
 # health check when you have not moved anywhere.
 #
-# It needs NO sudo. Restarting an instance is `kill -TERM`, which works because
-# the LaunchDaemons are KeepAlive {SuccessfulExit: false} -- launchd brings a
-# non-zero exit straight back. `launchctl kickstart` would need a password.
+# It needs NO sudo. Restarting an instance is `kill -KILL`, and the signal
+# matters: the LaunchDaemons are KeepAlive {SuccessfulExit: false}, which means
+# launchd restarts a job only when it exits NON-zero. The server handles SIGTERM
+# gracefully and exits 0, so `kill -TERM` reads as "it meant to stop" and launchd
+# leaves it down -- measured 2026-08-17, uat stayed dead with `last exit code = 0`
+# until someone ran `sudo launchctl kickstart`. SIGKILL exits 137, which is
+# non-zero, so KeepAlive fires (also measured: runs 3 -> 4, back in ~10s).
+#
+# The cost is an unclean stop: in-flight requests are dropped and DB connections
+# close hard. Acceptable for a config reload, and much better than discovering in
+# the client's server room that both instances are down and the fix needs a
+# password. To get BOTH graceful and automatic, set KeepAlive to <true/> in the
+# four server/db plists -- one-time sudo, at home -- and switch this back to TERM.
 #
 # Usage:  deploy/relocate.sh            # do it
 #         deploy/relocate.sh --check    # report only, change nothing
@@ -150,7 +160,9 @@ green "  reloaded"
 # keeps refusing the new IP no matter what the env file says.
 print ""
 bold "Restarting instances so they pick up the new hostname set"
-for pid in $(pgrep -f 'tsx src/index.ts' | head -4); do kill -TERM "$pid" 2>/dev/null || true; done
+# SIGKILL, not SIGTERM -- see the header. A graceful exit is exit 0, and
+# KeepAlive {SuccessfulExit: false} does not restart a job that exited 0.
+for pid in $(pgrep -f 'tsx src/index.ts' | head -4); do kill -KILL "$pid" 2>/dev/null || true; done
 for i in $(seq 1 30); do
   a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3102/api/health || echo 000)
   b=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3103/api/health || echo 000)
@@ -159,6 +171,14 @@ for i in $(seq 1 30); do
 done
 [ "$a" = "200" ] && green "  mkboard up" || red "  mkboard did NOT come back (got $a)"
 [ "$b" = "200" ] && green "  uat up"     || red "  uat did NOT come back (got $b)"
+# An instance that is down here needs launchd told to start it, and that is the
+# one step in this script that wants a password. Print it rather than making
+# someone work it out while the client waits.
+if [ "$a" != "200" ] || [ "$b" != "200" ]; then
+  red "  recover with:"
+  [ "$a" != "200" ] && red "    sudo launchctl kickstart -k system/com.agentdash.mkboard.server"
+  [ "$b" != "200" ] && red "    sudo launchctl kickstart -k system/com.agentdash.uat.server"
+fi
 
 # --- 6. Prove it, on every path someone might actually use ----------------
 print ""
