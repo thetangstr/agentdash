@@ -47,6 +47,8 @@ import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
 import { initErrorSink, recordServerError } from "./observability/error-sink.js";
 import { startAlerter } from "./observability/alerter.js";
+import { emitSignal } from "./observability/signals.js";
+import { computeHealthChecks } from "./observability/health-checks.js";
 import { conflict } from "./errors.js";
 import type {
   InstanceDatabaseBackupRunResult,
@@ -941,6 +943,44 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
+  // O4/O6 (2026-08-16): the health checks run on a clock, not only when
+  // polled — a stale backup or a filling disk emits a signal within the half
+  // hour instead of waiting for someone to look.
+  {
+    const healthSignalHandle = setInterval(() => {
+      void computeHealthChecks(db)
+        .then((checks) => {
+          if (checks.backup && !checks.backup.ok) {
+            emitSignal({
+              kind: "backup_stale",
+              summary: checks.backup.latestAt
+                ? `newest backup is ${checks.backup.ageHours}h old`
+                : "no backups found in the backup directory",
+              detail: { latestAt: checks.backup.latestAt, ageHours: checks.backup.ageHours },
+            });
+          }
+          if (!checks.disk.ok) {
+            emitSignal({
+              kind: "disk_low",
+              summary: `disk free below threshold: ${(checks.disk.freeBytes / 1e9).toFixed(1)} GB left`,
+              detail: { freeBytes: checks.disk.freeBytes },
+            });
+          }
+          if (!checks.runs.ok) {
+            emitSignal({
+              kind: "run_stuck",
+              summary: `${checks.runs.stuck} run(s) stuck in a live state for over 2h`,
+              detail: { stuck: checks.runs.stuck },
+            });
+          }
+        })
+        .catch((err) => {
+          logger.warn({ err }, "periodic health check failed");
+        });
+    }, 30 * 60 * 1000);
+    healthSignalHandle.unref?.();
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

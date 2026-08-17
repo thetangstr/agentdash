@@ -3,6 +3,8 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { emitSignal } from "../observability/signals.js";
+import { preRunChecks } from "../observability/pre-run-checks.js";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -2934,6 +2936,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         },
       });
       publishRunLifecyclePluginEvent(updated);
+      // O6 (2026-08-16): the run healer and recovery service already NOTICE
+      // bad endings; this is where anyone gets TOLD. One emission site,
+      // because this is the one place statuses change.
+      if (updated.status === "failed" || updated.status === "timed_out") {
+        emitSignal({
+          kind: updated.status === "failed" ? "run_failed" : "run_timed_out",
+          companyId: updated.companyId,
+          summary: `run ${updated.status}${updated.errorCode ? ` (${updated.errorCode})` : ""}`,
+          detail: {
+            runId: updated.id,
+            agentId: updated.agentId ?? undefined,
+            errorCode: updated.errorCode ?? undefined,
+          },
+        });
+      }
     }
 
     return updated;
@@ -4098,6 +4115,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         );
         return null;
       }
+    }
+
+    // M3/M4 (2026-08-16): budget and runaway gates, in the same seam as the
+    // blocker and staleness gates above. A refused run is CANCELLED with the
+    // reason, never silently dropped.
+    const preRun = await preRunChecks(db, { companyId: run.companyId, agentId: run.agentId });
+    if (!preRun.allowed) {
+      await setRunStatus(run.id, "cancelled", {
+        finishedAt: new Date(),
+        error: preRun.reason ?? "refused by pre-run checks",
+        errorCode: preRun.errorCode ?? "pre_run_check",
+      });
+      logger.info({ runId: run.id, errorCode: preRun.errorCode }, "claimQueuedRun: refused by pre-run checks");
+      return null;
     }
 
     const claimedAt = new Date();

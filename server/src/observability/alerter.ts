@@ -101,6 +101,7 @@ const ALERTING_KINDS: ReadonlySet<SignalKind> = new Set([
   "run_failed",
   "run_timed_out",
   "run_stuck",
+  "run_cap_hit",
   "backup_failed",
   "backup_stale",
   "disk_low",

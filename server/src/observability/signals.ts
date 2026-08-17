@@ -20,6 +20,7 @@ export const SIGNAL_KINDS = [
   "run_failed",
   "run_timed_out",
   "run_stuck",
+  "run_cap_hit",
   "backup_failed",
   "backup_stale",
   "disk_low",

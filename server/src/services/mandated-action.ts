@@ -1,4 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
+import { emitSignal } from "../observability/signals.js";
 import type { Db } from "@paperclipai/db";
 import { mandates as mandatesTable, mandateAttestations } from "@paperclipai/db";
 import { clockchainService } from "./clockchain.js";
@@ -52,6 +53,16 @@ export function mandatedActionService(
   async function performMandatedAction(input: MandatedActionInput, now: Date = new Date()): Promise<MandatedActionResult> {
     // 1. Mandate — fail-closed.
     const verdict = await mandates.verifyMandate(input.mandateId, now, input.granteeAgentId);
+    // G5 (2026-08-16): expiry was already ENFORCED here — verified, not
+    // assumed. What was missing is anyone being told an agent just tried to
+    // act on lapsed authority.
+    if (verdict.status === "unauthorized" && verdict.reason === "expired") {
+      emitSignal({
+        kind: "mandate_expired",
+        summary: "an agent attempted an action under an expired mandate",
+        detail: { mandateId: input.mandateId, granteeAgentId: input.granteeAgentId },
+      });
+    }
     if (verdict.status !== "authorized") {
       return { authorized: false, reason: verdict.reason ?? verdict.status };
     }
