@@ -25,7 +25,7 @@ describe("resolveAgentSandboxSettings", () => {
 
   it("builds a spec for a valid egress policy", () => {
     const settings = resolveAgentSandboxSettings({ AGENTDASH_AGENT_SANDBOX: "loopback" }, "darwin");
-    expect(settings.spec).toEqual({ homeDir: os.homedir(), egress: "loopback", readWritePaths: [] });
+    expect(settings.spec).toEqual({ homeDir: os.homedir(), egress: "loopback", readWritePaths: [], readOnlyPaths: [] });
     expect(settings.summary).toMatch(/on \(egress=loopback\)/);
   });
 

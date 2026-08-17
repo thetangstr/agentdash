@@ -106,8 +106,12 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
-      {/* O2: the local error sink, instance-admin only. */}
-      <Route path="instance/errors" element={<InstanceErrors />} />
+      {/* O2: the local error sink, instance-admin only. Lives under the
+          settings tree because the router treats the FIRST path segment as a
+          company prefix — a top-level /instance/errors resolves to "no
+          company named instance", which is exactly how the browser
+          walkthrough found this. */}
+      <Route path="company/settings/errors" element={<InstanceErrors />} />
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
       <Route path="skills/*" element={<CompanySkills />} />
