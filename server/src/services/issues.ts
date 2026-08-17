@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { clearIssueDependents } from "./issue-dependents.js";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -3266,6 +3267,10 @@ export function issueService(db: Db) {
           .select({ documentId: issueDocuments.documentId })
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
+
+        // Every dependent that would block the delete below. Shared with the
+        // project-delete path so the two cannot drift apart.
+        await clearIssueDependents(tx, sql`= ${id}`);
 
         const removedIssue = await tx
           .delete(issues)

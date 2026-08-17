@@ -33,6 +33,9 @@ const mockProjectService = vi.hoisted(() => ({
     ...PROJECT.current,
     ...body,
   })),
+  // Added when project delete learned to refuse rather than 500 on a project
+  // that still holds issues. Zero here keeps these cases about OWNERSHIP.
+  countIssues: vi.fn(async () => 0),
   remove: vi.fn(async () => PROJECT.current),
   list: vi.fn(async () => []),
   // agents resolve project references by shortname before the guard runs

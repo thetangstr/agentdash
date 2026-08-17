@@ -818,7 +818,29 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCanEditOwnedResource(req, existing.companyId, existing, "project");
-    const project = await svc.remove(id);
+
+    // `issues.project_id` has no cascade, so deleting a project that holds any
+    // issue used to raise a foreign-key violation and surface as
+    // `500 Internal server error` -- which made every real project on the
+    // board undeletable, with a message that named neither the cause nor the
+    // fix. Refuse instead, say how much work is in the way, and require the
+    // caller to ask for it explicitly. Cascading by default would let one
+    // click take a board's worth of issues, comments and approvals with it.
+    const withIssues =
+      req.query.withIssues === "true" || req.body?.withIssues === true;
+    const issueCount = await svc.countIssues(id);
+    if (issueCount > 0 && !withIssues) {
+      res.status(409).json({
+        error:
+          `This project still holds ${issueCount} issue${issueCount === 1 ? "" : "s"}. `
+          + `Move or delete them first, or repeat this request with ?withIssues=true `
+          + `to delete them along with the project.`,
+        issueCount,
+      });
+      return;
+    }
+
+    const project = await svc.remove(id, { withIssues });
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;
