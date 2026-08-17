@@ -35,6 +35,11 @@ export const agents = pgTable(
     lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     clockchainDid: text("clockchain_did"),
+    // A3/A4 (2026-08-16): whoever creates an agent owns it — the decided
+    // answer to "who is answerable for each agent" after the stewardship
+    // roster idea collided with stewardship's 1:1 uniqueness. Backfilled to
+    // each company's first admin.
+    createdByUserId: text("created_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

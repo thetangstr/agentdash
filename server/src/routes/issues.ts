@@ -3,7 +3,8 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { issueExecutionDecisions } from "@paperclipai/db";
+import { issueExecutionDecisions, issues } from "@paperclipai/db";
+import { assertProjectIdVisible, projectScopedVisibilityCondition } from "./visibility.js";
 import {
   addIssueCommentSchema,
   acceptIssueThreadInteractionSchema,
@@ -974,6 +975,8 @@ export function issueRoutes(
     const offset = parsedOffset ?? 0;
 
     const result = await svc.list(companyId, {
+      // A5: issues inside a restricted project vanish for actors off its list.
+      visibleWhere: projectScopedVisibilityCondition(req, companyId, issues.projectId),
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
       participantAgentId: req.query.participantAgentId as string | undefined,
@@ -1177,6 +1180,9 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
+    // A5: 404, never 403 — an issue in a restricted project does not exist
+    // for actors off the project's access list.
+    await assertProjectIdVisible(db, req, issue.companyId, issue.projectId);
     const [
       { project, goal },
       ancestors,

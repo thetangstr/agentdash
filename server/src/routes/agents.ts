@@ -2225,6 +2225,10 @@ export function agentRoutes(
         status,
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;
@@ -2423,6 +2427,10 @@ export function agentRoutes(
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;

@@ -834,6 +834,13 @@
       "when": 1786932126108,
       "tag": "0118_real_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1786932876530,
+      "tag": "0119_amusing_sleeper",
+      "breakpoints": true
     }
   ]
 }

@@ -181,6 +181,7 @@ export {
 export {
   createProjectSchema,
   updateProjectSchema,
+  replaceProjectAccessSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   projectExecutionWorkspacePolicySchema,

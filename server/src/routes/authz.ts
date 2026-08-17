@@ -182,6 +182,39 @@ export function canSetCompanyDirection(req: Request, companyId: string): boolean
 }
 
 /**
+ * A4 (2026-08-16): editing follows ownership. You change what you created;
+ * an admin changes anything. Replaces direction authority on project
+ * mutation routes — under the old rule a member could create a project they
+ * could never edit, which made "members own their own work" a fiction.
+ *
+ * Agents are refused here exactly as the direction guard refused them — this
+ * change redraws the human line, not the agent one. A resource with no
+ * recorded creator (pre-backfill rows, mid-migration) falls back to
+ * admin-only: fail toward the stricter rule, never the looser one.
+ */
+export function assertCanEditOwnedResource(
+  req: Request,
+  companyId: string,
+  resource: { createdByUserId?: string | null },
+  what: string,
+): void {
+  assertCompanyAccess(req, companyId);
+  if (req.actor.type === "agent") {
+    throw forbidden(`Agents cannot modify ${what}. Ask the ${what}'s owner or an admin.`);
+  }
+  if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
+  if (actorHumanRole(req, companyId) === "admin") return;
+  if (
+    resource.createdByUserId &&
+    req.actor.userId &&
+    resource.createdByUserId === req.actor.userId
+  ) {
+    return;
+  }
+  throw forbidden(`Only the ${what}'s creator or an admin can change it.`);
+}
+
+/**
  * The actor's normalized role in this company, or null for agents, inactive
  * memberships, and strangers. The one reader of `req.actor.memberships` for
  * role purposes — route guards ask this instead of poking at the array, so

@@ -1,11 +1,14 @@
 import { Router, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
+import { projectAccess } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import {
   createProjectSchema,
   createProjectWorkspaceSchema,
   findWorkspaceCommandDefinition,
   isUuidLike,
   matchWorkspaceRuntimeServiceToCommand,
+  replaceProjectAccessSchema,
   updateProjectSchema,
   updateProjectWorkspaceSchema,
   workspaceRuntimeControlTargetSchema,
@@ -19,7 +22,9 @@ import { accessService, projectService, logActivity, workspaceOperationService }
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest, conflict, forbidden } from "../errors.js";
+import { assertProjectVisible, projectVisibilityCondition } from "./visibility.js";
 import {
+  assertCanEditOwnedResource,
   assertCanSetCompanyDirection,
   assertCompanyAccess,
   canSetCompanyDirection,
@@ -112,7 +117,9 @@ export function projectRoutes(db: Db) {
   router.get("/companies/:companyId/projects", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await svc.list(companyId);
+    // A5: restricted projects simply do not appear for actors off their
+    // access list. The condition is undefined for admins — no extra filter.
+    const result = await svc.list(companyId, projectVisibilityCondition(req, companyId));
     res.json(result);
   });
 
@@ -124,6 +131,8 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, project.companyId);
+    // 404, never 403: an existence-confirming refusal is itself the leak.
+    await assertProjectVisible(db, req, project);
     res.json(project);
   });
 
@@ -188,7 +197,13 @@ export function projectRoutes(db: Db) {
         { strictMode: strictSecretsMode, fieldPath: "env" },
       );
     }
-    const project = await svc.create(companyId, projectData);
+    // Ownership comes from the ACTOR, never the body — a payload that could
+    // name its own creator could gift the project to someone else's quota of
+    // authority. Agents cannot reach this line (refused above).
+    const project = await svc.create(companyId, {
+      ...projectData,
+      createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+    });
     let createdWorkspaceId: string | null = null;
     if (workspace) {
       const createdWorkspace = await svc.createWorkspace(project.id, workspace);
@@ -230,8 +245,24 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCanSetCompanyDirection(req, existing.companyId);
+    // A4 (2026-08-16): editing follows ownership, not direction. Under the
+    // direction rule a member could create a project they could never edit.
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    await assertProjectVisible(db, req, existing);
     const body = { ...req.body };
+    // A5: restricting a project must not blind the agent working on it — the
+    // lead agent joins the access list in the same request.
+    if (body.visibility === "restricted" && existing.visibility !== "restricted" && existing.leadAgentId) {
+      await db
+        .insert(projectAccess)
+        .values({
+          projectId: existing.id,
+          principalType: "agent",
+          principalId: existing.leadAgentId,
+          grantedByUserId: req.actor.type === "board" ? (req.actor.userId ?? "system") : "system",
+        })
+        .onConflictDoNothing();
+    }
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -689,6 +720,61 @@ export function projectRoutes(db: Db) {
     res.json(workspace);
   });
 
+  /**
+   * A5: the access list of a restricted project. Managed only by whoever may
+   * edit the project (creator or admin); readable by the same, because the
+   * list of who can see a restricted thing is itself restricted.
+   */
+  router.get("/projects/:id/access", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
+    res.json({ visibility: existing.visibility, access: rows });
+  });
+
+  router.put("/projects/:id/access", validate(replaceProjectAccessSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    const grantedBy = req.actor.type === "board" ? (req.actor.userId ?? "system") : "system";
+    const entries = (req.body.access as Array<{ principalType: "user" | "agent"; principalId: string }>) ?? [];
+    await db.transaction(async (tx) => {
+      await tx.delete(projectAccess).where(eq(projectAccess.projectId, id));
+      if (entries.length > 0) {
+        await tx.insert(projectAccess).values(
+          entries.map((entry) => ({
+            projectId: id,
+            principalType: entry.principalType,
+            principalId: entry.principalId,
+            grantedByUserId: grantedBy,
+          })),
+        );
+      }
+    });
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: existing.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "project.access_replaced",
+      entityType: "project",
+      entityId: id,
+      details: { count: entries.length },
+    });
+    const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
+    res.json({ visibility: existing.visibility, access: rows });
+  });
+
   router.delete("/projects/:id", async (req, res) => {
     const id = req.params.id as string;
     const existing = await svc.getById(id);
@@ -696,7 +782,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCanSetCompanyDirection(req, existing.companyId);
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
     const project = await svc.remove(id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });

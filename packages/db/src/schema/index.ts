@@ -140,3 +140,5 @@ export {
 } from "./deliverables.js";
 // O1 (2026-08-16): the local error sink — one row per fingerprint, counted.
 export { serverErrors } from "./server_errors.js";
+// A5 (2026-08-16): access list for restricted projects.
+export { projectAccess } from "./project_access.js";

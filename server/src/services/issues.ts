@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -127,6 +127,11 @@ function buildReusedExecutionWorkspaceConfigPatchFromIssueSettings(
 }
 
 export interface IssueFilters {
+  /**
+   * A5: the actor's project-visibility condition from routes/visibility.ts.
+   * Undefined for admins. The service composes it; it never derives it.
+   */
+  visibleWhere?: SQL;
   status?: string;
   assigneeAgentId?: string;
   participantAgentId?: string;
@@ -2173,6 +2178,7 @@ export function issueService(db: Db) {
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
+      if (filters?.visibleWhere) conditions.push(filters.visibleWhere);
       const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
         ? Math.max(1, Math.floor(filters.limit))
         : undefined;

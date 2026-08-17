@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import {
@@ -399,8 +399,14 @@ async function ensureSinglePrimaryWorkspace(
 
 export function projectService(db: Db) {
   return {
-    list: async (companyId: string): Promise<ProjectWithGoals[]> => {
-      const rows = await db.select().from(projects).where(eq(projects.companyId, companyId));
+    list: async (companyId: string, visibleWhere?: SQL): Promise<ProjectWithGoals[]> => {
+      // A5: the caller passes the actor's visibility condition (undefined for
+      // admins). The service composes it rather than re-deriving it — one
+      // implementation of the rule lives in routes/visibility.ts.
+      const rows = await db
+        .select()
+        .from(projects)
+        .where(visibleWhere ? and(eq(projects.companyId, companyId), visibleWhere) : eq(projects.companyId, companyId));
       const withGoals = await attachGoals(db, rows);
       return attachWorkspaces(db, withGoals);
     },

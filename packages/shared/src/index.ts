@@ -871,6 +871,7 @@ export {
   type TransferAgentStewardship,
   createProjectSchema,
   updateProjectSchema,
+  replaceProjectAccessSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   type CreateProject,
