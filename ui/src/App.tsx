@@ -35,6 +35,7 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { InstanceErrors } from "./pages/InstanceErrors";
 import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
@@ -105,6 +106,8 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
+      {/* O2: the local error sink, instance-admin only. */}
+      <Route path="instance/errors" element={<InstanceErrors />} />
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
       <Route path="skills/*" element={<CompanySkills />} />

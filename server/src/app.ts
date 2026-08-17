@@ -67,6 +67,7 @@ import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
@@ -436,6 +437,8 @@ export async function createApp(
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
+  // O2: read the local error sink (instance-admin only).
+  api.use(serverErrorRoutes(db));
   api.use("/conversations", conversationRoutes(db));
   // AgentDash: tighter cap on the invite endpoint specifically — fans
   // out to Resend (cost amplification + sender-domain reputation risk).
