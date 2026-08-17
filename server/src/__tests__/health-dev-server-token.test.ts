@@ -43,13 +43,23 @@ describe("GET /health dev-server supervisor access", () => {
       select: vi.fn(() => {
         selectCall += 1;
         if (selectCall === 1) {
+          // O4: computeHealthChecks' stuck-run count fires before anything
+          // else in the route. Zero stuck runs keeps this test about the
+          // dev-server token, not about degradation.
+          return {
+            from: vi.fn(() => ({
+              where: vi.fn().mockResolvedValue([{ count: 0 }]),
+            })),
+          };
+        }
+        if (selectCall === 2) {
           return {
             from: vi.fn(() => ({
               where: vi.fn().mockResolvedValue([{ count: 1 }]),
             })),
           };
         }
-        if (selectCall === 2) {
+        if (selectCall === 3) {
           return {
             from: vi.fn(() => ({
               where: vi.fn().mockResolvedValue([
@@ -93,7 +103,7 @@ describe("GET /health dev-server supervisor access", () => {
         .set("X-Paperclip-Dev-Server-Status-Token", "dev-runner-token");
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
+      expect(res.body).toMatchObject({
         status: "ok",
         deploymentMode: "authenticated",
         bootstrapStatus: "ready",

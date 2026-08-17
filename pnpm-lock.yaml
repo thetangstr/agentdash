@@ -29,6 +29,7 @@ overrides:
   postcss: '>=8.5.18'
   brace-expansion: '>=5.0.9'
   ip-address: '>=10.3.1'
+  '@paperclipai/adapter-utils': link:packages/adapter-utils
 
 patchedDependencies:
   embedded-postgres@18.1.0-beta.16:
@@ -91,7 +92,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/db':
         specifier: workspace:*
@@ -149,7 +150,7 @@ importers:
         specifier: ^0.31.4
         version: 0.31.4
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       '@zed-industries/codex-acp':
         specifier: ^0.12.0
@@ -171,7 +172,7 @@ importers:
   packages/adapters/claude-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -187,7 +188,7 @@ importers:
   packages/adapters/codex-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -203,7 +204,7 @@ importers:
   packages/adapters/cursor-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -219,7 +220,7 @@ importers:
   packages/adapters/gemini-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -235,7 +236,7 @@ importers:
   packages/adapters/openclaw-gateway:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -257,7 +258,7 @@ importers:
   packages/adapters/opencode-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -273,7 +274,7 @@ importers:
   packages/adapters/pi-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -592,7 +593,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/db':
         specifier: workspace:*
@@ -776,7 +777,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/shared':
         specifier: workspace:*
@@ -2540,9 +2541,6 @@ packages:
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
     engines: {node: '>=14'}
-
-  '@paperclipai/adapter-utils@2026.325.0':
-    resolution: {integrity: sha512-YDVSAgjkeJ0PvxXDJVN9MZDX7oYRzidLtGHmGgRGd6gSk/bF2ygAKvND4FI1YxDc/cRLQjqAFCpCYaC/9wqIEA==}
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
@@ -9912,8 +9910,6 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
-  '@paperclipai/adapter-utils@2026.325.0': {}
-
   '@paralleldrive/cuid2@2.3.1':
     dependencies:
       '@noble/hashes': 1.8.0
@@ -13319,7 +13315,7 @@ snapshots:
 
   hermes-paperclip-adapter@0.3.0(patch_hash=ehfahkpirmgj5ms4pmtcaxntai):
     dependencies:
-      '@paperclipai/adapter-utils': 2026.325.0
+      '@paperclipai/adapter-utils': link:packages/adapter-utils
       picocolors: 1.1.1
 
   hono@4.12.26: {}

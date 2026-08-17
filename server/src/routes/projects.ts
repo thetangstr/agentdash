@@ -189,8 +189,17 @@ export function projectRoutes(db: Db) {
       const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
       const candidate = squash(cleanProjectData.name);
       // Scanned through the actor's OWN visibility — naming a restricted
-      // project in an error message would leak the thing A5 hides.
-      const visible = await svc.list(companyId, projectVisibilityCondition(req, companyId));
+      // project in an error message would leak the thing A5 hides. The scan
+      // itself is a COURTESY: if it cannot run, creation proceeds and the
+      // unique index remains the hard guard. An advisory check must never be
+      // able to fail a create.
+      let visible: Awaited<ReturnType<typeof svc.list>> = [];
+      try {
+        const scanned = await svc.list(companyId, projectVisibilityCondition(req, companyId));
+        if (Array.isArray(scanned)) visible = scanned;
+      } catch {
+        // advisory scan unavailable; the unique index still guards
+      }
       const similar = visible.find((p) => {
         if (p.archivedAt) return false;
         const other = squash(p.name);

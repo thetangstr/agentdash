@@ -25,6 +25,17 @@ const buildTargets = [
     tsconfig: path.join(rootDir, "packages/plugins/sdk/tsconfig.json"),
     src: path.join(rootDir, "packages/plugins/sdk/src"),
   },
+  {
+    // G6 (2026-08-16): adapter-utils exports point at dist now (upstream's
+    // shape), so the vendored hermes adapter loads OUR build with seatbelt
+    // support instead of the published copy with none. Stale dist here means
+    // agents run unconfined — exactly the class of failure this guard exists
+    // to catch.
+    name: "@paperclipai/adapter-utils",
+    output: path.join(rootDir, "packages/adapter-utils/dist/index.js"),
+    tsconfig: path.join(rootDir, "packages/adapter-utils/tsconfig.json"),
+    src: path.join(rootDir, "packages/adapter-utils/src"),
+  },
 ];
 
 if (!fs.existsSync(tscCliPath)) {
