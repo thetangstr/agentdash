@@ -45,7 +45,7 @@
 
 # --- mkboard (:3102) -------------------------------------------------------
 
-https://mkmini.local:3112, https://yangs-mac-mini.tail112187.ts.net:3112 {
+https://mkmini.local:3112, https://mkthinks-mac-mini.tail112187.ts.net:3112, https://yangs-mac-mini.tail112187.ts.net:3112 {
 	import agentdash_tls
 	reverse_proxy 127.0.0.1:3102
 }
@@ -59,7 +59,7 @@ https://100.64.89.16:3112, https://192.168.86.57:3112 {
 
 # --- uat (:3103) -----------------------------------------------------------
 
-https://mkmini.local:3113, https://yangs-mac-mini.tail112187.ts.net:3113 {
+https://mkmini.local:3113, https://mkthinks-mac-mini.tail112187.ts.net:3113, https://yangs-mac-mini.tail112187.ts.net:3113 {
 	import agentdash_tls
 	reverse_proxy 127.0.0.1:3103
 }

@@ -1,5 +1,40 @@
 # TLS front door, and reaching this box from off the LAN
 
+> **Machine name.** The Tailscale node was renamed `yangs-mac-mini` →
+> **`mkthinks-mac-mini`** on 2026-08-17, so the MagicDNS name is now
+> `mkthinks-mac-mini.tail112187.ts.net`. The old name is still in the
+> certificate and in the site blocks below during the cutover; it can be
+> dropped once nobody has it bookmarked.
+>
+> A tailnet rename changes a name that three separate things depend on — the
+> certificate SANs, the Caddy site blocks, and each server's
+> `PAPERCLIP_ALLOWED_HOSTNAMES` — and the last of those is read at boot. The
+> order that avoids any window of breakage is: add the new name to the env
+> files, reissue the cert with **both** names, add both to the Caddyfile,
+> restart the servers, and rename in Tailscale **last**. Done the other way
+> round, the new name 403s at the hostname guard until someone restarts.
+>
+> The guard is real, not vacuous: before the restart,
+> `Host: mkthinks-mac-mini.tail112187.ts.net` returned **403**, exactly as a
+> junk hostname did.
+>
+> Restarting the servers needs no password. `KeepAlive` is
+> `{SuccessfulExit: false}`, so `kill -TERM <pid>` exits non-zero and launchd
+> brings the instance straight back — verified on `uat` first, then `mkboard`.
+> `launchctl kickstart` would need sudo; this does not.
+>
+> Still `yang's Mac mini` at the macOS level (`scutil --get ComputerName`),
+> which is what Finder, AirDrop and file sharing display. Changing it needs a
+> password:
+>
+> ```
+> sudo scutil --set ComputerName "MKThink Mac Mini"
+> ```
+>
+> `LocalHostName` stays **`mkmini`** deliberately — `mkmini.local` is baked
+> into the Caddyfile, both env files, the runbook and the cert, and renaming it
+> would mean redoing all of that for a cosmetic gain.
+
 `Caddyfile` here is the copy of what runs at
 `~/.config/agentdash/Caddyfile`. Keep them in step — the LaunchDaemon reads the
 one in `~/.config`, so this copy exists so the config survives a rebuild, not
