@@ -1,5 +1,11 @@
 # Decisions to review — one per finding
 
+> **Decided 2026-08-16.** D2 answered with a different and better model than any
+> option offered — see **D2 (decided)** below. D9 build-to-dist: **accepted**.
+> D6 LaunchDaemons: **accepted**. D7 restore drill: **skipped** — "we have
+> backups" stays an untested assumption, recorded so nobody mistakes it for a
+> verified one. D1, D3, D5, D8 still open.
+
 **Written:** 2026-08-16. Companion to `2026-08-16-operating-review.md`.
 
 Each section: the decision, the options with what they cost, and a
@@ -60,6 +66,63 @@ Also fix regardless of which option wins, because both are latent traps:
 **DONE already:** `projects:create` exists as a grantable permission and project
 creation no longer requires direction authority. That is necessary for any of
 A/B/C and is not sufficient alone.
+
+---
+
+## D2 (decided) — Two roles, open visibility, restriction per project
+
+**Decided.** Not one of the three options offered. The answer was:
+
+> "let's just have admin and member, admin = titus, the rest of the company are
+> members who owns their own data"
+> "start with an open model where everybody sees everything but we need the
+> ability to set row level security by project"
+
+That is a better frame than the permission ladder I proposed, and it absorbs
+two other findings: ownership requires D3's `createdByUserId`, and it answers
+D4 by construction — whoever creates an agent owns it, so the five unstewarded
+agents are Titus's.
+
+**The model:**
+
+- **Roles collapse from four to two.** `admin` (Titus) and `member` (everyone
+  else). `owner` folds into `admin`; `viewer` and `operator` go away.
+- **Direction is admin-only.** Goals, mandates, company settings.
+- **Visibility is open by default.** Every member sees every project, issue and
+  agent. No filtering on the default path.
+- **Editing follows ownership.** You change what you created; admin changes
+  anything.
+- **A project can be restricted.** The exception, not the rule: a project marked
+  restricted is visible only to its access list plus admin.
+
+**Migration note, and it is not cosmetic:** `normalizeHumanRole` currently maps
+`"member"` → `operator`. Under this model `member` becomes a real role, so that
+alias stops being a trap and starts being the main path. Existing rows on both
+instances need mapping — `owner`/`admin` → `admin`, everything else → `member`.
+
+### The one open choice: how restriction is enforced
+
+Measured blast radius: **8 read paths in `projects.ts`, 20 in `issues.ts`**
+filter on `companyId` alone. `issues` and `cost_events` carry a `projectId`
+directly; `goals`, `issue_comments`, `heartbeat_runs` and `activity_log` do
+not and would need joins. **No Postgres RLS is used anywhere today.**
+
+| option | cost | failure mode |
+|---|---|---|
+| **A. Application-level predicate** — one shared "projects visible to this actor" filter applied to every list query | ~2 days | **forgetting one query leaks it.** That is precisely the failure this codebase keeps producing, and it is invisible until someone sees something they should not |
+| **B. Postgres RLS** — policies on the tables, actor set per connection | ~4 days | a forgotten query **fails closed** rather than leaking. Large change: session variables threaded through the pool, and nothing here uses RLS today |
+| **C. Hybrid** — restriction only on explicitly-restricted projects, enforced app-side, with an RLS policy as a backstop on the two tables that carry `projectId` | ~2.5 days | default path untouched; the exception is small enough to audit |
+
+**Recommend C.** Because the model is open by default, the restricted case is
+the exception — so the enforcement surface is small, and it does not have to be
+right everywhere to be right where it matters. A gets cheap coverage of the
+common case; the RLS backstop on `issues` and `cost_events` means the two
+tables carrying the most sensitive rows fail closed even if a query is missed.
+B everywhere is the honest ideal and is hard to justify before there is a
+second user actually using it.
+
+**Not started.** This is the largest single item on the list and wants its own
+sitting.
 
 ---
 
