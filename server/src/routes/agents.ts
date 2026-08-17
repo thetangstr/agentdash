@@ -64,6 +64,7 @@ import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { logger } from "../middleware/logger.js";
 import {
   assertHostWorkspaceCommandAuthority,
   collectAgentAdapterWorkspaceCommandPaths,
@@ -2462,6 +2463,43 @@ export function agentRoutes(
       agent.id,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+
+    // Make the creator this agent's steward, if they are not already stewarding
+    // one.
+    //
+    // Creating an agent used to leave you with no way to RUN it. The API key
+    // and the "work with it from your own terminal" prompts live on the My
+    // Agent page, `getMyAgent` returns only the agent you steward, and creation
+    // never wrote a stewardship row -- so a new admin created their first agent
+    // and then found nothing anywhere in the UI that would connect them to it.
+    // Observed on a client's own instance the day they set it up.
+    //
+    // Only when the creator has none. Stewardship is deliberately 1:1 in both
+    // directions (`assign` rejects a second one with a 409), so this cannot
+    // mean "you steward everything you create" -- it means the FIRST agent you
+    // make is yours to run, which is the case where being stranded actually
+    // happens. Later agents are paired deliberately, which is the point of the
+    // model.
+    //
+    // Best-effort: a failure here must not fail the creation. The agent exists
+    // and is valid without a steward; someone can pair it afterwards.
+    if (req.actor.type === "board" && req.actor.userId) {
+      try {
+        const existing = await stewardships.activeByUser(companyId, req.actor.userId);
+        if (!existing) {
+          await stewardships.assign(companyId, {
+            agentId: agent.id,
+            userId: req.actor.userId,
+            assignedByUserId: req.actor.userId,
+          });
+        }
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id, userId: req.actor.userId },
+          "[agents] could not auto-assign stewardship to the creator",
+        );
+      }
+    }
 
     if (agent.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(
