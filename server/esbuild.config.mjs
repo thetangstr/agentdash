@@ -37,6 +37,33 @@ const repoRoot = resolve(__dirname, "..");
 export const WORKSPACE_SCOPES = ["@paperclipai/", "@agentdash/"];
 
 /**
+ * npm packages we PATCH locally, which must be bundled rather than depended on.
+ *
+ * A patched dependency left external is a silent downgrade on the client's
+ * machine: `npm install` fetches the pristine published copy, and every local
+ * change disappears with no error anywhere. For `hermes-paperclip-adapter`
+ * that was not cosmetic — the published 0.3.0 depends on
+ * `@paperclipai/adapter-utils: ^2026.325.0`, whose published build contains NO
+ * sandbox code at all. A packaged install would therefore have run every agent
+ * UNCONFINED while the operator believed otherwise, which is the exact failure
+ * the confinement work exists to prevent, reintroduced by packaging.
+ *
+ * Bundling pulls in the patched copy from this tree, and — because our
+ * adapter-utils is a workspace package and already bundled — the Seatbelt
+ * profile builder travels with it.
+ *
+ * Anything added here MUST be removed from the generated dependency list, or
+ * npm reinstates the published copy alongside the bundled one.
+ */
+export const PATCHED_BUNDLED_PACKAGES = ["hermes-paperclip-adapter"];
+
+function isPatchedBundled(specifier) {
+  return PATCHED_BUNDLED_PACKAGES.some(
+    (name) => specifier === name || specifier.startsWith(`${name}/`),
+  );
+}
+
+/**
  * Decide whether a bare import is ours (bundle it) or npm's (leave it out).
  *
  * Exported so it can be tested directly. The alternative — a hand-maintained
@@ -47,6 +74,7 @@ export const WORKSPACE_SCOPES = ["@paperclipai/", "@agentdash/"];
  */
 export function isWorkspaceImport(specifier) {
   if (specifier.startsWith(".") || specifier.startsWith("/")) return true;
+  if (isPatchedBundled(specifier)) return true;
   return WORKSPACE_SCOPES.some((scope) => specifier.startsWith(scope));
 }
 
@@ -99,6 +127,10 @@ export function externalDependencyUnion() {
     }
     for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
       if (WORKSPACE_SCOPES.some((scope) => name.startsWith(scope))) continue;
+      // Patched packages are compiled INTO the bundle. Listing them here too
+      // would have npm fetch the pristine published copy alongside — which is
+      // how a packaged install came to run agents unconfined.
+      if (isPatchedBundled(name)) continue;
       const pinned = installedVersion(name, pkgPath);
       if (!pinned) unresolved.push({ name, pkgPath, range });
       const value = pinned ?? range;
