@@ -170,6 +170,38 @@ export function buildSandboxProfile(opts: {
       `(allow process-exec (subpath "${literal}"))`,
     ]);
 
+  /**
+   * Every ancestor directory of every re-opened path, metadata only.
+   *
+   * `realpath()` resolves a path one component at a time, so allowing
+   * `~/.local/bin/mcporter` is useless if `~` and `~/.local` cannot be
+   * stat'ed — the call fails at the first denied component. Computed rather
+   * than hand-listed so a new re-opened path cannot silently be unreachable.
+   */
+  const ancestorMetadataAllows = (() => {
+    const roots = [
+      opts.homeDir,
+      ...(opts.readOnlyPaths ?? []),
+      ...(opts.readWritePaths ?? []),
+      ...(opts.execPaths ?? []),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
+    const ancestors = new Set<string>();
+    for (const entry of roots) {
+      let current = entry;
+      // Walk up to "/", recording each directory on the way.
+      while (current && current !== "/" && current !== ".") {
+        ancestors.add(current);
+        const next = current.slice(0, current.lastIndexOf("/"));
+        if (!next || next === current) break;
+        current = next;
+      }
+    }
+    return [...ancestors]
+      .sort()
+      .map((entry, index) => sbplLiteralPath(`ancestor[${index}]`, entry))
+      .map((literal) => `(allow file-read-metadata (literal "${literal}"))`);
+  })();
+
   const egressLines =
     opts.egress === "loopback"
       ? [
@@ -213,6 +245,15 @@ export function buildSandboxProfile(opts: {
     ";; stay below the home deny. The home deny is not a dial — it is present under",
     ";; every egress policy, always.",
     `(deny file-read* file-write* (subpath "${home}"))`,
+    ";; Metadata-only on the ANCESTOR DIRECTORIES of every path re-opened",
+    ";; below. Not a convenience — realpath() walks each component in turn, so",
+    ";; a tool living at ~/.local/bin/x is unreachable unless ~ and ~/.local",
+    ";; can be stat'ed, and Node dies with EPERM before running a line of user",
+    ";; code (measured: mcporter, the MCP client agents use for web search).",
+    ";; This grants stat on directory ENTRIES only — names, sizes and contents",
+    ";; underneath stay denied by the rule above, so it opens nothing the",
+    ";; allowlist has not already opened deliberately.",
+    ...ancestorMetadataAllows,
     `(allow file-read* file-write* (subpath "${workspace}"))`,
     ...(extraWriteAllows.length
       ? [
