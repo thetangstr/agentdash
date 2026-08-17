@@ -29,7 +29,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -87,14 +87,32 @@ if (!APPLY) {
 }
 
 // --- backup first ---------------------------------------------------------
+// Backups land in ~/.paperclip/backups/<instance>/, which is where
+// `nightly-backup.mjs` writes them -- NOT in a directory this script invents.
+// The first version printed "see ~/agentdash-backups", created that directory
+// as a side effect of saying so, and left it empty. It looked exactly like a
+// backup step that had silently done nothing. Verify by counting files before
+// and after, so "backed up" is an observation rather than a claim.
+const backupDir = join(homedir(), ".paperclip", "backups", INSTANCE);
 console.log(B("\nBacking up before deleting"));
-const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const out = join(homedir(), "agentdash-backups", `pre-clean-${stamp}.sql`);
-try {
-  execFileSync("zsh", ["-lc", `mkdir -p ~/agentdash-backups && ~/agentdash/deploy/agentdash-backup.sh ${INSTANCE} > /dev/null 2>&1 || true`]);
-  console.log(`  backup script run (see ~/agentdash-backups)`);
-} catch {
-  console.log(Y("  backup script failed — continuing, the deletes are narrow and named"));
+const countBackups = () => {
+  try {
+    return readdirSync(backupDir).filter((f) => f.endsWith(".sql.gz")).length;
+  } catch {
+    return 0;
+  }
+};
+const backupsBefore = countBackups();
+execFileSync("zsh", ["-lc", `AGENTDASH_INSTANCE=${INSTANCE} ~/agentdash/deploy/agentdash-backup.sh`], {
+  stdio: "ignore",
+});
+const backupsAfter = countBackups();
+if (backupsAfter > backupsBefore) {
+  console.log(`  ${G("new backup written")} to ${backupDir}`);
+} else {
+  console.log(Y(`  NO new backup appeared in ${backupDir} — stopping rather than deleting unbacked data.`));
+  await sql.end();
+  process.exit(1);
 }
 
 // --- delete through the application ---------------------------------------
