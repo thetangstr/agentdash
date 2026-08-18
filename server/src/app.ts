@@ -21,6 +21,7 @@ import {
   createBillingRateLimiter,
   createDefaultApiRateLimiter,
   createInviteRateLimiter,
+  createIssueReportRateLimiter,
   createTrialRateLimiter,
 } from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
@@ -66,6 +67,7 @@ import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
+import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
@@ -436,6 +438,14 @@ export async function createApp(
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
+  // AgentDash: user-filed bug reports / feature requests -> GitHub issues.
+  // Every POST creates a real issue under one shared credential, so it gets
+  // a tighter limiter than the default API tier.
+  api.use(
+    "/issue-reports",
+    createIssueReportRateLimiter({ deploymentMode: opts.deploymentMode }),
+    issueReportRoutes(db),
+  );
   api.use(instanceSettingsRoutes(db));
   // O2: read the local error sink (instance-admin only).
   api.use(serverErrorRoutes(db));

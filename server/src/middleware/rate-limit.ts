@@ -184,6 +184,22 @@ export function createInviteRateLimiter(opts: RateLimiterFactoryOptions = {}): R
 }
 
 /**
+ * Tighter cap on user-filed bug reports and feature requests. Every POST
+ * creates a real GitHub issue under one shared credential, so an abused
+ * session could otherwise flood the team's queue (and burn the token's
+ * secondary rate limit for everyone else). 10 / 15 min per actor is far
+ * above anyone genuinely reporting problems.
+ */
+export function createIssueReportRateLimiter(opts: RateLimiterFactoryOptions = {}): RequestHandler {
+  if (isDisabled(opts)) return noopMiddleware;
+  return makeHandler(parseEnvInt("AGENTDASH_RATE_LIMIT_ISSUE_REPORT_MAX", 10), {
+    skip(req) {
+      return isSafeReadMethod(req.method) || isPreflightMethod(req.method);
+    },
+  });
+}
+
+/**
  * Tighter request-layer cap for the anonymous Test Drive trial. Each POST
  * /trial/session mints a fresh credit and each /trial/:token/design kicks off a
  * multi-agent MiniMax build, so these are cost-amplifying entry points. The

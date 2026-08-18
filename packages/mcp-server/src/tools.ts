@@ -248,7 +248,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
   return [
     makeTool(
       "paperclipMe",
-      "Get the current authenticated Paperclip actor details",
+      "Get the current authenticated AgentDash actor details",
       z.object({}),
       async () => client.requestJson("GET", "/agents/me"),
     ),
@@ -314,6 +314,55 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       async ({ agentId, companyId }) => {
         const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
         return client.requestJson("GET", `/agents/${encodeURIComponent(agentId)}${qs}`);
+      },
+    ),
+    // Renaming an agent was reported as a bug during external testing. It was
+    // not one: `PATCH /agents/:id` has always accepted a new name. The tool
+    // surface just never said so, and this surface IS the product for anyone
+    // driving AgentDash from their own terminal -- if a capability is not a
+    // tool, it does not exist, no matter what the REST API can do.
+    //
+    // `paperclipApiRequest` could technically have done it, but only for
+    // someone who already knew the route and body shape. That is a fallback
+    // for the long tail, not an answer for "rename this agent".
+    //
+    // Deliberately narrow: the identity fields a person actually renames, not
+    // the whole update schema. Adapter/runtime/budget changes are a different
+    // job with different blast radius, and they stay on the escape hatch until
+    // they earn a tool of their own.
+    makeTool(
+      "paperclipUpdateAgent",
+      "Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed.",
+      // A plain object, not a `.refine()`: `makeTool` needs a ZodObject so the
+      // server can read `.shape` when it advertises this tool's JSON schema.
+      // A ZodEffects type-checks as a validator and then hides the shape, so
+      // the "at least one field" rule lives in the handler instead.
+      z.object({
+        agentId: z.string().min(1),
+        companyId: companyIdOptional,
+        name: z.string().trim().min(1).optional(),
+        role: z.string().trim().min(1).optional(),
+        title: z.string().trim().optional().nullable(),
+        icon: z.string().trim().optional().nullable(),
+        reportsTo: z.string().uuid().optional().nullable(),
+        capabilities: z.string().optional().nullable(),
+      }),
+      async ({ agentId, companyId, ...changes }) => {
+        // Drop only `undefined`. An explicit null is meaningful here -- it is
+        // how a caller clears a title or detaches a reporting line -- so it
+        // has to survive into the request body.
+        const body = Object.fromEntries(
+          Object.entries(changes).filter(([, value]) => value !== undefined),
+        );
+        if (Object.keys(body).length === 0) {
+          // Say what to pass. An agent that gets "no changes" back with no
+          // vocabulary will retry the same empty call.
+          throw new Error(
+            "Pass at least one field to change: name, role, title, icon, reportsTo, or capabilities",
+          );
+        }
+        const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
+        return client.requestJson("PATCH", `/agents/${encodeURIComponent(agentId)}${qs}`, { body });
       },
     ),
     makeTool(
@@ -672,9 +721,62 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
           body: { body },
         }),
     ),
+    // Bug filing, as a tool rather than a form.
+    //
+    // The report that actually helps is the one written where the failure
+    // happened, by whoever (or whatever) was holding the context at the time.
+    // Asking a person to stop, open a browser, find the repo and retype what
+    // just went wrong loses most of that — so most of it never gets filed.
+    // "Tell your agent to file a bug" keeps the context, because the agent
+    // still has the command it ran and the error it got back.
+    //
+    // The tool is deliberately thin: no repo, no labels, no owner. Those are
+    // instance configuration, and an agent that had to guess them would file
+    // into the wrong place with confidence.
+    makeTool(
+      "paperclipReportIssue",
+      "File a bug report or feature request as a GitHub issue on the AgentDash team's queue. Use this when the user says something like 'file a bug' or 'report this', or when you hit a defect worth recording. Include what you were doing, what you expected, what happened, and the exact error — you have that context and the user should not have to retype it.",
+      z.object({
+        kind: z
+          .enum(["bug", "feature"])
+          .describe("bug for something broken, feature for something missing"),
+        title: z
+          .string()
+          .trim()
+          .min(3)
+          .max(160)
+          .describe("One line naming the specific failure, not the area it is in"),
+        description: z
+          .string()
+          .trim()
+          .min(10)
+          .max(8000)
+          .describe(
+            "What you were doing, what you expected, what happened instead, and the verbatim error or response. Markdown is fine.",
+          ),
+        companyId: companyIdOptional,
+      }),
+      async ({ kind, title, description, companyId }) =>
+        client.requestJson("POST", "/issue-reports", {
+          body: {
+            kind,
+            title,
+            description,
+            // Server-side actors override this; sending it is only meaningful
+            // for a board credential driving the tool on a person's behalf.
+            ...(companyId ? { companyId } : {}),
+          },
+        }),
+    ),
+    makeTool(
+      "paperclipReportIssueStatus",
+      "Check whether issue reporting is configured on this instance, and which GitHub repo reports land in. Call this before telling a user their bug was filed somewhere.",
+      z.object({}),
+      async () => client.requestJson("GET", "/issue-reports/config"),
+    ),
     makeTool(
       "paperclipApiRequest",
-      "Make a JSON request to an existing Paperclip /api endpoint for unsupported operations",
+      "Make a JSON request to an existing AgentDash /api endpoint for unsupported operations",
       apiRequestSchema,
       async ({ method, path, jsonBody }) => {
         if (!path.startsWith("/") || path.includes("..")) {

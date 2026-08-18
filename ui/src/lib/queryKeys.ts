@@ -1,4 +1,7 @@
 export const queryKeys = {
+  issueReports: {
+    config: ["issue-reports", "config"] as const,
+  },
   companies: {
     all: ["companies"] as const,
     detail: (id: string) => ["companies", id] as const,
