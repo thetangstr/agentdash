@@ -19,6 +19,17 @@ why: after the 2026-08-16 role collapse, the lowest human role is `member`, and
 an agent minting an invite is a privilege-escalation path with a person in the
 middle. **This feature must not weaken that check.**
 
+## What this feature is, precisely
+
+Not new capability — ergonomics with guardrails. A board-key session can already
+invite today through `api_request`, the MCP escape hatch that will make any
+`/api` call the caller's credential permits. But that path requires knowing the
+route and body shape, accepts any `role` the server will take, and reads in an
+audit trail as an anonymous API call. A named tool is the difference between a
+capability that exists and one a person can actually reach — the same gap that
+made "renaming an agent doesn't work" get filed as a bug when `PATCH /agents/:id`
+had always worked.
+
 ## What makes it possible without weakening anything
 
 `server/src/middleware/auth.ts` resolves three actor types: `agent`, `board`,
