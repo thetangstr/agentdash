@@ -37,12 +37,15 @@ async function createSiblingDatabase(connectionString: string, databaseName: str
   return targetUrl.toString();
 }
 
-afterEach(async () => {
-  while (cleanups.length > 0) {
-    const cleanup = cleanups.pop();
-    await cleanup?.();
-  }
-});
+afterEach(
+  async () => {
+    while (cleanups.length > 0) {
+      const cleanup = cleanups.pop();
+      await cleanup?.();
+    }
+  },
+  60_000,
+);
 
 if (!embeddedPostgresSupport.supported) {
   console.warn(
