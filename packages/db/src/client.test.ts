@@ -29,12 +29,15 @@ async function migrationHash(migrationFile: string): Promise<string> {
   return createHash("sha256").update(content).digest("hex");
 }
 
-afterEach(async () => {
-  while (cleanups.length > 0) {
-    const cleanup = cleanups.pop();
-    await cleanup?.();
-  }
-});
+afterEach(
+  async () => {
+    while (cleanups.length > 0) {
+      const cleanup = cleanups.pop();
+      await cleanup?.();
+    }
+  },
+  60_000,
+);
 
 if (!embeddedPostgresSupport.supported) {
   console.warn(
