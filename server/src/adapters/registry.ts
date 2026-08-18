@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AdapterEnvironmentCheck,
@@ -619,7 +622,53 @@ const piLocalAdapter: ServerAdapterModule = {
 
 // hermes-paperclip-adapter v0.2.0 predates the authToken field; cast is
 // intentional until hermes ships a matching AdapterExecutionContext type.
+import {
+  applyHermesUsageReport,
+  parseHermesUsageReport,
+  withUsageFileArg,
+} from "./hermes-usage.js";
+
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
+
+/**
+ * Run Hermes with `--usage-file` and fold the report it writes into the result.
+ *
+ * Everything downstream of the adapter already meters tokens — the heartbeat
+ * stores `usage`, and /costs/by-agent aggregates it — but hermes_local never
+ * filled it in, so the one agent MKThink runs showed nothing while codex_local
+ * agents showed full counts. Hermes reports its own totals when asked; the
+ * package's stdout regex finds nothing to scrape in Hermes 0.20.
+ *
+ * Wrapped so a metering failure can never fail a run: the report is a
+ * by-product, and a missing one leaves the result exactly as the adapter
+ * returned it.
+ */
+async function runHermesWithUsageReport(
+  ctx: Parameters<ServerAdapterModule["execute"]>[0],
+): Promise<AdapterExecutionResult> {
+  const runId = (ctx as { runId?: string | null }).runId ?? "run";
+  const usageFilePath = path.join(
+    os.tmpdir(),
+    `agentdash-hermes-usage-${runId.replace(/[^a-zA-Z0-9_-]/g, "")}-${process.pid}.json`,
+  );
+  const agent = (ctx as { agent?: { adapterConfig?: unknown } }).agent;
+  const config = readRecord(agent?.adapterConfig) ?? {};
+  const patchedCtx = {
+    ...ctx,
+    agent: { ...agent, adapterConfig: withUsageFileArg(config, usageFilePath) },
+  } as typeof ctx;
+
+  const result = await executeHermesLocal(patchedCtx);
+
+  try {
+    const raw = await fs.readFile(usageFilePath, "utf8");
+    return applyHermesUsageReport(result, parseHermesUsageReport(JSON.parse(raw) as unknown));
+  } catch {
+    return result;
+  } finally {
+    await fs.rm(usageFilePath, { force: true }).catch(() => {});
+  }
+}
 
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
@@ -641,7 +690,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
         "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
       );
     }
-    if (!taskPatchedCtx.authToken) return sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx));
+    if (!taskPatchedCtx.authToken) return sanitizeHermesExecutionResult(await runHermesWithUsageReport(taskPatchedCtx));
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const existingEnv =
@@ -689,7 +738,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
+    return sanitizeHermesExecutionResult(await runHermesWithUsageReport(patchedCtx));
   },
   // AgentDash: ensure the agent's managed profile exists before the env check so
   // harness-preflight passes for an agent created by any path, and run the check

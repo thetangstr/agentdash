@@ -486,7 +486,7 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.hermesCommand).toBe("/Users/example/.local/bin/hermes");
   });
 
-  it("passes the original Hermes context through when authToken is absent", async () => {
+  it("passes the original Hermes context through when authToken is absent, plus the usage file", async () => {
     const adapter = requireServerAdapter("hermes_local");
     const ctx = {
       runId: "run-123",
@@ -514,7 +514,16 @@ describe("server adapter registry", () => {
     await adapter.execute(ctx);
 
     expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
-    expect(hermesExecuteMock).toHaveBeenCalledWith(ctx);
+    const [passedCtx] = hermesExecuteMock.mock.calls[0];
+    // Everything the caller set survives...
+    const { extraArgs, ...configWithoutUsageFile } = passedCtx.agent.adapterConfig;
+    expect(configWithoutUsageFile).toEqual(ctx.agent.adapterConfig);
+    expect({ ...passedCtx, agent: undefined }).toEqual({ ...ctx, agent: undefined });
+    // ...and the run is asked to report what it spent. Without this flag
+    // hermes_local returns no usage at all, and the agent shows zero tokens on
+    // a costs page while codex agents show real ones.
+    expect(extraArgs.slice(0, 1)).toEqual(["--usage-file"]);
+    expect(extraArgs[1]).toContain("agentdash-hermes-usage-run-123");
   });
 
   it("drops a poisoned Hermes resume session before execution", async () => {
