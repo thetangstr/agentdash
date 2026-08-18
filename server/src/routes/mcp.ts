@@ -1,3 +1,5 @@
+/// <reference path="../types/agentdash-mcp-server.d.ts" />
+
 import { Router, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createAgentDashServer } from "@agentdash/mcp-server";

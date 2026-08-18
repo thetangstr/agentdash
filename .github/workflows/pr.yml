@@ -107,7 +107,7 @@ jobs:
         run: pnpm verify-skill-md
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm typecheck
 
       - name: Run Hermes onboarding regression lane
         run: pnpm run test:regression:hermes-onboarding
