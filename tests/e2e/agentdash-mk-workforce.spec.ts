@@ -187,8 +187,9 @@ test("CEO consolidates three stewarded contributions with web and Telegram appro
   const issuePrefix = company.body.issuePrefix as string;
   await page.goto(`/${issuePrefix}/my-agent`);
   await expect(page.getByRole("heading", { name: "My Agent" })).toBeVisible();
-  // Unassigned is an explicit state, and ordinary users cannot self-claim.
-  await expect(page.getByText("No agent assigned")).toBeVisible();
+  // The first agent a board user creates is automatically assigned to that
+  // user, so the page must expose the agent rather than strand its creator.
+  await expect(page.locator("main").getByText(/CEO Agent.*ceo.*idle/)).toBeVisible();
 
   // The Inbox `all` tab is scoped to the signed-in user in a profile company,
   // and says so. Asserted in the browser because the scoping is wiring between

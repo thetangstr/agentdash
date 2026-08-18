@@ -1182,8 +1182,14 @@ export function agentRoutes(
       return (updated as T | null) ?? { ...agent, adapterConfig: nextAdapterConfig };
     }
 
-    const files = input?.files
-      ?? await loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(agent.role));
+    const defaultFiles = await loadDefaultAgentInstructionsBundle(
+      resolveDefaultAgentInstructionsBundleRole(agent.role),
+    );
+    // A caller-supplied AGENTS.md customizes the mandate; it does not replace
+    // the rest of the managed bundle. The default AGENTS.md references the
+    // heartbeat, soul, and tools files, and onboarding must preserve those
+    // supporting instructions while allowing explicit files to override them.
+    const files = { ...defaultFiles, ...(input?.files ?? {}) };
     const materialized = await instructions.materializeManagedBundle(
       agent,
       files,
