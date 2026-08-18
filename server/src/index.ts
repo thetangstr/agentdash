@@ -204,19 +204,6 @@ export async function startServer(): Promise<StartedServer> {
     return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
   }
 
-  function rewriteLocalUrlPort(rawUrl: string | undefined, port: number): string | undefined {
-    if (!rawUrl) return undefined;
-    try {
-      const parsed = new URL(rawUrl);
-      // The URL API normalizes default ports like :80/:443 to "", so treat them as stable URLs.
-      if (!parsed.port) return rawUrl;
-      parsed.port = String(port);
-      return parsed.toString();
-    } catch {
-      return rawUrl;
-    }
-  }
-  
   const LOCAL_BOARD_USER_ID = "local-board";
   const LOCAL_BOARD_USER_EMAIL = "local@agentdash.local";
   const LOCAL_BOARD_USER_NAME = "Board";
@@ -495,7 +482,11 @@ export async function startServer(): Promise<StartedServer> {
   const requestedListenPort = config.port;
   const listenPort = await detectPort(requestedListenPort);
   if (config.authBaseUrlMode === "explicit" && config.authPublicBaseUrl) {
-    config.authPublicBaseUrl = rewriteLocalUrlPort(config.authPublicBaseUrl, listenPort);
+    const { rewritePublicBaseUrlPort } = await import("./auth/public-base-url.js");
+    config.authPublicBaseUrl = rewritePublicBaseUrlPort(config.authPublicBaseUrl, {
+      requestedPort: requestedListenPort,
+      listenPort,
+    });
   }
   
   let authReady = config.deploymentMode === "local_trusted";
