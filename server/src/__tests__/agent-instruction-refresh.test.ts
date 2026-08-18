@@ -129,28 +129,8 @@ const SOURCE_DEFAULT = `Worker prose.
 <!-- /AgentDash: agent-api-auth -->
 `;
 
-const SOURCE_CEO = `CEO prose.
-
-<!-- AgentDash: goals-eval-hitl -->
-## CEO DoD
-- ceo content
-<!-- /AgentDash: goals-eval-hitl -->
-`;
-
-const SOURCE_COS = `CoS prose.
-
-<!-- AgentDash: goals-eval-hitl -->
-## CoS DoD
-- cos content
-<!-- /AgentDash: goals-eval-hitl -->
-`;
-
 function makeSourceLoader(): (a: SourceArchetype) => Promise<string> {
-  return async (archetype: SourceArchetype) => {
-    if (archetype === "ceo") return SOURCE_CEO;
-    if (archetype === "chief_of_staff") return SOURCE_COS;
-    return SOURCE_DEFAULT;
-  };
+  return async () => SOURCE_DEFAULT;
 }
 
 beforeEach(() => {
@@ -358,18 +338,20 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     );
   });
 
-  it("dispatches by archetype: ceo → ceo source, chief_of_staff → cos source, general → default source", async () => {
+  it("refreshes every role from the ONE default source — no role gets a persona archetype back", async () => {
+    // This pins the collapse of the ceo/chief_of_staff archetypes. Before it,
+    // a refresh dispatched by role, which meant an agent deliberately put on
+    // the steward mandate could have CEO-persona blocks quietly reintroduced
+    // on the next stale-check. Now the role must not matter: whatever an
+    // agent's role says, the refresh source is `default`.
     const sourceCalls: SourceArchetype[] = [];
     const loader = async (a: SourceArchetype) => {
       sourceCalls.push(a);
-      if (a === "ceo") return SOURCE_CEO;
-      if (a === "chief_of_staff") return SOURCE_COS;
       return SOURCE_DEFAULT;
     };
 
     const { db, queueAgent } = makeDb();
 
-    // worker first
     queueAgent({
       id: "w",
       companyId: COMPANY_ID,
@@ -381,7 +363,7 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     queueAgent({
       id: "c",
       companyId: COMPANY_ID,
-      name: "CEO",
+      name: "Legacy CEO row",
       role: "ceo",
       status: "active",
       adapterConfig: {},
@@ -389,7 +371,7 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     queueAgent({
       id: "s",
       companyId: COMPANY_ID,
-      name: "CoS",
+      name: "Primary agent",
       role: "chief_of_staff",
       status: "active",
       adapterConfig: {},
@@ -397,8 +379,8 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
 
     const fake = makeFakeInstructions({
       w: SOURCE_DEFAULT,
-      c: SOURCE_CEO,
-      s: SOURCE_COS,
+      c: SOURCE_DEFAULT,
+      s: SOURCE_DEFAULT,
     });
 
     const svc = agentInstructionRefreshService({
@@ -411,7 +393,7 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     await svc.refreshIfStale("c");
     await svc.refreshIfStale("s");
 
-    expect(sourceCalls).toEqual(["default", "ceo", "chief_of_staff"]);
+    expect(sourceCalls).toEqual(["default", "default", "default"]);
   });
 
   it("is idempotent — second refresh after a successful one is a no-op", async () => {

@@ -1,5 +1,6 @@
 import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
+import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { SingleCompanyInstallationError } from "./companies.js";
 import {
   exceededFreeTierCapacityAction,
@@ -164,8 +165,9 @@ export function onboardingOrchestrator(deps: Deps) {
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
       });
-      // Materialize the default chief_of_staff bundle.
-      const bundleFiles = await loadCosBundleFiles();
+      // Materialize the standard agent bundle (one archetype for every role —
+      // see default-agent-instructions.ts for why the CEO persona is gone).
+      const bundleFiles = await loadDefaultAgentInstructionsBundle("default");
       const materialized = await services.instructions.materializeManagedBundle(
         created,
         bundleFiles,
@@ -315,21 +317,3 @@ function companyNameFromEmail(email: string | null | undefined): string {
   return root.charAt(0).toUpperCase() + root.slice(1);
 }
 
-async function loadCosBundleFiles(): Promise<Record<string, string>> {
-  // Read the four files from server/src/onboarding-assets/chief_of_staff/.
-  // Use fs.readFile + path resolution relative to the compiled JS location.
-  const { readFile } = await import("node:fs/promises");
-  const { fileURLToPath } = await import("node:url");
-  const path = await import("node:path");
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const dir = path.resolve(here, "../onboarding-assets/chief_of_staff");
-  const files: Record<string, string> = {};
-  for (const name of ["SOUL.md", "AGENTS.md", "HEARTBEAT.md", "TOOLS.md"]) {
-    try {
-      files[name] = await readFile(path.join(dir, name), "utf8");
-    } catch {
-      // missing files are tolerated; default fallback above
-    }
-  }
-  return files;
-}

@@ -23,7 +23,7 @@ import { __systemPromptForTest } from "../services/cos-interview.js";
 describe("CoS interview system prompt", () => {
   const assetPath = resolve(
     dirname(fileURLToPath(import.meta.url)),
-    "../onboarding-assets/chief_of_staff/INTERVIEW.md",
+    "../onboarding-assets/default/INTERVIEW.md",
   );
 
   it("is the real INTERVIEW.md asset, byte for byte", () => {

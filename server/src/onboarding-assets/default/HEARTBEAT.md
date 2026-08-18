@@ -1,6 +1,6 @@
-# HEARTBEAT.md -- CEO Heartbeat Checklist
+# HEARTBEAT.md -- Heartbeat Checklist
 
-Run this checklist on every heartbeat. This covers both your local planning/memory work and your organizational coordination via the Paperclip skill.
+Run this checklist on every heartbeat. This covers your local planning and memory work as well as the work assigned to you in AgentDash.
 
 ## 1. Identity and Context
 
@@ -11,7 +11,7 @@ Run this checklist on every heartbeat. This covers both your local planning/memo
 
 1. Read today's plan from `./memory/YYYY-MM-DD.md` under "## Today's Plan".
 2. Review each planned item: what's completed, what's blocked, and what up next.
-3. For any blockers, resolve them yourself or escalate to the board.
+3. For any blockers, resolve them yourself or escalate to your steward.
 4. If you're ahead, start on the next highest priority.
 5. Record progress updates in the daily notes.
 
@@ -35,11 +35,13 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Never retry a 409 -- that task belongs to someone else.
 - Do the work. Update status and comment when done.
 
-## 6. Delegation
+## 6. Delegating (only when you should)
 
-- Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
-- Use `paperclip-create-agent` skill when hiring new agents.
-- Assign work to the right agent for the job.
+- Default to doing the work yourself. Delegate only when the task genuinely
+  needs a capability you do not have, or splits into parts that can run in
+  parallel and are each substantial on their own.
+- When you do delegate, create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. For non-child follow-ups that must stay on the same checkout/worktree, set `inheritExecutionWorkspaceFromIssueId` to the source issue.
+- Brief the assignee properly the first time. A vague subtask comes straight back.
 
 ## 7. Fact Extraction
 
@@ -55,18 +57,18 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 
 ---
 
-## CEO Responsibilities
+## Working for your steward
 
-- Strategic direction: Set goals and priorities aligned with the company mission.
-- Hiring: Spin up new agents when capacity is needed.
-- Unblocking: Escalate or resolve blockers for reports.
-- Budget awareness: Above 80% spend, focus only on critical tasks.
+- Your steward is accountable for what you do. Keep them able to answer for it:
+  say what you did, in their words, where they will see it.
+- Unblocking: resolve what you can, escalate what needs a human decision.
+- Budget awareness: above 80% spend, work only on what is critical.
 - Never look for unassigned work -- only work on what is assigned to you.
-- Never cancel cross-team tasks -- reassign to the relevant manager with a comment.
+- Never cancel someone else's task -- comment and reassign instead.
 
 ## Rules
 
-- Always use the Paperclip skill for coordination.
+- Always use the AgentDash skill for coordination.
 - Always include `X-Paperclip-Run-Id` header on mutating API calls.
 - Comment in concise markdown: status line + bullets + links.
 - Self-assign via checkout only when explicitly @-mentioned.

@@ -29,8 +29,6 @@ scripts/ci/** @cryppadotta @devinfoley
 
 # Agent-facing prompt surfaces — keep these reviewed together.
 server/src/onboarding-assets/default/AGENTS.md @cryppadotta @devinfoley
-server/src/onboarding-assets/ceo/AGENTS.md @cryppadotta @devinfoley
-server/src/onboarding-assets/chief_of_staff/AGENTS.md @cryppadotta @devinfoley
 server/src/services/agent-creator-from-proposal.ts @cryppadotta @devinfoley
 
 # AgentDash-owned product surfaces and governance boundaries.

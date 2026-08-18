@@ -111,7 +111,7 @@ let _systemPrompt: string | null = null;
 function systemPrompt(): string {
   if (_systemPrompt) return _systemPrompt;
   const here = dirname(fileURLToPath(import.meta.url));
-  const promptPath = resolve(here, "../onboarding-assets/chief_of_staff/INTERVIEW.md");
+  const promptPath = resolve(here, "../onboarding-assets/default/INTERVIEW.md");
   _systemPrompt = readFileSync(promptPath, "utf8");
   return _systemPrompt;
 }

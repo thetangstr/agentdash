@@ -7,21 +7,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serverSrc = path.resolve(here, "..");
 
 /**
- * The four mandatory prompt surfaces from AGENTS.md.
+ * The mandatory prompt surfaces from AGENTS.md.
  *
- * Every adapter reads these, so a behavior change that lands in three of them
- * silently leaves the fourth adapter's workers running the old contract. CI
- * enforces that a PR touching routes/services/schema touches one of these; this
- * test enforces that the AgentDash-MK block is actually present in ALL of them
- * and says the same thing.
+ * Every adapter reads these, so a behavior change that lands in one of them
+ * silently leaves the other surface's workers running the old contract. This
+ * used to guard four surfaces — the `ceo` and `chief_of_staff` archetype
+ * copies were two of them — which is itself evidence of the problem: three
+ * hand-synced copies of the same 45KB. The persona archetypes are gone (one
+ * steward-centric bundle for every role; see default-agent-instructions.ts),
+ * so the sync surface shrank to the one archetype plus the proposal renderer.
  */
 const PROMPT_SURFACES: Array<{ name: string; path: string }> = [
   { name: "default", path: path.join(serverSrc, "onboarding-assets/default/AGENTS.md") },
-  { name: "ceo", path: path.join(serverSrc, "onboarding-assets/ceo/AGENTS.md") },
-  {
-    name: "chief_of_staff",
-    path: path.join(serverSrc, "onboarding-assets/chief_of_staff/AGENTS.md"),
-  },
   {
     name: "agent-creator-from-proposal",
     path: path.join(serverSrc, "services/agent-creator-from-proposal.ts"),

@@ -1,15 +1,24 @@
 import fs from "node:fs/promises";
 
+// One bundle for every agent, whatever its role.
+//
+// There used to be three archetypes (`default`, `ceo`, `chief_of_staff`),
+// selected by role. The `ceo` and `chief_of_staff` ones were the same
+// inherited Paperclip org-chart persona -- byte-identical SOUL.md/TOOLS.md,
+// both AGENTS.md opening "You are the CEO", both replacing the Execution
+// Contract with "You MUST delegate rather than doing it yourself" -- while
+// their shared `<!-- AgentDash: SLUG -->` blocks were kept identical across
+// all three copies by agent-instruction-refresh. Three directories, one real
+// difference: the persona intro.
+//
+// That persona is wrong for this product. The model is a steward and their
+// agent -- an agent that DOES the work -- not a company of executives that
+// route work to each other. So there is one archetype, the steward's agent,
+// and role no longer selects a mandate. Role still exists for routing (the
+// `chief_of_staff` lookups that find the primary agent) and display; authority
+// comes from permission grants, not from a title.
 const DEFAULT_AGENT_BUNDLE_FILES = {
-  default: ["AGENTS.md"],
-  ceo: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
-  // Closes #317 follow-up: the OnboardingWizard creates a
-  // chief_of_staff agent (per #318 which added the role to
-  // AGENT_ROLES). The default-bundle map didn't have a corresponding
-  // entry, so newly-hired CoS agents got only AGENTS.md instead of
-  // the full SOUL/AGENTS/HEARTBEAT/TOOLS kit that
-  // server/src/onboarding-assets/chief_of_staff/ ships.
-  chief_of_staff: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
+  default: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
 } as const;
 
 type DefaultAgentBundleRole = keyof typeof DEFAULT_AGENT_BUNDLE_FILES;
@@ -29,8 +38,6 @@ export async function loadDefaultAgentInstructionsBundle(role: DefaultAgentBundl
   return Object.fromEntries(entries);
 }
 
-export function resolveDefaultAgentInstructionsBundleRole(role: string): DefaultAgentBundleRole {
-  if (role === "ceo") return "ceo";
-  if (role === "chief_of_staff") return "chief_of_staff";
+export function resolveDefaultAgentInstructionsBundleRole(_role: string): DefaultAgentBundleRole {
   return "default";
 }
