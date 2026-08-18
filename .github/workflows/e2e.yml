@@ -39,7 +39,9 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      # Feature PRs intentionally omit pnpm-lock.yaml; the lockfile refresh
+      # workflow owns committing the resolved graph after merge.
+      - run: pnpm install --no-frozen-lockfile
       - run: pnpm build
       - run: google-chrome --version
 

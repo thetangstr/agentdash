@@ -14,7 +14,7 @@
  * issues, reading the secret from the instance env file — the credential is
  * never passed in argv and never printed.
  */
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { createHmac } from "node:crypto";
 import { readFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
