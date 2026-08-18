@@ -27,9 +27,30 @@ const sharedOpts = {
   singleLine: true,
 };
 
+/**
+ * Log-line fields that must never reach disk in the clear.
+ *
+ * The trap this closes: customProps below attaches the WHOLE request body to
+ * every response >= 400 — deliberately, because the body is usually what
+ * explains the failure. But a failed sign-in is a >= 400 response whose body
+ * IS the attempted password, so before this list every mistyped password
+ * landed in ~/Library/Logs/agentdash/*.log in cleartext, world-readable, and
+ * survived into the rotation copies. Found 2026-08-17 with real attempts in
+ * the file. Treat any password ever mistyped before this shipped as disclosed.
+ *
+ * The body reaches the log line on two paths — the error-context capture and
+ * the raw req.body fallback — but both attach it as the same top-level
+ * `reqBody` property, so one set of paths covers both.
+ */
+const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token"];
+export const LOG_REDACT_PATHS = [
+  "req.headers.authorization",
+  ...SECRET_BODY_FIELDS.map((field) => `reqBody.${field}`),
+];
+
 export const logger = pino({
   level: "debug",
-  redact: ["req.headers.authorization"],
+  redact: LOG_REDACT_PATHS,
 }, pino.transport({
   targets: [
     {
