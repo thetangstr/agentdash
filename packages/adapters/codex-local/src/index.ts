@@ -5,7 +5,25 @@ export const label = "Codex (local)";
 
 export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.3-codex";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
-export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = ["gpt-5.4"] as const;
+/**
+ * Fast mode is allowed for these known models -- and, via
+ * `isCodexLocalFastModeSupported`, for any model typed in by hand.
+ *
+ * That second rule is why this list has to be updated in the SAME commit that
+ * adds a model to `models` below. An unknown model counts as manual and gets
+ * fast mode; the moment it is added to `models` it stops being manual, and if
+ * it is not named here it silently LOSES fast mode. Adding the gpt-5.6 family
+ * to the picker did exactly that: the models became selectable and became
+ * fast-mode-ineligible in the same change, which is the opposite of what
+ * refreshing the list was for.
+ */
+export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.6-cyber",
+  "gpt-5.4",
+] as const;
 
 function normalizeModelId(model: string | null | undefined): string {
   return typeof model === "string" ? model.trim() : "";
