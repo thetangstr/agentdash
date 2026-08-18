@@ -27,7 +27,7 @@
 #
 # The cost is an unclean stop: in-flight requests are dropped and DB connections
 # close hard. Acceptable for a config reload, and much better than discovering in
-# the client's server room that both instances are down and the fix needs a
+# the client's server room that the instance is down and the fix needs a
 # password. To get BOTH graceful and automatic, set KeepAlive to <true/> in the
 # four server/db plists -- one-time sudo, at home -- and switch this back to TERM.
 #
@@ -44,9 +44,10 @@ TLS="$CONF/tls"
 CA="$HOME/Library/Application Support/mkcert/rootCA.pem"
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node@24/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-red()   { print -P "%F{red}$1%f"; }
-green() { print -P "%F{green}$1%f"; }
-bold()  { print -P "%B$1%b"; }
+red()    { print -P "%F{red}$1%f"; }
+green()  { print -P "%F{green}$1%f"; }
+yellow() { print -P "%F{yellow}$1%f"; }
+bold()   { print -P "%B$1%b"; }
 
 # --- 1. Where are we? ------------------------------------------------------
 IFACE=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
@@ -80,7 +81,7 @@ print "  $HOSTS"
 if [ "$CHECK_ONLY" = "1" ]; then
   print ""
   bold "--check: nothing was changed. Current state:"
-  for pair in "mkboard 3102 3112" "uat 3103 3113"; do
+  for pair in "mkboard 3102 3112"; do
     set -- ${=pair}
     printf "  %-8s http :%s -> %s\n" "$1" "$2" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://127.0.0.1:$2/api/health || echo FAIL)"
   done
@@ -91,7 +92,7 @@ fi
 STAMP=$(date +%Y%m%d-%H%M%S)
 print ""
 bold "Updating env files"
-for inst in mkboard uat; do
+for inst in mkboard; do
   f="$CONF/$inst.env"
   [ -f "$f" ] || { red "  missing $f"; exit 1; }
   cp "$f" "$f.bak-$STAMP"
@@ -112,6 +113,31 @@ mkdir -p "$TLS"
 chmod 600 "$TLS/mkmini-multi-key.pem"
 green "  SANs: $(openssl x509 -in "$TLS/mkmini-multi.pem" -noout -text | grep -A1 'Alternative Name' | tail -1 | sed 's/^ *//')"
 
+# The mkcert certificate above is only as good as the root that signs it, and
+# on an MDM-managed Mac a non-admin user cannot trust a private root at all --
+# Apple removed silent CLI trust, so the keychain prompts for admin credentials
+# however the file arrived. That is the whole reason HTTPS "worked" here and
+# still failed on the client's own laptops.
+#
+# The tailnet name is the way out: Tailscale issues a real Let's Encrypt
+# certificate for it, which every machine already trusts. It covers ONLY the
+# .ts.net name -- not mkmini.local, not the bare IPs -- so this is an addition
+# to the mkcert cert, never a replacement for it.
+TS_CERT="$TLS/ts.crt"
+TS_KEY="$TLS/ts.key"
+TS_PUBLIC_TLS=""
+if [ -n "$TS_NAME" ]; then
+  if tailscale cert --cert-file "$TS_CERT" --key-file "$TS_KEY" "$TS_NAME" >/dev/null 2>&1; then
+    TS_PUBLIC_TLS=1
+    green "  $TS_NAME: publicly-trusted cert ($(openssl x509 -in "$TS_CERT" -noout -issuer | sed 's/^issuer= *//'))"
+  else
+    # Not fatal: the name stays on the mkcert cert and keeps working for
+    # anyone who has the root. Enable DNS -> HTTPS Certificates in the
+    # Tailscale admin console to turn this on.
+    yellow "  $TS_NAME: tailnet HTTPS certs unavailable — falling back to mkcert"
+  fi
+fi
+
 # --- 4. Caddy --------------------------------------------------------------
 print ""
 bold "Rewriting Caddy site blocks"
@@ -131,15 +157,28 @@ cp "$CADDY" "$CADDY.bak-$STAMP"
 	tls $TLS/mkmini-multi.pem $TLS/mkmini-multi-key.pem
 }
 HEADER
-  for pair in "3112 3102 mkboard" "3113 3103 uat"; do
+  # The tailnet name gets its own snippet with the publicly-trusted cert, so a
+  # laptop that has never installed the mkcert root still gets a clean padlock
+  # -- and therefore a secure context, and therefore a working clipboard.
+  if [ -n "$TS_PUBLIC_TLS" ]; then
+    cat <<PUBLIC
+
+(agentdash_tls_public) {
+	tls $TS_CERT $TS_KEY
+}
+PUBLIC
+  fi
+  for pair in "3112 3102 mkboard"; do
     set -- ${=pair}
     tlsport=$1; appport=$2; label=$3
     sites="https://mkmini.local:$tlsport"
-    [ -n "$TS_NAME" ] && sites="$sites, https://$TS_NAME:$tlsport"
     # A request to a bare IP sends no SNI at all, so Caddy needs the address
     # spelled out or it closes the connection before offering a certificate.
+    # Bare IPs stay on mkcert: a public CA will not certify a private address.
     sites="$sites, https://$LAN_IP:$tlsport"
     [ -n "$TS_IP" ] && sites="$sites, https://$TS_IP:$tlsport"
+    # Without a public cert the tailnet name joins the mkcert block as before.
+    [ -n "$TS_NAME" ] && [ -z "$TS_PUBLIC_TLS" ] && sites="$sites, https://$TS_NAME:$tlsport"
     cat <<BLOCK
 
 # --- $label ---
@@ -148,6 +187,16 @@ $sites {
 	reverse_proxy 127.0.0.1:$appport
 }
 BLOCK
+    if [ -n "$TS_PUBLIC_TLS" ]; then
+      cat <<BLOCK
+
+# --- $label (tailnet, publicly-trusted cert) ---
+https://$TS_NAME:$tlsport {
+	import agentdash_tls_public
+	reverse_proxy 127.0.0.1:$appport
+}
+BLOCK
+    fi
   done
 } > "$CADDY"
 
@@ -165,19 +214,16 @@ bold "Restarting instances so they pick up the new hostname set"
 for pid in $(pgrep -f 'tsx src/index.ts' | head -4); do kill -KILL "$pid" 2>/dev/null || true; done
 for i in $(seq 1 30); do
   a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3102/api/health || echo 000)
-  b=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3103/api/health || echo 000)
-  [ "$a" = "200" ] && [ "$b" = "200" ] && break
+  [ "$a" = "200" ] && break
   sleep 2
 done
 [ "$a" = "200" ] && green "  mkboard up" || red "  mkboard did NOT come back (got $a)"
-[ "$b" = "200" ] && green "  uat up"     || red "  uat did NOT come back (got $b)"
 # An instance that is down here needs launchd told to start it, and that is the
 # one step in this script that wants a password. Print it rather than making
 # someone work it out while the client waits.
-if [ "$a" != "200" ] || [ "$b" != "200" ]; then
+if [ "$a" != "200" ]; then
   red "  recover with:"
-  [ "$a" != "200" ] && red "    sudo launchctl kickstart -k system/com.agentdash.mkboard.server"
-  [ "$b" != "200" ] && red "    sudo launchctl kickstart -k system/com.agentdash.uat.server"
+  red "    sudo launchctl kickstart -k system/com.agentdash.mkboard.server"
 fi
 
 # --- 6. Prove it, on every path someone might actually use ----------------
@@ -185,7 +231,7 @@ print ""
 bold "Verification — every address, real certificate validation"
 FAIL=0
 for host in mkmini.local "$LAN_IP" ${TS_IP:+$TS_IP} ${TS_NAME:+$TS_NAME}; do
-  for port in 3112 3113; do
+  for port in 3112; do
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --cacert "$CA" "https://$host:$port/api/health" || echo 000)
     if [ "$code" = "200" ]; then
       printf "  %-40s :%s  %s\n" "$host" "$port" "$(print -P '%F{green}200%f')"

@@ -48,7 +48,7 @@ const { hashPassword, verifyPassword } = await import(
 
 const [instance, email] = process.argv.slice(2);
 if (!instance || !email) {
-  console.error("usage: node ../deploy/set-password.mjs <mkboard|uat> <email>");
+  console.error("usage: node ../deploy/set-password.mjs <mkboard> <email>");
   process.exit(2);
 }
 
@@ -113,4 +113,4 @@ console.log("\nVerified against better-auth's own checker.");
 console.log(`\n  instance : ${instance}`);
 console.log(`  email    : ${user.email}`);
 if (!typed) console.log(`  password : ${password}`);
-console.log("\nSign in at https://mkmini.local:" + (instance === "mkboard" ? "3112" : "3113"));
+console.log("\nSign in at https://mkmini.local:3112");

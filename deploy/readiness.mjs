@@ -36,7 +36,7 @@ function envOf(instance) {
 const blockers = [];
 const notes = [];
 
-for (const [instance, tlsPort] of [["mkboard", 3112], ["uat", 3113]]) {
+for (const [instance, tlsPort] of [["mkboard", 3112]]) {
   const env = envOf(instance);
   const sql = postgres(env.DATABASE_URL, { max: 1 });
   console.log(`\n${B(`── ${instance} ─────────────────────────────────────────────`)}`);

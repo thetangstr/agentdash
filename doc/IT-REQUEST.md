@@ -4,7 +4,7 @@ One visit, three things, all routine. They are listed in dependency order —
 each makes the next one possible.
 
 Everything below is about a Mac Mini already sitting in your server room,
-currently at **10.50.10.129**, serving an internal web app on ports 3112/3113.
+currently at **10.50.10.129**, serving an internal web app on port 3112.
 It is not exposed to the internet and does not need to be.
 
 ---
@@ -29,14 +29,23 @@ returns `403` and looks broken.
 
 | | |
 |---|---|
-| MAC address | `02:e3:44:1e:93:58` (interface `en1`) |
-| Current address | 10.50.10.129 |
+| MAC to reserve — wired `en0` | `1c:f6:4c:69:c6:9d` ← ask for this |
+| MAC to reserve — Wi-Fi `en1` | `1c:f6:4c:68:d0:2d` (hardware address) |
+| Current address | 10.50.10.129, on `en1` |
 | Ask | reserve it, or assign a static |
 
-Note this is the **Wi-Fi** interface. If the machine gets moved to Ethernet — a
-good idea for a server in a rack — the MAC changes and the reservation has to
-follow it. Worth deciding which interface it lives on before they create the
-reservation, so it is done once.
+**Do not give them `02:e3:44:1e:93:58`.** That is what `ifconfig en1` reports
+today, but the `02:` prefix marks it as a macOS **private/randomised** Wi-Fi
+address, not the hardware one — corrected 2026-08-18. A reservation bound to it
+works until macOS rotates it, and then the address moves and the hostname guard
+starts returning 403: the failure this whole section exists to prevent, arriving
+weeks late and looking like nothing. If we stay on Wi-Fi, disable Private Wi-Fi
+Address for that network first so the reservation binds to `1c:f6:4c:68:d0:2d`.
+
+Ethernet has no randomisation at all, which is one more reason to prefer it for a
+machine in a rack. `en0` had no cable attached as of 2026-08-18. A USB 2.5G LAN
+adapter is also present (`en8`, `84:5c:31:47:29:8d`). Decide which interface it
+lives on **before** they create the reservation, so it is done once.
 
 ## 2. Internal DNS A record
 
@@ -51,10 +60,21 @@ Their resolver is at **10.30.65.2**.
 | Points to | the reserved address above |
 | Scope | internal only — this must not resolve publicly |
 
-`mkthink.com` is externally hosted, so this is a split-horizon record: the name
-resolves to a private address inside the network and does not exist outside it.
-That is a normal pattern; if they would rather use a different zone, **any name
-works** — just tell us and we reissue the CSR in one command.
+`mkthink.com` is externally hosted (185.230.63.x), so this is a split-horizon
+record: the name resolves to a private address inside the network and does not
+exist outside it.
+
+**Split-horizon is already in place** — verified 2026-08-18: that resolver is
+`mk-wpa-dc01.mkthink.net`, a Windows DC, and it answers **authoritatively** for
+`mkthink.com` (`aa` flag, SOA `mk-wpa-dc01.mkthink.net hostmaster.mkthink.net`)
+as well as for their internal AD zone `mkthink.net`. So we are asking for one
+more record in a zone they already maintain, not a new zone. `agentdash.mkthink.com`
+does not resolve today, internally or publicly.
+
+Because the internal AD zone is `mkthink.net`, offer **`agentdash.mkthink.net`**
+as an equally good alternative — some teams keep the internal `.com` zone as a
+strict mirror of public records. Any name works; we reissue the CSR in one
+command, so offering both up front avoids a round-trip.
 
 ## 3. TLS certificate from MKThink's internal CA
 
@@ -90,6 +110,11 @@ EKU     : serverAuth
 Worth saying when you hand it over, because it is always the first question:
 **a CSR contains no private key.** The key was generated on the server, has mode
 600, and never leaves it.
+
+Their resolver is a Windows domain controller, so they are very likely running AD
+Certificate Services. Name the **Web Server** template explicitly when you ask —
+it turns a vague "issue us a certificate" into a two-minute task for a Windows
+admin. Ask for the issuing chain alongside the certificate.
 
 If they want a different name, regenerate in one command:
 

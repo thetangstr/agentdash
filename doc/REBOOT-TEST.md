@@ -11,6 +11,11 @@ Run it at home, with a keyboard and a monitor, not on site.
 
 ## Baseline, captured 2026-08-17 01:25 before the reboot
 
+> Recorded when this machine ran two instances. `uat` (3103/3113) was retired on
+> 2026-08-18, so the current pass condition is `daemons loaded : 5` and the
+> :3103/:3113 lines should be absent. The figures below are left as captured —
+> a baseline that is edited after the fact is not a baseline.
+
 ```
 daemons loaded : 7
 http  :3102    200      http  :3103    200
@@ -21,6 +26,42 @@ in-flight runs 0
 ```
 
 That is what "passed" looks like. Anything less is a finding.
+
+---
+
+## Result, 2026-08-17 08:14 — PASS
+
+```
+daemons loaded : 7   (4 running, 3 calendar-triggered and correctly idle)
+http  :3102    200      http  :3103    200
+https :3112    200      https :3113    200      <- real CA validation, not -k
+tailscale      100.64.89.16   up, daemon started at boot
+LAN            192.168.86.57
+in-flight runs 0     (no pending/running rows in any run/job table)
+```
+
+The part that actually matters is the ordering:
+
+```
+08:14:56  boot
+08:15:17  postgres, caddy, tailscaled
+08:15:21  both servers
+08:15:34  DB connections live — serving, ~38s after boot
+08:16:36  first SSH login — 62s LATER
+```
+
+`stat -f '%Su' /dev/console` returned `root` and `loginwindow` was at the login
+screen throughout, so no user session existed when the stack came up. That is
+the whole claim, and it holds.
+
+Two things learned in the same session, both worth more than the pass:
+
+- **It came up on Wi-Fi.** SOP §1 warns a reboot on `en1` may beat the network.
+  It did not, once. One sample on a network we control — not evidence about
+  theirs.
+- **`kill -TERM` does not restart an instance.** Unrelated to boot (that is
+  `RunAtLoad`), but it was the documented restart mechanism and it was wrong.
+  See "Restarting an instance" in `SOP-onsite.md`.
 
 ---
 
@@ -43,7 +84,6 @@ That is what "passed" looks like. Anything less is a finding.
 
    ```
    http://192.168.86.57:3102/api/health     ← mkboard
-   http://192.168.86.57:3103/api/health     ← uat
    ```
 
    Plain HTTP on purpose: your phone does not have the mkcert root installed,
