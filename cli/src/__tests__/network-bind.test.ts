@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveRuntimeBind, validateConfiguredBindMode } from "@paperclipai/shared";
 import { buildPresetServerConfig } from "../config/server-bind.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(() => {
+      throw new Error("tailscale unavailable in this test");
+    }),
+  };
+});
 
 describe("network bind helpers", () => {
   it("rejects non-loopback bind modes in local_trusted", () => {
