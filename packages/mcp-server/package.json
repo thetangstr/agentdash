@@ -4,6 +4,7 @@
   "description": "AgentDash MCP Server — onboarding, provisioning, and management via Model Context Protocol",
   "type": "module",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "agentdash-mcp": "./dist/stdio.js"
   },
@@ -11,7 +12,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "esbuild src/stdio.ts src/index.ts --outdir=dist --bundle --platform=node --format=esm --target=node20 --sourcemap --banner:js=\"#!/usr/bin/env node\" --external:@modelcontextprotocol/sdk --external:zod",
+    "build": "esbuild src/stdio.ts src/index.ts --outdir=dist --bundle --platform=node --format=esm --target=node20 --sourcemap --banner:js=\"#!/usr/bin/env node\" --external:@modelcontextprotocol/sdk --external:zod && tsc --emitDeclarationOnly",
     "start": "node dist/stdio.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

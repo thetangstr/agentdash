@@ -37,12 +37,15 @@ async function createSiblingDatabase(connectionString: string, databaseName: str
   return targetUrl.toString();
 }
 
-afterEach(async () => {
-  while (cleanups.length > 0) {
-    const cleanup = cleanups.pop();
-    await cleanup?.();
-  }
-});
+afterEach(
+  async () => {
+    while (cleanups.length > 0) {
+      const cleanup = cleanups.pop();
+      await cleanup?.();
+    }
+  },
+  60_000,
+);
 
 if (!embeddedPostgresSupport.supported) {
   console.warn(
@@ -74,6 +77,95 @@ describe("createBufferedTextFileWriter", () => {
 });
 
 describeEmbeddedPostgres("runDatabaseBackup", () => {
+  /**
+   * The test that was missing, and its absence cost the product its backups.
+   *
+   * Every round-trip case below passes `backupEngine: "javascript"` — the ONE
+   * mode that emits INSERT statements. Production defaults to "auto", which
+   * emits `COPY … FROM stdin` + raw TSV. So the suite was green while every
+   * backup this library actually wrote was unrestorable: the psql path cannot
+   * run where embedded PostgreSQL ships no psql binary, and the node path fed
+   * the TSV rows to the SQL parser (`syntax error at or near "1"`).
+   *
+   * Measured before the fix: all 7 nightly backups on the live host failed to
+   * restore. This case pins the DEFAULT engine, so a green suite means the
+   * thing an operator would reach for in an incident actually works.
+   */
+  it(
+    "restores a backup written by the DEFAULT engine, which emits COPY rather than INSERTs",
+    async () => {
+      const sourceConnectionString = await createTempDatabase();
+      const restoreConnectionString = await createSiblingDatabase(
+        sourceConnectionString,
+        "paperclip_restore_copy_target",
+      );
+      const backupDir = createTempDir("paperclip-db-backup-copy-");
+      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
+      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+
+      try {
+        await sourceSql.unsafe(`
+          CREATE TABLE "public"."copy_roundtrip" (
+            "id" serial PRIMARY KEY,
+            "label" text NOT NULL,
+            "notes" text,
+            "meta" jsonb
+          );
+        `);
+        // Values chosen to break naive TSV handling: a tab, a newline, a
+        // backslash, a NULL, and a literal "\." that must not be read as the
+        // COPY terminator.
+        await sourceSql.unsafe(`
+          INSERT INTO "public"."copy_roundtrip" ("label", "notes", "meta") VALUES
+            ('plain', 'nothing special', '{"a":1}'::jsonb),
+            ('tabbed', E'has\\ttab', '{"b":2}'::jsonb),
+            ('newlined', E'line one\\nline two', NULL),
+            ('slashed', E'back\\\\slash', '{"c":3}'::jsonb),
+            ('terminator-ish', '\\.', '{"d":4}'::jsonb),
+            ('nulled', NULL, NULL);
+        `);
+
+        // NO backupEngine override — this is what production does.
+        const result = await runDatabaseBackup({
+          connectionString: sourceConnectionString,
+          backupDir,
+          retention: { dailyDays: 7, weeklyWeeks: 4, monthlyMonths: 1 },
+          filenamePrefix: "paperclip-copy-test",
+        });
+
+        await runDatabaseRestore({
+          connectionString: restoreConnectionString,
+          backupFile: result.backupFile,
+        });
+
+        const rows = await restoreSql.unsafe<
+          { label: string; notes: string | null; meta: unknown }[]
+        >(`SELECT "label", "notes", "meta" FROM "public"."copy_roundtrip" ORDER BY "id"`);
+
+        expect(rows).toHaveLength(6);
+        expect(rows.map((row) => row.label)).toEqual([
+          "plain",
+          "tabbed",
+          "newlined",
+          "slashed",
+          "terminator-ish",
+          "nulled",
+        ]);
+        // Every awkward value survives the round trip intact.
+        expect(rows[1]?.notes).toBe("has\ttab");
+        expect(rows[2]?.notes).toBe("line one\nline two");
+        expect(rows[3]?.notes).toBe("back\\slash");
+        expect(rows[4]?.notes).toBe("\\.");
+        expect(rows[5]?.notes).toBeNull();
+        expect(rows[5]?.meta).toBeNull();
+      } finally {
+        await sourceSql.end();
+        await restoreSql.end();
+      }
+    },
+    120_000,
+  );
+
   it(
     "backs up and restores large table payloads without materializing one giant string",
     async () => {

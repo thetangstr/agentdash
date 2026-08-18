@@ -143,7 +143,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ name: "Acme", emailDomain: "acme.com" }),
       expect.anything(),
-      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+      expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
     );
     expect(ensureMembershipMock).toHaveBeenCalledWith(
       "company-1",
@@ -169,7 +169,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "alice@gmail.com" }),
       expect.anything(),
-      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+      expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
     );
   });
 
@@ -249,7 +249,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "acme.com" }),
       expect.anything(),
-      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+      expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
     );
   });
 
@@ -342,7 +342,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: "alice@gmail.com" }),
       expect.anything(),
-      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+      expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
     );
   });
 
@@ -405,7 +405,7 @@ describe("POST /api/companies — FRE Plan B email_domain (AGE-55)", () => {
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({ emailDomain: null }),
       expect.anything(),
-      expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+      expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
     );
   });
 });
@@ -420,7 +420,7 @@ describe("PATCH /api/companies/:companyId — product profile authorization", ()
     feedbackDataSharingEnabled: false,
   };
 
-  function boardActor(membershipRole: "owner" | "admin" | "operator" | "viewer") {
+  function boardActor(membershipRole: "admin" | "admin" | "operator" | "viewer") {
     return {
       type: "board",
       userId: `${membershipRole}-user`,

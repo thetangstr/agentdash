@@ -1,8 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildSshSpawnTarget, type SshRemoteExecutionSpec } from "./ssh.js";
+import {
+  SANDBOX_EXEC_PATH,
+  assertSandboxSupported,
+  buildSandboxProfile,
+  type EgressPolicy,
+} from "./seatbelt.js";
 import { redactCommandText } from "./command-redaction.js";
 import type {
   AdapterSkillEntry,
@@ -28,6 +35,89 @@ interface RunningProcess {
   child: ChildProcess;
   graceSec: number;
   processGroupId: number | null;
+}
+
+/**
+ * Ask for the spawned child to be confined by macOS Seatbelt.
+ *
+ * Absent means unconfined, and that is the default on purpose: turning this on
+ * for every existing agent at once would be a change to how seven live agents
+ * run on a client machine, made without anyone watching the first failure.
+ * Callers opt in.
+ */
+export interface LocalSandboxSpec {
+  /** The home directory to deny. Everything under it is closed to the child. */
+  homeDir: string;
+  egress: EgressPolicy;
+  /**
+   * Absolute paths re-opened read-write below the home deny — agent runtime
+   * state that lives outside the execution workspace. Keep it as narrow as the
+   * agent will tolerate; every entry is a hole.
+   */
+  readWritePaths?: string[];
+  /**
+   * Absolute paths re-opened READ-ONLY (and executable) below the home deny —
+   * the agent's own runtime (interpreter, libraries, entry script), which for
+   * hermes lives under `~/.hermes/`. Read-only rather than read-write: an
+   * agent that can rewrite its own interpreter has escaped.
+   */
+  readOnlyPaths?: string[];
+  /**
+   * A directory handed to the child as `HOME`, instead of the operator's.
+   *
+   * Set this and the child sees a home containing only what the operator put
+   * there. The reason is a real failure, not tidiness: web search runs through
+   * `mcporter`, which probes `$HOME` on startup and died confined on
+   * `EPERM open '~/.claude/settings.json'` — the sandbox correctly refusing
+   * the operator's personal Claude Code config. Allowing `~/.claude` would
+   * have "fixed" it by handing every agent that config; repointing `HOME`
+   * fixes it by making the probe find nothing.
+   *
+   * Also re-opened read-write in the profile, since a home the child cannot
+   * write is a home half the tools will fail on. Symlinks placed inside it
+   * resolve to their targets and are matched there, so linking to something
+   * NOT on the allowlist stays denied.
+   */
+  syntheticHomeDir?: string;
+}
+
+/**
+ * Opt a call OUT of the ambient sandbox default.
+ *
+ * Not every `runChildProcess` caller is agent execution. Model discovery shells
+ * out to the agent CLI to ask what models it supports, and that legitimately
+ * reads the operator's own config in their home directory — confining it would
+ * break model listing for a control aimed at something else.
+ *
+ * Spelled as a value the caller must write, rather than inferred from a runId
+ * prefix or a heuristic. A security default that can be switched off by
+ * accident is not a default; this one is greppable.
+ */
+export const NEVER_SANDBOX = "never" as const;
+export type LocalSandboxOption = LocalSandboxSpec | typeof NEVER_SANDBOX | null;
+
+/**
+ * Process-wide default, set once at server startup.
+ *
+ * The alternative was for every adapter to pass a spec, which does not work:
+ * the local adapters are separate packages — some vendored — and they call this
+ * function directly. A default here reaches all of them, including ones written
+ * later, without each having to remember.
+ */
+let ambientLocalSandbox: LocalSandboxSpec | null = null;
+
+export function configureDefaultLocalSandbox(spec: LocalSandboxSpec | null): void {
+  ambientLocalSandbox = spec;
+}
+
+export function getDefaultLocalSandbox(): LocalSandboxSpec | null {
+  return ambientLocalSandbox;
+}
+
+function resolveLocalSandbox(option: LocalSandboxOption | undefined): LocalSandboxSpec | null {
+  if (option === NEVER_SANDBOX) return null;
+  if (option) return option;
+  return ambientLocalSandbox;
 }
 
 interface SpawnTarget {
@@ -931,14 +1021,63 @@ export function applyPaperclipWorkspaceEnv(
   return env;
 }
 
-export function sanitizeInheritedPaperclipEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const key of Object.keys(env)) {
-    if (!key.startsWith("PAPERCLIP_")) continue;
-    if (key === "PAPERCLIP_RUNTIME_API_URL") continue;
-    if (key === "PAPERCLIP_LISTEN_HOST") continue;
-    if (key === "PAPERCLIP_LISTEN_PORT") continue;
-    delete env[key];
+/**
+ * The slice of the server's environment a spawned adapter may see.
+ *
+ * Enough to find a binary, write to scratch space, and read the harness's own
+ * per-user config. Nothing else.
+ */
+const INHERITED_ENV_KEYS = new Set([
+  // Finding and starting a binary at all. Both cases of PATH: names are
+  // case-insensitive on Windows and Node preserves whichever case it was given.
+  "PATH", "Path", "PATHEXT", "SHELL", "COMSPEC", "SystemRoot", "SystemDrive", "windir",
+  // Per-user roots. The harnesses keep their own credentials under here
+  // (~/.hermes/.env, ~/.claude), which is why none need to be passed through.
+  "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+  // Scratch space.
+  "TMPDIR", "TEMP", "TMP",
+  // Identity, locale and terminal shape — read by CLIs for config paths and
+  // output formatting.
+  "USER", "LOGNAME", "USERNAME", "LANG", "TZ", "TERM",
+  // Where the harness reports back to. Not secrets: an address and a port.
+  "PAPERCLIP_RUNTIME_API_URL", "PAPERCLIP_LISTEN_HOST", "PAPERCLIP_LISTEN_PORT",
+]);
+
+/** `HERMES_*` is the harness's own configuration; `LC_*`/`XDG_*` are locale and config roots. */
+const INHERITED_ENV_PREFIXES = ["HERMES_", "LC_", "XDG_"];
+
+/**
+ * Allowlist, not denylist.
+ *
+ * This used to strip `PAPERCLIP_*` and pass everything else through, which
+ * meant a spawned agent harness received the server's whole environment. On a
+ * real deployment that was `DATABASE_URL` with live credentials,
+ * `BETTER_AUTH_SECRET` (forge a session for any user), the provider API key and
+ * the license key — handed to a process whose prompt is built from issue text,
+ * other agents' output and anything it fetches, all of which this system treats
+ * as untrusted and wraps in `<untrusted-agent-answer>` for exactly that reason.
+ * The blast radius of one prompt injection was not "runs a command"; it was
+ * direct Postgres access and the ability to mint sessions.
+ *
+ * The prefix rule hid it in the most ordinary way: `PAPERCLIP_AGENT_JWT_SECRET`
+ * was stripped and `BETTER_AUTH_SECRET` was not, because one happened to carry
+ * the prefix and the other did not. A denylist protects the secrets someone
+ * thought of, and silently leaks the next one added — which is precisely what
+ * happened here, and why the CoS chat path (`adapterChildEnv` in
+ * dispatch-llm.ts) was already written this way.
+ *
+ * Anything an adapter genuinely needs beyond this list goes in its own
+ * `adapterConfig.env`, which is merged after this and always wins. That keeps
+ * the escape hatch explicit, per-agent and visible in the agent's configuration
+ * rather than implicit in whatever the server happened to be started with.
+ */
+export function inheritableAdapterEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value === undefined) continue;
+    if (INHERITED_ENV_KEYS.has(key) || INHERITED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      env[key] = value;
+    }
   }
   return env;
 }
@@ -1017,6 +1156,56 @@ function resolveWindowsCmdShell(env: NodeJS.ProcessEnv): string {
   return path.join(fallbackRoot, "System32", "cmd.exe");
 }
 
+/**
+ * Resolve symlinks so an SBPL rule matches what the kernel will compare against.
+ *
+ * Falls back to the input when the path does not exist yet — the profile is
+ * then written against the literal path, which is the honest outcome: better a
+ * rule that may not match a not-yet-created directory than a silent rewrite to
+ * something else.
+ */
+async function canonicalisePath(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * The agent binary, with symlinks resolved, plus the link itself.
+ *
+ * Both are needed. A profile that allows only the resolved target still fails
+ * at `execvp` when the caller invokes the symlink, and one that allows only the
+ * symlink fails when the loader follows it. This is the failure that reads like
+ * a PATH problem and is not one.
+ */
+async function resolveSandboxExecPaths(executable: string): Promise<string[]> {
+  const paths = new Set<string>();
+  if (path.isAbsolute(executable)) paths.add(executable);
+  try {
+    const real = await fs.realpath(executable);
+    if (path.isAbsolute(real)) paths.add(real);
+  } catch {
+    // Unresolvable means we cannot widen for it. The profile is still built;
+    // the child will fail loudly at exec rather than run unconfined.
+  }
+  return [...paths];
+}
+
+/**
+ * Write the profile to a private temp file and hand back the path.
+ *
+ * Mode 0600 because the profile names the workspace and every re-opened path —
+ * a readable map of exactly where the confinement has holes.
+ */
+async function writeSandboxProfile(profile: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agentdash-sbpl-"));
+  const file = path.join(dir, "profile.sb");
+  await fs.writeFile(file, profile, { mode: 0o600 });
+  return file;
+}
+
 async function resolveSpawnTarget(
   command: string,
   args: string[],
@@ -1025,6 +1214,7 @@ async function resolveSpawnTarget(
   options: {
     remoteExecution?: RemoteExecutionSpec | null;
     remoteEnv?: Record<string, string> | null;
+    localSandbox?: LocalSandboxSpec | null;
   } = {},
 ): Promise<SpawnTarget> {
   const remote = options.remoteExecution ?? null;
@@ -1052,6 +1242,71 @@ async function resolveSpawnTarget(
   const resolved = await resolveCommandPath(command, cwd, env);
   const executable = resolved ?? command;
 
+  /**
+   * Local OS containment, when the caller asked for it.
+   *
+   * Same shape as the SSH rewrite above: the command we were asked to run
+   * becomes an argument to something that constrains it. Keyed to the CWD the
+   * caller resolved, not to a guessed `workspaces/<agent>` path — the heartbeat
+   * arrives at that directory four different ways (project workspace, managed
+   * checkout, prior session, default fallback) and a profile built from the
+   * wrong one denies the very directory the agent is standing in.
+   *
+   * `assertSandboxSupported` throws rather than falling back. A caller that
+   * asked for confinement and silently did not get it is worse off than one
+   * that failed to start, because it believes it is confined.
+   */
+  const sandbox = options.localSandbox ?? null;
+  if (sandbox && process.platform !== "win32") {
+    assertSandboxSupported();
+    /**
+     * Canonicalise every path before it reaches the profile.
+     *
+     * SBPL `subpath` matches the RESOLVED path, so a deny written against a
+     * symlinked path never fires. On macOS this is not an edge case: `/tmp` and
+     * `/var` are symlinks into `/private`, and a home or workspace reached
+     * through one produces a profile that parses, loads, confines nothing, and
+     * reports no error at all.
+     *
+     * Caught by a containment test that ran `cat` on a file it was supposed to
+     * be denied and got exit 0. Silent non-confinement is the worst failure
+     * available here — the operator believes the sandbox is on.
+     */
+    const [canonicalHome, canonicalCwd, canonicalExtras] = await Promise.all([
+      canonicalisePath(sandbox.homeDir),
+      canonicalisePath(cwd),
+      Promise.all((sandbox.readWritePaths ?? []).map(canonicalisePath)),
+    ]);
+    const canonicalReadOnly = await Promise.all(
+      (sandbox.readOnlyPaths ?? []).map(canonicalisePath),
+    );
+    const canonicalSyntheticHome = sandbox.syntheticHomeDir
+      ? await canonicalisePath(sandbox.syntheticHomeDir)
+      : undefined;
+    const profile = buildSandboxProfile({
+      homeDir: canonicalHome,
+      workspaceDir: canonicalCwd,
+      egress: sandbox.egress,
+      execPaths: await resolveSandboxExecPaths(executable),
+      readWritePaths: canonicalExtras,
+      readOnlyPaths: canonicalReadOnly,
+      syntheticHomeDir: canonicalSyntheticHome,
+    });
+    const profilePath = await writeSandboxProfile(profile);
+    return {
+      command: SANDBOX_EXEC_PATH,
+      args: ["-f", profilePath, executable, ...args],
+      cwd,
+      cleanup: async () => {
+        // The DIRECTORY, not just the file. Removing only `profile.sb` left the
+        // mkdtemp directory behind on every run — caught by a test that counted
+        // them, which is the only reason a slow leak in a world-readable temp
+        // dir would ever have been noticed.
+        await fs.rm(path.dirname(profilePath), { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  }
+
   if (process.platform !== "win32") {
     return { command: executable, args };
   }
@@ -1068,6 +1323,32 @@ async function resolveSpawnTarget(
   }
 
   return { command: executable, args };
+}
+
+/**
+ * Point the child's `HOME` at the sandbox's synthetic home, if there is one.
+ *
+ * Applied LAST, after `adapterConfig.env` has been merged, so a per-agent
+ * config cannot set `HOME` back to the operator's directory. Every other
+ * variable in this system is the agent's to override; this one is part of the
+ * confinement, and a control an agent's own configuration can switch off is
+ * not a control.
+ *
+ * `HOME` alone, deliberately. `os.homedir()` reads it on POSIX, which is what
+ * the CLIs in question use, and the sandbox is macOS-only — so `USERPROFILE`
+ * and friends would be decoration. If a tool is later found reading `XDG_*`
+ * for its config root, add it here with the measurement that showed it.
+ *
+ * Exported because the interesting property — that it wins over caller env —
+ * is worth asserting in a test rather than re-deriving from the call site.
+ */
+export function applySyntheticHome(
+  env: NodeJS.ProcessEnv,
+  sandbox: LocalSandboxSpec | null,
+): NodeJS.ProcessEnv {
+  const synthetic = sandbox?.syntheticHomeDir;
+  if (!synthetic) return env;
+  return { ...env, HOME: synthetic };
 }
 
 export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -1715,12 +1996,19 @@ export async function runChildProcess(
     terminalResultCleanup?: TerminalResultCleanupOptions;
     stdin?: string;
     remoteExecution?: RemoteExecutionSpec | null;
+    /**
+     * Confine the child with macOS Seatbelt, keyed to `opts.cwd`.
+     *
+     * Omitted falls back to the process-wide default (off unless the server
+     * configured one). Pass `NEVER_SANDBOX` to opt a non-agent call out.
+     */
+    localSandbox?: LocalSandboxOption;
   },
 ): Promise<RunProcessResult> {
   const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = {
-      ...sanitizeInheritedPaperclipEnv(process.env),
+      ...inheritableAdapterEnv(process.env),
       ...opts.env,
     };
 
@@ -1739,10 +2027,23 @@ export async function runChildProcess(
       delete rawMerged[key];
     }
 
-    const mergedEnv = ensurePathInEnv(rawMerged);
+    const localSandbox = resolveLocalSandbox(opts.localSandbox);
+    // After the merge above, so `adapterConfig.env` cannot hand the child the
+    // operator's real home back. Before spawn AND before command resolution,
+    // so the PATH lookup and the profile agree on which home is in play.
+    //
+    // Not for remote execution: there the local child is `ssh` itself, which
+    // reads the OPERATOR's `~/.ssh` to find the key it connects with, and the
+    // synthetic home is a local path that means nothing on the far host.
+    // `resolveSpawnTarget` already skips confinement for that branch, so this
+    // matches — the two must not disagree about which world we are in.
+    const mergedEnv = opts.remoteExecution
+      ? ensurePathInEnv(rawMerged)
+      : applySyntheticHome(ensurePathInEnv(rawMerged), localSandbox);
     void resolveSpawnTarget(command, args, opts.cwd, mergedEnv, {
       remoteExecution: opts.remoteExecution ?? null,
       remoteEnv: opts.remoteExecution ? opts.env : null,
+      localSandbox,
     })
       .then((target) => {
         const child = spawn(target.command, target.args, {

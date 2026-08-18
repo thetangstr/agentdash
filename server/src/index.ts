@@ -36,6 +36,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
+import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -44,7 +45,10 @@ import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
-import { initSentry, captureServerError } from "./observability/sentry.js";
+import { initErrorSink, recordServerError } from "./observability/error-sink.js";
+import { startAlerter } from "./observability/alerter.js";
+import { emitSignal } from "./observability/signals.js";
+import { computeHealthChecks } from "./observability/health-checks.js";
 import { conflict } from "./errors.js";
 import type {
   InstanceDatabaseBackupRunResult,
@@ -89,9 +93,6 @@ export interface StartedServer {
 }
 
 export async function startServer(): Promise<StartedServer> {
-  // AgentDash: initialize remote error tracking as early as possible so any
-  // startup failure below is captured. No-op unless SENTRY_DSN is set.
-  initSentry();
   let config = loadConfig();
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
@@ -103,6 +104,17 @@ export async function startServer(): Promise<StartedServer> {
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
   }
+
+  /**
+   * Agent confinement, before anything can run an agent.
+   *
+   * Logged unconditionally, including when it is off. An operator reading a
+   * startup log should be able to tell which posture they are in without
+   * inferring it from the absence of a line — "no news" is how a security
+   * control ends up believed-on and actually-off.
+   */
+  const agentSandbox = applyAgentSandboxSettings();
+  logger.info({ agentSandbox: agentSandbox.summary }, "agent subprocess sandbox");
   
   type MigrationSummary =
     | "skipped"
@@ -260,7 +272,7 @@ export async function startServer(): Promise<StartedServer> {
         principalType: "user",
         principalId: LOCAL_BOARD_USER_ID,
         status: "active",
-        membershipRole: "owner",
+        membershipRole: "admin",
       });
     }
   }
@@ -449,6 +461,12 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
+  // O1/O3 (2026-08-16): both database branches have run — the sink can
+  // persist and the alerter can subscribe. Order matters: the sink first, so
+  // an alerter failure during startup has somewhere to be recorded.
+  initErrorSink(db);
+  startAlerter();
+
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
@@ -925,6 +943,44 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
+  // O4/O6 (2026-08-16): the health checks run on a clock, not only when
+  // polled — a stale backup or a filling disk emits a signal within the half
+  // hour instead of waiting for someone to look.
+  {
+    const healthSignalHandle = setInterval(() => {
+      void computeHealthChecks(db)
+        .then((checks) => {
+          if (checks.backup && !checks.backup.ok) {
+            emitSignal({
+              kind: "backup_stale",
+              summary: checks.backup.latestAt
+                ? `newest backup is ${checks.backup.ageHours}h old`
+                : "no backups found in the backup directory",
+              detail: { latestAt: checks.backup.latestAt, ageHours: checks.backup.ageHours },
+            });
+          }
+          if (!checks.disk.ok) {
+            emitSignal({
+              kind: "disk_low",
+              summary: `disk free below threshold: ${(checks.disk.freeBytes / 1e9).toFixed(1)} GB left`,
+              detail: { freeBytes: checks.disk.freeBytes },
+            });
+          }
+          if (!checks.runs.ok) {
+            emitSignal({
+              kind: "run_stuck",
+              summary: `${checks.runs.stuck} run(s) stuck in a live state for over 2h`,
+              detail: { stuck: checks.runs.stuck },
+            });
+          }
+        })
+        .catch((err) => {
+          logger.warn({ err }, "periodic health check failed");
+        });
+    }, 30 * 60 * 1000);
+    healthSignalHandle.unref?.();
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 
@@ -1180,15 +1236,38 @@ export async function startServer(): Promise<StartedServer> {
   }
 
   await new Promise<void>((resolveListen, rejectListen) => {
+    // An all-interfaces bind is `::`, which serves IPv4 and IPv6 on one socket
+    // and is what makes a Bonjour `.local` name reachable. Where IPv6 is
+    // disabled entirely, that bind fails outright -- fall back to IPv4 rather
+    // than refuse to start, and say so, because it silently narrows who can
+    // reach the instance.
+    let listenHost = config.host;
+    let triedIpv4Fallback = false;
+
     const onError = (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      const ipv6Unsupported = code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL" || code === "EINVAL";
+      if (!triedIpv4Fallback && ipv6Unsupported && listenHost === "::") {
+        triedIpv4Fallback = true;
+        listenHost = "0.0.0.0";
+        logger.warn(
+          { err, code },
+          "IPv6 bind unavailable on this host; falling back to 0.0.0.0. Clients resolving this host to an IPv6 address will not be able to reach it.",
+        );
+        // `once` has already removed this handler; re-arm it so a failing
+        // fallback rejects the promise instead of throwing unhandled.
+        // `triedIpv4Fallback` stops that turning into a loop.
+        server.once("error", onError);
+        server.listen(listenPort, listenHost, onListening);
+        return;
+      }
       server.off("error", onError);
       rejectListen(err);
     };
 
-    server.once("error", onError);
-    server.listen(listenPort, config.host, () => {
+    function onListening() {
       server.off("error", onError);
-      logger.info(`Server listening on ${config.host}:${listenPort}`);
+      logger.info(`Server listening on ${listenHost}:${listenPort}`);
       if (process.env.PAPERCLIP_OPEN_ON_LISTEN === "true") {
         const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
         const url = `http://${openHost}:${listenPort}`;
@@ -1243,9 +1322,12 @@ export async function startServer(): Promise<StartedServer> {
       }
 
       resolveListen();
-    });
+    }
+
+    server.once("error", onError);
+    server.listen(listenPort, listenHost, onListening);
   });
-  
+
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       // AgentDash: goals-eval-hitl
@@ -1327,19 +1409,19 @@ function isMainModule(metaUrl: string): boolean {
 }
 
 if (isMainModule(import.meta.url)) {
-  // AgentDash: initialize Sentry before anything else so process-level
-  // crashes during startup are captured. No-op unless SENTRY_DSN is set.
-  initSentry();
-  // Capture otherwise-unhandled crashes. These guards only run when the
-  // server is launched as the main process (not when startServer is imported
-  // by tests), and each capture is a no-op unless SENTRY_DSN is set. We keep
-  // the existing logging behavior and do not change process lifecycle.
+  // Capture otherwise-unhandled crashes into the LOCAL error sink (2026-08-16:
+  // the remote Sentry transport is gone — it was measured to drop every event
+  // because nothing ever configured it, and error payloads must not leave a
+  // client box). Before the sink is initialised in startServer(), the record
+  // call degrades to stderr — which is where a pre-database crash belongs
+  // anyway. These guards only run when the server is launched as the main
+  // process; process lifecycle is unchanged.
   process.on("uncaughtException", (err) => {
-    captureServerError(err, { kind: "uncaughtException" });
+    recordServerError(err, { kind: "uncaughtException" });
     logger.error({ err }, "uncaught exception");
   });
   process.on("unhandledRejection", (reason) => {
-    captureServerError(reason, { kind: "unhandledRejection" });
+    recordServerError(reason, { kind: "unhandledRejection" });
     logger.error({ err: reason }, "unhandled promise rejection");
   });
   void startServer().catch((err) => {

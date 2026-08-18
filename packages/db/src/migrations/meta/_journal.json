@@ -806,6 +806,41 @@
       "when": 1785725611121,
       "tag": "0114_glamorous_korvac",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1786206688728,
+      "tag": "0115_careless_firestar",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1786827613105,
+      "tag": "0116_lumpy_changeling",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1786929248978,
+      "tag": "0117_role_collapse_admin_member",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1786932126108,
+      "tag": "0118_real_wendigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1786932876530,
+      "tag": "0119_amusing_sleeper",
+      "breakpoints": true
     }
   ]
 }

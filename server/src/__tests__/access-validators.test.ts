@@ -26,7 +26,7 @@ describe("access validators", () => {
 
   it("defaults omitted combined member grants to an empty list", () => {
     const result = updateCompanyMemberWithPermissionsSchema.parse({
-      membershipRole: "operator",
+      membershipRole: "member",
     });
 
     expect(result.grants).toEqual([]);

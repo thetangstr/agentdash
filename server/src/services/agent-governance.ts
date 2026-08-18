@@ -666,7 +666,17 @@ export function agentGovernanceService(db: Db) {
     if (!actor.userId) return null;
     if (!(await isProfileCompany(companyId))) return null;
     const active = await stewardships.activeByAgent(companyId, agentId);
-    return active && active.userId === actor.userId ? "steward" : null;
+    if (active && active.userId === actor.userId) return "steward";
+    // A4 (2026-08-16): whoever created an agent owns it. Deliberately the
+    // STEWARD tier, not admin — the field allowlist and the no-self-promotion
+    // rules exist to stop privilege escalation through one's own agent, and
+    // that reasoning applies to creators exactly as it does to stewards.
+    const created = await db
+      .select({ createdByUserId: agents.createdByUserId })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.companyId, companyId)))
+      .then((rows) => rows[0] ?? null);
+    return created?.createdByUserId === actor.userId ? "steward" : null;
   }
 
   /**

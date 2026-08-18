@@ -23,6 +23,13 @@ export type HealthStatus = {
   // AgentDash: self-serve-bootstrap — first-user self-serve company creation.
   selfServeBootstrap?: boolean;
   instanceHasCompany?: boolean;
+  /**
+   * The address the operator configured for this instance, when they set one.
+   *
+   * Used to generate harness configuration against a stable host instead of
+   * `window.location.origin` — see ConnectYourHarness. Absent when unset.
+   */
+  publicBaseUrl?: string;
   features?: {
     companyDeletionEnabled?: boolean;
   };

@@ -153,11 +153,23 @@ export function welcomeEmailTemplate(input: { name: string | null; appUrl: strin
  * the URL once in the link AND once as plain text so the user can copy
  * if their mail client mangles the link.
  */
-export function resetPasswordEmailTemplate(input: { resetUrl: string }): {
+export function resetPasswordEmailTemplate(input: {
+  resetUrl: string;
+  /**
+   * Human-readable token lifetime ("1 hour", "7 days") from
+   * formatTokenLifetime(). Optional so existing callers and tests keep
+   * working; defaults to Better Auth's own 1 hour. Passed in rather than
+   * hardcoded because the TTL is configurable per deployment
+   * (AGENTDASH_RESET_TOKEN_TTL_SECONDS) and copy that contradicts the real
+   * expiry is worse than no copy at all.
+   */
+  lifetime?: string;
+}): {
   subject: string;
   html: string;
   text: string;
 } {
+  const lifetime = input.lifetime ?? "1 hour";
   const subject = "Reset your AgentDash password";
   const text = [
     "Someone (hopefully you) asked to reset your AgentDash password.",
@@ -166,7 +178,7 @@ export function resetPasswordEmailTemplate(input: { resetUrl: string }): {
     "",
     "If you didn't ask for this, you can ignore this email — your password won't change.",
     "",
-    "The link expires in 1 hour for security.",
+    `The link expires in ${lifetime} for security.`,
   ].join("\n");
 
   const html = `
@@ -176,7 +188,7 @@ export function resetPasswordEmailTemplate(input: { resetUrl: string }): {
       <p>Someone (hopefully you) asked to reset your AgentDash password.</p>
       <p><a href="${escapeHtml(input.resetUrl)}" style="display: inline-block; padding: 10px 16px; background: #1f1e1d; color: #fff; text-decoration: none; border-radius: 6px;">Reset password</a></p>
       <p style="font-size: 13px; color: #666;">Or copy this URL: ${escapeHtml(input.resetUrl)}</p>
-      <p style="font-size: 13px; color: #666;">If you didn't ask for this, you can ignore this email — your password won't change. The link expires in 1 hour.</p>
+      <p style="font-size: 13px; color: #666;">If you didn't ask for this, you can ignore this email — your password won't change. The link expires in ${escapeHtml(lifetime)}.</p>
     </body></html>
   `.trim();
 

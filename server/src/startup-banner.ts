@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolvePaperclipConfigPath, resolvePaperclipEnvPath } from "./paths.js";
+import { isAllInterfacesHost } from "@paperclipai/shared";
 import type { BindMode, DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 
 import { parse as parseEnvFileContents } from "dotenv";
@@ -99,7 +100,7 @@ function resolveAgentJwtSecretStatus(
 }
 
 export function printStartupBanner(opts: StartupBannerOptions): void {
-  const baseHost = opts.host === "0.0.0.0" ? "localhost" : opts.host;
+  const baseHost = isAllInterfacesHost(opts.host) ? "localhost" : opts.host;
   const baseUrl = `http://${baseHost}:${opts.listenPort}`;
   const apiUrl = `${baseUrl}/api`;
   const uiUrl = opts.uiMode === "none" ? "disabled" : baseUrl;

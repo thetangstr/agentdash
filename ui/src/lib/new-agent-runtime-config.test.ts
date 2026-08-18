@@ -8,7 +8,7 @@ describe("buildNewAgentRuntimeConfig", () => {
     expect(buildNewAgentRuntimeConfig()).toEqual({
       heartbeat: {
         enabled: false,
-        intervalSec: 300,
+        intervalSec: 1800,
         wakeOnDemand: true,
         cooldownSec: 10,
         maxConcurrentRuns: AGENT_DEFAULT_MAX_CONCURRENT_RUNS,

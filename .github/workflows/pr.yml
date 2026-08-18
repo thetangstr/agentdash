@@ -93,7 +93,9 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        # Feature PRs intentionally omit pnpm-lock.yaml; policy validates that
+        # their manifests resolve and the refresh workflow commits after merge.
+        run: pnpm install --no-frozen-lockfile
 
       - name: Verify deep-interview SKILL.md is in sync with the upstream pin
         # Runs `scripts/sync-skill-md.mjs` (which falls back to the
@@ -105,7 +107,7 @@ jobs:
         run: pnpm verify-skill-md
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm typecheck
 
       - name: Run Hermes onboarding regression lane
         run: pnpm run test:regression:hermes-onboarding
@@ -145,7 +147,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
       - name: Verify MSP launch signoff checks
         run: pnpm run test:launch-signoff
 
@@ -182,7 +184,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Audit production dependencies (blocking)
         # `pnpm audit --audit-level=high --prod` exits non-zero on any
@@ -217,7 +219,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build
         run: pnpm build

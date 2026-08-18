@@ -451,6 +451,7 @@ export type {
   BudgetIncidentResolutionInput,
   CostEvent,
   CostSummary,
+  CostRunActivity,
   IssueCostSummary,
   CostByAgent,
   CostByProviderModel,
@@ -747,9 +748,11 @@ export {
 
 export {
   answerAgentFactSchema,
+  answerAsStewardSchema,
   askAgentFactSchema,
   declineAgentFactSchema,
   type AnswerAgentFact,
+  type AnswerAsSteward,
   type AskAgentFact,
   type DeclineAgentFact,
 } from "./validators/agent-facts.js";
@@ -810,6 +813,7 @@ export {
 export {
   createCompanySchema,
   updateCompanySchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
@@ -867,6 +871,7 @@ export {
   type TransferAgentStewardship,
   createProjectSchema,
   updateProjectSchema,
+  replaceProjectAccessSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   type CreateProject,

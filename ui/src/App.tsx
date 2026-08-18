@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { CloudAccessGate } from "./components/CloudAccessGate";
+import { FirstRunStart } from "./components/FirstRunStart";
 // Dashboard.tsx is left in place (unreferenced) — the dashboard route now renders Overview.
 import { Overview } from "./pages/Overview";
 import { DashboardLive } from "./pages/DashboardLive";
@@ -34,6 +35,7 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { InstanceErrors } from "./pages/InstanceErrors";
 import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
@@ -104,6 +106,12 @@ function boardRoutes() {
       <Route path="company/settings/access" element={<CompanyAccess />} />
       <Route path="company/settings/invites" element={<CompanyInvites />} />
       <Route path="company/settings/health" element={<CompanyHealth />} />
+      {/* O2: the local error sink, instance-admin only. Lives under the
+          settings tree because the router treats the FIRST path segment as a
+          company prefix — a top-level /instance/errors resolves to "no
+          company named instance", which is exactly how the browser
+          walkthrough found this. */}
+      <Route path="company/settings/errors" element={<InstanceErrors />} />
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
       <Route path="skills/*" element={<CompanySkills />} />
@@ -281,19 +289,28 @@ function UnprefixedBoardRedirect() {
 function NoCompaniesStartPage() {
   const { openOnboarding } = useDialogActions();
 
-  return (
-    <div className="mx-auto max-w-xl py-10">
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h1 className="text-xl font-semibold">Create your first company</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Get started by creating a company.
-        </p>
-        <div className="mt-4">
-          <Button onClick={() => openOnboarding()}>New Company</Button>
-        </div>
-      </div>
-    </div>
-  );
+  // MKThink is the first customer, so their brief is the default prose. Any
+  // other instance still gets a working prompt — just a generic description.
+  const brief = `MKThink is a strategy, design and innovation consultancy. We help
+organizations solve complex problems.
+
+I want a Chief of Staff for myself, plus three agents each belonging to one of my
+leads: Delivery (live client project status and commitments at risk), Platform
+(our SharePoint estate and code repositories), and People (recruiting pipeline
+and who is waiting on us).
+
+Set up three goals with tasks under them:
+  1. Monthly board pack, assembled without a fire drill — the Chief assembles it
+     and the other three each contribute their part, attributed.
+  2. SharePoint and repository cleanup — inventory what is stale, then a deletion
+     proposal a human approves. An agent must NEVER delete anything itself.
+  3. Recruiting pipeline that never silently stalls — weekly review of who is
+     waiting on us and which roles block delivery.
+
+No agent may contact a client or a candidate directly; they draft and a human
+sends. No agent reports a number it cannot source.`;
+
+  return <FirstRunStart onCreateManually={() => openOnboarding()} companyBrief={brief} />;
 }
 
 export function App() {
@@ -375,6 +392,42 @@ export function App() {
           <Route path="skills/*" element={<UnprefixedBoardRedirect />} />
           <Route path="settings" element={<LegacySettingsRedirect />} />
           <Route path="settings/*" element={<LegacySettingsRedirect />} />
+          {/* Every board root also answers unprefixed, so a typed or bookmarked
+              URL redirects to the selected company instead of being read as a
+              company code. Without these, /dashboard looked for a company
+              called DASHBOARD and said it could not find one. */}
+          <Route path="my-agent" element={<UnprefixedBoardRedirect />} />
+          <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
+          <Route path="dashboard/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="org" element={<UnprefixedBoardRedirect />} />
+          <Route path="org/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="billing" element={<UnprefixedBoardRedirect />} />
+          <Route path="billing/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="costs" element={<UnprefixedBoardRedirect />} />
+          <Route path="costs/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="goals" element={<UnprefixedBoardRedirect />} />
+          <Route path="goals/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="activity" element={<UnprefixedBoardRedirect />} />
+          <Route path="activity/*" element={<UnprefixedBoardRedirect />} />
+          {/* Explicit, not a splat. React Router ranks a dynamic+static pair
+              (":companyPrefix/settings") above a splat ("company/*"), so the
+              wildcard lost and /company/settings was read as a company called
+              COMPANY. Static segments outrank the dynamic prefix, so these
+              must be spelled out. */}
+          <Route path="company" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/health" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/export/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/import" element={<UnprefixedBoardRedirect />} />
+          <Route path="design-guide" element={<UnprefixedBoardRedirect />} />
+          <Route path="design-guide/*" element={<UnprefixedBoardRedirect />} />
           <Route path="agents" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/new" element={<UnprefixedBoardRedirect />} />
           <Route path="agents/:agentId" element={<UnprefixedBoardRedirect />} />

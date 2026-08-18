@@ -227,3 +227,133 @@ describe("rate-limit middleware (#160)", () => {
     expect(aliceBlocked.status).toBe(429);
   });
 });
+
+/**
+ * The bridge poll must not consume the mutation budget.
+ *
+ * The worker polls every 5 seconds. Over a 15-minute window that is 180
+ * requests against a 200-request ceiling shared with everything else the same
+ * actor does — so a laptop merely being connected spent 90% of its own quota,
+ * and any real work tipped it into 429s. The reported symptom was "the
+ * connection bumps all the time": the poll gets rate limited, the worker looks
+ * disconnected, and nothing in the product explains why.
+ *
+ * The numbers below are deliberate rather than round. If someone later "fixes"
+ * a rate-limit complaint by raising the ceiling, these still fail at whatever
+ * the new poll cadence implies, which is the honest signal.
+ */
+describe("bridge poll is exempt from the mutation limiter", () => {
+  const POLLS_PER_WINDOW = 180; // 15 min / 5 s
+
+  /**
+   * The actor auth.ts actually builds for a bridge credential.
+   *
+   * `type: "none"` is deliberate there — a bridge token must not satisfy any
+   * ordinary guard — and this test previously stubbed `{ type: "agent" }`
+   * instead, a shape production never produces for this route. The exemption
+   * was keyed on type, so the test passed against an actor that could not
+   * exist while every real laptop still collected 429s. Use the real shape.
+   */
+  const BRIDGE_ACTOR = {
+    type: "none",
+    companyId: "c1",
+    bridgeEndpointId: "endpoint-1",
+    source: "bridge_endpoint",
+  };
+
+  function buildBridgeApp(mw: express.RequestHandler, actor: unknown = BRIDGE_ACTOR): Express {
+    const app = express();
+    app.set("trust proxy", true);
+    // The real stack resolves the actor before the limiter.
+    app.use((req, _res, next) => {
+      (req as unknown as { actor: unknown }).actor = actor;
+      next();
+    });
+    app.use(mw);
+    app.post("/bridge/poll", (_req, res) => res.json({ ok: true }));
+    app.post("/bridge/result", (_req, res) => res.json({ ok: true }));
+    app.post("/companies/c1/issues", (_req, res) => res.json({ ok: true }));
+    return app;
+  }
+
+  it("keeps polling past a ceiling that would otherwise stop it", async () => {
+    // Ceiling deliberately BELOW the poll count. At the real 200 this assertion
+    // could not fail — 180 polls never reach 200 — so the test would pass with
+    // or without the exemption and prove nothing.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "50";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    for (let i = 0; i < POLLS_PER_WINDOW; i += 1) {
+      const res = await request(app).post("/bridge/poll");
+      expect(res.status, `poll ${i + 1} of ${POLLS_PER_WINDOW} was rate limited`).toBe(200);
+    }
+  });
+
+  it("leaves the real mutation budget intact after a window of polling", async () => {
+    // Scaled down deliberately. Proving this with 180 polls plus 30 mutations
+    // meant 210 sequential HTTP calls, which turned out to be flaky under full
+    // parallel-suite load ("socket hang up") — a volume problem, not a logic
+    // one. The property is a ratio: polls must not consume the budget that real
+    // work needs. A ceiling of 10 with 20 polls exercises the same relationship
+    // (polls exceed the ceiling on their own) at a tenth of the cost.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "10";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    for (let i = 0; i < 20; i += 1) {
+      await request(app).post("/bridge/poll");
+    }
+    // If polling counted, the budget of 10 is long gone and these all 429.
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      statuses.push((await request(app).post("/companies/c1/issues")).status);
+    }
+    expect(
+      statuses.filter((code) => code === 429).length,
+      "polling ate the mutation budget",
+    ).toBe(0);
+  });
+
+  /**
+   * The regression that made this whole block worthless: an actor with an
+   * ordinary type must NOT be exempt on the poll path. Only an enrolled bridge
+   * endpoint is, and the route rejects everyone else anyway.
+   */
+  it("does not exempt a non-endpoint actor on the poll path", async () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "20";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter(), { type: "agent", agentId: "agent-1" });
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      statuses.push((await request(app).post("/bridge/poll")).status);
+    }
+    expect(
+      statuses.filter((s) => s === 429).length,
+      "an agent-typed actor should not inherit the endpoint exemption",
+    ).toBeGreaterThan(0);
+  });
+
+  it("still limits the bridge calls that actually write", async () => {
+    // /bridge/result and /bridge/decline change state. The exemption is for the
+    // poll only — this is what stops it becoming a hole.
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTDASH_RATE_LIMIT_DISABLED;
+    process.env.AGENTDASH_RATE_LIMIT_API_MAX = "5";
+    const { createDefaultApiRateLimiter } = await loadFactories();
+    const app = buildBridgeApp(createDefaultApiRateLimiter());
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      statuses.push((await request(app).post("/bridge/result")).status);
+    }
+    expect(statuses.filter((s) => s === 429).length, "bridge/result was not limited").toBeGreaterThan(0);
+  });
+});

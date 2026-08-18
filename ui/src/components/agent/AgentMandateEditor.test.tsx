@@ -78,6 +78,28 @@ describe("AgentMandateEditor", () => {
     );
   });
 
+
+  /**
+   * The explainer itself: "Mandate" is product vocabulary, and the page assumed
+   * it was self-evident. A steward meeting this cold must be told it is the
+   * agent's instruction file — the thing that steers what the agent does — in
+   * both branches, editable or not.
+   */
+  it("explains what a mandate is on the editable path too", async () => {
+    mockAgentsApi.instructionsBundle.mockResolvedValue({
+      entryFile: "AGENTS.md",
+      mode: "managed",
+    });
+    mockAgentsApi.instructionsFile.mockResolvedValue({ content: "# Chief" });
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/job description and rulebook/i);
+    expect(text).toMatch(/reads before every piece of work/i);
+    expect(text).toMatch(/what it must never do/i);
+  });
+
   it("explains rather than errors when the bundle is not managed", async () => {
     // The real API always populates entryFile, so `mode` is the only signal
     // that a steward cannot edit here. Keying off entryFile made this branch
@@ -90,7 +112,11 @@ describe("AgentMandateEditor", () => {
     await render();
 
     expect(container.querySelector("textarea")).toBeNull();
-    expect(container.textContent).toContain("administrator configures where instructions live");
+    // Assert the meaning, not the sentence: the steward is told an
+    // administrator controls the location, and the explainer still teaches
+    // what a mandate is even when editing is unavailable here.
+    expect(container.textContent).toMatch(/administrator configures where/i);
+    expect(container.textContent).toMatch(/job description and rulebook/i);
   });
 
   it("surfaces a refused save instead of appearing to succeed", async () => {

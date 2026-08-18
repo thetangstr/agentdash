@@ -13,6 +13,7 @@ import {
 import { agents } from "./agents.js";
 import { approvals } from "./approvals.js";
 import { bridgeTasks } from "./bridge_tasks.js";
+import { authUsers } from "./auth.js";
 import { companies } from "./companies.js";
 
 /**
@@ -120,6 +121,29 @@ export const agentFactRequests = pgTable(
     answeredByAgentId: uuid("answered_by_agent_id").references(() => agents.id, {
       onDelete: "set null",
     }),
+    /**
+     * The person who answered, when a person did.
+     *
+     * `answered_by_agent_id` cannot carry this: a steward answering their own
+     * agent's question is not the agent answering, and recording it as one would
+     * put an agent's name on a figure a human supplied — the precise confusion
+     * the provenance note above exists to prevent.
+     *
+     * Nullable because most answers come from an agent, and set-null on delete
+     * for the same reason the agent reference is: a departed colleague must not
+     * take the record of an answered fact with them. The board pack said what it
+     * said, and who said it was true at the time.
+     */
+    answeredByUserId: text("answered_by_user_id").references(() => authUsers.id, {
+      onDelete: "set null",
+    }),
+    // Deliberately NOT constrained to be present whenever
+    // `answer_source_kind = 'human'`. That constraint seems obviously right and
+    // is wrong: an agent relaying a fact its steward told it answers with
+    // sourceKind "human" and has no user id to give, because the person spoke to
+    // the agent rather than to this system. "Human" describes where the figure
+    // came from, not which route carried it. The steward-answer path sets this
+    // column itself; a relay legitimately leaves it null.
     answeredAt: timestamp("answered_at", { withTimezone: true }),
     declineReason: text("decline_reason"),
     escalatedAt: timestamp("escalated_at", { withTimezone: true }),

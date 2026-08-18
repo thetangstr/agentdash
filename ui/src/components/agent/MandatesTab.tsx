@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCapability } from "../../hooks/useCapability";
+import { DirectionRestricted } from "../DirectionRestricted";
 import { mandatesApi, type Attestation, type Mandate } from "@/api/mandates";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn, formatCents, formatDate } from "@/lib/utils";
@@ -86,6 +88,9 @@ export function MandatesTab({
   agents: MandateAgent[];
 }) {
   const queryClient = useQueryClient();
+  // Read-only until the server answers; an optimistic form can only become a 403.
+  const direction = useCapability(companyId, "direction:set");
+  const canSetDirection = direction.allowed && !direction.isLoading;
 
   const eligibleGrantors = agents.filter((a) => a.id !== agentId);
   const defaultGrantorId =
@@ -180,83 +185,91 @@ export function MandatesTab({
 
   return (
     <div className="max-w-3xl space-y-6">
-      <Card>
-        <CardContent className="space-y-4">
-          <div>
-            <h3 className="text-sm font-semibold text-text-primary">Grant a mandate</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Authorize this agent to attest actions to Clockchain on another agent's behalf.
-            </p>
-          </div>
-
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="mandate-grantor">Grantor</Label>
-                <Select value={grantorAgentId} onValueChange={setGrantorAgentId}>
-                  <SelectTrigger id="mandate-grantor" className="w-full">
-                    <SelectValue placeholder="Select a grantor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {eligibleGrantors.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="mandate-cap">Spend cap (USD)</Label>
-                <Input
-                  id="mandate-cap"
-                  value={dollars}
-                  onChange={(event) => setDollars(event.target.value)}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                />
-              </div>
-
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="mandate-actions">Allowed actions (comma-separated)</Label>
-                <Input
-                  id="mandate-actions"
-                  value={actions}
-                  onChange={(event) => setActions(event.target.value)}
-                  placeholder="e.g. release_payment, attest_invoice"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="mandate-expiry">Expires</Label>
-                <input
-                  id="mandate-expiry"
-                  type="date"
-                  value={expiry}
-                  onChange={(event) => setExpiry(event.target.value)}
-                  className={cn(
-                    "border-border-soft h-9 w-full min-w-0 rounded-md border bg-surface-raised px-3 py-1 text-base text-text-primary shadow-sm transition-[color,box-shadow] outline-none",
-                    "focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200",
-                    "md:text-sm",
-                  )}
-                />
-              </div>
+      {/* Granting a mandate is company direction — it authorises one agent to
+          act for another. Members read the list below; only owner, admin or
+          operator may grant. Offering the form and refusing the submit is the
+          confusion this whole gate exists to remove. */}
+      {canSetDirection ? (
+        <Card>
+          <CardContent className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">Grant a mandate</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Authorize this agent to attest actions to Clockchain on another agent's behalf.
+              </p>
             </div>
 
-            {formError && <p className="text-sm text-destructive">{formError}</p>}
+            <form className="space-y-4" onSubmit={handleSubmit}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="mandate-grantor">Grantor</Label>
+                  <Select value={grantorAgentId} onValueChange={setGrantorAgentId}>
+                    <SelectTrigger id="mandate-grantor" className="w-full">
+                      <SelectValue placeholder="Select a grantor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {eligibleGrantors.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            <Button type="submit" disabled={createMutation.isPending || eligibleGrantors.length === 0}>
-              {createMutation.isPending ? "Granting..." : "Grant mandate"}
-            </Button>
-            {eligibleGrantors.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                No other agents available to act as grantor.
-              </p>
-            )}
-          </form>
-        </CardContent>
-      </Card>
+                <div className="space-y-2">
+                  <Label htmlFor="mandate-cap">Spend cap (USD)</Label>
+                  <Input
+                    id="mandate-cap"
+                    value={dollars}
+                    onChange={(event) => setDollars(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="mandate-actions">Allowed actions (comma-separated)</Label>
+                  <Input
+                    id="mandate-actions"
+                    value={actions}
+                    onChange={(event) => setActions(event.target.value)}
+                    placeholder="e.g. release_payment, attest_invoice"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="mandate-expiry">Expires</Label>
+                  <input
+                    id="mandate-expiry"
+                    type="date"
+                    value={expiry}
+                    onChange={(event) => setExpiry(event.target.value)}
+                    className={cn(
+                      "border-border-soft h-9 w-full min-w-0 rounded-md border bg-surface-raised px-3 py-1 text-base text-text-primary shadow-sm transition-[color,box-shadow] outline-none",
+                      "focus-visible:border-accent-500 focus-visible:ring-2 focus-visible:ring-accent-200",
+                      "md:text-sm",
+                    )}
+                  />
+                </div>
+              </div>
+
+              {formError && <p className="text-sm text-destructive">{formError}</p>}
+
+              <Button type="submit" disabled={createMutation.isPending || eligibleGrantors.length === 0}>
+                {createMutation.isPending ? "Granting..." : "Grant mandate"}
+              </Button>
+              {eligibleGrantors.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No other agents available to act as grantor.
+                </p>
+              )}
+            </form>
+          </CardContent>
+        </Card>
+      ) : (
+        <DirectionRestricted what="mandates" role={direction.membershipRole} />
+      )}
 
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-text-primary">Granted mandates</h3>

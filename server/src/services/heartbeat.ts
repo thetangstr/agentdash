@@ -3,6 +3,8 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { emitSignal } from "../observability/signals.js";
+import { preRunChecks } from "../observability/pre-run-checks.js";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -160,6 +162,8 @@ const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
 const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
+/** The liveness reaper's verdict when it can no longer see a run's child process. */
+const PROCESS_LOST_ERROR_CODE = "process_lost";
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
@@ -2932,6 +2936,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         },
       });
       publishRunLifecyclePluginEvent(updated);
+      // O6 (2026-08-16): the run healer and recovery service already NOTICE
+      // bad endings; this is where anyone gets TOLD. One emission site,
+      // because this is the one place statuses change.
+      if (updated.status === "failed" || updated.status === "timed_out") {
+        emitSignal({
+          kind: updated.status === "failed" ? "run_failed" : "run_timed_out",
+          companyId: updated.companyId,
+          summary: `run ${updated.status}${updated.errorCode ? ` (${updated.errorCode})` : ""}`,
+          detail: {
+            runId: updated.id,
+            agentId: updated.agentId ?? undefined,
+            errorCode: updated.errorCode ?? undefined,
+          },
+        });
+      }
     }
 
     return updated;
@@ -4098,6 +4117,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
     }
 
+    // M3/M4 (2026-08-16): budget and runaway gates, in the same seam as the
+    // blocker and staleness gates above. A refused run is CANCELLED with the
+    // reason, never silently dropped.
+    const preRun = await preRunChecks(db, { companyId: run.companyId, agentId: run.agentId });
+    if (!preRun.allowed) {
+      await setRunStatus(run.id, "cancelled", {
+        finishedAt: new Date(),
+        error: preRun.reason ?? "refused by pre-run checks",
+        errorCode: preRun.errorCode ?? "pre_run_check",
+      });
+      logger.info({ runId: run.id, errorCode: preRun.errorCode }, "claimQueuedRun: refused by pre-run checks");
+      return null;
+    }
+
     const claimedAt = new Date();
     const claimed = await db
       .update(heartbeatRuns)
@@ -4712,14 +4745,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let finalizedRun = await setRunStatus(run.id, "failed", {
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
-        errorCode: "process_lost",
+        errorCode: PROCESS_LOST_ERROR_CODE,
         finishedAt: now,
         resultJson: mergeRunStopMetadataForAgent(
           { adapterType, adapterConfig },
           "failed",
           {
             resultJson: parseObject(run.resultJson),
-            errorCode: "process_lost",
+            errorCode: PROCESS_LOST_ERROR_CODE,
             errorMessage: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
           },
         ),
@@ -5974,22 +6007,43 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
-      if (isHeartbeatRunTerminalStatus(latestRun?.status)) {
+      const adapterExitedCleanly =
+        !adapterResult.timedOut && (adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage;
+      // `process_lost` is the reaper's inference, not an observation: it fires
+      // when the server can no longer see the child, and after a restart that
+      // is a guess. A detached process group routinely outlives the restart,
+      // finishes the work, and reports back here with a real result -- so the
+      // adapter's clean exit is ground truth and supersedes the guess. A
+      // `cancelled` run is an operator decision and is never superseded.
+      const supersedesLivenessGuess =
+        adapterExitedCleanly &&
+        latestRun?.status === "failed" &&
+        latestRun.errorCode === PROCESS_LOST_ERROR_CODE;
+      const adoptedTerminalStatus =
+        isHeartbeatRunTerminalStatus(latestRun?.status) && !supersedesLivenessGuess;
+
+      if (adoptedTerminalStatus) {
         outcome = latestRun.status;
       } else if (adapterResult.timedOut) {
         outcome = "timed_out";
-      } else if ((adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage) {
+      } else if (adapterExitedCleanly) {
         outcome = "succeeded";
       } else {
         outcome = "failed";
       }
+      // When a status is adopted rather than derived, the reason already on the
+      // run is the true one. Falling through to "Adapter failed" here replaced
+      // an honest `process_lost` diagnosis with a generic one that pointed
+      // operators at the adapter instead of at the restart that caused it.
       const runErrorMessage =
         outcome === "cancelled"
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
             : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                adapterResult.errorMessage ??
+                  (adoptedTerminalStatus ? latestRun?.error : null) ??
+                  (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
                 currentUserRedactionOptions,
               );
       const runErrorCode =
@@ -5998,7 +6052,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
             : outcome === "failed"
-              ? (adapterResult.errorCode ?? "adapter_failed")
+              ? (adapterResult.errorCode ??
+                (adoptedTerminalStatus ? latestRun?.errorCode : null) ??
+                "adapter_failed")
               : null;
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;

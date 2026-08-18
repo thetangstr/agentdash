@@ -189,6 +189,110 @@ describe("PATCH /api/companies/:companyId/branding", () => {
     expect(res.body.logoAssetId ?? null).toBeNull();
   });
 
+  /**
+   * A CEO agent may manage the colour and the logo. It may not rename the
+   * company or rewrite its description — that is the company's identity, and
+   * it belongs with the people who set direction.
+   *
+   * Not hypothetical. Probed on the live uat instance with a real CEO-role
+   * agent key: `PATCH /companies/:id {name}` returned 200 and the database read
+   * back "RENAMED BY CEO AGENT", and this route returned 200 for a description
+   * rewrite. The role check was correct; the FIELD LIST was the hole, because
+   * `updateCompanyBrandingSchema` legitimately carries name and description for
+   * human callers and was doing double duty as the agent's boundary.
+   */
+  describe("company identity is not branding", () => {
+    function ceoAgent() {
+      mockAgentService.getById.mockResolvedValue({ id: "agent-1", companyId: "company-1", role: "ceo" });
+      return {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        source: "agent_key",
+        runId: "run-1",
+      };
+    }
+
+    it("refuses a CEO agent renaming the company", async () => {
+      const app = await createApp(ceoAgent());
+      const res = await request(app)
+        .patch("/api/companies/company-1/branding")
+        .send({ name: "RENAMED BY CEO AGENT" });
+
+      expect(res.status).toBe(403);
+      // A boundary must say what the rule is. A bare 400 "Validation error"
+      // reads as a bug, which is the confusion Gate 1 removed elsewhere.
+      expect(String(res.body.error)).toMatch(/cannot change the company's name/i);
+      expect(String(res.body.error)).toMatch(/owner, admin or operator/i);
+      // And the database must not have been touched at all — a refusal that
+      // still writes is the failure mode this whole gate exists for.
+      expect(mockCompanyService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a CEO agent rewriting the description", async () => {
+      const app = await createApp(ceoAgent());
+      const res = await request(app)
+        .patch("/api/companies/company-1/branding")
+        .send({ description: "REWRITTEN BY CEO AGENT" });
+
+      expect(res.status).toBe(403);
+      expect(mockCompanyService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a rename smuggled in beside a legitimate colour change", async () => {
+      // The one that a field-by-field guard misses. `brandColor` is allowed, so
+      // a check that stops at "is any field permitted" lets the name through
+      // with it.
+      const app = await createApp(ceoAgent());
+      const res = await request(app)
+        .patch("/api/companies/company-1/branding")
+        .send({ brandColor: "#123456", name: "RENAMED BY CEO AGENT" });
+
+      expect(res.status).toBe(403);
+      expect(mockCompanyService.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a CEO agent renaming via PATCH /companies/:id too", async () => {
+      // The route the live probe hit first. Two doors to the same field; one
+      // guarded is not guarded.
+      mockCompanyService.getById.mockResolvedValue(createCompany());
+      const app = await createApp(ceoAgent());
+      const res = await request(app)
+        .patch("/api/companies/company-1")
+        .send({ name: "RENAMED BY CEO AGENT" });
+
+      expect(res.status).toBe(403);
+      expect(mockCompanyService.update).not.toHaveBeenCalled();
+    });
+
+    it("still lets a CEO agent set the colour via PATCH /companies/:id", async () => {
+      // Control: the route is not simply closed to agents.
+      mockCompanyService.getById.mockResolvedValue(createCompany());
+      mockCompanyService.update.mockResolvedValue(createCompany());
+      const app = await createApp(ceoAgent());
+      const res = await request(app)
+        .patch("/api/companies/company-1")
+        .send({ brandColor: "#123456" });
+
+      expect(res.status).toBe(200);
+    });
+
+    it("still lets a board user rename the company here", async () => {
+      // The control case. Renaming is not forbidden — it is forbidden TO AN
+      // AGENT. Without this a route that refused everyone would pass above.
+      const company = createCompany();
+      mockCompanyService.update.mockResolvedValue({ ...company, name: "MKThink" });
+      const app = await createApp({ type: "board", userId: "user-1", source: "local_implicit" });
+
+      const res = await request(app)
+        .patch("/api/companies/company-1/branding")
+        .send({ name: "MKThink" });
+
+      expect(res.status).toBe(200);
+      expect(mockCompanyService.update).toHaveBeenCalledWith("company-1", { name: "MKThink" });
+    });
+  });
+
   it("rejects non-branding fields in the request body", async () => {
     const app = await createApp({
       type: "board",

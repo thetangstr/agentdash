@@ -54,6 +54,20 @@ export function NewAgentDialog() {
 
   const ceoAgent = (agents ?? []).find((a) => a.role === "ceo");
 
+  /**
+   * On an empty workspace there is nobody to delegate to, and offering it
+   * anyway is a dead end: "Ask the CEO to create a new agent" files an issue
+   * with `assigneeAgentId: undefined`, so it lands unassigned and no agent
+   * ever picks it up. Nothing errors — the user simply gets a task that sits
+   * there forever, which is the worst possible first minute in a new
+   * workspace.
+   *
+   * The delegation path is genuinely the better one once a CoS exists, so it
+   * stays the default. It is only skipped while there is no agent at all,
+   * which is exactly the case where it cannot work.
+   */
+  const hasAnyAgent = (agents ?? []).length > 0;
+
   // Build the adapter grid from the UI registry merged with display metadata.
   // This automatically includes external/plugin adapters.
   const adapterGrid = useMemo(() => {
@@ -135,7 +149,7 @@ export function NewAgentDialog() {
         </div>
 
         <div className="p-6 space-y-6">
-          {!showAdvancedCards ? (
+          {!showAdvancedCards && hasAnyAgent ? (
             <>
               {/* Recommendation */}
               <div className="text-center space-y-3">

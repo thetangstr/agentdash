@@ -531,19 +531,29 @@ export const COMPANY_MEMBERSHIP_ROLES = [
 ] as const;
 export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
 
-export const HUMAN_COMPANY_MEMBERSHIP_ROLES = [
-  "owner",
-  "admin",
-  "operator",
-  "viewer",
-] as const;
+/**
+ * Exactly two human roles, decided 2026-08-16: `admin` sets direction and can
+ * change anything; `member` does the work and owns what they create.
+ *
+ * The strings in LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES existed before the
+ * collapse and may still appear in stored rows, invite payloads, and older
+ * clients. They are accepted on read and normalized away by
+ * `normalizeHumanRole` — never written back, never compared against directly.
+ * `owner` folds into `admin`; `operator` and `viewer` fold into `member`.
+ * Note the viewer→member mapping is a power UPGRADE (viewer was read-only
+ * everywhere): measured before shipping, the only viewer rows in existence
+ * were uat test users.
+ */
+export const HUMAN_COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
 export type HumanCompanyMembershipRole = (typeof HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
 
+export const LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES = ["owner", "operator", "viewer"] as const;
+export type LegacyHumanCompanyMembershipRole =
+  (typeof LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
+
 export const HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS: Record<HumanCompanyMembershipRole, string> = {
-  owner: "Owner",
   admin: "Admin",
-  operator: "Operator",
-  viewer: "Viewer",
+  member: "Member",
 };
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;
@@ -563,6 +573,17 @@ export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
 export const PERMISSION_KEYS = [
   "agents:create",
+  /**
+   * Create and edit your OWN projects, without company-direction authority.
+   *
+   * Added because the role matrix had no way to express what a colleague
+   * actually needs. Project creation was gated on `assertCanSetCompanyDirection`
+   * — owner, admin or operator — so the only way to let someone start a project
+   * was to also let them rewrite the company's goals. `viewer` could do neither.
+   *
+   * Direction stays where it was. This grants the work, not the say-so.
+   */
+  "projects:create",
   "environments:manage",
   "users:invite",
   "users:manage_permissions",

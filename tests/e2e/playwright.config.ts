@@ -15,7 +15,7 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   // These suites target dedicated multi-user configurations/ports and are
   // intentionally not part of the default local_trusted e2e run.
-  testIgnore: ["multi-user.spec.ts", "multi-user-authenticated.spec.ts"],
+  testIgnore: ["multi-user.spec.ts", "multi-user-authenticated.spec.ts", "uat-*.spec.ts"],
   timeout: 60_000,
   retries: 0,
   use: {
@@ -79,6 +79,15 @@ export default defineConfig({
       // shape, not the adapter-environment probe.
       AGENTDASH_ADAPTER_ENV_BYPASS:
         process.env.AGENTDASH_ADAPTER_ENV_BYPASS ?? "true",
+      // The specs read PAPERCLIP_E2E_SKIP_LLM from the TEST process to decide
+      // which assertions to make; dispatchLLM reads it from the SERVER process.
+      // This was never passed through, so a spec could take its skip-mode
+      // branch while the server underneath tried a real provider call — which
+      // is exactly what happened: onboarding-deep-interview failed with
+      // "MINIMAX_API_KEY is not set" while believing it was in stub mode.
+      // Default the two to the same value so they cannot disagree.
+      PAPERCLIP_E2E_SKIP_LLM:
+        process.env.PAPERCLIP_E2E_SKIP_LLM ?? "true",
     },
   },
   outputDir: "./test-results",

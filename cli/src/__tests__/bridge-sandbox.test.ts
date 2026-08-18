@@ -129,11 +129,12 @@ describe("buildSandboxProfile", () => {
     expect(profile).not.toContain("443");
   });
 
-  it("emits the 443 allow under the direct policy and drops the loopback lines", () => {
+  it("emits the 443 allow and local AgentDash callback under the direct policy", () => {
     const profile = buildSandboxProfile({ ...base, egress: "direct" });
     expect(profile).toContain("(deny network*)");
     expect(profile).toContain('(allow network-outbound (remote ip "*:443"))');
-    expect(profile).not.toContain('(remote ip "localhost:*")');
+    expect(profile).toContain('(allow network-outbound (remote ip "localhost:*"))');
+    expect(profile).toContain('(allow network-bind    (local  ip "localhost:*"))');
   });
 
   it("allows DNS under the direct policy, without which the 443 allow does nothing", () => {

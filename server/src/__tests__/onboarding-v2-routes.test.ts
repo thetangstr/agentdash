@@ -904,9 +904,12 @@ describe("POST /api/onboarding/setup-adapter + GET /adapter-status", () => {
     const app = buildApp({ type: "board", userId: "u1" });
     const res = await request(app).get("/api/onboarding/adapter-status");
     expect(res.status).toBe(200);
-    expect(res.body.status).toMatchObject({ adapter: "claude_api", ready: false });
+    // minimax, matching dispatchLLM's default. These two disagreed: this surface
+    // reported claude_api while dispatch actually routed to minimax, so an
+    // unconfigured install described a provider it would never use.
+    expect(res.body.status).toMatchObject({ adapter: "minimax", ready: false });
     expect(res.body.options.map((o: { preset: string }) => o.preset).sort()).toEqual(
-      ["claude", "gemini", "openai", "stub"],
+      ["claude", "gemini", "hermes", "minimax", "openai", "stub"],
     );
   });
 

@@ -19,6 +19,18 @@ const BOARD_ROUTE_ROOTS = new Set([
   "inbox",
   "u",
   "design-guide",
+  // Missing here meant the sidebar's own "My Agent" link was broken.
+  //
+  // A root that is not in this set is assumed to BE a company prefix, so
+  // applyCompanyPrefix looked at "/my-agent", concluded the path was already
+  // prefixed with a company called MY-AGENT, and returned it unprefixed. The
+  // link then fell through to the :companyPrefix route, which reported
+  // "No company matches prefix MY-AGENT" — an error about a company, for a
+  // page that has nothing to do with one.
+  //
+  // Anything added under boardRoutes() needs an entry here, or it silently
+  // becomes a company code.
+  "my-agent",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set(["auth", "invite", "board-claim", "cli-auth", "docs", "instance"]);

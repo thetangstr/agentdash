@@ -1,0 +1,110 @@
+name: Publish agentdash-connect
+
+# Publishing this package took five rounds of credential trouble by hand: a gh
+# token the SSH session could not read out of the keychain, an npm token that
+# enabling 2FA silently revoked, npm requiring 2FA for every publish regardless
+# of account settings, and a token pasted from the wrong machine. Every one of
+# those recurs on a box sitting unattended in a client's office.
+#
+# Trusted publishing removes the category rather than the symptom: npm verifies
+# this workflow's OIDC identity, so there is no token on the Mac Mini, none on a
+# laptop, nothing to paste, rotate, or leak. Releases happen by pushing a tag.
+#
+# One-time setup on npmjs.com, on the package page for `agentdash-connect`:
+#   Settings -> Trusted Publisher -> GitHub Actions
+#     Organization or user: thetangstr
+#     Repository:           agentdash
+#     Workflow filename:    publish-connect.yml
+#     Environment:          (leave blank)
+# Once that is saved, delete the publish token from ~/.npmrc on the Mini.
+
+on:
+  push:
+    tags:
+      # Scoped to this package so tagging a server release does not republish it.
+      - "agentdash-connect-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and verify without publishing"
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # `id-token: write` is what mints the OIDC token npm checks. Without it
+      # the publish falls back to looking for a credential and fails.
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/connect
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing needs npm 11.5.1 or newer; the version bundled with
+      # setup-node lags behind and fails with a bare 403 that reads like a
+      # permissions problem rather than an old client.
+      - name: Use an npm that understands trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dev dependencies
+        # The package itself has zero runtime dependencies; this is only vitest.
+        run: npm install --no-package-lock
+
+      - name: Test
+        run: npx vitest run --config vitest.config.mjs
+
+      - name: Verify the tag matches the version being published
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#agentdash-connect-v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag says $TAG_VERSION but package.json says $PKG_VERSION." >&2
+            echo "Publishing these out of step puts a version on npm that no tag describes." >&2
+            exit 1
+          fi
+          echo "tag and package.json agree on $PKG_VERSION"
+
+      - name: Check this version is not already published
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "agentdash-connect@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "agentdash-connect@$PKG_VERSION is already on the registry." >&2
+            echo "npm versions are immutable — bump the version instead." >&2
+            exit 1
+          fi
+          echo "$PKG_VERSION is unpublished"
+
+      - name: Pack and show exactly what would ship
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        # No NODE_AUTH_TOKEN: the OIDC identity above is the credential.
+        run: npm publish
+
+      - name: Confirm the registry serves it
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          for attempt in 1 2 3 4 5; do
+            if npm view "agentdash-connect@$PKG_VERSION" version >/dev/null 2>&1; then
+              echo "agentdash-connect@$PKG_VERSION is live"
+              exit 0
+            fi
+            echo "not visible yet, retrying ($attempt/5)"
+            sleep 10
+          done
+          echo "Published, but the registry never served it back." >&2
+          exit 1

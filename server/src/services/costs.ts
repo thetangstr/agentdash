@@ -1,7 +1,8 @@
 import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
-import { activityLog, agents, companies, costEvents, issues, projects } from "@paperclipai/db";
+import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
+import type { HeartbeatRunStatus } from "@paperclipai/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
 
@@ -9,6 +10,17 @@ export interface CostDateRange {
   from?: Date;
   to?: Date;
 }
+
+/**
+ * Pinned to the shared vocabulary rather than written out as literals.
+ *
+ * `HEARTBEAT_RUN_STATUSES` is queued | scheduled_retry | running | succeeded |
+ * failed | cancelled | timed_out. "completed" is NOT one of them — it belongs
+ * to `RUN_LIVENESS_STATES`, a different column — and filtering on it returned
+ * 0 successes out of 73 real runs on the uat instance.
+ */
+const SUCCEEDED_STATUS: HeartbeatRunStatus = "succeeded";
+const FAILED_STATUSES: HeartbeatRunStatus[] = ["failed", "timed_out"];
 
 const METERED_BILLING_TYPE = "metered_api";
 const SUBSCRIPTION_BILLING_TYPES = ["subscription_included", "subscription_overage"] as const;
@@ -127,11 +139,92 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           ? (spendCents / company.budgetMonthlyCents) * 100
           : 0;
 
+      /**
+       * Has this company EVER recorded a cost event, ignoring the date range?
+       *
+       * Without this, an empty result is ambiguous in the most damaging
+       * direction: "nothing was spent this month" and "we have never been able
+       * to measure spend" both arrive as 0, and the dashboard renders a
+       * confident $0.00 for both.
+       *
+       * They are not the same claim. On this deployment the second is true --
+       * the local Hermes adapter emits no token counts, so nothing downstream
+       * can compute a cost -- and telling an owner they spent nothing would be
+       * the most damaging thing this product could say to someone deciding
+       * whether to trust it with money.
+       *
+       * Deliberately unbounded by `range`: the question is whether metering
+       * works at all, not whether this window happened to be quiet.
+       */
+      const [{ everMeasured }] = await db
+        .select({ everMeasured: sql<number>`count(*)` })
+        .from(costEvents)
+        .where(eq(costEvents.companyId, companyId));
+
       return {
         companyId,
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        measured: Number(everMeasured) > 0,
+      };
+    },
+
+    /**
+     * What the costs page can say honestly while spend is unmeasured.
+     *
+     * Runs and their wall-clock ARE recorded, completely — every row on both
+     * live instances has both `startedAt` and `finishedAt`. A page that shows
+     * only "Not measured" invites the reading that nothing is happening; this
+     * is the evidence that something is.
+     *
+     * Note what is NOT here: model and provider. `heartbeat_runs` has no such
+     * column, so those are as unavailable as the token counts, and inventing
+     * them from the agent's configured adapter would be a guess about what
+     * actually ran.
+     */
+    runActivity: async (companyId: string, range: CostDateRange = {}) => {
+      const conditions = [
+        eq(heartbeatRuns.companyId, companyId),
+        isNotNull(heartbeatRuns.startedAt),
+        isNotNull(heartbeatRuns.finishedAt),
+      ];
+      if (range.from) conditions.push(gte(heartbeatRuns.startedAt, range.from));
+      if (range.to) conditions.push(lte(heartbeatRuns.startedAt, range.to));
+
+      const seconds = sql`extract(epoch from (${heartbeatRuns.finishedAt} - ${heartbeatRuns.startedAt}))`;
+      const [row] = await db
+        .select({
+          totalRuns: sql<number>`count(*)::int`,
+          // Read off the shared constants, not string literals. The first
+          // version of this filtered on 'completed' and returned 0 of 73 on a
+          // live instance whose runs are all 'succeeded' — 'completed' is a
+          // RUN_LIVENESS_STATE, a different column entirely. A literal here is
+          // silently wrong; a renamed constant breaks the build.
+          succeededRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} = ${SUCCEEDED_STATUS})::int`,
+          // A timeout is a failure the owner cares about. `cancelled` is
+          // neither — somebody stopped it on purpose.
+          failedRuns: sql<number>`count(*) filter (where ${heartbeatRuns.status} in (${sql.join(FAILED_STATUSES.map((status) => sql`${status}`), sql`, `)}))::int`,
+          totalSeconds: sql<number>`coalesce(sum(${seconds}), 0)::double precision`,
+          medianSeconds: sql<number | null>`percentile_cont(0.5) within group (order by ${seconds})`,
+          p90Seconds: sql<number | null>`percentile_cont(0.9) within group (order by ${seconds})`,
+          lastRunAt: sql<Date | null>`max(${heartbeatRuns.finishedAt})`,
+        })
+        .from(heartbeatRuns)
+        .where(and(...conditions));
+
+      const totalRuns = Number(row?.totalRuns ?? 0);
+      return {
+        companyId,
+        totalRuns,
+        succeededRuns: Number(row?.succeededRuns ?? 0),
+        failedRuns: Number(row?.failedRuns ?? 0),
+        totalSeconds: Number(row?.totalSeconds ?? 0),
+        // Null rather than 0 when there is nothing to average. A zero here
+        // would be the same false-confidence bug this endpoint exists beside.
+        medianSeconds: totalRuns > 0 && row?.medianSeconds != null ? Number(row.medianSeconds) : null,
+        p90Seconds: totalRuns > 0 && row?.p90Seconds != null ? Number(row.p90Seconds) : null,
+        lastRunAt: row?.lastRunAt ?? null,
       };
     },
 

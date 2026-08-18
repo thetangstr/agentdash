@@ -2,8 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -31,6 +31,14 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
+import {
+  CONNECT_CODE_MAX_RETRIES,
+  CONNECT_CODE_TTL_MS,
+  createConnectCode,
+  formatConnectCode,
+  hashConnectCode,
+  isConnectCodeHashCollisionError,
+} from "../lib/connect-codes.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import {
   freeTierCapExceededPayload,
@@ -53,9 +61,10 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { logger } from "../middleware/logger.js";
 import {
   assertHostWorkspaceCommandAuthority,
   collectAgentAdapterWorkspaceCommandPaths,
@@ -511,6 +520,14 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
+      // Every active human member may create agents — decided 2026-08-16
+      // ("they can create their own agents if they want"). Deliberately a
+      // role check and NOT an implicit `agents:create` grant: that permission
+      // key doubles as the agent-ADMINISTRATOR predicate across governance,
+      // connectors and stewardship, and granting it to members was measured
+      // to open all of them. Creation is role-given; administration stays a
+      // grant.
+      if (actorHumanRole(req, companyId) !== null) return null;
       const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
       if (!allowed) {
         throw forbidden(
@@ -717,7 +734,21 @@ export function agentRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    if (actorAgent.id === targetAgent.id) return "agent";
+    if (actorAgent.id === targetAgent.id) {
+      // Self-update is allowed, but not of the things that bound it. Verified
+      // live: an agent PATCHed its own budgetMonthlyCents from 0 to 99,999,999
+      // and got 200. The spend cap is the brake; an agent that can release its
+      // own brake has no cap. `reportsTo` goes with it — rewriting your own
+      // chain of command is the same move.
+      for (const field of ["budgetMonthlyCents", "reportsTo"] as const) {
+        if (req.body && Object.prototype.hasOwnProperty.call(req.body, field)) {
+          throw forbidden(
+            `An agent cannot change its own ${field}. Ask an owner, admin or operator.`,
+          );
+        }
+      }
+      return "agent";
+    }
     if (actorAgent.role === "ceo") return "agent";
     const allowedByGrant = await access.hasPermission(
       targetAgent.companyId,
@@ -1151,8 +1182,14 @@ export function agentRoutes(
       return (updated as T | null) ?? { ...agent, adapterConfig: nextAdapterConfig };
     }
 
-    const files = input?.files
-      ?? await loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(agent.role));
+    const defaultFiles = await loadDefaultAgentInstructionsBundle(
+      resolveDefaultAgentInstructionsBundleRole(agent.role),
+    );
+    // A caller-supplied AGENTS.md customizes the mandate; it does not replace
+    // the rest of the managed bundle. The default AGENTS.md references the
+    // heartbeat, soul, and tools files, and onboarding must preserve those
+    // supporting instructions while allowing explicit files to override them.
+    const files = { ...defaultFiles, ...(input?.files ?? {}) };
     const materialized = await instructions.materializeManagedBundle(
       agent,
       files,
@@ -2121,6 +2158,9 @@ export function agentRoutes(
       instructionsBundle,
       sourceIssueId: _sourceIssueId,
       sourceIssueIds: _sourceIssueIds,
+      // Defaults FALSE — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why environment preflight
+      // stays opt-in, and why configuration completeness is enforced instead.
       requireHarnessPreflight,
       ...hireInput
     } = req.body;
@@ -2192,6 +2232,10 @@ export function agentRoutes(
         status,
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;
@@ -2326,6 +2370,9 @@ export function agentRoutes(
     const {
       desiredSkills: requestedDesiredSkills,
       instructionsBundle,
+      // Defaults FALSE — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why environment preflight
+      // stays opt-in, and why configuration completeness is enforced instead.
       requireHarnessPreflight,
       ...createInput
     } = req.body;
@@ -2387,6 +2434,10 @@ export function agentRoutes(
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;
@@ -2418,6 +2469,43 @@ export function agentRoutes(
       agent.id,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+
+    // Make the creator this agent's steward, if they are not already stewarding
+    // one.
+    //
+    // Creating an agent used to leave you with no way to RUN it. The API key
+    // and the "work with it from your own terminal" prompts live on the My
+    // Agent page, `getMyAgent` returns only the agent you steward, and creation
+    // never wrote a stewardship row -- so a new admin created their first agent
+    // and then found nothing anywhere in the UI that would connect them to it.
+    // Observed on a client's own instance the day they set it up.
+    //
+    // Only when the creator has none. Stewardship is deliberately 1:1 in both
+    // directions (`assign` rejects a second one with a 409), so this cannot
+    // mean "you steward everything you create" -- it means the FIRST agent you
+    // make is yours to run, which is the case where being stranded actually
+    // happens. Later agents are paired deliberately, which is the point of the
+    // model.
+    //
+    // Best-effort: a failure here must not fail the creation. The agent exists
+    // and is valid without a steward; someone can pair it afterwards.
+    if (req.actor.type === "board" && req.actor.userId) {
+      try {
+        const existing = await stewardships.activeByUser(companyId, req.actor.userId);
+        if (!existing) {
+          await stewardships.assign(companyId, {
+            agentId: agent.id,
+            userId: req.actor.userId,
+            assignedByUserId: req.actor.userId,
+          });
+        }
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id, userId: req.actor.userId },
+          "[agents] could not auto-assign stewardship to the creator",
+        );
+      }
+    }
 
     if (agent.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(
@@ -3157,6 +3245,86 @@ export function agentRoutes(
     });
 
     res.status(201).json(key);
+  });
+
+  /**
+   * Mint a short, single-use code that pairs one machine with this agent.
+   *
+   * This is the thing a steward hands to a colleague instead of a raw agent
+   * key. Same access check as minting a key, because it *is* minting a key —
+   * just deferred, scoped to one device, and worthless ten minutes from now.
+   *
+   * Any unredeemed codes for this agent are revoked first. Two live codes for
+   * one agent means a screen showing a stale one still works, which is exactly
+   * the confusion this flow exists to remove.
+   */
+  router.post("/agents/:id/connect-codes", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await getAccessibleAgent(req, res, id);
+    if (!agent) return;
+
+    if (agent.status === "terminated" || agent.status === "pending_approval") {
+      res.status(409).json({ error: "This agent cannot be connected to yet." });
+      return;
+    }
+
+    const now = new Date();
+    await db
+      .update(agentConnectCodes)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(agentConnectCodes.agentId, agent.id),
+          isNull(agentConnectCodes.redeemedAt),
+          isNull(agentConnectCodes.revokedAt),
+        ),
+      );
+
+    // Retry on hash collision the way invite tokens do. It will not happen;
+    // silently handing back a code that belongs to another agent, if it ever
+    // did, would be a cross-tenant credential leak.
+    let code: string | null = null;
+    let expiresAt: Date | null = null;
+    for (let attempt = 0; attempt < CONNECT_CODE_MAX_RETRIES; attempt += 1) {
+      const candidate = createConnectCode();
+      const candidateExpiry = new Date(Date.now() + CONNECT_CODE_TTL_MS);
+      try {
+        await db.insert(agentConnectCodes).values({
+          companyId: agent.companyId,
+          agentId: agent.id,
+          codeHash: hashConnectCode(candidate),
+          expiresAt: candidateExpiry,
+          createdByUserId: req.actor.userId ?? null,
+        });
+        code = candidate;
+        expiresAt = candidateExpiry;
+        break;
+      } catch (err) {
+        if (!isConnectCodeHashCollisionError(err)) throw err;
+      }
+    }
+
+    if (!code || !expiresAt) {
+      res.status(500).json({ error: "Could not create a connect code. Try again." });
+      return;
+    }
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "agent.connect_code_created",
+      entityType: "agent",
+      entityId: agent.id,
+      details: { expiresAt: expiresAt.toISOString() },
+    });
+
+    res.status(201).json({
+      code: formatConnectCode(code),
+      expiresAt: expiresAt.toISOString(),
+      expiresInSeconds: Math.round(CONNECT_CODE_TTL_MS / 1000),
+    });
   });
 
   router.delete("/agents/:id/keys/:keyId", async (req, res) => {

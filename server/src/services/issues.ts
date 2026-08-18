@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { clearIssueDependents } from "./issue-dependents.js";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -70,19 +71,40 @@ function assertTransition(from: string, to: string) {
   }
 }
 
+/**
+ * Stamp the moment an issue ENTERS a state, not every time it is touched while
+ * in it.
+ *
+ * `completedAt` and `cancelledAt` were set unconditionally whenever an update
+ * carried the matching status, while `startedAt` beside them was guarded. So
+ * any edit to an already-done issue — a label, a description, a probe that
+ * echoes the status back — rewrote when the work finished.
+ *
+ * Observed on the UAT instance: two issues completed on 2026-08-14 at 16:47
+ * showed 2026-08-15 14:46 after someone PATCHed them, and nothing in the
+ * response suggested a timestamp had moved. Completion times feed "how long did
+ * this take" and anything cycle-shaped, so silently rewriting them corrupts the
+ * record while looking like a successful edit.
+ *
+ * A missing timestamp is still filled in, so an issue that somehow reached
+ * `done` without one is repaired rather than left blank.
+ */
 function applyStatusSideEffects(
   status: string | undefined,
   patch: Partial<typeof issues.$inferInsert>,
+  existing?: { status?: string | null; startedAt?: Date | null; completedAt?: Date | null; cancelledAt?: Date | null } | null,
 ): Partial<typeof issues.$inferInsert> {
   if (!status) return patch;
 
-  if (status === "in_progress" && !patch.startedAt) {
+  const entering = !existing || existing.status !== status;
+
+  if (status === "in_progress" && !patch.startedAt && (entering || !existing?.startedAt)) {
     patch.startedAt = new Date();
   }
-  if (status === "done") {
+  if (status === "done" && (entering || !existing?.completedAt)) {
     patch.completedAt = new Date();
   }
-  if (status === "cancelled") {
+  if (status === "cancelled" && (entering || !existing?.cancelledAt)) {
     patch.cancelledAt = new Date();
   }
   return patch;
@@ -106,6 +128,11 @@ function buildReusedExecutionWorkspaceConfigPatchFromIssueSettings(
 }
 
 export interface IssueFilters {
+  /**
+   * A5: the actor's project-visibility condition from routes/visibility.ts.
+   * Undefined for admins. The service composes it; it never derives it.
+   */
+  visibleWhere?: SQL;
   status?: string;
   assigneeAgentId?: string;
   participantAgentId?: string;
@@ -2152,6 +2179,7 @@ export function issueService(db: Db) {
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
+      if (filters?.visibleWhere) conditions.push(filters.visibleWhere);
       const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
         ? Math.max(1, Math.floor(filters.limit))
         : undefined;
@@ -3095,7 +3123,7 @@ export function issueService(db: Db) {
         await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
       }
 
-      applyStatusSideEffects(issueData.status, patch);
+      applyStatusSideEffects(issueData.status, patch, existing);
       if (issueData.status && issueData.status !== "done") {
         patch.completedAt = null;
       }
@@ -3239,6 +3267,10 @@ export function issueService(db: Db) {
           .select({ documentId: issueDocuments.documentId })
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
+
+        // Every dependent that would block the delete below. Shared with the
+        // project-delete path so the two cannot drift apart.
+        await clearIssueDependents(tx, sql`= ${id}`);
 
         const removedIssue = await tx
           .delete(issues)
@@ -3718,6 +3750,24 @@ export function issueService(db: Db) {
           const comment = rows[0] ?? null;
           return comment ? redactIssueComment(comment, censorUsernameInLogs) : null;
         })),
+
+    /**
+     * The body of the newest comment this agent left on this issue.
+     *
+     * Exists so a status change can be checked against what the agent just
+     * said. Agents post the comment and set the status in two separate calls,
+     * so the comment is not in hand when the update arrives — see
+     * `resolveAgentClosingStatus` in issue-blocked-declaration.ts for why that
+     * disagreement matters.
+     */
+    latestAgentCommentBody: (issueId: string, agentId: string): Promise<string | null> =>
+      db
+        .select({ body: issueComments.body })
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, issueId), eq(issueComments.authorAgentId, agentId)))
+        .orderBy(desc(issueComments.createdAt))
+        .limit(1)
+        .then((rows) => rows[0]?.body ?? null),
 
     removeComment: async (commentId: string) => {
       const currentUserRedactionOptions = {

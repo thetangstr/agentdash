@@ -10,6 +10,8 @@ import { instanceSettingsService } from "../services/instance-settings.js";
 import { companyService } from "../services/companies.js";
 import { readAdapterStatus } from "../services/adapter-presets.js";
 import { serverVersion } from "../version.js";
+import { computeHealthChecks, type HealthChecks } from "../observability/health-checks.js";
+import { alerterStatus } from "../observability/alerter.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
@@ -35,6 +37,28 @@ function hasDevServerStatusToken(providedToken: string | undefined) {
   const provided = Buffer.from(token);
   if (expected.length !== provided.length) return false;
   return timingSafeEqual(expected, provided);
+}
+
+/**
+ * The address this instance calls itself, when its operator has said one.
+ *
+ * Exposed so the UI can generate harness configuration against a stable host
+ * rather than `window.location.origin`. That origin is whatever URL happened to
+ * be in the browser when someone pressed Copy — so a command copied from a LAN
+ * address bakes that address into `~/.codex/config.toml` on a colleague's
+ * laptop, and silently stops working the moment they are on a different
+ * network. A config that persists on someone else's machine is the worst place
+ * for that footgun.
+ *
+ * Not a secret: it is by definition the address people are told to use, and
+ * this endpoint already reports deployment mode and bootstrap state. Absent
+ * when unset, and callers fall back to their own origin.
+ */
+function configuredPublicBaseUrl(): string | undefined {
+  const raw =
+    process.env.PAPERCLIP_PUBLIC_URL?.trim()
+    || process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL?.trim();
+  return raw ? raw.replace(/\/+$/, "") : undefined;
 }
 
 export function healthRoutes(
@@ -71,8 +95,12 @@ export function healthRoutes(
       return;
     }
 
+    // O4 (2026-08-16): checks that can go DEGRADED — disk headroom, backup
+    // freshness, stuck runs — instead of "ok" meaning only "the process is
+    // up". A health check that cannot go red is decoration.
+    let checks: HealthChecks;
     try {
-      await db.execute(sql`SELECT 1`);
+      checks = await computeHealthChecks(db);
     } catch (error) {
       logger.warn({ err: error }, "Health check database probe failed");
       res.status(503).json({
@@ -146,7 +174,7 @@ export function healthRoutes(
 
     if (!exposeFullDetails) {
       res.json({
-        status: "ok",
+        status: checks.status,
         deploymentMode: opts.deploymentMode,
         bootstrapStatus,
         bootstrapInviteActive,
@@ -154,13 +182,19 @@ export function healthRoutes(
         instanceHasCompany,
         adapterReady: adapter.ready,
         adapterPreset: adapter.preset,
+        ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
         ...(devServer ? { devServer } : {}),
       });
       return;
     }
 
     res.json({
-      status: "ok",
+      status: checks.status,
+      db: checks.db,
+      disk: checks.disk,
+      backup: checks.backup,
+      runs: checks.runs,
+      alerter: alerterStatus(),
       version: serverVersion,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
@@ -172,6 +206,7 @@ export function healthRoutes(
       adapterReady: adapter.ready,
       adapterPreset: adapter.preset,
       adapterReason: adapter.reason,
+      ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },

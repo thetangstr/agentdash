@@ -11,7 +11,7 @@ const OWNER_PASSWORD = "paperclip-owner-password";
 const INVITED_PASSWORD = "paperclip-invited-password";
 const AUTH_SIGN_IN_HEADING = "Welcome back";
 const AUTH_SIGN_UP_HEADING = "Create your workspace";
-const BOOTSTRAP_INVITE_HEADING = "Set up Paperclip";
+const BOOTSTRAP_INVITE_HEADING = "Set up AgentDash";
 
 type HumanUser = {
   name: string;
@@ -27,7 +27,7 @@ type CompanySummary = {
 
 type CompanyMember = {
   id: string;
-  membershipRole: "owner" | "admin" | "operator" | "viewer";
+  membershipRole: "owner" | "admin" | "member";
   status: "pending" | "active" | "suspended";
   user: { id: string; email: string | null; name: string | null } | null;
 };
@@ -136,13 +136,28 @@ async function createAuthenticatedInvite(page: Page, companyPrefix: string) {
   await expect(page.getByRole("heading", { name: "Company Invites" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("radio", { name: /Operator/ }).check();
+  await expect(page.getByRole("radio", { name: /^Member\b/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Auto-approve on accept/ })).toBeChecked();
   await page.getByRole("button", { name: "Create invite" }).click();
   await expect(page.getByText("Latest invite link")).toBeVisible({ timeout: 20_000 });
-  const inviteUrlButton = page.getByRole("button", { name: /\/invite\// }).first();
-  await expect(inviteUrlButton).toBeVisible({ timeout: 20_000 });
-  const inviteUrl = (await inviteUrlButton.textContent())?.trim() ?? "";
+  const inviteUrlField = page.getByTestId("latest-invite-url");
+  await expect(inviteUrlField).toBeVisible({ timeout: 20_000 });
+  const inviteUrl = (await inviteUrlField.textContent())?.trim() ?? "";
   expect(inviteUrl).toContain("/invite/");
+
+  const selectedText = await inviteUrlField.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return selection?.toString().trim() ?? "";
+  });
+  expect(selectedText).toBe(inviteUrl);
+
+  const copyButton = page.getByRole("button", { name: "Copy invite link" });
+  await copyButton.click();
+  await expect(copyButton).toContainText("Copied");
   return inviteUrl;
 }
 
@@ -154,38 +169,9 @@ async function signUpFromInvite(page: Page, inviteUrl: string, user: HumanUser) 
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
   await page.getByRole("button", { name: "Create account and continue" }).click();
-  await expect(page.getByTestId("invite-pending-approval")).toBeVisible({
+  await expect(page.getByRole("heading", { name: "You joined the company" })).toBeVisible({
     timeout: 20_000,
   });
-}
-
-async function approvePendingHumanJoin(page: Page, companyPrefix: string, email: string) {
-  await page.goto(`${BASE}/${companyPrefix}/company/settings/access`);
-  await expect(page.getByRole("heading", { name: "Company Access" })).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect(page.getByText(email)).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Approve human" }).click();
-  await expect(page.getByRole("button", { name: "Approve human" })).toHaveCount(0, {
-    timeout: 20_000,
-  });
-}
-
-async function updateMemberRole(page: Page, companyPrefix: string, email: string, role: CompanyMember["membershipRole"]) {
-  await page.goto(`${BASE}/${companyPrefix}/company/settings/access`);
-  await expect(page.getByRole("heading", { name: "Company Access" })).toBeVisible({
-    timeout: 20_000,
-  });
-  const memberRow = page
-    .getByText(email)
-    .locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " grid ")][1]');
-  await expect(memberRow).toBeVisible({ timeout: 20_000 });
-  await memberRow.getByRole("button", { name: "Edit" }).click();
-  const dialog = page.getByRole("dialog", { name: "Edit member" });
-  await expect(dialog).toBeVisible({ timeout: 20_000 });
-  await dialog.getByLabel("Company role").selectOption(role ?? "");
-  await dialog.getByRole("button", { name: "Save access" }).click();
-  await expect(dialog).toHaveCount(0, { timeout: 20_000 });
 }
 
 async function sessionJsonRequest<T>(
@@ -250,39 +236,10 @@ async function waitForMember(page: Page, companyId: string, email: string) {
     )
     .toMatchObject({
       status: "active",
-      membershipRole: "operator",
+      membershipRole: "member",
       user: { email },
     });
   return member!;
-}
-
-async function waitForMemberRole(
-  page: Page,
-  companyId: string,
-  memberId: string,
-  membershipRole: CompanyMember["membershipRole"]
-) {
-  await expect
-    .poll(
-      async () => {
-        const membersRes = await sessionJsonRequest<{ members: CompanyMember[] }>(
-          page,
-          `${BASE}/api/companies/${companyId}/members`
-        );
-        expect(membersRes.ok).toBe(true);
-        const body = membersRes.json;
-        if (!body) return null;
-        return body.members.find((member) => member.id === memberId) ?? null;
-      },
-      {
-        timeout: 20_000,
-        intervals: [500, 1_000, 2_000],
-      }
-    )
-    .toMatchObject({
-      id: memberId,
-      membershipRole,
-    });
 }
 
 async function newPage(browser: Browser) {
@@ -301,7 +258,7 @@ async function newPage(browser: Browser) {
 }
 
 test.describe("Multi-user: authenticated mode", () => {
-  test("authenticated humans can bootstrap, invite, join, and respect viewer restrictions", async ({
+  test("a default invite creates an active member with member-level restrictions", async ({
     browser,
     page,
   }) => {
@@ -331,14 +288,9 @@ test.describe("Multi-user: authenticated mode", () => {
     try {
       await signUpFromInvite(invited.page, inviteUrl, invitedUser);
 
-      await approvePendingHumanJoin(page, companyPrefix, invitedUser.email);
-      await invited.page.reload();
       await expect(invited.page).not.toHaveURL(/\/auth/, { timeout: 10_000 });
 
-      const joinedMember = await waitForMember(page, company.id, invitedUser.email);
-
-      await updateMemberRole(page, companyPrefix, invitedUser.email, "viewer");
-      await waitForMemberRole(page, company.id, joinedMember.id, "viewer");
+      await waitForMember(page, company.id, invitedUser.email);
 
       await invited.page.goto(`${BASE}/${companyPrefix}/company/settings/invites`);
       await expect(
@@ -355,7 +307,7 @@ test.describe("Multi-user: authenticated mode", () => {
           method: "POST",
           data: {
             allowedJoinTypes: "human",
-            humanRole: "viewer",
+            humanRole: "member",
           },
         }
       );

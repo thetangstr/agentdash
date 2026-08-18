@@ -1,11 +1,14 @@
 import { Router, type Request, type Response } from "express";
 import type { Db } from "@paperclipai/db";
+import { projectAccess } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import {
   createProjectSchema,
   createProjectWorkspaceSchema,
   findWorkspaceCommandDefinition,
   isUuidLike,
   matchWorkspaceRuntimeServiceToCommand,
+  replaceProjectAccessSchema,
   updateProjectSchema,
   updateProjectWorkspaceSchema,
   workspaceRuntimeControlTargetSchema,
@@ -15,11 +18,18 @@ import { trackProjectCreated } from "@paperclipai/shared/telemetry";
 // AgentDash: goals-eval-hitl
 import { definitionOfDoneSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { projectService, logActivity, workspaceOperationService } from "../services/index.js";
+import { accessService, projectService, logActivity, workspaceOperationService } from "../services/index.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest, conflict, forbidden } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertProjectVisible, projectVisibilityCondition } from "./visibility.js";
+import {
+  assertCanEditOwnedResource,
+  assertCanSetCompanyDirection,
+  assertCompanyAccess,
+  canSetCompanyDirection,
+  getActorInfo,
+} from "./authz.js";
 import {
   buildWorkspaceRuntimeDesiredStatePatch,
   listConfiguredRuntimeServiceEntries,
@@ -45,6 +55,7 @@ const SHARED_WORKSPACE_STOP_AND_RESTART_ACTIONS = new Set(["stop", "restart"]);
 export function projectRoutes(db: Db) {
   const router = Router();
   const svc = projectService(db);
+  const access = accessService(db);
   const secretsSvc = secretService(db);
   const workspaceOperations = workspaceOperationService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
@@ -106,7 +117,9 @@ export function projectRoutes(db: Db) {
   router.get("/companies/:companyId/projects", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await svc.list(companyId);
+    // A5: restricted projects simply do not appear for actors off their
+    // access list. The condition is undefined for admins — no extra filter.
+    const result = await svc.list(companyId, projectVisibilityCondition(req, companyId));
     res.json(result);
   });
 
@@ -118,17 +131,87 @@ export function projectRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, project.companyId);
+    // 404, never 403: an existence-confirming refusal is itself the leak.
+    await assertProjectVisible(db, req, project);
     res.json(project);
   });
 
+  /**
+   * Starting a project is WORK. Deciding the company's direction is not.
+   *
+   * This route used to require `assertCanSetCompanyDirection`, which meant the
+   * only way to let a colleague start a project was to also let them rewrite
+   * the company's goals. `viewer` could do neither. There was no role in
+   * between, so the thing an ordinary contributor most obviously needs was
+   * reachable only by handing them authority over everything.
+   *
+   * Direction-holders keep the capability implicitly, so nothing an owner,
+   * admin or operator could do yesterday is refused today. Everyone else needs
+   * an explicit `projects:create` grant.
+   */
+  async function assertCanCreateProject(req: Request, companyId: string) {
+    assertCompanyAccess(req, companyId);
+    if (canSetCompanyDirection(req, companyId)) return;
+    if (req.actor.type === "agent") {
+      // Unchanged: agents do not start projects. `canSetCompanyDirection`
+      // already refuses them, and this states it rather than relying on the
+      // permission lookup below happening to fail.
+      throw forbidden("Agents cannot create projects.");
+    }
+    const allowed = await access
+      .canUser(companyId, req.actor.userId, "projects:create")
+      .catch(() => false);
+    if (!allowed) {
+      throw forbidden(
+        "Creating a project needs the projects:create permission, or an owner, "
+        + "admin or operator role. Ask a company owner to grant it.",
+      );
+    }
+  }
+
   router.post("/companies/:companyId/projects", validate(createProjectSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCanCreateProject(req, companyId);
     type CreateProjectPayload = Parameters<typeof svc.create>[1] & {
       workspace?: Parameters<typeof svc.createWorkspace>[1];
     };
 
     const { workspace, ...projectData } = req.body as CreateProjectPayload;
+    // A6 (2026-08-16): collision guard, two layers. Exact case-insensitive
+    // collision is refused by the partial unique index (409 below). A NEAR
+    // miss — same letters ignoring spacing/punctuation, or one name starting
+    // with the other — warns once and is overridable with confirmSimilarName,
+    // because the failure this prevents is someone dodging the hard rule by
+    // adding a suffix.
+    const { confirmSimilarName, ...cleanProjectData } =
+      projectData as CreateProjectPayload & { confirmSimilarName?: boolean };
+    if (confirmSimilarName !== true && typeof cleanProjectData.name === "string") {
+      const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const candidate = squash(cleanProjectData.name);
+      // Scanned through the actor's OWN visibility — naming a restricted
+      // project in an error message would leak the thing A5 hides. The scan
+      // itself is a COURTESY: if it cannot run, creation proceeds and the
+      // unique index remains the hard guard. An advisory check must never be
+      // able to fail a create.
+      let visible: Awaited<ReturnType<typeof svc.list>> = [];
+      try {
+        const scanned = await svc.list(companyId, projectVisibilityCondition(req, companyId));
+        if (Array.isArray(scanned)) visible = scanned;
+      } catch {
+        // advisory scan unavailable; the unique index still guards
+      }
+      const similar = visible.find((p) => {
+        if (p.archivedAt) return false;
+        const other = squash(p.name);
+        return other === candidate || other.startsWith(candidate) || candidate.startsWith(other);
+      });
+      if (similar) {
+        throw conflict(
+          `A project named "${similar.name}" already exists in this company. ` +
+            "Pick a different name, or resend with confirmSimilarName: true to create it anyway.",
+        );
+      }
+    }
     await assertProjectEnvironmentSelection(
       companyId,
       readProjectPolicyEnvironmentId(projectData.executionWorkspacePolicy),
@@ -149,7 +232,13 @@ export function projectRoutes(db: Db) {
         { strictMode: strictSecretsMode, fieldPath: "env" },
       );
     }
-    const project = await svc.create(companyId, projectData);
+    // Ownership comes from the ACTOR, never the body — a payload that could
+    // name its own creator could gift the project to someone else's quota of
+    // authority. Agents cannot reach this line (refused above).
+    const project = await svc.create(companyId, {
+      ...cleanProjectData,
+      createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
+    });
     let createdWorkspaceId: string | null = null;
     if (workspace) {
       const createdWorkspace = await svc.createWorkspace(project.id, workspace);
@@ -191,8 +280,24 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    // A4 (2026-08-16): editing follows ownership, not direction. Under the
+    // direction rule a member could create a project they could never edit.
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    await assertProjectVisible(db, req, existing);
     const body = { ...req.body };
+    // A5: restricting a project must not blind the agent working on it — the
+    // lead agent joins the access list in the same request.
+    if (body.visibility === "restricted" && existing.visibility !== "restricted" && existing.leadAgentId) {
+      await db
+        .insert(projectAccess)
+        .values({
+          projectId: existing.id,
+          principalType: "agent",
+          principalId: existing.leadAgentId,
+          grantedByUserId: req.actor.type === "board" ? (req.actor.userId ?? "system") : "system",
+        })
+        .onConflictDoNothing();
+    }
     await assertHostWorkspaceCommandAuthority(
       db,
       req,
@@ -650,6 +755,61 @@ export function projectRoutes(db: Db) {
     res.json(workspace);
   });
 
+  /**
+   * A5: the access list of a restricted project. Managed only by whoever may
+   * edit the project (creator or admin); readable by the same, because the
+   * list of who can see a restricted thing is itself restricted.
+   */
+  router.get("/projects/:id/access", async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
+    res.json({ visibility: existing.visibility, access: rows });
+  });
+
+  router.put("/projects/:id/access", validate(replaceProjectAccessSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+    const grantedBy = req.actor.type === "board" ? (req.actor.userId ?? "system") : "system";
+    const entries = (req.body.access as Array<{ principalType: "user" | "agent"; principalId: string }>) ?? [];
+    await db.transaction(async (tx) => {
+      await tx.delete(projectAccess).where(eq(projectAccess.projectId, id));
+      if (entries.length > 0) {
+        await tx.insert(projectAccess).values(
+          entries.map((entry) => ({
+            projectId: id,
+            principalType: entry.principalType,
+            principalId: entry.principalId,
+            grantedByUserId: grantedBy,
+          })),
+        );
+      }
+    });
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: existing.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "project.access_replaced",
+      entityType: "project",
+      entityId: id,
+      details: { count: entries.length },
+    });
+    const rows = await db.select().from(projectAccess).where(eq(projectAccess.projectId, id));
+    res.json({ visibility: existing.visibility, access: rows });
+  });
+
   router.delete("/projects/:id", async (req, res) => {
     const id = req.params.id as string;
     const existing = await svc.getById(id);
@@ -657,8 +817,30 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
-    const project = await svc.remove(id);
+    assertCanEditOwnedResource(req, existing.companyId, existing, "project");
+
+    // `issues.project_id` has no cascade, so deleting a project that holds any
+    // issue used to raise a foreign-key violation and surface as
+    // `500 Internal server error` -- which made every real project on the
+    // board undeletable, with a message that named neither the cause nor the
+    // fix. Refuse instead, say how much work is in the way, and require the
+    // caller to ask for it explicitly. Cascading by default would let one
+    // click take a board's worth of issues, comments and approvals with it.
+    const withIssues =
+      req.query.withIssues === "true" || req.body?.withIssues === true;
+    const issueCount = await svc.countIssues(id);
+    if (issueCount > 0 && !withIssues) {
+      res.status(409).json({
+        error:
+          `This project still holds ${issueCount} issue${issueCount === 1 ? "" : "s"}. `
+          + `Move or delete them first, or repeat this request with ?withIssues=true `
+          + `to delete them along with the project.`,
+        issueCount,
+      });
+      return;
+    }
+
+    const project = await svc.remove(id, { withIssues });
     if (!project) {
       res.status(404).json({ error: "Project not found" });
       return;
@@ -685,7 +867,7 @@ export function projectRoutes(db: Db) {
       try {
         const companyId = req.params.companyId as string;
         const projectId = req.params.projectId as string;
-        assertCompanyAccess(req, companyId);
+        assertCanSetCompanyDirection(req, companyId);
         const parsed = definitionOfDoneSchema.safeParse(req.body);
         if (!parsed.success) {
           throw badRequest("Invalid definition of done", {

@@ -6,6 +6,9 @@ import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
+import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
+import { ConnectYourMachine } from "../components/agent/ConnectYourMachine";
+import { QuestionsForYou } from "../components/agent/QuestionsForYou";
 import { MyChannels } from "../components/agent/MyChannels";
 import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
@@ -102,6 +105,8 @@ export default function MyAgent() {
         </p>
       </header>
 
+      <QuestionsForYou companyId={selectedCompanyId!} agentName={agent.name} />
+
       {governance.data ? (
         // On this page the viewer is, by construction, the agent's own
         // steward (getMyAgent returns only the caller's stewarded agent), so
@@ -120,6 +125,14 @@ export default function MyAgent() {
             : "Failed to load authority"}
         </p>
       ) : null}
+
+      <ConnectYourHarness
+        agentId={agent.id}
+        agentName={agent.name}
+        companyId={selectedCompanyId!}
+      />
+
+      <ConnectYourMachine companyId={selectedCompanyId!} agentName={agent.name} />
 
       <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
 

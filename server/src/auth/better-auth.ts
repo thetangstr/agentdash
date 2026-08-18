@@ -169,6 +169,58 @@ export interface CreateBetterAuthInstanceOptions {
   onUserCreated?: (user: { id: string; email: string; name: string | null }) => Promise<void>;
 }
 
+const DEFAULT_RESET_TOKEN_TTL_SECONDS = 3600; // Better Auth's own default
+const MAX_RESET_TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
+
+/**
+ * How long a password-reset link stays valid, in seconds.
+ *
+ * Better Auth defaults to 1 hour, which is the right posture for a hosted
+ * instance where the user is sitting at a browser when they click "forgot
+ * password". It is the wrong posture for an on-premise install you are about
+ * to physically relocate: the operator wants to mint a link for the customer's
+ * admin *before* travelling, and have it still work when the machine is
+ * plugged in at the other end. The URL host is an mDNS name that follows the
+ * machine, so the link itself survives the move — only the clock did not.
+ *
+ * Left at the 1-hour default unless AGENTDASH_RESET_TOKEN_TTL_SECONDS says
+ * otherwise, so no deployment gets a weaker window by accident. Capped at 30
+ * days: past that this stops being a reset link and becomes a bearer
+ * credential sitting in someone's inbox.
+ */
+function resolveResetTokenTtlSeconds(): number {
+  const raw = process.env.AGENTDASH_RESET_TOKEN_TTL_SECONDS?.trim();
+  if (!raw) return DEFAULT_RESET_TOKEN_TTL_SECONDS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    logger.warn(
+      { value: raw },
+      "[auth] AGENTDASH_RESET_TOKEN_TTL_SECONDS is not a positive integer — using the 1 hour default",
+    );
+    return DEFAULT_RESET_TOKEN_TTL_SECONDS;
+  }
+  if (parsed > MAX_RESET_TOKEN_TTL_SECONDS) {
+    logger.warn(
+      { requested: parsed, cap: MAX_RESET_TOKEN_TTL_SECONDS },
+      "[auth] AGENTDASH_RESET_TOKEN_TTL_SECONDS exceeds the 30 day cap — clamping",
+    );
+    return MAX_RESET_TOKEN_TTL_SECONDS;
+  }
+  return parsed;
+}
+
+/**
+ * Render a TTL in seconds as something a human reads in an email body, so the
+ * copy cannot drift from the configured value. "1 hour", "7 days", "90 minutes".
+ */
+export function formatTokenLifetime(seconds: number): string {
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  if (seconds % (24 * 3600) === 0) return plural(seconds / (24 * 3600), "day");
+  if (seconds % 3600 === 0) return plural(seconds / 3600, "hour");
+  if (seconds % 60 === 0) return plural(seconds / 60, "minute");
+  return plural(seconds, "second");
+}
+
 export function createBetterAuthInstance(
   db: Db,
   config: Config,
@@ -186,6 +238,7 @@ export function createBetterAuthInstance(
   const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
   const socialProviders = buildSocialProviders();
+  const resetTokenTtlSeconds = resolveResetTokenTtlSeconds();
 
   const authConfig: BetterAuthOptions = {
     baseURL: baseUrl,
@@ -203,6 +256,7 @@ export function createBetterAuthInstance(
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
+      resetPasswordTokenExpiresIn: resetTokenTtlSeconds,
       disableSignUp: config.authDisableSignUp,
       // Better Auth 1.4.x fires this from POST /api/auth/request-password-reset
       // (not /forget-password — that was the 1.3.x path). It hands us:
@@ -229,7 +283,10 @@ export function createBetterAuthInstance(
           for (const resolve of resolvers) resolve(resetUrl);
           return;
         }
-        const { subject, html, text } = resetPasswordEmailTemplate({ resetUrl });
+        const { subject, html, text } = resetPasswordEmailTemplate({
+          resetUrl,
+          lifetime: formatTokenLifetime(resetTokenTtlSeconds),
+        });
         await sendEmail({ to: user.email, subject, html, text });
       },
     },

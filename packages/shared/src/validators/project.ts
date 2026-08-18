@@ -108,11 +108,17 @@ const projectFields = {
   env: envConfigSchema.optional().nullable(),
   executionWorkspacePolicy: projectExecutionWorkspacePolicySchema.optional().nullable(),
   archivedAt: z.string().datetime().optional().nullable(),
+  // A5 (2026-08-16): open by default; 'restricted' limits visibility to the
+  // access list plus admins. Who may set it is the route's business
+  // (creator or admin), not the schema's.
+  visibility: z.enum(["company", "restricted"]).optional(),
 };
 
 export const createProjectSchema = z.object({
   ...projectFields,
   workspace: createProjectWorkspaceSchema.optional(),
+  // A6: acknowledges the near-miss warning; read by the route, never stored.
+  confirmSimilarName: z.boolean().optional(),
 });
 
 export type CreateProject = z.infer<typeof createProjectSchema>;
@@ -122,3 +128,17 @@ export const updateProjectSchema = z.object(projectFields).partial();
 export type UpdateProject = z.infer<typeof updateProjectSchema>;
 
 export type ProjectExecutionWorkspacePolicy = z.infer<typeof projectExecutionWorkspacePolicySchema>;
+
+/** A5: replace a restricted project's access list wholesale. */
+export const replaceProjectAccessSchema = z.object({
+  access: z
+    .array(
+      z.object({
+        principalType: z.enum(["user", "agent"]),
+        principalId: z.string().min(1),
+      }),
+    )
+    .max(200),
+});
+
+export type ReplaceProjectAccess = z.infer<typeof replaceProjectAccessSchema>;

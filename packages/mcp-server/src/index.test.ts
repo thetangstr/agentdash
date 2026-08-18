@@ -20,7 +20,13 @@ describe("unified server composition", () => {
   it("exposes both toolsets with unique names", () => {
     const names = tools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(names.some((name) => name.startsWith("paperclip"))).toBe(true);
+    // The core tools are unprefixed now — the MCP server name is the
+    // namespace. Nothing should carry the old Paperclip branding.
+    expect(names.some((name) => name.startsWith("paperclip"))).toBe(false);
+    expect(names).toContain("whoami");
+    expect(names).toContain("list_issues");
+    expect(names).toContain("update_agent");
+    expect(names).toContain("report_issue");
     expect(names).toContain("agentdash_setup_status");
     expect(names).toContain("agentdash_install_checklist");
     expect(names).toContain("agentdash_sign_up");
@@ -38,12 +44,12 @@ describe("unified server composition", () => {
     expect(names).toContain("agentdash_pause_agent");
     expect(names).toContain("agentdash_resume_agent");
     // Full approvals surface from the paperclip layer.
-    expect(names).toContain("paperclipListApprovals");
-    expect(names).toContain("paperclipCreateApproval");
-    expect(names).toContain("paperclipGetApproval");
-    expect(names).toContain("paperclipApprovalDecision");
-    expect(names).toContain("paperclipAddApprovalComment");
-    expect(names).toContain("paperclipLinkIssueApproval");
+    expect(names).toContain("list_approvals");
+    expect(names).toContain("create_approval");
+    expect(names).toContain("get_approval");
+    expect(names).toContain("approval_decision");
+    expect(names).toContain("add_approval_comment");
+    expect(names).toContain("link_issue_approval");
   });
 
   it("converts every tool schema to a JSON object schema without throwing", () => {

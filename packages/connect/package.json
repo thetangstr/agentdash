@@ -1,0 +1,42 @@
+{
+  "name": "agentdash-connect",
+  "version": "0.1.4",
+  "description": "Connect your Claude Code or Codex to an AgentDash agent. One command, no daemon, no install.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agentdash-connect": "./bin/agentdash-connect.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "!src/*.test.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thetangstr/agentdash.git",
+    "directory": "packages/connect"
+  },
+  "keywords": [
+    "agentdash",
+    "mcp",
+    "claude-code",
+    "codex"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

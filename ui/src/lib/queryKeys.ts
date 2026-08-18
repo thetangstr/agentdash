@@ -1,4 +1,7 @@
 export const queryKeys = {
+  issueReports: {
+    config: ["issue-reports", "config"] as const,
+  },
   companies: {
     all: ["companies"] as const,
     detail: (id: string) => ["companies", id] as const,
@@ -172,6 +175,8 @@ export const queryKeys = {
   activity: (companyId: string) => ["activity", companyId] as const,
   costs: (companyId: string, from?: string, to?: string) =>
     ["costs", companyId, from, to] as const,
+  costsRunActivity: (companyId: string, from?: string, to?: string) =>
+    ["costs-run-activity", companyId, from, to] as const,
   usageByProvider: (companyId: string, from?: string, to?: string) =>
     ["usage-by-provider", companyId, from, to] as const,
   usageByBiller: (companyId: string, from?: string, to?: string) =>

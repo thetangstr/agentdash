@@ -47,7 +47,17 @@ export function buildCodexExecArgs(
   );
   const extraArgs = readExtraArgs(record);
 
-  const args = ["exec", "--json"];
+  // Codex refuses to run outside a "trusted" directory (a git repo, or one the
+  // user blessed interactively): "Not inside a trusted directory and
+  // --skip-git-repo-check was not specified." Agent workspaces are created as
+  // EMPTY directories under ~/.paperclip/instances/<inst>/workspaces/<agent>,
+  // so without this flag every codex_local agent dies on its first run with an
+  // error that looks like an auth problem. The trust prompt exists to protect a
+  // human at a terminal from running an agent somewhere unintended; here the
+  // harness created the directory specifically for this agent, so the check is
+  // answered by construction. Verified 2026-08-18 against codex-cli 0.147.0
+  // with gpt-5.6-terra.
+  const args = ["exec", "--json", "--skip-git-repo-check"];
   if (search) args.unshift("--search");
   if (bypass) args.push("--dangerously-bypass-approvals-and-sandbox");
   if (model) args.push("--model", model);

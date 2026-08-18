@@ -29,7 +29,12 @@ describe("assertCompanyAccess", () => {
     expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
   });
 
-  it("rejects viewer memberships for writes", () => {
+  it("lets a legacy viewer membership write — the deliberate upgrade", () => {
+    // Until 2026-08-16 this test rejected viewer writes ("Viewer access is
+    // read-only"). The role collapse removed the tier: viewer normalizes to
+    // member, and the upgrade was measured to affect only uat test users
+    // before shipping. A write from a legacy viewer row must now pass this
+    // guard and fall through to route-level authority checks.
     const req = makeReq({
       method: "PATCH",
       actor: {
@@ -42,8 +47,7 @@ describe("assertCompanyAccess", () => {
         ],
       },
     });
-
-    expect(() => assertCompanyAccess(req, "company-1")).toThrow("Viewer access is read-only");
+    expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
   });
 
   it("rejects writes when membership details are present but omit the target company", () => {

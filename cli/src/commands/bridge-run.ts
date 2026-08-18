@@ -173,6 +173,23 @@ export async function bridgeRun(opts: BridgeRunOptions, deps: BridgeRunDeps = {}
   log(pc.cyan(`[bridge] polling ${serverUrl} every ${Math.round(intervalMs / 1000)}s`));
   posturePreamble(egress, log);
 
+  /**
+   * Say it at startup, not after the first task fails.
+   *
+   * The sandbox denies the home directory, so the agent cannot use the desktop
+   * login stored there. Without an env credential every task fails with an exit
+   * code and no stderr, several minutes and one confused debugging session after
+   * the worker looked like it started correctly.
+   */
+  if (!process.env.ANTHROPIC_API_KEY) {
+    log(
+      "[bridge] no ANTHROPIC_API_KEY in this environment. The sandbox denies the home\n" +
+        "         directory, so the agent cannot read a desktop login and every task will\n" +
+        "         fail to authenticate. Set ANTHROPIC_API_KEY before starting this worker;\n" +
+        "         `claude /login` cannot help, because it writes where the sandbox denies.",
+    );
+  }
+
   try {
     await runBridgeWorker({
       serverUrl,

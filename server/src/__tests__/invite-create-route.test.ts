@@ -27,7 +27,7 @@ function registerModuleMocks() {
     accessService: () => ({
       isInstanceAdmin: vi.fn(),
       canUser: vi.fn(async () => true),
-      hasPermission: vi.fn(),
+      hasPermission: vi.fn(async () => true),
       getMembership: (...args: [string, string, string]) => getMembershipMock(...args),
     }),
     agentService: () => ({
@@ -174,7 +174,7 @@ describe("POST /companies/:companyId/invites", () => {
       .set("x-forwarded-proto", "https")
       .send({
         allowedJoinTypes: "human",
-        humanRole: "viewer",
+        humanRole: "member",
       });
 
     expect(res.status).toBe(201);
@@ -246,52 +246,45 @@ describe("POST /companies/:companyId/invites", () => {
 
   // AgentDash: invite-role-ceiling (P0.5) — privilege-escalation guard.
   describe("invite role ceiling", () => {
-    it("rejects an admin inviting an owner with 403", async () => {
-      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+    // Two roles since 2026-08-16: the ceiling rule ("at or below your own")
+    // still holds, it just has fewer rungs. Legacy strings normalize before
+    // ranking — a stored "owner" ranks as admin, a stored "operator" as
+    // member — covered explicitly so the mapping cannot drift.
+    it("rejects a member inviting an admin with 403", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "member" });
       const app = await createApp(boardUserActor());
 
       const res = await request(app)
         .post("/api/companies/company-1/invites")
-        .send({ allowedJoinTypes: "human", humanRole: "owner" });
+        .send({ allowedJoinTypes: "human", humanRole: "admin" });
 
       expect(res.status).toBe(403);
       expect(res.body.error).toMatch(/role above your own/i);
     });
 
-    it("allows an admin inviting an operator", async () => {
+    it("allows a member inviting a member — equal rank is at the ceiling", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "member" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("allows an admin inviting an admin", async () => {
       getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
       const app = await createApp(boardUserActor());
 
       const res = await request(app)
         .post("/api/companies/company-1/invites")
-        .send({ allowedJoinTypes: "human", humanRole: "operator" });
+        .send({ allowedJoinTypes: "human", humanRole: "admin" });
 
       expect(res.status).toBe(201);
     });
 
-    it("allows an admin inviting a viewer", async () => {
-      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
-      const app = await createApp(boardUserActor());
-
-      const res = await request(app)
-        .post("/api/companies/company-1/invites")
-        .send({ allowedJoinTypes: "human", humanRole: "viewer" });
-
-      expect(res.status).toBe(201);
-    });
-
-    it("allows an owner inviting an owner", async () => {
-      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "owner" });
-      const app = await createApp(boardUserActor());
-
-      const res = await request(app)
-        .post("/api/companies/company-1/invites")
-        .send({ allowedJoinTypes: "human", humanRole: "owner" });
-
-      expect(res.status).toBe(201);
-    });
-
-    it("allows an owner inviting an admin", async () => {
+    it("ranks a legacy owner row as admin", async () => {
       getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "owner" });
       const app = await createApp(boardUserActor());
 
@@ -302,12 +295,113 @@ describe("POST /companies/:companyId/invites", () => {
       expect(res.status).toBe(201);
     });
 
-    it("still allows the local-implicit founding board owner to invite an owner", async () => {
+    it("ranks a legacy operator row as member — it may not invite an admin", async () => {
+      getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "operator" });
+      const app = await createApp(boardUserActor());
+
+      const res = await request(app)
+        .post("/api/companies/company-1/invites")
+        .send({ allowedJoinTypes: "human", humanRole: "admin" });
+
+      expect(res.status).toBe(403);
+    });
+
+    /**
+     * An agent has no human role, so there was no ceiling to compare against
+     * and the check returned early — letting an agent holding `users:invite`
+     * mint an invite at ANY role. Probed on the live uat instance before the
+     * first fix: an agent created invites at owner, admin, operator and
+     * viewer, all 201.
+     *
+     * The first fix capped agents at `viewer` — read-only participation
+     * without authority. The 2026-08-16 role collapse removed that tier: the
+     * lowest role is now `member`, which creates projects and agents. There
+     * is no longer any role an agent can hand out that does not carry write
+     * authority, so agents cannot invite humans AT ALL. A person extends the
+     * company, not its workers.
+     */
+    describe("an agent's ceiling", () => {
+      function agentActor() {
+        return {
+          type: "agent",
+          agentId: "agent-1",
+          companyId: "company-1",
+          source: "agent_key",
+          companyIds: ["company-1"],
+        } as Record<string, unknown>;
+      }
+
+      it("refuses an agent inviting an admin", async () => {
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "admin" });
+
+        expect(res.status).toBe(403);
+        expect(res.body.error).toMatch(/agents cannot invite people/i);
+      });
+
+      it("refuses an agent inviting a member", async () => {
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human", humanRole: "member" });
+
+        expect(res.status).toBe(403);
+      });
+
+      it("refuses an agent that names NO role — the default must not sneak past", async () => {
+        // The historic bypass shape: invite creation has its own role
+        // default, so an agent omitting `humanRole` used to be checked as one
+        // role and stored as another. Refusing agents outright closes the
+        // shape for good, but only if the no-role request is ALSO refused.
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human" });
+
+        expect(res.status).toBe(403);
+        expect(logActivityMock).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ action: "invite.created" }),
+        );
+      });
+
+      it("still allows an agent-only invite — hiring agents is not granting authority", async () => {
+        // The control case. Without it, a rule that refused agents every
+        // invite of any kind would satisfy every assertion above.
+        const app = await createApp(agentActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "agent" });
+
+        expect(res.status).toBe(201);
+      });
+
+      it("stores member when a human names no role", async () => {
+        getMembershipMock.mockResolvedValue({ status: "active", membershipRole: "admin" });
+        const app = await createApp(boardUserActor());
+        const res = await request(app)
+          .post("/api/companies/company-1/invites")
+          .send({ allowedJoinTypes: "human" });
+
+        expect(res.status).toBe(201);
+        expect(logActivityMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            action: "invite.created",
+            details: expect.objectContaining({ humanRole: "member" }),
+          }),
+        );
+      });
+    });
+
+    it("still allows the local-implicit founding board to invite an admin", async () => {
       const app = await createApp();
 
       const res = await request(app)
         .post("/api/companies/company-1/invites")
-        .send({ allowedJoinTypes: "human", humanRole: "owner" });
+        .send({ allowedJoinTypes: "human", humanRole: "admin" });
 
       expect(res.status).toBe(201);
     });

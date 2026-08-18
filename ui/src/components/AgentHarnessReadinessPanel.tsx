@@ -114,6 +114,30 @@ export function readAgentHarnessPreflightStatus(metadata: unknown): AgentHarness
   };
 }
 
+/**
+ * Whether this state is worth taking screen space for.
+ *
+ * Only a failing or warning preflight is. The panel used to render in every
+ * state, which meant the two most common ones — "passed" and "required" — were
+ * permanent furniture on the agent page saying nothing actionable. Worse, they
+ * were misleading in opposite directions: agents run whether or not preflight
+ * evidence exists, so "Harness preflight required" claimed a gate that is not
+ * enforced, and a green "passed" banner claimed a guarantee that expires the
+ * moment the configuration changes.
+ *
+ * `missing`, `stale` and `malformed` are not failures — they mean nobody has
+ * checked recently. That is a job for the page to do in the background, not a
+ * question to put to the person reading it.
+ */
+export function shouldSurfaceHarnessPreflight(state: AgentHarnessPreflightStatus["state"]): boolean {
+  return state === "fail" || state === "warn";
+}
+
+/** The states with no current evidence, which the page re-checks unprompted. */
+export function needsBackgroundPreflight(state: AgentHarnessPreflightStatus["state"]): boolean {
+  return state === "missing" || state === "stale" || state === "malformed";
+}
+
 function toneForState(state: AgentHarnessPreflightStatus["state"]) {
   if (state === "pass") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200";
   if (state === "warn") return "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200";
@@ -133,6 +157,10 @@ export function AgentHarnessReadinessPanel({
   error?: string | null;
   className?: string;
 }) {
+  // Nothing wrong, and nothing the reader can act on: render nothing at all.
+  // An error from a manual run still shows, because that one was asked for.
+  if (!shouldSurfaceHarnessPreflight(status.state) && !error) return null;
+
   const Icon = status.state === "pass" ? ShieldCheck : AlertTriangle;
   return (
     <section className={cn("rounded-lg border px-4 py-3 text-sm", toneForState(status.state), className)}>

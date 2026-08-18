@@ -5,7 +5,25 @@ export const label = "Codex (local)";
 
 export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.3-codex";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
-export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = ["gpt-5.4"] as const;
+/**
+ * Fast mode is allowed for these known models -- and, via
+ * `isCodexLocalFastModeSupported`, for any model typed in by hand.
+ *
+ * That second rule is why this list has to be updated in the SAME commit that
+ * adds a model to `models` below. An unknown model counts as manual and gets
+ * fast mode; the moment it is added to `models` it stops being manual, and if
+ * it is not named here it silently LOSES fast mode. Adding the gpt-5.6 family
+ * to the picker did exactly that: the models became selectable and became
+ * fast-mode-ineligible in the same change, which is the opposite of what
+ * refreshing the list was for.
+ */
+export const CODEX_LOCAL_FAST_MODE_SUPPORTED_MODELS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.6-cyber",
+  "gpt-5.4",
+] as const;
 
 function normalizeModelId(model: string | null | undefined): string {
   return typeof model === "string" ? model.trim() : "";
@@ -30,7 +48,22 @@ export function isCodexLocalFastModeSupported(model: string | null | undefined):
   );
 }
 
+/**
+ * IDs verified against OpenAI's own model documentation, not inferred from a
+ * version number. The family is three tiers plus a specialised model, and the
+ * bare `gpt-5.6` is an ALIAS for Sol rather than a fourth model -- listing it
+ * separately would offer the same thing twice under two names.
+ *
+ * Nothing validates this list server-side: `codex-args.ts` passes whatever it
+ * is given straight through as `--model`. So this array is a convenience, and
+ * being out of date makes new models unreachable from the UI without making
+ * them unsupported.
+ */
 export const models = [
+  { id: "gpt-5.6-sol", label: "gpt-5.6 Sol — deepest reasoning" },
+  { id: "gpt-5.6-terra", label: "gpt-5.6 Terra — balanced" },
+  { id: "gpt-5.6-luna", label: "gpt-5.6 Luna — fastest, cheapest" },
+  { id: "gpt-5.6-cyber", label: "gpt-5.6 Cyber — specialised" },
   { id: "gpt-5.4", label: "gpt-5.4" },
   { id: DEFAULT_CODEX_LOCAL_MODEL, label: DEFAULT_CODEX_LOCAL_MODEL },
   { id: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },

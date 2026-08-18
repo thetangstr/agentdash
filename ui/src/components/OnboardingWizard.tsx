@@ -4,9 +4,11 @@ import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
 import { useLocation, useNavigate, useParams } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { authApi } from "../api/auth";
 import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
+import { stewardshipsApi } from "../api/stewardships";
 import { approvalsApi } from "../api/approvals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
@@ -55,11 +57,33 @@ import {
   Check,
   Loader2,
   ChevronDown,
-  X
+  X,
+  Play,
+  ShieldCheck,
+  MessageSquare,
+  Laptop,
+  ScrollText,
+  Target
 } from "lucide-react";
+import {
+  AUTONOMOUS_ACTIONS,
+  MANDATE_JOBS,
+  NEVER_ACTIONS,
+  buildMandateMarkdown,
+  defaultMandateAnswers,
+  type MandateAnswers
+} from "../lib/agent-mandate";
+import { DEFAULT_DESTRUCTIVE_ACTION_CLASSES } from "@paperclipai/shared";
+import {
+  buildFirstGoalPayload,
+  buildFirstGoalTaskPayloads,
+  defaultFirstGoal,
+  firstGoalExamples,
+  type FirstGoalDraft
+} from "../lib/first-goal";
 
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5 | 6;
 type AdapterType = string;
 
 const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the operator route work, coordinate agents, and keep the company moving forward.
@@ -67,6 +91,162 @@ const DEFAULT_TASK_DESCRIPTION = `You are the Chief of Staff (CoS). You help the
 - help the operator onboard and get oriented
 - coordinate and delegate tasks to other agents as they are hired
 - surface blockers and keep context across the operator's priorities`;
+
+/**
+ * What the task step tells the owner about the machinery they are about to
+ * switch on.
+ *
+ * This step used to say only "give your agent a small task to start with",
+ * which describes the text box and nothing else. Everything a newcomer actually
+ * needs to predict was left implicit: that the work goes to the agent rather
+ * than to them, that nothing runs until they say so, that the agent will reach
+ * out to a colleague's agent — or to them personally, on their own machine —
+ * instead of inventing an answer. People met all of that for the first time
+ * when it happened to them, which is the wrong moment to learn it.
+ *
+ * Every line here is deliberately checkable against behaviour rather than
+ * aspiration:
+ *  - the task is created with status `todo` and no run is triggered, so
+ *    "nothing starts until you say so" is literally true;
+ *  - escalation prefers an enrolled `bridge:read` endpoint and falls back to a
+ *    notice when there is none, so the bridge line names both outcomes. Copy
+ *    promising the laptop path unconditionally would be a lie for every owner
+ *    who has not connected a machine yet — which is all of them, here;
+ *  - the approval line says "act on someone's machine or send something outside
+ *    the company" rather than the tempting "anything irreversible", because
+ *    those two surfaces are what is actually gated: `act`-class bridge tasks
+ *    wait on an approval before they are even pollable, and connector sends run
+ *    through approvals with the destructive ceiling on top. An agent's own
+ *    adapter work is not intercepted, so the broader promise would be false.
+ *
+ * The last two points describe the workforce features, which are gated to the
+ * `agentdash_mk` profile and answer 404 elsewhere — and this wizard creates a
+ * plain workspace, because `companiesApi.create` is called with a name and
+ * nothing else. So they are shown only when the workspace really has the
+ * profile. Describing agent-to-agent asks and the bridge on a workspace where
+ * both endpoints 404 would teach someone a mental model of the product that
+ * their own instance then contradicts.
+ */
+function WhatHappensNext({
+  agentName,
+  workforce,
+}: {
+  agentName: string;
+  /** Whether this workspace actually has the `agentdash_mk` features. */
+  workforce: boolean;
+}) {
+  const points: Array<{ icon: typeof ListTodo; title: string; body: string }> = [
+    {
+      icon: ListTodo,
+      title: "The work goes to the agent, not to you",
+      body: `This becomes an issue assigned to ${agentName}. You watch it, comment on it, and stay the person accountable for it.`,
+    },
+    {
+      icon: Play,
+      title: "Nothing runs until you say so",
+      body: "The task is created as To do. It sits there until you start it on the next screen, so an agent never begins work you did not ask for.",
+    },
+    {
+      icon: ShieldCheck,
+      title: "It works inside limits you set",
+      body: "Your agent follows a written mandate — who it is, what it must never do, whose direction wins when two people disagree. And when it wants to act on someone's machine or send something outside the company, that waits for a person to approve it.",
+    },
+    ...(workforce
+      ? [
+          {
+            icon: MessageSquare,
+            title: "If something is outside its area, it asks",
+            body: "It can ask a colleague's agent for a fact it does not own, and it is told to say what it does not know rather than fill the gap with a guess.",
+          },
+          {
+            icon: Laptop,
+            title: "When only a person can answer, it reaches you",
+            body: "Some things live in no system at all — intent, risk, a decision made in a room. The path to a person is what we call the bridge. Connect your own machine and the question lands in your Claude Code or Codex; you answer where you already work, and it comes back with your name on it. Until you connect one, the question simply arrives here.",
+          },
+        ]
+      : [
+          {
+            icon: MessageSquare,
+            title: "Working with other people's agents is not on here",
+            body: "Agents asking each other for facts, and reaching a person on their own machine, come with a workspace code. This workspace was created without one, so those stay off — your agent works on its own for now. You can set up a workspace with them from the start screen.",
+          },
+        ]),
+  ];
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <p className="text-xs font-medium">What happens after you launch</p>
+      <ul className="mt-2.5 space-y-2.5">
+        {points.map(({ icon: Icon, title, body }) => (
+          <li key={title} className="flex gap-2.5">
+            <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium leading-snug">{title}</p>
+              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{body}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** One numbered question on the mandate step. */
+function MandateQuestion({
+  number,
+  question,
+  hint,
+  children
+}: {
+  number: number;
+  question: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium">
+        <span className="text-muted-foreground">{number}.</span> {question}
+      </p>
+      {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * A checkbox row. `detail` carries the classifier's own rationale and example,
+ * which is the difference between an owner ticking a box they half-understand
+ * and one who can see what it would stop.
+ */
+function MandateCheck({
+  label,
+  detail,
+  checked,
+  onChange
+}: {
+  label: string;
+  detail?: string;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
+      <input
+        type="checkbox"
+        className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+        checked={checked}
+        onChange={onChange}
+      />
+      <span className="min-w-0">
+        <span className="block text-xs leading-snug">{label}</span>
+        {detail && (
+          <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{detail}</span>
+        )}
+      </span>
+    </label>
+  );
+}
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
@@ -106,10 +286,73 @@ export function OnboardingWizard() {
   // Step 1
   const [companyName, setCompanyName] = useState("");
   const [companyGoal, setCompanyGoal] = useState("");
+  /**
+   * The workspace code that grants the `agentdash_mk` profile.
+   *
+   * Without it this wizard could only ever produce a plain workspace, because
+   * the create call sent a name and nothing else — so the one route a person
+   * clicks when they want to do it by hand silently produced the version of the
+   * product without teammates, agent-to-agent asks, or the bridge, and no
+   * screen said why those never appeared.
+   */
+  const [workspaceCode, setWorkspaceCode] = useState("");
+
+  // Step 3 — the mandate, and whether the owner has hand-edited it. Once they
+  // have, answering another question must not silently discard their words.
+  const [mandateAnswers, setMandateAnswers] = useState<MandateAnswers>(defaultMandateAnswers);
+  const [mandateEdited, setMandateEdited] = useState(false);
+  const [mandateDraft, setMandateDraft] = useState("");
+  const [showMandateText, setShowMandateText] = useState(false);
+
+  // Step 4 — the first goal. Pre-filled with a worked example so the step can be
+  // accepted rather than composed; `goalSkipped` records a deliberate decline,
+  // which is different from an empty draft.
+  /**
+   * No goal is chosen until the owner chooses one.
+   *
+   * This used to start on the `board_pack` example, fully filled in, so an
+   * owner who clicked through shipped a goal written for a different company —
+   * "Weekly board pack, assembled without a fire drill", with four collection
+   * tasks addressed to delivery, platform and hiring leads. On a workspace with
+   * one agent and no leads, that produced four tasks nobody could do, closed
+   * themselves, and taught the owner that the interview they had just sat
+   * through did not matter.
+   *
+   * Starting empty costs nothing: the Continue button is already disabled until
+   * there is a title or the owner has explicitly ticked skip, so the existing
+   * gate now enforces a decision instead of rubber-stamping a default. The
+   * examples are still one click away — they just have to be picked.
+   */
+  const [goalDraft, setGoalDraft] = useState<FirstGoalDraft>(() => ({
+    title: "",
+    description: "",
+    tasks: [],
+  }));
+  const [goalExampleKey, setGoalExampleKey] = useState("");
+  const [goalSkipped, setGoalSkipped] = useState(false);
+  const [goalTouched, setGoalTouched] = useState(false);
 
   // Step 2
   const [agentName, setAgentName] = useState("CoS");
-  const [adapterType, setAdapterType] = useState<AdapterType>("claude_local");
+  /**
+   * The first agent's harness. `hermes_local`, not `claude_local`.
+   *
+   * Two reasons, and the second is the serious one.
+   *
+   * It has to be able to run. This defaulted to Claude Code on installs where
+   * Claude is not installed — verified on the deployment machine, where
+   * `claude` is absent, Hermes is present, and the server's own
+   * `AGENTDASH_DEFAULT_ADAPTER` is already `hermes_local`. The wizard was
+   * handing every new workspace an agent that could never start.
+   *
+   * And `claude_local` sets `dangerouslySkipPermissions` below, which becomes
+   * the literal `--dangerously-skip-permissions` flag on the CLI. That made the
+   * default path the one that runs a harness with its permission system
+   * switched off, over prompts built from issue text and other agents' output —
+   * content this system treats as untrusted everywhere else. Choosing Claude
+   * Code is still supported; it is no longer what happens by not choosing.
+   */
+  const [adapterType, setAdapterType] = useState<AdapterType>("hermes_local");
   const [model, setModel] = useState("");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
@@ -186,7 +429,7 @@ export function OnboardingWizard() {
 
   // Resize textarea when step 3 is shown or description changes
   useEffect(() => {
-    if (step === 3) autoResizeTextarea();
+    if (step === 5) autoResizeTextarea();
   }, [step, taskDescription, autoResizeTextarea]);
 
   const {
@@ -292,8 +535,20 @@ export function OnboardingWizard() {
     setError(null);
     setCompanyName("");
     setCompanyGoal("");
+    setWorkspaceCode("");
+    setGoalDraft({ title: "", description: "", tasks: [] });
+    setGoalExampleKey("");
+    setGoalSkipped(false);
+    setGoalTouched(false);
+    setMandateAnswers(defaultMandateAnswers());
+    setMandateEdited(false);
+    setMandateDraft("");
+    setShowMandateText(false);
     setAgentName("CoS");
-    setAdapterType("claude_local");
+    // Same default as the initial state above — a reset that quietly restored
+    // `claude_local` would reintroduce the unrunnable agent for anyone who
+    // started the wizard over.
+    setAdapterType("hermes_local");
     setModel("");
     setCommand("");
     setArgs("");
@@ -385,11 +640,122 @@ export function OnboardingWizard() {
     }
   }
 
+  /**
+   * Whether the workspace this wizard is filling in has the workforce features.
+   *
+   * Read from the company record rather than assumed, because the wizard runs
+   * both on a workspace it just created (never profiled) and on an existing one
+   * entered at a later step (which may be). Unknown counts as off: the copy it
+   * controls promises collaboration endpoints, and claiming those on a workspace
+   * where they 404 is worse than staying quiet about them.
+   */
+  const createdCompanyHasWorkforce =
+    companies.find((candidate) => candidate.id === createdCompanyId)?.productProfile ===
+    "agentdash_mk";
+
+  const createdCompanyName =
+    companies.find((candidate) => candidate.id === createdCompanyId)?.name ?? companyName;
+
+  /**
+   * The owner's own first name, because a mandate that says "Titus decides" is
+   * followed more reliably than one that says "your owner decides" — and the
+   * person reading it back should recognise themselves in it.
+   */
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+    enabled: effectiveOnboardingOpen
+  });
+  const ownerFirstName = (session?.user.name?.trim().split(/\s+/)[0] || "your owner").trim();
+
+  /**
+   * Re-seed the goal example once the owner's name arrives.
+   *
+   * The session loads after first render, so the initial draft is written with a
+   * neutral subject. Refreshing it only while `goalTouched` is false means an
+   * owner who has already edited the draft never has their words replaced by a
+   * late-arriving name.
+   */
+  useEffect(() => {
+    if (goalTouched) return;
+    const example = firstGoalExamples(ownerFirstName).find(
+      (candidate) => candidate.key === goalExampleKey
+    );
+    if (!example) return;
+    setGoalDraft({
+      title: example.title,
+      description: example.description,
+      tasks: [...example.tasks]
+    });
+  }, [ownerFirstName, goalExampleKey, goalTouched]);
+
+  /**
+   * The mandate as it currently stands: generated from the answers, unless the
+   * owner has opened the text and changed it, in which case their words win.
+   * Regenerating over a hand-edit would delete work someone chose to do by hand
+   * — the one case where they cared most.
+   */
+  const mandateText = mandateEdited
+    ? mandateDraft
+    : buildMandateMarkdown({
+        agentName: agentName.trim() || "Your agent",
+        companyName: createdCompanyName,
+        ownerName: ownerFirstName,
+        answers: mandateAnswers
+      });
+
+  const setAnswer = <K extends keyof MandateAnswers>(key: K, value: MandateAnswers[K]) =>
+    setMandateAnswers((previous) => ({ ...previous, [key]: value }));
+
+  const toggleAnswer = (key: "autonomous" | "never", optionKey: string) =>
+    setMandateAnswers((previous) => ({
+      ...previous,
+      [key]: previous[key].includes(optionKey)
+        ? previous[key].filter((entry) => entry !== optionKey)
+        : [...previous[key], optionKey]
+    }));
+
+  const toggleCheckFirst = (optionKey: (typeof DEFAULT_DESTRUCTIVE_ACTION_CLASSES)[number]["key"]) =>
+    setMandateAnswers((previous) => ({
+      ...previous,
+      checkFirst: previous.checkFirst.includes(optionKey)
+        ? previous.checkFirst.filter((entry) => entry !== optionKey)
+        : [...previous.checkFirst, optionKey]
+    }));
+
   async function handleStep1Next() {
     setLoading(true);
     setError(null);
     try {
-      const company = await companiesApi.create({ name: companyName.trim() });
+      // The profile and the code have to travel together: the server refuses a
+      // non-default profile without a valid code, and ignores a code that comes
+      // with no profile. Sending one alone is the quiet failure that leaves a
+      // workspace looking fine and missing every workforce surface.
+      const code = workspaceCode.trim();
+      // Ask for the workforce profile every time, code or not.
+      //
+      // `default` silently disables fact requests, deliverables, directives and
+      // governance — the machinery the very next step's goal is built out of.
+      // A workspace created without a code used to land there quietly and then
+      // hand the owner four collection tasks with nothing to collect through.
+      //
+      // Self-hosted installs are allowed the profile without a code (see the
+      // on-prem exemption in routes/companies.ts). The managed service still
+      // requires one, so a refusal there is expected rather than an error: fall
+      // back to `default` and carry on, because failing company creation over
+      // an optional profile would be worse than the profile being absent.
+      const company = await companiesApi
+        .create({
+          name: companyName.trim(),
+          productProfile: "agentdash_mk" as const,
+          ...(code ? { inviteCode: code } : {}),
+        })
+        .catch(async (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/invite code/i.test(message)) throw err;
+          return companiesApi.create({ name: companyName.trim() });
+        });
       setCreatedCompanyId(company.id);
       setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
@@ -420,7 +786,14 @@ export function OnboardingWizard() {
 
       setStep(2);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create company");
+      const message = err instanceof Error ? err.message : "Failed to create company";
+      // The server's wording assumes a missing code, so it reads as nonsense to
+      // someone who just typed one — they reread the field instead of the value.
+      setError(
+        workspaceCode.trim() && /invite code/i.test(message)
+          ? `That workspace code was not accepted. Check "${workspaceCode.trim()}" for typos, or clear the field to create a workspace without the team features.`
+          : message
+      );
     } finally {
       setLoading(false);
     }
@@ -487,6 +860,20 @@ export function OnboardingWizard() {
       }
       const agent = hire.agent;
       setCreatedAgentId(agent.id);
+      // Give the new agent a key straight away.
+      //
+      // `onboarding-orchestrator` bootstrap does this at its step 4, but this
+      // path — the wizard's own hire — never did, so a workspace created
+      // through the UI got a Chief of Staff that no harness could authenticate
+      // as. Reaching it from the bridge is most of the point of having it, and
+      // "should this agent have a key" is not a question the owner has any
+      // information to answer at this moment.
+      //
+      // Best-effort on purpose: an agent without a key is recoverable in one
+      // click from its own page, so a failure here must not strand onboarding.
+      await agentsApi
+        .createKey(agent.id, `${agent.name} — my machine`, createdCompanyId)
+        .catch(() => undefined);
       queryClient.invalidateQueries({
         queryKey: queryKeys.agents.list(createdCompanyId)
       });
@@ -547,10 +934,24 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep3Next() {
+  /** Mandate step → task step. Nothing is written yet; launch does that. */
+  function handleStep3Next() {
     if (!createdCompanyId || !createdAgentId) return;
     setError(null);
     setStep(4);
+  }
+
+  /** Goal step → task step. The goal itself is written at launch. */
+  function handleStep4Next() {
+    if (!createdCompanyId || !createdAgentId) return;
+    setError(null);
+    setStep(5);
+  }
+
+  async function handleStep5Next() {
+    if (!createdCompanyId || !createdAgentId) return;
+    setError(null);
+    setStep(6);
   }
 
   async function handleLaunch() {
@@ -558,6 +959,78 @@ export function OnboardingWizard() {
     setLoading(true);
     setError(null);
     try {
+      /**
+       * Write the mandate before anything else in the launch.
+       *
+       * The task is created assigned to this agent, so from that moment a run
+       * could pick it up — and an agent that starts work before its mandate
+       * exists is running with no stated limits at exactly the moment the owner
+       * believes they have just set some. Doing it first also means a failure
+       * here stops the launch loudly instead of producing an unconstrained agent
+       * with a task waiting for it.
+       */
+      await agentsApi.saveInstructionsFile(
+        createdAgentId,
+        { path: "AGENTS.md", content: mandateText },
+        createdCompanyId
+      );
+
+      /**
+       * The owner's first goal, and the work under it.
+       *
+       * Created here rather than at the goal step so that backing out of the
+       * wizard leaves nothing half-built, and written before the starter task so
+       * the goal exists by the time anything is assigned. Every task carries
+       * `goalId`: the scripted version of this flow omitted it and reported the
+       * tasks as being under the goal when they were not, which is the failure
+       * nobody investigates because the summary reads correctly.
+       */
+      if (!goalSkipped && goalDraft.title.trim()) {
+        const firstGoal = await goalsApi.create(
+          createdCompanyId,
+          buildFirstGoalPayload({
+            title: goalDraft.title,
+            description: goalDraft.description,
+            ownerAgentId: createdAgentId
+          })
+        );
+        setCreatedCompanyGoalId(firstGoal.id);
+        for (const payload of buildFirstGoalTaskPayloads({
+          goalId: firstGoal.id,
+          assigneeAgentId: createdAgentId,
+          tasks: goalDraft.tasks
+        })) {
+          await issuesApi.create(createdCompanyId, payload);
+        }
+        queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(createdCompanyId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(createdCompanyId) });
+      }
+
+      /**
+       * Make the owner the steward of the agent they just created.
+       *
+       * Without this the owner is the one person in the company who cannot
+       * reach their own agent: My Agent, the connect command for their harness,
+       * and every escalation to them all key off an active stewardship, and
+       * the wizard created agents with none. It surfaced as "Titus: no account"
+       * in a cold end-to-end run — the owner already had an account, but no
+       * stewardship, so nothing tied him to his own Chief of Staff.
+       *
+       * Checked rather than attempted-and-swallowed: pairing is refused with 409
+       * when either side already has an active stewardship, which is correct and
+       * expected on a second run. Asking first keeps a real failure visible
+       * instead of hiding it among the expected ones.
+       */
+      if (createdCompanyHasWorkforce && session?.session.userId) {
+        const mine = await stewardshipsApi.getMyAgent(createdCompanyId);
+        if (!mine.agent) {
+          await stewardshipsApi.pair(createdCompanyId, createdAgentId, session.session.userId);
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.myAgent.detail(createdCompanyId)
+          });
+        }
+      }
+
       let goalId = createdCompanyGoalId;
       if (!goalId) {
         const goals = await goalsApi.list(createdCompanyId);
@@ -617,8 +1090,10 @@ export function OnboardingWizard() {
       e.preventDefault();
       if (step === 1 && companyName.trim()) handleStep1Next();
       else if (step === 2 && agentName.trim()) handleStep2Next();
-      else if (step === 3 && taskTitle.trim()) handleStep3Next();
-      else if (step === 4) handleLaunch();
+      else if (step === 3) handleStep3Next();
+      else if (step === 4) handleStep4Next();
+      else if (step === 5 && taskTitle.trim()) handleStep5Next();
+      else if (step === 6) handleLaunch();
     }
   }
 
@@ -663,8 +1138,10 @@ export function OnboardingWizard() {
                   [
                     { step: 1 as Step, label: "Company", icon: Building2 },
                     { step: 2 as Step, label: "Agent", icon: Bot },
-                    { step: 3 as Step, label: "Task", icon: ListTodo },
-                    { step: 4 as Step, label: "Launch", icon: Rocket }
+                    { step: 3 as Step, label: "Mandate", icon: ScrollText },
+                    { step: 4 as Step, label: "Goal", icon: Target },
+                    { step: 5 as Step, label: "Task", icon: ListTodo },
+                    { step: 6 as Step, label: "Launch", icon: Rocket }
                   ] as const
                 ).map(({ step: s, label, icon: Icon }) => (
                   <button
@@ -734,6 +1211,30 @@ export function OnboardingWizard() {
                       value={companyGoal}
                       onChange={(e) => setCompanyGoal(e.target.value)}
                     />
+                  </div>
+                  <div className="group">
+                    <label
+                      className={cn(
+                        "text-xs mb-1 block transition-colors",
+                        workspaceCode.trim()
+                          ? "text-foreground"
+                          : "text-muted-foreground group-focus-within:text-foreground"
+                      )}
+                    >
+                      Workspace code (optional)
+                    </label>
+                    <input
+                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                      placeholder="e.g. MK-LANTEST"
+                      value={workspaceCode}
+                      onChange={(e) => setWorkspaceCode(e.target.value)}
+                    />
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      If you were given a code, enter it here and this workspace
+                      can give everyone their own agent — agents asking each
+                      other for things, and reaching people on their own
+                      machines. Leave it blank and your agent works on its own.
+                    </p>
                   </div>
                 </div>
               )}
@@ -1113,13 +1614,393 @@ export function OnboardingWizard() {
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
+                      <ScrollText className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-medium">
+                        Set the rules for {agentName.trim() || "your agent"}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        Answer these and we write its mandate — the file it reads
+                        before every piece of work. Every answer is already set
+                        to the careful option, so you can change what matters and
+                        skip the rest.
+                      </p>
+                    </div>
+                  </div>
+
+                  <MandateQuestion
+                    number={1}
+                    question="What is this agent for?"
+                    hint="Sets what it pays attention to and how it breaks a tie between two urgent things."
+                  >
+                    <div className="space-y-1.5">
+                      {MANDATE_JOBS.map((job) => (
+                        <label
+                          key={job.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-job"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.jobKey === job.key}
+                            onChange={() => setAnswer("jobKey", job.key)}
+                          />
+                          <span className="text-xs leading-snug">{job.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {mandateAnswers.jobKey === "other" && (
+                      <textarea
+                        className="mt-2 w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring"
+                        rows={2}
+                        placeholder="In one or two sentences: what is this agent for?"
+                        value={mandateAnswers.jobOther}
+                        onChange={(e) => setAnswer("jobOther", e.target.value)}
+                      />
+                    )}
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={2}
+                    question="What can it get on with by itself?"
+                    hint="Everything here is reversible or read-only. Uncheck anything you would rather see first."
+                  >
+                    <div className="space-y-1">
+                      {AUTONOMOUS_ACTIONS.map((option) => (
+                        <MandateCheck
+                          key={option.key}
+                          label={option.label}
+                          checked={mandateAnswers.autonomous.includes(option.key)}
+                          onChange={() => toggleAnswer("autonomous", option.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={3}
+                    question={`What must it check with ${ownerFirstName} before doing?`}
+                    hint="These are the actions that cannot be taken back. All of them are ticked — leave them that way unless you have a reason."
+                  >
+                    <div className="space-y-1">
+                      {DEFAULT_DESTRUCTIVE_ACTION_CLASSES.map((entry) => (
+                        <MandateCheck
+                          key={entry.key}
+                          label={entry.label}
+                          detail={`${entry.rationale} e.g. ${entry.example}`}
+                          checked={mandateAnswers.checkFirst.includes(entry.key)}
+                          onChange={() => toggleCheckFirst(entry.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={4}
+                    question="What must it never do, even if you approve it?"
+                    hint="Work a person does, full stop. The agent prepares it and hands it over."
+                  >
+                    <div className="space-y-1">
+                      {NEVER_ACTIONS.map((option) => (
+                        <MandateCheck
+                          key={option.key}
+                          label={option.label}
+                          checked={mandateAnswers.never.includes(option.key)}
+                          onChange={() => toggleAnswer("never", option.key)}
+                        />
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={5}
+                    question="Two people tell it different things. Who wins?"
+                  >
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          { key: "owner", label: `${ownerFirstName} decides — it works for you` },
+                          {
+                            key: "work_owner",
+                            label: "Whoever owns that piece of work decides"
+                          },
+                          {
+                            key: "back_to_owner",
+                            label: `Neither — it brings both answers back to ${ownerFirstName}`
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-tiebreak"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.tieBreak === option.key}
+                            onChange={() => setAnswer("tieBreak", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion number={6} question="When it is not sure?">
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          { key: "always_ask", label: "Ask me — I would rather be interrupted" },
+                          {
+                            key: "small_things_flag",
+                            label:
+                              "Decide small reversible things itself, and tell me what it assumed"
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-unsure"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.whenUnsure === option.key}
+                            onChange={() => setAnswer("whenUnsure", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion number={7} question="Numbers it cannot check?">
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          {
+                            key: "must_source",
+                            label: "Never state one — say where it came from or say it does not have it"
+                          },
+                          {
+                            key: "estimate_labelled",
+                            label: "It may estimate, as long as it says so every time"
+                          }
+                        ] as const
+                      ).map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-numbers"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                            checked={mandateAnswers.numbers === option.key}
+                            onChange={() => setAnswer("numbers", option.key)}
+                          />
+                          <span className="text-xs leading-snug">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </MandateQuestion>
+
+                  <MandateQuestion
+                    number={8}
+                    question="Anything else it should know?"
+                    hint="Optional, and in your own words — a client it must never contact, a standing commitment, whose word settles a particular argument. This is added to the mandate as written; it does not override the limits above."
+                  >
+                    <textarea
+                      className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring"
+                      rows={4}
+                      aria-label="Anything else the agent should know"
+                      placeholder="e.g. Never contact anyone at our largest client directly — everything goes through me first."
+                      value={mandateAnswers.additional}
+                      onChange={(e) => setAnswer("additional", e.target.value)}
+                    />
+                  </MandateQuestion>
+
+                  <div className="rounded-md border border-border bg-muted/30 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">
+                          {mandateEdited ? "Your mandate (edited by hand)" : "The mandate we will write"}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Saved as AGENTS.md on {agentName.trim() || "your agent"}. You can change
+                          it any time.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (!showMandateText && !mandateEdited) setMandateDraft(mandateText);
+                          setShowMandateText(!showMandateText);
+                        }}
+                      >
+                        {showMandateText ? "Hide" : "Read it"}
+                      </Button>
+                    </div>
+                    {showMandateText && (
+                      <>
+                        <textarea
+                          className="mt-2.5 max-h-[320px] min-h-[220px] w-full overflow-y-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:ring-1 focus:ring-ring"
+                          value={mandateEdited ? mandateDraft : mandateText}
+                          onChange={(e) => {
+                            setMandateEdited(true);
+                            setMandateDraft(e.target.value);
+                          }}
+                        />
+                        {mandateEdited && (
+                          <button
+                            type="button"
+                            className="mt-1.5 cursor-pointer text-xs text-muted-foreground underline hover:text-foreground"
+                            onClick={() => {
+                              setMandateEdited(false);
+                              setMandateDraft("");
+                            }}
+                          >
+                            Discard my edits and go back to the answers above
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {step === 4 && (
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="bg-muted/50 p-2">
+                      <Target className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-medium">Your first goal</h3>
+                      <p className="text-xs text-muted-foreground">
+                        A goal is the thing {agentName.trim() || "your agent"} keeps moving on
+                        its own. Pick the one that sounds most like your week — you can change
+                        every word of it.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {firstGoalExamples(ownerFirstName).map((example) => (
+                      <label
+                        key={example.key}
+                        className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40"
+                      >
+                        <input
+                          type="radio"
+                          name="first-goal-example"
+                          className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                          checked={!goalSkipped && goalExampleKey === example.key}
+                          onChange={() => {
+                            setGoalSkipped(false);
+                            setGoalTouched(false);
+                            setGoalExampleKey(example.key);
+                          }}
+                        />
+                        <span className="text-xs leading-snug">{example.label}</span>
+                      </label>
+                    ))}
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
+                      <input
+                        type="radio"
+                        name="first-goal-example"
+                        className="mt-0.5 shrink-0 cursor-pointer accent-foreground"
+                        checked={goalSkipped}
+                        onChange={() => setGoalSkipped(true)}
+                      />
+                      <span className="text-xs leading-snug">
+                        Not yet — I'll set a goal later
+                      </span>
+                    </label>
+                  </div>
+
+                  {!goalSkipped && (
+                    <>
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          Goal
+                        </label>
+                        <input
+                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                          value={goalDraft.title}
+                          onChange={(e) => {
+                            setGoalTouched(true);
+                            setGoalDraft({ ...goalDraft, title: e.target.value });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          Why it matters — {agentName.trim() || "your agent"} reads this
+                        </label>
+                        <textarea
+                          className="min-h-[80px] w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                          value={goalDraft.description}
+                          onChange={(e) => {
+                            setGoalTouched(true);
+                            setGoalDraft({ ...goalDraft, description: e.target.value });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-muted-foreground">
+                          The work underneath it
+                        </label>
+                        <div className="space-y-1.5">
+                          {goalDraft.tasks.map((task, index) => (
+                            <div key={index} className="flex items-center gap-2">
+                              <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                                {index === 0 ? "assemble" : "collect"}
+                              </span>
+                              <input
+                                className="w-full rounded-md border border-border bg-transparent px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                                value={task}
+                                onChange={(e) => {
+                                  setGoalTouched(true);
+                                  const tasks = [...goalDraft.tasks];
+                                  tasks[index] = e.target.value;
+                                  setGoalDraft({ ...goalDraft, tasks });
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-1.5 text-xs text-muted-foreground">
+                          All of these start on {agentName.trim() || "your agent"}. When you add
+                          the rest of your team, each collection task moves to whoever owns that
+                          area — that hand-off is what the next screen sets up.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {step === 5 && (
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="bg-muted/50 p-2">
                       <ListTodo className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
                       <h3 className="font-medium">Give it something to do</h3>
                       <p className="text-xs text-muted-foreground">
-                        Give your agent a small task to start with — a bug fix,
-                        a research question, writing a script.
+                        Give {agentName.trim() || "your agent"} a small task to
+                        start with — a bug fix, a research question, writing a
+                        script.
                       </p>
                     </div>
                   </div>
@@ -1147,10 +2028,14 @@ export function OnboardingWizard() {
                       onChange={(e) => setTaskDescription(e.target.value)}
                     />
                   </div>
+                  <WhatHappensNext
+                    agentName={agentName.trim() || "Your agent"}
+                    workforce={createdCompanyHasWorkforce}
+                  />
                 </div>
               )}
 
-              {step === 4 && (
+              {step === 6 && (
                 <div className="space-y-5">
                   <div className="flex items-center gap-3 mb-1">
                     <div className="bg-muted/50 p-2">
@@ -1159,8 +2044,10 @@ export function OnboardingWizard() {
                     <div>
                       <h3 className="font-medium">Ready to launch</h3>
                       <p className="text-xs text-muted-foreground">
-                        Everything is set up. Launching now will create the
-                        starter task, wake the agent, and open the issue.
+                        Everything is set up. This creates the task, assigns it
+                        to {agentName.trim() || "your agent"}, and opens it — it
+                        does not start the work. You do that from the issue,
+                        when you are ready.
                       </p>
                     </div>
                   </div>
@@ -1184,6 +2071,29 @@ export function OnboardingWizard() {
                         <p className="text-xs text-muted-foreground">
                           {getUIAdapter(adapterType).label}
                         </p>
+                      </div>
+                      <Check className="h-4 w-4 text-green-500 shrink-0" />
+                    </div>
+                    {!goalSkipped && goalDraft.title.trim() ? (
+                      <div className="flex items-center gap-3 px-3 py-2.5">
+                        <Target className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{goalDraft.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Goal · {goalDraft.tasks.filter((t) => t.trim()).length} tasks
+                          </p>
+                        </div>
+                        <Check className="h-4 w-4 text-green-500 shrink-0" />
+                      </div>
+                    ) : null}
+                    <div className="flex items-center gap-3 px-3 py-2.5">
+                      <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {mandateAnswers.never.length} things it will never do,{" "}
+                          {mandateAnswers.checkFirst.length} it must ask about first
+                        </p>
+                        <p className="text-xs text-muted-foreground">Mandate</p>
                       </div>
                       <Check className="h-4 w-4 text-green-500 shrink-0" />
                     </div>
@@ -1255,10 +2165,26 @@ export function OnboardingWizard() {
                     </Button>
                   )}
                   {step === 3 && (
+                    <Button size="sm" disabled={loading} onClick={handleStep3Next}>
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Next
+                    </Button>
+                  )}
+                  {step === 4 && (
+                    <Button
+                      size="sm"
+                      disabled={loading || (!goalSkipped && !goalDraft.title.trim())}
+                      onClick={handleStep4Next}
+                    >
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Next
+                    </Button>
+                  )}
+                  {step === 5 && (
                     <Button
                       size="sm"
                       disabled={!taskTitle.trim() || loading}
-                      onClick={handleStep3Next}
+                      onClick={handleStep5Next}
                     >
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -1268,7 +2194,7 @@ export function OnboardingWizard() {
                       {loading ? "Creating..." : "Next"}
                     </Button>
                   )}
-                  {step === 4 && (
+                  {step === 6 && (
                     <Button size="sm" disabled={loading} onClick={handleLaunch}>
                       {loading ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />

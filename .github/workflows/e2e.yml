@@ -1,6 +1,13 @@
 name: E2E Tests
 
 on:
+  # These specs had never run automatically: the trigger was workflow_dispatch
+  # only, so a dozen browser specs sat in the repo gating nothing. The onboarding
+  # wizard spec was broken by a change to the wizard's steps and nobody found out
+  # until someone ran it by hand.
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       skip_llm:
@@ -13,7 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PAPERCLIP_E2E_SKIP_LLM: ${{ inputs.skip_llm && 'true' || 'false' }}
+      # `inputs.skip_llm` is only populated on workflow_dispatch. On a
+      # pull_request event it is empty, so the old expression evaluated to
+      # 'false' and the server would attempt a real provider call with no key
+      # configured — red on the first PR, for a reason unrelated to the change.
+      # Skip by default; opt into a real model only by dispatching explicitly.
+      PAPERCLIP_E2E_SKIP_LLM: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_llm == false && 'false' || 'true' }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +39,9 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      # Feature PRs intentionally omit pnpm-lock.yaml; the lockfile refresh
+      # workflow owns committing the resolved graph after merge.
+      - run: pnpm install --no-frozen-lockfile
       - run: pnpm build
       - run: google-chrome --version
 

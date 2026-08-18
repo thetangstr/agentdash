@@ -661,7 +661,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       "agentdash_check_approval",
       "Check the status of an approval request. Poll this after agentdash_request_approval and DO "
         + "NOT proceed with the gated action until status === \"approved\". If status is "
-        + "\"rejected\" or \"revision_requested\", read the comments (paperclipListApprovalComments) "
+        + "\"rejected\" or \"revision_requested\", read the comments (list_approval_comments) "
         + "and either revise the request or drop the action. Never fabricate approval status.",
       z.object({ approvalId: z.string().uuid() }),
       async ({ approvalId }) => {

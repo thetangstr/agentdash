@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, MailPlus } from "lucide-react";
+import { Check, Copy, ExternalLink, MailPlus } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -8,32 +8,21 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useToast } from "@/context/ToastContext";
 import { Link } from "@/lib/router";
+import { copyToClipboard } from "@/lib/clipboard";
 import { queryKeys } from "@/lib/queryKeys";
 
 const inviteRoleOptions = [
   {
-    value: "viewer",
-    label: "Viewer",
-    description: "Can view company work and follow along without operational permissions.",
-    gets: "No built-in grants.",
-  },
-  {
-    value: "operator",
-    label: "Operator",
-    description: "Recommended for people who need to help run work without managing access.",
-    gets: "Can assign tasks.",
+    value: "member",
+    label: "Member",
+    description: "Recommended for colleagues. Does the work and owns what they create.",
+    gets: "Can create projects and agents, and assign tasks. Cannot change company goals.",
   },
   {
     value: "admin",
     label: "Admin",
-    description: "Recommended for operators who need to invite people, create agents, and approve joins.",
-    gets: "Can create agents, invite users, assign tasks, and approve join requests.",
-  },
-  {
-    value: "owner",
-    label: "Owner",
-    description: "Full company access, including membership and permission management.",
-    gets: "Everything in Admin, plus managing members and permission grants.",
+    description: "Sets company direction and manages everything, including access.",
+    gets: "Everything in Member, plus goals, invites, permissions, and join approval.",
   },
 ] as const;
 
@@ -49,7 +38,7 @@ export function CompanyInvites() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
-  const [humanRole, setHumanRole] = useState<"owner" | "admin" | "operator" | "viewer">("operator");
+  const [humanRole, setHumanRole] = useState<"admin" | "member">("member");
   // AgentDash: auto-approve invited teammates by default so they join the
   // workspace instantly on accept (no admin approval click). Uncheck to fall
   // back to the approval queue.
@@ -66,21 +55,27 @@ export function CompanyInvites() {
   }, [latestInviteCopied]);
 
   async function copyInviteUrl(url: string) {
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-        return true;
-      }
-    } catch {
-      // Fall through to the unavailable message below.
+    // Use the shared helper, not `navigator.clipboard` directly.
+    //
+    // The Clipboard API only exists in a SECURE CONTEXT. This instance is
+    // reached over plain HTTP on the client's LAN -- HTTPS is not an option
+    // for them yet -- so `navigator.clipboard` is simply absent and this
+    // reported "Clipboard unavailable" every time, on the one screen whose
+    // entire job is handing someone a URL.
+    //
+    // `copyToClipboard` already falls back to a hidden textarea plus
+    // `document.execCommand("copy")`, which DOES work without a secure
+    // context. That fallback was written for exactly this case; this page
+    // just never called it.
+    const ok = await copyToClipboard(url);
+    if (!ok) {
+      pushToast({
+        title: "Clipboard unavailable",
+        body: "Copy the invite URL manually from the field below.",
+        tone: "warn",
+      });
     }
-
-    pushToast({
-      title: "Clipboard unavailable",
-      body: "Copy the invite URL manually from the field below.",
-      tone: "warn",
-    });
-    return false;
+    return ok;
   }
 
   useEffect(() => {
@@ -214,7 +209,7 @@ export function CompanyInvites() {
                   <span className="min-w-0 space-y-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">{option.label}</span>
-                      {option.value === "operator" ? (
+                      {option.value === "member" ? (
                         <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
                           Default
                         </span>
@@ -275,16 +270,27 @@ export function CompanyInvites() {
                 This URL includes the current AgentDash domain returned by the server.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                const copied = await copyInviteUrl(latestInviteUrl);
-                setLatestInviteCopied(copied);
-              }}
-              className="w-full rounded-md border border-border bg-muted/60 px-3 py-2 text-left text-sm break-all transition-colors hover:bg-background"
-            >
-              {latestInviteUrl}
-            </button>
+            <div className="flex items-start gap-2">
+              <div
+                data-testid="latest-invite-url"
+                className="min-w-0 flex-1 cursor-text select-text rounded-md border border-border bg-muted/60 px-3 py-2 text-left font-mono text-sm break-all"
+              >
+                {latestInviteUrl}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                aria-label="Copy invite link"
+                onClick={async () => {
+                  const copied = await copyInviteUrl(latestInviteUrl);
+                  setLatestInviteCopied(copied);
+                }}
+              >
+                {latestInviteCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {latestInviteCopied ? "Copied" : "Copy"}
+              </Button>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" asChild>
                 <a href={latestInviteUrl} target="_blank" rel="noreferrer">

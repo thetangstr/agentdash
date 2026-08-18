@@ -71,6 +71,8 @@ export interface AgentFactFilterHold {
 /** Who answered, from what source, when. Attached to the fact, not to a person. */
 export interface AgentFactProvenance {
   answeredByAgentId: string | null;
+  /** The person, when a person answered rather than an agent. */
+  answeredByUserId: string | null;
   sourceKind: AgentFactSourceKind | null;
   answeredAt: string | null;
 }

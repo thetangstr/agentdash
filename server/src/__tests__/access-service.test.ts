@@ -71,7 +71,9 @@ describeEmbeddedPostgres("access service", () => {
     await tempDb?.cleanup();
   });
 
-  it("rejects combined access updates that would demote the last active owner", async () => {
+  it("rejects combined access updates that would demote the last active admin", async () => {
+    // Under the two-role model owner→admin is a no-op (both normalize to
+    // admin), so the demotion that threatens the invariant is admin→member.
     const { company, owner } = await createCompanyWithOwner(db);
     const access = accessService(db);
 
@@ -79,10 +81,10 @@ describeEmbeddedPostgres("access service", () => {
       access.updateMemberAndPermissions(
         company.id,
         owner.id,
-        { membershipRole: "admin", grants: [] },
+        { membershipRole: "member", grants: [] },
         "admin-user",
       ),
-    ).rejects.toThrow("Cannot remove the last active owner");
+    ).rejects.toThrow("Cannot remove the last active admin");
 
     const unchanged = await db
       .select()
@@ -92,13 +94,13 @@ describeEmbeddedPostgres("access service", () => {
     expect(unchanged.membershipRole).toBe("owner");
   });
 
-  it("rejects role-only updates that would suspend the last active owner", async () => {
+  it("rejects role-only updates that would suspend the last active admin", async () => {
     const { company, owner } = await createCompanyWithOwner(db);
     const access = accessService(db);
 
     await expect(
       access.updateMember(company.id, owner.id, { status: "suspended" }),
-    ).rejects.toThrow("Cannot remove the last active owner");
+    ).rejects.toThrow("Cannot remove the last active admin");
 
     const unchanged = await db
       .select()
@@ -206,7 +208,7 @@ describeEmbeddedPostgres("access service", () => {
 
     await expect(
       access.setUserCompanyAccess(admin.principalId, [], { actorUserId: owner.principalId }),
-    ).rejects.toThrow("Owners and admins cannot be removed from company access");
+    ).rejects.toThrow("Admins cannot be removed from company access");
 
     const operator = await db
       .insert(companyMemberships)

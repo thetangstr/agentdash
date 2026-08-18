@@ -7,6 +7,7 @@ import {
   createDeliverableCheckSchema,
   createDeliverableFactSchema,
   createDeliverableSchema,
+  isUuidLike,
   recordFactCorrectionSchema,
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
@@ -45,6 +46,27 @@ export function deliverableRoutes(db: Db) {
   const checks = deliverableCheckService(db);
   const review = deliverableReviewService(db);
   const record = deliverableRecordService(db);
+
+  /**
+   * A run id that is not a UUID is "not found", not "internal server error".
+   *
+   * Every `:runId` route below hands the raw path segment to a query that
+   * compares it against a uuid column, so a human-readable id like
+   * `board-pack-week-1` reached Postgres as a malformed literal and came back
+   * as an unhandled 500. Found by the Chief of Staff on its first real board
+   * pack: it guessed the slug it had been given, got "Internal server error",
+   * and assembled the pack from the facts table instead — the failure was
+   * reported in the deliverable, which is the only reason anyone saw it.
+   *
+   * 404 rather than 400: whether an id is well-formed is this API's private
+   * business, and a caller learning "no such run" is told everything it can act
+   * on. A well-formed id that does not exist already answers 404, so the two
+   * cases now agree instead of differing by five hundred.
+   */
+  router.param("runId", (req, res, next, value: string) => {
+    if (isUuidLike(value)) return next();
+    res.status(404).json({ error: "Deliverable run not found" });
+  });
 
   async function requireProfileCompany(companyId: string) {
     const company = await db

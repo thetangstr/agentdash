@@ -1,7 +1,12 @@
 import type { AgentAdapterType, JoinRequest, PermissionKey } from "@paperclipai/shared";
 import { api } from "./client";
 
-export type HumanCompanyRole = "owner" | "admin" | "operator" | "viewer";
+/**
+ * Two roles since the 2026-08-16 collapse. The server normalizes legacy
+ * strings (owner/operator/viewer) before they reach any response, so the UI
+ * only ever sees these.
+ */
+export type HumanCompanyRole = "admin" | "member";
 
 type InviteSummary = {
   id: string;
@@ -217,7 +222,7 @@ export type UserCompanyAccessEntry = {
   principalType: "user";
   principalId: string;
   status: "pending" | "active" | "suspended" | "archived";
-  membershipRole: HumanCompanyRole | "member" | null;
+  membershipRole: HumanCompanyRole | null;
   createdAt: string;
   updatedAt: string;
   companyName: string | null;
@@ -242,7 +247,7 @@ export type CurrentBoardAccess = {
   companyIds: string[];
   memberships?: Array<{
     companyId: string;
-    membershipRole: HumanCompanyRole | "member" | null;
+    membershipRole: HumanCompanyRole | null;
     status: "pending" | "active" | "suspended" | "archived";
   }>;
   source: string;

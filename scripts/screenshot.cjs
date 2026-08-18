@@ -65,7 +65,7 @@ const origin = new URL(url).origin;
 
 // --- Screenshot ----------------------------------------------------------
 (async () => {
-  const { chromium } = require("playwright");
+  const { chromium } = require("@playwright/test");
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({

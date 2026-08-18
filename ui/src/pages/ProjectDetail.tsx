@@ -17,6 +17,8 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
 import { InlineEditor } from "../components/InlineEditor";
+import { useCapability } from "../hooks/useCapability";
+import { DirectionRestricted } from "../components/DirectionRestricted";
 // AgentDash: goals-eval-hitl
 import { DefinitionOfDoneEditor } from "../components/DefinitionOfDoneEditor";
 import { goalsEvalHitlApi } from "../api/goals-eval-hitl";
@@ -253,6 +255,19 @@ export function ProjectDetail() {
   const canonicalProjectRef = project ? projectRouteRef(project) : routeProjectRef;
   const projectLookupRef = project?.id ?? routeProjectRef;
   const resolvedCompanyId = project?.companyId ?? selectedCompanyId;
+
+  /**
+   * A project defines a workstream, so changing it is company direction. The
+   * configuration and budget tabs are the sharper case: they are reachable by
+   * URL with no button to hide, so a member who bookmarks one lands on a page
+   * of controls that will all refuse. Gating the tab is the fix; hiding a
+   * button would not have covered it.
+   *
+   * Read-only while the answer is still loading — the API refuses either way,
+   * so an optimistic control can only ever become a 403.
+   */
+  const direction = useCapability(resolvedCompanyId, "direction:set");
+  const canEditProject = direction.allowed && !direction.isLoading;
   const experimentalSettingsQuery = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
@@ -578,6 +593,7 @@ export function ProjectDetail() {
           <InlineEditor
             value={project.name}
             onSave={(name) => updateProject.mutate({ name })}
+            readOnly={!canEditProject}
             as="h2"
             className="text-xl font-bold"
           />
@@ -672,7 +688,18 @@ export function ProjectDetail() {
         )
       ) : null}
 
-      {activeTab === "configuration" && (
+      {/* Configuration and budget are direction, and both are reachable by URL.
+          Someone without the capability gets an explanation instead of a page
+          of controls that all refuse. */}
+      {activeTab === "configuration" && !canEditProject && !direction.isLoading ? (
+        <DirectionRestricted what="project configuration" role={direction.membershipRole} />
+      ) : null}
+
+      {activeTab === "budget" && !canEditProject && !direction.isLoading ? (
+        <DirectionRestricted what="the project budget" role={direction.membershipRole} />
+      ) : null}
+
+      {activeTab === "configuration" && canEditProject && (
         <div className="max-w-4xl space-y-6">
           <ProjectProperties
             project={project}
@@ -697,7 +724,7 @@ export function ProjectDetail() {
         </div>
       )}
 
-      {activeTab === "budget" && resolvedCompanyId ? (
+      {activeTab === "budget" && canEditProject && resolvedCompanyId ? (
         <div className="max-w-3xl">
           <BudgetPolicyCard
             summary={projectBudgetSummary}

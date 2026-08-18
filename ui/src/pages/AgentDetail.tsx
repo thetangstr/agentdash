@@ -53,6 +53,7 @@ import {
 } from "../components/AgentRunFailureGuidance";
 import {
   AgentHarnessReadinessPanel,
+  needsBackgroundPreflight,
   readAgentHarnessPreflightStatus,
 } from "../components/AgentHarnessReadinessPanel";
 import { buildHarnessSupportEscalationBody } from "../lib/harness-support-escalation";
@@ -837,6 +838,28 @@ export function AgentDetail() {
       }
     },
   });
+
+  /**
+   * Re-check the harness in the background instead of asking the reader to.
+   *
+   * Agents run whether or not preflight evidence exists — which is why a banner
+   * saying "Harness preflight required" sat above agents that were already
+   * working. Clicking the button was bookkeeping the page can do itself, so it
+   * does: once per agent per mount, whenever there is no current evidence.
+   *
+   * This settles rather than retrying. A failed run moves the state to `fail`,
+   * which `needsBackgroundPreflight` excludes, and the ref stops a second
+   * attempt for the same agent even if the run errors without changing state.
+   */
+  const backgroundPreflightRef = useRef<string | null>(null);
+  useEffect(() => {
+    const agentId = agent?.id;
+    if (!agentId) return;
+    if (!needsBackgroundPreflight(harnessPreflightStatus.state)) return;
+    if (backgroundPreflightRef.current === agentId) return;
+    backgroundPreflightRef.current = agentId;
+    harnessPreflight.mutate();
+  }, [agent?.id, harnessPreflightStatus.state, harnessPreflight]);
 
   const budgetMutation = useMutation({
     mutationFn: (amount: number) =>

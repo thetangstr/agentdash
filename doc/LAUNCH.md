@@ -136,8 +136,8 @@ CoS chat (`/cos`) routes replies through `server/src/services/dispatch-llm.ts` b
 
 | Adapter | What it spawns | Required env |
 |---|---|---|
-| `claude_api` *(default)* | Direct HTTP call to Anthropic's Messages API with prompt caching | `ANTHROPIC_API_KEY=sk-ant-…` |
-| `minimax` | MiniMax via its **Anthropic-compatible** Messages API (same `@anthropic-ai/sdk` client, MiniMax base URL + model) | `MINIMAX_API_KEY=…` (optional: `MINIMAX_BASE_URL`, `MINIMAX_MODEL`) |
+| `claude_api` | Direct HTTP call to Anthropic's Messages API with prompt caching | `ANTHROPIC_API_KEY=sk-ant-…` |
+| `minimax` *(default)* | MiniMax via its **Anthropic-compatible** Messages API (same `@anthropic-ai/sdk` client, MiniMax base URL + model) | `MINIMAX_API_KEY=…` (optional: `MINIMAX_BASE_URL`, `MINIMAX_MODEL`) |
 | `openai_compat` | Any **OpenAI-compatible** provider (OpenRouter, Fireworks, Together, Groq) via fetch to `{base}/chat/completions` | `OPENAI_COMPAT_API_KEY=…` (optional: `OPENAI_COMPAT_BASE_URL`, `OPENAI_COMPAT_MODEL`, `OPENAI_COMPAT_MAX_TOKENS`) |
 | `claude_local` | Spawns `claude --print -` with conversation piped to stdin | the `claude` CLI on PATH; auth handled by `claude login` |
 | `hermes_local` | Spawns `hermes chat -q "<prompt>" -Q` | the `hermes` CLI on PATH; Hermes manages its own auth via `hermes setup` |
@@ -168,9 +168,12 @@ Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) are n
 
 | Var | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed for `claude_api` path or fallback) |
-| `AGENTDASH_DEFAULT_ADAPTER` | `claude_api` / `claude_local` / `hermes_local` for CoS chat (default `claude_api` if unset). Other adapters are for agent execution unless separately wired into CoS chat. |
+| `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed when `claude_api` is the adapter or the named fallback) |
+| `AGENTDASH_DEFAULT_ADAPTER` | `minimax` / `claude_api` / `claude_local` / `hermes_local` / `openai_compat` for CoS chat (default `minimax` if unset). Other adapters are for agent execution unless separately wired into CoS chat. |
+| `AGENTDASH_FALLBACK_ADAPTER` | Adapter to try when the configured one fails. **Unset means do not fall back** — the request fails loudly instead. One hop only; naming the same adapter is refused. |
 | `AGENTDASH_HERMES_COMMAND` | Optional absolute path to `hermes`; defaults to `hermes` on PATH. |
+
+**Why the default is not `claude_api`.** Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibit sharing an account or driving it by automated means "except when you are accessing our Services via an Anthropic API Key", and the [Agent SDK docs](https://code.claude.com/docs/en/agent-sdk) state that third-party products may not offer a claude.ai login and must use Console API-key auth. Defaulting to Claude pushed every unconfigured deployment toward either an unbudgeted key or a shared personal seat. `claude_api` with a Console key remains fully supported and is squarely within the Commercial Terms — it is now a deliberate choice rather than what you get by saying nothing. The same caution applies to `claude_local` and to pointing `hermes setup` at a Claude Pro/Max login.
 
 Costs for the API path are minimal at chat scale — the system prompt is cached (`cache_control: ephemeral`), so each repeat turn within a conversation is ~10% the input cost of the first.
 
@@ -269,8 +272,12 @@ PAPERCLIP_PUBLIC_URL=https://your-domain.com  # e.g. http://100.83.171.56:3100 f
 # MICROSOFT_TENANT_ID=common  # optional; defaults to common (any Microsoft account)
 
 # LLM (CoS chat dispatch)
-ANTHROPIC_API_KEY=sk-ant-…
-AGENTDASH_DEFAULT_ADAPTER=claude_api  # or claude_local / hermes_local / minimax / openai_compat
+AGENTDASH_DEFAULT_ADAPTER=minimax  # or claude_api / claude_local / hermes_local / openai_compat
+MINIMAX_API_KEY=…
+# Optional. Unset means a failed adapter fails the request rather than
+# quietly answering from somewhere nobody configured.
+# AGENTDASH_FALLBACK_ADAPTER=openai_compat
+# ANTHROPIC_API_KEY=sk-ant-…  # only for the claude_api adapter or fallback
 
 # OpenAI-compatible provider (Cloud SKU — usage-based via OpenRouter / Fireworks)
 # AGENTDASH_DEFAULT_ADAPTER=openai_compat

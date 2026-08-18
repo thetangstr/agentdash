@@ -17,11 +17,24 @@ const buildTargets = [
     name: "@paperclipai/shared",
     output: path.join(rootDir, "packages/shared/dist/index.js"),
     tsconfig: path.join(rootDir, "packages/shared/tsconfig.json"),
+    src: path.join(rootDir, "packages/shared/src"),
   },
   {
     name: "@paperclipai/plugin-sdk",
     output: path.join(rootDir, "packages/plugins/sdk/dist/index.js"),
     tsconfig: path.join(rootDir, "packages/plugins/sdk/tsconfig.json"),
+    src: path.join(rootDir, "packages/plugins/sdk/src"),
+  },
+  {
+    // G6 (2026-08-16): adapter-utils exports point at dist now (upstream's
+    // shape), so the vendored hermes adapter loads OUR build with seatbelt
+    // support instead of the published copy with none. Stale dist here means
+    // agents run unconfined — exactly the class of failure this guard exists
+    // to catch.
+    name: "@paperclipai/adapter-utils",
+    output: path.join(rootDir, "packages/adapter-utils/dist/index.js"),
+    tsconfig: path.join(rootDir, "packages/adapter-utils/tsconfig.json"),
+    src: path.join(rootDir, "packages/adapter-utils/src"),
   },
 ];
 
@@ -29,8 +42,71 @@ if (!fs.existsSync(tscCliPath)) {
   throw new Error(`TypeScript CLI not found at ${tscCliPath}`);
 }
 
+/**
+ * Newest mtime under a source tree, or 0 if it cannot be read.
+ *
+ * Cheap by design: this runs before every typecheck and every test invocation,
+ * so it walks .ts files and nothing else.
+ */
+function newestSourceMtime(dir) {
+  let newest = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue;
+      try {
+        const mtime = fs.statSync(full).mtimeMs;
+        if (mtime > newest) newest = mtime;
+      } catch {
+        // A file that vanished mid-walk cannot make the build newer.
+      }
+    }
+  }
+  return newest;
+}
+
+/**
+ * A target is up to date only if its output exists AND is newer than every
+ * source file that produced it.
+ *
+ * This used to check existence alone, which meant that once `dist/index.js`
+ * existed it was never rebuilt again — no matter how far the source had moved
+ * on. The consequence is not a build annoyance, it is a correctness one: the
+ * server suite imports `@paperclipai/plugin-sdk` through its `exports` map,
+ * which points at `dist`. So an edit to SDK source was INVISIBLE to both
+ * `pnpm typecheck` and the tests.
+ *
+ * Found while trying to falsify the plugin capability gate: deleting the gate
+ * from `host-client-factory.ts` broke no test, because the test was running
+ * against a dist built before the deletion. A guard that cannot be falsified
+ * is not known to work.
+ */
+function isUpToDate(target) {
+  if (!fs.existsSync(target.output)) return false;
+  if (!target.src) return true;
+  let outputMtime;
+  try {
+    outputMtime = fs.statSync(target.output).mtimeMs;
+  } catch {
+    return false;
+  }
+  return newestSourceMtime(target.src) <= outputMtime;
+}
+
 function allOutputsExist() {
-  return buildTargets.every((target) => fs.existsSync(target.output));
+  return buildTargets.every(isUpToDate);
 }
 
 function sleep(ms) {
@@ -76,7 +152,7 @@ try {
   }
 
   for (const target of buildTargets) {
-    if (fs.existsSync(target.output)) {
+    if (isUpToDate(target)) {
       continue;
     }
 

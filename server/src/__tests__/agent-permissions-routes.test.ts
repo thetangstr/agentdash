@@ -787,7 +787,9 @@ describe.sequential("agent permission routes", () => {
         name: "Backdoor",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(403);
@@ -813,7 +815,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
@@ -854,7 +858,9 @@ describe.sequential("agent permission routes", () => {
         name: "Backdoor",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(403);
@@ -882,7 +888,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(402);
@@ -910,7 +918,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(201);
@@ -935,7 +945,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(409);
@@ -960,7 +972,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect([200, 201]).toContain(res.status);
@@ -1014,7 +1028,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
         runtimeConfig: {
           heartbeat: {
             intervalSec: 3600,
@@ -1052,7 +1068,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
         runtimeConfig: {
           heartbeat: {
             intervalSec: 3600,
@@ -1095,7 +1113,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(402);
@@ -1187,7 +1207,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
         defaultEnvironmentId: environmentId,
       }));
 
@@ -1219,7 +1241,9 @@ describe.sequential("agent permission routes", () => {
         name: "Builder",
         role: "engineer",
         adapterType: "process",
-        adapterConfig: {},
+        // A process agent needs a command to be creatable at all; these cases are
+        // about authorization, so any runnable no-op keeps them on topic.
+        adapterConfig: { command: "/usr/bin/true" },
         defaultEnvironmentId: environmentId,
       }));
 
@@ -1383,6 +1407,7 @@ describe.sequential("agent permission routes", () => {
       .patch(`/api/agents/${agentId}`)
       .send({
         adapterType: "process",
+        adapterConfig: { command: "/usr/bin/true" },
       }));
 
     expect(res.status).toBe(422);

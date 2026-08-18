@@ -38,6 +38,20 @@ export const answerAgentFactSchema = z
   .strict();
 export type AnswerAgentFact = z.infer<typeof answerAgentFactSchema>;
 
+/**
+ * A steward answering their own agent's question.
+ *
+ * No `sourceKind`: it is forced to "human" by the service. A caller that could
+ * choose the label could record a recollection as a connector reading, and the
+ * whole point of the source kind is that a reader can tell those apart.
+ */
+export const answerAsStewardSchema = z
+  .object({
+    answer: z.string().trim().min(1).max(20_000),
+  })
+  .strict();
+export type AnswerAsSteward = z.infer<typeof answerAsStewardSchema>;
+
 export const declineAgentFactSchema = z
   .object({
     reason: z.string().trim().min(1).max(2000),

@@ -167,7 +167,7 @@ describe("POST /api/companies — Pro free-mail block (AGE-60 + AGE-104)", () =>
       expect(createMock).toHaveBeenCalledWith(
         expect.objectContaining({ emailDomain: `alice@${domain}` }),
         expect.anything(),
-        expect.objectContaining({ principalType: "user", membershipRole: "owner" }),
+        expect.objectContaining({ principalType: "user", membershipRole: "admin" }),
       );
     },
   );

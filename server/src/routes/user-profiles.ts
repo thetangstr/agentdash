@@ -310,7 +310,15 @@ export function userProfileRoutes(db: Db) {
     const canonicalSlug = userSlugCandidates(row)[0] ?? row.principalId;
     const userId = row.userId ?? row.principalId;
 
-    const [stats, daily, recentIssues, recentActivity, topAgents, topProviders] = await Promise.all([
+    const [everMeasured, stats, daily, recentIssues, recentActivity, topAgents, topProviders] = await Promise.all([
+      // Company-wide and unbounded, matching `CostSummary.measured`. Scoping it
+      // to this user's issues would make "never metered" indistinguishable from
+      // "this person has done nothing" — which is the confusion being removed.
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(costEvents)
+        .where(eq(costEvents.companyId, companyId))
+        .then((rows) => Number(rows[0]?.count ?? 0) > 0),
       Promise.all(
         PROFILE_WINDOWS.map((entry) =>
           loadWindowStats(db, companyId, userId, entry.key, entry.label, windowStart(entry.days)),
@@ -405,6 +413,7 @@ export function userProfileRoutes(db: Db) {
 
     const payload: UserProfileResponse = {
       user,
+      measured: everMeasured,
       stats,
       daily,
       recentIssues: recentIssues.map((issue) => ({

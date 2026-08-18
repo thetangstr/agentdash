@@ -21,6 +21,7 @@ export {
 export {
   createCompanySchema,
   updateCompanySchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   type CreateCompany,
   type UpdateCompany,
@@ -180,6 +181,7 @@ export {
 export {
   createProjectSchema,
   updateProjectSchema,
+  replaceProjectAccessSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   projectExecutionWorkspacePolicySchema,

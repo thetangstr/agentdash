@@ -1,7 +1,7 @@
 # Bridge containment spike — results
 
 **Date:** 2026-07-31
-**Host:** MKThink Mac mini M4, macOS 26.6, arm64 (`yang@192.168.86.57`)
+**Host:** MKThink Mac mini M4, macOS 26.6, arm64 (`<user>@mkmini.local`)
 **Method:** decoy secret (`SPIKE_DECOY_SHOULD_NOT_BE_READABLE`), never real credentials.
 **Question:** can the local bridge worker run agent-authored code on a staff Mac
 without exposing the rest of the machine or the MKThink LAN?

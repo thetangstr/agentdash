@@ -538,6 +538,36 @@ export function agentService(db: Db) {
         // so without these the delete fails with a foreign-key violation.
         await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.agentId, id));
         await tx.delete(agentStewardships).where(eq(agentStewardships.agentId, id));
+
+        // Six more tables reference `agents` with NO ACTION and were missed, so
+        // deleting any agent that had ever raised an approval or authored a
+        // document failed with a foreign-key violation the route reported as
+        // `500 Internal server error`. The agents you most want to remove are
+        // precisely the ones that did some work, so in practice this affected
+        // every real agent on the board.
+        //
+        // They divide the same way the issue dependents do, and the division is
+        // the point:
+        //
+        //   DETACHED — an approval is a decision with a human's name on it, a
+        //     document is the work product, a goal outlives whoever was set to
+        //     own it. Deleting an agent must not erase who approved what. The
+        //     reference is cleared; the record stays.
+        await tx.execute(sql`update approvals set requested_by_agent_id = null where requested_by_agent_id = ${id}`);
+        await tx.execute(sql`update bridge_tasks set requested_by_agent_id = null where requested_by_agent_id = ${id}`);
+        await tx.execute(sql`update documents set created_by_agent_id = null where created_by_agent_id = ${id}`);
+        await tx.execute(sql`update documents set updated_by_agent_id = null where updated_by_agent_id = ${id}`);
+        await tx.execute(sql`update document_revisions set created_by_agent_id = null where created_by_agent_id = ${id}`);
+        await tx.execute(sql`update goals set owner_agent_id = null where owner_agent_id = ${id}`);
+
+        //   DELETED — these carry a NOT NULL agent reference, so they cannot be
+        //     detached and mean nothing without the agent. `agent_runs` is the
+        //     metering rollup, so deleting an agent DOES discard its historical
+        //     run counts; that is forced by the schema, not chosen here, and is
+        //     worth knowing before deleting an agent whose usage is being
+        //     billed.
+        await tx.execute(sql`delete from agent_config_revisions where agent_id = ${id}`);
+        await tx.execute(sql`delete from agent_runs where agent_id = ${id}`);
         const deleted = await tx
           .delete(agents)
           .where(eq(agents.id, id))

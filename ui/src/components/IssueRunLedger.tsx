@@ -453,7 +453,7 @@ function canBoardRecordWatchdogDecision(
     (item) => item.companyId === companyId && item.status === "active",
   );
   if (!membership) return boardAccess.companyIds.includes(companyId) && !boardAccess.memberships;
-  return membership.membershipRole !== "viewer" && membership.membershipRole !== null;
+  return membership.membershipRole !== null;
 }
 
 function watchdogDecisionErrorMessage(error: unknown) {
