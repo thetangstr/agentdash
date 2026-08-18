@@ -54,14 +54,14 @@ describe("renaming an agent through MCP", () => {
   it("is reachable as a tool, not only as a REST route", () => {
     // The whole point. If this name disappears, the capability is gone from
     // the customer's view no matter what the server can still do.
-    expect(() => getTool("paperclipUpdateAgent")).not.toThrow();
+    expect(() => getTool("update_agent")).not.toThrow();
   });
 
   it("PATCHes the agent with only the fields that were passed", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "agent-1", name: "Atlas" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getTool("paperclipUpdateAgent").execute({ agentId: "agent-1", name: "Atlas" });
+    await getTool("update_agent").execute({ agentId: "agent-1", name: "Atlas" });
 
     const request = lastRequest(fetchMock);
     expect(request.url).toBe("http://localhost:3100/api/agents/agent-1");
@@ -75,7 +75,7 @@ describe("renaming an agent through MCP", () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getTool("paperclipUpdateAgent").execute({ agentId: "agent-1", title: null });
+    await getTool("update_agent").execute({ agentId: "agent-1", title: null });
 
     expect(lastRequest(fetchMock).body).toEqual({ title: null });
   });
@@ -86,7 +86,7 @@ describe("renaming an agent through MCP", () => {
 
     // Returns the validation error as tool output rather than throwing, so an
     // agent reads why it failed instead of seeing an opaque transport error.
-    const result = await getTool("paperclipUpdateAgent").execute({ agentId: "agent-1" });
+    const result = await getTool("update_agent").execute({ agentId: "agent-1" });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).toMatch(/at least one field/i);
@@ -102,10 +102,10 @@ describe("filing a bug through MCP", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await getTool("paperclipReportIssue").execute({
+    await getTool("report_issue").execute({
       kind: "bug",
       title: "Renaming an agent returns 404",
-      description: "Ran paperclipUpdateAgent with a new name and got a 404 back.",
+      description: "Ran update_agent with a new name and got a 404 back.",
     });
 
     const request = lastRequest(fetchMock);
@@ -122,7 +122,7 @@ describe("filing a bug through MCP", () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getTool("paperclipReportIssue").execute({ kind: "bug", title: "x", description: "broke" });
+    await getTool("report_issue").execute({ kind: "bug", title: "x", description: "broke" });
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -133,7 +133,7 @@ describe("filing a bug through MCP", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await getTool("paperclipReportIssueStatus").execute({});
+    await getTool("report_issue_status").execute({});
 
     const request = lastRequest(fetchMock);
     expect(request.url).toBe("http://localhost:3100/api/issue-reports/config");

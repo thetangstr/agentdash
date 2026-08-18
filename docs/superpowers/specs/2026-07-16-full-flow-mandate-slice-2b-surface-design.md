@@ -38,7 +38,7 @@ export const performMandatedActionSchema = z.object({
 `packages/mcp-server/src/tools.ts` — add via `makeTool`:
 ```ts
 makeTool(
-  "paperclipMandatedAttest",
+  "mandated_attest",
   "Perform a mandated action: verify the agent's mandate, KYA the counterparty (valid-at-T), and attest the action — returns { authorized, reason?, receipt? }. Denied if out-of-scope/over-cap/expired or the counterparty can't be verified.",
   z.object({
     companyId: companyIdOptional,
@@ -65,7 +65,7 @@ makeTool(
 ## Acceptance criteria
 - [ ] `performMandatedActionSchema` exists in shared + exported.
 - [ ] `mandatedActionRoutes` mounted in `app.ts`; POST returns the gate result as JSON; `granteeAgentId` defaults to the acting agent; missing grantee+non-agent → 400; cross-company → 403.
-- [ ] `paperclipMandatedAttest` MCP tool registered, wrapping the route via `client.requestJson`.
+- [ ] `mandated_attest` MCP tool registered, wrapping the route via `client.requestJson`.
 - [ ] Route supertest test (valid→200 denial, invalid→400, cross-company→403) green; server typecheck exit 0; mcp-server compiles.
 - [ ] No approvals/bounce-back/UI (2c deferred).
 

@@ -73,8 +73,8 @@ For QA/browser checks, use the service whose `status` is `running` and whose `he
 
 When the Paperclip MCP tools are available, prefer these issue-scoped tools:
 
-- `paperclipGetIssueWorkspaceRuntime` — reads `currentExecutionWorkspace` and service URLs for an issue.
-- `paperclipControlIssueWorkspaceServices` — starts, stops, or restarts the current issue workspace services.
-- `paperclipWaitForIssueWorkspaceService` — waits until a selected service is running and returns its URL when exposed.
+- `get_issue_workspace_runtime` — reads `currentExecutionWorkspace` and service URLs for an issue.
+- `control_issue_workspace_services` — starts, stops, or restarts the current issue workspace services.
+- `wait_for_issue_workspace_service` — waits until a selected service is running and returns its URL when exposed.
 
 These tools resolve the issue's workspace id for you, so QA agents do not need to know the lower-level execution workspace endpoint first.

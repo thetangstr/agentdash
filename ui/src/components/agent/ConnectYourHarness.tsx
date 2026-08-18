@@ -11,7 +11,7 @@ import { copyToClipboard } from "../../lib/clipboard";
  * Connecting a person's own coding agent to their AgentDash agent.
  *
  * The MCP server, the tools, and the per-agent keys have all existed for a
- * while, and a harness pointed at them works — `paperclipMe` with an agent key
+ * while, and a harness pointed at them works — `whoami` with an agent key
  * returns that agent. What did not exist was any way for the person whose agent
  * it is to get there: minting a key is an API call, the runtime URL is not
  * written down anywhere they look, and the only install instructions in the repo

@@ -50,14 +50,34 @@ const briefPath = resolve(
 const brief = readFileSync(briefPath, "utf8");
 
 /**
- * Every identifier in the brief that looks like one of our tool names. Matching
- * on the prefixes rather than a hand-kept list is the point: it cannot fall out
- * of date with the brief.
+ * Every identifier in the brief that looks like one of our tool names.
+ *
+ * The core tools are unprefixed snake_case now (`list_issues`, `whoami`), so a
+ * prefix regex can no longer find them all, and no regex can tell an arbitrary
+ * snake_case word from a stale citation of a renamed tool. So the extraction is
+ * three-part, from strongest to weakest signal:
+ *
+ *   1. backtick-quoted identifiers — the brief's explicit tool citations. The
+ *      brief is a JS template literal, so the backticks are ESCAPED in source
+ *      (\`name\`); match that, not a bare backtick. These must all resolve.
+ *   2. prefixed camelCase names (agentdashHireAgent) — unambiguous citations
+ *      by shape. These must all resolve.
+ *   3. bare identifiers that ARE current tool names — they anchor the sentinel
+ *      count below, so a brief that stops mentioning tools at all still fails.
+ *
+ * The cost of unprefixed names is that a *bare* stale citation (category 3
+ * gone stale) is invisible to this test; the backtick convention in the brief
+ * is what keeps citations checkable, so cite tools with backticks there.
  */
-const cited = [...new Set(brief.match(/\b(?:paperclip|agentdash)[A-Za-z_]{3,}\b/g) ?? [])]
-  // `agentdash` also appears in package names, URLs and prose ("agentdash_mk",
-  // "agentdash-mcp-server"), so keep only things shaped like a tool identifier.
-  .filter((name) => toolNames.has(name) || /^(paperclip|agentdash)[A-Z]/.test(name));
+const backticked = [...brief.matchAll(/\\`([A-Za-z][A-Za-z0-9_]{2,})\\`/g)].map((m) => m[1]!);
+const prefixedCamel = brief.match(/\b(?:paperclip|agentdash)[A-Z][A-Za-z]{2,}\b/g) ?? [];
+const bareKnown = (brief.match(/\b[a-z][a-z0-9_]{2,}\b/g) ?? []).filter((word) =>
+  toolNames.has(word),
+);
+const cited = [...new Set([...backticked, ...prefixedCamel, ...bareKnown])]
+  // Backticks also quote env vars, headers and JSON fields; keep identifiers
+  // that resolve to a tool or carry an unambiguous tool-citation shape.
+  .filter((name) => toolNames.has(name) || /^(paperclip|agentdash)[A-Z]/.test(name) || /^[a-z0-9]+(_[a-z0-9]+)+$/.test(name));
 
 describe("the handoff brief only names tools that exist", () => {
   it("cites at least a few tools, so the extraction cannot silently match nothing", () => {

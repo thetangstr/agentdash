@@ -87,7 +87,7 @@ an agent with `users:invite` can invite a human as **owner**; a CEO-role agent
 can `PATCH /companies/:id` name and description.
 
 **The honest caveat this plan owed you.** Route-by-route guarding of a ~67-route
-surface, against agents holding a generic `paperclipApiRequest` HTTP tool, means
+surface, against agents holding a generic `api_request` HTTP tool, means
 one missed route is a full bypass — and the first audit found four. A
 deny-by-default middleware over direction-shaped writes would fail closed
 instead. Route-by-route is still the choice here, because a wrong 403 is as

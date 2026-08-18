@@ -61,7 +61,7 @@ Point the agent at the playbook and let the state machine drive:
 1. The agent hits a gated action (hiring beyond the confirmed plan, deletions, budget changes, pausing/resuming the fleet, anything outside the confirmed goals).
 2. It calls `agentdash_request_approval` → creates a `request_board_approval` and returns an `approveUrl`.
 3. **A human decides at `/approvals` in the AgentDash UI** (approve / reject / request revision, with comments).
-4. The agent polls `agentdash_check_approval` and proceeds **only** on `status: "approved"`. On rejection or revision requests it reads the comments (`paperclipListApprovalComments`) and revises or drops the action. Blocked for more than 2 polls → it creates a task for the human instead.
+4. The agent polls `agentdash_check_approval` and proceeds **only** on `status: "approved"`. On rejection or revision requests it reads the comments (`list_approval_comments`) and revises or drops the action. Blocked for more than 2 polls → it creates a task for the human instead.
 
 `agentdash_start_interview` additionally sets `requireBoardApprovalForNewAgents=true` on the freshly bootstrapped company, so agent hires are gated server-side from day one (if the PATCH is not permitted for your key, the tool returns the required manual step instead of silently skipping it).
 

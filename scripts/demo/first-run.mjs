@@ -270,7 +270,7 @@ of hand-written HTTP, so the calls below cannot be malformed:
 Do NOT set PAPERCLIP_AGENT_ID here. That flag makes the connection act AS one
 agent; you are acting as me, to build the company.
 
-Some of what follows has no typed tool yet. For those, use \`paperclipApiRequest\`
+Some of what follows has no typed tool yet. For those, use \`api_request\`
 with the method and path given — it reuses this connection, so you never handle
 the key yourself. If you cannot install the MCP, everything below also works as
 plain HTTP with \`Authorization: Bearer <the key above>\`.
@@ -280,7 +280,7 @@ WHAT ALREADY EXISTS
   Chief of Staff agent: ${cosId}
     - it is my own agent AND the company's Chief of Staff
     - its mandate is already written; read it before changing anything:
-      paperclipApiRequest { method: "GET",
+      api_request { method: "GET",
         path: "/agents/${cosId}/instructions-bundle/file?path=AGENTS.md" }
 
 THE GOAL WE ARE WORKING ON
@@ -313,7 +313,7 @@ WHAT I WANT YOU TO DO
    inferring. Ask me for the "must never" list — that is the part I care about
    most and the part you cannot guess. For example, an agent that owns our
    systems must never delete anything; it proposes a list for a human to approve.
-     paperclipApiRequest
+     api_request
        method: "PUT"
        path:   "/agents/<agentId>/instructions-bundle/file"
        jsonBody: { "path": "AGENTS.md", "content": "# ..." }
@@ -325,7 +325,7 @@ WHAT I WANT YOU TO DO
    the agent behaves.
 
 4. Invite each lead, with auto-approve on:
-     paperclipApiRequest
+     api_request
        method: "POST"
        path:   "/onboarding/invites"
        jsonBody: { "companyId": "${companyId}", "emails": ["..."], "autoApprove": true }
@@ -346,14 +346,14 @@ WHAT I WANT YOU TO DO
    someone who has not accepted is refused with
    "Steward user must be an active company member", which reads like a bug and is
    not one. If they have not accepted yet, tell me, and stop at this step.
-     paperclipApiRequest
+     api_request
        method: "POST"
        path:   "/companies/${companyId}/agent-stewardships"
        jsonBody: { "agentId": "<agentId>", "userId": "<their user id>" }
 
 6. Mint one key per agent, and tell me which key belongs to which person. Each
    person pastes their own key into their own Claude Code or Codex.
-     paperclipApiRequest
+     api_request
        method: "POST"
        path:   "/agents/<agentId>/keys"
        jsonBody: { "name": "<Person> desktop" }
@@ -366,14 +366,14 @@ WHAT I WANT YOU TO DO
    the agent that owns that domain, leaving the assembly task on the Chief of
    Staff. Then show me the shape of it: who is doing what, and what the Chief is
    waiting on.
-     paperclipListIssues  {}
-     paperclipUpdateIssue { issueId: "<issueId>", assigneeAgentId: "<agentId>" }
+     list_issues  {}
+     update_issue { issueId: "<issueId>", assigneeAgentId: "<agentId>" }
    Both are typed tools, so this step needs no hand-written paths at all.
 
 8. Finally, walk one loop for real so I can watch it: have the Chief of Staff ask
    one lead's agent for its contribution, let that agent escalate to its human,
    and show me the answer coming back attributed.
-     paperclipApiRequest
+     api_request
        method: "POST"
        path:   "/companies/${companyId}/fact-requests"
        jsonBody: { "targetAgentId": "...", "factKey": "delivery_status",
