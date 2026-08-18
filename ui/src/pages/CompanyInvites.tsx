@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, MailPlus } from "lucide-react";
+import { Check, Copy, ExternalLink, MailPlus } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -270,16 +270,27 @@ export function CompanyInvites() {
                 This URL includes the current AgentDash domain returned by the server.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                const copied = await copyInviteUrl(latestInviteUrl);
-                setLatestInviteCopied(copied);
-              }}
-              className="w-full rounded-md border border-border bg-muted/60 px-3 py-2 text-left text-sm break-all transition-colors hover:bg-background"
-            >
-              {latestInviteUrl}
-            </button>
+            <div className="flex items-start gap-2">
+              <div
+                data-testid="latest-invite-url"
+                className="min-w-0 flex-1 cursor-text select-text rounded-md border border-border bg-muted/60 px-3 py-2 text-left font-mono text-sm break-all"
+              >
+                {latestInviteUrl}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                aria-label="Copy invite link"
+                onClick={async () => {
+                  const copied = await copyInviteUrl(latestInviteUrl);
+                  setLatestInviteCopied(copied);
+                }}
+              >
+                {latestInviteCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {latestInviteCopied ? "Copied" : "Copy"}
+              </Button>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" asChild>
                 <a href={latestInviteUrl} target="_blank" rel="noreferrer">

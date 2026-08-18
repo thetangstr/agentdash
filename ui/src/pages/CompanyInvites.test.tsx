@@ -107,6 +107,10 @@ describe("CompanyInvites", () => {
       configurable: true,
       value: { writeText: clipboardWriteTextMock },
     });
+    Object.defineProperty(globalThis.window, "isSecureContext", {
+      configurable: true,
+      value: true,
+    });
   });
 
   afterEach(() => {
@@ -206,12 +210,15 @@ describe("CompanyInvites", () => {
       tone: "success",
     });
 
-    const inviteFieldButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("https://paperclip.local/invite/new-token"),
-    );
+    const inviteUrl = container.querySelector('[data-testid="latest-invite-url"]');
+    expect(inviteUrl?.tagName).toBe("DIV");
+    expect(inviteUrl?.classList.contains("select-text")).toBe(true);
+    expect(inviteUrl?.closest("button")).toBeNull();
+
+    const copyInviteButton = container.querySelector('button[aria-label="Copy invite link"]');
 
     await act(async () => {
-      inviteFieldButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      copyInviteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flushReact();
 
