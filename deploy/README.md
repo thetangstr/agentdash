@@ -37,20 +37,44 @@ Logs: `~/Library/Logs/agentdash/<instance>-{server,backup}.log`
 Backups: `~/.paperclip/backups/<instance>/`, retained 14 daily / 8 weekly / 12 monthly.
 
 ```sh
+# after install-launchdaemons.sh (the MKThink Mini), services live in the system domain:
+sudo launchctl print system/com.agentdash.mkboard.server | head
+sudo launchctl kickstart -k system/com.agentdash.mkboard.backup   # backup now
+
+# before that migration, they are login-scoped:
 launchctl print gui/$(id -u)/com.agentdash.mkboard.server | head
 launchctl kickstart -k gui/$(id -u)/com.agentdash.mkboard.backup   # backup now
 ```
 
 ## Two decisions worth knowing
 
-**LaunchAgents, not LaunchDaemons.** The harnesses keep their credentials under
-`$HOME` — Hermes reads `~/.hermes/.env` — and the instance data lives in
-`~/.paperclip`. A daemon runs as root with a different `$HOME` and would
-authenticate as nobody.
+**LaunchAgents first, LaunchDaemons once the box is unattended.** The harnesses
+keep their credentials under `$HOME` — Hermes reads `~/.hermes/.env` — and the
+instance data lives in `~/.paperclip`. A daemon running as root has a different
+`$HOME` and would authenticate as nobody, which is why `install.sh` writes
+LaunchAgents.
 
-The cost is real: **a user agent needs that user logged in.** On an unattended
-Mini, turn on automatic login, or the service will not come back after a power
-cut. This is the one thing the installer cannot do for you.
+The cost is real: **a user agent needs that user logged in.** For an unattended
+Mini, `install-launchdaemons.sh` moves the services into the system domain with
+`UserName` set, so they start at boot without a login and still read the right
+`$HOME`. Verified with FileVault off; with FileVault on, the home volume is not
+readable at boot and this buys nothing.
+
+**Exactly one supervisor per instance.** The two mechanisms must never both own
+a service. Booting a LaunchAgent out is not enough to retire it: launchd
+re-bootstraps everything in `~/Library/LaunchAgents` at the next login, and a
+later `launchctl bootstrap gui/$(id -u) …` resurrects it by hand. The migration
+therefore renames each agent plist to `*.plist.disabled`.
+
+If two ever do run, the symptom is not an obvious crash. The loser of the port
+race falls back to the next free port, answers `/api/health` with `status: ok`,
+and serves nobody — Caddy proxies only 3102. Observed on the Mini on
+2026-08-18. When a restart looks wrong, count the listeners before anything
+else:
+
+```sh
+lsof -nP -iTCP -sTCP:LISTEN | grep -E '310[0-9]'   # expect one line per instance
+```
 
 **The backup does not use `pg_dump`.** The embedded Postgres this stack runs on
 ships only `initdb`, `pg_ctl` and `postgres` — there is no `pg_dump` on the

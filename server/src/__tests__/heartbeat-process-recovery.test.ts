@@ -2444,13 +2444,23 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
-    await waitForRunToSettle(heartbeat, runId);
 
-    const run = await db
-      .select()
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, runId))
-      .then((rows) => rows[0] ?? null);
+    // NOT waitForRunToSettle: `failed` is a settled status, and this test's
+    // whole premise is that the reaper writes exactly that mid-run. The helper
+    // would hand back the intermediate row before the completion path overturns
+    // it, and the assertions below would race the behaviour they exist to pin.
+    // Wait for the overturn itself; fall back to a plain read on timeout so a
+    // real regression still reports the status it actually found.
+    const readRun = async () =>
+      db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, runId))
+        .then((rows) => rows[0] ?? null);
+    const run = (await waitForValue(async () => {
+      const row = await readRun();
+      return row?.status === "succeeded" ? row : null;
+    })) ?? (await readRun());
     expect(run?.status, "work that finished was filed as a failure").toBe("succeeded");
     expect(run?.error).toBeNull();
     expect(run?.errorCode).toBeNull();
@@ -2463,11 +2473,18 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     );
     expect(agent?.status, "a recovered agent kept reporting broken").not.toBe("error");
 
-    const issue = await db
-      .select()
-      .from(issues)
-      .where(eq(issues.id, issueId))
-      .then((rows) => rows[0] ?? null);
+    // Same race, one row over: the issue's execution lock is released by the
+    // completion path, not by the reaper.
+    const readIssue = async () =>
+      db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+    const issue = (await waitForValue(async () => {
+      const row = await readIssue();
+      return row && row.executionRunId === null ? row : null;
+    })) ?? (await readIssue());
     expect(issue?.executionRunId).toBeNull();
   });
 
