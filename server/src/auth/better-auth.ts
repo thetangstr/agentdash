@@ -64,6 +64,20 @@ function headersFromExpressRequest(req: Request): Headers {
   return headersFromNodeHeaders(req.headers);
 }
 
+/** The explicit port in a URL, or null when it has none or is unparseable. */
+function readPort(rawUrl: string | undefined | null): number | null {
+  const value = (rawUrl ?? "").trim();
+  if (!value) return null;
+  try {
+    const port = new URL(value).port;
+    if (!port) return null;
+    const parsed = Number.parseInt(port, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: number }): string[] {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
   const trustedOrigins = new Set<string>();
@@ -76,14 +90,32 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
     }
   }
   if (config.deploymentMode === "authenticated") {
-    const port = opts?.listenPort ?? config.port;
-    const needsPortVariants = port !== 80 && port !== 443;
+    /**
+     * Both the port the application listens on AND the port browsers arrive on.
+     *
+     * These are the same only when nothing sits in front. On the MKThink Mini
+     * Caddy terminates TLS on 3112 for four hostnames and proxies to 3102, and
+     * this function produced `:3102` variants for every one of them — a port
+     * where nothing serves TLS — while `:3112` existed only for the single
+     * hostname named in the public base URL.
+     *
+     * So the tailnet address could sign in and `https://mkmini.local:3112`,
+     * which is what somebody in the office actually opens, was refused with
+     * `403 INVALID_ORIGIN`. That is how the customer's own admin could not log
+     * in while every check we ran against the tailnet URL passed.
+     */
+    const listenPort = opts?.listenPort ?? config.port;
+    const publicPort = readPort(baseUrl) ?? readPort(process.env.PAPERCLIP_PUBLIC_URL);
+    const ports = new Set<number>([listenPort, ...(publicPort ? [publicPort] : [])]);
     for (const hostname of config.allowedHostnames) {
       const trimmed = hostname.trim().toLowerCase();
       if (!trimmed) continue;
       trustedOrigins.add(`https://${trimmed}`);
       trustedOrigins.add(`http://${trimmed}`);
-      if (needsPortVariants) {
+      for (const port of ports) {
+        // 80 and 443 are implied by the bare-host entries above; the URL API
+        // normalizes them away, so adding them back would be noise.
+        if (port === 80 || port === 443) continue;
         trustedOrigins.add(`https://${trimmed}:${port}`);
         trustedOrigins.add(`http://${trimmed}:${port}`);
       }
