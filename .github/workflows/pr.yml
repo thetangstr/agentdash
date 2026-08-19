@@ -112,41 +112,59 @@ jobs:
         # their manifests resolve and the refresh workflow commits after merge.
         run: pnpm install --no-frozen-lockfile
 
+      - name: Run tests (shard ${{ matrix.shard }} of 4)
+        run: pnpm test:run
+
+  # Everything that must happen once per PR rather than once per shard.
+  #
+  # These sat on shard 1 in the first cut of this change, which left that shard
+  # at 14m38s while the others finished in 2m48s-5m14s: the lane was still
+  # paying typecheck, build and the canary dry run in series behind the server
+  # test bulk. Run in parallel with the shards, they cost nothing extra in
+  # wall-clock.
+  verify-build:
+    needs: [policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
       - name: Verify deep-interview SKILL.md is in sync with the upstream pin
-        # Runs `scripts/sync-skill-md.mjs` (which falls back to the
-        # checked-in fixture at `scripts/fixtures/skill-md-<version>.md`
-        # in environments without OMC installed) and asserts the
-        # generated `packages/shared/src/deep-interview-skill.ts` is
-        # byte-identical. Any drift must be regenerated locally and
-        # re-committed via `pnpm sync-skill-md`.
         run: pnpm verify-skill-md
 
       - name: Typecheck
-        if: matrix.shard == 1
         run: pnpm typecheck
 
       - name: Test the shard split itself
-        if: matrix.shard == 1
         # A split that loses a suite looks exactly like a suite that passed.
         run: node --test scripts/lib/shard.test.mjs
 
       - name: Run Hermes onboarding regression lane
-        if: matrix.shard == 1
         run: pnpm run test:regression:hermes-onboarding
 
-      - name: Run tests (shard ${{ matrix.shard }} of 4)
-        run: pnpm test:run
-
       - name: Verify release registry test coverage
-        if: matrix.shard == 1
         run: pnpm run test:release-registry
 
       - name: Build
-        if: matrix.shard == 1
         run: pnpm build
 
       - name: Release canary dry run
-        if: matrix.shard == 1
         run: |
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
@@ -157,16 +175,17 @@ jobs:
   # explicit result test is deliberate: without it a failed shard leaves this
   # job skipped, and a skipped required check does not block a merge.
   verify:
-    needs: [verify-shard]
+    needs: [verify-shard, verify-build]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require every shard to have passed
         run: |
-          result="${{ needs.verify-shard.result }}"
-          echo "verify-shard result: $result"
-          if [ "$result" != "success" ]; then
-            echo "::error::At least one verify shard did not succeed ($result)."
+          shards="${{ needs.verify-shard.result }}"
+          build="${{ needs.verify-build.result }}"
+          echo "verify-shard: $shards | verify-build: $build"
+          if [ "$shards" != "success" ] || [ "$build" != "success" ]; then
+            echo "::error::verify did not pass (shards: $shards, build: $build)."
             exit 1
           fi
 
