@@ -11,6 +11,7 @@ const mockStewardshipsApi = vi.hoisted(() => ({
   getAgentStewardshipHistory: vi.fn(),
   assign: vi.fn(),
   transfer: vi.fn(),
+  release: vi.fn(),
 }));
 
 vi.mock("@/api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -70,6 +71,7 @@ describe("StewardshipAssignments", () => {
     mockStewardshipsApi.getAgentStewardshipHistory.mockResolvedValue({ stewardships: [] });
     mockStewardshipsApi.assign.mockResolvedValue({ stewardship: {} });
     mockStewardshipsApi.transfer.mockResolvedValue({ stewardship: {} });
+    mockStewardshipsApi.release.mockResolvedValue({ stewardship: {} });
   });
 
   afterEach(() => {
@@ -132,6 +134,39 @@ describe("StewardshipAssignments", () => {
       "agent-1",
       expect.objectContaining({ userId: "user-2", transferReason: "Role change" }),
     );
+  });
+
+  it("releases an agent with a reason and without naming anyone new", async () => {
+    // The case assign and transfer cannot express: this agent should stand
+    // alone. Until this button existed the only way to get there was to archive
+    // the person, and making an agent autonomous is refused while its pairing
+    // is live.
+    mockStewardshipsApi.getAgentStewardship.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-1" },
+    });
+
+    await render();
+    await act(async () => selectValue(byLabel("Agent") as HTMLSelectElement, "agent-1"));
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    const release = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Release"),
+    )!;
+    expect(release.disabled).toBe(true);
+
+    await act(async () => typeValue(byLabel("Reason") as HTMLInputElement, "Joining the autonomous team"));
+    // No new steward selected, deliberately: that is the whole point of release.
+    expect(release.disabled).toBe(false);
+
+    await act(async () => release.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(mockStewardshipsApi.release).toHaveBeenCalledWith("company-1", "agent-1", {
+      releaseReason: "Joining the autonomous team",
+    });
+    expect(mockStewardshipsApi.transfer).not.toHaveBeenCalled();
   });
 
   it("disables mutations for a member who cannot manage access", async () => {

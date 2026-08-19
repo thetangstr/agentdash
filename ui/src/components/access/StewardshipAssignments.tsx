@@ -92,6 +92,17 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
     onError: (err) => setError(err instanceof Error ? err.message : "Transfer failed"),
   });
 
+  const release = useMutation({
+    mutationFn: () =>
+      stewardshipsApi.release(companyId, selectedAgentId, { releaseReason: transferReason }),
+    onSuccess: () => {
+      setError(null);
+      setTransferReason("");
+      invalidate();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "Release failed"),
+  });
+
   const activeMembers = members.filter((member) => member.status === "active");
   const canSubmitAssign = canManage && !!selectedAgentId && !!selectedUserId && !assign.isPending;
   const canSubmitTransfer =
@@ -100,6 +111,9 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
     !!selectedUserId &&
     transferReason.trim().length > 0 &&
     !transfer.isPending;
+  // No `selectedUserId`: releasing is the case where there is nobody to name.
+  const canSubmitRelease =
+    canManage && !!selectedAgentId && transferReason.trim().length > 0 && !release.isPending;
 
   return (
     <section aria-labelledby="stewardship-heading" className="space-y-3 rounded-lg border p-4">
@@ -174,17 +188,36 @@ export function StewardshipAssignments({ companyId, members, canManage }: Props)
               className="mt-1 w-full rounded border px-2 py-1"
               value={transferReason}
               onChange={(event) => setTransferReason(event.target.value)}
-              placeholder="Why is stewardship moving?"
+              placeholder="Why is stewardship moving or ending?"
             />
           </label>
-          <button
-            type="button"
-            disabled={!canSubmitTransfer}
-            onClick={() => transfer.mutate()}
-            className="rounded border px-2 py-1 text-xs disabled:opacity-50"
-          >
-            Confirm transfer
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={!canSubmitTransfer}
+              onClick={() => transfer.mutate()}
+              className="rounded border px-2 py-1 text-xs disabled:opacity-50"
+            >
+              Confirm transfer
+            </button>
+            {/*
+              The third verb. Assign and transfer both need somebody to hand the
+              agent to, so an agent meant to stand alone had no path here at all
+              — and making it autonomous is refused while a pairing is live.
+            */}
+            <button
+              type="button"
+              disabled={!canSubmitRelease}
+              onClick={() => release.mutate()}
+              className="rounded border px-2 py-1 text-xs disabled:opacity-50"
+            >
+              Release, leaving no steward
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Releasing ends this pairing and revokes that person&rsquo;s channel bindings and
+            enrolled machines for it. Do this before making an agent autonomous.
+          </p>
         </div>
       ) : (
         <button

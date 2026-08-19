@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import {
   assignAgentStewardshipSchema,
   transferAgentStewardshipSchema,
+  releaseAgentStewardshipSchema,
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
@@ -78,6 +79,34 @@ export function agentStewardshipRoutes(db: Db) {
         userId: req.body.userId,
         transferredByUserId: req.actor.userId ?? null,
         transferReason: req.body.transferReason ?? null,
+      });
+      res.json({ stewardship });
+    },
+  );
+
+  /**
+   * End a pairing and put nobody in its place.
+   *
+   * `POST .../release` rather than `DELETE .../stewardship`, matching
+   * `.../transfer` and `.../channel-bindings/:id/revoke`: the reason is required
+   * and belongs in a body, and every other stewardship state change on this
+   * router is a POST. The row is never deleted — history is the point of the
+   * table — so DELETE would also describe the wrong thing.
+   *
+   * Same authority as assigning or transferring. Releasing an agent is not a
+   * lesser act than moving it: it revokes the outgoing steward's channels and
+   * enrolled machines just the same.
+   */
+  router.post(
+    "/companies/:companyId/agents/:agentId/stewardship/release",
+    validate(releaseAgentStewardshipSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const agentId = req.params.agentId as string;
+      await assertCanMutateStewardships(req, companyId);
+      const stewardship = await stewardships.releaseForAgent(companyId, agentId, {
+        releasedByUserId: req.actor.userId ?? null,
+        releaseReason: req.body.releaseReason,
       });
       res.json({ stewardship });
     },
