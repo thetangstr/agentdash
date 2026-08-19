@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 
-import { buildUpdatePlan, defaultRestartCommand } from "./agentdash-source-update.mjs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { buildUpdatePlan, defaultRestartCommand, selfInstall } from "./agentdash-source-update.mjs";
 
 const BASE = {
   repoDir: "/Users/yang/agentdash",
@@ -100,4 +101,20 @@ test("backup and dirty-tree posture are carried on the plan, not assumed", () =>
   const loose = buildUpdatePlan({ ...BASE, skipBackup: true, allowDirty: true }, {});
   assert.equal(loose.skipBackup, true);
   assert.equal(loose.allowDirty, true);
+});
+
+test("selfInstall keeps an executable copy outside the checkout it updates", () => {
+  // The first live rollback attempt died with MODULE_NOT_FOUND: the update
+  // before it had checked out a commit where the updater did not exist yet.
+  // The tool that repairs a half-finished update cannot live only inside it.
+  const dir = mkdtempSync(path.join(os.tmpdir(), "agentdash-selfinstall-"));
+  try {
+    const target = path.join(dir, "bin", "agentdash-source-update.mjs");
+    const written = selfInstall(new URL(import.meta.url).pathname, target);
+    assert.equal(written, target);
+    assert.ok(existsSync(target));
+    assert.equal(statSync(target).mode & 0o111, 0o111, "installed copy must be executable");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

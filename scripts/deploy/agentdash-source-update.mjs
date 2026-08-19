@@ -23,7 +23,7 @@
 import { spawnSync } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -230,10 +230,19 @@ export async function waitForHealth(url, timeoutSec, intervalMs) {
   throw new Error(`Health check did not pass before timeout: ${lastError?.message ?? "unknown error"}`);
 }
 
-/** Move the working tree to a commit and make it runnable. */
+/**
+ * Move the working tree to a commit and make it runnable.
+ *
+ * Detached, not "checkout the branch and fast-forward". A rollback goes
+ * BACKWARDS, and merging an older commit into the branch is not a
+ * fast-forward, so the branch-based version could only ever move one
+ * direction — it would have failed the first time it was needed, which is the
+ * worst moment to discover it. A deployment does not need to be on a branch;
+ * it needs to be at a commit, and detaching also keeps the updater from moving
+ * anybody's branch pointer underneath them.
+ */
 function applyRevision(plan, sha, checks, phase) {
-  git(plan.repoDir, ["checkout", "--quiet", plan.branch]);
-  git(plan.repoDir, ["merge", "--ff-only", sha]);
+  git(plan.repoDir, ["checkout", "--quiet", "--detach", sha]);
   checks.push({ name: `${phase}_checkout`, status: "passed", sha, completedAt: nowIso() });
 
   run("pnpm", ["install", "--no-frozen-lockfile"], { cwd: plan.repoDir, label: "pnpm install" });
@@ -358,11 +367,32 @@ export async function runUpdate(input) {
   };
   writeJsonFile(plan.statePath, nextState);
 
+  // Refresh the copy the scheduled job runs, from the commit just deployed.
+  let selfInstalledTo = null;
+  if (input.selfInstallPath !== false) {
+    const target = input.selfInstallPath
+      ?? path.join(os.homedir(), ".agentdash", "bin", "agentdash-source-update.mjs");
+    const source = path.join(plan.repoDir, "scripts", "deploy", "agentdash-source-update.mjs");
+    try {
+      if (existsSync(source)) selfInstalledTo = selfInstall(source, target);
+      checks.push({ name: "self_install", status: selfInstalledTo ? "passed" : "skipped", completedAt: nowIso() });
+    } catch (error) {
+      // Never fail a healthy deployment over its own housekeeping.
+      checks.push({
+        name: "self_install",
+        status: "failed",
+        error: String(error?.message ?? error),
+        completedAt: nowIso(),
+      });
+    }
+  }
+
   const receipt = {
     version: 1,
     kind: "source",
     action: plan.action,
     outcome: "succeeded",
+    selfInstalledTo,
     operator: input.operator ?? process.env.USER ?? "unknown",
     startedAt,
     completedAt: nowIso(),
@@ -379,6 +409,26 @@ export async function runUpdate(input) {
   writeJsonFile(plan.receiptPath, receipt);
 
   return { plan, state: nextState, receipt, health };
+}
+
+/**
+ * Keep a copy of this updater outside the checkout it updates.
+ *
+ * The updater lives inside the thing it updates, which is the one case the OTA
+ * plan calls out as able to strand a customer. It is not hypothetical: the
+ * first live rollback attempt died with MODULE_NOT_FOUND, because the update
+ * before it had checked out a commit where this file did not exist yet.
+ *
+ * So the scheduled job runs the installed copy under ~/.agentdash/bin, and a
+ * successful update refreshes that copy from the commit it just deployed. A
+ * half-finished update can change the repository without taking the tool that
+ * repairs it away.
+ */
+export function selfInstall(sourcePath, targetPath) {
+  mkdirSync(path.dirname(targetPath), { recursive: true });
+  copyFileSync(sourcePath, targetPath);
+  chmodSync(targetPath, 0o755);
+  return targetPath;
 }
 
 function usage() {
@@ -408,6 +458,9 @@ Options:
   --health-timeout <sec>     Health timeout. Default: 120
   --state-dir <path>         State and receipts. Default: ~/.agentdash/deployments
   --force                    Apply even when already at the target commit.
+  --self-install-path <path> Where to keep the standalone copy of this updater.
+                             Default: ~/.agentdash/bin/agentdash-source-update.mjs
+  --no-self-install          Do not refresh that copy.
   --help                     Show this help.
 `);
 }
@@ -432,6 +485,8 @@ async function main() {
       "health-timeout": { type: "string" },
       "state-dir": { type: "string" },
       force: { type: "boolean" },
+      "self-install-path": { type: "string" },
+      "no-self-install": { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -459,6 +514,7 @@ async function main() {
     healthTimeoutSec: values["health-timeout"] ? Number.parseInt(values["health-timeout"], 10) : undefined,
     stateDir: values["state-dir"],
     force: values.force,
+    selfInstallPath: values["no-self-install"] ? false : values["self-install-path"],
   });
 
   if (result.checkOnly || result.dryRun) {
