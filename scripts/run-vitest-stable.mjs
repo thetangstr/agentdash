@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveShardConfig, selectShard } from "./lib/shard.mjs";
 
 const repoRoot = process.cwd();
 const serverRoot = path.join(repoRoot, "server");
@@ -63,6 +64,12 @@ const additionalSerializedServerTests = new Set([
   "server/src/__tests__/routines-e2e.test.ts",
 ]);
 let invocationIndex = 0;
+
+/**
+ * Sharding: see scripts/lib/shard.mjs for why the units can be split and why
+ * the split has to be deterministic. Default is 1/1 — everything, as before.
+ */
+const { count: shardCount, index: shardIndex } = resolveShardConfig();
 
 function walk(dir) {
   const entries = readdirSync(dir);
@@ -130,16 +137,26 @@ const routeTests = walk(serverTestsDir)
   .sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 
 const excludeRouteArgs = routeTests.flatMap((file) => ["--exclude", file.serverPath]);
-for (const project of nonServerProjects) {
+
+if (shardCount > 1) {
+  console.log(`[test:run] shard ${shardIndex} of ${shardCount}`);
+}
+
+for (const project of selectShard(nonServerProjects, { index: shardIndex, count: shardCount })) {
   runVitest(["--project", project], `non-server project ${project}`);
 }
 
-runVitest(
-  ["--project", "@paperclipai/server", ...excludeRouteArgs],
-  `server suites excluding ${routeTests.length} serialized suites`,
-);
+// The server bulk is one unit and cannot be split without re-deriving the
+// exclude list, so it rides on the first shard. It is the largest single unit,
+// which is why the serialized suites are dealt from the other end below.
+if (shardIndex === 1) {
+  runVitest(
+    ["--project", "@paperclipai/server", ...excludeRouteArgs],
+    `server suites excluding ${routeTests.length} serialized suites`,
+  );
+}
 
-for (const routeTest of routeTests) {
+for (const routeTest of selectShard([...routeTests].reverse(), { index: shardIndex, count: shardCount })) {
   runVitest(
     [
       "--project",

@@ -68,14 +68,29 @@ jobs:
             pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
           fi
 
-  verify:
+  # The test lane, split four ways.
+  #
+  # `pnpm test:run` starts 93 Vitest processes — one per non-server project, one
+  # for the server bulk, and one per serialized route suite, because those share
+  # ports and database state and must not overlap. That serialization stays; what
+  # changed is that it no longer all happens on one machine. Each shard runs a
+  # deterministic quarter (scripts/lib/shard.mjs), so the lane costs the slowest
+  # shard instead of the sum.
+  #
+  # The branch protection context is `verify`, which is the aggregate job below —
+  # a matrix would rename the check to `verify (1)` and silently stop blocking
+  # merges.
+  verify-shard:
     needs: [policy]
     runs-on: ubuntu-latest
-    # 35 (was 20): once tests pass, the full lane (install + test:run + build +
-    # release canary dry-run) runs to completion and exceeds 20m. The 20m cap
-    # cancelled the release-canary step (#467) even though install, typecheck,
-    # tests, and build all passed — the value never got bumped to match this note.
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_COUNT: 4
 
     steps:
       - name: Checkout repository
@@ -107,25 +122,53 @@ jobs:
         run: pnpm verify-skill-md
 
       - name: Typecheck
+        if: matrix.shard == 1
         run: pnpm typecheck
 
+      - name: Test the shard split itself
+        if: matrix.shard == 1
+        # A split that loses a suite looks exactly like a suite that passed.
+        run: node --test scripts/lib/shard.test.mjs
+
       - name: Run Hermes onboarding regression lane
+        if: matrix.shard == 1
         run: pnpm run test:regression:hermes-onboarding
 
-      - name: Run tests
+      - name: Run tests (shard ${{ matrix.shard }} of 4)
         run: pnpm test:run
 
       - name: Verify release registry test coverage
+        if: matrix.shard == 1
         run: pnpm run test:release-registry
 
       - name: Build
+        if: matrix.shard == 1
         run: pnpm build
 
       - name: Release canary dry run
+        if: matrix.shard == 1
         run: |
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
           ./scripts/release.sh canary --skip-verify --dry-run
+
+  # The required check. Branch protection names `verify`, so this job keeps that
+  # contract while the work happens in the matrix above. `always()` plus an
+  # explicit result test is deliberate: without it a failed shard leaves this
+  # job skipped, and a skipped required check does not block a merge.
+  verify:
+    needs: [verify-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every shard to have passed
+        run: |
+          result="${{ needs.verify-shard.result }}"
+          echo "verify-shard result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::At least one verify shard did not succeed ($result)."
+            exit 1
+          fi
 
   # MSP launch sign-off — its own required-check job. The launch-signoff policy
   # (scripts/ci/check-launch-signoff.mjs) lists `launch-signoff` as a required
