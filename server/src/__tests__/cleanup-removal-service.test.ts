@@ -5,6 +5,7 @@ import {
   activityLog,
   agents,
   companies,
+  costEvents,
   companySkills,
   createDb,
   documents,
@@ -49,6 +50,10 @@ describeEmbeddedPostgres("cleanup removal services", () => {
     await db.delete(documentRevisions);
     await db.delete(documents);
     await db.delete(companySkills);
+    // Before heartbeatRuns: cost_events references both the run and the agent,
+    // so tearing down in the other order trips the same foreign key this file
+    // now has a test for.
+    await db.delete(costEvents);
     await db.delete(heartbeatRuns);
     await db.delete(issues);
     await db.delete(agents);
@@ -149,6 +154,45 @@ describeEmbeddedPostgres("cleanup removal services", () => {
     await expect(db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId))).resolves.toHaveLength(0);
     await expect(db.select().from(issueComments).where(eq(issueComments.issueId, issueId))).resolves.toHaveLength(0);
     await expect(db.select().from(activityLog).where(eq(activityLog.companyId, companyId))).resolves.toHaveLength(0);
+  });
+
+  it("refuses to delete an agent that has recorded spend, instead of erasing it or 500ing", async () => {
+    // cost_events.agent_id is NOT NULL, so keeping the event and dropping the
+    // agent is not possible: the choice is between erasing spend history and
+    // refusing. Before this, the delete reached heartbeat_runs, hit the
+    // cost_events foreign key, and surfaced as 500 Internal server error with
+    // nothing to act on.
+    const { agentId, companyId, runId } = await seedFixture();
+
+    await db.insert(costEvents).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      heartbeatRunId: runId,
+      provider: "openai",
+      biller: "openai",
+      billingType: "api",
+      model: "gpt-5.6-terra",
+      inputTokens: 1000,
+      outputTokens: 100,
+      costCents: 12,
+      occurredAt: new Date(),
+    });
+
+    await expect(agentService(db).remove(agentId)).rejects.toThrow(/recorded spend/i);
+
+    // The agent and its spend are both still there.
+    await expect(db.select().from(agents).where(eq(agents.id, agentId))).resolves.toHaveLength(1);
+    await expect(db.select().from(costEvents).where(eq(costEvents.agentId, agentId))).resolves.toHaveLength(1);
+  });
+
+  it("still deletes an agent that never cost anything", async () => {
+    const { agentId } = await seedFixture();
+
+    const removed = await agentService(db).remove(agentId);
+
+    expect(removed?.id).toBe(agentId);
+    await expect(db.select().from(agents).where(eq(agents.id, agentId))).resolves.toHaveLength(0);
   });
 
   it("removes issue read states and activity rows before deleting the company", async () => {
