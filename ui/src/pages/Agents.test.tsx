@@ -135,6 +135,46 @@ describe("Agents", () => {
     vi.clearAllMocks();
   });
 
+  it("marks an agent with no heartbeat schedule, which otherwise looks identical to a working one", async () => {
+    // runtimeConfig.heartbeat.enabled defaults absent and the heartbeat service
+    // reads missing-or-false as never-run-this-agent. The agent sits at idle
+    // and does nothing forever; MKThink's instance recorded zero runs for days
+    // that way, with nothing on this page to say so.
+    mockAgentsApi.list.mockResolvedValue([makeAgent({ runtimeConfig: {} })]);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <Agents />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Not scheduled");
+  });
+
+  it("says nothing about scheduling for an agent that does wake on its own", async () => {
+    mockAgentsApi.list.mockResolvedValue([
+      makeAgent({ runtimeConfig: { heartbeat: { enabled: true, intervalSec: 1800 } } }),
+    ]);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={queryClient}>
+          <Agents />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).not.toContain("Not scheduled");
+  });
+
   it("shows the configured model beside the adapter on the all agents page", async () => {
     root = createRoot(container);
     await act(async () => {
