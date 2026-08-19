@@ -514,6 +514,32 @@ export function agentService(db: Db) {
       const existing = await getById(id);
       if (!existing) return null;
 
+      /**
+       * An agent that has spent money is part of the financial record.
+       *
+       * The sweep below deletes the rows that reference this agent, which is
+       * right for wakeup requests and runtime state and wrong for cost events:
+       * they are what the company was billed. `cost_events.agent_id` is NOT
+       * NULL, so there is no way to keep the event and drop the agent — the
+       * choice is between erasing spend history and refusing the delete.
+       *
+       * It refuses, and says so. Until now this path reached
+       * `delete from heartbeat_runs`, hit the `cost_events_heartbeat_run_id`
+       * foreign key, and surfaced as `500 Internal server error` with nothing
+       * to act on. Terminating the agent is the supported way to retire one
+       * that has done real work.
+       */
+      const [spend] = await db
+        .select({ events: sql<number>`count(*)::int` })
+        .from(costEvents)
+        .where(eq(costEvents.agentId, id));
+      if ((spend?.events ?? 0) > 0) {
+        throw conflict(
+          "This agent has recorded spend and cannot be deleted. Terminate it instead — its cost history belongs to the company.",
+          { agentId: id, costEvents: spend?.events ?? 0 },
+        );
+      }
+
       return db.transaction(async (tx) => {
         await tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id));
         await tx
