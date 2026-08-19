@@ -1,9 +1,10 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   agents,
   agentStewardships,
+  authUsers,
   companyMemberships,
   bridgeEndpoints,
   humanChannelBindings,
@@ -13,6 +14,24 @@ import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { logActivity } from "./activity-log.js";
 
 type AgentStewardshipRow = typeof agentStewardships.$inferSelect;
+
+/**
+ * The steward as another party is allowed to see them.
+ *
+ * `name` and `email` are nullable on purpose: `agent_stewardships.user_id` is a
+ * durable principal id rather than a foreign key into the auth user table (see
+ * the schema comment), so a steward can legitimately have no auth row — a local
+ * or external principal, or a person whose identity provider changed. `userId`
+ * is therefore the only field guaranteed to identify them, which is why callers
+ * that need a label fall back name -> email -> userId, the same order the
+ * member list in the UI already uses.
+ */
+export interface AgentStewardSummary {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  since: Date;
+}
 type StewardshipDb = Pick<Db, "select" | "insert" | "update" | "execute">;
 
 type AssignInput = {
@@ -209,6 +228,58 @@ export function agentStewardshipService(db: Db) {
       )
       .then((rows) => rows[0] ?? null);
     return row;
+  }
+
+  /**
+   * Who stands behind each of these agents, keyed by agent id.
+   *
+   * Batched rather than per-agent because the agent list is the main caller and
+   * a per-row lookup there is one query per agent on a hot read path.
+   *
+   * A LEFT join, not an inner one: an agent whose steward has no auth user row
+   * must still report a steward. Dropping the row would tell the caller the
+   * agent is unstewarded, which is a different and wrong answer.
+   */
+  async function activeStewardsByAgentIds(
+    companyId: string,
+    agentIds: string[],
+  ): Promise<Map<string, AgentStewardSummary>> {
+    const byAgentId = new Map<string, AgentStewardSummary>();
+    if (agentIds.length === 0) return byAgentId;
+    const rows = await db
+      .select({
+        agentId: agentStewardships.agentId,
+        userId: agentStewardships.userId,
+        startedAt: agentStewardships.startedAt,
+        name: authUsers.name,
+        email: authUsers.email,
+      })
+      .from(agentStewardships)
+      .leftJoin(authUsers, eq(authUsers.id, agentStewardships.userId))
+      .where(
+        and(
+          eq(agentStewardships.companyId, companyId),
+          inArray(agentStewardships.agentId, agentIds),
+          isNull(agentStewardships.endedAt),
+        ),
+      );
+    for (const row of rows) {
+      byAgentId.set(row.agentId, {
+        userId: row.userId,
+        name: row.name ?? null,
+        email: row.email ?? null,
+        since: row.startedAt,
+      });
+    }
+    return byAgentId;
+  }
+
+  async function activeStewardForAgent(
+    companyId: string,
+    agentId: string,
+  ): Promise<AgentStewardSummary | null> {
+    const byAgentId = await activeStewardsByAgentIds(companyId, [agentId]);
+    return byAgentId.get(agentId) ?? null;
   }
 
   async function historyForAgent(companyId: string, agentId: string) {
@@ -501,6 +572,8 @@ export function agentStewardshipService(db: Db) {
     activeByUser,
     activeByAgent,
     activeByUserWithAgent,
+    activeStewardsByAgentIds,
+    activeStewardForAgent,
     historyForAgent,
     requireActiveByAgent,
     assign,

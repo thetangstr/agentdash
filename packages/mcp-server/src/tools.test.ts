@@ -379,6 +379,19 @@ describe("paperclip MCP tools", () => {
     expect(response.content[0]?.text).toContain("msg-1");
   });
 
+  /**
+   * The tool description is the only thing a model reads before deciding
+   * whether a tool answers its question. The server now returns a `steward` on
+   * every agent read path, and a description that stops at "actor details" or
+   * "List agents in a company" does not tell a model that the human behind an
+   * agent is in there — so the field would ship and go unread.
+   */
+  it("advertises the steward on the three tools an agent reads identities through", () => {
+    for (const name of ["whoami", "list_agents", "get_agent"]) {
+      expect(getTool(name).description).toContain("steward");
+    }
+  });
+
   it("agentdashHireAgent POSTs to company agent-hires without companyId in the body", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "agent-9" }));
     vi.stubGlobal("fetch", fetchMock);

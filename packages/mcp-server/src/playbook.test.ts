@@ -47,6 +47,16 @@ describe("the steward contract", () => {
     }
   });
 
+  /**
+   * The playbook says "your steward" a dozen times and used to name no way to
+   * find out who that is. `whoami` and the agent read paths now carry a
+   * `steward`, and the contract has to say so or the agent will not look.
+   */
+  it("tells the agent where its own steward, and another agent's, is named", () => {
+    expect(STEWARD_PLAYBOOK).toContain("`steward`");
+    expect(STEWARD_PLAYBOOK).toContain("Every agent has a human behind it");
+  });
+
   it("does not tell a person's agent to provision a company", () => {
     expect(STEWARD_PLAYBOOK).not.toContain("sign the human up");
     expect(STEWARD_PLAYBOOK).not.toContain("agentdash_sign_up");

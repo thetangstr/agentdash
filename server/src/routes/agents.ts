@@ -484,18 +484,48 @@ export function agentRoutes(
     };
   }
 
+  /**
+   * Attach the human steward to agent rows.
+   *
+   * Stewardship was readable only through the dedicated
+   * `/agents/:id/stewardship` route, which returns the raw row: a durable
+   * principal id and nothing else. An agent reading the agent list or another
+   * agent's record therefore got names, roles and adapters but no way to say
+   * which person stands behind any of them, even though every mandate this
+   * product writes talks about "your steward". Carrying the steward on the
+   * read paths agents actually call is what makes that name available.
+   *
+   * `name` and `email` come from the same auth user row that
+   * `/companies/:companyId/user-directory` already returns to any caller with
+   * company access — including agent keys, which pass `assertCompanyAccess` for
+   * their own company. So this widens no one's view of contact details; it only
+   * puts the person next to the agent they are accountable for.
+   */
+  async function attachStewards<T extends { id: string }>(companyId: string, rows: T[]) {
+    const stewardsByAgentId = await stewardships.activeStewardsByAgentIds(
+      companyId,
+      rows.map((row) => row.id),
+    );
+    return rows.map((row) => ({ ...row, steward: stewardsByAgentId.get(row.id) ?? null }));
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState] = await Promise.all([
+    const [chainOfCommand, accessState, steward] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
+      stewardships.activeStewardForAgent(agent.companyId, agent.id),
     ]);
 
     return {
       ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
       chainOfCommand,
+      // Present and null when nobody stewards this agent, never absent: an
+      // agent reading a missing key cannot tell "unstewarded" from "this
+      // build does not report stewards".
+      steward,
       access: accessState,
     };
   }
@@ -1747,10 +1777,20 @@ export function agentRoutes(
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(result);
+      res.json(await attachStewards(companyId, result));
       return;
     }
-    res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+    // The restricted view redacts adapter and runtime configuration, which is
+    // where credentials live. Stewardship is not a credential — it is the org
+    // chart — so it survives the redaction rather than being stripped with it.
+    res.json(
+      await attachStewards(
+        companyId,
+        // Non-null: every row came from `svc.list`, and the redactor only
+        // returns null for a null input.
+        result.map((agent) => redactForRestrictedAgentView(agent)!),
+      ),
+    );
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {

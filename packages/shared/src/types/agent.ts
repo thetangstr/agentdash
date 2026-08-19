@@ -70,6 +70,21 @@ export interface AgentChainOfCommandEntry {
   title: string | null;
 }
 
+/**
+ * The person an agent belongs to and is accountable to.
+ *
+ * `name` and `email` are nullable because `agent_stewardships.user_id` is a
+ * durable principal id rather than a foreign key into the auth user table, so a
+ * steward can have no auth row at all. Label a steward name -> email -> userId,
+ * which is the order the member list already uses.
+ */
+export interface AgentSteward {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  since: Date;
+}
+
 export interface Agent {
   id: string;
   companyId: string;
@@ -94,6 +109,13 @@ export interface Agent {
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Optional on the type, always present on the wire from
+   * `GET /companies/:companyId/agents` and the agent detail routes. It stays
+   * optional here because `Agent` is also the shape of rows built from config
+   * revisions and other places that never carried a stewardship.
+   */
+  steward?: AgentSteward | null;
 }
 
 export interface AgentDetail extends Agent {
