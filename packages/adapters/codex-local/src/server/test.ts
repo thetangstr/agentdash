@@ -266,7 +266,13 @@ export async function testEnvironment(
             {
               cwd,
               env,
-              timeoutSec: 45,
+              // Same budget as the hello probe above, for the same reason:
+              // this is a full model round-trip (the model runs the curl and
+              // answers with a token), so first-token latency on a
+              // ChatGPT-account login routinely exceeds 45s. Proven in the
+              // field: the hello probe passed at 150s and this one then
+              // timed out at 45s on the same healthy machine.
+              timeoutSec: 150,
               graceSec: 5,
               stdin: buildControlPlaneApiProbePrompt(paperclipApiUrl),
               onLog: async () => {},
