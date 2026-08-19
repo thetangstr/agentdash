@@ -21,6 +21,8 @@
  * against a dirty tree, and roll back to the exact previous SHA on any failure.
  */
 import { spawnSync } from "node:child_process";
+import http from "node:http";
+import https from "node:https";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -156,15 +158,70 @@ function git(repoDir, args, options = {}) {
   return run("git", ["-C", repoDir, ...args], { capture: true, label: `git ${args[0]}`, ...options });
 }
 
+/**
+ * One health request, over node:http(s) rather than fetch.
+ *
+ * fetch's undici stack raised `EINVAL setTypeOfService` against loopback on
+ * this Node build and macOS version, asynchronously and outside the await — so
+ * it crashed the updater instead of counting as a failed attempt. A health
+ * check that can kill the process it is meant to verify is worse than no
+ * health check, and this path has no such surprise: every failure arrives on
+ * the request object as an event.
+ */
+function requestHealth(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+    let request;
+    try {
+      const target = new URL(url);
+      const transport = target.protocol === "https:" ? https : http;
+      request = transport.request(
+        target,
+        {
+          method: "GET",
+          headers: { accept: "application/json" },
+          // The instance serves a certificate for its public hostname; this is
+          // a liveness probe from the same machine, not a trust decision.
+          rejectUnauthorized: false,
+          timeout: timeoutMs,
+        },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () =>
+            finish(resolve, {
+              status: response.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8").slice(0, 500),
+            }),
+          );
+          response.on("error", (error) => finish(reject, error));
+        },
+      );
+    } catch (error) {
+      finish(reject, error);
+      return;
+    }
+    request.on("error", (error) => finish(reject, error));
+    request.on("timeout", () => {
+      request.destroy(new Error("health request timed out"));
+    });
+    request.end();
+  });
+}
+
 export async function waitForHealth(url, timeoutSec, intervalMs) {
   const deadline = Date.now() + timeoutSec * 1000;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url, { headers: { accept: "application/json" } });
-      const text = await response.text();
-      if (response.ok) return { status: response.status, body: text.slice(0, 500) };
-      lastError = new Error(`health returned ${response.status}: ${text.slice(0, 200)}`);
+      const response = await requestHealth(url, Math.max(intervalMs, 5_000));
+      if (response.status >= 200 && response.status < 300) return response;
+      lastError = new Error(`health returned ${response.status}: ${response.body.slice(0, 200)}`);
     } catch (error) {
       lastError = error;
     }
