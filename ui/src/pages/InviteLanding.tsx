@@ -318,6 +318,12 @@ export function InviteLandingPage() {
   const showsAgentForm = invite?.inviteType !== "bootstrap_ceo" && invite?.allowedJoinTypes === "agent";
   const shouldAutoAcceptHumanInvite =
     Boolean(sessionQuery.data) &&
+    // The invite itself has to have loaded. Without this the effect fires on
+    // the first render where a session exists, `acceptMutation` throws
+    // "Invite not found" against an invite it simply has not fetched yet, and
+    // that error is rendered beside a perfectly valid invite. It was invisible
+    // while members were redirected away before the race could resolve.
+    Boolean(invite) &&
     !showsAgentForm &&
     invite?.inviteType !== "bootstrap_ceo" &&
     !inviteJoinRequestStatus &&
