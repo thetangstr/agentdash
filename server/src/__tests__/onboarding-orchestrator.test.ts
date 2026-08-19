@@ -93,8 +93,11 @@ describe("onboardingOrchestrator.bootstrap", () => {
     expect(call.body).toContain("Alice");
     // Identifies the agent role.
     expect(call.body).toMatch(/chief of staff/i);
-    // Sets context for what AgentDash is and why this conversation exists.
-    expect(call.body).toMatch(/agentdash/i);
+    // Names the company the agent works FOR, not the product it runs on: a
+    // founder opening their own workspace was being greeted by a Chief of Staff
+    // who said it worked somewhere else (#449).
+    expect(call.body).toMatch(/chief of staff at Acme/i);
+    expect(call.body).not.toMatch(/chief of staff at agentdash/i);
     // Asks the first goal question (short-term + long-term framing).
     expect(call.body).toMatch(/short-term/i);
     expect(call.body).toMatch(/6.?12 months|long-?term/i);
