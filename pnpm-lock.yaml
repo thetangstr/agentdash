@@ -23,12 +23,15 @@ overrides:
   ws: '>=8.21.0'
   underscore: '>=1.13.8'
   snarkjs: '>=0.7.5'
-  js-yaml: '>=4.3.0 <5'
+  js-yaml: '>=4.3.1 <5'
+  nanoid@<4: '>=3.3.18 <4'
+  nanoid@>=4: '>=5.1.16 <6'
   axios: '>=1.18.0'
   sharp: '>=0.35.0'
   postcss: '>=8.5.18'
   brace-expansion: '>=5.0.9'
   ip-address: '>=10.3.1'
+  '@paperclipai/adapter-utils': link:packages/adapter-utils
 
 patchedDependencies:
   embedded-postgres@18.1.0-beta.16:
@@ -54,6 +57,9 @@ importers:
       patch-package:
         specifier: ^8.0.1
         version: 8.0.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.8
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
@@ -91,7 +97,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/db':
         specifier: workspace:*
@@ -117,6 +123,12 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.8
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.12.0
@@ -143,7 +155,7 @@ importers:
         specifier: ^0.31.4
         version: 0.31.4
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       '@zed-industries/codex-acp':
         specifier: ^0.12.0
@@ -165,7 +177,7 @@ importers:
   packages/adapters/claude-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -181,7 +193,7 @@ importers:
   packages/adapters/codex-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -197,7 +209,7 @@ importers:
   packages/adapters/cursor-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -213,7 +225,7 @@ importers:
   packages/adapters/gemini-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -229,7 +241,7 @@ importers:
   packages/adapters/openclaw-gateway:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -251,7 +263,7 @@ importers:
   packages/adapters/opencode-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -267,7 +279,7 @@ importers:
   packages/adapters/pi-local:
     dependencies:
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../../adapter-utils
         version: link:../../adapter-utils
       picocolors:
         specifier: ^1.1.1
@@ -279,6 +291,12 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+
+  packages/connect:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.2.3)(jiti@2.6.1)(jsdom@28.1.0(@noble/hashes@2.0.1))(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.9.0)
 
   packages/create-agentdash: {}
 
@@ -540,6 +558,9 @@ importers:
 
   server:
     dependencies:
+      '@agentdash/mcp-server':
+        specifier: workspace:*
+        version: link:../packages/mcp-server
       '@anthropic-ai/sdk':
         specifier: ^0.92.0
         version: 0.92.0(zod@3.25.76)
@@ -549,6 +570,9 @@ importers:
       '@microsoft/teams.apps':
         specifier: ^2.0.14
         version: 2.0.14
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
       '@paperclipai/adapter-acpx-local':
         specifier: workspace:*
         version: link:../packages/adapters/acpx-local
@@ -574,7 +598,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/db':
         specifier: workspace:*
@@ -758,7 +782,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/adapters/pi-local
       '@paperclipai/adapter-utils':
-        specifier: workspace:*
+        specifier: link:../packages/adapter-utils
         version: link:../packages/adapter-utils
       '@paperclipai/shared':
         specifier: workspace:*
@@ -781,6 +805,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      driver.js:
+        specifier: ^1.8.0
+        version: 1.8.0
       hermes-paperclip-adapter:
         specifier: ^0.3.0
         version: 0.3.0(patch_hash=ehfahkpirmgj5ms4pmtcaxntai)
@@ -1617,11 +1644,11 @@ packages:
 
   '@esbuild-kit/core-utils@3.3.2':
     resolution: {integrity: sha512-sPRAnw9CdSsRmEtnsl2WXWdyquogVpB3yZ3dgwJfe8zrOzTsV7cJvmwrKVa+0ma5BoiGJ+BoqkMvawbayKUsqQ==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild-kit/esm-loader@2.6.5':
     resolution: {integrity: sha512-FxEMIkJKnodyA1OaCUoEvbYRkoZlLZ4d/eXFu9Fh8CbBBgP5EmZxrfTRyN0qpXZ4vOvqnE5YdRdcrmUUXuU+dA==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild/aix-ppc64@0.25.12':
     resolution: {integrity: sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==}
@@ -2519,9 +2546,6 @@ packages:
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
     engines: {node: '>=14'}
-
-  '@paperclipai/adapter-utils@2026.325.0':
-    resolution: {integrity: sha512-YDVSAgjkeJ0PvxXDJVN9MZDX7oYRzidLtGHmGgRGd6gSk/bF2ygAKvND4FI1YxDc/cRLQjqAFCpCYaC/9wqIEA==}
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
@@ -4112,6 +4136,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@vitejs/plugin-react@4.7.0':
     resolution: {integrity: sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==}
@@ -4198,6 +4223,7 @@ packages:
 
   '@zed-industries/codex-acp@0.12.0':
     resolution: {integrity: sha512-0d7gRzOiYTgDmIyh783mCcq50h3mdOg/TtKdLfBIghOLushpQRwhuLjKK8Q9hxZfNlPL0Ua56DoPjnsW8amf8g==}
+    deprecated: This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.
     hasBin: true
 
   '@zk-kit/artifacts@2.0.1':
@@ -5091,6 +5117,9 @@ packages:
     peerDependencies:
       react: '>=16.12.0'
 
+  driver.js@1.8.0:
+    resolution: {integrity: sha512-+8/IO7h1v14IzWh2GP60N7T3PFZweXwdn5e5POuxRSBoCYUojsBxzqawPeXh3YZIibRy7EehYNEyxe7slwwtdg==}
+
   drizzle-kit@0.31.9:
     resolution: {integrity: sha512-GViD3IgsXn7trFyBUUHyTFBpH/FsHTxYJ66qdbVggxef4UBPHRYxQaRzYLTuekYnk9i5FIEL9pbBIwMqX/Uwrg==}
     hasBin: true
@@ -5845,8 +5874,8 @@ packages:
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
 
-  js-yaml@4.3.0:
-    resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
+  js-yaml@4.3.1:
+    resolution: {integrity: sha512-CY6crGq313MX8GkwvB7tzgp99vjQxY1++5y10/BKN/GUfHqWaOGQMNZkBvqSzsZKWk/ijwHlWzzkLulsGHhjWQ==}
     hasBin: true
 
   jsdom@28.1.0:
@@ -6381,13 +6410,13 @@ packages:
   nanoassert@2.0.0:
     resolution: {integrity: sha512-7vO7n28+aYO4J+8w96AzhmU8G+Y/xpPDJz/se19ICsqj/momRbb9mh9ZUtkoJ5X3nTnPdhEJyc0qnM6yAsHBaA==}
 
-  nanoid@3.3.16:
-    resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nanoid@5.1.7:
-    resolution: {integrity: sha512-ua3NDgISf6jdwezAheMOk4mbE1LXjm1DfMUDMuJf4AqxLFK3ccGpgWizwa5YV7Yz9EpXwEaWoRXSb/BnV0t5dQ==}
+  nanoid@5.1.16:
+    resolution: {integrity: sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==}
     engines: {node: ^18 || >=20}
     hasBin: true
 
@@ -7880,7 +7909,7 @@ snapshots:
       '@assistant-ui/store': 0.2.6(@assistant-ui/tap@0.5.7(@types/react@19.2.14)(react@19.2.4))(@types/react@19.2.14)(react@19.2.4)
       '@assistant-ui/tap': 0.5.7(@types/react@19.2.14)(react@19.2.4)
       assistant-stream: 0.3.10
-      nanoid: 5.1.7
+      nanoid: 5.1.16
     optionalDependencies:
       '@types/react': 19.2.14
       assistant-cloud: 0.1.25
@@ -7900,7 +7929,7 @@ snapshots:
       '@radix-ui/react-use-escape-keydown': 1.1.1(@types/react@19.2.14)(react@19.2.4)
       assistant-cloud: 0.1.25
       assistant-stream: 0.3.10
-      nanoid: 5.1.7
+      nanoid: 5.1.16
       radix-ui: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
@@ -9758,7 +9787,7 @@ snapshots:
       cm6-theme-basic-light: 0.2.0(@codemirror/language@6.12.1)(@codemirror/state@6.5.4)(@codemirror/view@6.39.15)(@lezer/highlight@1.2.3)
       codemirror: 6.0.2
       downshift: 7.6.2(react@19.2.4)
-      js-yaml: 4.3.0
+      js-yaml: 4.3.1
       lexical: 0.35.0
       mdast-util-directive: 3.1.0
       mdast-util-from-markdown: 2.0.2
@@ -9885,8 +9914,6 @@ snapshots:
   '@open-draft/deferred-promise@2.2.0': {}
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
-
-  '@paperclipai/adapter-utils@2026.325.0': {}
 
   '@paralleldrive/cuid2@2.3.1':
     dependencies:
@@ -11914,7 +11941,7 @@ snapshots:
   assistant-stream@0.3.10:
     dependencies:
       '@standard-schema/spec': 1.1.0
-      nanoid: 5.1.7
+      nanoid: 5.1.16
       secure-json-parse: 4.1.0
 
   ast-types@0.16.1:
@@ -12647,7 +12674,7 @@ snapshots:
       '@types/node': 25.2.3
       hash.js: 1.1.7
       jszip: 3.10.1
-      nanoid: 5.1.7
+      nanoid: 5.1.16
       xml: 1.0.1
       xml-js: 1.6.11
 
@@ -12671,6 +12698,8 @@ snapshots:
       react: 19.2.4
       react-is: 17.0.2
       tslib: 2.8.1
+
+  driver.js@1.8.0: {}
 
   drizzle-kit@0.31.9:
     dependencies:
@@ -13291,7 +13320,7 @@ snapshots:
 
   hermes-paperclip-adapter@0.3.0(patch_hash=ehfahkpirmgj5ms4pmtcaxntai):
     dependencies:
-      '@paperclipai/adapter-utils': 2026.325.0
+      '@paperclipai/adapter-utils': link:packages/adapter-utils
       picocolors: 1.1.1
 
   hono@4.12.26: {}
@@ -13470,7 +13499,7 @@ snapshots:
 
   js-tokens@9.0.1: {}
 
-  js-yaml@4.3.0:
+  js-yaml@4.3.1:
     dependencies:
       argparse: 2.0.1
 
@@ -14314,9 +14343,9 @@ snapshots:
 
   nanoassert@2.0.0: {}
 
-  nanoid@3.3.16: {}
+  nanoid@3.3.18: {}
 
-  nanoid@5.1.7: {}
+  nanoid@5.1.16: {}
 
   nanostores@1.4.0: {}
 
@@ -14589,7 +14618,7 @@ snapshots:
 
   postcss@8.5.23:
     dependencies:
-      nanoid: 3.3.16
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
