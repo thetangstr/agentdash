@@ -9,10 +9,20 @@ import { costService } from "./costs.js";
 import { logger } from "../middleware/logger.js";
 import { HttpError } from "../errors.js";
 import type { Db } from "@paperclipai/db";
+import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
 
 // Default to PATH so every Mac mini install can use its own Hermes location.
 // Overridden by AGENTDASH_HERMES_COMMAND env var if set.
 const DEFAULT_HERMES_COMMAND = "hermes";
+const DEFAULT_CODEX_COMMAND = "codex";
+/**
+ * Chat replies go through a model a ChatGPT-account login can actually use.
+ *
+ * The `-codex` family is refused outright on such an install ("not supported
+ * when using Codex with a ChatGPT account"), and a Chief of Staff that cannot
+ * answer a question is not a Chief of Staff.
+ */
+const DEFAULT_CODEX_CHAT_MODEL = "gpt-5.6-terra";
 
 /**
  * Toolsets granted to Hermes when it answers a chat turn. `clarify` (ask a
@@ -38,7 +48,7 @@ const DEFAULT_HERMES_TOOLSETS = "clarify";
 
 const TOKEN_BUDGET_LOG_ENABLED = Boolean(process.env.AGENTDASH_TOKEN_BUDGET_LOG);
 const TOKEN_BUDGET_FILE = process.env.AGENTDASH_TOKEN_BUDGET_FILE ?? "/tmp/agentdash-token-budget.json";
-const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "minimax", "openai_compat", "hermes_local", "claude_local"] as const;
+const SUPPORTED_COS_CHAT_ADAPTERS = ["claude_api", "minimax", "openai_compat", "hermes_local", "claude_local", "codex_local"] as const;
 
 function emitTokenBudget(adapterName: string, input: LLMInput): void {
   if (!TOKEN_BUDGET_LOG_ENABLED) return;
@@ -231,9 +241,16 @@ function spawnWithTimeout(
       }
     });
 
-    if (stdinData !== undefined) {
-      child.stdin.end(stdinData);
-    }
+    // Close stdin either way.
+    //
+    // Leaving it open when there is nothing to send looks harmless and is not:
+    // `codex exec` accepts a prompt on stdin, so a held-open pipe means it
+    // waits for EOF that never comes and the call dies on the 120s timeout —
+    // while the identical command run by hand answers in three seconds. Hermes
+    // does not read stdin, which is why this went unnoticed until a second
+    // adapter arrived. An adapter given no stdin should see EOF, not a promise
+    // of input.
+    child.stdin.end(stdinData ?? "");
   });
 }
 
@@ -569,6 +586,46 @@ export async function dispatchLLM(
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back");
+      return runFallbackAdapter(input, adapter, err);
+    }
+  }
+
+  if (adapter === "codex_local") {
+    const codexCmd = (process.env.AGENTDASH_CODEX_COMMAND ?? "").trim() || DEFAULT_CODEX_COMMAND;
+    const model = (process.env.AGENTDASH_CODEX_CHAT_MODEL ?? "").trim() || DEFAULT_CODEX_CHAT_MODEL;
+    const prompt = buildFlatPrompt(input);
+    logger.info({ adapter, codexCmd, model }, "[dispatch-llm] routing CoS reply through codex_local");
+    try {
+      // Answering a question needs no tools, and this prompt carries other
+      // agents' output — content this system wraps in
+      // `<untrusted-agent-answer>` precisely because it may be adversarial.
+      // `--sandbox read-only` is the same reasoning the hermes branch above
+      // spells out: full tool access over untrusted text is arbitrary code
+      // execution on the AgentDash host, one prompt injection away. Codex's own
+      // agent runs pass `--dangerously-bypass-approvals-and-sandbox`; a chat
+      // reply must not.
+      const raw = await spawnWithTimeout(codexCmd, [
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--model",
+        model,
+        prompt,
+      ]);
+      const parsed = parseCodexJsonl(raw);
+      const reply = (parsed.summary ?? "").trim();
+      if (!reply) {
+        logger.warn(
+          { adapter, error: parsed.errorMessage },
+          "[dispatch-llm] codex_local returned no final message, using fallback",
+        );
+        return runFallbackAdapter(input, adapter, parsed.errorMessage ?? "empty reply");
+      }
+      return reply;
+    } catch (err) {
+      logger.error({ err, adapter }, "[dispatch-llm] codex_local failed, falling back");
       return runFallbackAdapter(input, adapter, err);
     }
   }

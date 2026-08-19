@@ -12,6 +12,13 @@ const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+  // The codex chat branch imports the codex adapter's JSONL parser, and that
+  // module's neighbours reach for execFile at import time. Mocking the module
+  // means providing everything the import graph touches, not only what this
+  // file drives.
+  execFile: vi.fn(),
+  execFileSync: vi.fn(),
+  spawnSync: vi.fn(() => ({ status: 0, stdout: "", stderr: "" })),
 }));
 
 vi.mock("../services/anthropic-llm.js", () => ({
@@ -220,7 +227,10 @@ describe("dispatchLLM", () => {
   });
 
   it("rejects unsupported CoS chat adapters instead of silently using claude_api", async () => {
-    process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
+    // Was codex_local until it gained a branch of its own. An adapter the chat
+    // path cannot drive must still fail loudly rather than answer as some other
+    // model without saying so.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "gemini_local";
 
     await expect(
       dispatchLLM({
@@ -229,10 +239,83 @@ describe("dispatchLLM", () => {
       }),
     ).rejects.toMatchObject({
       status: 501,
-      message: expect.stringContaining("codex_local"),
+      message: expect.stringContaining("gemini_local"),
     } satisfies Partial<HttpError>);
 
     expect(anthropicLLM).not.toHaveBeenCalled();
+  });
+
+  describe("codex_local runs with least privilege", () => {
+    function spawnArgs(): string[] {
+      return spawnMock.mock.calls[0][1] as string[];
+    }
+
+    it("routes CoS replies through codex and returns its final message", async () => {
+      spawnMock.mockImplementation(() => {
+        const child: any = {
+          kill: vi.fn(),
+          stdin: { end: vi.fn() },
+          stdout: {
+            on: vi.fn((event: string, callback: (chunk: Buffer) => void) => {
+              if (event === "data") {
+                setTimeout(
+                  () =>
+                    callback(
+                      Buffer.from(
+                        [
+                          JSON.stringify({ type: "thread.started", thread_id: "t1" }),
+                          JSON.stringify({
+                            type: "item.completed",
+                            item: { type: "agent_message", text: "codex reply" },
+                          }),
+                        ].join("\n"),
+                      ),
+                    ),
+                  0,
+                );
+              }
+              return child.stdout;
+            }),
+          },
+          stderr: { on: vi.fn(() => child.stderr) },
+          on: vi.fn((event: string, callback: (code: number) => void) => {
+            if (event === "close") setTimeout(() => callback(0), 1);
+            return child;
+          }),
+        };
+        return child;
+      });
+
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
+      const reply = await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      expect(reply).toBe("codex reply");
+      expect(spawnMock.mock.calls[0][0]).toBe("codex");
+      expect(spawnArgs()).toContain("exec");
+    });
+
+    it("never hands untrusted content a writable sandbox", async () => {
+      // The prompt carries other agents' output, which this system wraps in
+      // <untrusted-agent-answer> precisely because it may be adversarial. Codex
+      // agent RUNS bypass the sandbox deliberately; a chat reply must not.
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const args = spawnArgs();
+      expect(args).toContain("--sandbox");
+      expect(args[args.indexOf("--sandbox") + 1]).toBe("read-only");
+      expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+      expect(args).not.toContain("--yolo");
+    });
+
+    it("asks for a model a ChatGPT-account login accepts", async () => {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
+      await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
+
+      const args = spawnArgs();
+      expect(args).toContain("--model");
+      expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.6-terra");
+    });
   });
 
   it("routes CoS replies through the minimax adapter when selected", async () => {
