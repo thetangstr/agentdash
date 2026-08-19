@@ -32,6 +32,8 @@ import { MarkdownEditor } from "../components/MarkdownEditor";
 import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
+import { accessApi } from "../api/access";
+import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
 import { CopyText } from "../components/CopyText";
@@ -1357,6 +1359,23 @@ function AgentOverview({
   agentId: string;
   agentRouteId: string;
 }) {
+  // Origin block (AGE-13): resolve the creator's display name/avatar. The
+  // steward arrives on the agent payload already resolved (name/email), so
+  // the directory is only needed for the creator — and for avatar images,
+  // which the steward payload does not carry.
+  const { data: companyMembers } = useQuery({
+    queryKey: queryKeys.access.companyUserDirectory(agent.companyId),
+    queryFn: () => accessApi.listUserDirectory(agent.companyId),
+    enabled: !!agent.companyId,
+  });
+  const userProfiles = useMemo(
+    () => buildCompanyUserProfileMap(companyMembers?.users),
+    [companyMembers?.users],
+  );
+  const creatorId = agent.createdByUserId ?? null;
+  const creatorProfile = creatorId ? userProfiles.get(creatorId) : undefined;
+  const steward = agent.steward ?? null;
+  const stewardLabel = steward ? (steward.name ?? steward.email ?? steward.userId) : null;
   return (
     <div className="space-y-8">
       {/* Latest Run */}
@@ -1409,6 +1428,51 @@ function AgentOverview({
             )}
           </div>
         )}
+      </div>
+
+      {/* Origin — who is answerable for this agent (AGE-13) */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">Origin</h3>
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <SummaryRow label="Created">
+            <span className="text-xs">{formatDate(agent.createdAt)}</span>
+          </SummaryRow>
+          <SummaryRow label="Created by">
+            {creatorId ? (
+              <>
+                <Identity
+                  name={creatorProfile?.label ?? creatorId.slice(0, 5)}
+                  avatarUrl={creatorProfile?.image ?? null}
+                  size="xs"
+                />
+                <span className="text-xs">
+                  {creatorProfile?.label ?? `${creatorId.slice(0, 5)} (no longer a member)`}
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-muted-foreground">Hired by an agent</span>
+            )}
+          </SummaryRow>
+          <SummaryRow label="Steward">
+            {steward ? (
+              <>
+                <Identity
+                  name={stewardLabel ?? "Steward"}
+                  avatarUrl={userProfiles.get(steward.userId)?.image ?? null}
+                  size="xs"
+                />
+                <span className="text-xs">{stewardLabel}</span>
+                {steward.since && (
+                  <span className="text-xs text-muted-foreground">
+                    since {formatDate(steward.since)}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-muted-foreground">No steward assigned</span>
+            )}
+          </SummaryRow>
+        </div>
       </div>
 
       {/* Costs */}
