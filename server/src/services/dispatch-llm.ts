@@ -241,9 +241,16 @@ function spawnWithTimeout(
       }
     });
 
-    if (stdinData !== undefined) {
-      child.stdin.end(stdinData);
-    }
+    // Close stdin either way.
+    //
+    // Leaving it open when there is nothing to send looks harmless and is not:
+    // `codex exec` accepts a prompt on stdin, so a held-open pipe means it
+    // waits for EOF that never comes and the call dies on the 120s timeout —
+    // while the identical command run by hand answers in three seconds. Hermes
+    // does not read stdin, which is why this went unnoticed until a second
+    // adapter arrived. An adapter given no stdin should see EOF, not a promise
+    // of input.
+    child.stdin.end(stdinData ?? "");
   });
 }
 
