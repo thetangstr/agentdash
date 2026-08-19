@@ -330,6 +330,7 @@ export type {
   AgentAccessState,
   AgentChainOfCommandEntry,
   AgentDetail,
+  AgentSteward,
   AgentPermissions,
   AgentInstructionsBundleMode,
   AgentInstructionsFileSummary,

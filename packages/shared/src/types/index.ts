@@ -74,6 +74,7 @@ export type {
   AgentAccessState,
   AgentChainOfCommandEntry,
   AgentDetail,
+  AgentSteward,
   AgentModelProfileConfig,
   AgentPermissions,
   AgentRuntimeConfig,

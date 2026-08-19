@@ -246,9 +246,14 @@ async function getIssueWorkspaceRuntime(client: PaperclipApiClient, issueId: str
 
 export function createToolDefinitions(client: PaperclipApiClient): ToolDefinition[] {
   return [
+    // The `steward` in this response is the reason the description names it.
+    // Every mandate and every playbook line in this product says "your steward",
+    // and until the agent read paths carried stewardship an agent could not name
+    // that person — it knew the word and not the human. A tool description that
+    // stops at "actor details" does not tell a model the answer is in there.
     makeTool(
       "whoami",
-      "Get the current authenticated AgentDash actor details",
+      "Get the current authenticated AgentDash actor details, including the human steward this agent belongs to and is accountable to.",
       z.object({}),
       async () => client.requestJson("GET", "/agents/me"),
     ),
@@ -303,13 +308,13 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "list_agents",
-      "List agents in a company",
+      "List agents in a company, each with the human steward who stands behind it.",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId }) => client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}/agents`),
     ),
     makeTool(
       "get_agent",
-      "Get a single agent by id",
+      "Get a single agent by id, including the human steward who stands behind it.",
       z.object({ agentId: z.string().min(1), companyId: companyIdOptional }),
       async ({ agentId, companyId }) => {
         const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
