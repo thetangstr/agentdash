@@ -16,9 +16,9 @@ command to connect, and a person describing what they want.
 
 ```
 claude mcp add agentdash \
-  --env PAPERCLIP_API_URL=http://mkmini.local:3102 \
+  --env PAPERCLIP_API_URL=https://mkthinks-mac-mini.tail112187.ts.net:3112 \
   --env PAPERCLIP_API_KEY=pcp_board_c4b678e7713733d06fc791deeb29c1034eb0f8d10c0f00ec \
-  -- npx -y http://mkmini.local:3102/downloads/agentdash-mcp-server.tgz
+  -- npx -y https://mkthinks-mac-mini.tail112187.ts.net:3112/downloads/agentdash-mcp-server.tgz
 ```
 
 Restart the harness so the tools load. Codex users put the same four values in

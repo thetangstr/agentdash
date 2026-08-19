@@ -43,16 +43,22 @@ echo "PAPERCLIP_AGENT_JWT_SECRET=$(openssl rand -hex 32)"
 ## Step 7: Write the Environment File
 Write this to `~/.config/agentdash/agentdash.env` (replace ALL <PLACEHOLDERS>):
 
+> The two public-URL values must be the address a **browser** arrives on. Sign-in
+> and sign-up check the browser's origin against them, and anything else is
+> refused with `403 INVALID_ORIGIN`. Below that is the app's own port, which is
+> right until you put TLS in front of it — once Caddy terminates on `:3112`,
+> both public-URL values become the `https://…:3112` address, not this one.
+
 ```sh
 PAPERCLIP_DEPLOYMENT_MODE=authenticated
 NODE_ENV=production
 PAPERCLIP_DEPLOYMENT_EXPOSURE=private
 PAPERCLIP_BIND=lan
 PAPERCLIP_ALLOWED_HOSTNAMES=<IP_FROM_STEP_5>
-PAPERCLIP_PUBLIC_URL=http://<IP_FROM_STEP_5>:3100
-PAPERCLIP_API_URL=http://127.0.0.1:3100
+PAPERCLIP_PUBLIC_URL=http://<IP_FROM_STEP_5>:3102
+PAPERCLIP_API_URL=http://127.0.0.1:3102
 PAPERCLIP_AUTH_BASE_URL_MODE=explicit
-PAPERCLIP_AUTH_PUBLIC_BASE_URL=http://<IP_FROM_STEP_5>:3100
+PAPERCLIP_AUTH_PUBLIC_BASE_URL=http://<IP_FROM_STEP_5>:3102
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 BETTER_AUTH_SECRET=<FROM_STEP_6>
 PAPERCLIP_AGENT_JWT_SECRET=<FROM_STEP_6>
@@ -75,7 +81,7 @@ ANTHROPIC_API_KEY=<their-key>
 ```sh
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 sleep 8
-curl -fsS http://127.0.0.1:3100/api/health
+curl -fsS http://127.0.0.1:3102/api/health
 ```
 The health check must return `{"status":"ok"}`. If it fails, check `~/.agentdash/logs/agentdash.err`.
 
@@ -91,7 +97,7 @@ Then navigate to `/cos` and verify the CoS replies with a real Claude response (
 ## Step 11: Set Budget (if using API key)
 After the user completes onboarding and has a company ID, set a $100/mo budget:
 ```sh
-curl -X PATCH http://127.0.0.1:3100/api/companies/<COMPANY_ID>/budgets \
+curl -X PATCH http://127.0.0.1:3102/api/companies/<COMPANY_ID>/budgets \
   -H "Content-Type: application/json" \
   -d '{"budgetMonthlyCents": 10000}'
 ```

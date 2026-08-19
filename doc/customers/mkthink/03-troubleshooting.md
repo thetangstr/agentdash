@@ -12,7 +12,7 @@ Common issues and how to fix them without calling support.
 
 1. **Check if the server is running:**
    ```sh
-   curl http://127.0.0.1:3100/api/health
+   curl http://127.0.0.1:3102/api/health
    ```
    If this returns `{"status":"ok"}`, the server is running — it's a network issue.
    If it fails, the server is down.
@@ -21,7 +21,7 @@ Common issues and how to fix them without calling support.
    ```sh
    launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
    sleep 5
-   curl http://127.0.0.1:3100/api/health
+   curl http://127.0.0.1:3102/api/health
    ```
 
 3. **Check you're on the same network:** The Mac mini must be on the same WiFi/LAN as your computer. If using Tailscale, both devices must be on the tailnet.

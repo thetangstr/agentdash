@@ -138,7 +138,7 @@ Once connected:
 
 ```sh
 # Check AgentDash health
-curl -fsS http://127.0.0.1:3100/api/health
+curl -fsS http://127.0.0.1:3102/api/health
 
 # Restart AgentDash
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
@@ -152,7 +152,7 @@ cd ~/agentdash && git pull --ff-only && pnpm install && pnpm build
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 
 # Check agent runs
-curl -s http://127.0.0.1:3100/api/companies/:companyId/dashboard
+curl -s http://127.0.0.1:3102/api/companies/:companyId/dashboard
 
 # Fix common issues
 sudo pmset -a sleep 0          # prevent sleep

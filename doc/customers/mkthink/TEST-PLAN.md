@@ -12,9 +12,18 @@ Two halves, run independently.
 `scripts/demo/mkthink-company.mjs`, with Titus/Chief, Priya/Delivery,
 Raj/Platform, Maya/People. `buzzhive` is also on this instance; leave it alone.
 
-Reach it at `http://mkmini.local:3103` on the LAN, or
-`http://<tailscale-ip>:3103` over Tailscale. **Not `127.0.0.1`** — loopback is not
-a trusted origin and sign-in returns `403 INVALID_ORIGIN`.
+> **Retired 2026-08-18.** The `uat` instance this plan targets is
+> decommissioned; the Mini now runs one instance, `mkboard`. Its database,
+> backups and instance files were deliberately kept, so this plan remains
+> readable as a record — but nothing answers on `:3103` any more. To run these
+> cases against the live workspace, use https://mkthinks-mac-mini.tail112187.ts.net:3112 and read the warning below,
+> which still applies.
+
+Reach the live instance at https://mkthinks-mac-mini.tail112187.ts.net:3112, the only address with a publicly-trusted
+certificate. **Not `127.0.0.1`, and not the app's own port** — sign-in checks the
+browser's origin against the configured public URL, and an address that is not
+that URL returns `403 INVALID_ORIGIN`. That check misfired for a day in August
+2026 because startup rewrote the public URL's port to the app's; see #483.
 
 Mark each case **PASS**, **FAIL**, or **BLOCKED**, and for anything that is not
 a pass write down what you actually saw rather than what it should have been.

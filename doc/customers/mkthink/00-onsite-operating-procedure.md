@@ -87,7 +87,7 @@ launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 sleep 5
 
 # 7. Health check
-curl -fsS http://127.0.0.1:3100/api/health
+curl -fsS http://127.0.0.1:3102/api/health
 ```
 
 **If it fails:** Check `~/.agentdash/logs/agentdash.err` for errors. Most common issues:
@@ -124,7 +124,7 @@ curl -fsS http://127.0.0.1:3100/api/health
 
 ```sh
 # Set $100/month company budget
-curl -X PATCH http://127.0.0.1:3100/api/companies/:companyId/budgets \
+curl -X PATCH http://127.0.0.1:3102/api/companies/:companyId/budgets \
   -H "Content-Type: application/json" \
   -d '{"budgetMonthlyCents": 10000}'
 ```
@@ -221,7 +221,7 @@ Do they have an Anthropic API key?
 
 ## Post-Install Checklist (Before You Leave)
 
-- [ ] Health check passes (`curl http://127.0.0.1:3100/api/health`)
+- [ ] Health check passes (`curl http://127.0.0.1:3102/api/health`)
 - [ ] Primary user can log in from their computer
 - [ ] CoS onboarding completed — agents created
 - [ ] First real task assigned and picked up by an agent
