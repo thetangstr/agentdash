@@ -11,6 +11,7 @@ import { logger } from "../../middleware/logger.js";
 import type { HealDiagnosis } from "./diagnosis.js";
 import { heartbeatService } from "../heartbeat.js";
 import { agentService } from "../agents.js";
+import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-chain.js";
 
 // Adapter fallback chain: if one fails, try the next
 const ADAPTER_FALLBACK_CHAIN: Record<string, string[]> = {
@@ -93,9 +94,15 @@ async function executeAdapterSwitchFix(
   diagnosis: HealDiagnosis,
 ): Promise<HealFixResult> {
   try {
-    // Get current agent info including companyId
+    // Get current agent info including companyId and adapterConfig — the
+    // config matters because a fallback hop can be "same adapter, different
+    // model", and because a stale model must not survive an adapter switch.
     const [agent] = await db
-      .select({ companyId: agents.companyId, adapterType: agents.adapterType })
+      .select({
+        companyId: agents.companyId,
+        adapterType: agents.adapterType,
+        adapterConfig: agents.adapterConfig,
+      })
       .from(agents)
       .where(eq(agents.id, run.agentId));
     if (!agent) {
@@ -103,20 +110,56 @@ async function executeAdapterSwitchFix(
     }
 
     const currentAdapter = agent.adapterType ?? "claude_local";
-    const fallbackChain = ADAPTER_FALLBACK_CHAIN[currentAdapter] ?? [];
+    const currentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+    const currentModel = typeof currentConfig.model === "string" ? currentConfig.model : "";
 
-    if (fallbackChain.length === 0) {
-      logger.info({ runId: run.id, currentAdapter }, "run_healer: no fallback adapters available");
-      return { succeeded: false, actionTaken: "no_fallback_available", costUsd: 0 };
+    // AgentDash: an operator-configured AGENTDASH_FALLBACK_CHAIN takes
+    // precedence over the built-in adapter table. The chain is ordered hops
+    // of `adapter[:model]`; position is matched on (adapter, model) so an
+    // agent already moved to hop N advances to hop N+1 instead of restarting.
+    const envChain = readFallbackChain();
+    let targetAdapter: string;
+    let targetModel: string | undefined;
+    if (envChain.length > 0) {
+      const next = nextFallbackHop(envChain, { adapter: currentAdapter, model: currentModel });
+      if (!next) {
+        logger.info(
+          { runId: run.id, currentAdapter, currentModel },
+          "run_healer: fallback chain exhausted",
+        );
+        return { succeeded: false, actionTaken: "no_fallback_available", costUsd: 0 };
+      }
+      targetAdapter = next.adapter;
+      targetModel = next.model;
+    } else {
+      const fallbackChain = ADAPTER_FALLBACK_CHAIN[currentAdapter] ?? [];
+      if (fallbackChain.length === 0) {
+        logger.info({ runId: run.id, currentAdapter }, "run_healer: no fallback adapters available");
+        return { succeeded: false, actionTaken: "no_fallback_available", costUsd: 0 };
+      }
+      targetAdapter = fallbackChain[0];
+      targetModel = undefined;
     }
 
-    const targetAdapter = fallbackChain[0];
-    logger.info({ runId: run.id, from: currentAdapter, to: targetAdapter, reason: diagnosis.diagnosis }, "run_healer: switching adapter");
+    logger.info(
+      { runId: run.id, from: currentAdapter, fromModel: currentModel || null, to: targetAdapter, toModel: targetModel ?? null, reason: diagnosis.diagnosis },
+      "run_healer: switching adapter",
+    );
 
-    // Update agent's adapter type
+    // Update the agent's adapter — and its model. A hop with a model sets
+    // it; a hop (or legacy-table switch) without one deletes it, because the
+    // previous adapter's model name is meaningless to the new adapter
+    // (gpt-5.6-terra is not a Hermes model).
+    const nextConfig: Record<string, unknown> = { ...currentConfig };
+    if (targetAdapter !== currentAdapter || targetModel !== undefined) {
+      delete nextConfig.model;
+    }
+    if (targetModel !== undefined) {
+      nextConfig.model = targetModel;
+    }
     await db
       .update(agents)
-      .set({ adapterType: targetAdapter })
+      .set({ adapterType: targetAdapter, adapterConfig: nextConfig })
       .where(eq(agents.id, run.agentId));
 
     // Re-enqueue the run with the new adapter
@@ -126,12 +169,12 @@ async function executeAdapterSwitchFix(
       agentId: run.agentId,
       source: "automation",
       reason: "healer_adapter_switch",
-      triggerDetail: `healer_switched_from_${currentAdapter}_to_${targetAdapter}`,
+      triggerDetail: `healer_switched_from_${currentAdapter}_to_${targetAdapter}${targetModel ? `:${targetModel}` : ""}`,
     });
 
     return {
       succeeded: true,
-      actionTaken: `adapter_switch_${currentAdapter}_to_${targetAdapter}`,
+      actionTaken: `adapter_switch_${currentAdapter}_to_${targetAdapter}${targetModel ? `:${targetModel}` : ""}`,
       costUsd: 0,
     };
   } catch (err) {
