@@ -4,11 +4,33 @@ Technical commands for managing the AgentDash server on the Mac mini.
 
 ---
 
+## Addresses
+
+Three addresses reach the same instance, and which one you use matters.
+
+| Address | Use it for | Certificate |
+|---|---|---|
+| `https://mkthinks-mac-mini.tail112187.ts.net:3112` | **Anything you send to a person.** Invite links, the board, connecting a harness | Publicly trusted (Let's Encrypt, via Tailscale) — the only one an MDM-managed Mac will accept without a warning |
+| `https://mkmini.local:3112` | LAN convenience when Tailscale is not in play | Self-signed; the browser asks first |
+| `http://127.0.0.1:3102` | Commands run **on the Mini itself**, like the health checks below | None; loopback only |
+
+Two rules behind that table, both learned the hard way:
+
+- **`:3112` is Caddy, `:3102` is the application.** Browsers arrive on 3112 and
+  Caddy proxies to 3102. Sign-in and sign-up check the browser's origin against
+  the configured public URL, so a page served from any other address is refused
+  with `403 INVALID_ORIGIN`.
+- **Invite links carry whichever address the server is configured with.** If an
+  invite link points somewhere a recipient cannot reach, the public URL is
+  wrong, not the invite.
+
+---
+
 ## Server Management
 
 ```sh
 # Health check
-curl -fsS http://127.0.0.1:3100/api/health
+curl -fsS http://127.0.0.1:3102/api/health
 
 # Restart server
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
@@ -94,7 +116,7 @@ pnpm install --frozen-lockfile
 pnpm build
 launchctl kickstart -k gui/$(id -u)/ai.agentdash.agent
 sleep 5
-curl -fsS http://127.0.0.1:3100/api/health
+curl -fsS http://127.0.0.1:3102/api/health
 ```
 
 Record the new version:
@@ -108,17 +130,17 @@ git rev-parse HEAD
 
 ```sh
 # Set company monthly budget ($100 = 10000 cents)
-curl -X PATCH http://127.0.0.1:3100/api/companies/:companyId/budgets \
+curl -X PATCH http://127.0.0.1:3102/api/companies/:companyId/budgets \
   -H "Content-Type: application/json" \
   -d '{"budgetMonthlyCents": 10000}'
 
 # Set per-agent budget ($30 = 3000 cents)
-curl -X PATCH http://127.0.0.1:3100/api/agents/:agentId/budgets \
+curl -X PATCH http://127.0.0.1:3102/api/agents/:agentId/budgets \
   -H "Content-Type: application/json" \
   -d '{"budgetMonthlyCents": 3000}'
 
 # Check dashboard summary (spend, budget, utilization)
-curl -s http://127.0.0.1:3100/api/companies/:companyId/dashboard
+curl -s http://127.0.0.1:3102/api/companies/:companyId/dashboard
 ```
 
 ---

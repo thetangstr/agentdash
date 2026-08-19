@@ -19,7 +19,7 @@ e2e **20 passed / 2 skipped**, journey gate **exit 0**.
 
 ## 0. Start here
 
-1. Open `http://mkmini.local:3102` — this is the clean MKThink instance.
+1. Open `https://mkthinks-mac-mini.tail112187.ts.net:3112` — this is the clean MKThink instance.
    `:3100` and `:3101` are separate, older, still on Claude. **Do not restart
    `:3100`** — it owns the Postgres process for all three.
 2. Sign in as `owner@example.com`. Reset links expire after **one hour**, so
@@ -31,17 +31,17 @@ e2e **20 passed / 2 skipped**, journey gate **exit 0**.
    # 1. generate the token (note: request-password-reset, NOT forget-password,
    #    which 404s on this Better Auth version)
    curl -s -o /dev/null -w "%{http_code}\n" \
-     -X POST http://mkmini.local:3102/api/auth/request-password-reset \
+     -X POST https://mkthinks-mac-mini.tail112187.ts.net:3112/api/auth/request-password-reset \
      -H "content-type: application/json" \
-     -H "Origin: http://mkmini.local:3102" \
-     -d '{"email":"owner@example.com","redirectTo":"http://mkmini.local:3102/reset-password"}'
+     -H "Origin: https://mkthinks-mac-mini.tail112187.ts.net:3112" \
+     -d '{"email":"owner@example.com","redirectTo":"https://mkthinks-mac-mini.tail112187.ts.net:3112/reset-password"}'
 
    # 2. read it out of the verification table (columns are snake_case)
    cd cli && pnpm exec tsx -e '
      import postgres from "postgres";
      const sql = postgres("postgres://paperclip:paperclip@127.0.0.1:54329/mkboard");
      const r = await sql`select identifier, expires_at from verification order by created_at desc limit 1`;
-     console.log("http://mkmini.local:3102/reset-password?token=" +
+     console.log("https://mkthinks-mac-mini.tail112187.ts.net:3112/reset-password?token=" +
        r[0].identifier.replace("reset-password:", ""), "expires", r[0].expires_at);
      await sql.end();'
    ```
@@ -514,6 +514,14 @@ through — cosmetic today, but it means org structure in the proposal is not th
 org structure you get.
 
 ## 16. The clean instance for acceptance testing
+
+> **Retired 2026-08-18.** This second installation was decommissioned at the
+> customer's instruction — two identical-looking instances on adjacent ports is
+> how real work lands on the wrong one. Its LaunchAgents are disabled and its
+> env file retired; the `uat` database, `~/.paperclip/backups/uat/` and
+> `~/.paperclip/instances/uat/` were kept on purpose. The commands below no
+> longer describe a running service, and rehearsal now belongs on the
+> operator's own hardware.
 
 A second, empty installation for testing onboarding from zero, so the MKThink
 workspace is not disturbed.
