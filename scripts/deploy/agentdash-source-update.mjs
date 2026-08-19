@@ -138,7 +138,7 @@ function run(command, args, options = {}) {
     encoding: "utf8",
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
     cwd: options.cwd,
-    env: process.env,
+    env: options.env ?? process.env,
   });
   if (result.error) throw result.error;
   if (result.status !== 0 && !options.allowFailure) {
@@ -245,7 +245,22 @@ function applyRevision(plan, sha, checks, phase) {
   git(plan.repoDir, ["checkout", "--quiet", "--detach", sha]);
   checks.push({ name: `${phase}_checkout`, status: "passed", sha, completedAt: nowIso() });
 
-  run("pnpm", ["install", "--no-frozen-lockfile"], { cwd: plan.repoDir, label: "pnpm install" });
+  /**
+   * Non-interactive, and said twice on purpose.
+   *
+   * A branch move can leave pnpm wanting a full reinstall, at which point it
+   * asks "The modules directories will be removed and reinstalled from
+   * scratch. Proceed? (Y/n)" and waits. Under launchd there is nobody to
+   * answer, so the update hangs forever holding a half-installed tree —
+   * observed on the Mini, killed by hand after ten minutes. `CI=1` puts pnpm in
+   * non-interactive mode and the explicit flag answers the one question that
+   * mode still leaves open.
+   */
+  run(
+    "pnpm",
+    ["install", "--no-frozen-lockfile", "--config.confirm-modules-purge=false"],
+    { cwd: plan.repoDir, label: "pnpm install", env: { ...process.env, CI: "1" } },
+  );
   checks.push({ name: `${phase}_install`, status: "passed", completedAt: nowIso() });
 
   run("pnpm", ["--filter", "./packages/**", "build"], { cwd: plan.repoDir, label: "packages build" });
