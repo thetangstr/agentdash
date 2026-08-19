@@ -1,7 +1,4 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AdapterEnvironmentCheck,
@@ -623,50 +620,32 @@ const piLocalAdapter: ServerAdapterModule = {
 // hermes-paperclip-adapter v0.2.0 predates the authToken field; cast is
 // intentional until hermes ships a matching AdapterExecutionContext type.
 import {
-  applyHermesUsageReport,
-  parseHermesUsageReport,
-  withUsageFileArg,
+  applyHermesSessionUsage,
+  readHermesSessionId,
+  readHermesSessionUsage,
 } from "./hermes-usage.js";
 
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
 
 /**
- * Run Hermes with `--usage-file` and fold the report it writes into the result.
+ * Run Hermes, then read what it spent out of its own ledger.
  *
- * Everything downstream of the adapter already meters tokens — the heartbeat
- * stores `usage`, and /costs/by-agent aggregates it — but hermes_local never
- * filled it in, so the one agent MKThink runs showed nothing while codex_local
- * agents showed full counts. Hermes reports its own totals when asked; the
- * package's stdout regex finds nothing to scrape in Hermes 0.20.
+ * Nothing about the invocation changes — the earlier attempt at this passed
+ * `--usage-file`, which Hermes rejects outside one-shot mode and this adapter
+ * runs `chat`. Hermes records `session_model_usage` in its state database for
+ * every run regardless, so the totals are read afterwards, by session id.
  *
- * Wrapped so a metering failure can never fail a run: the report is a
- * by-product, and a missing one leaves the result exactly as the adapter
- * returned it.
+ * Wrapped so metering can never fail a run: a missing or unreadable ledger
+ * leaves the result exactly as the adapter returned it.
  */
-async function runHermesWithUsageReport(
-  ctx: Parameters<ServerAdapterModule["execute"]>[0],
+async function withHermesSessionUsage(
+  result: AdapterExecutionResult,
 ): Promise<AdapterExecutionResult> {
-  const runId = (ctx as { runId?: string | null }).runId ?? "run";
-  const usageFilePath = path.join(
-    os.tmpdir(),
-    `agentdash-hermes-usage-${runId.replace(/[^a-zA-Z0-9_-]/g, "")}-${process.pid}.json`,
-  );
-  const agent = (ctx as { agent?: { adapterConfig?: unknown } }).agent;
-  const config = readRecord(agent?.adapterConfig) ?? {};
-  const patchedCtx = {
-    ...ctx,
-    agent: { ...agent, adapterConfig: withUsageFileArg(config, usageFilePath) },
-  } as typeof ctx;
-
-  const result = await executeHermesLocal(patchedCtx);
-
   try {
-    const raw = await fs.readFile(usageFilePath, "utf8");
-    return applyHermesUsageReport(result, parseHermesUsageReport(JSON.parse(raw) as unknown));
+    const sessionId = readHermesSessionId(result);
+    return applyHermesSessionUsage(result, readHermesSessionUsage(sessionId));
   } catch {
     return result;
-  } finally {
-    await fs.rm(usageFilePath, { force: true }).catch(() => {});
   }
 }
 
@@ -690,7 +669,9 @@ const hermesLocalAdapter: ServerAdapterModule = {
         "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
       );
     }
-    if (!taskPatchedCtx.authToken) return sanitizeHermesExecutionResult(await runHermesWithUsageReport(taskPatchedCtx));
+    if (!taskPatchedCtx.authToken) {
+      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
+    }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const existingEnv =
@@ -738,7 +719,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return sanitizeHermesExecutionResult(await runHermesWithUsageReport(patchedCtx));
+    return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx)));
   },
   // AgentDash: ensure the agent's managed profile exists before the env check so
   // harness-preflight passes for an agent created by any path, and run the check
