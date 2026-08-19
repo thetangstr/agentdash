@@ -107,6 +107,13 @@ export interface Agent {
   permissions: AgentPermissions;
   lastHeartbeatAt: Date | null;
   metadata: Record<string, unknown> | null;
+  /**
+   * The human owner of record (AGE-13). Set from the board actor at creation,
+   * backfilled to each company's first admin, and null when an agent was hired
+   * by another agent rather than a person. The server has always sent this
+   * column (agent reads spread the full row); this types it for the UI.
+   */
+  createdByUserId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   /**

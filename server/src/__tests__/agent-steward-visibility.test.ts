@@ -300,6 +300,47 @@ describeEmbeddedPostgres("agent steward visibility", () => {
     expect(casperRow?.steward).toMatchObject({ userId: titus, name: "Titus" });
   });
 
+  it("carries createdByUserId on reads, including the restricted view (AGE-13)", async () => {
+    const company = await createCompany(db);
+    const titus = await createUserMember(db, company.id, {
+      name: "Titus",
+      email: "titus@example.com",
+    });
+    const [casper] = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: "Casper",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        adapterConfig: { command: "run-casper" },
+        createdByUserId: titus,
+      })
+      .returning();
+    const reader = await createAgent(db, company.id, "Reader");
+
+    // Single read: the owner of record is on the payload.
+    const app = await createApp(db, makeAgentActor(company.id, reader.id));
+    const single = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/agents/${casper.id}`),
+    );
+    expect(single.status).toBe(200);
+    expect(single.body.createdByUserId).toBe(titus);
+
+    // Restricted list view: redaction strips adapter config but must keep the
+    // owner of record — like stewardship, it is org chart, not credential.
+    const list = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents`),
+    );
+    expect(list.status).toBe(200);
+    const casperRow = (
+      list.body as Array<{ id: string; adapterConfig: unknown; createdByUserId: unknown }>
+    ).find((agent) => agent.id === casper.id);
+    expect(casperRow?.adapterConfig).toEqual({});
+    expect(casperRow?.createdByUserId).toBe(titus);
+  });
+
   it("names the steward on a single agent read, so one agent can name another's human", async () => {
     const company = await createCompany(db);
     const titus = await createUserMember(db, company.id, {
