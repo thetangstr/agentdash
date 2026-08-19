@@ -203,6 +203,21 @@ export function readHermesSessionId(result: AdapterExecutionResult): string | nu
  * profile ran and which model label a human configured, and the ledger merely
  * repeating those must not clobber them.
  */
+/**
+ * Values the adapter emits when it does not know.
+ *
+ * `provider: "auto"` means "Hermes picked one", which buckets real spend under
+ * a non-answer in /costs/by-provider. The ledger records which provider was
+ * actually billed, so a placeholder must not outrank it — while a genuine
+ * label a human configured still wins.
+ */
+const PLACEHOLDER_LABELS = new Set(["auto", "unknown", "default", "none"]);
+
+function isInformative(value: unknown): value is string {
+  const label = readString(value);
+  return label !== null && !PLACEHOLDER_LABELS.has(label.toLowerCase());
+}
+
 export function applyHermesSessionUsage(
   result: AdapterExecutionResult,
   usage: HermesSessionUsage | null,
@@ -211,8 +226,8 @@ export function applyHermesSessionUsage(
   return {
     ...result,
     usage: result.usage ?? usage.usage,
-    ...(result.model ? {} : usage.model ? { model: usage.model } : {}),
-    ...(result.provider ? {} : usage.provider ? { provider: usage.provider } : {}),
+    ...(isInformative(result.model) ? {} : usage.model ? { model: usage.model } : {}),
+    ...(isInformative(result.provider) ? {} : usage.provider ? { provider: usage.provider } : {}),
     ...(result.costUsd === undefined || result.costUsd === null
       ? usage.costUsd !== null
         ? { costUsd: usage.costUsd }

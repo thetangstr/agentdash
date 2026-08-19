@@ -176,6 +176,21 @@ describe("applyHermesSessionUsage", () => {
     expect(merged.model).toBe("configured-label");
   });
 
+  it("replaces a placeholder provider with the one that was actually billed", () => {
+    // The adapter reports provider "auto" meaning "Hermes chose"; measured on
+    // the live instance, that put real MiniMax spend in an "auto" bucket in
+    // /costs/by-provider. The ledger knows which provider was billed.
+    const merged = applyHermesSessionUsage({ ...base, provider: "auto", model: "auto" }, usage);
+    expect(merged.provider).toBe("minimax");
+    expect(merged.model).toBe("MiniMax-M3");
+  });
+
+  it("still defers to a label a human actually configured", () => {
+    const merged = applyHermesSessionUsage({ ...base, provider: "openrouter", model: "my-model" }, usage);
+    expect(merged.provider).toBe("openrouter");
+    expect(merged.model).toBe("my-model");
+  });
+
   it("leaves the result untouched when the ledger has nothing", () => {
     const result = { ...base, model: "x" };
     expect(applyHermesSessionUsage(result, null)).toEqual(result);
