@@ -642,6 +642,47 @@ describe("InviteLandingPage", () => {
     });
   });
 
+  it("shows the invite to an admin who opened their own link, instead of bouncing them home", async () => {
+    // Every admin is a member, so the blanket member redirect made the invites
+    // page's "Open invite" button appear to do nothing: a new tab that landed
+    // on their own dashboard. Arriving already signed in is the signal.
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: {
+        id: "user-1",
+        name: "Yang Tang",
+        email: "yang@example.com",
+        image: null,
+      },
+    });
+    listCompaniesMock.mockResolvedValue([{ id: "company-1", name: "Acme Robotics" }]);
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+              <Route path="/" element={<div>DASHBOARD</div>} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).not.toContain("DASHBOARD");
+    expect(container.textContent).toContain("already belongs to");
+    expect(container.textContent).toContain("copy it and send it to them");
+  });
+
   it("falls back to the generated company icon when the invite logo fails to load", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({
