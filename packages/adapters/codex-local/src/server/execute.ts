@@ -43,6 +43,7 @@ import {
   isCodexUnknownSessionError,
 } from "./parse.js";
 import { pathExists, prepareManagedCodexHome, resolveManagedCodexHomeDir, resolveSharedCodexHomeDir } from "./codex-home.js";
+import { resolveCodexCommand } from "./command.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
 
@@ -286,7 +287,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
-  const command = asString(config.command, process.env.AGENTDASH_CODEX_COMMAND ?? "codex-acp");
+  const command = resolveCodexCommand(config, process.env);
   const model = asString(config.model, "");
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
