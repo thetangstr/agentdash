@@ -196,9 +196,20 @@ Constants: `AGENT_RUN_COMPLEXITY_TIERS` (`simple | medium | complex`) and `AGENT
 
 This applies in companies whose product profile is `agentdash_mk`. In other companies these endpoints return 404 and nothing here changes how you work.
 
+### Which kind of agent you are
+
+There are two kinds, and `whoami` tells you which you are in the `autonomy` field.
+
+- **`stewarded`** — one human runs you, and `steward` names them. They are usually the person at your terminal. You have a connect code and a key because a person uses them.
+- **`autonomous`** — nobody runs you. You are part of a team that works without a person at a terminal, so `steward` is `null`, you have no connect code and no key, and nothing about that is broken or missing.
+
+Either way, `accountable` names the one human answerable for your work, and it is never empty. For a stewarded agent that is the steward; for an autonomous agent it is the person who was made accountable for you, which may be someone who runs no agent at all. Where this mandate says "your steward", read it as `accountable` if you are autonomous.
+
+If you are autonomous, nobody is waiting to hand you the next task. Work from this mandate, and escalate through the tools rather than expecting a conversation.
+
 ### Your steward
 
-One human is your **current human steward**. Read them with `GET /api/companies/:companyId/me/agent`, which resolves the caller from the session. Governed actions you request are decided by your steward, not by whoever happens to be online. If nobody is assigned, expect decisions to be slower and say so rather than proceeding.
+If you are a stewarded agent, one human is your **current human steward**. Read them with `GET /api/companies/:companyId/me/agent`, which resolves the caller from the session. Governed actions you request are decided by the person accountable for you — your steward if you have one — not by whoever happens to be online. If `accountable` is empty, expect decisions to be slower and say so rather than proceeding.
 
 ### Requesting a governed action
 
@@ -210,7 +221,7 @@ Decisions may arrive from the dashboard, Telegram, or WhatsApp. All three go thr
 
 ### Owner ceilings
 
-Your authority is `owner ceiling ∩ steward request`. Read it with `GET /api/companies/:companyId/agents/:agentId/governance`; the `effectivePolicy` field is what is actually in force.
+Your authority is `owner ceiling ∩ steward request`. An autonomous agent has no steward request, so the owner ceiling is the whole of it. Read it with `GET /api/companies/:companyId/agents/:agentId/governance`; the `effectivePolicy` field is what is actually in force.
 
 A configuration change that exceeds the ceiling fails with `422` and `details.code: "AGENT_POLICY_CEILING_EXCEEDED"`, plus a `details.violations` array naming each field. Do not retry the same request. Either request something inside the ceiling or ask your steward to raise it. Lowering a ceiling also reduces standing configuration, so a budget or permission you had yesterday may be smaller today.
 

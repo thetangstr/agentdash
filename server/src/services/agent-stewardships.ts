@@ -10,6 +10,7 @@ import {
   humanChannelBindings,
 } from "@paperclipai/db";
 import { conflict, notFound } from "../errors.js";
+import { normalizeAgentAutonomy } from "./agent-accountability.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { logActivity } from "./activity-log.js";
 
@@ -115,12 +116,18 @@ async function lockAssignableCompanyAgent(
   agentId: string,
 ) {
   const result = await database.execute(sql`
-    select ${agents.id}, ${agents.companyId}, ${agents.status}
+    select ${agents.id}, ${agents.companyId}, ${agents.status}, ${agents.name}, ${agents.autonomy}
     from ${agents}
     where ${agents.id} = ${agentId}
     for update
   `);
-  const rows = resultRows(result) as Array<{ company_id?: string; companyId?: string; status?: string }>;
+  const rows = resultRows(result) as Array<{
+    company_id?: string;
+    companyId?: string;
+    status?: string;
+    name?: string;
+    autonomy?: string;
+  }>;
   const row = rows[0];
   const rowCompanyId = row?.company_id ?? row?.companyId;
   if (!row || rowCompanyId !== companyId) {
@@ -128,6 +135,17 @@ async function lockAssignableCompanyAgent(
   }
   if (row.status === "terminated") {
     throw conflict("Stewardship agent must not be terminated");
+  }
+  // An autonomous agent has no person at a terminal by definition, so pairing
+  // one to a human is not a partial state to be tolerated — it is the two
+  // kinds contradicting each other. Refused here, inside the row lock, rather
+  // than in the route, because `assign` is reachable from the API, the MCP
+  // surface and the creation path.
+  if (normalizeAgentAutonomy(row.autonomy) === "autonomous") {
+    throw conflict(
+      `${row.name?.trim() || "This agent"} is an autonomous agent and works without a steward. ` +
+        "Make it a stewarded agent first if a person should run it.",
+    );
   }
 }
 

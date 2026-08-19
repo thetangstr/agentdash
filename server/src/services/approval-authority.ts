@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden } from "../errors.js";
 import { accessService } from "./access.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
 
 type ApprovalRow = typeof approvals.$inferSelect;
 
@@ -56,6 +57,7 @@ export interface ApprovalDecisionRequest {
 export function approvalAuthorityService(db: Db) {
   const access = accessService(db);
   const stewardships = agentStewardshipService(db);
+  const accountability = agentAccountabilityService(db);
   const governance = agentGovernanceService(db);
 
   async function isProfileCompany(companyId: string) {
@@ -164,8 +166,16 @@ export function approvalAuthorityService(db: Db) {
     }
 
     if (approval.requestedByAgentId) {
-      const active = await stewardships.activeByAgent(approval.companyId, approval.requestedByAgentId);
-      if (active && actor.userId && active.userId === actor.userId) {
+      // The person who answers for the requesting agent decides about its work.
+      // For a stewarded agent that is its steward, exactly as before; for an
+      // autonomous one it is the accountable human, who previously had no route
+      // to decide at all and had to write an emergency override for routine work
+      // from an agent they are answerable for.
+      const responsibleUserId = await accountability.escalationUserId(
+        approval.companyId,
+        approval.requestedByAgentId,
+      );
+      if (responsibleUserId && actor.userId && responsibleUserId === actor.userId) {
         return "steward";
       }
 

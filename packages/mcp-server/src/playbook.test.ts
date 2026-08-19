@@ -54,7 +54,20 @@ describe("the steward contract", () => {
    */
   it("tells the agent where its own steward, and another agent's, is named", () => {
     expect(STEWARD_PLAYBOOK).toContain("`steward`");
-    expect(STEWARD_PLAYBOOK).toContain("Every agent has a human behind it");
+    expect(STEWARD_PLAYBOOK).toContain("Every agent has a human answerable for it");
+  });
+
+  /**
+   * Both kinds of agent read this, and only one of them has a person at its
+   * terminal. An autonomous agent told "the person at this terminal is your
+   * steward" reads `steward: null` in `whoami` and concludes something is broken
+   * — or worse, that nobody is answerable for what it does.
+   */
+  it("explains both kinds of agent, and points either at an accountable human", () => {
+    expect(STEWARD_PLAYBOOK).toContain("A stewarded agent");
+    expect(STEWARD_PLAYBOOK).toContain("An autonomous agent");
+    expect(STEWARD_PLAYBOOK).toContain("`accountable`");
+    expect(STEWARD_PLAYBOOK).toContain("that is not a gap to");
   });
 
   it("does not tell a person's agent to provision a company", () => {

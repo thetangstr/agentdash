@@ -39,6 +39,12 @@ import { MarkdownBody } from "../components/MarkdownBody";
 import { CopyText } from "../components/CopyText";
 import { EntityRow } from "../components/EntityRow";
 import { Identity } from "../components/Identity";
+import {
+  AgentKindBadge,
+  accountableLabel,
+  agentKind,
+  agentKindExplanation,
+} from "@/components/AgentKindBadge";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -1376,6 +1382,8 @@ function AgentOverview({
   const creatorProfile = creatorId ? userProfiles.get(creatorId) : undefined;
   const steward = agent.steward ?? null;
   const stewardLabel = steward ? (steward.name ?? steward.email ?? steward.userId) : null;
+  const accountable = agent.accountable ?? null;
+  const accountableName = accountableLabel(agent);
   return (
     <div className="space-y-8">
       {/* Latest Run */}
@@ -1453,6 +1461,9 @@ function AgentOverview({
               <span className="text-xs text-muted-foreground">Hired by an agent</span>
             )}
           </SummaryRow>
+          <SummaryRow label="Kind">
+            <AgentKindBadge agent={agent} />
+          </SummaryRow>
           <SummaryRow label="Steward">
             {steward ? (
               <>
@@ -1469,9 +1480,39 @@ function AgentOverview({
                 )}
               </>
             ) : (
-              <span className="text-xs text-muted-foreground">No steward assigned</span>
+              <span className="text-xs text-muted-foreground">
+                {/* Two different absences, and they were previously one line of
+                    text. An autonomous agent has no steward by design; a
+                    personal agent without one is unfinished work. */}
+                {agentKind(agent) === "autonomous"
+                  ? "None — this agent runs without a person"
+                  : "No steward assigned"}
+              </span>
             )}
           </SummaryRow>
+          <SummaryRow label="Accountable">
+            {accountable ? (
+              <>
+                <Identity
+                  name={accountableName ?? "Accountable"}
+                  avatarUrl={userProfiles.get(accountable.userId)?.image ?? null}
+                  size="xs"
+                />
+                <span className="text-xs">{accountableName}</span>
+                <span className="text-xs text-muted-foreground">
+                  {accountable.via === "steward" ? "as its steward" : "assigned"}
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-amber-600 dark:text-amber-400">Nobody yet</span>
+            )}
+          </SummaryRow>
+          {/* The explanation, spelled out rather than left to the tooltip.
+              Someone reading this panel is trying to understand the model, not
+              hovering to remind themselves of it. */}
+          <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
+            {agentKindExplanation(agent)}
+          </p>
         </div>
       </div>
 

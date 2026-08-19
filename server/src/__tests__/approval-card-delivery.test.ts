@@ -83,6 +83,15 @@ describeEmbeddedPostgres("approval card delivery", () => {
       profile?: "agentdash_mk" | "default";
       binding?: "verified" | "unverified" | "revoked" | "none";
       steward?: boolean;
+      /**
+       * An agent that runs without a person, answerable to the second member.
+       * Its card has to reach that person; before accountability was separated
+       * from stewardship it reached nobody, because delivery gave up on a null
+       * stewardship.
+       */
+      autonomous?: boolean;
+      /** Whose channel the binding belongs to. Defaults to the steward. */
+      bindingUser?: "steward" | "owner";
     } = {},
   ) {
     const company = await db
@@ -124,11 +133,14 @@ describeEmbeddedPostgres("approval card delivery", () => {
         role: "engineer",
         status: "idle",
         adapterType: "process",
+        ...(options.autonomous
+          ? { autonomy: "autonomous", accountableUserId: owner.principalId }
+          : {}),
       })
       .returning()
       .then((rows) => rows[0]!);
 
-    if (options.steward !== false) {
+    if (options.steward !== false && !options.autonomous) {
       await agentStewardshipService(db).assign(company.id, {
         agentId: agent.id,
         userId: steward.principalId,
@@ -141,7 +153,10 @@ describeEmbeddedPostgres("approval card delivery", () => {
       const now = new Date();
       await db.insert(humanChannelBindings).values({
         companyId: company.id,
-        userId: steward.principalId,
+        userId:
+          (options.bindingUser ?? (options.autonomous ? "owner" : "steward")) === "owner"
+            ? owner.principalId
+            : steward.principalId,
         agentId: agent.id,
         provider: "telegram",
         externalUserId: "555",
@@ -181,6 +196,31 @@ describeEmbeddedPostgres("approval card delivery", () => {
     const keyboard = (cards[0].body.reply_markup as { inline_keyboard?: unknown[][] } | undefined)
       ?.inline_keyboard;
     expect(keyboard?.[0], "the card carried no decision buttons").toHaveLength(2);
+  });
+
+  it("delivers an autonomous agent's card to the person accountable for it", async () => {
+    // The behaviour that did not exist. An autonomous agent has no steward, and
+    // delivery resolved its recipient from the stewardship — so every approval
+    // an autonomous agent raised was silently delivered to nobody while the
+    // approval sat pending.
+    const { approval } = await seed({ autonomous: true });
+
+    await approvalCardDeliveryService(db).deliverForApproval(approval.id);
+
+    const cards = cardSends();
+    expect(cards, "no card reached the accountable person").toHaveLength(1);
+    expect(cards[0].body.chat_id).toBe("chat-555");
+  });
+
+  it("delivers nothing for an agent nobody answers for", async () => {
+    // A personal agent whose pairing was never finished. Nothing to deliver to
+    // is the correct outcome; the fix is a human assigning a steward, and the
+    // board now says so on the agent.
+    const { approval } = await seed({ steward: false, binding: "none" });
+
+    await approvalCardDeliveryService(db).deliverForApproval(approval.id);
+
+    expect(cardSends()).toHaveLength(0);
   });
 
   it("mints callback tokens bound to the approval and its current revision", async () => {

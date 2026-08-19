@@ -251,9 +251,14 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     // and until the agent read paths carried stewardship an agent could not name
     // that person — it knew the word and not the human. A tool description that
     // stops at "actor details" does not tell a model the answer is in there.
+    //
+    // `autonomy` and `accountable` are named for the same reason. An autonomous
+    // agent has no steward at all, so a model told only about `steward` reads
+    // `null` and concludes there is nobody to escalate to — when in fact
+    // `accountable` names the person who answers for it.
     makeTool(
       "whoami",
-      "Get the current authenticated AgentDash actor details, including the human steward this agent belongs to and is accountable to.",
+      "Get the current authenticated AgentDash actor details: who this agent is, whether it is a stewarded agent (one person runs it) or an autonomous one (no person does), and the human who is accountable for its work.",
       z.object({}),
       async () => client.requestJson("GET", "/agents/me"),
     ),
@@ -285,7 +290,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
           return {
             mandate: null,
             reason:
-              "This agent has no instruction bundle entry file. Ask your steward to write a mandate in the AgentDash UI (My Agent → Mandate).",
+              "This agent has no instruction bundle entry file. Ask the person accountable for you (`accountable` in whoami) to write a mandate in the AgentDash UI (My Agent → Mandate).",
             bundle,
           };
         }
@@ -308,13 +313,13 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
     ),
     makeTool(
       "list_agents",
-      "List agents in a company, each with the human steward who stands behind it.",
+      "List agents in a company, each with its kind (stewarded or autonomous) and the human accountable for it.",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId }) => client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}/agents`),
     ),
     makeTool(
       "get_agent",
-      "Get a single agent by id, including the human steward who stands behind it.",
+      "Get a single agent by id, including its kind (stewarded or autonomous) and the human accountable for it.",
       z.object({ agentId: z.string().min(1), companyId: companyIdOptional }),
       async ({ agentId, companyId }) => {
         const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";

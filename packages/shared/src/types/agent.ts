@@ -1,5 +1,6 @@
 import type {
   AgentAdapterType,
+  AgentAutonomy,
   ModelProfileKey,
   PauseReason,
   AgentRole,
@@ -123,6 +124,39 @@ export interface Agent {
    * revisions and other places that never carried a stewardship.
    */
   steward?: AgentSteward | null;
+  /**
+   * Whether this agent mirrors one person or runs on its own.
+   *
+   * Optional on the type and always present on the wire from the agent list and
+   * detail routes, for the same reason `steward` is: `Agent` also describes rows
+   * rebuilt from config revisions, which never carried either field. Treat a
+   * missing value as `stewarded`.
+   */
+  autonomy?: AgentAutonomy;
+  /**
+   * The human answerable for this agent's work, or null when nobody is.
+   *
+   * `via` says where the answer came from — `steward` for a personal agent,
+   * `assignment` for an autonomous one — which is what lets a screen explain
+   * itself instead of showing a name with no reason attached. Null on a
+   * stewarded agent means the pairing was never finished, and the board says so
+   * rather than implying the agent is autonomous.
+   */
+  accountable?: AgentAccountableParty | null;
+}
+
+/**
+ * Who answers for an agent, and why them.
+ *
+ * Deliberately not the same shape as `AgentSteward`: a steward is a pairing with
+ * a start date, while this is the answer to "who do I take this to?" — which for
+ * an autonomous agent is somebody who does not steward it at all.
+ */
+export interface AgentAccountableParty {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  via: "steward" | "assignment";
 }
 
 export interface AgentDetail extends Agent {

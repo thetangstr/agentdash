@@ -30,6 +30,22 @@ export const AGENT_STATUSES = [
 ] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+/**
+ * Whether an agent mirrors one person or works on its own (decided 2026-08-19).
+ *
+ * `stewarded` — one human runs it, and that pairing is what the My Agent page,
+ * the connect code, the API key, the channel binding and every escalation are
+ * built on. `agent_stewardships` holds the pairing, 1:1 in both directions.
+ *
+ * `autonomous` — part of a team that runs without a person at a terminal: no
+ * steward, no key, and escalations go to the human made accountable for it.
+ *
+ * A single string rather than a boolean because the board has to name the kinds
+ * to a person, and "autonomy: false" is not a thing anyone says out loud.
+ */
+export const AGENT_AUTONOMY_KINDS = ["stewarded", "autonomous"] as const;
+export type AgentAutonomy = (typeof AGENT_AUTONOMY_KINDS)[number];
+
 // AgentDash (cos-onboarding Phase A): `claude_api` and `hermes_local` are
 // added for discoverability (autocomplete + exhaustive-switch hints used by
 // CoS deep-interview prompt-depth selection). The type already widens to

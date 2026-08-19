@@ -262,9 +262,11 @@ surfacing, whether three cycles is the right floor — is entirely unvalidated a
 be validated until real cycles accumulate.
 
 **The residual limit, stated rather than claimed away.** `pipeline_id` and `step_key` are
-correlation keys. A deliverable fact names an owning agent, and an agent has a steward, so
-somebody holding authority over `workflow_recommendations`, `deliverable_facts`, and
-`agent_stewardships` can still join their way to a person. That is weaker than the seat
+correlation keys. A deliverable fact names an owning agent, and every agent has a human
+answerable for it — its steward if it is a stewarded agent, `agents.accountable_user_id`
+if it is an autonomous one — so somebody holding authority over
+`workflow_recommendations`, `deliverable_facts`, and either of those can still join their
+way to a person. That is weaker than the seat
 case — a stewardship is reassignable, and an ask may be answered by the agent, the
 harness, or the person, so the wait is not attributable to one of them — but it is not
 nothing. What the table guarantees is that it contains no such name and that nothing
@@ -299,6 +301,7 @@ Each of these is a considered exclusion, not a gap.
 | Concern | Lives in | Status |
 |---|---|---|
 | Human↔agent binding | `server/src/services/agent-stewardships.ts` | shipped |
+| Which kind of agent, and who answers for it | `server/src/services/agent-accountability.ts` | shipped |
 | Harness→agent directives | `server/src/services/agent-directives.ts` | shipped |
 | Ceiling narrowing (Rule A) | `server/src/services/agent-governance.ts` | shipped |
 | Authorization (Rule B boundary) | `server/src/services/connectors.ts` → `resolveActingAs` | shipped |

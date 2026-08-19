@@ -64,6 +64,13 @@ import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import {
+  accountabilityLabel,
+  type AgentAccountability,
+  agentAccountabilityService,
+  assertAgentMayHoldKey,
+  normalizeAgentAutonomy,
+} from "../services/agent-accountability.js";
 import { logger } from "../middleware/logger.js";
 import {
   assertHostWorkspaceCommandAuthority,
@@ -182,6 +189,7 @@ export function agentRoutes(
   // configuration. No-ops for `default`-profile companies.
   const governance = agentGovernanceService(db);
   const stewardships = agentStewardshipService(db);
+  const accountability = agentAccountabilityService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -485,7 +493,7 @@ export function agentRoutes(
   }
 
   /**
-   * Attach the human steward to agent rows.
+   * Attach the human steward, and the human answerable, to agent rows.
    *
    * Stewardship was readable only through the dedicated
    * `/agents/:id/stewardship` route, which returns the raw row: a durable
@@ -501,22 +509,50 @@ export function agentRoutes(
    * their own company. So this widens no one's view of contact details; it only
    * puts the person next to the agent they are accountable for.
    */
-  async function attachStewards<T extends { id: string }>(companyId: string, rows: T[]) {
-    const stewardsByAgentId = await stewardships.activeStewardsByAgentIds(
-      companyId,
-      rows.map((row) => row.id),
-    );
-    return rows.map((row) => ({ ...row, steward: stewardsByAgentId.get(row.id) ?? null }));
+  async function attachHumanContext<T extends { id: string }>(companyId: string, rows: T[]) {
+    const agentIds = rows.map((row) => row.id);
+    const [stewardsByAgentId, accountabilityByAgentId] = await Promise.all([
+      stewardships.activeStewardsByAgentIds(companyId, agentIds),
+      accountability.resolveForAgents(companyId, agentIds),
+    ]);
+    return rows.map((row) => ({
+      ...row,
+      steward: stewardsByAgentId.get(row.id) ?? null,
+      // Who answers for this agent, and why them. Carried next to `steward`
+      // rather than derived by each reader: for an autonomous agent the answer
+      // is somebody who does not steward it, and a board or another agent that
+      // has to infer that from two nullable fields will infer it differently.
+      accountable: toAccountableParty(accountabilityByAgentId.get(row.id) ?? null),
+    }));
+  }
+
+  /**
+   * The wire shape for "who answers for this agent", or null when nobody does.
+   *
+   * Null is a real answer — a stewarded agent whose pairing was never finished —
+   * and it is deliberately distinguishable from an autonomous agent, which
+   * always has somebody. `via` travels with the name so a screen can explain
+   * itself instead of showing a person with no reason attached.
+   */
+  function toAccountableParty(value: AgentAccountability | null) {
+    if (!value?.userId || value.via === "unpaired") return null;
+    return {
+      userId: value.userId,
+      name: value.name,
+      email: value.email,
+      via: value.via,
+    };
   }
 
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
+      accountability.resolveForAgent(agent.companyId, agent.id),
     ]);
 
     return {
@@ -526,6 +562,10 @@ export function agentRoutes(
       // agent reading a missing key cannot tell "unstewarded" from "this
       // build does not report stewards".
       steward,
+      // Same contract, and the field that makes an autonomous agent legible:
+      // `steward` is null for one of those by definition, so `steward: null`
+      // alone cannot tell a reader whether anybody is answerable.
+      accountable: toAccountableParty(accountableFor),
       access: accessState,
     };
   }
@@ -1777,14 +1817,14 @@ export function agentRoutes(
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(await attachStewards(companyId, result));
+      res.json(await attachHumanContext(companyId, result));
       return;
     }
     // The restricted view redacts adapter and runtime configuration, which is
     // where credentials live. Stewardship is not a credential — it is the org
     // chart — so it survives the redaction rather than being stripped with it.
     res.json(
-      await attachStewards(
+      await attachHumanContext(
         companyId,
         // Non-null: every row came from `svc.list`, and the redactor only
         // returns null for a null input.
@@ -2237,6 +2277,17 @@ export function agentRoutes(
       ...hireInput,
       adapterConfig: normalizedAdapterConfig,
       runtimeConfig: normalizedRuntimeConfig,
+      // A hire is a proposal for a personal agent: the whole flow exists so a
+      // person ends up with an agent of their own, and the approval payload has
+      // nowhere to carry an accountable human.
+      //
+      // Pinned rather than passed through. `createAgentHireSchema` extends the
+      // same base schema as creation, so a body asking for `autonomy:
+      // "autonomous"` would otherwise reach the insert with no accountable
+      // person resolved and fail on `agents_accountable_ck` as a 500. Creating
+      // autonomous agents goes through POST /companies/:id/agents.
+      autonomy: "stewarded" as const,
+      accountableUserId: null,
     };
 
     const company = await db
@@ -2451,6 +2502,43 @@ export function agentRoutes(
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
     });
 
+    // Which kind of agent this is, and who answers for it.
+    //
+    // `stewarded` is the default, so every existing caller keeps creating
+    // personal agents. An autonomous agent has no steward to inherit
+    // accountability from, so it has to be recorded here or it never is: the
+    // person asking, or — when one agent hires another, where there is no human
+    // actor at all — whoever is already accountable for the hiring agent.
+    //
+    // An autonomous agent with nobody behind it is refused rather than created.
+    // That is the same rule `agents_accountable_ck` enforces in the database;
+    // refusing here means the caller gets a sentence they can act on instead of
+    // a constraint violation.
+    const requestedAutonomy = normalizeAgentAutonomy(createInput.autonomy);
+    if (requestedAutonomy === "stewarded" && createInput.accountableUserId) {
+      throw conflict(
+        "A stewarded agent takes its accountable human from its steward, so accountableUserId "
+          + "cannot be set on one. Assign the stewardship instead, or create the agent as autonomous.",
+      );
+    }
+    let resolvedAccountableUserId: string | null = null;
+    if (requestedAutonomy === "autonomous") {
+      const creationActor = getActorInfo(req);
+      resolvedAccountableUserId =
+        (createInput.accountableUserId as string | null | undefined)
+        ?? (req.actor.type === "board" ? req.actor.userId ?? null : null)
+        ?? (creationActor.agentId
+          ? await accountability.escalationUserId(companyId, creationActor.agentId)
+          : null);
+      if (!resolvedAccountableUserId) {
+        throw conflict(
+          "An autonomous agent needs a human who is accountable for it. Pass accountableUserId, "
+            + "or create the agent as stewarded so its steward is the answer.",
+        );
+      }
+      await accountability.assertAccountableMember(companyId, resolvedAccountableUserId);
+    }
+
     const harnessPreflightResult = requireHarnessPreflight
       ? await runRequiredHarnessPreflight({
           companyId,
@@ -2474,6 +2562,10 @@ export function agentRoutes(
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // Resolved above, and set after the spread so the resolution wins over
+        // whatever the body asked for.
+        autonomy: requestedAutonomy,
+        accountableUserId: resolvedAccountableUserId,
         // A3: ownership from the ACTOR, never the body. An agent creating an
         // agent (chief-of-staff hires) records no human creator; the hire
         // approval trail is its provenance.
@@ -2529,7 +2621,10 @@ export function agentRoutes(
     //
     // Best-effort: a failure here must not fail the creation. The agent exists
     // and is valid without a steward; someone can pair it afterwards.
-    if (req.actor.type === "board" && req.actor.userId) {
+    //
+    // Skipped entirely for an autonomous agent: it has no steward by
+    // definition, and `assign` now refuses one anyway.
+    if (requestedAutonomy === "stewarded" && req.actor.type === "board" && req.actor.userId) {
       try {
         const existing = await stewardships.activeByUser(companyId, req.actor.userId);
         if (!existing) {
@@ -2990,6 +3085,65 @@ export function agentRoutes(
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+
+    // Changing what kind of agent this is, or who answers for it.
+    //
+    // Reassignment is the whole point of a separate accountable column: the
+    // person who set an autonomous agent running is often not the person who
+    // should be woken by it later, and `created_by_user_id` is provenance that
+    // must not be rewritten to express that.
+    //
+    // Turning a paired agent autonomous is refused while the pairing is live.
+    // Doing it silently would end someone's stewardship as a side effect of a
+    // field edit — taking away their My Agent page, their connect code and their
+    // channel binding — so the steward is named and the pairing has to be ended
+    // deliberately first.
+    //
+    // Only administrators reach this at all: `STEWARD_PATCHABLE_AGENT_FIELDS`
+    // does not list either field, so a steward patching their own agent is
+    // refused by `assertStewardPatchScope` above.
+    if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
+      const currentAutonomy = normalizeAgentAutonomy(existing.autonomy);
+      const nextAutonomy = hasOwn(patchData, "autonomy")
+        ? normalizeAgentAutonomy(patchData.autonomy)
+        : currentAutonomy;
+      const requestedAccountable =
+        typeof patchData.accountableUserId === "string" ? patchData.accountableUserId.trim() : null;
+
+      if (nextAutonomy === "autonomous") {
+        const activeSteward = await stewardships.activeByAgent(existing.companyId, existing.id);
+        if (activeSteward) {
+          const steward = await accountability.resolveForAgent(existing.companyId, existing.id);
+          throw conflict(
+            `${existing.name} is stewarded by ${accountabilityLabel(steward) ?? activeSteward.userId}. `
+              + "End that stewardship first if this agent should run without a person; "
+              + "making it autonomous would revoke their connect code and channel binding.",
+          );
+        }
+        const resolved = requestedAccountable
+          ?? existing.accountableUserId
+          ?? (req.actor.type === "board" ? req.actor.userId ?? null : null);
+        if (!resolved) {
+          throw conflict(
+            "An autonomous agent needs a human who is accountable for it. Pass accountableUserId.",
+          );
+        }
+        await accountability.assertAccountableMember(existing.companyId, resolved);
+        patchData.accountableUserId = resolved;
+      } else {
+        if (requestedAccountable) {
+          throw conflict(
+            "A stewarded agent takes its accountable human from its steward, so accountableUserId "
+              + "cannot be set on one. Assign the stewardship instead, or make the agent autonomous.",
+          );
+        }
+        // Clearing it is deliberate: leaving a stale value behind would give the
+        // agent two answers to "who answers for this?" the moment a steward is
+        // assigned, and the stewardship is the one that means anything.
+        patchData.accountableUserId = null;
+      }
+      patchData.autonomy = nextAutonomy;
+    }
     if (hasOwn(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {
@@ -3115,6 +3269,31 @@ export function agentRoutes(
       entityId: agent.id,
       details: summarizeAgentUpdateDetails(patchData),
     });
+
+    // A second, specific entry when accountability moved.
+    //
+    // `agent.updated` records that a field changed; it does not answer "who was
+    // answerable for this agent in March", which is the question an audit
+    // actually asks. Recorded separately so it can be found without reading
+    // every update to the agent.
+    if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.accountability_changed",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          fromAutonomy: normalizeAgentAutonomy(existing.autonomy),
+          toAutonomy: normalizeAgentAutonomy(agent.autonomy),
+          fromAccountableUserId: existing.accountableUserId ?? null,
+          toAccountableUserId: agent.accountableUserId ?? null,
+        },
+      });
+    }
 
     res.json(agent);
   });
@@ -3272,6 +3451,9 @@ export function agentRoutes(
     if (!agent) {
       return;
     }
+    // A key is for a person to run this agent from their own terminal, which is
+    // exactly what an autonomous agent does not have.
+    assertAgentMayHoldKey(agent);
     const key = await svc.createApiKey(id, req.body.name);
 
     await logActivity(db, {
@@ -3308,6 +3490,9 @@ export function agentRoutes(
       res.status(409).json({ error: "This agent cannot be connected to yet." });
       return;
     }
+
+    // Same rule as minting a key, because redeeming this code mints one.
+    assertAgentMayHoldKey(agent);
 
     const now = new Date();
     await db
