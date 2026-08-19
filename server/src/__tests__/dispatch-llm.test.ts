@@ -601,3 +601,121 @@ describe("stripHermesChatter", () => {
     expect(stripHermesChatter("  ⚠ scanner unavailable\r\n")).toBe("");
   });
 });
+
+/**
+ * AGENTDASH_FALLBACK_CHAIN: ordered `adapter[:model]` hops walked after the
+ * primary adapter fails. Two hops on the same adapter with different models
+ * are distinct — the motivating deployment is codex → hermes:k3 → hermes:glm.
+ */
+describe("dispatchLLM fallback chain", () => {
+  const input = {
+    system: "You are a Chief of Staff.",
+    messages: [{ role: "user" as const, content: "Draft a rollout plan." }],
+  };
+
+  const savedEnv: Record<string, string | undefined> = {};
+  const ENV_KEYS = [
+    "AGENTDASH_DEFAULT_ADAPTER",
+    "AGENTDASH_FALLBACK_CHAIN",
+    "AGENTDASH_FALLBACK_ADAPTER",
+    "ANTHROPIC_API_KEY",
+    "MINIMAX_API_KEY",
+    "PAPERCLIP_E2E_SKIP_LLM",
+  ];
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+    delete process.env.PAPERCLIP_E2E_SKIP_LLM;
+    delete process.env.AGENTDASH_FALLBACK_ADAPTER;
+    process.env.ANTHROPIC_API_KEY = "sk-test-key";
+    process.env.MINIMAX_API_KEY = "mm-test-key";
+    anthropicLLM.mockClear();
+    anthropicLLM.mockResolvedValue("anthropic fallback");
+    minimaxLLM.mockClear();
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => {
+      const child: any = {
+        kill: vi.fn(),
+        stdin: { end: vi.fn() },
+        stdout: {
+          on: vi.fn((event: string, callback: (chunk: Buffer) => void) => {
+            if (event === "data") setTimeout(() => callback(Buffer.from("hermes reply")), 0);
+            return child.stdout;
+          }),
+        },
+        stderr: { on: vi.fn(() => child.stderr) },
+        on: vi.fn((event: string, callback: (code?: number) => void) => {
+          if (event === "close") setTimeout(() => callback(0), 0);
+          return child;
+        }),
+      };
+      return child;
+    });
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it("falls back through a model-bearing hermes hop, passing -m", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:k3";
+    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
+
+    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "hermes",
+      expect.arrayContaining(["-m", "k3"]),
+      expect.anything(),
+    );
+  });
+
+  it("takes precedence over the legacy single-hop AGENTDASH_FALLBACK_ADAPTER", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:k3";
+    process.env.AGENTDASH_FALLBACK_ADAPTER = "claude_api";
+    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
+
+    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
+    expect(anthropicLLM).not.toHaveBeenCalled();
+  });
+
+  it("walks past a failing hop to the next one", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "claude_api,hermes_local:glm-5.3";
+    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
+    anthropicLLM.mockRejectedValue(new Error("anthropic down"));
+
+    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
+
+    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledWith(
+      "hermes",
+      expect.arrayContaining(["-m", "glm-5.3"]),
+      expect.anything(),
+    );
+  });
+
+  it("skips a hop naming the failed adapter with no model override", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "minimax,claude_api";
+    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
+
+    await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
+    // Primary call only — the identical minimax hop must not be retried.
+    expect(minimaxLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails loudly when every hop fails, naming each attempt", async () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "claude_api";
+    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
+    anthropicLLM.mockRejectedValue(new Error("anthropic down"));
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/All fallback-chain hops failed/);
+  });
+});

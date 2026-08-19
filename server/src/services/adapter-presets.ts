@@ -169,6 +169,13 @@ export function readAdapterStatus(): AdapterStatus {
       return hasBinary("claude")
         ? { adapter, ready: true, preset: "custom", reason: null }
         : { adapter, ready: false, preset: "custom", reason: "claude binary not found on PATH" };
+    case "codex_local":
+      // Same shape as claude_local: a binary on PATH is what "ready" can
+      // honestly mean for a CLI adapter — auth state is the CLI's own to
+      // report. Respects AGENTDASH_CODEX_COMMAND like dispatch-llm does.
+      return hasBinary((process.env.AGENTDASH_CODEX_COMMAND ?? "").trim() || "codex")
+        ? { adapter, ready: true, preset: "custom", reason: null }
+        : { adapter, ready: false, preset: "custom", reason: "codex binary not found on PATH" };
     default:
       return { adapter, ready: false, preset: "custom", reason: `adapter '${adapter}' has no readiness check` };
   }

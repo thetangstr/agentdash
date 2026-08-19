@@ -7,6 +7,7 @@ import { minimaxLLM } from "./minimax-llm.js";
 import { openaiCompatLLMDetailed, type OpenAICompatUsage } from "./openai-compat-llm.js";
 import { costService } from "./costs.js";
 import { logger } from "../middleware/logger.js";
+import { readFallbackChain } from "../lib/adapter-fallback-chain.js";
 import { HttpError } from "../errors.js";
 import type { Db } from "@paperclipai/db";
 import { parseCodexJsonl } from "@paperclipai/adapter-codex-local/server";
@@ -414,6 +415,20 @@ function e2eStubResponse(callIndex: number): string {
  */
 export interface DispatchOptions {
   adapter?: string;
+  /**
+   * Model override for adapters that take one on the command line
+   * (`hermes_local` via `-m`, `codex_local` via `--model`). Adapters with no
+   * such flag ignore it. Set by fallback-chain hops so "same adapter,
+   * different model" is a real hop rather than a no-op retry.
+   */
+  model?: string;
+  /**
+   * Internal: a fallback-chain hop must not itself fall back. The chain
+   * walker in `runFallbackAdapter` owns iteration; each hop it dispatches
+   * gets this flag so a failing hop returns to the walker (which tries the
+   * next hop) instead of re-entering the chain from the top and ping-ponging.
+   */
+  disableFallback?: boolean;
 }
 
 /**
@@ -439,13 +454,55 @@ export interface DispatchOptions {
  * `failedAdapter` equal to the configured fallback, which is refused below —
  * so a misconfigured pair cannot ping-pong.
  */
-function runFallbackAdapter(
+async function runFallbackAdapter(
   input: LLMInput,
   failedAdapter: string,
   cause: unknown,
+  options?: DispatchOptions,
 ): Promise<string> {
-  const fallback = (process.env.AGENTDASH_FALLBACK_ADAPTER ?? "").trim();
   const reason = cause instanceof Error ? cause.message : String(cause);
+
+  // A chain hop that fails must surface to the chain walker, not start a
+  // nested walk of its own.
+  if (options?.disableFallback) {
+    throw cause instanceof Error
+      ? cause
+      : new Error(`Adapter "${failedAdapter}" failed: ${reason}`);
+  }
+
+  // AgentDash: AGENTDASH_FALLBACK_CHAIN — ordered `adapter[:model]` hops.
+  // Takes precedence over the single-hop AGENTDASH_FALLBACK_ADAPTER when set.
+  const chain = readFallbackChain();
+  if (chain.length > 0) {
+    const errors: string[] = [`${failedAdapter}: ${reason}`];
+    for (const hop of chain) {
+      // A hop that names the failed adapter with no model override would be
+      // the identical call again; skip it. A hop with a model is a different
+      // call even on the same adapter — that is the k3 → glm-5.3 case.
+      if (hop.adapter === failedAdapter && !hop.model) continue;
+      logger.info(
+        { failedAdapter, hopAdapter: hop.adapter, hopModel: hop.model ?? null },
+        "[dispatch-llm] falling back via chain",
+      );
+      try {
+        // Deliberately no meter, matching the single-hop path below: a
+        // fallback reply is not the billable call the caller asked for.
+        return await dispatchLLM(input, undefined, {
+          adapter: hop.adapter,
+          model: hop.model,
+          disableFallback: true,
+        });
+      } catch (hopErr) {
+        const hopReason = hopErr instanceof Error ? hopErr.message : String(hopErr);
+        errors.push(`${hop.adapter}${hop.model ? `:${hop.model}` : ""}: ${hopReason}`);
+      }
+    }
+    throw new Error(
+      `All fallback-chain hops failed. Refusing to answer with placeholder text. Attempts — ${errors.join(" | ")}`,
+    );
+  }
+
+  const fallback = (process.env.AGENTDASH_FALLBACK_ADAPTER ?? "").trim();
 
   if (!fallback) {
     throw new Error(
@@ -507,12 +564,12 @@ export async function dispatchLLM(
       const reply = await minimaxLLM(input);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] minimax returned empty reply, using fallback");
-        return runFallbackAdapter(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply", options);
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] minimax failed, falling back");
-      return runFallbackAdapter(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err, options);
     }
   }
 
@@ -530,7 +587,7 @@ export async function dispatchLLM(
           { adapter },
           "[dispatch-llm] openai_compat returned empty reply, using fallback",
         );
-        return runFallbackAdapter(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply", options);
       }
       return text;
     } catch (err) {
@@ -538,7 +595,7 @@ export async function dispatchLLM(
         { err, adapter },
         "[dispatch-llm] openai_compat failed, falling back",
       );
-      return runFallbackAdapter(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err, options);
     }
   }
 
@@ -568,31 +625,30 @@ export async function dispatchLLM(
       // that make inference work at all.
       const toolsets =
         (process.env.AGENTDASH_HERMES_TOOLSETS ?? "").trim() || DEFAULT_HERMES_TOOLSETS;
-      const reply = stripHermesChatter(
-        await spawnWithTimeout(hermesCmd, [
-          "chat",
-          "-q",
-          prompt,
-          "-Q",
-          "-t",
-          toolsets,
-          "--ignore-rules",
-        ]),
-      );
+      const hermesArgs = ["chat", "-q", prompt, "-Q", "-t", toolsets, "--ignore-rules"];
+      // Fallback-chain hops carry a model so "hermes with k3" and "hermes
+      // with glm" are distinct hops; without one, Hermes uses its own
+      // configured default.
+      const hermesModel = (options?.model ?? "").trim();
+      if (hermesModel) hermesArgs.push("-m", hermesModel);
+      const reply = stripHermesChatter(await spawnWithTimeout(hermesCmd, hermesArgs));
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] hermes_local returned empty reply, using fallback");
-        return runFallbackAdapter(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply", options);
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] hermes_local failed, falling back");
-      return runFallbackAdapter(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err, options);
     }
   }
 
   if (adapter === "codex_local") {
     const codexCmd = (process.env.AGENTDASH_CODEX_COMMAND ?? "").trim() || DEFAULT_CODEX_COMMAND;
-    const model = (process.env.AGENTDASH_CODEX_CHAT_MODEL ?? "").trim() || DEFAULT_CODEX_CHAT_MODEL;
+    const model =
+      (options?.model ?? "").trim() ||
+      (process.env.AGENTDASH_CODEX_CHAT_MODEL ?? "").trim() ||
+      DEFAULT_CODEX_CHAT_MODEL;
     const prompt = buildFlatPrompt(input);
     logger.info({ adapter, codexCmd, model }, "[dispatch-llm] routing CoS reply through codex_local");
     try {
@@ -621,12 +677,12 @@ export async function dispatchLLM(
           { adapter, error: parsed.errorMessage },
           "[dispatch-llm] codex_local returned no final message, using fallback",
         );
-        return runFallbackAdapter(input, adapter, parsed.errorMessage ?? "empty reply");
+        return runFallbackAdapter(input, adapter, parsed.errorMessage ?? "empty reply", options);
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] codex_local failed, falling back");
-      return runFallbackAdapter(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err, options);
     }
   }
 
@@ -637,12 +693,12 @@ export async function dispatchLLM(
       const reply = await spawnWithTimeout("claude", ["--print", "-"], prompt);
       if (!reply) {
         logger.warn({ adapter }, "[dispatch-llm] claude_local returned empty reply, using fallback");
-        return runFallbackAdapter(input, adapter, "empty reply");
+        return runFallbackAdapter(input, adapter, "empty reply", options);
       }
       return reply;
     } catch (err) {
       logger.error({ err, adapter }, "[dispatch-llm] claude_local failed, falling back");
-      return runFallbackAdapter(input, adapter, err);
+      return runFallbackAdapter(input, adapter, err, options);
     }
   }
 
