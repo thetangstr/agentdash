@@ -543,6 +543,164 @@ describeEmbeddedPostgres("agent stewardships", () => {
     });
   });
 
+  /**
+   * The third verb, and the reason it exists.
+   *
+   * `assign` needs somebody to pair with and `transfer` needs somebody to hand
+   * the agent to, so an agent that should stand alone had no path at all: the
+   * only way to leave one unstewarded was to archive the person. Making an
+   * agent autonomous is refused while a pairing is live, which meant the guard
+   * pointed at an action nothing exposed.
+   */
+  it("release ends a pairing and leaves the agent with nobody", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId));
+    const response = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
+        .send({ releaseReason: "moving it to the autonomous team" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.stewardship.endedAt).toBeTruthy();
+    expect(response.body.stewardship.endedByUserId).toBe(owner.principalId);
+    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).toBeNull();
+    // The person is free to steward something else, which is the other half of
+    // what release is for.
+    expect(await agentStewardshipService(db).activeByUser(company.id, user.principalId)).toBeNull();
+  });
+
+  it("release keeps the history rather than deleting the row", async () => {
+    // The table IS the record of who held decision authority. A release that
+    // erased it would answer "who was answerable in March" with silence.
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    await agentStewardshipService(db).releaseForAgent(company.id, agent.id, {
+      releasedByUserId: owner.principalId,
+      releaseReason: "standing alone now",
+    });
+
+    const history = await agentStewardshipService(db).historyForAgent(company.id, agent.id);
+    expect(history).toHaveLength(1);
+    expect(history[0].userId).toBe(user.principalId);
+
+    const ended = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "agent.stewardship_ended"));
+    expect(ended).toHaveLength(1);
+    expect(ended[0].details).toMatchObject({
+      userId: user.principalId,
+      reason: "released",
+      releaseReason: "standing alone now",
+    });
+  });
+
+  it("release revokes the outgoing steward's channels and enrolled machines", async () => {
+    // A release that left these behind would leave a live path to act for an
+    // agent the person no longer stewards — the same rule transfer already
+    // applies, for the same reason.
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+    await db.insert(humanChannelBindings).values({
+      companyId: company.id,
+      userId: user.principalId,
+      agentId: agent.id,
+      provider: "telegram",
+      externalUserId: "555",
+      verifiedAt: new Date(),
+    });
+    await db.insert(bridgeEndpoints).values({
+      companyId: company.id,
+      userId: user.principalId,
+      label: "laptop",
+      tokenHash: "hash-release-1",
+      enrolledAt: new Date(),
+      approvedByUserId: owner.principalId,
+    });
+
+    await agentStewardshipService(db).releaseForAgent(company.id, agent.id, {
+      releasedByUserId: owner.principalId,
+      releaseReason: "leaving the team",
+    });
+
+    const bindings = await db.select().from(humanChannelBindings);
+    expect(bindings.every((row) => row.revokedAt !== null)).toBe(true);
+    const endpoints = await db.select().from(bridgeEndpoints);
+    expect(endpoints.every((row) => row.revokedAt !== null)).toBe(true);
+
+    const revoked = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "human_channel.binding_revoked"));
+    expect(revoked[0].details).toMatchObject({ reason: "stewardship_released" });
+  });
+
+  it("release refuses without a reason, and 404s when there is no pairing", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const agent = await createAgent(db, company.id);
+    const app = await createApp(db, makeBoardActor(company.id, owner.principalId));
+
+    const noReason = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
+        .send({}),
+    );
+    expect(noReason.status).toBe(400);
+
+    const noPairing = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
+        .send({ releaseReason: "nothing to end" }),
+    );
+    expect(noPairing.status).toBe(404);
+  });
+
+  it("release is refused for a caller who may not manage stewardships", async () => {
+    const company = await createCompany(db);
+    const owner = await createMember(db, company.id, { role: "owner" });
+    const user = await createMember(db, company.id);
+    const agent = await createAgent(db, company.id);
+    await agentStewardshipService(db).assign(company.id, {
+      agentId: agent.id,
+      userId: user.principalId,
+      assignedByUserId: owner.principalId,
+    });
+
+    const app = await createApp(db, { type: "agent", agentId: agent.id, companyId: company.id });
+    const response = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/stewardship/release`)
+        .send({ releaseReason: "not mine to end" }),
+    );
+    expect(response.status).toBe(403);
+    expect(await agentStewardshipService(db).activeByAgent(company.id, agent.id)).not.toBeNull();
+  });
+
   it("assign rejects when target membership is not active at transaction time", async () => {
     const company = await createCompany(db);
     const assigner = await createMember(db, company.id, { role: "owner" });

@@ -535,6 +535,40 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
       expect(response.body.error).toMatch(/Scribe is stewarded by Ada/);
     });
 
+    it("release then make autonomous — the sequence the refusal tells you to follow", async () => {
+      // The guard says "end that stewardship first", and for one release there
+      // was no route that did it: assign needs somebody to pair with, transfer
+      // needs somebody to hand the agent to. This pins the whole path, because
+      // a refusal pointing at an action nobody can take is worse than no guard.
+      const company = await createCompany(db);
+      const steward = await createMember(db, company.id, { name: "Ada", email: "ada@example.test" });
+      const admin = await createMember(db, company.id);
+      const agent = await createAgent(db, company.id, { name: "Scribe" });
+      await agentStewardshipService(db).assign(company.id, {
+        agentId: agent.id,
+        userId: steward,
+        assignedByUserId: admin,
+      });
+      const app = await createApp(db, makeBoardActor(company.id, admin));
+
+      const refused = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ autonomy: "autonomous" }),
+      );
+      expect(refused.status).toBe(409);
+
+      await agentStewardshipService(db).releaseForAgent(company.id, agent.id, {
+        releasedByUserId: admin,
+        releaseReason: "joining the autonomous team",
+      });
+
+      const accepted = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ autonomy: "autonomous" }),
+      );
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.autonomy).toBe("autonomous");
+      expect(accepted.body.accountableUserId).toBe(admin);
+    });
+
     it("turns an unpaired agent autonomous, defaulting accountability to the person doing it", async () => {
       const company = await createCompany(db);
       const admin = await createMember(db, company.id);

@@ -137,8 +137,10 @@ export {
 export {
   assignAgentStewardshipSchema,
   transferAgentStewardshipSchema,
+  releaseAgentStewardshipSchema,
   type AssignAgentStewardship,
   type TransferAgentStewardship,
+  type ReleaseAgentStewardship,
 } from "./agent-stewardship.js";
 
 export {

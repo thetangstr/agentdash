@@ -131,4 +131,16 @@ export const stewardshipsApi = {
       `/companies/${companyId}/agents/${agentId}/stewardship/transfer`,
       data,
     ),
+  /**
+   * End a pairing without naming a replacement.
+   *
+   * What you call before making an agent autonomous — that change is refused
+   * while a pairing is live, because it would revoke somebody's connect code and
+   * channel binding as a side effect of a field edit.
+   */
+  release: (companyId: string, agentId: string, data: { releaseReason: string }) =>
+    api.post<{ stewardship: AgentStewardship }>(
+      `/companies/${companyId}/agents/${agentId}/stewardship/release`,
+      data,
+    ),
 };

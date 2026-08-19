@@ -47,6 +47,16 @@ type TransferInput = {
   transferReason?: string | null;
 };
 
+type ReleaseInput = {
+  releasedByUserId: string | null;
+  /**
+   * Why the pairing ended, required by the route for the same reason a transfer
+   * reason is: this table IS the record of who held decision authority over an
+   * agent, and an unexplained gap in it cannot be read after the fact.
+   */
+  releaseReason?: string | null;
+};
+
 function resultRows(result: unknown): unknown[] {
   if (Array.isArray(result)) return result;
   if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
@@ -168,7 +178,7 @@ async function auditRevocations(
   input: {
     companyId: string;
     actorUserId: string | null;
-    reason: "stewardship_ended" | "stewardship_transferred";
+    reason: "stewardship_ended" | "stewardship_transferred" | "stewardship_released";
     bindings: Array<{ id: string; agentId: string; provider: string }>;
     endpoints: Array<{ id: string; label: string }>;
   },
@@ -502,6 +512,144 @@ export function agentStewardshipService(db: Db) {
     }
   }
 
+  /**
+   * End an agent's pairing without putting anybody else in its place.
+   *
+   * The missing third verb. `assign` creates a pairing and `transfer` moves one,
+   * and until this existed the only way to leave an agent with no steward was to
+   * archive the person — so "release this agent" meant "remove that human from
+   * the company", and the guard that tells you to end a pairing before making an
+   * agent autonomous pointed at something no caller could do. It was reachable
+   * only by calling `endActiveForUser` from a script, which is how it was done
+   * the first time, and that is not a thing to leave as the answer.
+   *
+   * Keyed by agent rather than by user because that is the question being asked
+   * — this agent should stand alone — even though the 1:1 constraint means the
+   * two select the same row.
+   *
+   * Structured exactly like `transfer` minus the incoming steward: same advisory
+   * lock so two releases cannot interleave, same `for update` re-read so a
+   * transfer landing between the check and the write loses, and the same
+   * revocation of the outgoing steward's channel bindings and bridge endpoints.
+   * Those are paths to act for this agent; the moment the pairing that justified
+   * them ends, they end too.
+   */
+  async function releaseForAgent(
+    companyId: string,
+    agentId: string,
+    input: ReleaseInput,
+  ): Promise<AgentStewardshipRow> {
+    const releaseReason = normalizeReason(input.releaseReason);
+    const now = new Date();
+
+    return db.transaction(async (tx) => {
+      const lockResult = await tx.execute(sql`
+        select pg_try_advisory_xact_lock(hashtextextended(${`${companyId}:${agentId}`}, 0)) as locked
+      `);
+      const lockRows = resultRows(lockResult) as Array<{ locked?: boolean }>;
+      if (lockRows[0]?.locked !== true) {
+        throw conflict("Agent stewardship change already in progress");
+      }
+
+      await lockTransferCompanyAgent(tx, companyId, agentId);
+
+      const locked = await tx.execute(sql`
+        select ${agentStewardships.id}
+        from ${agentStewardships}
+        where ${agentStewardships.companyId} = ${companyId}
+          and ${agentStewardships.agentId} = ${agentId}
+          and ${agentStewardships.endedAt} is null
+        for update
+      `);
+      if (resultRows(locked).length === 0) {
+        throw notFound("Active stewardship not found");
+      }
+
+      const active = await tx
+        .select()
+        .from(agentStewardships)
+        .where(
+          and(
+            eq(agentStewardships.companyId, companyId),
+            eq(agentStewardships.agentId, agentId),
+            isNull(agentStewardships.endedAt),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (!active) {
+        throw notFound("Active stewardship not found");
+      }
+
+      const ended = await tx
+        .update(agentStewardships)
+        .set({
+          endedAt: now,
+          endedByUserId: input.releasedByUserId,
+          updatedAt: now,
+        })
+        .where(eq(agentStewardships.id, active.id))
+        .returning()
+        .then((rows) => rows[0]!);
+
+      const revokedBindings = await tx
+        .update(humanChannelBindings)
+        .set({
+          revokedAt: now,
+          revokedByUserId: input.releasedByUserId,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(humanChannelBindings.companyId, companyId),
+            eq(humanChannelBindings.userId, active.userId),
+            isNull(humanChannelBindings.revokedAt),
+          ),
+        )
+        .returning();
+
+      const revokedEndpoints = await tx
+        .update(bridgeEndpoints)
+        .set({
+          revokedAt: now,
+          revokedByUserId: input.releasedByUserId,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(bridgeEndpoints.companyId, companyId),
+            eq(bridgeEndpoints.userId, active.userId),
+            isNull(bridgeEndpoints.revokedAt),
+          ),
+        )
+        .returning();
+
+      await auditRevocations(tx, {
+        companyId,
+        actorUserId: input.releasedByUserId,
+        reason: "stewardship_released",
+        bindings: revokedBindings,
+        endpoints: revokedEndpoints,
+      });
+
+      await logActivity(tx as unknown as Db, {
+        companyId,
+        actorType: "user",
+        actorId: input.releasedByUserId ?? "board",
+        action: "agent.stewardship_ended",
+        entityType: "agent_stewardship",
+        entityId: ended.id,
+        agentId,
+        details: {
+          userId: active.userId,
+          reason: "released",
+          releaseReason,
+        },
+      });
+
+      return ended;
+    });
+  }
+
   async function endActiveForUser(
     companyId: string,
     userId: string,
@@ -596,6 +744,7 @@ export function agentStewardshipService(db: Db) {
     requireActiveByAgent,
     assign,
     transfer,
+    releaseForAgent,
     endActiveForUser,
     createActivityForArchivedStewardships,
   };
