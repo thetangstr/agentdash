@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared";
 import type { AgentAdapterType, JoinRequest } from "@paperclipai/shared";
@@ -263,15 +263,33 @@ export function InviteLandingPage() {
     setAutoAcceptStarted(false);
   }, [token]);
 
+  /**
+   * Whether this visitor already had a session when they opened the link.
+   *
+   * It decides what "you are already a member" means. Someone who signs in ON
+   * this page and turns out to have access came here to get in, so taking them
+   * in is right. Someone who arrived already signed in is almost always an
+   * admin opening their own invite link to see what they are about to send —
+   * and every admin is a member, so redirecting them made the invites page's
+   * "Open invite" button appear to do nothing at all: a new tab that lands on
+   * their own dashboard.
+   */
+  const arrivedSignedInRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (arrivedSignedInRef.current !== null) return;
+    if (sessionQuery.isLoading) return;
+    arrivedSignedInRef.current = Boolean(sessionQuery.data);
+  }, [sessionQuery.isLoading, sessionQuery.data]);
+
   useEffect(() => {
     if (!companiesQuery.data || !inviteQuery.data?.companyId) return;
     const isMember = companiesQuery.data.some(
       (c) => c.id === inviteQuery.data!.companyId
     );
-    if (isMember) {
-      clearPendingInviteToken(token);
-      navigate("/", { replace: true });
-    }
+    if (!isMember) return;
+    clearPendingInviteToken(token);
+    if (arrivedSignedInRef.current) return;
+    navigate("/", { replace: true });
   }, [companiesQuery.data, inviteQuery.data, token, navigate]);
 
   const invite = inviteQuery.data;
@@ -803,7 +821,7 @@ export function InviteLandingPage() {
                     {shouldAutoAcceptHumanInvite
                       ? `Submitting your join request for ${companyDisplayName}.`
                       : isCurrentMember
-                      ? `This account already belongs to ${companyDisplayName}.`
+                      ? `This account already belongs to ${companyDisplayName}. This link is for someone else — copy it and send it to them.`
                       : `This will ${
                           invite.inviteType === "bootstrap_ceo" ? "finish setting up AgentDash" : `submit or complete your join request for ${companyDisplayName}`
                         }.`}
