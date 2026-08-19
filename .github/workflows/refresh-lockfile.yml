@@ -78,10 +78,18 @@ jobs:
             head -n 1
           )"
           if [ -z "$pr_url" ]; then
+            # The body lives in a committed file and has to satisfy
+            # scripts/ci/check-pr-process.mjs like any other PR. The inline one
+            # did not, so `policy` failed on every refresh, the verify shards
+            # skipped behind it, and this PR could never merge — which is how
+            # `main` reached a lockfile it cannot install from
+            # (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH on --frozen-lockfile). An
+            # automation that owns a file and cannot merge its own change to it
+            # is worse than no automation.
             pr_url="$(gh pr create \
               --head "$BRANCH" \
               --title "chore(lockfile): refresh pnpm-lock.yaml" \
-              --body "Auto-generated lockfile refresh after dependencies changed on the default branch. This PR only updates pnpm-lock.yaml.")"
+              --body-file .github/pr-bodies/lockfile-refresh.md)"
             echo "Created new PR: $pr_url"
           else
             echo "PR already exists: $pr_url"
