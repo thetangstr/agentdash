@@ -10,6 +10,7 @@ import { conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
 import { bridgeService } from "./bridge.js";
 import { classifyInboundContent } from "./inbound-filter.js";
 import { logActivity } from "./activity-log.js";
@@ -82,6 +83,7 @@ type FactRow = typeof agentFactRequests.$inferSelect;
 export function agentFactRequestService(db: Db) {
   const workflow = workflowEventsService(db);
   const stewardships = agentStewardshipService(db);
+  const accountability = agentAccountabilityService(db);
   const bridge = bridgeService(db);
   const teams = teamsConnectorService(db);
 
@@ -580,9 +582,15 @@ export function agentFactRequestService(db: Db) {
     const row = await getById(companyId, id);
     requireOpen(row);
 
-    const steward = await stewardships.activeByAgent(companyId, row.targetAgentId);
-    if (!steward || steward.userId !== input.userId) {
-      throw forbidden("Only the steward of the agent this was asked of can answer it");
+    // The human who answers for the target agent answers on its behalf: its
+    // steward, or for an autonomous agent the person accountable for it. An
+    // autonomous agent could previously receive an escalation it had no human
+    // able to resolve.
+    const responsibleUserId = await accountability.escalationUserId(companyId, row.targetAgentId);
+    if (!responsibleUserId || responsibleUserId !== input.userId) {
+      throw forbidden(
+        "Only the person accountable for the agent this was asked of can answer it",
+      );
     }
 
     return writeAnswer(companyId, row, {
@@ -759,9 +767,10 @@ export function agentFactRequestService(db: Db) {
     requireTarget(row, input.answeringAgentId);
     requireOpen(row);
 
-    const steward = await stewardships.activeByAgent(companyId, row.targetAgentId);
-    const endpoints = steward
-      ? await bridge.listEndpointsForUser(companyId, steward.userId)
+    // The escalation goes to the machine of whoever answers for this agent.
+    const responsibleUserId = await accountability.escalationUserId(companyId, row.targetAgentId);
+    const endpoints = responsibleUserId
+      ? await bridge.listEndpointsForUser(companyId, responsibleUserId)
       : [];
     const reachable = endpoints.find(
       (endpoint) => endpoint.enrolledAt && (endpoint.capabilities ?? []).includes("bridge:read"),
@@ -785,13 +794,13 @@ export function agentFactRequestService(db: Db) {
           "Reply with the value and where it came from.",
       });
       escalationTaskId = task.id;
-    } else if (steward) {
+    } else if (responsibleUserId) {
       // No live endpoint: the harness is unreachable, so the human is the only
       // remaining path. A notice, not a decision surface — nothing here is
       // decidable, so nothing here carries a handle.
       const notice = await teams.sendNotice(
         companyId,
-        steward.userId,
+        responsibleUserId,
         `Your agent needs "${row.factKey}" for ${row.pipelineId} (${row.runId}) and cannot ` +
           `reach your local harness.\n\n${row.question}\n\n` +
           "The run is waiting. If nothing arrives by " +

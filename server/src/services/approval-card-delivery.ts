@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies, humanChannelBindings } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { agentStewardshipService } from "./agent-stewardships.js";
+import { agentAccountabilityService } from "./agent-accountability.js";
 import { teamsConnectorService } from "./teams-connector.js";
 import { telegramConnectorService } from "./telegram-connector.js";
 import { whatsappConnectorService } from "./whatsapp-connector.js";
@@ -33,6 +34,7 @@ const DELIVERABLE_STATUSES = new Set(["pending", "revision_requested"]);
 
 export function approvalCardDeliveryService(db: Db) {
   const stewardships = agentStewardshipService(db);
+  const accountability = agentAccountabilityService(db);
   const teams = teamsConnectorService(db);
   const telegram = telegramConnectorService(db);
   const whatsapp = whatsappConnectorService(db);
@@ -77,15 +79,21 @@ export function approvalCardDeliveryService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (company?.productProfile !== "agentdash_mk") return;
 
-      // No requesting agent means no steward to route to; those approvals are
-      // administrator business and live on the Override screen.
+      // No requesting agent means nobody in particular to route to; those
+      // approvals are administrator business and live on the Override screen.
       if (!approval.requestedByAgentId) return;
 
-      const active = await stewardships.activeByAgent(
+      // Whoever answers for this agent: its steward when it has one, and the
+      // accountable human when it is autonomous. Until this used the
+      // stewardship directly, an autonomous agent's approval card was delivered
+      // to nobody at all — the `if (!active) return` below was reached for every
+      // agent that had no person paired to it, which is every agent on an
+      // autonomous team.
+      const recipientUserId = await accountability.escalationUserId(
         approval.companyId,
         approval.requestedByAgentId,
       );
-      if (!active) return;
+      if (!recipientUserId) return;
 
       const bindings = await db
         .select()
@@ -93,7 +101,7 @@ export function approvalCardDeliveryService(db: Db) {
         .where(
           and(
             eq(humanChannelBindings.companyId, approval.companyId),
-            eq(humanChannelBindings.userId, active.userId),
+            eq(humanChannelBindings.userId, recipientUserId),
             isNotNull(humanChannelBindings.verifiedAt),
             isNull(humanChannelBindings.revokedAt),
           ),

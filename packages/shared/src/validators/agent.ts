@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  AGENT_AUTONOMY_KINDS,
   AGENT_ICON_NAMES,
   AGENT_ROLES,
   AGENT_STATUSES,
@@ -111,6 +112,22 @@ const createAgentBaseSchema = z.object({
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   permissions: agentPermissionsSchema.optional(),
   metadata: z.record(z.unknown()).optional().nullable(),
+  /**
+   * Which kind of agent this is. Absent means `stewarded`, so every existing
+   * caller keeps creating personal agents without changing a line.
+   */
+  autonomy: z.enum(AGENT_AUTONOMY_KINDS).optional(),
+  /**
+   * The human answerable for an autonomous agent.
+   *
+   * Optional here and defaulted server-side to the person creating the agent,
+   * because "you are accountable for what you set running" is the right default
+   * and refusing the request over a field the caller did not know about is not.
+   * Meaningless for a stewarded agent, where the steward is the answer; the
+   * route rejects sending it there rather than storing something that could
+   * later disagree with the stewardship.
+   */
+  accountableUserId: z.string().trim().min(1).optional().nullable(),
 });
 
 
