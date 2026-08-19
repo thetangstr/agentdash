@@ -218,7 +218,12 @@ export async function testEnvironment(
         {
           cwd,
           env,
-          timeoutSec: 45,
+          // 150s, not 45s: first-token latency on a ChatGPT-account login is
+          // routinely over a minute — gpt-5.6-terra measured 107s answering
+          // exactly this prompt on a healthy machine whose real agent runs all
+          // succeeded. A 45s probe turned that into a permanent preflight
+          // "warn" that blocked every wake-up of a perfectly working agent.
+          timeoutSec: 150,
           graceSec: 5,
           stdin: "Respond with hello.",
           onLog: async () => {},
