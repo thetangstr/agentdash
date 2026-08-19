@@ -1,37 +1,60 @@
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { AdapterExecutionResult, UsageSummary } from "@paperclipai/adapter-utils";
 
 /**
  * Token metering for `hermes_local`.
  *
- * The platform already meters everything downstream of the adapter: an adapter
- * returns `usage`, the heartbeat writes it to `heartbeat_runs.usage_json`, and
- * `/costs/by-agent` and friends aggregate input/cached/output tokens per agent,
- * model, provider and biller. codex_local fills that in and shows up there.
+ * Everything downstream already meters: an adapter returns `usage`, the
+ * heartbeat writes `heartbeat_runs.usage_json`, and /costs/by-agent aggregates
+ * input, cached and output tokens by agent, model, provider and biller.
+ * codex_local fills that in. hermes_local did not, so the one agent MKThink
+ * runs reported nothing while its costs page read zero against real spend.
  *
- * hermes_local did not, so the one agent MKThink actually runs contributed
- * nothing: `usage_json` null, and a costs page reading zero while real tokens
- * were being spent. The package tries to scrape totals out of stdout with a
- * regex, and Hermes 0.20 prints no such line — measured on the live instance,
- * a whole successful run whose log never says the word "token".
+ * Two earlier readings of this were wrong, and both are worth recording so
+ * nobody spends the evening rediscovering them:
  *
- * Hermes will report it directly if asked: `--usage-file PATH` writes a JSON
- * report after the run, "even when the run fails, so pipelines can always
- * account for" it. That is the number, from the process that spent it, rather
- * than a guess parsed out of prose.
+ *   1. The adapter package scrapes totals out of stdout with a regex. Hermes
+ *      0.20 prints no such line — a whole successful run whose log never says
+ *      the word "token".
+ *   2. Hermes has `--usage-file PATH`, which looks like the answer and is not:
+ *      it is documented "One-shot mode only … No effect outside -z/--oneshot",
+ *      and this adapter runs the `chat` subcommand. Passed there, Hermes exits
+ *      with `unrecognized arguments: --usage-file`. Measured in production.
+ *
+ * What Hermes does keep, for every run and without being asked, is its own
+ * ledger: `session_model_usage` in `~/.hermes/state.db`, one row per model per
+ * task, carrying api_call_count, input/output/cache/reasoning tokens and both
+ * estimated and actual cost. That is the number, from the process that spent
+ * it, recorded whether or not anyone thought to ask for it.
  */
 
-/** The subset of Hermes' usage report this adapter trusts. */
-export interface HermesUsageReport {
+/** The subset of Hermes' ledger this adapter trusts. */
+export interface HermesSessionUsage {
+  /** Cumulative session totals — see `applyHermesSessionUsage`. */
   usage: UsageSummary;
   model: string | null;
   provider: string | null;
-  /** Only set when Hermes itself claims to know the cost. */
+  /** Only set when Hermes itself recorded a non-zero cost. */
   costUsd: number | null;
-  apiCalls: number | null;
+  apiCalls: number;
 }
 
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+/** One `session_model_usage` row, as far as this module cares. */
+export interface HermesUsageRow {
+  model?: unknown;
+  billing_provider?: unknown;
+  api_call_count?: unknown;
+  input_tokens?: unknown;
+  output_tokens?: unknown;
+  cache_read_tokens?: unknown;
+  estimated_cost_usd?: unknown;
+  actual_cost_usd?: unknown;
+}
+
+function readNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function readString(value: unknown): string | null {
@@ -39,98 +62,161 @@ function readString(value: unknown): string | null {
 }
 
 /**
- * A cost Hermes describes as unknown is not a cost of zero.
+ * Where Hermes keeps its state.
  *
- * The MiniMax runs on the MKThink Mini come back with
- * `estimated_cost_usd: 0.0, cost_status: "unknown", cost_source: "none"` —
- * Hermes knows the token counts and not the price list. Copying that 0 into a
- * cost event would put "$0.00 spent" on a board where money is in fact being
- * spent, which is worse than an empty cost column: one is a gap, the other is
- * a false statement. Tokens are recorded either way.
+ * Managed profiles select a config within one Hermes home rather than giving
+ * each agent its own, so a single database holds them all; the override exists
+ * for an operator who has moved it.
  */
-function readTrustedCostUsd(raw: Record<string, unknown>): number | null {
-  const status = readString(raw.cost_status)?.toLowerCase();
-  const source = readString(raw.cost_source)?.toLowerCase();
-  if (!status || status === "unknown") return null;
-  if (!source || source === "none") return null;
-  const cost = readNumber(raw.estimated_cost_usd);
-  return cost && cost > 0 ? cost : null;
+export function resolveHermesStateDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = readString(env.AGENTDASH_HERMES_STATE_DB);
+  if (explicit) return path.resolve(explicit);
+  const hermesHome = readString(env.HERMES_HOME);
+  if (hermesHome) return path.resolve(hermesHome, "state.db");
+  return path.join(os.homedir(), ".hermes", "state.db");
 }
 
 /**
- * Map a Hermes usage report onto the platform's `UsageSummary`.
+ * Sum a session's rows into one usage summary.
  *
- * Returns null when the file holds nothing countable, so a run with no report
- * is left exactly as the adapter returned it rather than being stamped with
- * zeros that would read as "this run cost nothing".
+ * Hermes writes a row per model per task, so a session that summarised itself
+ * with a second model has several. Summing is what a bill does; the model and
+ * provider reported are the ones that did the most work, because a single
+ * label has to stand for the run and the summariser is not the story.
+ *
+ * A cost of zero is dropped rather than reported. On the MKThink Mini every
+ * MiniMax row carries `estimated_cost_usd 0.0` and `actual_cost_usd 0.0` —
+ * Hermes has the token counts and not the price list. Writing that zero into a
+ * cost event would put "$0.00 spent" on a board that is spending money, which
+ * is a false statement rather than a gap. Tokens land either way.
  */
-export function parseHermesUsageReport(raw: unknown): HermesUsageReport | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const report = raw as Record<string, unknown>;
+export function summarizeHermesUsageRows(rows: readonly HermesUsageRow[]): HermesSessionUsage | null {
+  if (rows.length === 0) return null;
 
-  const inputTokens = readNumber(report.input_tokens);
-  const outputTokens = readNumber(report.output_tokens);
-  const cachedInputTokens = readNumber(report.cache_read_tokens);
-  if (inputTokens === null && outputTokens === null) return null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let apiCalls = 0;
+  let costUsd = 0;
+  let dominant: { model: string | null; provider: string | null; tokens: number } | null = null;
 
-  const usage: UsageSummary = {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    ...(cachedInputTokens !== null ? { cachedInputTokens } : {}),
-  };
+  for (const row of rows) {
+    const rowInput = readNumber(row.input_tokens);
+    const rowOutput = readNumber(row.output_tokens);
+    inputTokens += rowInput;
+    outputTokens += rowOutput;
+    cachedInputTokens += readNumber(row.cache_read_tokens);
+    apiCalls += readNumber(row.api_call_count);
+    costUsd += readNumber(row.actual_cost_usd) || readNumber(row.estimated_cost_usd);
+
+    const rowTokens = rowInput + rowOutput;
+    if (!dominant || rowTokens > dominant.tokens) {
+      dominant = {
+        model: readString(row.model),
+        provider: readString(row.billing_provider),
+        tokens: rowTokens,
+      };
+    }
+  }
+
+  if (inputTokens === 0 && outputTokens === 0) return null;
 
   return {
-    usage,
-    model: readString(report.model),
-    provider: readString(report.provider),
-    costUsd: readTrustedCostUsd(report),
-    apiCalls: readNumber(report.api_calls),
+    usage: {
+      inputTokens,
+      outputTokens,
+      ...(cachedInputTokens > 0 ? { cachedInputTokens } : {}),
+    },
+    model: dominant?.model ?? null,
+    provider: dominant?.provider ?? null,
+    costUsd: costUsd > 0 ? costUsd : null,
+    apiCalls,
   };
 }
 
 /**
- * Merge the report into the adapter's result without overwriting what the
- * adapter already established.
+ * Read one session's usage out of Hermes' state database.
  *
- * The adapter knows things the report does not — which profile ran, how the
- * provider was resolved, the model label a human configured — so a report that
- * merely repeats them must not clobber them. It contributes what only it has:
- * the counts.
+ * Read-only, and every failure returns null: metering is a by-product of the
+ * run, and a database that is missing, locked, or newer than this query must
+ * never turn a completed run into a failed one.
  */
-export function applyHermesUsageReport(
+export function readHermesSessionUsage(
+  sessionId: string | null | undefined,
+  opts: { dbPath?: string; env?: NodeJS.ProcessEnv } = {},
+): HermesSessionUsage | null {
+  const session = readString(sessionId);
+  if (!session) return null;
+  const dbPath = opts.dbPath ?? resolveHermesStateDbPath(opts.env);
+
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db
+      .prepare(
+        `SELECT model, billing_provider, api_call_count, input_tokens, output_tokens,
+                cache_read_tokens, estimated_cost_usd, actual_cost_usd
+           FROM session_model_usage
+          WHERE session_id = ?`,
+      )
+      .all(session) as HermesUsageRow[];
+    return summarizeHermesUsageRows(rows);
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Nothing useful to do with a close failure on a read-only handle.
+    }
+  }
+}
+
+/** Find the Hermes session a result belongs to, wherever the adapter put it. */
+export function readHermesSessionId(result: AdapterExecutionResult): string | null {
+  const sessionParams =
+    result.sessionParams && typeof result.sessionParams === "object" && !Array.isArray(result.sessionParams)
+      ? (result.sessionParams as Record<string, unknown>)
+      : null;
+  const resultJson =
+    result.resultJson && typeof result.resultJson === "object" && !Array.isArray(result.resultJson)
+      ? (result.resultJson as Record<string, unknown>)
+      : null;
+
+  return (
+    readString(result.sessionId)
+    ?? readString(sessionParams?.sessionId)
+    ?? readString(resultJson?.session_id)
+    ?? readString(result.sessionDisplayId)
+  );
+}
+
+/**
+ * Fold the ledger into the adapter's result.
+ *
+ * The totals are CUMULATIVE for the session, which is the shape the platform
+ * already expects from a resuming adapter: `deriveNormalizedUsageDelta` in the
+ * heartbeat subtracts the previous run's raw totals for the same session, so a
+ * ten-run session bills ten deltas rather than ten copies of the total.
+ *
+ * Nothing the adapter already established is overwritten: it knows which
+ * profile ran and which model label a human configured, and the ledger merely
+ * repeating those must not clobber them.
+ */
+export function applyHermesSessionUsage(
   result: AdapterExecutionResult,
-  report: HermesUsageReport | null,
+  usage: HermesSessionUsage | null,
 ): AdapterExecutionResult {
-  if (!report) return result;
+  if (!usage) return result;
   return {
     ...result,
-    usage: result.usage ?? report.usage,
-    ...(result.model ? {} : report.model ? { model: report.model } : {}),
-    ...(result.provider ? {} : report.provider ? { provider: report.provider } : {}),
+    usage: result.usage ?? usage.usage,
+    ...(result.model ? {} : usage.model ? { model: usage.model } : {}),
+    ...(result.provider ? {} : usage.provider ? { provider: usage.provider } : {}),
     ...(result.costUsd === undefined || result.costUsd === null
-      ? report.costUsd !== null
-        ? { costUsd: report.costUsd }
+      ? usage.costUsd !== null
+        ? { costUsd: usage.costUsd }
         : {}
       : {}),
   };
-}
-
-/**
- * Add `--usage-file` to the Hermes invocation.
- *
- * `extraArgs` is the package's own escape hatch and is appended last, after
- * every flag it builds. Anything an operator already put there is preserved:
- * this appends, and it does not add a second `--usage-file` if one is already
- * configured, because Hermes takes the last one and an operator who pinned a
- * path meant it.
- */
-export function withUsageFileArg(
-  config: Record<string, unknown>,
-  usageFilePath: string,
-): Record<string, unknown> {
-  const existing = Array.isArray(config.extraArgs)
-    ? config.extraArgs.filter((value): value is string => typeof value === "string")
-    : [];
-  if (existing.includes("--usage-file")) return config;
-  return { ...config, extraArgs: [...existing, "--usage-file", usageFilePath] };
 }

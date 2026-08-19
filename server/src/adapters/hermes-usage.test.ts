@@ -1,125 +1,183 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, describe, expect, it } from "vitest";
 import {
-  applyHermesUsageReport,
-  parseHermesUsageReport,
-  withUsageFileArg,
+  applyHermesSessionUsage,
+  readHermesSessionId,
+  readHermesSessionUsage,
+  resolveHermesStateDbPath,
+  summarizeHermesUsageRows,
 } from "./hermes-usage.js";
 
-/** A real report, copied from a Hermes 0.20 run on the MKThink Mini. */
-const LIVE_REPORT = {
-  estimated_cost_usd: 0.0,
-  cost_status: "unknown",
-  cost_source: "none",
-  input_tokens: 13743,
-  output_tokens: 2,
-  cache_read_tokens: 1023,
-  cache_write_tokens: 0,
-  reasoning_tokens: 0,
-  total_tokens: 14768,
-  api_calls: 1,
-  model: "MiniMax-M3",
-  provider: "minimax",
-  session_id: "20260818_165154_a7ae2a",
-  completed: true,
-  failed: false,
-  service_tier: null,
-};
+/**
+ * Rows copied from `session_model_usage` on the MKThink Mini: two rows for one
+ * Hermes session, which is the ordinary shape (one per model per task).
+ */
+const LIVE_ROWS = [
+  {
+    model: "MiniMax-M3",
+    billing_provider: "minimax",
+    api_call_count: 1,
+    input_tokens: 14,
+    output_tokens: 200,
+    cache_read_tokens: 2739,
+    estimated_cost_usd: 0.0,
+    actual_cost_usd: 0.0,
+  },
+  {
+    model: "MiniMax-M3",
+    billing_provider: "minimax",
+    api_call_count: 1,
+    input_tokens: 536,
+    output_tokens: 13,
+    cache_read_tokens: 0,
+    estimated_cost_usd: 0.0,
+    actual_cost_usd: 0.0,
+  },
+];
 
-describe("parseHermesUsageReport", () => {
-  it("reads the counts out of a real Hermes report", () => {
-    const report = parseHermesUsageReport(LIVE_REPORT);
-    expect(report?.usage).toEqual({ inputTokens: 13743, outputTokens: 2, cachedInputTokens: 1023 });
-    expect(report?.model).toBe("MiniMax-M3");
-    expect(report?.provider).toBe("minimax");
-    expect(report?.apiCalls).toBe(1);
+describe("summarizeHermesUsageRows", () => {
+  it("sums every row of a session, because a bill is the sum", () => {
+    const usage = summarizeHermesUsageRows(LIVE_ROWS);
+    expect(usage?.usage).toEqual({ inputTokens: 550, outputTokens: 213, cachedInputTokens: 2739 });
+    expect(usage?.apiCalls).toBe(2);
   });
 
-  it("refuses a cost Hermes says it does not know", () => {
-    // estimated_cost_usd is 0.0 with cost_status "unknown": Hermes has the
-    // token counts and not the price list. Recording $0.00 would put a false
-    // statement on the costs page, not merely an incomplete one.
-    expect(parseHermesUsageReport(LIVE_REPORT)?.costUsd).toBeNull();
+  it("reports the model that did the most work, not the summariser", () => {
+    const usage = summarizeHermesUsageRows([
+      { ...LIVE_ROWS[0], model: "small-summariser", input_tokens: 10, output_tokens: 5 },
+      { ...LIVE_ROWS[1], model: "MiniMax-M3", input_tokens: 9000, output_tokens: 400 },
+    ]);
+    expect(usage?.model).toBe("MiniMax-M3");
+    expect(usage?.provider).toBe("minimax");
   });
 
-  it("takes a cost Hermes does claim to know", () => {
-    const report = parseHermesUsageReport({
-      ...LIVE_REPORT,
-      estimated_cost_usd: 0.0123,
-      cost_status: "estimated",
-      cost_source: "price_table",
-    });
-    expect(report?.costUsd).toBeCloseTo(0.0123);
+  it("refuses a cost Hermes recorded as zero", () => {
+    // Every MiniMax row on the Mini carries 0.0 for both cost columns: Hermes
+    // has the token counts and not the price list. "$0.00 spent" on a board
+    // that is spending money is a false statement, not a gap.
+    expect(summarizeHermesUsageRows(LIVE_ROWS)?.costUsd).toBeNull();
   });
 
-  it("still reports the tokens of a failed run", () => {
-    // Hermes writes the file even when the run fails, and an agent that burned
-    // 40k tokens before dying spent them just the same.
-    const report = parseHermesUsageReport({
-      ...LIVE_REPORT,
-      completed: false,
-      failed: true,
-      output_tokens: 0,
-      input_tokens: 40123,
-    });
-    expect(report?.usage.inputTokens).toBe(40123);
+  it("takes a cost Hermes did record, preferring actual over estimated", () => {
+    const usage = summarizeHermesUsageRows([
+      { ...LIVE_ROWS[0], estimated_cost_usd: 0.02, actual_cost_usd: 0.031 },
+    ]);
+    expect(usage?.costUsd).toBeCloseTo(0.031);
   });
 
-  it("returns null for a report with nothing countable in it", () => {
-    expect(parseHermesUsageReport({ model: "MiniMax-M3" })).toBeNull();
-    expect(parseHermesUsageReport(null)).toBeNull();
-    expect(parseHermesUsageReport("{}")).toBeNull();
-    expect(parseHermesUsageReport([])).toBeNull();
+  it("returns null when there is nothing countable", () => {
+    expect(summarizeHermesUsageRows([])).toBeNull();
+    expect(summarizeHermesUsageRows([{ model: "m", input_tokens: 0, output_tokens: 0 }])).toBeNull();
   });
 });
 
-describe("applyHermesUsageReport", () => {
+describe("readHermesSessionUsage", () => {
+  const dbPath = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "hermes-usage-test-")),
+    "state.db",
+  );
+
+  const db = new DatabaseSync(dbPath);
+  db.exec(`CREATE TABLE session_model_usage (
+    session_id TEXT, model TEXT, billing_provider TEXT, billing_base_url TEXT,
+    billing_mode TEXT, task TEXT, api_call_count INTEGER, input_tokens INTEGER,
+    output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER, estimated_cost_usd REAL, actual_cost_usd REAL)`);
+  const insert = db.prepare(
+    `INSERT INTO session_model_usage
+       (session_id, model, billing_provider, api_call_count, input_tokens, output_tokens,
+        cache_read_tokens, estimated_cost_usd, actual_cost_usd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of LIVE_ROWS) {
+    insert.run(
+      "20260818_171709_4e143f",
+      row.model,
+      row.billing_provider,
+      row.api_call_count,
+      row.input_tokens,
+      row.output_tokens,
+      row.cache_read_tokens,
+      row.estimated_cost_usd,
+      row.actual_cost_usd,
+    );
+  }
+  insert.run("another-session", "MiniMax-M3", "minimax", 1, 999999, 999999, 0, 0, 0);
+  db.close();
+
+  afterAll(() => {
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+  });
+
+  it("reads one session's totals and nobody else's", () => {
+    const usage = readHermesSessionUsage("20260818_171709_4e143f", { dbPath });
+    expect(usage?.usage).toEqual({ inputTokens: 550, outputTokens: 213, cachedInputTokens: 2739 });
+  });
+
+  it("returns null for a session with no rows", () => {
+    expect(readHermesSessionUsage("never-ran", { dbPath })).toBeNull();
+  });
+
+  it("returns null rather than throwing when the database is missing", () => {
+    // A run that completed must not be turned into a failure because the
+    // metering by-product could not be read.
+    expect(readHermesSessionUsage("20260818_171709_4e143f", { dbPath: "/nonexistent/state.db" })).toBeNull();
+  });
+
+  it("returns null without a session id", () => {
+    expect(readHermesSessionUsage(null, { dbPath })).toBeNull();
+    expect(readHermesSessionUsage("   ", { dbPath })).toBeNull();
+  });
+});
+
+describe("resolveHermesStateDbPath", () => {
+  it("prefers the explicit override", () => {
+    expect(resolveHermesStateDbPath({ AGENTDASH_HERMES_STATE_DB: "/srv/hermes/state.db" })).toBe(
+      "/srv/hermes/state.db",
+    );
+  });
+
+  it("falls back to the Hermes home, then to the default", () => {
+    expect(resolveHermesStateDbPath({ HERMES_HOME: "/srv/hermes" })).toBe("/srv/hermes/state.db");
+    expect(resolveHermesStateDbPath({})).toBe(path.join(os.homedir(), ".hermes", "state.db"));
+  });
+});
+
+describe("readHermesSessionId", () => {
   const base = { exitCode: 0, signal: null, timedOut: false } as const;
 
+  it("finds the session wherever the adapter recorded it", () => {
+    expect(readHermesSessionId({ ...base, sessionId: "a" })).toBe("a");
+    expect(readHermesSessionId({ ...base, sessionParams: { sessionId: "b" } })).toBe("b");
+    expect(readHermesSessionId({ ...base, resultJson: { session_id: "c" } })).toBe("c");
+    expect(readHermesSessionId({ ...base })).toBeNull();
+  });
+});
+
+describe("applyHermesSessionUsage", () => {
+  const base = { exitCode: 0, signal: null, timedOut: false } as const;
+  const usage = summarizeHermesUsageRows(LIVE_ROWS);
+
   it("fills in usage the adapter did not report", () => {
-    const merged = applyHermesUsageReport({ ...base }, parseHermesUsageReport(LIVE_REPORT));
-    expect(merged.usage).toEqual({ inputTokens: 13743, outputTokens: 2, cachedInputTokens: 1023 });
+    const merged = applyHermesSessionUsage({ ...base }, usage);
+    expect(merged.usage).toEqual({ inputTokens: 550, outputTokens: 213, cachedInputTokens: 2739 });
     expect(merged.model).toBe("MiniMax-M3");
   });
 
   it("never overwrites what the adapter already established", () => {
-    const merged = applyHermesUsageReport(
-      { ...base, usage: { inputTokens: 1, outputTokens: 2 }, model: "configured-label", provider: "hermes" },
-      parseHermesUsageReport(LIVE_REPORT),
+    const merged = applyHermesSessionUsage(
+      { ...base, usage: { inputTokens: 1, outputTokens: 2 }, model: "configured-label" },
+      usage,
     );
     expect(merged.usage).toEqual({ inputTokens: 1, outputTokens: 2 });
     expect(merged.model).toBe("configured-label");
-    expect(merged.provider).toBe("hermes");
   });
 
-  it("leaves the result untouched when there is no report", () => {
+  it("leaves the result untouched when the ledger has nothing", () => {
     const result = { ...base, model: "x" };
-    expect(applyHermesUsageReport(result, null)).toEqual(result);
-  });
-});
-
-describe("withUsageFileArg", () => {
-  it("appends after the operator's own extra args", () => {
-    expect(withUsageFileArg({ extraArgs: ["--safe-mode"] }, "/tmp/u.json").extraArgs).toEqual([
-      "--safe-mode",
-      "--usage-file",
-      "/tmp/u.json",
-    ]);
-  });
-
-  it("adds the flag when there are no extra args at all", () => {
-    expect(withUsageFileArg({}, "/tmp/u.json").extraArgs).toEqual(["--usage-file", "/tmp/u.json"]);
-  });
-
-  it("leaves a path the operator pinned alone", () => {
-    const config = { extraArgs: ["--usage-file", "/var/log/hermes-usage.json"] };
-    expect(withUsageFileArg(config, "/tmp/u.json")).toBe(config);
-  });
-
-  it("ignores non-string entries rather than passing them to a shell", () => {
-    expect(withUsageFileArg({ extraArgs: ["--safe-mode", 42, null] }, "/tmp/u.json").extraArgs).toEqual([
-      "--safe-mode",
-      "--usage-file",
-      "/tmp/u.json",
-    ]);
+    expect(applyHermesSessionUsage(result, null)).toEqual(result);
   });
 });
