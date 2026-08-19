@@ -3,7 +3,22 @@ import type { AdapterModelProfileDefinition } from "@paperclipai/adapter-utils";
 export const type = "codex_local";
 export const label = "Codex (local)";
 
-export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.3-codex";
+/**
+ * The model a new codex_local agent starts on.
+ *
+ * `gpt-5.3-codex` until 2026-08-19, which a Codex login backed by a ChatGPT
+ * account rejects outright: `The 'gpt-5.3-codex' model is not supported when
+ * using Codex with a ChatGPT account` (400). Every codex agent created on such
+ * an install was therefore born unable to run, and the failure arrived as a
+ * model error from OpenAI rather than as anything about configuration —
+ * measured on the MKThink Mini, where the same probe agent went green the
+ * moment the model changed.
+ *
+ * Terra is the balanced member of the current family and is accepted under both
+ * auth modes, so it is the honest default. The `-codex` models remain in the
+ * list below for API-key installs that want the coding-tuned lane.
+ */
+export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.6-terra";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
 /**
  * Fast mode is allowed for these known models -- and, via
@@ -65,7 +80,7 @@ export const models = [
   { id: "gpt-5.6-luna", label: "gpt-5.6 Luna — fastest, cheapest" },
   { id: "gpt-5.6-cyber", label: "gpt-5.6 Cyber — specialised" },
   { id: "gpt-5.4", label: "gpt-5.4" },
-  { id: DEFAULT_CODEX_LOCAL_MODEL, label: DEFAULT_CODEX_LOCAL_MODEL },
+  { id: "gpt-5.3-codex", label: "gpt-5.3-codex (API-key installs; a ChatGPT account rejects it)" },
   { id: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },
   { id: "gpt-5", label: "gpt-5" },
   { id: "o3", label: "o3" },
