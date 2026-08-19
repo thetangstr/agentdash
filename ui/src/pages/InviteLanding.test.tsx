@@ -642,6 +642,40 @@ describe("InviteLandingPage", () => {
     });
   });
 
+  it("does not try to accept an invite it has not loaded yet", async () => {
+    // The auto-accept effect fired on the first render where a session existed,
+    // before the invite query resolved, so acceptInvite threw "Invite not
+    // found" against a valid invite and rendered the error beside it. It was
+    // invisible while members were redirected away before the race resolved.
+    getInviteMock.mockReturnValue(new Promise(() => {}));
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", name: "Yang Tang", email: "yang@example.com", image: null },
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(acceptInviteMock).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Invite not found");
+  });
+
   it("shows the invite to an admin who opened their own link, instead of bouncing them home", async () => {
     // Every admin is a member, so the blanket member redirect made the invites
     // page's "Open invite" button appear to do nothing: a new tab that landed
