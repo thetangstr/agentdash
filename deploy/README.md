@@ -46,6 +46,50 @@ launchctl print gui/$(id -u)/com.agentdash.mkboard.server | head
 launchctl kickstart -k gui/$(id -u)/com.agentdash.mkboard.backup   # backup now
 ```
 
+## Updating over the air
+
+The Mini runs the repository itself, so an update is a commit, not an image.
+`scripts/deploy/agentdash-source-update.mjs` does it with the same discipline as
+the Docker updater beside it: back up, apply, prove `/api/health`, roll back to
+the exact previous commit if health does not return, and leave a receipt under
+`~/.agentdash/deployments/`.
+
+```sh
+# Is this box behind GitHub? Changes nothing.
+node ~/.agentdash/bin/agentdash-source-update.mjs --check
+
+# Apply whatever origin/main points at.
+node ~/.agentdash/bin/agentdash-source-update.mjs \
+  --backup-command "AGENTDASH_INSTANCE=mkboard /bin/sh ~/agentdash/deploy/agentdash-backup.sh"
+
+# Go back to the commit that was running before.
+node ~/.agentdash/bin/agentdash-source-update.mjs --rollback --backup-command "…"
+```
+
+Three things about it are deliberate:
+
+- **It runs from `~/.agentdash/bin`, not from the checkout.** The updater lives
+  inside the thing it updates; the first live rollback attempt died with
+  `MODULE_NOT_FOUND` because the update before it had checked out a commit where
+  the script did not exist yet. A successful update refreshes that standalone
+  copy from the commit it just deployed.
+- **It detaches to the target commit** rather than fast-forwarding a branch,
+  because a rollback goes backwards and a fast-forward cannot.
+- **It refuses to run against a dirty tree, and refuses to update without a
+  backup** unless you pass `--skip-backup` and say so out loud.
+
+`deploy/agentdash-update.sh` is the scheduled wrapper, installed by
+`install-launchdaemons.sh` as `com.agentdash.update` (09:15 daily). It is
+**check-only by default**: it reports that the box is behind and changes
+nothing. Set `AGENTDASH_UPDATE_APPLY=1` in the instance env file to let it
+deploy unattended.
+
+That default is a judgement, not timidity. A bad commit reaching `main` can
+reach a customer's Mini within the hour — on 2026-08-18 one did, and broke the
+agent's heartbeat in production. Rollback exists and is tested end to end on
+this machine, but "it repairs itself afterwards" is a weaker promise than "a
+person decided".
+
 ## Two decisions worth knowing
 
 **LaunchAgents first, LaunchDaemons once the box is unattended.** The harnesses
