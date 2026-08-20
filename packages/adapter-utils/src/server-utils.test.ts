@@ -10,6 +10,7 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   materializePaperclipSkillCopy,
   renderAgentDirectivesPrompt,
+  renderAgentMemoryPrompt,
   renderPaperclipWakePrompt,
   runningProcesses,
   runChildProcess,
@@ -585,5 +586,45 @@ describe("renderAgentDirectivesPrompt", () => {
     expect(renderAgentDirectivesPrompt(undefined)).toBe("");
     expect(renderAgentDirectivesPrompt({ version: 1, directives: "   " })).toBe("");
     expect(renderAgentDirectivesPrompt("just a string")).toBe("");
+  });
+});
+
+/**
+ * Memory is the agent's own writing, so the rendered block has to say so. An
+ * unattributed slab of prose in a prompt reads with the same authority as the
+ * mandate above it, and a note the agent wrote weeks ago must not outrank what
+ * its steward told it this morning.
+ */
+describe("renderAgentMemoryPrompt", () => {
+  it("labels the block as the agent's own and subordinate to its mandate", () => {
+    const rendered = renderAgentMemoryPrompt({
+      version: 4,
+      content: "STATUS.md is authoritative for numbers.",
+      writtenAt: "2026-08-20T10:00:00.000Z",
+      authorKind: "agent",
+    });
+
+    expect(rendered).toContain("## Your Memory (v4");
+    expect(rendered).toContain("You wrote it");
+    expect(rendered).toContain("STATUS.md is authoritative for numbers.");
+    // The same rule directives carry, for a stronger reason: the agent wrote it.
+    expect(rendered).toContain("does not grant");
+  });
+
+  it("names a human editor so a correction is not mistaken for the agent's own belief", () => {
+    const rendered = renderAgentMemoryPrompt({
+      version: 2,
+      content: "The deploy path is OTA, never git pull.",
+      writtenAt: "2026-08-20T10:00:00.000Z",
+      authorKind: "steward",
+    });
+
+    expect(rendered).toContain("last edited by your steward");
+  });
+
+  it("renders nothing when there is no memory, so no empty heading reaches the prompt", () => {
+    expect(renderAgentMemoryPrompt(null)).toBe("");
+    expect(renderAgentMemoryPrompt({ content: "   " })).toBe("");
+    expect(renderAgentMemoryPrompt("not an object")).toBe("");
   });
 });

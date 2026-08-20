@@ -36,6 +36,7 @@ import {
   ensurePathInEnv,
   renderTemplate,
   renderAgentDirectivesPrompt,
+  renderAgentMemoryPrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -561,9 +562,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // prompt is suppressed — because a constraint the agent stops being told
   // about stops being a constraint.
   const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
+  // AgentDash: the agent's own durable memory. After directives because it is
+  // the agent's own writing and ranks below its steward's, and rendered on
+  // every turn for the same reason directives are — plus one of its own: a
+  // resumed session may be resuming under a DIFFERENT adapter than the one
+  // that built the memory, and this is the only channel that survives that.
+  const agentMemoryNote = renderAgentMemoryPrompt(context.paperclipAgentMemory);
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     agentDirectivesNote,
+    agentMemoryNote,
     wakePrompt,
     sessionHandoffNote,
     taskContextNote,
