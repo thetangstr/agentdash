@@ -30,7 +30,12 @@ import {
   projects,
 } from "@paperclipai/db";
 import type {
+  IssueAssigneeSteward,
+  IssueAwaitingReview,
   IssueBlockerAttention,
+  IssueExecutionStagePrincipal,
+  IssueExecutionStageType,
+  IssueExecutionStateStatus,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
@@ -55,6 +60,8 @@ import {
   type ActiveIssueTreePauseHoldGate,
 } from "./issue-tree-control.js";
 import { parseIssueGraphLivenessIncidentKey } from "./recovery/origins.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
+import { authUsers } from "@paperclipai/db";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -140,6 +147,14 @@ export interface IssueFilters {
   touchedByUserId?: string;
   inboxArchivedByUserId?: string;
   unreadForUserId?: string;
+  /**
+   * AgentDash: age-2 — the requesting viewer's userId, independent of any
+   * user-scoped *filter*. Board fetches send no touched/unread filters, so
+   * without this the "awaiting your review" badge would never light on the
+   * board even though the viewer is the pending reviewer. Purely a badge
+   * input; it never narrows the WHERE clause.
+   */
+  viewerUserId?: string;
   projectId?: string;
   workspaceId?: string;
   executionWorkspaceId?: string;
@@ -156,7 +171,19 @@ export interface IssueFilters {
   offset?: number;
 }
 
-type IssueRow = typeof issues.$inferSelect;
+type IssueRow = typeof issues.$inferSelect & {
+  // Slim execution-review projection appended by `issueListSelect`. The
+  // full `executionState` is deliberately nulled on list rows to keep the
+  // payload bounded; this triple is the minimum needed to decide whether
+  // to render the "awaiting your review" badge on a card. Optional
+  // because most call sites don't construct a list-payload row and don't
+  // need the projection.
+  executionReviewSignals?: {
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null;
+};
 type IssueLabelRow = typeof labels.$inferSelect;
 type IssueActiveRunRow = {
   id: string;
@@ -1452,6 +1479,114 @@ async function listIssueBlockerAttentionMap(
   return attentionMap;
 }
 
+/**
+ * Build a per-issue "active steward" projection for the issues-list payload.
+ *
+ * For every issue whose assigneeAgentId is set we want to know who is
+ * accountable for it: the explicit active steward if one exists, otherwise
+ * the agent's owner (the user who created the agent — whoever owns an
+ * agent is accountable when nobody is explicitly stewarding it). When
+ * neither is known the field is null and the UI simply doesn't render a
+ * chip.
+ *
+ * Two batched queries per list call:
+ *   1. `stewardships.activeStewardsByAgentIds` — explicit active stewards.
+ *   2. `agents.created_by_user_id` LEFT JOIN auth_users — owner fallback
+ *      for any agent that did not have a steward row.
+ */
+async function buildAssigneeStewardsByIssueId(
+  db: Pick<Db, "select">,
+  companyId: string,
+  issueRows: Array<{ id: string; assigneeAgentId: string | null }>,
+): Promise<Map<string, IssueAssigneeSteward>> {
+  const result = new Map<string, IssueAssigneeSteward>();
+  const agentIds = Array.from(
+    new Set(issueRows.map((row) => row.assigneeAgentId).filter((value): value is string => Boolean(value))),
+  );
+  if (agentIds.length === 0) return result;
+
+  const stewardships = agentStewardshipService(db as Db);
+  const stewardsByAgentId = await stewardships.activeStewardsByAgentIds(companyId, agentIds);
+
+  const ownerAgentIds: string[] = [];
+  for (const agentId of agentIds) {
+    if (!stewardsByAgentId.has(agentId)) ownerAgentIds.push(agentId);
+  }
+
+  type OwnerRow = { id: string; createdByUserId: string | null; name: string | null; email: string | null };
+  const ownerByAgentId = new Map<string, OwnerRow>();
+  if (ownerAgentIds.length > 0) {
+    const rows = await db
+      .select({
+        id: agents.id,
+        createdByUserId: agents.createdByUserId,
+        name: authUsers.name,
+        email: authUsers.email,
+      })
+      .from(agents)
+      .leftJoin(authUsers, eq(authUsers.id, agents.createdByUserId))
+      .where(and(eq(agents.companyId, companyId), inArray(agents.id, ownerAgentIds)));
+    for (const row of rows) ownerByAgentId.set(row.id, row);
+  }
+
+  for (const issueRow of issueRows) {
+    if (!issueRow.assigneeAgentId) continue;
+    const steward = stewardsByAgentId.get(issueRow.assigneeAgentId);
+    if (steward) {
+      result.set(issueRow.id, {
+        userId: steward.userId,
+        name: steward.name,
+        email: steward.email,
+        source: "steward",
+      });
+      continue;
+    }
+    const owner = ownerByAgentId.get(issueRow.assigneeAgentId);
+    if (owner?.createdByUserId) {
+      result.set(issueRow.id, {
+        userId: owner.createdByUserId,
+        name: owner?.name ?? null,
+        email: owner?.email ?? null,
+        source: "owner",
+      });
+    }
+  }
+  return result;
+}
+
+function deriveIssueAwaitingReview(
+  signals: {
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null,
+  viewerUserId: string | null,
+): IssueAwaitingReview | null {
+  if (!viewerUserId) return null;
+  if (!signals) return null;
+  // Only the two "waiting on a human" statuses qualify. `idle` is "nothing
+  // happening", `completed` is "all stages approved" — neither should ever
+  // light up an awaiting-review badge.
+  if (signals.status !== "pending" && signals.status !== "changes_requested") return null;
+  if (signals.currentStageType !== "review" && signals.currentStageType !== "approval") return null;
+  const participant = signals.currentParticipant;
+  if (!participant) return null;
+  // The "awaiting your review" badge requires the viewer to actually be the
+  // current stage's user principal. Agent-principal stages are the agent's
+  // job; no user sees them as "their" review. When the principal is some
+  // other user we return null — the metadata simply isn't there for this
+  // viewer, which keeps the badge strictly personal.
+  if (participant.type !== "user") return null;
+  if (participant.userId !== viewerUserId) return null;
+
+  return {
+    viewerUserId,
+    stageType: signals.currentStageType,
+    status: signals.status,
+    viewerMatchesPrincipal: true,
+  };
+}
+
 const issueListSelect = {
   id: issues.id,
   companyId: issues.companyId,
@@ -1494,7 +1629,27 @@ const issueListSelect = {
   // AgentDash: goals-eval-hitl
   definitionOfDone: sql<null>`null`,
   executionPolicy: sql<null>`null`,
+  // List payload must stay slim — the full executionState carries stage
+  // history that can grow without bound; the index-route payload test
+  // enforces `executionState: null`. We instead surface a tightly-bounded
+  // JSON projection of the three fields the "awaiting your review" badge
+  // needs (status, currentStageType, currentParticipant). It is computed
+  // once in SQL per row and parsed back to IssueAwaitingReview in JS.
   executionState: sql<null>`null`,
+  executionReviewSignals: sql<{
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null>`
+    CASE
+      WHEN ${issues.executionState} IS NULL THEN NULL
+      ELSE jsonb_build_object(
+        'status', ${issues.executionState}->>'status',
+        'currentStageType', ${issues.executionState}->'currentStageType',
+        'currentParticipant', ${issues.executionState}->'currentParticipant'
+      )
+    END
+  `,
   executionWorkspaceId: issues.executionWorkspaceId,
   executionWorkspacePreference: issues.executionWorkspacePreference,
   executionWorkspaceSettings: sql<null>`null`,
@@ -2190,6 +2345,10 @@ export function issueService(db: Db) {
       const inboxArchivedByUserId = filters?.inboxArchivedByUserId?.trim() || undefined;
       const unreadForUserId = filters?.unreadForUserId?.trim() || undefined;
       const contextUserId = unreadForUserId ?? touchedByUserId ?? inboxArchivedByUserId;
+      // AgentDash: age-2 — badge viewer, independent of the context filters.
+      // Falls back to contextUserId so callers that already scope by user
+      // (inbox/unread lists) get badges without passing an extra param.
+      const badgeViewerUserId = filters?.viewerUserId?.trim() || contextUserId || null;
       const includeBlockedBy = filters?.includeBlockedBy === true;
       const rawSearch = filters?.q?.trim() ?? "";
       const hasSearch = rawSearch.length > 0;
@@ -2325,7 +2484,7 @@ export function issueService(db: Db) {
       }
 
       const issueIds = withRuns.map((row) => row.id);
-      const [statsRows, readRows, lastActivityRows, blockedByMap] = await Promise.all([
+      const [statsRows, readRows, lastActivityRows, blockedByMap, stewardByIssueId] = await Promise.all([
         contextUserId
           ? userCommentStatsForIssues(db, companyId, contextUserId, issueIds)
           : Promise.resolve([]),
@@ -2336,6 +2495,7 @@ export function issueService(db: Db) {
         includeBlockedBy
           ? blockedByMapForIssues(db, companyId, issueIds)
           : Promise.resolve(new Map<string, IssueRelationIssueSummary[]>()),
+        buildAssigneeStewardsByIssueId(db, companyId, withRuns),
       ]);
       const statsByIssueId = new Map(statsRows.map((row) => [row.issueId, row]));
       const lastActivityByIssueId = new Map(lastActivityRows.map((row) => [row.issueId, row]));
@@ -2360,6 +2520,11 @@ export function issueService(db: Db) {
             ...(productivityReviewByIssueId.has(row.id)
               ? { productivityReview: productivityReviewByIssueId.get(row.id) }
               : {}),
+            assigneeSteward: stewardByIssueId.get(row.id) ?? null,
+            awaitingReviewByViewer: deriveIssueAwaitingReview(row.executionReviewSignals ?? null, badgeViewerUserId),
+            // AgentDash: age-2 — internal join field consumed above; never
+            // ship the raw projection on the wire.
+            executionReviewSignals: undefined,
           };
         });
       }
@@ -2381,6 +2546,14 @@ export function issueService(db: Db) {
           ...(productivityReviewByIssueId.has(row.id)
             ? { productivityReview: productivityReviewByIssueId.get(row.id) }
             : {}),
+          assigneeSteward: stewardByIssueId.get(row.id) ?? null,
+          awaitingReviewByViewer: deriveIssueAwaitingReview(
+            row.executionReviewSignals ?? null,
+            badgeViewerUserId,
+          ),
+          // AgentDash: age-2 — internal join field consumed above; never
+          // ship the raw projection on the wire.
+          executionReviewSignals: undefined,
           ...deriveIssueUserContext(row, contextUserId, {
             myLastCommentAt: statsByIssueId.get(row.id)?.myLastCommentAt ?? null,
             myLastReadAt: readByIssueId.get(row.id) ?? null,
