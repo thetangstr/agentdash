@@ -4,7 +4,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import {
   activityLog,
+  agentStewardships,
   agents,
+  authUsers,
   companies,
   createDb,
   executionWorkspaces,
@@ -81,6 +83,10 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(goals);
+    // AgentDash: age-2 — stewardship rows reference agents; clear them
+    // before the agents delete or the FK constraint fails on cleanup.
+    await db.delete(agentStewardships);
+    await db.delete(authUsers);
     await db.delete(agents);
     await db.delete(instanceSettings);
     await db.delete(companies);
@@ -1107,6 +1113,152 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     expect(result?.executionWorkspaceSettings).toBeNull();
   });
 
+  // AgentDash: age-2 — steward chip, awaiting-review badge, and the wire
+  // shape of the new list-payload projections.
+  it("joins assignee steward with owner fallback and derives the viewer awaiting-review badge on list rows", async () => {
+    const companyId = randomUUID();
+    const stewardedIssueId = randomUUID();
+    const ownerFallbackIssueId = randomUUID();
+    const unstewardedIssueId = randomUUID();
+    const agentStewardedId = randomUUID();
+    const agentOwnedId = randomUUID();
+    const stewardUserId = `steward-${randomUUID().slice(0, 8)}`;
+    const ownerUserId = `owner-${randomUUID().slice(0, 8)}`;
+    const viewerId = `viewer-${randomUUID().slice(0, 8)}`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(authUsers).values([
+      { id: stewardUserId, name: "Steward User", email: "steward@example.com", createdAt: new Date(), updatedAt: new Date() },
+      { id: ownerUserId, name: "Owner User", email: "owner@example.com", createdAt: new Date(), updatedAt: new Date() },
+    ]);
+
+    await db.insert(agents).values([
+      {
+        id: agentStewardedId,
+        companyId,
+        name: "Stewarded agent",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        createdByUserId: ownerUserId,
+      },
+      {
+        id: agentOwnedId,
+        companyId,
+        name: "Unstewarded agent",
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        createdByUserId: ownerUserId,
+      },
+    ]);
+
+    await db.insert(agentStewardships).values({
+      companyId,
+      agentId: agentStewardedId,
+      userId: stewardUserId,
+    });
+
+    // The stewarded issue sits in a pending human review whose current
+    // participant is the viewer — exactly the badge case.
+    await db.insert(issues).values([
+      {
+        id: stewardedIssueId,
+        companyId,
+        title: "Stewarded issue",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: agentStewardedId,
+        executionState: {
+          status: "pending",
+          currentStageId: "stage-1",
+          currentStageIndex: 0,
+          currentStageType: "review",
+          currentParticipant: { type: "user", userId: viewerId },
+          returnAssignee: null,
+          reviewRequest: null,
+          completedStageIds: [],
+          lastDecisionId: null,
+          lastDecisionOutcome: null,
+        },
+      },
+      {
+        id: ownerFallbackIssueId,
+        companyId,
+        title: "Owner fallback issue",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: agentOwnedId,
+        executionState: {
+          status: "pending",
+          currentStageId: "stage-1",
+          currentStageIndex: 0,
+          currentStageType: "review",
+          currentParticipant: { type: "user", userId: ownerUserId },
+          returnAssignee: null,
+          reviewRequest: null,
+          completedStageIds: [],
+          lastDecisionId: null,
+          lastDecisionOutcome: null,
+        },
+      },
+      {
+        id: unstewardedIssueId,
+        companyId,
+        title: "No agent issue",
+        status: "todo",
+        priority: "medium",
+      },
+    ]);
+
+    const result = await svc.list(companyId, { viewerUserId: viewerId });
+    const byId = new Map(result.map((issue) => [issue.id, issue]));
+
+    // Steward chip: explicit steward wins over owner.
+    expect(byId.get(stewardedIssueId)?.assigneeSteward).toEqual({
+      userId: stewardUserId,
+      name: "Steward User",
+      email: "steward@example.com",
+      source: "steward",
+    });
+    // Owner fallback when no active steward exists.
+    expect(byId.get(ownerFallbackIssueId)?.assigneeSteward).toEqual({
+      userId: ownerUserId,
+      name: "Owner User",
+      email: "owner@example.com",
+      source: "owner",
+    });
+    // Issues with no assigned agent have no steward at all.
+    expect(byId.get(unstewardedIssueId)?.assigneeSteward).toBeNull();
+
+    // Badge: only the issue whose review participant matches the viewer.
+    expect(byId.get(stewardedIssueId)?.awaitingReviewByViewer).toEqual({
+      viewerUserId: viewerId,
+      stageType: "review",
+      status: "pending",
+      viewerMatchesPrincipal: true,
+    });
+    expect(byId.get(ownerFallbackIssueId)?.awaitingReviewByViewer).toBeNull();
+    expect(byId.get(unstewardedIssueId)?.awaitingReviewByViewer).toBeNull();
+
+    // The internal join projection never leaks onto the wire.
+    for (const issue of result) {
+      expect((issue as Record<string, unknown>).executionReviewSignals).toBeUndefined();
+    }
+
+    // Without a viewer there is no badge, even when the state matches.
+    const noViewerResult = await svc.list(companyId);
+    for (const issue of noViewerResult) {
+      expect(issue.awaitingReviewByViewer).toBeNull();
+    }
+  });
+
   it("does not let description preview truncation split multibyte characters", async () => {
     const companyId = randomUUID();
     const issueId = randomUUID();
@@ -1157,6 +1309,10 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(goals);
+    // AgentDash: age-2 — stewardship rows reference agents; clear them
+    // before the agents delete or the FK constraint fails on cleanup.
+    await db.delete(agentStewardships);
+    await db.delete(authUsers);
     await db.delete(agents);
     await db.delete(instanceSettings);
     await db.delete(companies);
@@ -2382,6 +2538,10 @@ describeEmbeddedPostgres("issueService.clearExecutionRunIfTerminal", () => {
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(goals);
+    // AgentDash: age-2 — stewardship rows reference agents; clear them
+    // before the agents delete or the FK constraint fails on cleanup.
+    await db.delete(agentStewardships);
+    await db.delete(authUsers);
     await db.delete(agents);
     await db.delete(instanceSettings);
     await db.delete(companies);
