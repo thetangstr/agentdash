@@ -26,6 +26,19 @@ describe("selectPlaybook", () => {
 });
 
 describe("the steward contract", () => {
+  /**
+   * A harness reading the tool list sees `create_issue` and reaches for it. The
+   * cost is invisible from there: an agent's working session is keyed to the
+   * issue, so continuing an existing issue resumes the context it already built
+   * — files read, approaches tried, decisions made — while a sibling issue
+   * starts cold on work already done. Closed issues resume too; validated
+   * against a `done` issue whose session was reused a day later.
+   */
+  it("tells the agent to find an existing issue before opening a new one", () => {
+    expect(STEWARD_PLAYBOOK).toContain("Find before you create");
+    expect(STEWARD_PLAYBOOK).toContain("including closed issues");
+  });
+
   it("points the agent at its mandate as the highest authority", () => {
     expect(STEWARD_PLAYBOOK).toContain("AGENTS.md");
     expect(STEWARD_PLAYBOOK).toContain("outranks everything in this playbook");
