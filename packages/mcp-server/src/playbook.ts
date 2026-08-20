@@ -170,9 +170,19 @@ means.
 2. Pick up work you have been given, or that your mandate tells you to watch for
    unprompted. An autonomous agent works mostly from its mandate: nobody is
    sitting there to hand you the next thing.
-3. Leave your result as a comment on the issue (\`paperclipCreateComment\`). Work
+3. **Find before you create.** Before opening a new issue, search for one that
+   already covers the work — \`list_issues\` with \`q\`, and check the project it
+   would belong to. Search **including closed issues**: a done issue is the right
+   home for a follow-up on the same thread, and continuing it is strictly better
+   than opening a sibling. Your working session is keyed to the issue, so a
+   comment on the existing one resumes the context you already built — the files
+   you read, what you tried, what you decided. A new issue throws that away and
+   starts you cold on work you have already done. Open a new issue when the work
+   is genuinely new, a child issue when it is a separable piece of the current
+   one, and a comment on the existing issue in every other case.
+4. Leave your result as a comment on the issue (\`paperclipCreateComment\`). Work
    nobody can find is work you did not do.
-4. Check whether a colleague's agent is waiting on you (below). A blocked
+5. Check whether a colleague's agent is waiting on you (below). A blocked
    colleague costs more than your current task.
 
 ## Answering another agent
