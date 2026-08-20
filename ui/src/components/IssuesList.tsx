@@ -113,7 +113,7 @@ export type IssueSortField = "status" | "priority" | "title" | "created" | "upda
 export type IssueViewState = IssueFilterState & {
   sortField: IssueSortField;
   sortDir: "asc" | "desc";
-  groupBy: "status" | "priority" | "assignee" | "workspace" | "parent" | "none";
+  groupBy: "status" | "priority" | "assignee" | "workspace" | "parent" | "steward" | "none";
   viewMode: "list" | "board";
   nestingEnabled: boolean;
   collapsedGroups: string[];
@@ -961,7 +961,7 @@ export function IssuesList({
 
   const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter);
 
-  const groupedContent = useMemo(() => {
+  const groupedContent = useMemo<{ key: string; label: string | null; items: typeof filtered }[]>(() => {
     if (viewState.groupBy === "none") {
       return [{ key: "__all", label: null as string | null, items: filtered }];
     }
@@ -999,7 +999,6 @@ export function IssuesList({
       const groups = groupBy(filtered, (i) => i.parentId ?? "__no_parent");
       return Object.keys(groups)
         .sort((a, b) => {
-          // Groups with items first, "no parent" last
           if (a === "__no_parent") return 1;
           if (b === "__no_parent") return -1;
           return (groups[b]?.length ?? 0) - (groups[a]?.length ?? 0);
@@ -1009,6 +1008,41 @@ export function IssuesList({
           label: key === "__no_parent" ? "No Parent" : (issueTitleMap.get(key) ?? key.slice(0, 8)),
           items: groups[key]!,
         }));
+    }
+    if (viewState.groupBy === "steward") {
+      // Group by the joined `assigneeSteward.userId`. Issues whose assignee
+      // agent has no steward AND no known owner fall into a single
+      // "__unstewarded" bucket so they don't disappear. Same key shape
+      // the board view uses, so toggling modes keeps groupings stable.
+      const groups = groupBy(filtered, (issue) =>
+        issue.assigneeSteward
+          ? `__steward:${issue.assigneeSteward.userId}`
+          : "__unstewarded",
+      );
+      const sampleByUserId = new Map<string, { userId: string; name: string | null; email: string | null; source: "steward" | "owner" }>();
+      for (const issue of filtered) {
+        if (issue.assigneeSteward && !sampleByUserId.has(issue.assigneeSteward.userId)) {
+          sampleByUserId.set(issue.assigneeSteward.userId, issue.assigneeSteward);
+        }
+      }
+      const labelFor = (key: string): string => {
+        if (key === "__unstewarded") return "Unstewarded";
+        const userId = key.slice("__steward:".length);
+        const override = companyUserLabelMap.get(userId);
+        if (override) return override;
+        const sample = sampleByUserId.get(userId);
+        if (sample?.name?.trim()) return sample.name.trim();
+        if (sample?.email?.trim()) return sample.email.trim();
+        return userId.slice(0, 8);
+      };
+      return Object.keys(groups)
+        .sort((a, b) => {
+          if (a === "__unstewarded") return 1;
+          if (b === "__unstewarded") return -1;
+          const countDiff = (groups[b]?.length ?? 0) - (groups[a]?.length ?? 0);
+          return countDiff !== 0 ? countDiff : labelFor(a).localeCompare(labelFor(b));
+        })
+        .map((key) => ({ key, label: labelFor(key), items: groups[key]! }));
     }
     // assignee
     const groups = groupBy(
@@ -1292,9 +1326,11 @@ export function IssuesList({
             </Popover>
           )}
 
-          {/* Group (list view only) */}
-          {viewState.viewMode === "list" && (
-            <Popover>
+          {/* Group — drives list-mode collapsible sections AND
+              board-mode columns. "Steward" reroutes the board view to
+              columns-per-steward (and in list view it groups by the
+              server-joined assigneeSteward). Available in both modes. */}
+          <Popover>
               <PopoverTrigger asChild>
                 <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Group">
                   <Layers className="h-3.5 w-3.5" />
@@ -1306,6 +1342,7 @@ export function IssuesList({
                     ["status", "Status"],
                     ["priority", "Priority"],
                     ["assignee", "Assignee"],
+                    ["steward", "Steward"],
                     ["workspace", "Workspace"],
                     ["parent", "Parent Issue"],
                     ["none", "None"],
@@ -1324,7 +1361,6 @@ export function IssuesList({
                 </div>
               </PopoverContent>
             </Popover>
-          )}
         </div>
       </div>
 
@@ -1355,6 +1391,9 @@ export function IssuesList({
           agents={agents}
           liveIssueIds={liveIssueIds}
           onUpdateIssue={onUpdateIssue}
+          boardGroupBy={viewState.groupBy === "steward" ? "steward" : "status"}
+          viewerUserId={currentUserId ?? null}
+          stewardLabelByUserId={companyUserLabelMap}
         />
       ) : (
         <>

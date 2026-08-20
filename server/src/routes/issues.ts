@@ -938,6 +938,10 @@ export function issueRoutes(
       unreadForUserFilterRaw === "me" && req.actor.type === "board"
         ? req.actor.userId
         : unreadForUserFilterRaw;
+    // AgentDash: age-2 — always tell the service who is looking at the board
+    // so awaitingReviewByViewer can be derived without any user filter set.
+    const viewerUserId =
+      req.actor.type === "board" ? req.actor.userId : undefined;
     const rawLimit = req.query.limit as string | undefined;
     const parsedLimit = rawLimit !== undefined && /^\d+$/.test(rawLimit)
       ? Number.parseInt(rawLimit, 10)
@@ -984,6 +988,7 @@ export function issueRoutes(
       touchedByUserId,
       inboxArchivedByUserId,
       unreadForUserId,
+      viewerUserId,
       projectId: req.query.projectId as string | undefined,
       workspaceId: req.query.workspaceId as string | undefined,
       executionWorkspaceId: req.query.executionWorkspaceId as string | undefined,

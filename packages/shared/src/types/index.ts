@@ -216,6 +216,8 @@ export type {
 export type {
   Issue,
   IssueAssigneeAdapterOverrides,
+  IssueAssigneeSteward,
+  IssueAwaitingReview,
   IssueBlockerAttention,
   IssueBlockerAttentionReason,
   IssueBlockerAttentionState,
