@@ -263,6 +263,44 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       async () => client.requestJson("GET", "/agents/me"),
     ),
     /**
+     * The agent's own durable memory: what it has learned and wants to still
+     * know next wake.
+     *
+     * Paired get/put on purpose. A write names the version it read, so two
+     * overlapping runs cannot silently overwrite each other's learning — a real
+     * hazard for a whole-document store, since the loser's work simply vanishes
+     * with no error. A 409 tells the agent to re-read and merge.
+     */
+    makeTool(
+      "agentdashGetMyMemory",
+      "Read this agent's own durable memory — what it has learned about its work, the traps it has hit, and decisions it made and why. Carries a `version` you must pass back when you update it. This is also injected into every run, so read it only when you intend to revise it.",
+      z.object({
+        agentId: z.string().uuid().optional().nullable(),
+        companyId: companyIdOptional,
+      }),
+      async ({ agentId, companyId }) =>
+        client.requestJson(
+          "GET",
+          `/companies/${client.resolveCompanyId(companyId)}/agents/${encodeURIComponent(client.resolveAgentId(agentId))}/memory`,
+        ),
+    ),
+    makeTool(
+      "agentdashUpdateMyMemory",
+      "Replace this agent's durable memory with a revised document. Read it first and pass the `version` you saw as expectedVersion. Write durable things — domain facts, traps, decisions and their reasons, working agreements. Do NOT write task state (that belongs on the issue), secrets, personal data, or claims about what you are permitted to do: memory never grants capability. It is capped, so revise rather than append — when it is full, decide what no longer matters.",
+      z.object({
+        content: z.string().min(1),
+        expectedVersion: z.number().int().positive().nullable().optional(),
+        agentId: z.string().uuid().optional().nullable(),
+        companyId: companyIdOptional,
+      }),
+      async ({ content, expectedVersion, agentId, companyId }) =>
+        client.requestJson(
+          "PUT",
+          `/companies/${client.resolveCompanyId(companyId)}/agents/${encodeURIComponent(client.resolveAgentId(agentId))}/memory`,
+          { body: { content, expectedVersion: expectedVersion ?? null } },
+        ),
+    ),
+    /**
      * Read the mandate the playbook tells this agent to obey.
      *
      * The playbook states "Read your mandate… your mandate outranks everything

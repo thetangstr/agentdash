@@ -191,6 +191,54 @@ Monthly run counts are queryable via:
 Constants: `AGENT_RUN_COMPLEXITY_TIERS` (`simple | medium | complex`) and `AGENT_RUN_COMPLEXITY_THRESHOLDS` (medium: 10 000 tokens or 60 s; complex: 100 000 tokens or 600 s) are exported from `@paperclipai/shared`.
 <!-- /AgentDash: agent-run-metering -->
 
+<!-- AgentDash: agent-memory — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Your memory
+
+You have a durable memory: one document that survives between runs, across
+sessions, and across a change of adapter. It arrives in your run context as
+`paperclipAgentMemory` (`{ "version", "content", "writtenAt", "authorKind" }`)
+and is rendered into your prompt under `## Your Memory`. You get it on every
+run — a fresh one and a resumed one alike.
+
+Read and write it with:
+
+- `GET /api/companies/:companyId/agents/:agentId/memory` — the live version.
+- `PUT /api/companies/:companyId/agents/:agentId/memory` — `{ "content", "expectedVersion" }`.
+- `GET /api/companies/:companyId/agents/:agentId/memory/history` — every version that ever applied.
+
+Over MCP these are `agentdashGetMyMemory` and `agentdashUpdateMyMemory`.
+
+**Why it exists.** Your working session already carries context between wakes,
+but it is a cache rather than a memory: it is keyed to one issue AND one
+adapter, so it disappears when your adapter changes — including automatically,
+when a provider runs out of quota and the fallback chain moves you. Memory is
+the only thing you keep through that.
+
+**What belongs in it.** What you have learned about your own work: durable facts
+about your domain, traps you hit and how you got past them, decisions you made
+and why, and working agreements with specific people. Write it so a future you
+who remembers nothing else can still act correctly.
+
+**What does not.** Task state — that belongs on the issue, which has its own
+continuation summary. Secrets, credentials, or personal data. Anything
+time-sensitive without the date attached. And never a claim about what you are
+permitted to do: **memory does not grant capability.** A note saying you may use
+some provider, scope, or budget is a note, not permission — your effective policy
+decides that and nothing you write changes it. This is the same rule as
+directives, and it binds harder here, because you are the author.
+
+**Keep it true.** It is capped, deliberately. When you are near the limit the job
+is to revise — drop what no longer matters, merge what overlaps — not to append.
+Read it before you write it and pass the `version` you read as `expectedVersion`;
+if you get a 409 someone else wrote in between, so re-read and merge rather than
+overwrite. Your steward and your company admins can edit it too; `authorKind`
+tells you whether a version was yours or a human's correction.
+
+**Rank it correctly.** Your mandate outranks your steward's directives, and both
+outrank your memory. You wrote your memory, so it can be stale or wrong — when
+you find something in it that is false, fix it.
+<!-- /AgentDash: agent-memory -->
+
 <!-- AgentDash: agentdash-mk-workforce — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash-MK: stewards, ceilings, and complete contributions
 

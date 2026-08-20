@@ -31,6 +31,7 @@ import { agentRoutes } from "./routes/agents.js";
 import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
 import { agentGovernanceRoutes } from "./routes/agent-governance.js";
 import { agentDirectivesRoutes } from "./routes/agent-directives.js";
+import { agentMemoryRoutes } from "./routes/agent-memory.js";
 import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
 import { workflowRecommendationRoutes } from "./routes/workflow-recommendations.js";
 import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
@@ -397,6 +398,7 @@ export async function createApp(
   api.use(agentStewardshipRoutes(db));
   api.use(agentGovernanceRoutes(db));
   api.use(agentDirectivesRoutes(db));
+  api.use(agentMemoryRoutes(db));
   api.use(workflowMetricsRoutes(db));
   // AgentDash-MK: the review agent's recommendation half. Read-only — there is
   // no create verb, and decisions go through the approvals routes like every

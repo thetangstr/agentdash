@@ -10,6 +10,7 @@ import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_MEMORY_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
   isEnvironmentDriverSupportedForAdapter,
@@ -60,6 +61,7 @@ import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
 import { agentDirectivesService } from "./agent-directives.js";
+import { agentMemoryService } from "./agent-memory.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -2195,6 +2197,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
   const agentDirectivesSvc = agentDirectivesService(db);
+  const agentMemorySvc = agentMemoryService(db);
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
@@ -5255,6 +5258,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       context[AGENT_DIRECTIVES_CONTEXT_KEY] = activeDirectives;
     } else {
       delete context[AGENT_DIRECTIVES_CONTEXT_KEY];
+    }
+
+    // AgentDash: the agent's own durable memory, injected on EVERY run —
+    // fresh and resumed alike, for the same reason directives are: a thing the
+    // agent stops being told is a thing it stops knowing.
+    //
+    // This is what makes memory survive the events that end a session. A CLI
+    // session is keyed per adapter, so a fallback hop from Codex to Hermes
+    // orphans it and the agent wakes with no recollection of its own work;
+    // memory is re-read from the database and does not care which adapter ran.
+    //
+    // It enters as TEXT, like directives, and nothing downstream reads it for an
+    // authorization decision. The agent wrote it, so treating it as a capability
+    // input would let an agent widen its own reach by describing it.
+    const activeMemory = await agentMemorySvc.activeForRuntime(agent.companyId, agent.id);
+    if (activeMemory) {
+      context[AGENT_MEMORY_CONTEXT_KEY] = activeMemory;
+    } else {
+      delete context[AGENT_MEMORY_CONTEXT_KEY];
     }
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;

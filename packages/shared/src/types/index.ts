@@ -115,6 +115,16 @@ export {
   AGENT_DIRECTIVES_CONTEXT_KEY,
   AGENT_DIRECTIVES_MAX_LENGTH,
 } from "./agent-directives.js";
+export type {
+  AgentMemory,
+  AgentMemoryAuthorKind,
+  AgentMemoryHistory,
+  AgentMemoryRuntimeContext,
+} from "./agent-memory.js";
+export {
+  AGENT_MEMORY_CONTEXT_KEY,
+  AGENT_MEMORY_MAX_LENGTH,
+} from "./agent-memory.js";
 export type { WorkflowActorKind, WorkflowEventType, WorkflowRunMetrics } from "./workflow-events.js";
 export {
   WORKFLOW_ACTOR_KINDS,

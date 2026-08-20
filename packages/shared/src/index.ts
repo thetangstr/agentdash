@@ -687,6 +687,20 @@ export {
 } from "./types/agent-directives.js";
 
 export {
+  writeAgentMemorySchema,
+  type WriteAgentMemory,
+} from "./validators/agent-memory.js";
+
+export {
+  AGENT_MEMORY_CONTEXT_KEY,
+  AGENT_MEMORY_MAX_LENGTH,
+  type AgentMemory,
+  type AgentMemoryAuthorKind,
+  type AgentMemoryHistory,
+  type AgentMemoryRuntimeContext,
+} from "./types/agent-memory.js";
+
+export {
   pushAgentDirectivesSchema,
   pushHarnessAgentPolicySchema,
   type PushAgentDirectives,
