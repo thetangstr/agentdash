@@ -75,7 +75,7 @@
   "pnpm": {
     "patchedDependencies": {
       "embedded-postgres@18.1.0-beta.16": "patches/embedded-postgres@18.1.0-beta.16.patch",
-      "hermes-paperclip-adapter@0.3.0": "patches/hermes-paperclip-adapter+0.3.0.patch"
+      "hermes-paperclip-adapter@0.3.0": "patches/hermes-paperclip-adapter@0.3.0.patch"
     },
     "overrides": {
       "rollup": ">=4.59.0",
