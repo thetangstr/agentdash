@@ -149,15 +149,15 @@ npm run acceptance:android-livekit:offline
 
 That command starts only ephemeral `127.0.0.1` HTTP servers and a temporary canonical `DeviceAuthStore` directory. It proves broker admin pairing, Android-style pairing exchange, authenticated session creation, explicit LiveKit agent dispatch before token minting, microphone-only/data-disabled grant shape, the shared `ask_project_lead` tool path, one normalized AgentDash request/run/result comment, and one correlated `VoiceTurnAuditV1` sidecar comment through the real AgentDash voice-audit sink. The JSON output is intentionally redacted: it contains pass/fail, pseudonymous request/correlation/issue/run/comment/voice IDs, statuses, and exact boundary counters only. It does not print pairing codes, participant tokens, credential values, raw HTTP bodies, hostnames, or raw audio.
 
-This offline proof is not a live phone or LiveKit proof. It uses fake LiveKit control and fake in-process AgentDash transport behind the real ExecOS client/sink contracts. A live run remains gated on operator authorization and the stop conditions below.
+This offline proof is not a live phone, real LiveKit, or real AgentDash API proof. It uses injected fake LiveKit control, a loopback fake readiness server, and fake in-process AgentDash persistence behind the real ExecOS broker, `DeviceAuthStore`, shared `ask_project_lead` toolset, `VoiceTurnCoordinator`, AgentDash client contract, and AgentDash voice-audit sink. Real AgentDash API visibility is covered by the existing local-product proof/runbook below, not by this Android offline script. A live run remains gated on operator authorization and the stop conditions below.
 
 Local broker and pairing commands:
 
 ```sh
 cd "$EXECOS_CHECKOUT"
 export EXECOS_VOICE_DEVICE_STATE_DIR='<local canonical state dir>'
-export EXECOS_VOICE_PUBLIC_BASE_URL='<Tailscale HTTPS broker origin for phone use>'
-export EXECOS_VOICE_EXECOS_BASE_URL='http://127.0.0.1:<cos-port>'
+export EXECOS_VOICE_BROKER_PUBLIC_BASE_URL='<Tailscale HTTPS broker origin for phone use>'
+export EXECOS_VOICE_READINESS_URL='http://127.0.0.1:<cos-port>'
 export LIVEKIT_URL='<wss LiveKit URL>'
 export LIVEKIT_API_KEY='<set in shell only>'
 export LIVEKIT_API_SECRET='<set in shell only>'
@@ -196,13 +196,34 @@ Credential variables by name only:
 - `LIVEKIT_API_SECRET`
 - `EXECOS_VOICE_TOKEN`
 - `EXECOS_VOICE_DEVICE_STATE_DIR`
-- `EXECOS_VOICE_PUBLIC_BASE_URL`
-- `EXECOS_VOICE_EXECOS_BASE_URL`
+- `EXECOS_VOICE_DEVICE_LABEL`
+- `EXECOS_VOICE_READINESS_URL`
+- `EXECOS_VOICE_BROKER_PUBLIC_BASE_URL`
+- `EXECOS_VOICE_BROKER_HOST`
+- `EXECOS_VOICE_BROKER_PORT`
+- `EXECOS_VOICE_ALLOW_LOCAL_LIVEKIT`
+- `EXECOS_VOICE_ALLOW_INSECURE_DEV_PUBLIC_BASE_URL`
+- `EXECOS_LIVEKIT_ROOM`
+- `EXECOS_LIVEKIT_TOKEN_TTL`
+- `EXECOS_LIVEKIT_AGENT_NAME`
+- `EXECOS_LIVEKIT_WORKER_ID`
 - `AGENTDASH_BASE_URL`
 - `AGENTDASH_COMPANY_ID`
 - `AGENTDASH_PROJECT_ID`
 - `AGENTDASH_ASSIGNEE_AGENT_ID`
 - `AGENTDASH_BEARER_TOKEN`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `EXECOS_REALTIME_MODEL`
+- `EXECOS_REALTIME_VOICE`
+- `EXECOS_STT_MODEL`
+- `EXECOS_LLM_MODEL`
+- `EXECOS_TTS_MODEL`
+- `EXECOS_TTS_VOICE`
+- `EXECOS_RUNNER_TOKEN`
+- `EXECOS_RUNNER_TOKEN_PIPE`
+- `EXECOS_MCP_TOKEN`
+- `TAILSCALE_AUTHKEY`
 
 Live preflight and acceptance must stop before mutating anything if credentials are absent, the broker is not loopback/private, Tailscale would expose routes outside the allowlist, Android TLS cannot be verified, the `execos-voice` worker cannot be explicitly dispatched, LiveKit grants include data publishing, AgentDash does not produce exactly one attributable request/run/result comment, the voice sidecar cannot be appended with the same run/agent provenance, or any path attempts tmux mutation, Hermes/direct existing-session control, raw-audio persistence, external fetches outside the approved services, or consequential/destructive actions.
 
@@ -210,7 +231,7 @@ AgentDash inspection after a live run should show one `originKind=execos_request
 
 ## Honest verification state
 
-The offline acceptance proof uses real in-process HTTP boundaries and the production client/adapter/runner code, with injected fake AgentDash persistence and fake tmux/Claude process boundaries. It proves consistent serialization, dispatch, attribution, lifecycle, evidence, and one-record idempotency without starting Claude, changing tmux, or writing to an AgentDash instance.
+The Android offline acceptance proof uses real in-process HTTP boundaries for the broker plus the real ExecOS broker/auth/tool/coordinator/client/sink contracts. It deliberately uses fake in-process AgentDash persistence, fake loopback readiness, and injected fake LiveKit control. It proves consistent serialization, dispatch metadata, attribution, lifecycle, redacted evidence, network/env/import/tool/raw-audio guards, and one-record idempotency without starting Claude, changing tmux, contacting LiveKit, exposing Tailscale, installing an APK, or writing to a real AgentDash instance.
 
 On 2026-08-21, the complete local path was proven against a disposable AgentDash instance bound only to `127.0.0.1:3199`, with a fresh embedded PostgreSQL database under an isolated `PAPERCLIP_HOME`. The external adapter was loaded from the explicit ExecOS worktree path and assigned to a dedicated KiddoQuest agent. The authenticated runner remained bound to localhost in owned pane `%2/@2`; it launched the single question in a new owned Claude pane `%5/@5`, then that per-request pane closed normally. The observed Claude pane `%0/@0` and the existing `%1/@1` shell were not targeted.
 
