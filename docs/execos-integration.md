@@ -144,10 +144,10 @@ The Android LiveKit bridge has a one-command offline proof in the ExecOS checkou
 
 ```sh
 cd "$EXECOS_CHECKOUT"
-npm run acceptance:android-livekit:offline
+npm --silent run acceptance:android-livekit:offline
 ```
 
-That command starts only ephemeral `127.0.0.1` HTTP servers and a temporary canonical `DeviceAuthStore` directory. It proves broker admin pairing, Android-style pairing exchange, authenticated session creation, explicit LiveKit agent dispatch before token minting, microphone-only/data-disabled grant shape, the shared `ask_project_lead` tool path, one normalized AgentDash request/run/result comment, and one correlated `VoiceTurnAuditV1` sidecar comment through the real AgentDash voice-audit sink. The JSON output is intentionally redacted: it contains pass/fail, pseudonymous request/correlation/issue/run/comment/voice IDs, statuses, and exact boundary counters only. It does not print pairing codes, participant tokens, credential values, raw HTTP bodies, hostnames, or raw audio.
+That command starts only ephemeral `127.0.0.1` HTTP servers and a temporary canonical `DeviceAuthStore` directory. It proves broker admin pairing, Android-style pairing exchange, authenticated session creation, explicit LiveKit agent dispatch before token minting, microphone-only/data-disabled grant shape, the shared `ask_project_lead` tool path, one normalized AgentDash request/run/result comment, and one correlated `VoiceTurnAuditV1` sidecar comment through the real AgentDash voice-audit sink. The `--silent` form writes exactly one redacted JSON document plus a trailing newline to stdout: pass/fail, stable role aliases for request/correlation/issue/run/comment/voice IDs, statuses, and exact boundary counters only. It does not print pairing codes, participant tokens, credential values, raw HTTP bodies, hostnames, or raw audio.
 
 This offline proof is not a live phone, real LiveKit, or real AgentDash API proof. It uses injected fake LiveKit control, a loopback fake readiness server, and fake in-process AgentDash persistence behind the real ExecOS broker, `DeviceAuthStore`, shared `ask_project_lead` toolset, `VoiceTurnCoordinator`, AgentDash client contract, and AgentDash voice-audit sink. Real AgentDash API visibility is covered by the existing local-product proof/runbook below, not by this Android offline script. A live run remains gated on operator authorization and the stop conditions below.
 
@@ -224,6 +224,7 @@ Credential variables by name only:
 - `EXECOS_RUNNER_TOKEN_PIPE`
 - `EXECOS_MCP_TOKEN`
 - `TAILSCALE_AUTHKEY`
+- `TS_AUTHKEY`
 
 Live preflight and acceptance must stop before mutating anything if credentials are absent, the broker is not loopback/private, Tailscale would expose routes outside the allowlist, Android TLS cannot be verified, the `execos-voice` worker cannot be explicitly dispatched, LiveKit grants include data publishing, AgentDash does not produce exactly one attributable request/run/result comment, the voice sidecar cannot be appended with the same run/agent provenance, or any path attempts tmux mutation, Hermes/direct existing-session control, raw-audio persistence, external fetches outside the approved services, or consequential/destructive actions.
 
