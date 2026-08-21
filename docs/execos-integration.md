@@ -17,18 +17,67 @@ Destructive, credentialed, external, high-impact, and unknown actions stop at `b
 
 ## Local installation and configuration
 
-Install the external adapter through **Board → Adapter manager** from:
+Set the adapter path explicitly to the checkout that actually contains the
+integration. Until the ExecOS branch is landed into the primary checkout, the
+current local product path is:
 
+```sh
+export EXECOS_CHECKOUT=/Users/Kailor/.config/superpowers/worktrees/agent_bus/codex-agentdash-execos
+export EXECOS_ADAPTER_PACKAGE_PATH="$EXECOS_CHECKOUT/packages/agentdash-execos-adapter"
+```
+
+Do not point AgentDash at
 `/Volumes/mac_studio_ssd/Projects/agent_bus/packages/agentdash-execos-adapter`
+until that path really exists. Install `$EXECOS_ADAPTER_PACKAGE_PATH` through
+**Board → Adapter manager**.
 
 Create a dedicated AgentDash agent using adapter type `execos_local`. Its adapter config contains only:
 
 - `runnerBaseUrl` (default `http://127.0.0.1:4781`)
-- `requestTimeoutSec`
+- `runnerToken` (a generated local runner secret of at least 32 characters)
+- `requestTimeoutSec` (use `150`; it must exceed the runner's `120` second execution timeout)
 
 Do not put Claude tokens, API keys, arbitrary environment variables, shell commands, or tmux commands in this adapter configuration. AgentDash authentication remains at the AgentDash API boundary. Claude authentication remains inside the CEO-owned local Claude installation.
 
 Start the runner only as the initial command of a newly owned window in `execos-0`; never reuse `%0`. Before dispatch, its read-only health response must identify the discovered session, protected pane/window IDs, localhost binding, owned-pane execution capabilities, credential-relay exclusion, and unsupported capabilities.
+
+## Deterministic local preflight
+
+The preflight is read-only. It checks AgentDash health, the exact adapter
+package path, the exact KiddoQuest cwd, the Claude executable, tmux session
+`execos-0/$0`, protected pane `@0/%0`, authenticated runner health, and the
+explicit unsupported declarations. It lists tmux state but never creates a
+window, sends keys, captures scrollback, or submits a Claude prompt.
+
+```sh
+cd "$EXECOS_CHECKOUT"
+export EXECOS_TMUX_CWD=/Volumes/mac_studio_ssd/Projects/agent_bus
+export EXECOS_RUNNER_BASE_URL=http://127.0.0.1:4781
+export EXECOS_RUNNER_TOKEN='<generated local value, at least 32 characters>'
+npm run preflight:agentdash-execos
+```
+
+Before the runner exists, the command should fail only the runner-dependent
+checks and report those gates explicitly. After starting the runner in a newly
+owned tmux window, rerun it and require every check to pass.
+
+The runner's owned startup window can be created with `tmux new-window -d -P`
+using `$EXECOS_CHECKOUT` as its process cwd and
+`EXECOS_TMUX_CWD=/Volumes/mac_studio_ssd/Projects/agent_bus` as its scoped
+evidence cwd. Record the returned window and pane IDs. Never target `@0`,
+`%0`, or the existing `@1/%1` pane.
+
+To expose the same path through the ExecOS Chief of Staff process, configure:
+
+- `AGENTDASH_BASE_URL=http://127.0.0.1:3100`
+- `AGENTDASH_COMPANY_ID`
+- `AGENTDASH_PROJECT_ID` (KiddoQuest)
+- `AGENTDASH_ASSIGNEE_AGENT_ID` (the dedicated `execos_local` agent)
+- optional `AGENTDASH_BEARER_TOKEN` for AgentDash API authentication
+
+If the three AgentDash IDs are absent, `ask_project_lead` remains present but
+returns an explicit unsupported response. A partial configuration is rejected
+at startup.
 
 ## Visible audit path
 
