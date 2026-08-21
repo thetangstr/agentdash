@@ -11,6 +11,18 @@ const timestamp = "2026-08-21T08:00:00.000Z";
 const hashA = "a".repeat(64);
 const hashB = "b".repeat(64);
 const hashC = "c".repeat(64);
+const resultComment = {
+  id: "comment_1",
+  body: "Normal result comment",
+  authorAgentId: "agent_1",
+  createdByRunId: "ad_run_1",
+};
+const voiceComment = (audit: ExecOsVoiceTurnAuditComment = voiceAudit()) => ({
+  id: "voice_comment_1",
+  body: serializeExecOsVoiceTurnAuditComment(audit),
+  authorAgentId: "agent_1",
+  createdByRunId: "ad_run_1",
+});
 
 const unsupported = [
   {
@@ -178,8 +190,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_1", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        resultComment,
+        voiceComment(),
       ],
     });
 
@@ -216,16 +228,16 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "bad_json", body: `${EXECOS_VOICE_TURN_AUDIT_MARKER}\n{not json}` },
-        { id: "unmarked", body: JSON.stringify(voiceAudit()) },
-        { id: "unknown", body: serializeExecOsVoiceTurnAuditComment({ ...voiceAudit(), extra: "nope" } as ExecOsVoiceTurnAuditComment) },
+        { ...voiceComment(), id: "bad_json", body: `${EXECOS_VOICE_TURN_AUDIT_MARKER}\n{not json}` },
+        { ...voiceComment(), id: "unmarked", body: JSON.stringify(voiceAudit()) },
+        { ...voiceComment(), id: "unknown", body: serializeExecOsVoiceTurnAuditComment({ ...voiceAudit(), extra: "nope" } as ExecOsVoiceTurnAuditComment) },
       ],
     })).toBeNull();
     expect(projectExecOsVoiceTurnAudit({
       executionAuditResultJson: null,
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
-      comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
+      comments: [voiceComment()],
     })).toBeNull();
   });
 
@@ -238,8 +250,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_1", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ requestId: "req_other" })) },
+        resultComment,
+        voiceComment(voiceAudit({ requestId: "req_other" })),
       ],
     })).toBeNull();
 
@@ -248,8 +260,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_1", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        resultComment,
+        voiceComment(),
       ],
     })?.session.id).toBe("vs_12345678");
     expect(executionAudit?.requestId).toBe("req_1");
@@ -270,8 +282,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_1", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        resultComment,
+        voiceComment(),
       ],
     })).toBeNull();
   });
@@ -288,9 +300,37 @@ describe("projectExecOsVoiceTurnAudit", () => {
         issue: { id: "issue_1", ref: "AGE-1" },
         run: { id: "ad_run_1" },
         comments: [
-          { id: "comment_1", body: "Normal result comment" },
-          { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(audit) },
+          resultComment,
+          voiceComment(audit),
         ],
+      })).toBeNull();
+    }
+  });
+
+  it("rejects forged voice sidecars or result comments with wrong AgentDash provenance", () => {
+    for (const comments of [
+      [
+        resultComment,
+        { ...voiceComment(), authorAgentId: "agent_other" },
+      ],
+      [
+        resultComment,
+        { ...voiceComment(), createdByRunId: "run_other" },
+      ],
+      [
+        { ...resultComment, authorAgentId: "agent_other" },
+        voiceComment(),
+      ],
+      [
+        { ...resultComment, createdByRunId: "run_other" },
+        voiceComment(),
+      ],
+    ]) {
+      expect(projectExecOsVoiceTurnAudit({
+        executionAuditResultJson: resultJson(),
+        issue: { id: "issue_1", ref: "AGE-1" },
+        run: { id: "ad_run_1" },
+        comments,
       })).toBeNull();
     }
   });
@@ -319,8 +359,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
         issue: { id: "issue_1", ref: "AGE-1" },
         run: { id: "ad_run_1" },
         comments: [
-          { id: "comment_1", body: "Normal result comment" },
-          { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+          resultComment,
+          voiceComment(),
         ],
       })).toBeNull();
     }
@@ -335,8 +375,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_1", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        resultComment,
+        voiceComment(),
       ],
     })).toBeNull();
 
@@ -345,8 +385,8 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "comment_10", body: "Normal result comment" },
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        { ...resultComment, id: "comment_10" },
+        voiceComment(),
       ],
     })).toBeNull();
   });
@@ -357,7 +397,7 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ commentId: "voice_comment_1" })) },
+        voiceComment(voiceAudit({ commentId: "voice_comment_1" })),
       ],
     })).toBeNull();
   });

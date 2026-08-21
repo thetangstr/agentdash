@@ -1,3 +1,14 @@
+import {
+  parseExecOsExecutionAuditV1FromResult,
+  type ExecOsExecutionAuditV1,
+} from "./execos-execution-audit-contract";
+
+export {
+  agentDashExecutionSourceRef,
+  parseExecOsExecutionAuditV1FromResult,
+  type ExecOsExecutionAuditV1,
+} from "./execos-execution-audit-contract";
+
 export interface ExecOsAuditEvidence {
   kind: string;
   summary: string;
@@ -39,6 +50,12 @@ export interface ExecOsAuditView {
 }
 
 export function projectExecOsAudit(resultJson: unknown): ExecOsAuditView | null {
+  const strictAudit = parseExecOsExecutionAuditV1FromResult(resultJson);
+  if (strictAudit) {
+    const strictView = projectStrictAudit(strictAudit);
+    if (strictView) return strictView;
+  }
+
   const result = asRecord(resultJson);
   const audit = asRecord(result?.audit);
   const request = asRecord(audit?.request);
@@ -89,6 +106,45 @@ export function projectExecOsAudit(resultJson: unknown): ExecOsAuditView | null 
     evidence,
     transitions,
     unsupported,
+  };
+}
+
+function projectStrictAudit(audit: ExecOsExecutionAuditV1): ExecOsAuditView | null {
+  const answer = audit.directAnswer ?? audit.cannotAnswer?.reason;
+  if (!answer) return null;
+  const paneId = audit.runtimeIdentity.runtimeId.split(":").findLast((part) => /^%\d+$/u.test(part)) ?? null;
+  return {
+    requestId: audit.request.id,
+    correlationId: audit.request.correlationId,
+    question: audit.request.question,
+    status: audit.terminalStatus,
+    answer,
+    answerKind: audit.directAnswer ? "direct" : "cannot_answer",
+    actor: `${audit.actorIdentity.actorType}:${audit.actorIdentity.actorId}`,
+    runtime: `${audit.runtimeIdentity.track}:${audit.runtimeIdentity.adapterId}`,
+    runtimeId: audit.runtimeIdentity.runtimeId,
+    paneId,
+    acceptedAt: audit.acceptedAt,
+    completedAt: audit.completedAt ?? null,
+    evidence: audit.evidence.map((row) => ({
+      kind: row.kind,
+      summary: row.summary,
+      sourceRef: row.sourceRef,
+      observedAt: row.observedAt,
+      byteSize: row.byteSize,
+      sha256: row.sha256,
+    })),
+    transitions: audit.events.map((row) => ({
+      status: row.type,
+      occurredAt: row.occurredAt,
+      sourceRef: row.sourceRef,
+    })),
+    unsupported: audit.unsupported.map((row) => ({
+      adapterId: row.adapterId as string,
+      capability: row.capability as string,
+      targetRef: row.targetRef as string,
+      reason: row.reason as string,
+    })),
   };
 }
 

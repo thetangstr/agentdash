@@ -165,6 +165,7 @@ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
 const ISSUE_COMMENT_PAGE_SIZE = 50;
+const EXECOS_VOICE_AUDIT_COMMENT_LIMIT = 100;
 const ISSUE_COMMENT_AUTOLOAD_LIMIT = ISSUE_COMMENT_PAGE_SIZE * 3;
 const JUMP_TO_LATEST_MAX_COMMENT_PAGES = 10;
 const TREE_CONTROL_MODE_LABEL: Record<IssueTreeControlMode, string> = {
@@ -1070,8 +1071,8 @@ function IssueDetailActivityTab({
     enabled: !!execOsRunId,
   });
   const { data: execOsComments } = useQuery({
-    queryKey: queryKeys.issues.comments(issueId),
-    queryFn: () => issuesApi.listComments(issueId),
+    queryKey: queryKeys.issues.voiceAuditComments(issueId),
+    queryFn: () => issuesApi.listComments(issueId, { order: "desc", limit: EXECOS_VOICE_AUDIT_COMMENT_LIMIT }),
     enabled: originKind === "execos_request",
     placeholderData: keepPreviousDataForSameQueryTail<IssueComment[]>(issueId),
   });
@@ -1169,7 +1170,12 @@ function IssueDetailActivityTab({
           executionAuditResultJson: execOsAuditSource.resultJson,
           issue: { id: issueId, ref: issueRef ?? issueId },
           run: { id: execOsAuditSource.runId },
-          comments: (execOsComments ?? []).map((comment) => ({ id: comment.id, body: comment.body })),
+          comments: (execOsComments ?? []).map((comment) => ({
+            id: comment.id,
+            body: comment.body,
+            authorAgentId: comment.authorAgentId,
+            createdByRunId: comment.createdByRunId ?? null,
+          })),
         })
       : null
   ), [execOsAuditSource, execOsComments, issueId, issueRef]);

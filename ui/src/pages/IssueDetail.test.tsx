@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Agent, Issue, IssueTreeControlPreview, IssueTreeHold } from "@paperclipai/shared";
+import type { Agent, Issue, IssueComment, IssueTreeControlPreview, IssueTreeHold } from "@paperclipai/shared";
 import { act, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -195,6 +195,7 @@ vi.mock("../components/InlineEditor", () => ({
 
 vi.mock("../components/IssueChatThread", () => ({
   IssueChatThread: (props: {
+    comments?: IssueComment[];
     onStopRun?: (runId: string) => Promise<void>;
     stopRunLabel?: string;
     stoppingRunLabel?: string;
@@ -602,6 +603,21 @@ function createVoiceAuditComment(input: {
     createdAt: "2026-08-21T15:46:12.000Z",
   };
   return serializeExecOsVoiceTurnAuditComment(audit);
+}
+
+function createIssueComment(overrides: Partial<IssueComment> = {}): IssueComment {
+  return {
+    id: "comment_1",
+    companyId: "company-1",
+    issueId: "issue_1",
+    authorAgentId: "agent-1",
+    authorUserId: null,
+    createdByRunId: "run-execos-1",
+    body: "Normal result comment",
+    createdAt: new Date(execOsAuditTimestamp),
+    updatedAt: new Date(execOsAuditTimestamp),
+    ...overrides,
+  };
 }
 
 function createPauseHold(overrides: Partial<IssueTreeHold> = {}): IssueTreeHold {
@@ -1110,26 +1126,12 @@ describe("IssueDetail", () => {
       executionRunId: null,
     }));
     mockIssuesApi.listComments.mockResolvedValue([
-      {
-        id: "comment_1",
-        companyId: "company-1",
-        issueId: "issue_1",
-        authorAgentId: "agent-1",
-        authorUserId: null,
-        body: "Normal result comment",
-        createdAt: new Date(execOsAuditTimestamp),
-        updatedAt: new Date(execOsAuditTimestamp),
-      },
-      {
+      createIssueComment(),
+      createIssueComment({
         id: "voice_comment_1",
-        companyId: "company-1",
-        issueId: "issue_1",
-        authorAgentId: null,
-        authorUserId: null,
+        authorAgentId: "agent-1",
         body: createVoiceAuditComment(),
-        createdAt: new Date(execOsAuditTimestamp),
-        updatedAt: new Date(execOsAuditTimestamp),
-      },
+      }),
     ]);
     mockActivityApi.runsForIssue.mockResolvedValue([{
       runId: "run-execos-1",
@@ -1168,6 +1170,139 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Result comment comment_1");
   });
 
+  it("keeps chat comment pagination cached when Activity loads bounded voice-audit comments", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockImplementation(async (_issueId: string, opts?: { order?: "asc" | "desc"; limit?: number }) => {
+      if (opts?.limit === 100) {
+        return [
+          createIssueComment(),
+          createIssueComment({
+            id: "voice_comment_1",
+            authorAgentId: "agent-1",
+            body: createVoiceAuditComment(),
+          }),
+        ];
+      }
+      return [
+        createIssueComment({
+          id: "chat_comment_1",
+          body: "Chat comment survives Activity voice loading",
+        }),
+      ];
+    });
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitForAssertion(() => {
+      expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0].comments).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "chat_comment_1" })]),
+      );
+    });
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await waitForAssertion(() => expect(container.textContent).toContain("Voice Turn Audit"));
+    expect(mockIssuesApi.listComments).toHaveBeenCalledWith("issue_1", { order: "desc", limit: 100 });
+
+    const chatButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Chat");
+    expect(chatButton).toBeTruthy();
+    await act(async () => chatButton!.click());
+
+    await waitForAssertion(() => {
+      expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0].comments).toEqual(
+        expect.arrayContaining([expect.objectContaining({
+          id: "chat_comment_1",
+          body: "Chat comment survives Activity voice loading",
+        })]),
+      );
+    });
+  });
+
+  it("does not render a forged marked voice comment with wrong author or run provenance", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      createIssueComment(),
+      createIssueComment({
+        id: "voice_comment_1",
+        authorAgentId: "agent-other",
+        body: createVoiceAuditComment(),
+      }),
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await flushReact();
+
+    expect(container.textContent).toContain("ExecOS Audit");
+    expect(container.textContent).not.toContain("Voice Turn Audit");
+  });
+
   it("does not render a voice turn audit card when the sidecar self-references as the result comment", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue({
       id: "issue_1",
@@ -1179,16 +1314,11 @@ describe("IssueDetail", () => {
       executionRunId: null,
     }));
     mockIssuesApi.listComments.mockResolvedValue([
-      {
+      createIssueComment({
         id: "voice_comment_1",
-        companyId: "company-1",
-        issueId: "issue_1",
-        authorAgentId: null,
-        authorUserId: null,
+        authorAgentId: "agent-1",
         body: createVoiceAuditComment({ commentId: "voice_comment_1" }),
-        createdAt: new Date(execOsAuditTimestamp),
-        updatedAt: new Date(execOsAuditTimestamp),
-      },
+      }),
     ]);
     mockActivityApi.runsForIssue.mockResolvedValue([{
       runId: "run-execos-1",
