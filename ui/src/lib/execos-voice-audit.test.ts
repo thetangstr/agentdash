@@ -12,6 +12,33 @@ const hashA = "a".repeat(64);
 const hashB = "b".repeat(64);
 const hashC = "c".repeat(64);
 
+const unsupported = [
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "execution",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes is observed through AgentDash evidence only; ExecOS does not execute work inside Hermes.",
+  },
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "direct_session_control",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes direct-session control is outside the controlled execos-0 adapter surface.",
+  },
+  {
+    adapterId: "execos-0",
+    track: "local_claude",
+    capability: "observed_pane_control",
+    targetRef: "%0",
+    status: "unsupported",
+    reason: "Pane %0 is observed for evidence only; the controlled local adapter must not drive that pane.",
+  },
+];
+
 function resultJson() {
   return {
     audit: {
@@ -53,7 +80,7 @@ function resultJson() {
           runId: "ad_run_1",
           track: "agentdash",
           adapterId: "execos_local",
-          type: "completed",
+          type: "accepted",
           occurredAt: timestamp,
           sourceRef: "paperclip://issues/issue_1/runs/ad_run_1",
           payload: {},
@@ -79,7 +106,7 @@ function resultJson() {
           adapterId: "execos_local",
           kind: "issue_comment",
           summary: "AgentDash result comment.",
-          sourceRef: "paperclip://issues/issue_1/comments/comment_1",
+          sourceRef: "paperclip://issues/issue_1/runs/ad_run_1",
           observedAt: timestamp,
           method: "reported",
           byteSize: 7,
@@ -108,7 +135,7 @@ function resultJson() {
       acceptedAt: timestamp,
       completedAt: timestamp,
       directAnswer: "commit abc123; tree clean",
-      unsupported: [],
+      unsupported,
     },
   };
 }
@@ -151,7 +178,7 @@ describe("projectExecOsVoiceTurnAudit", () => {
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
       comments: [
-        { id: "regular_comment", body: "Normal user-visible comment" },
+        { id: "comment_1", body: "Normal result comment" },
         { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
       ],
     });
@@ -210,14 +237,20 @@ describe("projectExecOsVoiceTurnAudit", () => {
       executionAuditResultJson: result,
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
-      comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ requestId: "req_other" })) }],
+      comments: [
+        { id: "comment_1", body: "Normal result comment" },
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ requestId: "req_other" })) },
+      ],
     })).toBeNull();
 
     expect(projectExecOsVoiceTurnAudit({
       executionAuditResultJson: result,
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
-      comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
+      comments: [
+        { id: "comment_1", body: "Normal result comment" },
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+      ],
     })?.session.id).toBe("vs_12345678");
     expect(executionAudit?.requestId).toBe("req_1");
     expect(projectExecOsVoiceTurnAudit({
@@ -236,7 +269,10 @@ describe("projectExecOsVoiceTurnAudit", () => {
       executionAuditResultJson: result,
       issue: { id: "issue_1", ref: "AGE-1" },
       run: { id: "ad_run_1" },
-      comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
+      comments: [
+        { id: "comment_1", body: "Normal result comment" },
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+      ],
     })).toBeNull();
   });
 
@@ -251,8 +287,67 @@ describe("projectExecOsVoiceTurnAudit", () => {
         executionAuditResultJson: resultJson(),
         issue: { id: "issue_1", ref: "AGE-1" },
         run: { id: "ad_run_1" },
-        comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(audit) }],
+        comments: [
+          { id: "comment_1", body: "Normal result comment" },
+          { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(audit) },
+        ],
       })).toBeNull();
     }
+  });
+
+  it("rejects loose unsupported entries, invalid enums, and invalid terminal answer invariants", () => {
+    for (const mutate of [
+      (result: ReturnType<typeof resultJson>) => { result.audit.unsupported = [{ adapterId: "hermes", status: "unsupported" }] as typeof result.audit.unsupported; },
+      (result: ReturnType<typeof resultJson>) => { result.audit.request.classification = "routine-ish"; },
+      (result: ReturnType<typeof resultJson>) => { result.audit.events[0]!.type = "done"; },
+      (result: ReturnType<typeof resultJson>) => { result.audit.evidence[0]!.method = "guessed"; },
+      (result: ReturnType<typeof resultJson>) => { Reflect.deleteProperty(result.audit, "directAnswer"); },
+      (result: ReturnType<typeof resultJson>) => { Object.assign(result.audit, { cannotAnswer: { reason: "conflict", at: timestamp } }); },
+      (result: ReturnType<typeof resultJson>) => {
+        result.audit.terminalStatus = "cannot_answer";
+        Reflect.deleteProperty(result.audit, "directAnswer");
+      },
+      (result: ReturnType<typeof resultJson>) => {
+        result.audit.terminalStatus = "failed";
+        result.audit.directAnswer = "must not answer";
+      },
+    ]) {
+      const result = resultJson();
+      mutate(result);
+      expect(projectExecOsVoiceTurnAudit({
+        executionAuditResultJson: result,
+        issue: { id: "issue_1", ref: "AGE-1" },
+        run: { id: "ad_run_1" },
+        comments: [
+          { id: "comment_1", body: "Normal result comment" },
+          { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+        ],
+      })).toBeNull();
+    }
+  });
+
+  it("uses exact sourceRef and result-comment matching, not substring collisions", () => {
+    const issueCollision = resultJson();
+    issueCollision.audit.events[0]!.sourceRef = "paperclip://issues/issue_10/runs/ad_run_1";
+    issueCollision.audit.evidence[0]!.sourceRef = "paperclip://issues/issue_10/runs/ad_run_1";
+    expect(projectExecOsVoiceTurnAudit({
+      executionAuditResultJson: issueCollision,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
+      comments: [
+        { id: "comment_1", body: "Normal result comment" },
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+      ],
+    })).toBeNull();
+
+    expect(projectExecOsVoiceTurnAudit({
+      executionAuditResultJson: resultJson(),
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
+      comments: [
+        { id: "comment_10", body: "Normal result comment" },
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
+      ],
+    })).toBeNull();
   });
 });

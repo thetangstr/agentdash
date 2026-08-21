@@ -6,6 +6,7 @@ import { act, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueDetail } from "./IssueDetail";
+import { serializeExecOsVoiceTurnAuditComment, type ExecOsVoiceTurnAuditComment } from "../lib/execos-voice-audit";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -423,6 +424,184 @@ function createAgent(overrides: Partial<Agent> = {}): Agent {
     updatedAt: new Date("2026-04-21T00:00:00.000Z"),
     ...overrides,
   };
+}
+
+const execOsAuditTimestamp = "2026-08-21T15:46:09.000Z";
+const execOsHashA = "a".repeat(64);
+const execOsHashB = "b".repeat(64);
+const execOsHashC = "c".repeat(64);
+
+const execOsUnsupported = [
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "execution",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes is observed through AgentDash evidence only; ExecOS does not execute work inside Hermes.",
+  },
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "direct_session_control",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes direct-session control is outside the controlled execos-0 adapter surface.",
+  },
+  {
+    adapterId: "execos-0",
+    track: "local_claude",
+    capability: "observed_pane_control",
+    targetRef: "%0",
+    status: "unsupported",
+    reason: "Pane %0 is observed for evidence only; the controlled local adapter must not drive that pane.",
+  },
+];
+
+function createValidExecOsResultJson(input: {
+  requestId?: string;
+  correlationId?: string;
+  issueId?: string;
+  runId?: string;
+}) {
+  const requestId = input.requestId ?? "req_1";
+  const correlationId = input.correlationId ?? "corr_1";
+  const issueId = input.issueId ?? "issue_1";
+  const runId = input.runId ?? "run-execos-1";
+  return {
+    audit: {
+      request: {
+        id: requestId,
+        correlationId,
+        project: "kiddoquest",
+        question: "What is the current repository state?",
+        expectedOutput: "direct_answer_with_evidence",
+        classification: "routine_read_only",
+        scope: { readOnly: true, paths: ["leads/kiddoquest"], repos: ["agent_bus"] },
+        requestedBy: { actorType: "ceo", actorId: "ceo_1" },
+        createdAt: execOsAuditTimestamp,
+      },
+      runs: [
+        {
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          runtimeId: "agentdash-runtime:1",
+          actor: { actorType: "agentdash_agent", actorId: "agent-1" },
+          startedAt: execOsAuditTimestamp,
+          completedAt: execOsAuditTimestamp,
+        },
+        {
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          runtimeId: "$0:@2:%2",
+          actor: { actorType: "execos", actorId: "execos-0" },
+          startedAt: execOsAuditTimestamp,
+          completedAt: execOsAuditTimestamp,
+        },
+      ],
+      events: [
+        {
+          id: "evt_1",
+          requestId,
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          type: "accepted",
+          occurredAt: execOsAuditTimestamp,
+          sourceRef: `paperclip://issues/${issueId}/runs/${runId}`,
+          payload: {},
+        },
+        {
+          id: "evt_2",
+          requestId,
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          type: "completed",
+          occurredAt: execOsAuditTimestamp,
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          payload: {},
+        },
+      ],
+      evidence: [
+        {
+          id: "ev_1",
+          requestId,
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          kind: "issue_comment",
+          summary: "AgentDash result comment.",
+          sourceRef: `paperclip://issues/${issueId}/runs/${runId}`,
+          observedAt: execOsAuditTimestamp,
+          method: "reported",
+          byteSize: 7,
+          sha256: execOsHashA,
+          truncated: false,
+        },
+        {
+          id: "ev_2",
+          requestId,
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          kind: "claude_stdout",
+          summary: "Local stdout.",
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          observedAt: execOsAuditTimestamp,
+          method: "derived",
+          byteSize: 20,
+          sha256: execOsHashB,
+          truncated: false,
+        },
+      ],
+      actorIdentity: { actorType: "execos", actorId: "execos-0" },
+      runtimeIdentity: { track: "local_claude", adapterId: "execos-0", runtimeId: "$0:@2:%2" },
+      terminalStatus: "completed",
+      acceptedAt: execOsAuditTimestamp,
+      completedAt: execOsAuditTimestamp,
+      directAnswer: "commit abc123; tree clean",
+      unsupported: execOsUnsupported,
+    },
+  };
+}
+
+function createVoiceAuditComment(input: {
+  requestId?: string;
+  correlationId?: string;
+  issueId?: string;
+  issueRef?: string;
+  runId?: string;
+  commentId?: string;
+} = {}) {
+  const audit: ExecOsVoiceTurnAuditComment = {
+    version: "execos.voice.turn.v1",
+    voiceSessionId: "vs_12345678",
+    voiceTurnId: "vt_12345678",
+    deviceId: "android_pixel_1",
+    participantId: "ceo_livekit_participant",
+    workerId: "execos_voice_worker",
+    requestId: input.requestId ?? "req_1",
+    correlationId: input.correlationId ?? "corr_1",
+    issueId: input.issueId ?? "issue_1",
+    issueRef: input.issueRef ?? "AGE-1",
+    runId: input.runId ?? "run-execos-1",
+    commentId: input.commentId ?? "comment_1",
+    tool: "ask_project_lead",
+    toolArgumentsSha256: execOsHashC,
+    userTranscript: { excerpt: "What changed?", sha256: execOsHashA, byteSize: 13 },
+    spokenResponse: { excerpt: "Shipped.", sha256: execOsHashB, byteSize: 8 },
+    events: [
+      { type: "connected", occurredAt: execOsAuditTimestamp },
+      { type: "transcript_final", occurredAt: "2026-08-21T15:46:10.000Z" },
+      { type: "tool_finished", occurredAt: "2026-08-21T15:46:11.000Z" },
+    ],
+    terminalStatus: "completed",
+    createdAt: "2026-08-21T15:46:12.000Z",
+  };
+  return serializeExecOsVoiceTurnAuditComment(audit);
 }
 
 function createPauseHold(overrides: Partial<IssueTreeHold> = {}): IssueTreeHold {
@@ -918,6 +1097,75 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("$0:@5:%5");
     expect(container.textContent).toContain("%5");
     expect(container.textContent).not.toContain("An attributable runtime result has not arrived yet");
+  });
+
+  it("renders a voice turn audit card for a valid marked comment bound to internal issue id and human ref", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      {
+        id: "comment_1",
+        companyId: "company-1",
+        issueId: "issue_1",
+        authorAgentId: "agent-1",
+        authorUserId: null,
+        body: "Normal result comment",
+        createdAt: new Date(execOsAuditTimestamp),
+        updatedAt: new Date(execOsAuditTimestamp),
+      },
+      {
+        id: "voice_comment_1",
+        companyId: "company-1",
+        issueId: "issue_1",
+        authorAgentId: null,
+        authorUserId: null,
+        body: createVoiceAuditComment(),
+        createdAt: new Date(execOsAuditTimestamp),
+        updatedAt: new Date(execOsAuditTimestamp),
+      },
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+
+    await waitForAssertion(() => expect(container.textContent).toContain("Voice Turn Audit"));
+    expect(container.textContent).toContain("vs_12345678");
+    expect(container.textContent).toContain("vt_12345678");
+    expect(container.textContent).toContain("raw-audio-not-stored");
+    expect(container.textContent).toContain("Result comment comment_1");
   });
 
   it("passes blocker attention to the issue detail header status icon", async () => {

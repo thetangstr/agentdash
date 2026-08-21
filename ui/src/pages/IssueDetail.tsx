@@ -3873,6 +3873,7 @@ export function IssueDetail() {
           {detailTab === "activity" ? (
             <IssueDetailActivityTab
               issueId={issue.id}
+              issueRef={issue.identifier ?? issue.id}
               companyId={issue.companyId}
               originKind={issue.originKind ?? null}
               issueStatus={issue.status}
