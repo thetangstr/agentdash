@@ -1022,6 +1022,7 @@ function ExecOsVoiceTurnAuditCard({ audit }: { audit: ExecOsVoiceTurnAuditView }
 
 type IssueDetailActivityTabProps = {
   issueId: string;
+  issueRef?: string | null;
   companyId: string;
   originKind: string | null;
   issueStatus: Issue["status"];
@@ -1037,6 +1038,7 @@ type IssueDetailActivityTabProps = {
 
 function IssueDetailActivityTab({
   issueId,
+  issueRef,
   companyId,
   originKind,
   issueStatus,
@@ -1149,23 +1151,28 @@ function IssueDetailActivityTab({
       || issueTreeCostSummary.issueCount > 1);
   const shouldShowCostSummary =
     (linkedRuns && linkedRuns.length > 0) || hasIssueTreeCost;
-  const execOsAudit = useMemo(() => {
-    if (originKind !== "execos_request") return null;
+  const execOsAuditSource = useMemo(() => {
+    if (originKind !== "execos_request") return { audit: null, resultJson: null as unknown, runId: null as string | null };
     const fullRunAudit = projectExecOsAudit(execOsRun?.resultJson);
-    if (fullRunAudit) return fullRunAudit;
+    if (fullRunAudit && execOsRunId) return { audit: fullRunAudit, resultJson: execOsRun?.resultJson, runId: execOsRunId };
     const runs = linkedRuns ?? [];
     for (let index = runs.length - 1; index >= 0; index -= 1) {
       const audit = projectExecOsAudit(runs[index]?.resultJson);
-      if (audit) return audit;
+      if (audit) return { audit, resultJson: runs[index]?.resultJson, runId: runs[index]?.runId ?? null };
     }
-    return null;
-  }, [execOsRun?.resultJson, linkedRuns, originKind]);
+    return { audit: null, resultJson: null as unknown, runId: null as string | null };
+  }, [execOsRun?.resultJson, execOsRunId, linkedRuns, originKind]);
+  const execOsAudit = execOsAuditSource.audit;
   const execOsVoiceAudit = useMemo(() => (
-    projectExecOsVoiceTurnAudit({
-      executionAudit: execOsAudit,
-      comments: (execOsComments ?? []).map((comment) => ({ id: comment.id, body: comment.body })),
-    })
-  ), [execOsAudit, execOsComments]);
+    execOsAuditSource.runId
+      ? projectExecOsVoiceTurnAudit({
+          executionAuditResultJson: execOsAuditSource.resultJson,
+          issue: { id: issueId, ref: issueRef ?? issueId },
+          run: { id: execOsAuditSource.runId },
+          comments: (execOsComments ?? []).map((comment) => ({ id: comment.id, body: comment.body })),
+        })
+      : null
+  ), [execOsAuditSource, execOsComments, issueId, issueRef]);
 
   if (initialLoading) {
     return <IssueSectionSkeleton titleWidth="w-20" rows={4} />;

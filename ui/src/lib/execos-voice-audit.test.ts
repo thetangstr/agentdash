@@ -26,7 +26,26 @@ function resultJson() {
         requestedBy: { actorType: "ceo", actorId: "ceo_1" },
         createdAt: timestamp,
       },
-      runs: [],
+      runs: [
+        {
+          runId: "ad_run_1",
+          track: "agentdash",
+          adapterId: "execos_local",
+          runtimeId: "agentdash-runtime:1",
+          actor: { actorType: "agentdash_agent", actorId: "agent_1" },
+          startedAt: timestamp,
+          completedAt: timestamp,
+        },
+        {
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          runtimeId: "$0:@2:%2",
+          actor: { actorType: "execos", actorId: "execos-0" },
+          startedAt: timestamp,
+          completedAt: timestamp,
+        },
+      ],
       events: [
         {
           id: "evt_1",
@@ -39,8 +58,50 @@ function resultJson() {
           sourceRef: "paperclip://issues/issue_1/runs/ad_run_1",
           payload: {},
         },
+        {
+          id: "evt_2",
+          requestId: "req_1",
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          type: "completed",
+          occurredAt: timestamp,
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          payload: {},
+        },
       ],
-      evidence: [],
+      evidence: [
+        {
+          id: "ev_1",
+          requestId: "req_1",
+          runId: "ad_run_1",
+          track: "agentdash",
+          adapterId: "execos_local",
+          kind: "issue_comment",
+          summary: "AgentDash result comment.",
+          sourceRef: "paperclip://issues/issue_1/comments/comment_1",
+          observedAt: timestamp,
+          method: "reported",
+          byteSize: 7,
+          sha256: hashA,
+          truncated: false,
+        },
+        {
+          id: "ev_2",
+          requestId: "req_1",
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          kind: "claude_stdout",
+          summary: "Local stdout.",
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          observedAt: timestamp,
+          method: "derived",
+          byteSize: 20,
+          sha256: hashB,
+          truncated: false,
+        },
+      ],
       actorIdentity: { actorType: "execos", actorId: "execos-0" },
       runtimeIdentity: { track: "local_claude", adapterId: "execos-0", runtimeId: "$0:@2:%2" },
       terminalStatus: "completed",
@@ -83,9 +144,12 @@ function voiceAudit(overrides: Partial<ExecOsVoiceTurnAuditComment> = {}): ExecO
 
 describe("projectExecOsVoiceTurnAudit", () => {
   it("projects one valid marked voice audit comment when an execution audit separately validates", () => {
-    const executionAudit = projectExecOsAudit(resultJson());
+    const result = resultJson();
+    const executionAudit = projectExecOsAudit(result);
     const view = projectExecOsVoiceTurnAudit({
-      executionAudit,
+      executionAuditResultJson: result,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
       comments: [
         { id: "regular_comment", body: "Normal user-visible comment" },
         { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) },
@@ -121,7 +185,9 @@ describe("projectExecOsVoiceTurnAudit", () => {
 
   it("rejects malformed JSON, unknown fields, unmarked comments, and absent execution audit", () => {
     expect(projectExecOsVoiceTurnAudit({
-      executionAudit: projectExecOsAudit(resultJson()),
+      executionAuditResultJson: resultJson(),
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
       comments: [
         { id: "bad_json", body: `${EXECOS_VOICE_TURN_AUDIT_MARKER}\n{not json}` },
         { id: "unmarked", body: JSON.stringify(voiceAudit()) },
@@ -129,27 +195,64 @@ describe("projectExecOsVoiceTurnAudit", () => {
       ],
     })).toBeNull();
     expect(projectExecOsVoiceTurnAudit({
-      executionAudit: null,
+      executionAuditResultJson: null,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
       comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
     })).toBeNull();
   });
 
   it("rejects correlation mismatches and never sources voice fields from resultJson.audit", () => {
     const result = resultJson();
-    Object.assign(result.audit, {
-      voiceSessionId: "vs_from_result_json",
-      voiceTurnId: "vt_from_result_json",
-    });
     const executionAudit = projectExecOsAudit(result);
 
     expect(projectExecOsVoiceTurnAudit({
-      executionAudit,
+      executionAuditResultJson: result,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
       comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ requestId: "req_other" })) }],
     })).toBeNull();
 
     expect(projectExecOsVoiceTurnAudit({
-      executionAudit,
+      executionAuditResultJson: result,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
       comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
     })?.session.id).toBe("vs_12345678");
+    expect(executionAudit?.requestId).toBe("req_1");
+    expect(projectExecOsVoiceTurnAudit({
+      executionAuditResultJson: result,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
+      comments: [],
+    })).toBeNull();
+  });
+
+  it("rejects missing required ExecutionAuditV1 fields before accepting a voice card", () => {
+    const result = resultJson();
+    Reflect.deleteProperty(result.audit.request, "expectedOutput");
+
+    expect(projectExecOsVoiceTurnAudit({
+      executionAuditResultJson: result,
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
+      comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit()) }],
+    })).toBeNull();
+  });
+
+  it("treats right-request voice comments with wrong issue, run, or result comment as ordinary comments", () => {
+    for (const audit of [
+      voiceAudit({ issueId: "issue_other" }),
+      voiceAudit({ issueRef: "AGE-OTHER" }),
+      voiceAudit({ runId: "run_other" }),
+      voiceAudit({ commentId: "comment_other" }),
+    ]) {
+      expect(projectExecOsVoiceTurnAudit({
+        executionAuditResultJson: resultJson(),
+        issue: { id: "issue_1", ref: "AGE-1" },
+        run: { id: "ad_run_1" },
+        comments: [{ id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(audit) }],
+      })).toBeNull();
+    }
   });
 });
