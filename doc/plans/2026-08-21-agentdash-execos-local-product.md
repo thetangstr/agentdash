@@ -10,6 +10,20 @@
 
 ---
 
+## Completion record — 2026-08-21
+
+- [x] Tasks 1–6 landed as narrow Lore commits in the isolated AgentDash and ExecOS worktrees, with contract, transport, readback, shared-tool, UI-audit, lifecycle, and preflight regression coverage.
+- [x] The gated real acceptance ran against a disposable localhost-only AgentDash instance and dedicated `execos_local` agent.
+- [x] Stable request `req_kiddoquest_repo_state` produced exactly one `KID-1` issue, one succeeded heartbeat run, and one attributable agent comment.
+- [x] The real local Claude invocation ran in newly owned `%5/@5`, recorded runtime `$0:@5:%5`, and closed without targeting protected `%0/@0` or existing `%1/@1`.
+- [x] AgentDash API and UI both retrieved and displayed the normalized answer, transitions, evidence, attribution, timestamps, and unsupported capabilities.
+- [x] Idempotent replay returned the original issue/run/comment and created no second execution pane.
+- [ ] Stop and remove the disposable services only after the CEO has inspected them. They remain local-only and intentionally running at handoff.
+
+The checked completion record is the authoritative execution ledger. The task-level checklists below preserve the original criteria-first instructions and expected red/green sequence.
+
+---
+
 ## Boundaries and acceptance
 
 - KiddoQuest is the only project accepted by this slice.
