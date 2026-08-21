@@ -37,6 +37,7 @@ const mockActivityApi = vi.hoisted(() => ({
 const mockHeartbeatsApi = vi.hoisted(() => ({
   liveRunsForIssue: vi.fn(),
   activeRunForIssue: vi.fn(),
+  get: vi.fn(),
   cancel: vi.fn(),
 }));
 
@@ -69,6 +70,7 @@ const mockSetMobileToolbar = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
 const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
+const mockTabsState = vi.hoisted(() => ({ onValueChange: null as ((value: string) => void) | null }));
 
 vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
@@ -320,10 +322,15 @@ vi.mock("@/components/ui/skeleton", () => ({
 }));
 
 vi.mock("@/components/ui/tabs", () => ({
-  Tabs: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Tabs: ({ children, onValueChange }: { children?: ReactNode; onValueChange?: (value: string) => void }) => {
+    mockTabsState.onValueChange = onValueChange ?? null;
+    return <div>{children}</div>;
+  },
   TabsContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   TabsList: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
+  TabsTrigger: ({ children, value }: { children?: ReactNode; value: string }) => (
+    <button type="button" onClick={() => mockTabsState.onValueChange?.(value)}>{children}</button>
+  ),
 }));
 
 vi.mock("@/components/ui/textarea", () => ({
@@ -786,6 +793,7 @@ describe("IssueDetail", () => {
     mockActivityApi.runsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.liveRunsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.activeRunForIssue.mockResolvedValue(null);
+    mockHeartbeatsApi.get.mockResolvedValue(null);
     mockAgentsApi.list.mockResolvedValue([]);
     mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
       companyIds: ["company-1"],
@@ -804,6 +812,7 @@ describe("IssueDetail", () => {
     });
     mockIssuesListRender.mockClear();
     mockIssueChatThreadRender.mockClear();
+    mockTabsState.onValueChange = null;
   });
 
   afterEach(async () => {
@@ -835,6 +844,80 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("loads the full historical ExecOS run after the active execution lock is released", async () => {
+    const timestamp = "2026-08-21T15:46:09.000Z";
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_kiddoquest_repo_state",
+      executionRunId: null,
+    }));
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+      createdAt: timestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: {
+        audit: {
+          request: {
+            id: "req_kiddoquest_repo_state",
+            correlationId: "corr_kiddoquest_repo_state",
+            question: "What is the current repository state?",
+          },
+          actorIdentity: { actorType: "execos", actorId: "execos-0" },
+          runtimeIdentity: { track: "local_claude", adapterId: "execos-0", runtimeId: "$0:@5:%5" },
+          terminalStatus: "completed",
+          acceptedAt: timestamp,
+          completedAt: timestamp,
+          directAnswer: "commit abc123; tree clean",
+          evidence: [{
+            kind: "read_only_command",
+            summary: "git status",
+            sourceRef: "execos://read-only-evidence/1",
+            observedAt: timestamp,
+            byteSize: 20,
+            sha256: "a".repeat(64),
+          }],
+          events: [{ type: "completed", occurredAt: timestamp, sourceRef: "tmux://execos-0/$0/@5/%5/stdout" }],
+          unsupported: [{
+            adapterId: "hermes",
+            capability: "direct_session_control",
+            targetRef: "hermes",
+            reason: "not implemented",
+          }],
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await waitForAssertion(() => expect(container.textContent).toContain("commit abc123; tree clean"));
+
+    expect(mockHeartbeatsApi.get).toHaveBeenCalledWith("run-execos-1");
+    expect(container.textContent).toContain("$0:@5:%5");
+    expect(container.textContent).toContain("%5");
+    expect(container.textContent).not.toContain("An attributable runtime result has not arrived yet");
   });
 
   it("passes blocker attention to the issue detail header status icon", async () => {

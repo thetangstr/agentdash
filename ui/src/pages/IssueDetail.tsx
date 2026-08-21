@@ -1009,6 +1009,14 @@ function IssueDetailActivityTab({
     queryFn: () => activityApi.runsForIssue(issueId),
     placeholderData: keepPreviousDataForSameQueryTail<RunForIssue[]>(issueId),
   });
+  const execOsRunId = originKind === "execos_request"
+    ? linkedRuns?.find((run) => run.adapterType === "execos_local")?.runId ?? null
+    : null;
+  const { data: execOsRun } = useQuery({
+    queryKey: queryKeys.runDetail(execOsRunId ?? "pending-execos-run"),
+    queryFn: () => heartbeatsApi.get(execOsRunId!),
+    enabled: !!execOsRunId,
+  });
   const { data: linkedApprovals } = useQuery({
     queryKey: queryKeys.issues.approvals(issueId),
     queryFn: () => issuesApi.listApprovals(issueId),
@@ -1087,13 +1095,15 @@ function IssueDetailActivityTab({
     (linkedRuns && linkedRuns.length > 0) || hasIssueTreeCost;
   const execOsAudit = useMemo(() => {
     if (originKind !== "execos_request") return null;
+    const fullRunAudit = projectExecOsAudit(execOsRun?.resultJson);
+    if (fullRunAudit) return fullRunAudit;
     const runs = linkedRuns ?? [];
     for (let index = runs.length - 1; index >= 0; index -= 1) {
       const audit = projectExecOsAudit(runs[index]?.resultJson);
       if (audit) return audit;
     }
     return null;
-  }, [linkedRuns, originKind]);
+  }, [execOsRun?.resultJson, linkedRuns, originKind]);
 
   if (initialLoading) {
     return <IssueSectionSkeleton titleWidth="w-20" rows={4} />;
