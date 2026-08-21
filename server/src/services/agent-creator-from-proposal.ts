@@ -83,6 +83,14 @@ ${p.oneLineOkr}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 
+<!-- AgentDash: execos-request-origin — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## ExecOS request records
+
+An issue created through \`POST /api/companies/:companyId/issues\` may carry \`originKind: "execos_request"\` and a non-empty \`originId\`. Together they are the durable idempotency key for one normalized ExecOS request; do not change or reuse them for another request.
+
+This origin records work identity only. It grants no capability and does not authorize a non-read-only action. The external \`execos_local\` adapter owns transport to a separately controlled local runner; AgentDash remains authoritative for issue, run, comment, and audit state. If the normalized request is absent or outside its declared read-only scope, return an explicit blocked or cannot-answer result instead of inferring permission.
+<!-- /AgentDash: execos-request-origin -->
+
 <!-- AgentDash: goals-eval-hitl — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Definition of Done & verdict workflow
 
