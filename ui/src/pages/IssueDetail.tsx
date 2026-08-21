@@ -60,6 +60,7 @@ import {
 } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
 import { projectExecOsAudit, type ExecOsAuditView } from "../lib/execos-audit";
+import { projectExecOsVoiceTurnAudit, type ExecOsVoiceTurnAuditView } from "../lib/execos-voice-audit";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
@@ -970,6 +971,55 @@ function ExecOsAuditCard({ audit }: { audit: ExecOsAuditView | null }) {
   );
 }
 
+function ExecOsVoiceTurnAuditCard({ audit }: { audit: ExecOsVoiceTurnAuditView }) {
+  return (
+    <section className="mb-3 rounded-lg border border-border bg-card px-3 py-3" aria-label="ExecOS Voice Turn Audit">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-foreground">Voice Turn Audit</h3>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+          {audit.turn.status}
+        </span>
+      </div>
+      <div className="mt-3 space-y-3 text-xs">
+        <dl className="grid gap-x-4 gap-y-1 text-muted-foreground sm:grid-cols-2">
+          <div><dt className="inline">Session </dt><dd className="inline font-mono text-foreground">{audit.session.id}</dd></div>
+          <div><dt className="inline">Turn </dt><dd className="inline font-mono text-foreground">{audit.turn.id}</dd></div>
+          <div><dt className="inline">Participant </dt><dd className="inline font-mono text-foreground">{audit.participant.pseudonym}</dd></div>
+          <div><dt className="inline">Worker </dt><dd className="inline font-mono text-foreground">{audit.worker.pseudonym}</dd></div>
+          <div><dt className="inline">Tool </dt><dd className="inline font-mono text-foreground">{audit.tool.name}</dd></div>
+          <div><dt className="inline">Run </dt><dd className="inline font-mono text-foreground">{audit.refs.runId}</dd></div>
+          <div><dt className="inline">Result comment </dt><dd className="inline font-mono text-foreground">{audit.refs.resultCommentId}</dd></div>
+          <div><dt className="inline">Audio </dt><dd className="inline text-foreground">{audit.rawAudioBoundary}</dd></div>
+        </dl>
+        <div>
+          <div className="text-muted-foreground">Transcript excerpt</div>
+          <div className="mt-0.5 whitespace-pre-wrap text-foreground">{audit.transcript.excerpt}</div>
+          <div className="mt-1 break-all font-mono text-muted-foreground">
+            sha256 {audit.transcript.sha256} · {audit.transcript.byteSize} bytes
+          </div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Spoken response excerpt</div>
+          <div className="mt-0.5 whitespace-pre-wrap text-foreground">{audit.response.excerpt}</div>
+          <div className="mt-1 break-all font-mono text-muted-foreground">
+            sha256 {audit.response.sha256} · {audit.response.byteSize} bytes
+          </div>
+        </div>
+        <div>
+          <div className="font-medium text-muted-foreground">Voice timeline</div>
+          <ul className="mt-1 space-y-1">
+            {audit.timeline.map((event, index) => (
+              <li key={`${event.type}:${event.occurredAt}:${index}`} className="text-foreground">
+                <span className="font-medium">{event.type}</span>{" · "}{event.occurredAt}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 type IssueDetailActivityTabProps = {
   issueId: string;
   companyId: string;
@@ -1016,6 +1066,12 @@ function IssueDetailActivityTab({
     queryKey: queryKeys.runDetail(execOsRunId ?? "pending-execos-run"),
     queryFn: () => heartbeatsApi.get(execOsRunId!),
     enabled: !!execOsRunId,
+  });
+  const { data: execOsComments } = useQuery({
+    queryKey: queryKeys.issues.comments(issueId),
+    queryFn: () => issuesApi.listComments(issueId),
+    enabled: originKind === "execos_request",
+    placeholderData: keepPreviousDataForSameQueryTail<IssueComment[]>(issueId),
   });
   const { data: linkedApprovals } = useQuery({
     queryKey: queryKeys.issues.approvals(issueId),
@@ -1104,6 +1160,12 @@ function IssueDetailActivityTab({
     }
     return null;
   }, [execOsRun?.resultJson, linkedRuns, originKind]);
+  const execOsVoiceAudit = useMemo(() => (
+    projectExecOsVoiceTurnAudit({
+      executionAudit: execOsAudit,
+      comments: (execOsComments ?? []).map((comment) => ({ id: comment.id, body: comment.body })),
+    })
+  ), [execOsAudit, execOsComments]);
 
   if (initialLoading) {
     return <IssueSectionSkeleton titleWidth="w-20" rows={4} />;
@@ -1112,7 +1174,10 @@ function IssueDetailActivityTab({
   return (
     <>
       {originKind === "execos_request" ? (
-        <ExecOsAuditCard audit={execOsAudit} />
+        <>
+          <ExecOsAuditCard audit={execOsAudit} />
+          {execOsVoiceAudit ? <ExecOsVoiceTurnAuditCard audit={execOsVoiceAudit} /> : null}
+        </>
       ) : null}
       {shouldShowCostSummary && (
         <div className="mb-3 px-3 py-2 rounded-lg border border-border">
