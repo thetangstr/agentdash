@@ -46,9 +46,11 @@ ExecOS may read and interpret those records, but AgentDash remains authoritative
 
 The offline acceptance proof uses real in-process HTTP boundaries and the production client/adapter/runner code, with injected fake AgentDash persistence and fake tmux/Claude process boundaries. It proves consistent serialization, dispatch, attribution, lifecycle, evidence, and one-record idempotency without starting Claude, changing tmux, or writing to an AgentDash instance.
 
-That green offline proof is **not** a visible AgentDash record. During the completion audit on 2026-08-20, no AgentDash process was reachable at `127.0.0.1:3100` or `127.0.0.1:3101`, so no existing live KiddoQuest issue/comment/run could be verified read-only. No local AgentDash data was created or modified during that audit.
+On 2026-08-21, the AgentDash-visible record gate was separately proven against a disposable local instance bound only to `127.0.0.1:3199`, with a fresh embedded PostgreSQL database under an isolated `PAPERCLIP_HOME`. Telemetry and the heartbeat scheduler were disabled, no credentials were present, no adapter plugin loaded, and the issue had no assignee. The real API created KiddoQuest issue `KID-1` (`185b6667-7afb-437c-9533-0ad8052916ca`) with `originKind=execos_request` and `originId=req_kiddoquest_repo_state`. Reading the stored description back through the API and parsing it with the ExecOS contract parser reproduced the exact normalized request, including correlation ID, CEO actor, read-only scope, fixed question, and timestamp.
 
-The residual live gate is explicit: a reachable local AgentDash instance, its local authentication/configuration, installation of the external adapter, a dedicated assigned agent, a newly owned runner pane, and the existing local Claude login are all required. Those steps write local AgentDash configuration/data and start real tmux/Claude processes, so they must be run only when that live acceptance is authorized and the prerequisites pass read-only discovery.
+The same proof retrieved exactly one origin match, one explicit local-board audit comment (`87c0d6e9-9234-4731-8c1f-454471f8c41d`), and the `issue.created` plus `issue.comment_added` activity rows. A second create returned `409 EXECOS_REQUEST_ALREADY_RECORDED`. The issue had `assigneeAgentId=null`, `executionRunId=null`, and zero run rows, which is the intended evidence that runtime dispatch stayed disabled. The checkout had no built UI artifact (`ui/dist/index.html`), so the server reported API-only mode and UI visibility was not claimed. After retrieval, the server and embedded database were stopped, both loopback listeners were verified closed, and the disposable instance directory was moved to Trash.
+
+This proves a real AgentDash API-visible system-of-record entry and audit retrieval; it does **not** prove the full execution result path. The remaining live execution gate is explicit: installation of the external adapter, a dedicated assigned agent, a newly owned runner pane, the existing local Claude login, a real heartbeat run, and an agent-authored direct answer or explicit cannot-answer comment with tmux/evidence attribution. Those steps start real tmux/Claude processes and remain separately gated.
 
 ## Explicitly unsupported
 
@@ -59,3 +61,4 @@ The residual live gate is explicit: a reachable local AgentDash instance, its lo
 - A generic shell or tmux-control API.
 - Non-KiddoQuest live acceptance data.
 - Claims of a visible AgentDash result based only on the offline in-process proof.
+- Claims that the disposable API-only record proves a Claude/tmux execution, heartbeat run, or agent-authored answer.
