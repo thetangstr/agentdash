@@ -44,6 +44,14 @@ describe("issue validators", () => {
       originId: "",
     }).success).toBe(false);
     expect(createIssueSchema.safeParse({
+      title: "Missing ExecOS request identity",
+      originKind: "execos_request",
+    }).success).toBe(false);
+    expect(createIssueSchema.safeParse({
+      title: "Orphaned external identity",
+      originId: "req_kiddoquest_repo_state",
+    }).success).toBe(false);
+    expect(createIssueSchema.safeParse({
       title: "Forged internal origin",
       originKind: "routine_execution",
       originId: "routine-1",
