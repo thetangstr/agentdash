@@ -124,6 +124,7 @@ import {
 import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-guard.js";
 import { recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
+import { resolveExecOsRequestIssueStatus } from "./execos-request-lifecycle.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { redactEventPayload } from "../redaction.js";
@@ -6368,6 +6369,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       if (!issue) return null;
       if (issue.executionRunId && issue.executionRunId !== run.id) return null;
+
+      const execOsTerminalStatus = resolveExecOsRequestIssueStatus({ issue, run });
+      if (execOsTerminalStatus) {
+        const updatedIssue = await issuesSvc.update(
+          issue.id,
+          { status: execOsTerminalStatus, actorAgentId: run.agentId },
+          tx,
+        );
+        if (updatedIssue) issue = updatedIssue;
+      }
 
       if (issue.executionRunId === run.id) {
         await tx

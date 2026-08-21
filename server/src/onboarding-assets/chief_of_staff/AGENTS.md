@@ -488,4 +488,6 @@ No real cycle has run anywhere in this system. Every recommendation it can curre
 An issue created through `POST /api/companies/:companyId/issues` may carry `originKind: "execos_request"` and a non-empty `originId`. Together they are the durable idempotency key for one normalized ExecOS request; do not change or reuse them for another request.
 
 This origin records work identity only. It grants no capability and does not authorize a non-read-only action. The external `execos_local` adapter owns transport to a separately controlled local runner; AgentDash remains authoritative for issue, run, comment, and audit state. If the normalized request is absent or outside its declared read-only scope, return an explicit blocked or cannot-answer result instead of inferring permission.
+
+When a successful run returns a request-bound `completed` or `cannot_answer` audit, AgentDash closes the `execos_request` issue. Do not retry that terminal request; a follow-up question requires a new `originId`.
 <!-- /AgentDash: execos-request-origin -->
