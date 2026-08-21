@@ -350,4 +350,15 @@ describe("projectExecOsVoiceTurnAudit", () => {
       ],
     })).toBeNull();
   });
+
+  it("rejects a voice sidecar that self-references as the result comment", () => {
+    expect(projectExecOsVoiceTurnAudit({
+      executionAuditResultJson: resultJson(),
+      issue: { id: "issue_1", ref: "AGE-1" },
+      run: { id: "ad_run_1" },
+      comments: [
+        { id: "voice_comment_1", body: serializeExecOsVoiceTurnAuditComment(voiceAudit({ commentId: "voice_comment_1" })) },
+      ],
+    })).toBeNull();
+  });
 });

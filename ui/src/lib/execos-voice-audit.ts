@@ -152,7 +152,7 @@ export function projectExecOsVoiceTurnAudit(input: {
   for (const comment of input.comments) {
     const audit = parseVoiceAuditComment(comment.body);
     if (!audit) continue;
-    if (!matchesExecutionAudit(audit, executionAudit, input.issue, input.run, input.comments)) continue;
+    if (!matchesExecutionAudit(audit, executionAudit, input.issue, input.run, input.comments, comment.id)) continue;
     return {
       session: { id: audit.voiceSessionId, deviceId: audit.deviceId },
       turn: { id: audit.voiceTurnId, status: audit.terminalStatus, createdAt: audit.createdAt },
@@ -321,6 +321,7 @@ function matchesExecutionAudit(
   issue: { id: string; ref?: string | null },
   run: { id: string },
   comments: Array<{ id: string; body: string }>,
+  voiceCommentId: string,
 ): boolean {
   if (audit.requestId !== executionAudit.request.id) return false;
   if (audit.correlationId !== executionAudit.request.correlationId) return false;
@@ -328,7 +329,7 @@ function matchesExecutionAudit(
   if (audit.issueRef !== (issue.ref ?? issue.id)) return false;
   if (audit.runId !== run.id) return false;
   if (audit.terminalStatus !== executionAudit.terminalStatus) return false;
-  if (!comments.some((comment) => comment.id === audit.commentId)) return false;
+  if (!comments.some((comment) => comment.id === audit.commentId && comment.id !== voiceCommentId)) return false;
   if (!executionAudit.runs.some((candidate) => candidate.track === "agentdash" && candidate.runId === audit.runId)) return false;
   const expectedSourceRef = agentDashSourceRef(audit.issueId, audit.runId);
   if (!executionAudit.events.some((event) => (

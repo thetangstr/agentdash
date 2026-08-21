@@ -1168,6 +1168,63 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Result comment comment_1");
   });
 
+  it("does not render a voice turn audit card when the sidecar self-references as the result comment", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      {
+        id: "voice_comment_1",
+        companyId: "company-1",
+        issueId: "issue_1",
+        authorAgentId: null,
+        authorUserId: null,
+        body: createVoiceAuditComment({ commentId: "voice_comment_1" }),
+        createdAt: new Date(execOsAuditTimestamp),
+        updatedAt: new Date(execOsAuditTimestamp),
+      },
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await flushReact();
+
+    expect(container.textContent).toContain("ExecOS Audit");
+    expect(container.textContent).not.toContain("Voice Turn Audit");
+  });
+
   it("passes blocker attention to the issue detail header status icon", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue({
       status: "blocked",
