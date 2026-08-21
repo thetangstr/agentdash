@@ -92,7 +92,7 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
 }
 
 /** Convert a tool's zod object schema into an MCP inputSchema. */
-export function toolInputSchema(schema: z.AnyZodObject): JsonSchema {
+export function toolInputSchema(schema: z.ZodTypeAny): JsonSchema {
   const converted = zodToJsonSchema(schema);
   return { type: "object", properties: {}, ...converted };
 }

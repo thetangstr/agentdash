@@ -54,6 +54,21 @@ describe("unified server composition", () => {
     }
   });
 
+  it("preserves the ExecOS origin invariant when the create-issue schema adds MCP context", () => {
+    const createIssue = tools.find((tool) => tool.name === "paperclipCreateIssue");
+    expect(createIssue).toBeDefined();
+    expect(() => createIssue!.schema.safeParse({
+      companyId: null,
+      title: "ExecOS request",
+      originKind: "execos_request",
+    })).not.toThrow();
+    expect(createIssue!.schema.safeParse({
+      companyId: null,
+      title: "ExecOS request",
+      originKind: "execos_request",
+    }).success).toBe(false);
+  });
+
   it("constructs the MCP server from a config", () => {
     const server = createAgentDashServer(CONFIG);
     expect(server).toBeDefined();

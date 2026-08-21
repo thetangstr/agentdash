@@ -19,17 +19,17 @@ import { formatErrorResponse, formatTextResponse } from "./format.js";
 export interface ToolDefinition {
   name: string;
   description: string;
-  schema: z.AnyZodObject;
+  schema: z.ZodTypeAny;
   execute: (input: Record<string, unknown>) => Promise<{
     content: Array<{ type: "text"; text: string }>;
   }>;
 }
 
-export function makeTool<TSchema extends z.ZodRawShape>(
+export function makeTool<TSchema extends z.ZodTypeAny>(
   name: string,
   description: string,
-  schema: z.ZodObject<TSchema>,
-  execute: (input: z.infer<typeof schema>) => Promise<unknown>,
+  schema: TSchema,
+  execute: (input: z.infer<TSchema>) => Promise<unknown>,
 ): ToolDefinition {
   return {
     name,
@@ -94,9 +94,15 @@ const upsertDocumentToolSchema = z.object({
   baseRevisionId: z.string().uuid().nullable().optional(),
 });
 
-const createIssueToolSchema = z.object({
-  companyId: companyIdOptional,
-}).merge(createIssueSchema);
+const createIssueToolSchema = createIssueSchema
+  .innerType()
+  .extend({ companyId: companyIdOptional })
+  .superRefine((value, ctx) => {
+    const { companyId: _companyId, ...issue } = value;
+    const result = createIssueSchema.safeParse(issue);
+    if (result.success) return;
+    for (const validationIssue of result.error.issues) ctx.addIssue(validationIssue);
+  });
 
 const updateIssueToolSchema = z.object({
   issueId: issueIdSchema,
