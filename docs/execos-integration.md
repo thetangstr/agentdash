@@ -79,6 +79,53 @@ If the three AgentDash IDs are absent, `ask_project_lead` remains present but
 returns an explicit unsupported response. A partial configuration is rejected
 at startup.
 
+## Local product lifecycle
+
+Use the ExecOS lifecycle command instead of manually reconstructing the runner
+and AgentDash launch commands. It reuses healthy localhost services, creates
+only missing services in fresh owned tmux windows, and stores only the exact
+owned window/pane identities. A newly started runner receives its token through
+a mode-`0600` one-shot FIFO; the token never enters process/tmux argv, the
+lifecycle state, command output, logs, or on-disk file content.
+
+For the currently proven local instance:
+
+```sh
+cd "$EXECOS_CHECKOUT"
+export AGENTDASH_CHECKOUT=/Users/Kailor/.config/superpowers/worktrees/agentdash/codex-agentdash-execos-local-product
+export PAPERCLIP_CONFIG=/tmp/agentdash-execos-final.pOFD9Y/config.json
+export PAPERCLIP_HOME=/tmp/agentdash-execos-final.pOFD9Y/home
+export PAPERCLIP_INSTANCE_ID=acceptance-final
+export AGENTDASH_BASE_URL=http://127.0.0.1:3199
+export EXECOS_RUNNER_BASE_URL=http://127.0.0.1:4781
+export EXECOS_TMUX_CWD=/Volumes/mac_studio_ssd/Projects/agent_bus
+export EXECOS_RUNNER_TOKEN='<the existing local runner token>'
+
+npm run local:up
+npm run local:status
+```
+
+`local:up` is idempotent. A healthy runner or AgentDash instance is reported as
+`existing` unless it was created by this lifecycle controller. `local:down`
+stops only exact windows recorded as `owned`; it preserves healthy unowned
+services and refuses any state that names protected `%0/@0`.
+
+After `local:status` is green, use the existing explicit KiddoQuest proof:
+
+```sh
+export AGENTDASH_KIDDOQUEST_PROOF=1
+export AGENTDASH_COMPANY_ID='<KiddoQuest company id>'
+export AGENTDASH_PROJECT_ID='<KiddoQuest project id>'
+export AGENTDASH_ASSIGNEE_AGENT_ID='<dedicated execos_local agent id>'
+npm run proof:agentdash-kiddoquest
+```
+
+To stop only lifecycle-owned local windows:
+
+```sh
+npm run local:down
+```
+
 ## Visible audit path
 
 For a live proof, AgentDash should visibly contain:
