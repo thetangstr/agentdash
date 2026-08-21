@@ -138,6 +138,76 @@ For a live proof, AgentDash should visibly contain:
 
 ExecOS may read and interpret those records, but AgentDash remains authoritative for the persisted work and audit state.
 
+## Android LiveKit voice bridge acceptance
+
+The Android LiveKit bridge has a one-command offline proof in the ExecOS checkout:
+
+```sh
+cd "$EXECOS_CHECKOUT"
+npm run acceptance:android-livekit:offline
+```
+
+That command starts only ephemeral `127.0.0.1` HTTP servers and a temporary canonical `DeviceAuthStore` directory. It proves broker admin pairing, Android-style pairing exchange, authenticated session creation, explicit LiveKit agent dispatch before token minting, microphone-only/data-disabled grant shape, the shared `ask_project_lead` tool path, one normalized AgentDash request/run/result comment, and one correlated `VoiceTurnAuditV1` sidecar comment through the real AgentDash voice-audit sink. The JSON output is intentionally redacted: it contains pass/fail, pseudonymous request/correlation/issue/run/comment/voice IDs, statuses, and exact boundary counters only. It does not print pairing codes, participant tokens, credential values, raw HTTP bodies, hostnames, or raw audio.
+
+This offline proof is not a live phone or LiveKit proof. It uses fake LiveKit control and fake in-process AgentDash transport behind the real ExecOS client/sink contracts. A live run remains gated on operator authorization and the stop conditions below.
+
+Local broker and pairing commands:
+
+```sh
+cd "$EXECOS_CHECKOUT"
+export EXECOS_VOICE_DEVICE_STATE_DIR='<local canonical state dir>'
+export EXECOS_VOICE_PUBLIC_BASE_URL='<Tailscale HTTPS broker origin for phone use>'
+export EXECOS_VOICE_EXECOS_BASE_URL='http://127.0.0.1:<cos-port>'
+export LIVEKIT_URL='<wss LiveKit URL>'
+export LIVEKIT_API_KEY='<set in shell only>'
+export LIVEKIT_API_SECRET='<set in shell only>'
+npm run voice:broker
+
+npm run voice:pair
+```
+
+Android build commands use the SDK at `/Users/Kailor/Library/Android`:
+
+```sh
+cd "$EXECOS_CHECKOUT/android"
+export ANDROID_HOME=/Users/Kailor/Library/Android
+export ANDROID_SDK_ROOT=/Users/Kailor/Library/Android
+./gradlew testDebugUnitTest
+./gradlew lintDebug
+./gradlew assembleDebug assembleRelease
+```
+
+The Android contract is explicit-start only. Permission alone must not open the microphone. Hard mute disables the local microphone track before any disconnect. Reconnect and transcript handling must dedupe final transcript callbacks so one spoken KiddoQuest question creates one ExecOS request. Session cleanup must end the broker session and remove the LiveKit dispatch/room artifacts; participant tokens are in-memory session values, not persisted credentials.
+
+If Tailscale HTTPS is used, expose only:
+
+- `/health`
+- `/v1/pairings/exchange`
+- `/v1/voice/sessions`
+- `/v1/voice/sessions/:sessionId`
+- `/v1/voice/sessions/:sessionId/end`
+
+Do not expose `/admin`, `/voice/tool`, `/voice/audit`, AgentDash, ExecOS internals, tmux, or any direct runner route through the reverse proxy.
+
+Credential variables by name only:
+
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+- `EXECOS_VOICE_TOKEN`
+- `EXECOS_VOICE_DEVICE_STATE_DIR`
+- `EXECOS_VOICE_PUBLIC_BASE_URL`
+- `EXECOS_VOICE_EXECOS_BASE_URL`
+- `AGENTDASH_BASE_URL`
+- `AGENTDASH_COMPANY_ID`
+- `AGENTDASH_PROJECT_ID`
+- `AGENTDASH_ASSIGNEE_AGENT_ID`
+- `AGENTDASH_BEARER_TOKEN`
+
+Live preflight and acceptance must stop before mutating anything if credentials are absent, the broker is not loopback/private, Tailscale would expose routes outside the allowlist, Android TLS cannot be verified, the `execos-voice` worker cannot be explicitly dispatched, LiveKit grants include data publishing, AgentDash does not produce exactly one attributable request/run/result comment, the voice sidecar cannot be appended with the same run/agent provenance, or any path attempts tmux mutation, Hermes/direct existing-session control, raw-audio persistence, external fetches outside the approved services, or consequential/destructive actions.
+
+AgentDash inspection after a live run should show one `originKind=execos_request` issue for the KiddoQuest question, one succeeded heartbeat run, one agent-authored result comment linked to that run, and one marked voice-audit sidecar comment whose request ID, correlation ID, issue ID, run ID, result comment ID, and terminal status match the normalized execution audit.
+
 ## Honest verification state
 
 The offline acceptance proof uses real in-process HTTP boundaries and the production client/adapter/runner code, with injected fake AgentDash persistence and fake tmux/Claude process boundaries. It proves consistent serialization, dispatch, attribution, lifecycle, evidence, and one-record idempotency without starting Claude, changing tmux, or writing to an AgentDash instance.
@@ -158,11 +228,15 @@ The AgentDash issue activity tab was loaded through the real local UI and visibl
 
 ## Explicitly unsupported
 
+- Always-listening audio.
+- Wake word activation.
+- Android chat bubble, overlay, or background microphone capture.
 - Hermes execution or direct Hermes session control.
 - Direct control of an already-running Claude or Codex session.
 - Any command, key, signal, respawn, scrollback capture, or ownership action targeting `%0` / `@0`.
 - Claude credential relay through AgentDash.
 - A generic shell or tmux-control API.
+- Consequential, destructive, credentialed, external, or high-impact actions from voice.
 - Non-KiddoQuest live acceptance data.
 - Claims of a visible AgentDash result based only on the offline in-process proof.
 - Claims that the local acceptance artifacts are production deployment, durable shared state, or support for an arbitrary project/question scope.
