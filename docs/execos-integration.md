@@ -17,19 +17,18 @@ Destructive, credentialed, external, high-impact, and unknown actions stop at `b
 
 ## Local installation and configuration
 
-Set the adapter path explicitly to the checkout that actually contains the
-integration. Until the ExecOS branch is landed into the primary checkout, the
-current local product path is:
+Both integration branches were merged into their `main` branches on
+2026-08-21, so the durable checkouts carry the integration:
 
 ```sh
-export EXECOS_CHECKOUT=/Users/Kailor/.config/superpowers/worktrees/agent_bus/codex-agentdash-execos
+export EXECOS_CHECKOUT=/Volumes/mac_studio_ssd/Projects/agent_bus
 export EXECOS_ADAPTER_PACKAGE_PATH="$EXECOS_CHECKOUT/packages/agentdash-execos-adapter"
 ```
 
-Do not point AgentDash at
-`/Volumes/mac_studio_ssd/Projects/agent_bus/packages/agentdash-execos-adapter`
-until that path really exists. Install `$EXECOS_ADAPTER_PACKAGE_PATH` through
-**Board → Adapter manager**.
+The AgentDash checkout for the local product is
+`/Volumes/home/Projects_Hosted/agentdash` on `main`. Install
+`$EXECOS_ADAPTER_PACKAGE_PATH` through **Board → Adapter manager**, or let
+`local:onboard` do it.
 
 `npm run local:onboard` (or the `local:bootstrap` cold start below) performs the
 adapter install and agent creation over the loopback API in `local_trusted`
@@ -136,7 +135,7 @@ the `claude` executable:
 
 ```sh
 cd "$EXECOS_CHECKOUT"
-npm run local:init -- --agentdash-checkout /Users/Kailor/.config/superpowers/worktrees/agentdash/codex-agentdash-execos-local-product
+npm run local:init -- --agentdash-checkout /Volumes/home/Projects_Hosted/agentdash
 npm run local:bootstrap
 ```
 
@@ -147,12 +146,13 @@ npm run local:bootstrap
 are needed again.
 
 The manifest pins the ExecOS checkout `init` ran from, and the `execos_local`
-adapter is installed into the persistent instance from that path. Until the
-branches are merged, the superpowers worktree is the only checkout that has
-the integration, so `init` warns that it is pinning a linked worktree. After
-the merge, delete `manifest.json` and re-run `init` from the durable checkout
-(the AgentDash instance, database, and token are untouched by that), then
-reinstall the adapter from the new path through **Board → Adapter manager**.
+adapter is installed into the persistent instance from that path; `init` warns
+when it is pinning a linked git worktree. To move a home to a different
+checkout, delete `manifest.json` and re-run `init` from the new checkout (the
+AgentDash instance, database, and token are untouched by that); if the
+persistent instance already holds the adapter from the old path, `onboard`
+refuses until it is reinstalled from the new path through **Board → Adapter
+manager**.
 
 `local:bootstrap` runs, in order, and prints one JSON document:
 
@@ -200,11 +200,15 @@ protected `%0/@0` pane.
 
 ### Migrating the disposable acceptance instance
 
-The 2026-08-21 disposable instance (`/tmp/agentdash-execos-final.pOFD9Y`) is
-intentionally preserved for CEO inspection and is not copied automatically:
-its embedded Postgres data directory can only be copied safely while that
-instance is stopped, and stopping it is the CEO's call. macOS discards `/tmp`
-on reboot. To keep its records instead of regenerating them with the proof:
+The 2026-08-21 disposable instance (`/tmp/agentdash-execos-final.pOFD9Y`) was
+migrated into the persistent home on 2026-08-21 after the CEO's "merge it and
+continue": its owned `agentdash-local`/`execos-runner` windows were stopped,
+embedded Postgres shut down cleanly within one second, and `db/`,
+`data/run-logs`, and `workspaces/` were copied (not moved) into the persistent
+instance root. The persistent instance now serves the same `KID-1` issue, run,
+and result comment on `127.0.0.1:3199`; the `/tmp` original is untouched and
+disposable. Migration is not automated because the data directory can only be
+copied while the source instance is stopped. The general procedure:
 
 1. From the environment that started it, run `npm run local:down` (or stop its
    owned `agentdash-local` window) and confirm `/api/health` on `:3199` no
@@ -340,6 +344,8 @@ The real AgentDash API contains exactly one request issue, one heartbeat run, an
 The direct response correctly declined to infer an unproven KiddoQuest source path. It reported only what the fixed read-only evidence established for `/Volumes/mac_studio_ssd/Projects/agent_bus`: commit `abcea4968880d4fb0299fe15986453dd64f98b03`, branch `main`, no tracked-file changes, and untracked `.claude/`. The evidence came from only the three documented `git -C` argv commands. A repeat of the proof reused the same issue, run, and comment without opening another pane.
 
 The AgentDash issue activity tab was loaded through the real local UI and visibly rendered the completed ExecOS audit, answer, request/correlation IDs, actor, runtime and pane, timestamps, transitions, evidence hashes and sizes, and unsupported capability rows. The disposable AgentDash instance, database, and localhost runner are intentionally preserved for CEO inspection; they are local acceptance artifacts, not shared or production state.
+
+After both branches were merged into `main` on 2026-08-21, the persistent home was re-initialized from the durable checkouts (`/Volumes/mac_studio_ssd/Projects/agent_bus`, `/Volumes/home/Projects_Hosted/agentdash`), the migrated database was started by `local:bootstrap` in owned windows `@12` (runner) and `@13` (AgentDash), the `execos_local` adapter was installed from the durable ExecOS path, and onboarding adopted the original company, project, and agent (`350bcdd2…`, `f870a357…`, `092bc018…`). The migrated agent's adapter config was updated once to the persistent home's runner token, after which `local:bootstrap` and `local:status` were green and the runner token appeared in no output or state file.
 
 Later on 2026-08-21, the persistent home and one-command cold start were exercised against an empty scratch home on unused ports (`3299`, runner `4791`, Postgres `55441`) while the disposable instance kept running. `npm run local:bootstrap` created exactly two owned windows in `execos-0` (`@8` runner, `@9` AgentDash), installed the `execos_local` adapter into the isolated `agentdash-home`, created the company, project, and dedicated agent, recorded their IDs in `manifest.json`, and returned an all-green preflight. A second run reported every item `existing` with no new windows. `npm run local:down` stopped only `@8` and `@9`. Against the default home, `local:bootstrap` refused to adopt the disposable instance on `:3199` and created no window. The generated runner token appeared nowhere in command output, lifecycle state, the manifest, `config.json`, or the runner's argv. The KiddoQuest proof was not run against the scratch instance, and the disposable database was not migrated.
 
