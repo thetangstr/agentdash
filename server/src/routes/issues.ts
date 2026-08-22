@@ -201,10 +201,15 @@ function shouldImplicitlyMoveCommentedIssueToTodo(input: {
   assigneeAgentId: string | null | undefined;
   actorType: "agent" | "user";
   actorId: string;
+  runId?: string | null;
 }) {
   // Only human comments should implicitly reopen finished work.
   // Agent-authored comments remain communicative unless reopen was explicit.
   if (input.actorType !== "user") return false;
+  // A comment attributed to a heartbeat run (x-paperclip-run-id) is execution
+  // evidence posted through a board identity — e.g. an ExecOS voice-turn audit
+  // sidecar in local_trusted mode — not a person asking for more work.
+  if (typeof input.runId === "string" && input.runId.length > 0) return false;
   if (!isClosedIssueStatus(input.issueStatus) && input.issueStatus !== "blocked") return false;
   if (typeof input.assigneeAgentId !== "string" || input.assigneeAgentId.length === 0) return false;
   return true;
@@ -2028,6 +2033,7 @@ export function issueRoutes(
           assigneeAgentId: requestedAssigneeAgentId,
           actorType: actor.actorType,
           actorId: actor.actorId,
+          runId: actor.runId,
         }));
     const updateReferenceSummaryBefore = titleOrDescriptionChanged
       ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
@@ -3525,6 +3531,7 @@ export function issueRoutes(
         assigneeAgentId: issue.assigneeAgentId,
         actorType: actor.actorType,
         actorId: actor.actorId,
+        runId: actor.runId,
       });
     const hasUnresolvedFirstClassBlockers =
       isBlocked && effectiveMoveToTodoRequested

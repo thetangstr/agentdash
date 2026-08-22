@@ -583,6 +583,28 @@ describe.sequential("issue comment reopen routes", () => {
     ));
   });
 
+  it("does not implicitly reopen closed issues for run-attributed board comments", async () => {
+    // ExecOS posts its voice-turn audit sidecar through the local board identity
+    // with `x-paperclip-run-id`; that is execution evidence, not a human follow-up.
+    mockIssueService.getById.mockResolvedValue(makeIssue("done"));
+
+    const res = await request(await installActor(createApp(), {
+      type: "board",
+      userId: "local-board",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      runId: "33333333-3333-4333-8333-333333333333",
+    }))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "EXECOS_VOICE_TURN_AUDIT_V1\n{}" });
+
+    expect(res.status).toBe(201);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
   it("does not implicitly reopen closed issues via POST comments when no agent is assigned", async () => {
     mockIssueService.getById.mockResolvedValue({
       ...makeIssue("done"),
