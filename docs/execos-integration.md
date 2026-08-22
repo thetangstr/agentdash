@@ -309,6 +309,7 @@ Credential variables by name only:
 - `AGENTDASH_PROJECT_ID`
 - `AGENTDASH_ASSIGNEE_AGENT_ID`
 - `AGENTDASH_BEARER_TOKEN`
+- `AGENTDASH_VOICE_AUDIT_BEARER_TOKEN` (the dedicated `execos_local` agent's own API key; the voice-audit sidecar must be agent-authored, so the CoS posts it with this key)
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `EXECOS_REALTIME_MODEL`
@@ -324,6 +325,8 @@ Credential variables by name only:
 - `TS_AUTHKEY`
 
 Live preflight and acceptance must stop before mutating anything if credentials are absent, the broker is not loopback/private, Tailscale would expose routes outside the allowlist, Android TLS cannot be verified, the `execos-voice` worker cannot be explicitly dispatched, LiveKit grants include data publishing, AgentDash does not produce exactly one attributable request/run/result comment, the voice sidecar cannot be appended with the same run/agent provenance, or any path attempts tmux mutation, Hermes/direct existing-session control, raw-audio persistence, external fetches outside the approved services, or consequential/destructive actions.
+
+On 2026-08-22 the sidecar path was proven live against this checkout's `main` with the free local voice stack (ExecOS `docs/voice-local.md`): issue `KID-7` holds one heartbeat run, one agent-authored result comment, and one agent-authored, parseable voice-audit sidecar. Two AgentDash-side facts matter for anyone re-running it: adapter configs now carry `paperclipRuntimeSkills` at heartbeat time (the ExecOS adapter ignores it), and a comment attributed to a heartbeat run no longer implicitly reopens a done issue (`7f251db0`), which is what had re-dispatched the agent when the sidecar landed.
 
 AgentDash inspection after a live run should show one `originKind=execos_request` issue for the KiddoQuest question, one succeeded heartbeat run, one agent-authored result comment linked to that run, and one marked voice-audit sidecar comment whose request ID, correlation ID, issue ID, run ID, result comment ID, and terminal status match the normalized execution audit.
 
