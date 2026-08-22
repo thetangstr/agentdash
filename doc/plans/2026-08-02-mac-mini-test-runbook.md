@@ -1,5 +1,12 @@
 # Mac Mini Test Deployment Runbook — AgentDash-MK
 
+> **SUPERSEDED 2026-08-03 — do not follow the install steps below.**
+> The branch this deploys was merged to `main` as `cd296cf5` (#467), which reversed four
+> instructions here: deploy `main` not `codex/agentdash-mk`, the lockfile is tracked so
+> `--frozen-lockfile` is now correct, the offline bundle was removed, and migrations run to
+> 0114. Use [`2026-08-03-mac-mini-test-runbook.md`](2026-08-03-mac-mini-test-runbook.md).
+> Kept for the record; §5's real-cycle intent is unchanged and carried forward.
+
 **Date:** 2026-08-02
 **Deploys:** `codex/agentdash-mk` @ `87cade25` (harness slices 1,A,B,C,D,E,F,G,H + zk-flake fix + GLS plan)
 **Mode:** on-prem, `claude_local` (BYOT), 6-month free license

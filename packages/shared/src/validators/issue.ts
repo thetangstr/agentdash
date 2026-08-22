@@ -133,7 +133,7 @@ const issueRequestDepthInputSchema = z
   .nonnegative()
   .transform((value) => clampIssueRequestDepth(value));
 
-export const createIssueSchema = z.object({
+const createIssueBaseSchema = z.object({
   projectId: z.string().uuid().optional().nullable(),
   projectWorkspaceId: z.string().uuid().optional().nullable(),
   goalId: z.string().uuid().optional().nullable(),
@@ -146,6 +146,8 @@ export const createIssueSchema = z.object({
   priority: z.enum(ISSUE_PRIORITIES).optional().default("medium"),
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
+  originKind: z.literal("execos_request").optional(),
+  originId: z.string().trim().min(1).max(500).optional().nullable(),
   requestDepth: issueRequestDepthInputSchema.optional().default(0),
   billingCode: z.string().optional().nullable(),
   definitionOfDone: definitionOfDoneSchema.optional().nullable(),
@@ -157,12 +159,36 @@ export const createIssueSchema = z.object({
   labelIds: z.array(z.string().uuid()).optional(),
 });
 
+function requireCompleteExecOsOrigin(
+  value: { originKind?: "execos_request"; originId?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.originKind === "execos_request" && !value.originId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "originId is required when originKind is execos_request",
+      path: ["originId"],
+    });
+  }
+  if (value.originId && value.originKind !== "execos_request") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "originKind must be execos_request when originId is provided",
+      path: ["originKind"],
+    });
+  }
+}
+
+export const createIssueSchema = createIssueBaseSchema.superRefine(requireCompleteExecOsOrigin);
+
 export type CreateIssue = z.infer<typeof createIssueSchema>;
 
-export const createChildIssueSchema = createIssueSchema
+export const createChildIssueSchema = createIssueBaseSchema
   .omit({
     parentId: true,
     inheritExecutionWorkspaceFromIssueId: true,
+    originKind: true,
+    originId: true,
   })
   .extend({
     acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
@@ -178,7 +204,11 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
-export const updateIssueSchema = createIssueSchema.omit({ definitionOfDone: true }).partial().extend({
+export const updateIssueSchema = createIssueBaseSchema.omit({
+  definitionOfDone: true,
+  originKind: true,
+  originId: true,
+}).partial().extend({
   requestDepth: issueRequestDepthInputSchema.optional(),
   assigneeAgentId: z.string().trim().min(1).optional().nullable(),
   comment: multilineTextSchema.pipe(z.string().min(1)).optional(),

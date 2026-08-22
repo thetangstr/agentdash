@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Agent, Issue, IssueTreeControlPreview, IssueTreeHold } from "@paperclipai/shared";
+import type { Agent, Issue, IssueComment, IssueTreeControlPreview, IssueTreeHold } from "@paperclipai/shared";
 import { act, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueDetail } from "./IssueDetail";
+import { serializeExecOsVoiceTurnAuditComment, type ExecOsVoiceTurnAuditComment } from "../lib/execos-voice-audit";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -37,6 +38,7 @@ const mockActivityApi = vi.hoisted(() => ({
 const mockHeartbeatsApi = vi.hoisted(() => ({
   liveRunsForIssue: vi.fn(),
   activeRunForIssue: vi.fn(),
+  get: vi.fn(),
   cancel: vi.fn(),
 }));
 
@@ -69,6 +71,7 @@ const mockSetMobileToolbar = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 const mockIssuesListRender = vi.hoisted(() => vi.fn());
 const mockIssueChatThreadRender = vi.hoisted(() => vi.fn());
+const mockTabsState = vi.hoisted(() => ({ onValueChange: null as ((value: string) => void) | null }));
 
 vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
@@ -192,6 +195,7 @@ vi.mock("../components/InlineEditor", () => ({
 
 vi.mock("../components/IssueChatThread", () => ({
   IssueChatThread: (props: {
+    comments?: IssueComment[];
     onStopRun?: (runId: string) => Promise<void>;
     stopRunLabel?: string;
     stoppingRunLabel?: string;
@@ -320,10 +324,15 @@ vi.mock("@/components/ui/skeleton", () => ({
 }));
 
 vi.mock("@/components/ui/tabs", () => ({
-  Tabs: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Tabs: ({ children, onValueChange }: { children?: ReactNode; onValueChange?: (value: string) => void }) => {
+    mockTabsState.onValueChange = onValueChange ?? null;
+    return <div>{children}</div>;
+  },
   TabsContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   TabsList: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
+  TabsTrigger: ({ children, value }: { children?: ReactNode; value: string }) => (
+    <button type="button" onClick={() => mockTabsState.onValueChange?.(value)}>{children}</button>
+  ),
 }));
 
 vi.mock("@/components/ui/textarea", () => ({
@@ -414,6 +423,199 @@ function createAgent(overrides: Partial<Agent> = {}): Agent {
     metadata: null,
     createdAt: new Date("2026-04-21T00:00:00.000Z"),
     updatedAt: new Date("2026-04-21T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+const execOsAuditTimestamp = "2026-08-21T15:46:09.000Z";
+const execOsHashA = "a".repeat(64);
+const execOsHashB = "b".repeat(64);
+const execOsHashC = "c".repeat(64);
+
+const execOsUnsupported = [
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "execution",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes is observed through AgentDash evidence only; ExecOS does not execute work inside Hermes.",
+  },
+  {
+    adapterId: "hermes",
+    track: "agentdash",
+    capability: "direct_session_control",
+    targetRef: "hermes",
+    status: "unsupported",
+    reason: "Hermes direct-session control is outside the controlled execos-0 adapter surface.",
+  },
+  {
+    adapterId: "execos-0",
+    track: "local_claude",
+    capability: "observed_pane_control",
+    targetRef: "%0",
+    status: "unsupported",
+    reason: "Pane %0 is observed for evidence only; the controlled local adapter must not drive that pane.",
+  },
+];
+
+function createValidExecOsResultJson(input: {
+  requestId?: string;
+  correlationId?: string;
+  issueId?: string;
+  runId?: string;
+}) {
+  const requestId = input.requestId ?? "req_1";
+  const correlationId = input.correlationId ?? "corr_1";
+  const issueId = input.issueId ?? "issue_1";
+  const runId = input.runId ?? "run-execos-1";
+  return {
+    audit: {
+      request: {
+        id: requestId,
+        correlationId,
+        project: "kiddoquest",
+        question: "What is the current repository state?",
+        expectedOutput: "direct_answer_with_evidence",
+        classification: "routine_read_only",
+        scope: { readOnly: true, paths: ["leads/kiddoquest"], repos: ["agent_bus"] },
+        requestedBy: { actorType: "ceo", actorId: "ceo_1" },
+        createdAt: execOsAuditTimestamp,
+      },
+      runs: [
+        {
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          runtimeId: "agentdash-runtime:1",
+          actor: { actorType: "agentdash_agent", actorId: "agent-1" },
+          startedAt: execOsAuditTimestamp,
+          completedAt: execOsAuditTimestamp,
+        },
+        {
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          runtimeId: "$0:@2:%2",
+          actor: { actorType: "execos", actorId: "execos-0" },
+          startedAt: execOsAuditTimestamp,
+          completedAt: execOsAuditTimestamp,
+        },
+      ],
+      events: [
+        {
+          id: "evt_1",
+          requestId,
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          type: "accepted",
+          occurredAt: execOsAuditTimestamp,
+          sourceRef: `paperclip://issues/${issueId}/runs/${runId}`,
+          payload: {},
+        },
+        {
+          id: "evt_2",
+          requestId,
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          type: "completed",
+          occurredAt: execOsAuditTimestamp,
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          payload: {},
+        },
+      ],
+      evidence: [
+        {
+          id: "ev_1",
+          requestId,
+          runId,
+          track: "agentdash",
+          adapterId: "execos_local",
+          kind: "issue_comment",
+          summary: "AgentDash result comment.",
+          sourceRef: `paperclip://issues/${issueId}/runs/${runId}`,
+          observedAt: execOsAuditTimestamp,
+          method: "reported",
+          byteSize: 7,
+          sha256: execOsHashA,
+          truncated: false,
+        },
+        {
+          id: "ev_2",
+          requestId,
+          runId: "local_run_1",
+          track: "local_claude",
+          adapterId: "execos-0",
+          kind: "claude_stdout",
+          summary: "Local stdout.",
+          sourceRef: "tmux://execos-0/$0/@2/%2/stdout",
+          observedAt: execOsAuditTimestamp,
+          method: "derived",
+          byteSize: 20,
+          sha256: execOsHashB,
+          truncated: false,
+        },
+      ],
+      actorIdentity: { actorType: "execos", actorId: "execos-0" },
+      runtimeIdentity: { track: "local_claude", adapterId: "execos-0", runtimeId: "$0:@2:%2" },
+      terminalStatus: "completed",
+      acceptedAt: execOsAuditTimestamp,
+      completedAt: execOsAuditTimestamp,
+      directAnswer: "commit abc123; tree clean",
+      unsupported: execOsUnsupported,
+    },
+  };
+}
+
+function createVoiceAuditComment(input: {
+  requestId?: string;
+  correlationId?: string;
+  issueId?: string;
+  issueRef?: string;
+  runId?: string;
+  commentId?: string;
+} = {}) {
+  const audit: ExecOsVoiceTurnAuditComment = {
+    version: "execos.voice.turn.v1",
+    voiceSessionId: "vs_12345678",
+    voiceTurnId: "vt_12345678",
+    deviceId: "android_pixel_1",
+    participantId: "ceo_livekit_participant",
+    workerId: "execos_voice_worker",
+    requestId: input.requestId ?? "req_1",
+    correlationId: input.correlationId ?? "corr_1",
+    issueId: input.issueId ?? "issue_1",
+    issueRef: input.issueRef ?? "AGE-1",
+    runId: input.runId ?? "run-execos-1",
+    commentId: input.commentId ?? "comment_1",
+    tool: "ask_project_lead",
+    toolArgumentsSha256: execOsHashC,
+    userTranscript: { excerpt: "What changed?", sha256: execOsHashA, byteSize: 13 },
+    spokenResponse: { excerpt: "Shipped.", sha256: execOsHashB, byteSize: 8 },
+    events: [
+      { type: "connected", occurredAt: execOsAuditTimestamp },
+      { type: "transcript_final", occurredAt: "2026-08-21T15:46:10.000Z" },
+      { type: "tool_finished", occurredAt: "2026-08-21T15:46:11.000Z" },
+    ],
+    terminalStatus: "completed",
+    createdAt: "2026-08-21T15:46:12.000Z",
+  };
+  return serializeExecOsVoiceTurnAuditComment(audit);
+}
+
+function createIssueComment(overrides: Partial<IssueComment> = {}): IssueComment {
+  return {
+    id: "comment_1",
+    companyId: "company-1",
+    issueId: "issue_1",
+    authorAgentId: "agent-1",
+    authorUserId: null,
+    createdByRunId: "run-execos-1",
+    body: "Normal result comment",
+    createdAt: new Date(execOsAuditTimestamp),
+    updatedAt: new Date(execOsAuditTimestamp),
     ...overrides,
   };
 }
@@ -786,6 +988,7 @@ describe("IssueDetail", () => {
     mockActivityApi.runsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.liveRunsForIssue.mockResolvedValue([]);
     mockHeartbeatsApi.activeRunForIssue.mockResolvedValue(null);
+    mockHeartbeatsApi.get.mockResolvedValue(null);
     mockAgentsApi.list.mockResolvedValue([]);
     mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
       companyIds: ["company-1"],
@@ -804,6 +1007,7 @@ describe("IssueDetail", () => {
     });
     mockIssuesListRender.mockClear();
     mockIssueChatThreadRender.mockClear();
+    mockTabsState.onValueChange = null;
   });
 
   afterEach(async () => {
@@ -835,6 +1039,320 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("loads the full historical ExecOS run after the active execution lock is released", async () => {
+    const timestamp = "2026-08-21T15:46:09.000Z";
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_kiddoquest_repo_state",
+      executionRunId: null,
+    }));
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+      createdAt: timestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: {
+        audit: {
+          request: {
+            id: "req_kiddoquest_repo_state",
+            correlationId: "corr_kiddoquest_repo_state",
+            question: "What is the current repository state?",
+          },
+          actorIdentity: { actorType: "execos", actorId: "execos-0" },
+          runtimeIdentity: { track: "local_claude", adapterId: "execos-0", runtimeId: "$0:@5:%5" },
+          terminalStatus: "completed",
+          acceptedAt: timestamp,
+          completedAt: timestamp,
+          directAnswer: "commit abc123; tree clean",
+          evidence: [{
+            kind: "read_only_command",
+            summary: "git status",
+            sourceRef: "execos://read-only-evidence/1",
+            observedAt: timestamp,
+            byteSize: 20,
+            sha256: "a".repeat(64),
+          }],
+          events: [{ type: "completed", occurredAt: timestamp, sourceRef: "tmux://execos-0/$0/@5/%5/stdout" }],
+          unsupported: [{
+            adapterId: "hermes",
+            capability: "direct_session_control",
+            targetRef: "hermes",
+            reason: "not implemented",
+          }],
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await waitForAssertion(() => expect(container.textContent).toContain("commit abc123; tree clean"));
+
+    expect(mockHeartbeatsApi.get).toHaveBeenCalledWith("run-execos-1");
+    expect(container.textContent).toContain("$0:@5:%5");
+    expect(container.textContent).toContain("%5");
+    expect(container.textContent).not.toContain("An attributable runtime result has not arrived yet");
+  });
+
+  it("renders a voice turn audit card for a valid marked comment bound to internal issue id and human ref", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      createIssueComment(),
+      createIssueComment({
+        id: "voice_comment_1",
+        authorAgentId: "agent-1",
+        body: createVoiceAuditComment(),
+      }),
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+
+    await waitForAssertion(() => expect(container.textContent).toContain("Voice Turn Audit"));
+    expect(container.textContent).toContain("vs_12345678");
+    expect(container.textContent).toContain("vt_12345678");
+    expect(container.textContent).toContain("raw-audio-not-stored");
+    expect(container.textContent).toContain("Result comment comment_1");
+  });
+
+  it("keeps chat comment pagination cached when Activity loads bounded voice-audit comments", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockImplementation(async (_issueId: string, opts?: { order?: "asc" | "desc"; limit?: number }) => {
+      if (opts?.limit === 100) {
+        return [
+          createIssueComment(),
+          createIssueComment({
+            id: "voice_comment_1",
+            authorAgentId: "agent-1",
+            body: createVoiceAuditComment(),
+          }),
+        ];
+      }
+      return [
+        createIssueComment({
+          id: "chat_comment_1",
+          body: "Chat comment survives Activity voice loading",
+        }),
+      ];
+    });
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitForAssertion(() => {
+      expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0].comments).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "chat_comment_1" })]),
+      );
+    });
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await waitForAssertion(() => expect(container.textContent).toContain("Voice Turn Audit"));
+    expect(mockIssuesApi.listComments).toHaveBeenCalledWith("issue_1", { order: "desc", limit: 100 });
+
+    const chatButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Chat");
+    expect(chatButton).toBeTruthy();
+    await act(async () => chatButton!.click());
+
+    await waitForAssertion(() => {
+      expect(mockIssueChatThreadRender.mock.calls.at(-1)?.[0].comments).toEqual(
+        expect.arrayContaining([expect.objectContaining({
+          id: "chat_comment_1",
+          body: "Chat comment survives Activity voice loading",
+        })]),
+      );
+    });
+  });
+
+  it("does not render a forged marked voice comment with wrong author or run provenance", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      createIssueComment(),
+      createIssueComment({
+        id: "voice_comment_1",
+        authorAgentId: "agent-other",
+        body: createVoiceAuditComment(),
+      }),
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await flushReact();
+
+    expect(container.textContent).toContain("ExecOS Audit");
+    expect(container.textContent).not.toContain("Voice Turn Audit");
+  });
+
+  it("does not render a voice turn audit card when the sidecar self-references as the result comment", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      id: "issue_1",
+      identifier: "AGE-1",
+      issueNumber: 1,
+      status: "done",
+      originKind: "execos_request",
+      originId: "req_1",
+      executionRunId: null,
+    }));
+    mockIssuesApi.listComments.mockResolvedValue([
+      createIssueComment({
+        id: "voice_comment_1",
+        authorAgentId: "agent-1",
+        body: createVoiceAuditComment({ commentId: "voice_comment_1" }),
+      }),
+    ]);
+    mockActivityApi.runsForIssue.mockResolvedValue([{
+      runId: "run-execos-1",
+      status: "succeeded",
+      agentId: "agent-1",
+      adapterType: "execos_local",
+      startedAt: execOsAuditTimestamp,
+      finishedAt: execOsAuditTimestamp,
+      createdAt: execOsAuditTimestamp,
+      invocationSource: "assignment",
+      usageJson: null,
+      resultJson: { stopReason: "completed" },
+    }]);
+    mockHeartbeatsApi.get.mockResolvedValue({
+      id: "run-execos-1",
+      resultJson: createValidExecOsResultJson({}),
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await waitForAssertion(() => expect(container.textContent).toContain("Activity"));
+    const activityButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Activity");
+    expect(activityButton).toBeTruthy();
+    await act(async () => activityButton!.click());
+    await flushReact();
+
+    expect(container.textContent).toContain("ExecOS Audit");
+    expect(container.textContent).not.toContain("Voice Turn Audit");
   });
 
   it("passes blocker attention to the issue detail header status icon", async () => {

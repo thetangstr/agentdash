@@ -307,6 +307,7 @@ export interface IssueComment {
   issueId: string;
   authorAgentId: string | null;
   authorUserId: string | null;
+  createdByRunId?: string | null;
   body: string;
   followUpRequested?: boolean;
   createdAt: Date;

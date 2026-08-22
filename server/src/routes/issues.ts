@@ -67,6 +67,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
+import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
   assertHostWorkspaceCommandAuthority,
@@ -1850,12 +1851,27 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    const issue = await svc.create(companyId, {
-      ...req.body,
-      executionPolicy,
-      createdByAgentId: actor.agentId,
-      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-    });
+    let issue;
+    try {
+      issue = await svc.create(companyId, {
+        ...req.body,
+        executionPolicy,
+        createdByAgentId: actor.agentId,
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      });
+    } catch (error) {
+      if (
+        req.body.originKind === "execos_request" &&
+        isUniqueViolation(error) &&
+        pgConstraintName(error) === "issues_execos_request_origin_uq"
+      ) {
+        throw conflict("ExecOS request is already recorded", {
+          code: "EXECOS_REQUEST_ALREADY_RECORDED",
+          originId: req.body.originId,
+        });
+      }
+      throw error;
+    }
     await issueReferencesSvc.syncIssue(issue.id);
     const referenceSummary = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const referenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
