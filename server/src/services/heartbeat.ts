@@ -35,6 +35,7 @@ import {
   issueComments,
   issueRelations,
   issues,
+  agentFactRequests,
   issueWorkProducts,
   projects,
   projectWorkspaces,
@@ -3983,7 +3984,98 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
       wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
+      /**
+       * Only spend a run when there is something to spend it on.
+       *
+       * A timer wake used to invoke the model to answer a question the database
+       * answers for nothing: "is there anything for me to do?". Measured on a
+       * live instance, 88% of one agent's wakes came back "no pending fact
+       * requests or assigned issues" — and because a wake with no issue attached
+       * cannot use the resume-delta prompt, those were also the MOST expensive
+       * wakes, re-sending the agent's entire mandate every time.
+       */
+      requireWork: asBoolean(heartbeat.requireWork, true),
+      /**
+       * How long an agent may go without waking at all.
+       *
+       * The gate above is blind to work nobody has filed yet, and mandates in
+       * this product tell agents to watch for things unprompted. So the gate is
+       * a filter on the common case, not a cage: after this long with no run,
+       * the next tick goes through regardless.
+       */
+      sweepIntervalSec: Math.max(0, asNumber(heartbeat.sweepIntervalSec, 12 * 60 * 60)),
     };
+  }
+
+  /**
+   * Is there anything for this agent to wake up for?
+   *
+   * Deliberately cheap and deliberately narrow: three indexed existence checks.
+   * Each is a thing the product already models as work aimed at this agent.
+   *
+   * Ported from the shape upstream uses in its own scheduler so a future merge
+   * lines up, with two differences. Upstream gates the whole check behind a
+   * worktree-execution cutoff, so it is off unless that override is active;
+   * here it is the default, because the measurement that prompted it says the
+   * empty wake IS the common case. And upstream looks only at assigned issues,
+   * which would silence an agent whose mandate tells it to watch for work
+   * nobody has filed yet — hence fact requests and fresh comments too, plus the
+   * sweep in the caller.
+   */
+  async function agentHasWakeworthyWork(
+    agent: typeof agents.$inferSelect,
+    since: Date | null,
+  ): Promise<boolean> {
+    const assigned = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, agent.companyId),
+          eq(issues.assigneeAgentId, agent.id),
+          inArray(issues.status, ["todo", "in_progress", "blocked"]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (assigned) return true;
+
+    // A colleague's agent is blocked waiting on an answer only this one can
+    // give. That is work, even with no issue assigned.
+    const asked = await db
+      .select({ id: agentFactRequests.id })
+      .from(agentFactRequests)
+      .where(
+        and(
+          eq(agentFactRequests.companyId, agent.companyId),
+          eq(agentFactRequests.targetAgentId, agent.id),
+          inArray(agentFactRequests.status, ["asked", "escalated"]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (asked) return true;
+
+    // Somebody said something on an issue this agent owns since it last ran.
+    // Without this it would sleep through a question put to it directly.
+    if (since) {
+      const commented = await db
+        .select({ id: issueComments.id })
+        .from(issueComments)
+        .innerJoin(issues, eq(issues.id, issueComments.issueId))
+        .where(
+          and(
+            eq(issues.companyId, agent.companyId),
+            eq(issues.assigneeAgentId, agent.id),
+            gt(issueComments.createdAt, since),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (commented) return true;
+    }
+
+    return false;
   }
 
   function issueRunPriorityRank(priority: string | null | undefined) {
@@ -8009,6 +8101,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
+      let skippedNoWork = 0;
 
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
@@ -8016,9 +8109,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (!policy.enabled || policy.intervalSec <= 0) continue;
 
         checked += 1;
-        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
+        const lastRunAt = agent.lastHeartbeatAt ?? agent.createdAt;
+        const baseline = new Date(lastRunAt).getTime();
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
+
+        // Asked only once the timer is due, so a quiet agent costs three indexed
+        // lookups per interval rather than per tick.
+        const sweepDue =
+          policy.sweepIntervalSec > 0 && elapsedMs >= policy.sweepIntervalSec * 1000;
+        if (policy.requireWork && !sweepDue) {
+          if (!(await agentHasWakeworthyWork(agent, new Date(lastRunAt)))) {
+            skippedNoWork += 1;
+            continue;
+          }
+        }
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
@@ -8036,7 +8141,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         else skipped += 1;
       }
 
-      return { checked, enqueued, skipped };
+      if (skippedNoWork > 0) {
+        // Visible on purpose. A scheduler that quietly decides not to run is
+        // indistinguishable from a broken one, and "is the heartbeat working?"
+        // is the first question anybody asks about a quiet board.
+        logger.info({ skippedNoWork, checked, enqueued }, "heartbeat: skipped agents with nothing to do");
+      }
+      return { checked, enqueued, skipped, skippedNoWork };
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),
