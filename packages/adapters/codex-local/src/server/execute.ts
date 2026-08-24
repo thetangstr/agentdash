@@ -553,8 +553,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: Boolean(sessionId) });
-  const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
-  const promptInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
+  const resumingSession = Boolean(sessionId);
+  const shouldUseResumeDeltaPrompt = resumingSession && wakePrompt.length > 0;
+  /**
+   * Never re-send the instructions into a session that already has them.
+   *
+   * The prefix is the agent's whole mandate — tens of thousands of tokens of
+   * text that does not change between wakes. It used to be skipped only when
+   * the wake ALSO carried an issue payload, because that is the case the resume
+   * delta was written for. So the cheap path applied when the agent had work,
+   * and the expensive path applied when it had none: a timer wake with nothing
+   * assigned re-sent the entire mandate every time.
+   *
+   * Measured on a live instance: one session held 260 user messages of which
+   * only 15 were distinct — the same 49KB block 202 times, ~2.87M tokens of
+   * pure repetition, all of it re-read by every later call in that session.
+   *
+   * Resuming is the only condition that matters. If the session is resumed the
+   * instructions are already in its context; if it is fresh they are sent
+   * below. Rotation is what refreshes them: `evaluateSessionCompaction` nulls
+   * the session id when a session gets too long, which lands here as a fresh
+   * session and re-sends the mandate along with a handoff summary.
+   */
+  const promptInstructionsPrefix = resumingSession ? "" : instructionsPrefix;
   instructionsChars = promptInstructionsPrefix.length;
   const continuationSummary = parseObject(context.paperclipContinuationSummary);
   const continuationSummaryBody = asString(continuationSummary.body, "").trim() || null;
