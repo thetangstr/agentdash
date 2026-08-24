@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { buildUpdatePlan, defaultRestartCommand, selfInstall } from "./agentdash-source-update.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import {
+  assertBranchAllowed,
+  buildUpdatePlan,
+  defaultRestartCommand,
+  readDeployBranchLock,
+  selfInstall,
+} from "./agentdash-source-update.mjs";
 
 const BASE = {
   repoDir: "/Users/yang/agentdash",
@@ -116,5 +123,86 @@ test("selfInstall keeps an executable copy outside the checkout it updates", () 
     assert.equal(statSync(target).mode & 0o111, 0o111, "installed copy must be executable");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A machine that must never run a test branch.
+ *
+ * The updater takes `--branch`, and the interesting branches are the dangerous
+ * ones: `staging` exists so half-finished work can be driven on a test
+ * instance. One flag on the wrong terminal puts that on a customer's machine,
+ * and the machine is the only thing that knows which kind of machine it is.
+ */
+test("branch lock: absent by default, so a test machine is unaffected", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "branch-lock-none-"));
+  try {
+    assert.equal(readDeployBranchLock(stateDir, {}), null);
+    // And the plan still builds, tracking whatever was asked for.
+    const plan = buildUpdatePlan({ ...BASE, stateDir, branch: "staging" }, {});
+    assert.equal(plan.branch, "staging");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("branch lock: a locked machine refuses any other branch", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "branch-lock-main-"));
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "allowed-branch"), "main\n");
+    assert.equal(readDeployBranchLock(stateDir, {}), "main");
+
+    assert.throws(
+      () => buildUpdatePlan({ ...BASE, stateDir, branch: "staging" }, {}),
+      /locked to the "main" branch and refuses to deploy "staging"/,
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("branch lock: the allowed branch still deploys normally", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "branch-lock-ok-"));
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "allowed-branch"), "main");
+    const plan = buildUpdatePlan({ ...BASE, stateDir, branch: "main" }, {});
+    assert.equal(plan.action, "update");
+    assert.equal(plan.branch, "main");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("branch lock: refuses the default branch too when the lock names another", () => {
+  // The lock is about what this machine runs, not about blessing "main".
+  assert.throws(
+    () => assertBranchAllowed("main", "release-2026-08"),
+    /refuses to deploy "main"/,
+  );
+});
+
+test("branch lock: an env override is honoured, for a machine without a state dir yet", () => {
+  assert.equal(
+    readDeployBranchLock("/nonexistent", { AGENTDASH_DEPLOY_BRANCH_LOCK: "main" }),
+    "main",
+  );
+});
+
+test("branch lock: a rollback on a locked machine is still allowed", () => {
+  // Rolling back is the thing you do when a deploy went wrong; the lock must
+  // not stand between an operator and the previous known-good commit.
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "branch-lock-rollback-"));
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "allowed-branch"), "main");
+    const plan = buildUpdatePlan(
+      { ...BASE, stateDir, rollback: true },
+      { previousSha: "ccccccc", currentSha: "bbbbbbb" },
+    );
+    assert.equal(plan.action, "rollback");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });

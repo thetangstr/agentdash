@@ -61,6 +61,49 @@ function nowIso() {
  * Separated from execution so the decision is testable without a repository,
  * a network, or a running server — the same split the Docker updater uses.
  */
+/**
+ * The branch a machine is allowed to run, if it says so.
+ *
+ * A lock file next to the deployment state, holding one branch name. When it is
+ * present, this updater will only deploy that branch and refuses anything else.
+ *
+ * It exists because the interesting branches are the dangerous ones. `staging`
+ * is where half-finished work goes to be driven on a test instance, and the
+ * updater takes `--branch`, so one flag on the wrong terminal puts a candidate
+ * onto a customer's machine. That is a typo away at 2am, and the machine is the
+ * only thing that knows which kind of machine it is.
+ *
+ * Absent on a test instance, so nothing changes there — the lock is opt-in per
+ * machine, and the machine that needs it is the one running production.
+ */
+export function readDeployBranchLock(stateDir, env = process.env) {
+  const override = env.AGENTDASH_DEPLOY_BRANCH_LOCK;
+  if (typeof override === "string" && override.trim()) return override.trim();
+  const lockPath = path.join(stateDir, "allowed-branch");
+  try {
+    const contents = readFileSync(lockPath, "utf8").trim();
+    return contents.length > 0 ? contents : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse a deployment the machine has not been told to accept.
+ *
+ * Thrown rather than warned. A warning on a deploy script is read after the
+ * deploy, and by then the customer's instance is running a candidate.
+ */
+export function assertBranchAllowed(branch, allowedBranch) {
+  if (!allowedBranch || branch === allowedBranch) return;
+  throw new Error(
+    `This machine is locked to the "${allowedBranch}" branch and refuses to deploy "${branch}".\n` +
+      "That lock is what stops a test branch reaching a production instance.\n" +
+      "If this really is a machine that should track another branch, change the branch " +
+      "named in the lock file rather than passing --branch past it.",
+  );
+}
+
 export function buildUpdatePlan(input, state = {}) {
   const repoDir = absolutePath(input.repoDir ?? DEFAULT_REPO_DIR);
   const stateDir = absolutePath(
@@ -68,6 +111,9 @@ export function buildUpdatePlan(input, state = {}) {
   );
   const remote = input.remote ?? "origin";
   const branch = input.branch ?? "main";
+  // Checked while deciding, not while executing: the plan is what `--check`
+  // prints, so a locked machine says no before anybody runs the real thing.
+  assertBranchAllowed(branch, input.allowedBranch ?? readDeployBranchLock(stateDir));
   const currentSha = input.currentSha ?? null;
   const previousSha = state.currentSha ?? null;
 
