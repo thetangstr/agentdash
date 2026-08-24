@@ -59,7 +59,7 @@ describeEmbeddedPostgres("run-healer eligibility scan (Postgres integration)", (
     await tempDb?.cleanup();
   });
 
-  async function seedCompanyAndAgent() {
+  async function seedCompanyAndAgent(agentStatus = "active") {
     const companyId = randomUUID();
     const agentId = randomUUID();
     await db.insert(companies).values({
@@ -73,7 +73,7 @@ describeEmbeddedPostgres("run-healer eligibility scan (Postgres integration)", (
       companyId,
       name: "Healer Target",
       role: "engineer",
-      status: "active",
+      status: agentStatus,
       adapterType: "claude_local",
       adapterConfig: {},
       runtimeConfig: {},
@@ -182,6 +182,94 @@ describeEmbeddedPostgres("run-healer eligibility scan (Postgres integration)", (
     // And the surviving row reports its real heal count from the grouped query.
     const underCap = eligible.find((r) => r.id === underCapId);
     expect(underCap?.healAttemptCount).toBe(0);
+  });
+
+  /**
+   * Pausing an agent has to stop the healer too.
+   *
+   * The scan joins `agents` for the adapter type and never looked at status, so
+   * a paused agent's failed runs stayed eligible and were re-diagnosed every
+   * five minutes — each diagnosis a real model call. Measured on a live
+   * instance: three failed runs belonging to paused agents drew 1,848 diagnosis
+   * attempts while their owner believed everything was stopped.
+   */
+  it.each(["paused", "terminated", "pending_approval"])(
+    "excludes runs whose agent is %s",
+    async (agentStatus) => {
+      const { companyId, agentId } = await seedCompanyAndAgent(agentStatus);
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId,
+        agentId,
+        status: "failed",
+        errorCode: "auth_invalid_token",
+        error: "API key rejected",
+        stderrExcerpt: "auth failed",
+        createdAt: new Date(Date.now() - 60_000),
+      });
+
+      expect(await healer._scanEligibleRunsForTests()).toEqual([]);
+    },
+  );
+
+  it("still heals a run whose agent is running normally", async () => {
+    // The other half of the rule: the filter must not swallow the case the
+    // healer exists for.
+    const { companyId, agentId } = await seedCompanyAndAgent("active");
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "failed",
+      errorCode: "auth_invalid_token",
+      error: "API key rejected",
+      stderrExcerpt: "auth failed",
+      createdAt: new Date(Date.now() - 60_000),
+    });
+
+    expect((await healer._scanEligibleRunsForTests()).map((r) => r.id)).toEqual([runId]);
+  });
+
+  /**
+   * A run that cannot be diagnosed must still exhaust its allowance.
+   *
+   * `maxHealsPerRun` is enforced by counting `heal_attempts` rows, and the
+   * diagnosis-failed path used to return before writing one — so the count
+   * stayed at zero and the run was re-diagnosed on every scan for the whole
+   * lookback window. The cap existed and could never fire, which is how three
+   * unfixable runs produced 1,848 model calls.
+   */
+  it("counts a failed diagnosis against maxHealsPerRun", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent("active");
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "failed",
+      errorCode: "auth_invalid_token",
+      error: "API key rejected",
+      stderrExcerpt: "auth failed",
+      createdAt: new Date(Date.now() - 60_000),
+    });
+
+    expect((await healer._scanEligibleRunsForTests()).map((r) => r.id)).toEqual([runId]);
+
+    // What a diagnosis that produced no answer now writes. maxHealsPerRun is 2
+    // for this suite, so two of these must take the run out of scope.
+    for (let i = 0; i < 2; i += 1) {
+      await db.insert(healAttempts).values({
+        runId,
+        diagnosis: { outcome: "diagnosis_failed" },
+        fixType: "none",
+        actionTaken: "diagnosis_failed",
+        succeeded: false,
+        costUsd: 0,
+      });
+    }
+
+    expect(await healer._scanEligibleRunsForTests()).toEqual([]);
   });
 
   it("excludes runs created outside the lookback window", async () => {
