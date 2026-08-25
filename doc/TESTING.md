@@ -50,6 +50,31 @@ node ~/.agentdash/bin/agentdash-source-update.mjs --branch staging \
 Production keeps its default of `main`. Nothing about a test instance should
 ever be able to move a production checkout.
 
+### Locking a production machine to one branch
+
+`--branch` is one flag, and the interesting branches are the dangerous ones. A
+machine that runs a customer's instance should say so, in a file it owns:
+
+```sh
+mkdir -p ~/.agentdash/deployments
+echo main > ~/.agentdash/deployments/allowed-branch
+```
+
+With that present the updater refuses to deploy anything else, at plan time — so
+even `--check` says no rather than reporting what a forbidden update would do:
+
+```
+This machine is locked to the "main" branch and refuses to deploy "staging".
+```
+
+Rollback is deliberately still allowed: rolling back is what you do when a
+deploy went wrong, and the lock must not stand between an operator and the last
+known-good commit.
+
+The lock is absent by default, so test instances are unaffected. It is opt-in
+per machine because the machine is the only thing that knows which kind of
+machine it is.
+
 ## Standing up an instance that is not production
 
 A test instance needs its own database, its own port, and **no credentials that
@@ -125,6 +150,9 @@ deployment — the boundary is worth stating explicitly:
 - **Not** `git checkout` in the production checkout — the updater refuses a dirty
   tree, and a stray branch switch there is a production deploy waiting for the
   next restart
+- **Never** `--branch staging` against a customer's instance. `staging` exists to
+  be driven on a test machine; it is not a thing a customer runs. Lock the
+  production machine as above so this is refused rather than remembered
 
 The safest arrangement is a different machine entirely, which is what `staging`
 is for.
