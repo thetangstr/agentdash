@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { emitSignal } from "../observability/signals.js";
 import { preRunChecks } from "../observability/pre-run-checks.js";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
@@ -1336,7 +1336,35 @@ function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
   };
 }
 
-function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: UsageTotals | null): UsageTotals | null {
+/**
+ * How far back to look for a usable baseline within one session.
+ *
+ * Sized for the failure runs this exists to survive: an agent on a 30-minute
+ * heartbeat that fails for three days produces ~144 rows, and the observed
+ * incident was exactly that. Bounded rather than unbounded because this runs on
+ * every completed run.
+ */
+const USAGE_BASELINE_SCAN_LIMIT = 500;
+
+/**
+ * The newest row that reported usage, from rows ordered newest first.
+ *
+ * Split out from the query so the rule can be tested without a database: rows
+ * whose `usage_json` exists but holds nothing countable — a run that recorded
+ * a shape but no totals — are as useless as a baseline as a failed run is, and
+ * both have to be skipped rather than treated as zero.
+ */
+export function pickUsageBaseline(
+  rows: Array<{ id?: string; usageJson: unknown }>,
+): { id: string | null; totals: UsageTotals } | null {
+  for (const row of rows) {
+    const totals = readRawUsageTotals(row.usageJson);
+    if (totals) return { id: row.id ?? null, totals };
+  }
+  return null;
+}
+
+export function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: UsageTotals | null): UsageTotals | null {
   if (!current) return null;
   if (!previous) return { ...current };
 
@@ -2350,7 +2378,30 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .then((rows) => rows[0] ?? null);
   }
 
-  async function getLatestRunForSession(
+  /**
+   * The last run of this session that actually recorded usage.
+   *
+   * Adapters that resume a session report the session's RUNNING TOTAL, so a
+   * run's own consumption is that total minus the previous run's. The previous
+   * run therefore has to be one that reported a total — and this used to take
+   * whichever run was simply most recent, with no regard for whether it had
+   * recorded anything.
+   *
+   * A failed run records no usage. So after any run of failures — a revoked
+   * credential, an exhausted plan, a provider outage — the next success found a
+   * baseline of null, and `deriveNormalizedUsageDelta` charged the entire
+   * session history as if that one run had consumed it. Measured on a live
+   * instance: 144 consecutive failures over three days, then a six-second run
+   * booked at 11,622,466 input tokens, roughly doubling the reported spend for
+   * that agent. The tokens were real once; they were counted twice.
+   *
+   * `isNotNull` drops the failures in SQL, and `pickUsageBaseline` then skips
+   * any row whose totals are present but empty. The scan is bounded because an
+   * unbounded one on a busy session is a table scan on a hot write path;
+   * `USAGE_BASELINE_SCAN_LIMIT` is far above any real run of failures, and
+   * exhausting it leaves the previous behaviour rather than a wrong number.
+   */
+  async function getLatestUsageBaselineForSession(
     agentId: string,
     sessionId: string,
     opts?: { excludeRunId?: string | null },
@@ -2358,11 +2409,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const conditions = [
       eq(heartbeatRuns.agentId, agentId),
       eq(heartbeatRuns.sessionIdAfter, sessionId),
+      isNotNull(heartbeatRuns.usageJson),
     ];
     if (opts?.excludeRunId) {
       conditions.push(sql`${heartbeatRuns.id} <> ${opts.excludeRunId}`);
     }
-    return db
+    const rows = await db
       .select({
         id: heartbeatRuns.id,
         usageJson: heartbeatRuns.usageJson,
@@ -2370,8 +2422,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .from(heartbeatRuns)
       .where(and(...conditions))
       .orderBy(desc(heartbeatRuns.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
+      .limit(USAGE_BASELINE_SCAN_LIMIT);
+    return pickUsageBaseline(rows);
   }
 
   async function getOldestRunForSession(agentId: string, sessionId: string) {
@@ -2402,8 +2454,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     }
 
-    const previousRun = await getLatestRunForSession(agentId, sessionId, { excludeRunId: runId });
-    const previousRawUsage = readRawUsageTotals(previousRun?.usageJson);
+    const baseline = await getLatestUsageBaselineForSession(agentId, sessionId, {
+      excludeRunId: runId,
+    });
+    const previousRawUsage = baseline?.totals ?? null;
     return {
       normalizedUsage: deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
       previousRawUsage,

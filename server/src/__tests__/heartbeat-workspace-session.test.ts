@@ -571,13 +571,33 @@ describe("prioritizeProjectWorkspaceCandidatesForRun", () => {
 });
 
 describe("parseSessionCompactionPolicy", () => {
-  it("disables Paperclip-managed rotation by default for codex and claude local", () => {
+  /**
+   * codex_local moved off "never rotate" deliberately.
+   *
+   * Native context management means the adapter will not overflow its window;
+   * it does not mean the session is cheap. Every call re-reads the accumulated
+   * history, and across a heartbeat interval the provider's prompt cache has
+   * gone cold, so that history is billed as fresh input. Measured on a live
+   * instance, a session left to run reached 400k+ input per wake to produce a
+   * few hundred tokens of output.
+   *
+   * Rotation also carries the agent's instructions now: they are sent once per
+   * session rather than on every wake, so a session that never rotates is one
+   * where the mandate is never re-stated.
+   */
+  it("gives codex local a bounded ceiling rather than never rotating", () => {
     expect(parseSessionCompactionPolicy(buildAgent("codex_local"))).toEqual({
       enabled: true,
-      maxSessionRuns: 0,
-      maxRawInputTokens: 0,
-      maxSessionAgeHours: 0,
+      maxSessionRuns: 40,
+      maxRawInputTokens: 250_000,
+      maxSessionAgeHours: 24,
     });
+  });
+
+  it("still disables Paperclip-managed rotation by default for claude local", () => {
+    // Only the adapters actually running heartbeats on the instance that was
+    // measured were changed. Widening it to every native-compaction adapter
+    // would be a guess dressed up as a fix.
     expect(parseSessionCompactionPolicy(buildAgent("claude_local"))).toEqual({
       enabled: true,
       maxSessionRuns: 0,
@@ -617,7 +637,9 @@ describe("parseSessionCompactionPolicy", () => {
       enabled: true,
       maxSessionRuns: 25,
       maxRawInputTokens: 500_000,
-      maxSessionAgeHours: 0,
+      // Not overridden, so it still comes from the adapter default — which is
+      // the other half of what "overrides win" has to mean.
+      maxSessionAgeHours: 24,
     });
   });
 });

@@ -20,8 +20,13 @@ feature branch  ──PR──▶  staging  ──test on a real instance──�
 ```
 
 `staging` being unprotected is the point — it is where something half-finished
-can be put on a real machine and driven. The gate that matters is the PR from
-`staging` into `main`, which runs the full matrix like any other.
+can be put on a real machine and driven. The gate that *enforces* anything is
+the PR from `staging` into `main`, which runs the full matrix and cannot be
+merged without it.
+
+The same checks also run on PRs into `staging`, where they are advisory: nothing
+blocks the merge, but a syntax error or a failing suite is visible before
+somebody spends an afternoon on a test machine finding it by hand.
 
 If `main` moves ahead of `staging` (a hotfix, say), bring `staging` forward
 before testing anything else, or you are testing a tree nobody will ever run:
