@@ -4,6 +4,12 @@ on:
   pull_request:
     branches:
       - main
+      # Candidates land on `staging` before a test instance picks them up (see
+      # doc/TESTING.md). Without this they arrived there with no verify, no
+      # policy and no drift check — so the first thing to find a syntax error
+      # was a human on a test machine. `staging` stays unprotected on purpose;
+      # this makes the checks advisory there and required on the way to `main`.
+      - staging
 
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
