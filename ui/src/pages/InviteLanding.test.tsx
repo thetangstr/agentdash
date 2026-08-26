@@ -310,6 +310,7 @@ describe("InviteLandingPage", () => {
           <QueryClientProvider client={queryClient}>
             <Routes>
               <Route path="/invite/:token" element={<InviteLandingPage />} />
+              <Route path="/member-onboarding" element={<div>Member onboarding destination</div>} />
             </Routes>
           </QueryClientProvider>
         </MemoryRouter>,
@@ -357,6 +358,7 @@ describe("InviteLandingPage", () => {
     expect(setSelectedCompanyIdMock).toHaveBeenCalledWith("company-1", { source: "manual" });
     expect(queryClient.getQueryData(queryKeys.companies.all)).toBeUndefined();
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
+    expect(container.textContent).toContain("Member onboarding destination");
 
     await act(async () => {
       root.unmount();
