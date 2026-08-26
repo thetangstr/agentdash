@@ -8187,27 +8187,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (elapsedMs < policy.intervalSec * 1000) continue;
         lastTimerCheckAtByAgent.set(agent.id, now.getTime());
 
-        // Timer heartbeats are a fallback for actionable assigned work, not a
-        // model-powered idle poll. Restrict the check to statuses an agent can
-        // actively advance and use the existing company/assignee/status index.
-        const actionableIssue = await db
-          .select({ id: issues.id })
-          .from(issues)
-          .where(
-            and(
-              eq(issues.companyId, agent.companyId),
-              eq(issues.assigneeAgentId, agent.id),
-              inArray(issues.status, ["todo", "in_progress"]),
-              isNull(issues.hiddenAt),
-            ),
-          )
-          .limit(1)
-          .then((rows) => rows[0] ?? null);
-        if (!actionableIssue) {
-          skippedNoWork += 1;
-          continue;
-        }
-
         // A due timer may be polled while its previous wake is still active.
         // Treat that as a skip so the scheduler does not count a coalesced run
         // as newly enqueued and emit a misleading INFO line every 30 seconds.
@@ -8226,6 +8205,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (activeRun) {
           skipped += 1;
           continue;
+        }
+
+        // Preserve the full wakeworthy-work contract (assigned blocked work,
+        // fact requests, new comments, explicit sweeps, and opt-out agents).
+        // The in-memory baseline above bounds these indexed checks and their
+        // visible skip log to the configured heartbeat interval.
+        const sweepDue =
+          policy.sweepIntervalSec > 0 && elapsedMs >= policy.sweepIntervalSec * 1000;
+        if (policy.requireWork && !sweepDue) {
+          if (!(await agentHasWakeworthyWork(agent, new Date(lastRunAt)))) {
+            skippedNoWork += 1;
+            continue;
+          }
         }
 
         const run = await enqueueWakeup(agent.id, {

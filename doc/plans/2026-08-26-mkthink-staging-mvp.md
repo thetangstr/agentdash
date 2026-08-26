@@ -32,6 +32,7 @@
 - Rollback checkpoint: `mkthink-staging-checkpoint-20260826-103008.sql.gz`; gzip integrity and stop/restart continuity passed.
 - Full `pnpm test:run`, `pnpm -r typecheck`, `pnpm build`, architecture, migration, diff, and targeted security-pattern gates passed. Repository-wide forbidden-token and dependency-audit gates remain red from unchanged baseline findings and are promotion blockers, not waived by this slice.
 - Independent review found one bounded-polling defect; a red/green regression and per-agent timer-check baseline resolved it, and re-review reported no remaining source findings.
+- Promotion branch `codex/mkthink-staging-mvp-pr` was subsequently rebased onto the now-current `origin/main` at `a02aaaa4`; the uniqueness migration was regenerated as `0122_funny_valkyrie.sql`. Current main has removed the dedicated CEO and Chief-of-Staff onboarding asset files, so the rebase preserved those deletions and retained the explicit board-only note in the two surviving prompt-generation surfaces instead of resurrecting stale prompts.
 
 ### Task 1: Per-user invited-member onboarding
 
@@ -46,7 +47,7 @@
 - Create/modify tests: `server/src/__tests__/invite-accept-auto-approve.test.ts`, access manual-approval coverage, and `server/src/__tests__/member-onboarding.test.ts`
 - Create: `ui/src/pages/MemberOnboarding.tsx` and test
 - Modify: `ui/src/api/onboarding.ts`, `ui/src/components/CloudAccessGate.tsx`, `ui/src/App.tsx`, `ui/src/pages/InviteLanding.tsx` and their tests
-- Modify all four agent prompt surfaces with an explicit non-applicability note because this is board-session-only behavior.
+- Modify every prompt-generation surface present on the promotion base with an explicit non-applicability note because this is board-session-only behavior; do not resurrect prompt files deleted by current `main`.
 
 - [ ] Add failing DB/service tests proving one in-progress session per `(companyId, createdByUserId)`, resume without duplication, cross-user/company isolation, completion, and completed-row non-reopening.
 - [ ] Run `pnpm exec vitest run server/src/__tests__/member-onboarding.test.ts server/src/__tests__/invite-accept-auto-approve.test.ts` and confirm failures are caused by missing lifecycle behavior.
@@ -121,5 +122,5 @@
 - [ ] Run dependency audit, security/privacy/static gates defined by `package.json` and `.github/workflows/pr.yml`; run relevant authenticated Playwright specs.
 - [ ] Dispatch an independent code reviewer against the base/head SHAs; fix every verified Critical/Important issue and rerun affected/full gates.
 - [ ] Review the final diff for unrelated changes, secrets, client identifiers/data, and prompt-surface compliance.
-- [ ] Push `codex/mkthink-staging-mvp` and create a PR to `main` using every section of `.github/PULL_REQUEST_TEMPLATE.md`; do not merge.
+- [ ] Push the clean `codex/mkthink-staging-mvp-pr` promotion branch and create a PR to `main` using every section of `.github/PULL_REQUEST_TEMPLATE.md`; do not merge.
 - [ ] Capture CI status, exact commits/test counts/runtime receipt/resource impact/rollback proof, and a separated production-promotion checklist.
