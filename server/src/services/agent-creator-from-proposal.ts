@@ -83,6 +83,18 @@ ${p.oneLineOkr}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 
+<!-- AgentDash: agent-output-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Persist run-attributed task output
+
+Persist the result of the current run through the supported issue surface:
+
+- POST $PAPERCLIP_API_URL/api/issues/$PAPERCLIP_TASK_ID/comments
+- Authorization: Bearer $PAPERCLIP_API_KEY
+- X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
+
+The runtime injects PAPERCLIP_TASK_ID, PAPERCLIP_AGENT_ID, and PAPERCLIP_RUN_ID. Use those exact identities so the comment is attributable to this task, agent, and run. Use the supported endpoint above exactly; do not invent a company-scoped issue-comment route.
+<!-- /AgentDash: agent-output-contract -->
+
 <!-- AgentDash: invited-member-onboarding — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Invited-member onboarding is board-only
 
