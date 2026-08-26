@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeBillableCents,
+  computeVisibleUsageCost,
   reportUsageToStripe,
   usagePricingFromEnv,
 } from "../services/usage-billing.js";
@@ -46,6 +47,57 @@ describe("usagePricingFromEnv", () => {
     expect(usagePricingFromEnv().markup).toBe(1.5);
     process.env.AGENTDASH_USAGE_MARKUP = "nonsense";
     expect(usagePricingFromEnv().markup).toBe(1.5);
+  });
+
+  it("rejects negative and invalid token prices", () => {
+    process.env.AGENTDASH_USAGE_INPUT_CENTS_PER_MTOK = "-15";
+    process.env.AGENTDASH_USAGE_OUTPUT_CENTS_PER_MTOK = "not-a-number";
+    expect(usagePricingFromEnv()).toMatchObject({
+      inputCentsPerMTok: 0,
+      outputCentsPerMTok: 0,
+    });
+  });
+});
+
+describe("computeVisibleUsageCost", () => {
+  it("makes token-bearing zero-cost runs visible with configured test pricing", () => {
+    expect(
+      computeVisibleUsageCost(
+        {
+          inputTokens: 908_000,
+          outputTokens: 0,
+          providerCostUsd: 0,
+          billingType: "metered_api",
+        },
+        { markup: 1, inputCentsPerMTok: 15, outputCentsPerMTok: 60 },
+      ),
+    ).toEqual({ costCents: 14, source: "token_pricing" });
+  });
+
+  it("preserves a larger provider cost and keeps subscription-included runs at zero", () => {
+    const pricing = { markup: 1, inputCentsPerMTok: 15, outputCentsPerMTok: 60 };
+    expect(
+      computeVisibleUsageCost(
+        {
+          inputTokens: 908_000,
+          outputTokens: 0,
+          providerCostUsd: 0.25,
+          billingType: "metered_api",
+        },
+        pricing,
+      ),
+    ).toEqual({ costCents: 25, source: "provider_reported" });
+    expect(
+      computeVisibleUsageCost(
+        {
+          inputTokens: 908_000,
+          outputTokens: 0,
+          providerCostUsd: 0.25,
+          billingType: "subscription_included",
+        },
+        pricing,
+      ),
+    ).toEqual({ costCents: 0, source: "subscription_included" });
   });
 });
 

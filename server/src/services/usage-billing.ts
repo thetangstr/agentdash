@@ -23,11 +23,49 @@ export interface UsagePricing {
 
 export function usagePricingFromEnv(): UsagePricing {
   const markup = Number(process.env.AGENTDASH_USAGE_MARKUP);
+  const inputCentsPerMTok = Number(process.env.AGENTDASH_USAGE_INPUT_CENTS_PER_MTOK);
+  const outputCentsPerMTok = Number(process.env.AGENTDASH_USAGE_OUTPUT_CENTS_PER_MTOK);
   return {
     markup: Number.isFinite(markup) && markup > 0 ? markup : 1.5,
-    inputCentsPerMTok: Number(process.env.AGENTDASH_USAGE_INPUT_CENTS_PER_MTOK) || 0,
-    outputCentsPerMTok: Number(process.env.AGENTDASH_USAGE_OUTPUT_CENTS_PER_MTOK) || 0,
+    inputCentsPerMTok:
+      Number.isFinite(inputCentsPerMTok) && inputCentsPerMTok >= 0
+        ? inputCentsPerMTok
+        : 0,
+    outputCentsPerMTok:
+      Number.isFinite(outputCentsPerMTok) && outputCentsPerMTok >= 0
+        ? outputCentsPerMTok
+        : 0,
   };
+}
+
+export type VisibleUsageCostSource =
+  | "provider_reported"
+  | "token_pricing"
+  | "subscription_included";
+
+export function computeVisibleUsageCost(
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    providerCostUsd: number | null | undefined;
+    billingType: string;
+  },
+  pricing = usagePricingFromEnv(),
+): { costCents: number; source: VisibleUsageCostSource } {
+  if (usage.billingType === "subscription_included") {
+    return { costCents: 0, source: "subscription_included" };
+  }
+  const providerCents =
+    typeof usage.providerCostUsd === "number" && Number.isFinite(usage.providerCostUsd)
+      ? Math.max(0, Math.round(usage.providerCostUsd * 100))
+      : 0;
+  const tokenCents = Math.ceil(
+    (Math.max(0, usage.inputTokens) / 1_000_000) * pricing.inputCentsPerMTok +
+      (Math.max(0, usage.outputTokens) / 1_000_000) * pricing.outputCentsPerMTok,
+  );
+  return tokenCents > providerCents
+    ? { costCents: tokenCents, source: "token_pricing" }
+    : { costCents: providerCents, source: "provider_reported" };
 }
 
 export interface UsageTotals {
