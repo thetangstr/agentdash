@@ -9,6 +9,11 @@ export {
   type TrialService,
 } from "./trial.js";
 export { inviteService } from "./invites.js";
+export {
+  memberOnboardingService,
+  MEMBER_ONBOARDING_STEPS,
+  type MemberOnboardingStep,
+} from "./member-onboarding.js";
 export { feedbackService } from "./feedback.js";
 export { companySkillService } from "./company-skills.js";
 export { agentService, deduplicateAgentName } from "./agents.js";

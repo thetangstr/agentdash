@@ -76,6 +76,7 @@ import {
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
+import { memberOnboardingService } from "../services/member-onboarding.js";
 import {
   grantsForHumanRole,
   normalizeHumanRole,
@@ -3531,6 +3532,10 @@ export function accessRoutes(
               ),
               req.actor.userId ?? null,
             );
+            await memberOnboardingService(dbOrTx).startOrResume(
+              companyId,
+              requestingUserId,
+            );
 
             const approved = await dbOrTx
               .insert(joinRequests)
@@ -4062,6 +4067,10 @@ export function accessRoutes(
               lockedRequest.requestingUserId,
               grants,
               req.actor.userId ?? null
+            );
+            await memberOnboardingService(dbOrTx).startOrResume(
+              companyId,
+              lockedRequest.requestingUserId,
             );
           } else {
             const existingAgents = await txAgents.list(companyId);

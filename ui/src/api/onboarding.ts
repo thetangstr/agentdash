@@ -46,7 +46,33 @@ export interface CompleteInitialAssessmentResponse {
   redirectUrl: string;
 }
 
+export interface MemberOnboardingSession {
+  id: string;
+  companyId: string;
+  companyName: string;
+  issuePrefix: string;
+  status: "in_progress" | "completed";
+  currentStep: "welcome" | "workspace";
+  completedAt: string | null;
+  updatedAt: string;
+}
+
 export const onboardingApi = {
+  listMemberSessions: () =>
+    api.get<MemberOnboardingSession[]>("/onboarding/member-sessions"),
+  advanceMemberSession: (
+    companyId: string,
+    currentStep: MemberOnboardingSession["currentStep"],
+  ) =>
+    api.patch<MemberOnboardingSession>(
+      `/onboarding/member-sessions/${companyId}`,
+      { currentStep },
+    ),
+  completeMemberSession: (companyId: string) =>
+    api.post<MemberOnboardingSession>(
+      `/onboarding/member-sessions/${companyId}/complete`,
+      {},
+    ),
   bootstrap: () => api.post<BootstrapResponse>("/onboarding/bootstrap", {}),
   interviewTurn: (input: {
     conversationId: string;

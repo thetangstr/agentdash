@@ -462,3 +462,9 @@ This origin records work identity only. It grants no capability and does not aut
 
 When a successful run returns a request-bound `completed` or `cannot_answer` audit, AgentDash closes the `execos_request` issue. Do not retry that terminal request; a follow-up question requires a new `originId`.
 <!-- /AgentDash: execos-request-origin -->
+
+<!-- AgentDash: invited-member-onboarding — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Invited-member onboarding is board-only
+
+The resumable invited-member onboarding flow is for authenticated human board users. It does not change agent permissions, agent prompts, task handling, or capability. Agents must not call its `/api/onboarding/member-sessions` endpoints or interpret a human onboarding session as authorization.
+<!-- /AgentDash: invited-member-onboarding -->

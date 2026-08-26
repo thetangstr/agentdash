@@ -14,8 +14,14 @@ import {
   agentInstructionsService,
   cosOnboardingStateService,
   inviteService,
+  logActivity,
   OnboardingTierCapacityExceededError,
 } from "../services/index.js";
+import {
+  memberOnboardingService,
+  MEMBER_ONBOARDING_STEPS,
+  type MemberOnboardingStep,
+} from "../services/member-onboarding.js";
 import { unauthorized, badRequest, notFound } from "../errors.js";
 import { assertCompanyAccess } from "./authz.js";
 import { SingleCompanyInstallationError } from "../services/companies.js";
@@ -130,6 +136,7 @@ export function onboardingV2Routes(db: Db) {
   // service per call (fixes review feedback re: per-request churn).
   const companies = companyService(db);
   const tierServices = tierCapacityServices(db);
+  const memberOnboarding = memberOnboardingService(db);
 
   const users = {
     getById: async (id: string) => {
@@ -208,6 +215,72 @@ export function onboardingV2Routes(db: Db) {
       agents: agentService(dbOrTx),
     };
   }
+
+  // AgentDash: invited-member-onboarding — this lifecycle is deliberately
+  // separate from workspace bootstrap. It records only board-user progress
+  // and never grants permissions, creates agents, or mutates company setup.
+  router.get("/member-sessions", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    res.json(
+      await memberOnboarding.listForUser(
+        req.actor.userId,
+        req.actor.companyIds ?? [],
+      ),
+    );
+  });
+
+  router.patch("/member-sessions/:companyId", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const currentStep = req.body?.currentStep;
+    if (
+      typeof currentStep !== "string" ||
+      !MEMBER_ONBOARDING_STEPS.includes(currentStep as MemberOnboardingStep)
+    ) {
+      throw badRequest("currentStep must be welcome or workspace");
+    }
+    const updated = await memberOnboarding.advance(
+      companyId,
+      req.actor.userId,
+      currentStep as MemberOnboardingStep,
+    );
+    if (!updated) throw notFound("Member onboarding session not found");
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId,
+      action: "onboarding.member_advanced",
+      entityType: "onboarding_session",
+      entityId: updated.id,
+      details: { currentStep: updated.currentStep },
+    });
+    res.json(updated);
+  });
+
+  router.post("/member-sessions/:companyId/complete", async (req, res) => {
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      throw unauthorized("Sign-in required");
+    }
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const completed = await memberOnboarding.complete(companyId, req.actor.userId);
+    if (!completed) throw notFound("Member onboarding session not found");
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: req.actor.userId,
+      action: "onboarding.member_completed",
+      entityType: "onboarding_session",
+      entityId: completed.id,
+      details: { completedAt: completed.completedAt },
+    });
+    res.json(completed);
+  });
 
   // POST /api/onboarding/bootstrap
   // The orchestrator owns the welcome sequence end-to-end (posted atomically

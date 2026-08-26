@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "onboarding_sessions_company_user_unique" ON "onboarding_sessions" USING btree ("company_id","created_by_user_id");
