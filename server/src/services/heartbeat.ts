@@ -52,6 +52,7 @@ import type {
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
+import { computeVisibleUsageCost } from "./usage-billing.js";
 import { agentRunService } from "./agent-runs.js";
 import { quotaEnforcementService, quotaExceededPayload } from "./quota-enforcement.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
@@ -1211,12 +1212,6 @@ function resolveLedgerBiller(result: AdapterExecutionResult): string {
   return readNonEmptyString(result.biller) ?? readNonEmptyString(result.provider) ?? "unknown";
 }
 
-function normalizeBilledCostCents(costUsd: number | null | undefined, billingType: BillingType): number {
-  if (billingType === "subscription_included") return 0;
-  if (typeof costUsd !== "number" || !Number.isFinite(costUsd)) return 0;
-  return Math.max(0, Math.round(costUsd * 100));
-}
-
 async function resolveLedgerScopeForRun(
   db: Db,
   companyId: string,
@@ -2206,6 +2201,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const workspaceOperationsSvc = workspaceOperationService(db);
   const instructionRefreshSvc = agentInstructionRefreshService({ db });
   const activeRunExecutions = new Set<string>();
+  const lastTimerCheckAtByAgent = new Map<string, number>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
@@ -4849,7 +4845,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const outputTokens = usage?.outputTokens ?? 0;
     const cachedInputTokens = usage?.cachedInputTokens ?? 0;
     const billingType = normalizeLedgerBillingType(result.billingType);
-    const additionalCostCents = normalizeBilledCostCents(result.costUsd, billingType);
+    const visibleCost = computeVisibleUsageCost({
+      inputTokens,
+      outputTokens,
+      providerCostUsd: result.costUsd,
+      billingType,
+    });
+    const additionalCostCents = visibleCost.costCents;
     const hasTokenUsage = inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0;
     const provider = result.provider ?? "unknown";
     const biller = resolveLedgerBiller(result);
@@ -5972,6 +5974,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         rawUsage,
       });
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
+      const billingType = normalizeLedgerBillingType(adapterResult.billingType);
+      const visibleCost = computeVisibleUsageCost({
+        inputTokens: normalizedUsage?.inputTokens ?? 0,
+        outputTokens: normalizedUsage?.outputTokens ?? 0,
+        providerCostUsd: adapterResult.costUsd,
+        billingType,
+      });
 
       let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
@@ -6022,7 +6031,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               : "failed";
 
       const usageJson =
-        normalizedUsage || adapterResult.costUsd != null
+        normalizedUsage || adapterResult.costUsd != null || visibleCost.costCents > 0
           ? ({
               ...(normalizedUsage ?? {}),
               ...(rawUsage ? {
@@ -6042,8 +6051,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               provider: readNonEmptyString(adapterResult.provider) ?? "unknown",
               biller: resolveLedgerBiller(adapterResult),
               model: readNonEmptyString(adapterResult.model) ?? "unknown",
-              ...(adapterResult.costUsd != null ? { costUsd: adapterResult.costUsd } : {}),
-              billingType: normalizeLedgerBillingType(adapterResult.billingType),
+              ...(adapterResult.costUsd != null || visibleCost.costCents > 0
+                ? {
+                    costUsd: visibleCost.costCents / 100,
+                    costSource: visibleCost.source,
+                  }
+                : {}),
+              billingType,
             } as Record<string, unknown>)
           : null;
 
@@ -7949,9 +7963,55 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (!policy.enabled || policy.intervalSec <= 0) continue;
 
         checked += 1;
-        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
+        const persistedBaseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
+        const baseline = Math.max(
+          persistedBaseline,
+          lastTimerCheckAtByAgent.get(agent.id) ?? persistedBaseline,
+        );
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
+        lastTimerCheckAtByAgent.set(agent.id, now.getTime());
+
+        // Timer heartbeats are a fallback for actionable assigned work, not a
+        // model-powered idle poll. Restrict the check to statuses an agent can
+        // actively advance and use the existing company/assignee/status index.
+        const actionableIssue = await db
+          .select({ id: issues.id })
+          .from(issues)
+          .where(
+            and(
+              eq(issues.companyId, agent.companyId),
+              eq(issues.assigneeAgentId, agent.id),
+              inArray(issues.status, ["todo", "in_progress"]),
+              isNull(issues.hiddenAt),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (!actionableIssue) {
+          skipped += 1;
+          continue;
+        }
+
+        // A due timer may be polled while its previous wake is still active.
+        // Treat that as a skip so the scheduler does not count a coalesced run
+        // as newly enqueued and emit a misleading INFO line every 30 seconds.
+        const activeRun = await db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.companyId, agent.companyId),
+              eq(heartbeatRuns.agentId, agent.id),
+              inArray(heartbeatRuns.status, ["queued", "running", "scheduled"]),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (activeRun) {
+          skipped += 1;
+          continue;
+        }
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
