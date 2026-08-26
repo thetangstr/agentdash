@@ -11,15 +11,14 @@ import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
-import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { requireActiveStewardHarness } from "./agentdash-mk-harness-auth.js";
 
 export function agentGovernanceRoutes(db: Db) {
   const router = Router();
   const governance = agentGovernanceService(db);
   const access = accessService(db);
-  const stewardships = agentStewardshipService(db);
 
   /**
    * Profile gate. Non-`agentdash_mk` companies must be indistinguishable from a
@@ -122,12 +121,13 @@ export function agentGovernanceRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       const agentId = req.params.agentId as string;
       await requireProfileCompany(req, companyId);
-      assertBoard(req);
-      const userId = req.actor.userId ?? null;
-      const active = userId ? await stewardships.activeByAgent(companyId, agentId) : null;
-      if (!active || active.userId !== userId) {
-        throw forbidden("Only the agent's active steward can push a harness ceiling");
-      }
+      const active = await requireActiveStewardHarness(
+        db,
+        req,
+        companyId,
+        agentId,
+        "Only the agent's active steward can push a harness ceiling",
+      );
 
       const { policy, clamped } = await governance.pushHarnessStewardRequest(companyId, agentId, {
         policy: req.body.policy,

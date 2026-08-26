@@ -4,12 +4,11 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies } from "@paperclipai/db";
 import { pushAgentDirectivesSchema } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { agentDirectivesService } from "../services/agent-directives.js";
-import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess } from "./authz.js";
+import { requireActiveStewardHarness } from "./agentdash-mk-harness-auth.js";
 
 /**
  * AgentDash-MK: the harness→agent directives channel.
@@ -28,7 +27,6 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
 export function agentDirectivesRoutes(db: Db) {
   const router = Router();
   const directives = agentDirectivesService(db);
-  const stewardships = agentStewardshipService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -52,11 +50,13 @@ export function agentDirectivesRoutes(db: Db) {
    * mean what it says.
    */
   async function requireSteward(req: Request, companyId: string, agentId: string) {
-    assertBoard(req);
-    const userId = req.actor.userId ?? null;
-    const active = userId ? await stewardships.activeByAgent(companyId, agentId) : null;
-    if (active && active.userId === userId) return active;
-    throw forbidden("Only the agent's active steward can push directives");
+    return requireActiveStewardHarness(
+      db,
+      req,
+      companyId,
+      agentId,
+      "Only the agent's active steward can push directives",
+    );
   }
 
   router.get("/companies/:companyId/agents/:agentId/directives", async (req, res) => {
