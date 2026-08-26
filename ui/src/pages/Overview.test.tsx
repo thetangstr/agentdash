@@ -65,10 +65,16 @@ function ok(data: unknown): QueryResult {
   return { data, isLoading: false, error: null };
 }
 
-function makeDashboard(overrides: { active?: number; running?: number } = {}) {
+function makeDashboard(
+  overrides: {
+    active?: number;
+    running?: number;
+    tasks?: { open: number; inProgress: number; done: number };
+  } = {},
+) {
   return {
     agents: { active: overrides.active ?? 0, running: overrides.running ?? 0, paused: 0 },
-    tasks: { open: 2, inProgress: 1, done: 4 },
+    tasks: overrides.tasks ?? { open: 2, inProgress: 1, done: 4 },
     pendingApprovals: 0,
     costs: { monthSpendCents: 1250, monthBudgetCents: 10000 },
   };
@@ -174,5 +180,23 @@ describe("Overview", () => {
     await render();
 
     expect(container.textContent).toContain("Acme · 5 agents");
+  });
+
+  it("shows dashboard tasks.open as the headline open task count", async () => {
+    setQuery(
+      "dashboard",
+      ok(makeDashboard({ tasks: { open: 3, inProgress: 5, done: 7 } })),
+    );
+
+    await render();
+
+    const openTasksLabel = Array.from(container.querySelectorAll("div")).find(
+      (node) => node.textContent === "open tasks",
+    );
+    const openTasksCardText = openTasksLabel?.parentElement?.textContent ?? "";
+
+    expect(container.textContent).toContain("Acme · 0 agents · 3 open tasks");
+    expect(openTasksCardText).toContain("open tasks3");
+    expect(openTasksCardText).not.toContain("open tasks15");
   });
 });
