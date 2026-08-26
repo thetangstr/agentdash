@@ -758,7 +758,7 @@ export function Overview() {
 
   // Hooks MUST be called before any early return
   const animatedAgents = useCountUp(agentsActive, 0, reduced);
-  const animatedTasks = useCountUp(tasksOpen + tasksInProgress + tasksDone, 70, reduced);
+  const animatedTasks = useCountUp(tasksOpen, 70, reduced);
 
   if (!selectedCompanyId) {
     return (

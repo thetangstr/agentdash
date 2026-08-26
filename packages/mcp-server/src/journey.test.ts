@@ -279,7 +279,7 @@ describe("agentdash_setup_status", () => {
       ]],
       [/\/companies\/[^/]+\/dashboard$/, {
         pendingApprovals: 1,
-        taskCounts: { open: 4, inProgress: 1, blocked: 0, done: 2 },
+        tasks: { open: 4, inProgress: 1, done: 2 },
       }],
       [/\/companies\/[^/]+\/approvals\?status=pending$/, [{ id: APPROVAL_ID }]],
     ]);
@@ -316,7 +316,7 @@ describe("agentdash_setup_status", () => {
       [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/api\/companies$/, [{ id: COMPANY_ID }]],
       [/\/companies\/[^/]+\/agents$/, []],
-      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
+      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, tasks: { open: 0, inProgress: 0, done: 0 } }],
       [/\/approvals\?status=pending$/, []],
     ]);
 
@@ -347,7 +347,7 @@ describe("agentdash_setup_status", () => {
     const fetchMock = routeFetch([
       [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
-      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
+      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, tasks: { open: 0, inProgress: 0, done: 0 } }],
       [/\/approvals\?status=pending$/, []],
       [/\/conversations\/companies\/[^/]+\/inbox$/, { id: CONVERSATION_ID }],
       [/\/conversations\/[^/]+\/messages\?limit=200$/, [
@@ -372,7 +372,7 @@ describe("agentdash_setup_status", () => {
     routeFetch([
       [/\/api\/health$/, { status: "ok", adapterReady: true }],
       [/\/companies\/[^/]+\/agents$/, [{ id: AGENT_ID, role: "chief_of_staff", status: "idle" }]],
-      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, taskCounts: { open: 0 } }],
+      [/\/companies\/[^/]+\/dashboard$/, { pendingApprovals: 0, tasks: { open: 0, inProgress: 0, done: 0 } }],
       [/\/approvals\?status=pending$/, []],
       [/\/conversations\/companies\/[^/]+\/inbox$/, { id: CONVERSATION_ID }],
       [/\/conversations\/[^/]+\/messages\?limit=200$/, [{ id: "m1", body: "welcome" }]],
