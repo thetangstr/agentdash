@@ -5,6 +5,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   activityLog,
+  agentApiKeys,
+  agentConnectCodes,
   agentDirectives,
   agentGovernancePolicies,
   agentRuns,
@@ -85,6 +87,8 @@ describeEmbeddedPostgres("agentdash-mk harness directives and ceilings", () => {
         await db.delete(connections);
         await db.delete(agentDirectives);
         await db.delete(agentGovernancePolicies);
+        await db.delete(agentConnectCodes);
+        await db.delete(agentApiKeys);
         await db.delete(agentStewardships);
         await db.delete(companyMemberships);
         await db.delete(agents);
@@ -195,6 +199,35 @@ describeEmbeddedPostgres("agentdash-mk harness directives and ceilings", () => {
     };
   }
 
+  async function pairedHarnessActor(companyId: string, agentId: string, stewardUserId: string) {
+    const key = await db
+      .insert(agentApiKeys)
+      .values({
+        companyId,
+        agentId,
+        name: "Casper — paired staging harness",
+        keyHash: randomUUID().replaceAll("-", ""),
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await db.insert(agentConnectCodes).values({
+      companyId,
+      agentId,
+      codeHash: randomUUID().replaceAll("-", ""),
+      expiresAt: new Date(Date.now() - 60_000),
+      redeemedAt: new Date(),
+      issuedApiKeyId: key.id,
+      createdByUserId: stewardUserId,
+    });
+    return {
+      type: "agent",
+      agentId,
+      companyId,
+      keyId: key.id,
+      source: "agent_key",
+    };
+  }
+
   async function call(app: express.Express, build: (baseUrl: string) => request.Test) {
     const { createServer } = await import("node:http");
     const server = createServer(app);
@@ -269,6 +302,75 @@ describeEmbeddedPostgres("agentdash-mk harness directives and ceilings", () => {
   }
 
   // -- authorization ------------------------------------------------------
+
+  it("lets the active steward's connect-code-issued harness read and push directives", async () => {
+    const { company, agent, steward } = await seed();
+    const actor = await pairedHarnessActor(company.id, agent.id, steward.principalId);
+    const app = createApp(actor);
+
+    const initial = await call(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/directives`),
+    );
+    expect(initial.status).toBe(200);
+    expect(initial.body).toEqual({ active: null, history: [] });
+
+    const pushed = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/directives`)
+        .send({ directives: "Prepare drafts only; wait for human approval before external action." }),
+    );
+    expect(pushed.status).toBe(201);
+    expect(pushed.body.directive.pushedByUserId).toBe(steward.principalId);
+
+    const narrowed = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .put(`/api/companies/${company.id}/agents/${agent.id}/governance/harness-request`)
+        .send({ policy: policy({ providers: ["sharepoint"] }) }),
+    );
+    expect(narrowed.status).toBe(200);
+    expect(narrowed.body.policy.stewardRequest.providers).toEqual(["sharepoint"]);
+  });
+
+  it("keeps ordinary agent keys and a former steward's paired harness blocked", async () => {
+    const { company, agent, owner, steward, outsider } = await seed();
+    const paired = await pairedHarnessActor(company.id, agent.id, steward.principalId);
+
+    const ordinaryKey = await db
+      .insert(agentApiKeys)
+      .values({
+        companyId: company.id,
+        agentId: agent.id,
+        name: "ordinary runtime key",
+        keyHash: randomUUID().replaceAll("-", ""),
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    const ordinary = createApp({
+      type: "agent",
+      agentId: agent.id,
+      companyId: company.id,
+      keyId: ordinaryKey.id,
+      source: "agent_key",
+    });
+    const ordinaryRead = await call(ordinary, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/directives`),
+    );
+    expect(ordinaryRead.status).toBe(403);
+
+    await agentStewardshipService(db).transfer(company.id, agent.id, {
+      userId: outsider.principalId,
+      transferredByUserId: owner.principalId,
+      transferReason: "Regression: old paired device must lose steward authority",
+    });
+    const stale = createApp(paired);
+    const stalePush = await call(stale, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/directives`)
+        .send({ directives: "This must not persist." }),
+    );
+    expect(stalePush.status).toBe(403);
+    expect(await db.select().from(agentDirectives)).toHaveLength(0);
+  });
 
   it("refuses a directive push from anyone but the agent's active steward", async () => {
     // 403, not 404: the caller is a real member of a real profile company, so
