@@ -15,7 +15,7 @@
 Continue in this worktree:
 
 ```sh
-cd /Users/Kailor/.config/superpowers/worktrees/agentdash/agentdash-mk
+cd "$HOME/.config/superpowers/worktrees/agentdash/agentdash-mk"
 git status --short
 git branch --show-current
 ```
@@ -425,7 +425,7 @@ Do not call AgentDash-MK complete until all are true:
 
 ```text
 Continue the AgentDash-MK implementation in:
-/Users/Kailor/.config/superpowers/worktrees/agentdash/agentdash-mk
+$HOME/.config/superpowers/worktrees/agentdash/agentdash-mk
 
 Read AGENTS.md, the approved design, the implementation plan, and
 doc/plans/2026-07-28-agentdash-mk-claude-code-handoff.md in full.
