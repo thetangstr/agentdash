@@ -131,6 +131,11 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-
 import { recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
+import {
+  evaluateTaskRecoveryBudget,
+  formatTaskRecoveryBudgetUsage,
+  TASK_RECOVERY_BUDGET_LIMITS,
+} from "./task-recovery-budget.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { redactEventPayload } from "../redaction.js";
 import {
@@ -168,6 +173,7 @@ const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 /** The liveness reaper's verdict when it can no longer see a run's child process. */
 const PROCESS_LOST_ERROR_CODE = "process_lost";
+const TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE = "task_recovery_budget_exhausted";
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
@@ -3060,6 +3066,233 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .where(eq(agentWakeupRequests.id, wakeupRequestId));
   }
 
+  function taskRecoveryParentRunId(run: typeof heartbeatRuns.$inferSelect) {
+    const context = parseObject(run.contextSnapshot);
+    return run.retryOfRunId ??
+      readNonEmptyString(context.retryOfRunId) ??
+      readNonEmptyString(context.livenessContinuationSourceRunId) ??
+      readNonEmptyString(context.missingIssueCommentForRunId);
+  }
+
+  function taskRecoveryRunIssueId(run: typeof heartbeatRuns.$inferSelect) {
+    const context = parseObject(run.contextSnapshot);
+    return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
+  }
+
+  async function taskRecoveryAncestors(
+    run: typeof heartbeatRuns.$inferSelect,
+    issueId: string,
+  ) {
+    const ancestors: Array<typeof heartbeatRuns.$inferSelect> = [];
+    const seen = new Set<string>([run.id]);
+    let parentId = taskRecoveryParentRunId(run);
+
+    while (parentId && ancestors.length < 50 && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.id, parentId),
+            eq(heartbeatRuns.companyId, run.companyId),
+            eq(heartbeatRuns.agentId, run.agentId),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (!parent) break;
+      if (taskRecoveryRunIssueId(parent) !== issueId) break;
+      ancestors.push(parent);
+      parentId = taskRecoveryParentRunId(parent);
+    }
+
+    return ancestors;
+  }
+
+  async function cancelQueuedRunForRecoveryBudget(
+    run: typeof heartbeatRuns.$inferSelect,
+    reason: string,
+  ) {
+    const now = new Date();
+    const cancelled = await setRunStatus(run.id, "cancelled", {
+      finishedAt: now,
+      error: reason,
+      errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE,
+    });
+    await setWakeupStatus(run.wakeupRequestId, "skipped", {
+      finishedAt: now,
+      error: reason,
+    });
+    return cancelled;
+  }
+
+  async function ensureTaskRecoveryBudgetCommentOnce(input: {
+    run: typeof heartbeatRuns.$inferSelect;
+    issueId: string;
+    usageSummary: string;
+    exhaustedBy: string[];
+  }) {
+    const dimensions = input.exhaustedBy.length > 0
+      ? input.exhaustedBy.join(", ")
+      : "persisted aggregate limit";
+    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic wakeups and provider calls are suppressed until human remediation.`;
+
+    await db.transaction(async (tx) => {
+      const issue = await tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.run.companyId)))
+        .for("update")
+        .then((rows) => rows[0] ?? null);
+      if (!issue) return;
+
+      const existing = await tx
+        .select({ id: issueComments.id })
+        .from(issueComments)
+        .where(
+          and(
+            eq(issueComments.companyId, input.run.companyId),
+            eq(issueComments.issueId, input.issueId),
+            sql`${issueComments.body} like 'Automatic recovery budget exhausted%'`,
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (existing) return;
+
+      await tx.insert(issueComments).values({
+        companyId: input.run.companyId,
+        issueId: input.issueId,
+        authorAgentId: input.run.agentId,
+        createdByRunId: input.run.id,
+        body,
+      });
+      await tx
+        .update(issues)
+        .set({ updatedAt: new Date() })
+        .where(eq(issues.id, input.issueId));
+    });
+  }
+
+  async function enforceTaskRecoveryBudget(
+    run: typeof heartbeatRuns.$inferSelect,
+    issueId: string,
+  ): Promise<boolean> {
+    const issue = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (!issue) return false;
+
+    const executionState = parseObject(issue.executionState);
+    const existingBudget = parseObject(executionState.recoveryBudget);
+    if (existingBudget.status === "exhausted") {
+      const usage = parseObject(existingBudget.usage);
+      const usageSummary = formatTaskRecoveryBudgetUsage({
+        automaticRetries: asNumber(usage.automaticRetries, 0),
+        providerTurns: asNumber(usage.providerTurns, 0),
+        providerTokens: asNumber(usage.providerTokens, 0),
+        providerCostUsd: asNumber(usage.providerCostUsd, 0),
+        runtimeMs: asNumber(usage.runtimeMs, 0),
+      });
+      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Human remediation must clear the exhausted recovery state before another run can start.`;
+      await cancelQueuedRunForRecoveryBudget(run, reason);
+      await ensureTaskRecoveryBudgetCommentOnce({
+        run,
+        issueId,
+        usageSummary,
+        exhaustedBy: Array.isArray(existingBudget.exhaustedBy)
+          ? existingBudget.exhaustedBy.filter((value): value is string => typeof value === "string")
+          : [],
+      });
+      return true;
+    }
+
+    if (!taskRecoveryParentRunId(run)) return false;
+    const ancestors = await taskRecoveryAncestors(run, issueId);
+    if (ancestors.length === 0) return false;
+
+    const decision = evaluateTaskRecoveryBudget(ancestors);
+    if (decision.exhaustedBy.length === 0) return false;
+
+    const now = new Date();
+    const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage);
+    const reason = `Automatic recovery budget exhausted (${decision.exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until human remediation clears the exhausted recovery state.`;
+    const recoveryBudget = {
+      status: "exhausted",
+      exhaustedBy: decision.exhaustedBy,
+      usage: decision.usage,
+      limits: TASK_RECOVERY_BUDGET_LIMITS,
+      exhaustedAt: now.toISOString(),
+      sourceRunId: ancestors[0]?.id ?? null,
+      refusedRunId: run.id,
+    };
+
+    await db
+      .update(issues)
+      .set({
+        status: "blocked",
+        executionState: { ...executionState, recoveryBudget },
+        checkoutRunId: null,
+        executionRunId: null,
+        executionAgentNameKey: null,
+        executionLockedAt: null,
+        updatedAt: now,
+      })
+      .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)));
+
+    const cancelled = await cancelQueuedRunForRecoveryBudget(run, reason);
+    if (!cancelled) return true;
+
+    const siblingRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, run.companyId),
+          eq(heartbeatRuns.agentId, run.agentId),
+          inArray(heartbeatRuns.status, ["queued", "scheduled_retry"]),
+          sql`${heartbeatRuns.id} <> ${run.id}`,
+          or(
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
+          ),
+        ),
+      );
+    for (const sibling of siblingRuns) {
+      await cancelQueuedRunForRecoveryBudget(sibling, reason);
+    }
+
+    await ensureTaskRecoveryBudgetCommentOnce({
+      run,
+      issueId,
+      usageSummary,
+      exhaustedBy: decision.exhaustedBy,
+    });
+    await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "error",
+      message: reason,
+      payload: { recoveryBudget },
+    });
+    await logActivity(db, {
+      companyId: run.companyId,
+      actorType: "system",
+      actorId: "system",
+      agentId: run.agentId,
+      runId: run.id,
+      action: "issue.recovery_budget_exhausted",
+      entityType: "issue",
+      entityId: issueId,
+      details: recoveryBudget,
+    });
+    return true;
+  }
+
   async function addContinuationExhaustedCommentOnce(input: {
     run: typeof heartbeatRuns.$inferSelect;
     issueId: string;
@@ -4084,6 +4317,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           eq(issues.companyId, agent.companyId),
           eq(issues.assigneeAgentId, agent.id),
           inArray(issues.status, ["todo", "in_progress", "blocked"]),
+          sql`coalesce(${issues.executionState} -> 'recoveryBudget' ->> 'status', '') <> 'exhausted'`,
         ),
       )
       .limit(1)
@@ -4117,6 +4351,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           and(
             eq(issues.companyId, agent.companyId),
             eq(issues.assigneeAgentId, agent.id),
+            sql`coalesce(${issues.executionState} -> 'recoveryBudget' ->> 'status', '') <> 'exhausted'`,
             gt(issueComments.createdAt, since),
           ),
         )
@@ -4126,6 +4361,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     return false;
+  }
+
+  async function agentHasRecoveryBudgetExhaustedWork(
+    agent: typeof agents.$inferSelect,
+  ): Promise<boolean> {
+    return db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, agent.companyId),
+          eq(issues.assigneeAgentId, agent.id),
+          inArray(issues.status, ["todo", "in_progress", "blocked"]),
+          sql`${issues.executionState} -> 'recoveryBudget' ->> 'status' = 'exhausted'`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows.length > 0);
   }
 
   function issueRunPriorityRank(priority: string | null | undefined) {
@@ -4179,8 +4432,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const context = parseObject(run.contextSnapshot);
+    const recoveryIssueId = taskRecoveryRunIssueId(run);
+    if (recoveryIssueId && await enforceTaskRecoveryBudget(run, recoveryIssueId)) {
+      logger.info(
+        { runId: run.id, issueId: recoveryIssueId, errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE },
+        "claimQueuedRun: cancelled by aggregate task recovery budget",
+      );
+      return null;
+    }
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
-      issueId: readNonEmptyString(context.issueId),
+      issueId: recoveryIssueId,
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
@@ -8213,11 +8474,28 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // visible skip log to the configured heartbeat interval.
         const sweepDue =
           policy.sweepIntervalSec > 0 && elapsedMs >= policy.sweepIntervalSec * 1000;
+        let wakeworthy: boolean | null = null;
+        const hasWakeworthyWork = async () => {
+          wakeworthy ??= await agentHasWakeworthyWork(agent, new Date(lastRunAt));
+          return wakeworthy;
+        };
         if (policy.requireWork && !sweepDue) {
-          if (!(await agentHasWakeworthyWork(agent, new Date(lastRunAt)))) {
+          if (!(await hasWakeworthyWork())) {
             skippedNoWork += 1;
             continue;
           }
+        }
+
+        // A sweep may preserve mandate-driven discovery for an otherwise empty
+        // agent, but it must not bypass a durable per-task recovery exhaustion
+        // marker when that exhausted assignment is the agent's only known work.
+        if (
+          (sweepDue || !policy.requireWork) &&
+          await agentHasRecoveryBudgetExhaustedWork(agent) &&
+          !(await hasWakeworthyWork())
+        ) {
+          skippedNoWork += 1;
+          continue;
         }
 
         const run = await enqueueWakeup(agent.id, {

@@ -31,6 +31,29 @@ const renderedPromptSurfaces = PROMPT_SURFACES.map((surface) => ({
 }));
 
 describe("AgentDash-MK prompt surface synchronization", () => {
+  it("includes the run-attributed issue comment contract in every prompt surface", () => {
+    for (const surface of renderedPromptSurfaces) {
+      expect(surface.content, `${surface.name} is missing the named output contract`).toContain(
+        "<!-- AgentDash: agent-output-contract",
+      );
+      expect(surface.content, `${surface.name} omits the supported comment endpoint`).toContain(
+        "$PAPERCLIP_API_URL/api/issues/$PAPERCLIP_TASK_ID/comments",
+      );
+      expect(surface.content, `${surface.name} omits bearer agent authentication`).toContain(
+        "Authorization: Bearer $PAPERCLIP_API_KEY",
+      );
+      expect(surface.content, `${surface.name} omits run attribution`).toContain(
+        "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID",
+      );
+      expect(surface.content, `${surface.name} omits the injected agent identity`).toContain(
+        "PAPERCLIP_AGENT_ID",
+      );
+      expect(surface.content, `${surface.name} suggests the invalid company-scoped comment route`).not.toContain(
+        "/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/comments",
+      );
+    }
+  });
+
   it("includes the AgentDash-MK workforce block in every prompt surface", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the named block`).toContain(

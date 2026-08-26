@@ -351,6 +351,22 @@ describe("renderPaperclipWakePrompt", () => {
     );
   });
 
+  it("gives every local agent the run-attributed issue comment write contract", () => {
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain(
+      "$PAPERCLIP_API_URL/api/issues/$PAPERCLIP_TASK_ID/comments",
+    );
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain(
+      "Authorization: Bearer $PAPERCLIP_API_KEY",
+    );
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain(
+      "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID",
+    );
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("PAPERCLIP_AGENT_ID");
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).not.toContain(
+      "/api/companies/$PAPERCLIP_COMPANY_ID/issues/$PAPERCLIP_TASK_ID/comments",
+    );
+  });
+
   it("adds the execution contract to scoped wake prompts", () => {
     const prompt = renderPaperclipWakePrompt({
       reason: "issue_assigned",
