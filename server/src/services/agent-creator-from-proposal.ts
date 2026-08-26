@@ -83,6 +83,12 @@ ${p.oneLineOkr}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 
+<!-- AgentDash: invited-member-onboarding — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Invited-member onboarding is board-only
+
+The resumable invited-member onboarding flow is for authenticated human board users. It does not change agent permissions, agent prompts, task handling, or capability. Agents must not call its \`/api/onboarding/member-sessions\` endpoints or interpret a human onboarding session as authorization.
+<!-- /AgentDash: invited-member-onboarding -->
+
 <!-- AgentDash: agent-memory — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Your memory
 

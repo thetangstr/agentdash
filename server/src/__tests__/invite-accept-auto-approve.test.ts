@@ -19,6 +19,7 @@ import {
   createDb,
   invites,
   joinRequests,
+  onboardingSessions,
   principalPermissionGrants,
 } from "@paperclipai/db";
 import { accessRoutes } from "../routes/access.js";
@@ -46,6 +47,7 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
   afterEach(async () => {
     await db.delete(activityLog);
     await db.delete(joinRequests);
+    await db.delete(onboardingSessions);
     await db.delete(invites);
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
@@ -158,6 +160,21 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       .where(eq(invites.companyId, companyId))
       .then((rows) => rows[0] ?? null);
     expect(consumed?.acceptedAt).not.toBeNull();
+
+    const onboarding = await db
+      .select()
+      .from(onboardingSessions)
+      .where(
+        and(
+          eq(onboardingSessions.companyId, companyId),
+          eq(onboardingSessions.createdByUserId, userId),
+        ),
+      );
+    expect(onboarding).toHaveLength(1);
+    expect(onboarding[0]).toMatchObject({
+      status: "in_progress",
+      currentStep: "welcome",
+    });
   });
 
   it("creates a pending_approval join request with no membership when auto_approve is false", async () => {
@@ -195,5 +212,11 @@ describeEmbeddedPostgres("POST /invites/:token/accept (auto_approve)", () => {
       .then((rows) => rows[0] ?? null);
     expect(joinRequest?.status).toBe("pending_approval");
     expect(joinRequest?.approvedAt).toBeNull();
+
+    const onboarding = await db
+      .select()
+      .from(onboardingSessions)
+      .where(eq(onboardingSessions.companyId, companyId));
+    expect(onboarding).toHaveLength(0);
   });
 });

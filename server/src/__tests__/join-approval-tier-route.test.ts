@@ -9,6 +9,7 @@ const notifyHireApprovedMock = vi.fn().mockResolvedValue(undefined);
 const seatSyncMock = vi.fn().mockResolvedValue(undefined);
 const ensureMembershipMock = vi.fn().mockResolvedValue(undefined);
 const setPrincipalGrantsMock = vi.fn().mockResolvedValue(undefined);
+const startOrResumeMemberOnboardingMock = vi.fn().mockResolvedValue(undefined);
 // AgentDash: invite-role-ceiling (P0.5) — resolves the approver's company role.
 const getMembershipMock = vi.fn(
   async (_companyId: string, _type: string, _userId: string) =>
@@ -54,6 +55,11 @@ function registerModuleMocks() {
   }));
   vi.doMock("../services/seat-quantity-syncer.js", () => ({
     seatQuantitySyncer: () => ({ onMembershipChanged: seatSyncMock }),
+  }));
+  vi.doMock("../services/member-onboarding.js", () => ({
+    memberOnboardingService: () => ({
+      startOrResume: startOrResumeMemberOnboardingMock,
+    }),
   }));
 }
 
@@ -171,6 +177,7 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
     vi.doUnmock("../middleware/build-tier-deps.js");
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../services/seat-quantity-syncer.js");
+    vi.doUnmock("../services/member-onboarding.js");
     registerModuleMocks();
     vi.clearAllMocks();
     process.env.STRIPE_SECRET_KEY = "sk_test_free_caps";
@@ -336,6 +343,10 @@ describe("POST /companies/:companyId/join-requests/:requestId/approve Free tier 
       "user-2",
       "member",
       "active",
+    );
+    expect(startOrResumeMemberOnboardingMock).toHaveBeenCalledWith(
+      "company-1",
+      "user-2",
     );
   });
 });

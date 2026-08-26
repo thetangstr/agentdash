@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { accessApi } from "@/api/access";
 import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
+import { onboardingApi } from "@/api/onboarding";
 import { queryKeys } from "@/lib/queryKeys";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
@@ -72,22 +73,35 @@ export function CloudAccessGate() {
     retry: false,
   });
 
+  const memberOnboardingQuery = useQuery({
+    queryKey: queryKeys.onboarding.memberSessions,
+    queryFn: () => onboardingApi.listMemberSessions(),
+    enabled:
+      isAuthenticatedMode &&
+      !!sessionQuery.data &&
+      (boardAccessQuery.data?.companyIds.length ?? 0) > 0,
+    retry: false,
+  });
+
   if (
     healthQuery.isLoading ||
     (isAuthenticatedMode && sessionQuery.isLoading) ||
-    (isAuthenticatedMode && !!sessionQuery.data && boardAccessQuery.isLoading)
+    (isAuthenticatedMode && !!sessionQuery.data && boardAccessQuery.isLoading) ||
+    memberOnboardingQuery.isFetching
   ) {
     return <div className="mx-auto max-w-xl py-10 text-sm text-muted-foreground">Loading...</div>;
   }
 
-  if (healthQuery.error || boardAccessQuery.error) {
+  if (healthQuery.error || boardAccessQuery.error || memberOnboardingQuery.error) {
     return (
       <div className="mx-auto max-w-xl py-10 text-sm text-destructive">
         {healthQuery.error instanceof Error
           ? healthQuery.error.message
           : boardAccessQuery.error instanceof Error
             ? boardAccessQuery.error.message
-            : "Failed to load app state"}
+            : memberOnboardingQuery.error instanceof Error
+              ? memberOnboardingQuery.error.message
+              : "Failed to load app state"}
       </div>
     );
   }
@@ -133,6 +147,13 @@ export function CloudAccessGate() {
       return <Navigate to="/onboarding" replace />;
     }
     return <NoBoardAccessPage />;
+  }
+
+  const incompleteMemberSession = memberOnboardingQuery.data?.find(
+    (session) => session.status === "in_progress",
+  );
+  if (incompleteMemberSession && location.pathname !== "/member-onboarding") {
+    return <Navigate to="/member-onboarding" replace />;
   }
 
   return <Outlet />;

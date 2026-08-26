@@ -18,6 +18,10 @@ const mockAccessApi = vi.hoisted(() => ({
   getCurrentBoardAccess: vi.fn(),
 }));
 
+const mockOnboardingApi = vi.hoisted(() => ({
+  listMemberSessions: vi.fn(),
+}));
+
 vi.mock("./api/health", () => ({
   healthApi: mockHealthApi,
 }));
@@ -28,6 +32,10 @@ vi.mock("./api/auth", () => ({
 
 vi.mock("./api/access", () => ({
   accessApi: mockAccessApi,
+}));
+
+vi.mock("./api/onboarding", () => ({
+  onboardingApi: mockOnboardingApi,
 }));
 
 vi.mock("@/lib/router", () => ({
@@ -60,6 +68,7 @@ describe("CloudAccessGate", () => {
       deploymentMode: "authenticated",
       bootstrapStatus: "ready",
     });
+    mockOnboardingApi.listMemberSessions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -275,11 +284,66 @@ describe("CloudAccessGate", () => {
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("Outlet content");
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("Outlet content");
+      });
+    });
     expect(container.textContent).not.toContain("No company access");
 
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("routes an invited member with incomplete onboarding to the resumable flow", async () => {
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+    });
+    mockAccessApi.getCurrentBoardAccess.mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com", name: "User", image: null },
+      userId: "user-1",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+      source: "session",
+      keyId: null,
+    });
+    mockOnboardingApi.listMemberSessions.mockResolvedValue([
+      {
+        id: "onboarding-1",
+        companyId: "company-1",
+        companyName: "MKThink",
+        issuePrefix: "MKT",
+        status: "in_progress",
+        currentStep: "workspace",
+        completedAt: null,
+        updatedAt: "2026-08-26T17:00:00.000Z",
+      },
+    ]);
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CloudAccessGate />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("Navigate:/member-onboarding");
+      });
+    });
+    expect(container.textContent).not.toContain("Outlet content");
+
+    await act(async () => root.unmount());
   });
 });

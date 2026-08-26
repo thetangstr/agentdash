@@ -369,7 +369,7 @@ export function InviteLandingPage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
       if (invite?.companyId && isApprovedHumanJoinPayload(payload, showsAgentForm)) {
         setSelectedCompanyId(invite.companyId, { source: "manual" });
-        navigate("/", { replace: true });
+        navigate("/member-onboarding", { replace: true });
       }
     },
     onError: (err) => {

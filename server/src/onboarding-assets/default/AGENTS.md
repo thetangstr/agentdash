@@ -514,3 +514,8 @@ The addressee is the deliverable's **first** approver — deliberately not the s
 No real cycle has run anywhere in this system. Every recommendation it can currently produce would be derived from events written in tests. Treat one as a suggestion with its evidence attached, repeat the evidence whenever you repeat the suggestion, and do not describe it as a finding.
 <!-- /AgentDash: agentdash-mk-recommendations -->
 
+<!-- AgentDash: invited-member-onboarding — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Invited-member onboarding is board-only
+
+The resumable invited-member onboarding flow is for authenticated human board users. It does not change agent permissions, agent prompts, task handling, or capability. Agents must not call its `/api/onboarding/member-sessions` endpoints or interpret a human onboarding session as authorization.
+<!-- /AgentDash: invited-member-onboarding -->
