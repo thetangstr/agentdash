@@ -1048,7 +1048,7 @@ export const FREE_MAIL_DOMAINS: ReadonlySet<string> = new Set([
  * - Corp emails (domain NOT in {@link FREE_MAIL_DOMAINS}) → bare lowercased
  *   domain (e.g. `acme.com`). One company per domain is enforced.
  * - Free-mail emails (domain IN {@link FREE_MAIL_DOMAINS}) → full lowercased
- *   email address (e.g. `kailortang@gmail.com`) so each personal user gets
+ *   email address (e.g. `person@example.com`) so each personal user gets
  *   their own personal workspace without colliding on `gmail.com`.
  *
  * Throws when the input is not parseable as a single `local@host` email.
