@@ -352,8 +352,8 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           }
         }
 
-        const taskCounts = dashboard?.taskCounts as Record<string, unknown> | undefined;
-        const openTasks = typeof taskCounts?.open === "number" ? taskCounts.open : 0;
+        const tasks = dashboard?.tasks as Record<string, unknown> | undefined;
+        const openTasks = typeof tasks?.open === "number" ? tasks.open : 0;
 
         const snapshot: SetupStatusSnapshot = {
           serverHealthy,
