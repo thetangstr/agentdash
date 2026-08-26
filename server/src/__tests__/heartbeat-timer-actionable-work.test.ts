@@ -104,15 +104,31 @@ describeEmbeddedPostgres("heartbeat timer actionable-work gate", () => {
     },
   );
 
-  it.each(["blocked", "in_review"] as const)(
-    "keeps assigned %s work idle",
-    async (status) => {
-      await seed(status);
-      const result = await heartbeatService(db, { autoDispatchQueuedRuns: false }).tickTimers(
-        new Date("2026-08-26T16:10:00.000Z"),
-      );
-      expect(result).toEqual({ checked: 1, enqueued: 0, skipped: 0, skippedNoWork: 1 });
-      expect(await db.select().from(heartbeatRuns)).toHaveLength(0);
-    },
-  );
+  it("does not count an already queued wake as a newly enqueued timer run", async () => {
+    const { agentId } = await seed("todo");
+    const [agent] = await db.select().from(agents);
+    await db.insert(heartbeatRuns).values({
+      companyId: agent!.companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "queued",
+      contextSnapshot: {},
+    });
+
+    const result = await heartbeatService(db, { autoDispatchQueuedRuns: false }).tickTimers(
+      new Date("2026-08-26T16:10:00.000Z"),
+    );
+
+    expect(result).toEqual({ checked: 1, enqueued: 0, skipped: 1, skippedNoWork: 0 });
+    expect(await db.select().from(heartbeatRuns)).toHaveLength(1);
+  });
+
+  it("keeps assigned in-review work idle", async () => {
+    await seed("in_review");
+    const result = await heartbeatService(db, { autoDispatchQueuedRuns: false }).tickTimers(
+      new Date("2026-08-26T16:10:00.000Z"),
+    );
+    expect(result).toEqual({ checked: 1, enqueued: 0, skipped: 0, skippedNoWork: 1 });
+    expect(await db.select().from(heartbeatRuns)).toHaveLength(0);
+  });
 });
