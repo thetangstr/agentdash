@@ -1,10 +1,30 @@
-# Releasing Paperclip
+# Releasing AgentDash
 
-Maintainer runbook for shipping Paperclip across npm, GitHub, and the website-facing changelog surface.
+Maintainer runbook for shipping the AgentDash application and owned packages through their separate release lines.
+
+<!-- AgentDash: owned-release-boundary — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash fork release boundary
+
+AgentDash has two deliberately separate release lines:
+
+- **Application/OTA:** `.github/workflows/release.yml` verifies an immutable application source, creates CalVer tags/releases, and builds checksummed updater assets. Every invocation passes `--skip-npm`; this path must never publish workspace packages.
+- **Owned connector:** `.github/workflows/publish-connect.yml` publishes only `packages/connect` as `agentdash-connect`, preserving its `0.1.x` versions and `agentdash-connect-v*` tags. npm authenticates that workflow with trusted publishing/OIDC.
+
+`scripts/release-package-map.mjs` is an explicit ownership allowlist. In this fork it contains only `packages/connect` / `agentdash-connect`; inherited `@paperclipai/*` and unprovisioned `@agentdash/*` names are not release targets. Add another package only after ownership, naming, trusted-publisher configuration, version policy, tests, and review are explicit.
+
+Canonical AgentDash commands:
+
+```bash
+./scripts/release.sh canary --skip-npm --dry-run
+./scripts/release.sh stable --skip-npm --dry-run
+```
+
+Publish `agentdash-connect` by merging its reviewed version bump and notes, running the `Publish agentdash-connect` workflow dry-run, then pushing the matching `agentdash-connect-vX.Y.Z` tag through the normal GitHub path. Do not use `scripts/release.sh` to assign a CalVer version to the connector.
+<!-- /AgentDash: owned-release-boundary -->
 
 The release model is now commit-driven:
 
-1. Every push to `master` publishes a canary automatically.
+1. Every push to `main` verifies and tags an application canary automatically.
 2. Stable releases are manually promoted from a chosen tested commit or canary tag.
 3. Stable release notes live in `releases/vYYYY.MDD.P.md` on the release-control ref.
 4. Only stable releases get GitHub Releases.
@@ -32,20 +52,20 @@ Important constraints:
 
 ## Release Surfaces
 
-Every stable release has four separate surfaces:
+Every stable application release has four separate surfaces:
 
 1. **Verification** — the exact git SHA passes typecheck, tests, and build
-2. **npm** — `paperclipai` and public workspace packages are published
-3. **GitHub** — the stable release gets a git tag and GitHub Release
-4. **Website / announcements** — the stable changelog is published externally and announced
+2. **Provenance** — the updater controller, checksum, and manifest bind the application source and release-control SHAs
+3. **GitHub** — the stable release gets a git tag, GitHub Release, and updater assets
+4. **Staging / customer handoff** — an isolated upgrade and rollback rehearsal is recorded before a customer installation is authorized
 
 A stable release is done only when all four surfaces are handled.
 
-Canaries only cover the first two surfaces plus an internal traceability tag.
+Canaries cover verification plus an internal traceability tag. They never publish npm packages.
 
 ## Core Invariants
 
-- canaries publish from `master`
+- canaries run from `main`
 - stables publish from an explicitly chosen source ref
 - tags point at the original source commit, not a generated release commit
 - stable notes are always `releases/vYYYY.MDD.P.md`
@@ -64,24 +84,14 @@ It:
 
 - verifies the pushed commit
 - computes the canary version for the current UTC date
-- publishes under npm dist-tag `canary`
-- verifies that `canary` resolves to the just-published version and that published internal dependencies exist on npm
-- fails by default if npm leaves `latest` pointing at a canary; use `--allow-canary-latest` only when that state is intentional
+- passes `--skip-npm`, so no inherited or unprovisioned package can be published
 - creates a git tag `canary/vYYYY.MDD.P-canary.N`
-
-Users install canaries with:
-
-```bash
-npx paperclipai@canary onboard
-# or
-npx paperclipai@canary onboard --data-dir "$(mktemp -d /tmp/paperclip-canary.XXXXXX)"
-```
 
 ### Stable
 
 Use [`.github/workflows/release.yml`](../.github/workflows/release.yml) from the Actions tab with the manual `workflow_dispatch` inputs.
 
-[Run the action here](https://github.com/paperclipai/paperclip/actions/workflows/release.yml)
+[Run the action here](https://github.com/thetangstr/agentdash/actions/workflows/release.yml)
 
 Inputs:
 
@@ -96,7 +106,7 @@ Inputs:
 Before running stable:
 
 1. pick the canary commit or tag you trust
-2. resolve the target stable version with `./scripts/release.sh stable --date "$(date +%F)" --print-version`
+2. resolve the target stable version with `./scripts/release.sh stable --skip-npm --date "$(date +%F)" --print-version`
 3. create or update `releases/vYYYY.MDD.P.md` on the default branch that contains the release workflow
 4. run the stable workflow from that default branch with the chosen immutable commit as `source_ref`
 
@@ -115,7 +125,7 @@ It then:
 
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
-- publishes `YYYY.MDD.P` under npm dist-tag `latest`
+- does not publish npm packages
 - creates git tag `vYYYY.MDD.P` on the immutable source commit, not the release-control commit
 - builds the standalone Mac mini source-launchd controller from the release-control checkout, with a SHA-256 checksum and JSON provenance manifest
 - creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md` and uploads those release-control assets
@@ -125,24 +135,17 @@ It then:
 ### Preview a canary locally
 
 ```bash
-./scripts/release.sh canary --dry-run
+./scripts/release.sh canary --skip-npm --dry-run
 ```
 
 ### Preview a stable locally
 
 ```bash
-./scripts/release.sh stable --dry-run
+./scripts/release.sh stable --skip-npm --dry-run
 ```
 
-### Publish a stable locally
-
-This is mainly for emergency/manual use. The normal path is the GitHub workflow.
-
-```bash
-./scripts/release.sh stable
-git push public-gh refs/tags/vYYYY.MDD.P
-PUBLISH_REMOTE=public-gh ./scripts/create-github-release.sh YYYY.MDD.P
-```
+Live stable publication is only through `.github/workflows/release.yml`. Do not
+manually publish or tag around that workflow.
 
 ## Stable Changelog Workflow
 
@@ -155,7 +158,7 @@ Canaries do not get changelog files.
 Recommended local generation flow:
 
 ```bash
-VERSION="$(./scripts/release.sh stable --date 2026-03-18 --print-version)"
+VERSION="$(./scripts/release.sh stable --skip-npm --date 2026-03-18 --print-version)"
 claude --print --output-format stream-json --verbose --dangerously-skip-permissions --model claude-opus-4-6 "Use the release-changelog skill to draft or update releases/v${VERSION}.md for Paperclip. Read doc/RELEASING.md and .agents/skills/release-changelog/SKILL.md, then generate the stable changelog for v${VERSION} from commits since the last stable tag. Do not create a canary changelog."
 ```
 
@@ -167,35 +170,13 @@ The repo intentionally does not run this through GitHub Actions because:
 
 ## Smoke Testing
 
-For a canary:
-
-```bash
-PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
-```
-
-For the current stable:
-
-```bash
-PAPERCLIPAI_VERSION=latest ./scripts/docker-onboard-smoke.sh
-```
-
-Useful isolated variants:
-
-```bash
-HOST_PORT=3232 DATA_DIR=./data/release-smoke-canary PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
-HOST_PORT=3233 DATA_DIR=./data/release-smoke-stable PAPERCLIPAI_VERSION=latest ./scripts/docker-onboard-smoke.sh
-```
-
-Automated browser smoke is also available:
-
-```bash
-gh workflow run release-smoke.yml -f paperclip_version=canary
-gh workflow run release-smoke.yml -f paperclip_version=latest
-```
+Download the application release controller, checksum, and manifest from the
+GitHub Release. Verify the checksum and both provenance SHAs, then exercise the
+controller in a loopback-only synthetic instance before customer installation.
 
 Minimum checks:
 
-- `npx paperclipai@canary onboard` installs
+- the checksummed release controller installs or upgrades the synthetic instance
 - onboarding completes without crashes
 - authenticated login works with the smoke credentials
 - the browser lands in onboarding on a fresh instance
@@ -205,16 +186,10 @@ Minimum checks:
 
 ## Rollback
 
-Rollback does not unpublish versions.
-
-It only moves the `latest` dist-tag back to a previous stable:
-
-```bash
-./scripts/rollback-latest.sh 2026.318.0 --dry-run
-./scripts/rollback-latest.sh 2026.318.0
-```
-
-Then fix forward with a new stable patch slot or release date.
+Application rollback uses the generated `agentdash-source-rollback.sh` wrapper,
+which returns to the previously recorded immutable commit. Verify restored
+health and data before ending the rehearsal. npm versions of `agentdash-connect`
+are immutable; correct connector defects with a new patch release.
 
 ## Failure Playbooks
 
@@ -229,33 +204,16 @@ Instead:
 3. wait for the next automatic canary
 4. rerun smoke testing
 
-### If stable npm publish succeeds but tag push or GitHub release creation fails
+### If the application tag exists but the GitHub Release or assets fail
 
-This is a partial release. npm is already live.
-
-Do this immediately:
-
-1. push the missing tag
-2. rerun `PUBLISH_REMOTE=public-gh ./scripts/create-github-release.sh YYYY.MDD.P`
-3. verify the GitHub Release notes point at `releases/vYYYY.MDD.P.md`
-
-Do not republish the same version.
-
-### If `latest` is broken after stable publish
-
-Roll back the dist-tag:
-
-```bash
-./scripts/rollback-latest.sh YYYY.MDD.P
-```
-
-Then fix forward with a new stable release.
+Stop customer installation. Repair and rerun the canonical workflow against the
+same immutable source and release-control commits; never retag a different
+commit with the same version.
 
 ## Related Files
 
 - [`scripts/release.sh`](../scripts/release.sh)
 - [`scripts/release-package-map.mjs`](../scripts/release-package-map.mjs)
 - [`scripts/create-github-release.sh`](../scripts/create-github-release.sh)
-- [`scripts/rollback-latest.sh`](../scripts/rollback-latest.sh)
 - [`doc/PUBLISHING.md`](PUBLISHING.md)
 - [`doc/RELEASE-AUTOMATION-SETUP.md`](RELEASE-AUTOMATION-SETUP.md)

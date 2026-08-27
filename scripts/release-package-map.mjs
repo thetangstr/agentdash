@@ -1,51 +1,44 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
-const roots = ["packages", "server", "ui", "cli"];
+const ownedReleasePackages = [
+  { dir: "packages/connect", name: "agentdash-connect" },
+];
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function discoverPublicPackages() {
-  const packages = [];
-
-  function walk(relDir) {
-    const absDir = join(repoRoot, relDir);
-    if (!existsSync(absDir)) return;
-
-    const pkgPath = join(absDir, "package.json");
-    if (existsSync(pkgPath)) {
-      const pkg = readJson(pkgPath);
-      if (!pkg.private) {
-        packages.push({
-          dir: relDir,
-          pkgPath,
-          name: pkg.name,
-          version: pkg.version,
-          pkg,
-        });
-      }
-      return;
+  return ownedReleasePackages.map(({ dir, name }) => {
+    const pkgPath = join(repoRoot, dir, "package.json");
+    if (!existsSync(pkgPath)) {
+      throw new Error(`owned release package ${dir} (${name}) is missing`);
     }
 
-    for (const entry of readdirSync(absDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") continue;
-      walk(join(relDir, entry.name));
+    const pkg = readJson(pkgPath);
+    if (pkg.name !== name) {
+      throw new Error(
+        `owned release package ${dir} must be named ${name}, found ${pkg.name ?? "<missing>"}`,
+      );
     }
-  }
+    if (pkg.private) {
+      throw new Error(`owned release package ${dir} (${name}) must not be private`);
+    }
 
-  for (const rel of roots) {
-    walk(rel);
-  }
-
-  return packages;
+    return {
+      dir,
+      pkgPath,
+      name,
+      version: pkg.version,
+      pkg,
+    };
+  });
 }
 
 function sortTopologically(packages) {
@@ -116,21 +109,6 @@ function setVersion(version) {
     writeFileSync(pkg.pkgPath, `${JSON.stringify(nextPkg, null, 2)}\n`);
   }
 
-  const cliEntryPath = join(repoRoot, "cli/src/index.ts");
-  const cliEntry = readFileSync(cliEntryPath, "utf8");
-  const nextCliEntry = cliEntry.replace(
-    /\.version\("([^"]+)"\)/,
-    `.version("${version}")`,
-  );
-
-  if (cliEntry !== nextCliEntry) {
-    writeFileSync(cliEntryPath, nextCliEntry);
-    return;
-  }
-
-  if (!cliEntry.includes(".version(cliVersion)")) {
-    throw new Error("failed to rewrite CLI version string in cli/src/index.ts");
-  }
 }
 
 function listPackages() {

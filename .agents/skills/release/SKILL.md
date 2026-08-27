@@ -1,14 +1,25 @@
 ---
 name: release
 description: >
-  Coordinate a full Paperclip release across engineering verification, npm,
-  GitHub, smoke testing, and announcement follow-up. Use when leadership asks
-  to ship a release, not merely to discuss versioning.
+  Coordinate an AgentDash application or owned-package release across
+  engineering verification, GitHub, npm when applicable, smoke testing, and
+  announcement follow-up. Use when leadership asks to ship a release.
 ---
 
 # Release Coordination Skill
 
-Run the full Paperclip maintainer release workflow, not just an npm publish.
+<!-- AgentDash: release-ownership-boundary — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash release ownership boundary
+
+Classify the release before doing anything else:
+
+- **Application/OTA:** use `.github/workflows/release.yml`, CalVer tags `vYYYY.MDD.P`, and `releases/vYYYY.MDD.P.md`. Every `scripts/release.sh` invocation must pass `--skip-npm`. This path creates application tags, GitHub Releases, and checksummed updater assets; it does not publish npm packages.
+- **Owned connector:** only `packages/connect` / `agentdash-connect` is currently owned and allowlisted. Preserve semver and tags `agentdash-connect-vX.Y.Z`; put notes at `packages/connect/releases/vX.Y.Z.md`; dry-run and publish only through `.github/workflows/publish-connect.yml` using npm trusted publishing/OIDC.
+
+Never publish inherited `@paperclipai/*` packages or unprovisioned `@agentdash/*` names, never assign application CalVer to `agentdash-connect`, and never add a long-lived npm token fallback. If later steps in this skill describe upstream Paperclip npm behavior that conflicts with this block, this block is authoritative for AgentDash.
+<!-- /AgentDash: release-ownership-boundary -->
+
+Run the full AgentDash release workflow, not an ad hoc tag or npm publish.
 
 This skill coordinates:
 
@@ -37,7 +48,7 @@ Before proceeding, verify all of the following:
 3. There is at least one canary or candidate commit since the last stable tag.
 4. The candidate SHA has passed the verification gate or is about to.
 5. If manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `master`.
-6. npm publish rights are available through GitHub trusted publishing, or through local npm auth for emergency/manual use.
+6. For an owned-package release, npm trusted publishing is configured for the exact package and package-specific workflow. Local token auth is not an allowed fallback.
 7. If running through Paperclip, you have issue context for status updates and follow-up task creation.
 
 If any precondition fails, stop and report the blocker.
@@ -81,14 +92,13 @@ For stable promotion:
 
 1. choose the tested source ref
 2. confirm it is the exact SHA you want to promote
-3. resolve the target stable version with `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
+3. resolve the target stable version with `./scripts/release.sh stable --skip-npm --date YYYY-MM-DD --print-version`
 
 Useful commands:
 
 ```bash
 git tag --list 'v*' --sort=-version:refname | head -1
 git log --oneline --no-merges
-npm view paperclipai@canary version
 ```
 
 ## Step 2 — Draft the Stable Changelog
@@ -129,33 +139,24 @@ The normal canary path is automatic from `master` via:
 Confirm:
 
 1. verification passed
-2. npm canary publish succeeded
+2. no npm package publication was attempted
 3. git tag `canary/vYYYY.MDD.P-canary.N` exists
 
 Useful checks:
 
 ```bash
-npm view paperclipai@canary version
 git tag --list 'canary/v*' --sort=-version:refname | head -5
 ```
 
 ## Step 5 — Smoke Test the Canary
 
-Run:
-
-```bash
-PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
-```
-
-Useful isolated variant:
-
-```bash
-HOST_PORT=3232 DATA_DIR=./data/release-smoke-canary PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
-```
+Use the checksummed application release controller in an isolated synthetic
+instance. Verify its manifest before running it and keep the instance bound to
+loopback. Do not substitute an inherited npm package for the AgentDash app.
 
 Confirm:
 
-1. install succeeds
+1. the controller checksum and source/control provenance match
 2. onboarding completes without crashes
 3. the server boots
 4. the UI loads
@@ -182,7 +183,7 @@ Inputs:
 
 Before live stable:
 
-1. resolve the target stable version with `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
+1. resolve the target stable version with `./scripts/release.sh stable --skip-npm --date YYYY-MM-DD --print-version`
 2. ensure `releases/vYYYY.MDD.P.md` exists on the default-branch release-control ref
 3. run the stable workflow in dry-run mode first when practical
 4. then run the real stable publish
@@ -192,19 +193,20 @@ The stable workflow keeps the default-branch release controls and chosen source 
 - requires `source_ref` to be a full 40-character commit SHA
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
-- publishes `YYYY.MDD.P` under dist-tag `latest`
+- does not publish npm packages
 - creates git tag `vYYYY.MDD.P` on the exact source ref
 - builds a checksummed source-install controller with a manifest that pins source and release-control SHAs
 - creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md` and uploads the controller assets
 
-Local emergency/manual commands:
+Local preview commands:
 
 ```bash
-./scripts/release.sh stable --dry-run
-./scripts/release.sh stable
-git push public-gh refs/tags/vYYYY.MDD.P
-./scripts/create-github-release.sh YYYY.MDD.P
+./scripts/release.sh stable --skip-npm --dry-run
+./scripts/release.sh stable --skip-npm --date YYYY-MM-DD --print-version
 ```
+
+Publish through `.github/workflows/release.yml`; do not manually publish or tag
+around the canonical workflow.
 
 ## Step 7 — Finish the Other Surfaces
 
@@ -222,18 +224,13 @@ If the canary is bad:
 
 - publish another canary, do not ship stable
 
-If stable npm publish succeeds but tag push or GitHub release creation fails:
+If stable tag creation succeeds but GitHub release creation fails, stop and
+repair the GitHub workflow from the same immutable source and release-control
+result. Do not retag a different commit with the same version.
 
-- fix the git/GitHub issue immediately from the same release result
-- do not republish the same version
-
-If `latest` is bad after stable publish:
-
-```bash
-./scripts/rollback-latest.sh <last-good-version>
-```
-
-Then fix forward with a new stable release.
+If an installed application release is bad, use its generated source rollback
+wrapper and verify restored health. If an owned npm package is bad, publish a
+reviewed patch; do not unpublish or repoint inherited package names.
 
 ## Output
 
@@ -242,7 +239,7 @@ When the skill completes, provide:
 - candidate SHA and tested canary version, if relevant
 - stable version, if promoted
 - verification status
-- npm status
+- owned-package status, when the release includes one
 - smoke-test status
 - git tag / GitHub Release status
 - website / announcement follow-up status

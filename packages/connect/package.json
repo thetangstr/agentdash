@@ -1,6 +1,6 @@
 {
   "name": "agentdash-connect",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Connect your Claude Code or Codex to an AgentDash agent. One command, no daemon, no install.",
   "license": "MIT",
   "type": "module",
