@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
@@ -70,6 +71,12 @@ import {
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
 import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import {
+  WorkspaceFileError,
+  contentTypeForWorkspaceFile,
+  resolveAgentWorkspaceFile,
+} from "../lib/agent-workspace-files.js";
+import { absoluteUrl } from "../lib/public-base-url.js";
 import {
   assertHostWorkspaceCommandAuthority,
   collectIssueWorkspaceCommandPaths,
@@ -3976,6 +3983,149 @@ export function issueRoutes(
 
     res.status(201).json(withContentPath(attachment));
   });
+
+  /**
+   * Attach a file the calling agent wrote in its own workspace.
+   *
+   * An agent produces a file on the machine running the server and then has to tell
+   * a human about it. Naming the path is useless — it is true only on that machine,
+   * and the person reading the response is on a laptop. This turns the file into an
+   * attachment with a URL, which is the same shape of fix as #539: stop handing out
+   * an identifier that is only valid where it was made.
+   *
+   * Deliberately a separate route from the multipart upload rather than a mode on
+   * it. The upload path takes bytes from an HTTP client; this one takes a filename
+   * from an authenticated agent and reads the disk on its behalf. Those have
+   * different threat models and belong apart.
+   *
+   * Agent-only. A signed-in human already has the file locally and uses the upload.
+   */
+  router.post(
+    "/companies/:companyId/issues/:issueId/attachments/from-workspace",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const issueId = req.params.issueId as string;
+      assertCompanyAccess(req, companyId);
+
+      const actor = getActorInfo(req);
+      if (actor.actorType !== "agent" || !actor.agentId) {
+        // Not 403-for-flavour: the workspace root is derived from the agent id, so
+        // without one there is no root to resolve against and nothing to serve.
+        res.status(403).json({
+          error: "Only an agent can attach from a workspace; use the upload endpoint instead.",
+        });
+        return;
+      }
+
+      const issue = await svc.getById(issueId);
+      if (!issue) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      if (issue.companyId !== companyId) {
+        res.status(422).json({ error: "Issue does not belong to company" });
+        return;
+      }
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+
+      const parsed = z
+        .object({
+          path: z.string().min(1).max(1024),
+          filename: z.string().min(1).max(255).optional(),
+          issueCommentId: z.string().uuid().optional(),
+        })
+        .safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request", details: parsed.error.issues });
+        return;
+      }
+
+      let resolved;
+      try {
+        resolved = await resolveAgentWorkspaceFile(actor.agentId, parsed.data.path);
+      } catch (err) {
+        if (err instanceof WorkspaceFileError) {
+          // 404 for a missing file, 400 for a path we refuse to honour. Both are the
+          // agent's mistake to fix, and neither reveals anything about the filesystem
+          // beyond what the agent already supplied.
+          res.status(err.code === "not_found" ? 404 : 400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      const company = await companiesSvc.getById(companyId);
+      const maxBytes = normalizeIssueAttachmentMaxBytes(company?.attachmentMaxBytes);
+      if (resolved.byteSize <= 0) {
+        res.status(422).json({ error: "File is empty" });
+        return;
+      }
+      if (resolved.byteSize > maxBytes) {
+        res.status(422).json({ error: `File exceeds ${maxBytes} bytes` });
+        return;
+      }
+
+      // Read after the size check so an oversized file is never pulled into memory.
+      const body = await fs.readFile(resolved.absolutePath);
+
+      // Name the stored file after what the agent called it, but take the content
+      // type from the extension we resolved — never from the caller, which would let
+      // an agent choose how a browser interprets its bytes.
+      const originalFilename = parsed.data.filename ?? resolved.filename;
+      const contentType = contentTypeForWorkspaceFile(originalFilename);
+
+      const stored = await storage.putFile({
+        companyId,
+        namespace: `issues/${issueId}`,
+        originalFilename,
+        contentType,
+        body,
+      });
+
+      const attachment = await svc.createAttachment({
+        issueId,
+        issueCommentId: parsed.data.issueCommentId ?? null,
+        provider: stored.provider,
+        objectKey: stored.objectKey,
+        contentType: stored.contentType,
+        byteSize: stored.byteSize,
+        sha256: stored.sha256,
+        originalFilename: stored.originalFilename,
+        createdByAgentId: actor.agentId,
+        createdByUserId: null,
+      });
+
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.attachment_added",
+        entityType: "issue",
+        entityId: issueId,
+        details: {
+          attachmentId: attachment.id,
+          originalFilename: attachment.originalFilename,
+          contentType: attachment.contentType,
+          byteSize: attachment.byteSize,
+          // The path is recorded because "which file did it attach" is the first
+          // question an operator asks, and the agent's own wording is the answer.
+          workspacePath: resolved.relativePath,
+          source: "agent_workspace",
+        },
+      });
+
+      const withPath = withContentPath(attachment);
+      res.status(201).json({
+        ...withPath,
+        // Absolute where the instance advertises an address, so the agent can put a
+        // working link in its response instead of composing one from whatever
+        // endpoint it happened to dial.
+        url: absoluteUrl(withPath.contentPath) ?? null,
+      });
+    },
+  );
 
   router.get("/attachments/:attachmentId/content", async (req, res, next) => {
     const attachmentId = req.params.attachmentId as string;

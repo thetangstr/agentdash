@@ -38,3 +38,18 @@ export function approvalUrl(approvalId: string): string | undefined {
   const base = configuredPublicBaseUrl();
   return base ? `${base}/approvals/${encodeURIComponent(approvalId)}` : undefined;
 }
+
+/**
+ * Absolute URL for a server-relative path, or `undefined` when this instance
+ * advertises no public URL.
+ *
+ * Same contract as `approvalUrl` and for the same reason: a link handed to a
+ * person has to name an address they can reach, and the server is the only party
+ * that knows what that is. Callers that receive `undefined` should say so rather
+ * than substituting a guess — see #539 for what a plausible wrong link costs.
+ */
+export function absoluteUrl(pathname: string): string | undefined {
+  const base = configuredPublicBaseUrl();
+  if (!base) return undefined;
+  return `${base}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
+}
