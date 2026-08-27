@@ -633,7 +633,7 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
       }),
       async ({ companyId, summary, proposedAction, details, issueIds }) => {
         const resolvedCompanyId = client.resolveCompanyId(companyId);
-        const approval = await client.requestJson<{ id: string; status: string }>(
+        const approval = await client.requestJson<{ id: string; status: string; url?: string }>(
           "POST",
           `/companies/${resolvedCompanyId}/approvals`,
           {
@@ -653,7 +653,13 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
         return {
           approvalId: approval.id,
           status: approval.status ?? "pending",
-          approveUrl: `${client.appBaseUrl}/approvals/${approval.id}`,
+          // Prefer the URL the server minted from the address this instance
+          // advertises. `appBaseUrl` is only the endpoint this client happened to
+          // dial, so it is right for a single-machine instance and wrong for
+          // everyone else — it is what sent stewards loopback links they could
+          // not open (#539). It stays as the fallback because an instance that
+          // advertises no public URL genuinely is local.
+          approveUrl: approval.url ?? `${client.appBaseUrl}/approvals/${approval.id}`,
         };
       },
     ),
@@ -674,6 +680,10 @@ export function createJourneyToolDefinitions(client: PaperclipApiClient): ToolDe
           status: approval.status ?? null,
           decisionNote: approval.decisionNote ?? null,
           approved: approval.status === "approved",
+          // Carried through so an agent chasing a stalled decision can re-send the
+          // human a link that works, instead of rebuilding one from its own
+          // transport address (#539).
+          ...(typeof approval.url === "string" ? { approveUrl: approval.url } : {}),
         };
       },
     ),

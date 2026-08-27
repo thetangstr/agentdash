@@ -29,6 +29,7 @@ import {
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
+import { approvalUrl } from "../lib/public-base-url.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import {
@@ -42,6 +43,27 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
   return {
     ...approval,
     payload: redactEventPayload(approval.payload) ?? {},
+  };
+}
+
+/**
+ * Shape an approval row for a client response: redact the payload, and attach the
+ * absolute URL a human would open to decide it.
+ *
+ * The URL is attached here rather than by the caller because the server is the
+ * only party that knows the address this instance advertises. Clients used to
+ * build it from whatever endpoint they had happened to dial, which minted
+ * correct-looking loopback links for every reader who was not on the server's
+ * own machine (#539).
+ *
+ * Absent, not null, when the instance advertises no public URL — the same idiom
+ * the health route uses for `publicBaseUrl`.
+ */
+function approvalResponse<T extends { id: string; payload: Record<string, unknown> }>(approval: T) {
+  const url = approvalUrl(approval.id);
+  return {
+    ...redactApprovalPayload(approval),
+    ...(url ? { url } : {}),
   };
 }
 
@@ -209,7 +231,7 @@ export function approvalRoutes(
     assertCompanyAccess(req, companyId);
     const status = req.query.status as string | undefined;
     const result = await svc.list(companyId, status);
-    res.json(result.map((approval) => redactApprovalPayload(approval)));
+    res.json(result.map((approval) => approvalResponse(approval)));
   });
 
   router.get("/approvals/:id", async (req, res) => {
@@ -220,7 +242,7 @@ export function approvalRoutes(
       return;
     }
     assertCompanyAccess(req, approval.companyId);
-    res.json(redactApprovalPayload(approval));
+    res.json(approvalResponse(approval));
   });
 
   router.post("/companies/:companyId/approvals", validate(createApprovalSchema), async (req, res) => {
@@ -286,7 +308,7 @@ export function approvalRoutes(
     // internally, so an unreachable provider cannot fail this response.
     await cardDelivery.deliverForApproval(approval.id);
 
-    res.status(201).json(redactApprovalPayload(approval));
+    res.status(201).json(approvalResponse(approval));
   });
 
   router.get("/approvals/:id/issues", async (req, res) => {
@@ -478,7 +500,7 @@ export function approvalRoutes(
       await connectorSend.executeForApproval(approval.id);
     }
 
-    res.json(redactApprovalPayload(approval));
+    res.json(approvalResponse(approval));
   });
 
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
@@ -557,7 +579,7 @@ export function approvalRoutes(
       }
     }
 
-    res.json(redactApprovalPayload(approval));
+    res.json(approvalResponse(approval));
   });
 
   /**
@@ -640,7 +662,7 @@ export function approvalRoutes(
       }
     }
 
-    res.json(redactApprovalPayload(approval));
+    res.json(approvalResponse(approval));
   });
 
   router.post(
@@ -672,7 +694,7 @@ export function approvalRoutes(
         details: { type: approval.type },
       });
 
-      res.json(redactApprovalPayload(approval));
+      res.json(approvalResponse(approval));
     },
   );
 
@@ -726,7 +748,7 @@ export function approvalRoutes(
     // closed with no explanation of what replaced them.
     await cardDelivery.deliverForApproval(approval.id);
 
-    res.json(redactApprovalPayload(approval));
+    res.json(approvalResponse(approval));
   });
 
   router.get("/approvals/:id/comments", async (req, res) => {

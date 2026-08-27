@@ -349,6 +349,45 @@ const finished = runs.find((run) => run.status !== "running" && run.status !== "
 ok("the run reaches a terminal state", !!finished, JSON.stringify(runs.slice(0, 1)).slice(0, 200));
 ok("and it succeeded", finished?.status === "succeeded", `${finished?.status}`);
 
+// ------------------------------------------------- 10. approval links are openable
+section("10. An approval carries a link its reader can actually open");
+const advertised = health.body?.publicBaseUrl;
+const approval = await call("POST", `/api/companies/${companyId}/approvals`, {
+  type: "request_board_approval",
+  payload: { summary: "e2e link check", proposedAction: "nothing", requestedVia: "e2e" },
+});
+ok("an approval is created", approval.status === 201, `status=${approval.status}`);
+const approvalId = approval.body?.id;
+
+// The regression this guards (#539): the link used to be built by whichever
+// client was talking to the server, out of the address THAT client had dialled.
+// A harness on loopback therefore minted loopback links and handed them to
+// people who were not on the server's machine.
+//
+// The invariant is NOT "never loopback" — a genuinely local instance is
+// loopback, and this suite runs against one. It is that the minted link agrees
+// with the address the instance advertises about itself.
+if (advertised) {
+  ok(
+    "its url is on the address the instance advertises",
+    approval.body?.url === `${advertised}/approvals/${approvalId}`,
+    JSON.stringify({ url: approval.body?.url, advertised }),
+  );
+} else {
+  ok(
+    "no url is invented when the instance advertises none",
+    approval.body?.url === undefined,
+    JSON.stringify({ url: approval.body?.url }),
+  );
+}
+
+const readBack = await call("GET", `/api/approvals/${approvalId}`);
+ok(
+  "and reading it back gives the same link",
+  readBack.body?.url === approval.body?.url,
+  JSON.stringify({ created: approval.body?.url, readBack: readBack.body?.url }),
+);
+
 // ---------------------------------------------------------------- summary
 section(`Result: ${passed} passed, ${failures.length} failed`);
 for (const failure of failures) {
