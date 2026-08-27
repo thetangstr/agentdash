@@ -328,6 +328,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Publish stable
+        id: stable_release
         env:
           GITHUB_ACTIONS: "true"
           REPO_ROOT: ${{ github.workspace }}/source
@@ -341,13 +342,22 @@ jobs:
           version="$(release-control/scripts/release.sh "${version_args[@]}")"
           export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
           release-control/scripts/release.sh "${args[@]}"
+          tag="v${version}"
+          tag_source="$(git -C source rev-parse "refs/tags/${tag}^{commit}")"
+          current_source="$(git -C source rev-parse HEAD)"
+          if [ "$tag_source" != "$current_source" ]; then
+            echo "Error: stable tag resolves to $tag_source, expected $current_source." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Push stable tag
         working-directory: source
         run: |
-          tag="$(git tag --points-at HEAD | grep '^v' | head -1)"
+          tag="${{ steps.stable_release.outputs.tag }}"
           if [ -z "$tag" ]; then
-            echo "Error: no stable tag points at HEAD after release." >&2
+            echo "Error: stable release did not provide an exact tag." >&2
             exit 1
           fi
           tag_source="$(git rev-parse "$tag^{commit}")"
@@ -361,9 +371,9 @@ jobs:
       - name: Build release-control assets
         id: release_control_assets
         run: |
-          version="$(git -C source tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
+          version="${{ steps.stable_release.outputs.version }}"
           if [ -z "$version" ]; then
-            echo "Error: no v* tag points at HEAD after stable release." >&2
+            echo "Error: stable release did not provide an exact version." >&2
             exit 1
           fi
           output_dir="${{ runner.temp }}/agentdash-release-assets"

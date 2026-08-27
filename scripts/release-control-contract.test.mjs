@@ -42,6 +42,22 @@ test("stable workflow separates immutable source from release-control metadata",
   assert.match(workflow, /--asset/);
 });
 
+test("stable publication carries the exact resolved version through every downstream step", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const publishStable = workflow.slice(workflow.indexOf("  publish_stable:"));
+
+  assert.match(publishStable, /name:\s*Publish stable\s+id:\s*stable_release/);
+  assert.match(publishStable, /echo "version=\$version" >> "\$GITHUB_OUTPUT"/);
+  assert.match(publishStable, /echo "tag=\$tag" >> "\$GITHUB_OUTPUT"/);
+  assert.match(publishStable, /tag="\$\{\{ steps\.stable_release\.outputs\.tag \}\}"/);
+  assert.match(publishStable, /version="\$\{\{ steps\.stable_release\.outputs\.version \}\}"/);
+  assert.doesNotMatch(
+    publishStable,
+    /git(?: -C source)? tag --points-at HEAD/,
+    "stable publication must not rediscover a tag when multiple stable tags share one source SHA",
+  );
+});
+
 test("release scripts honor explicit source and release-notes paths", () => {
   const releaseScript = readFileSync(path.join(repoRoot, "scripts/release.sh"), "utf8");
   const githubReleaseScript = readFileSync(path.join(repoRoot, "scripts/create-github-release.sh"), "utf8");
