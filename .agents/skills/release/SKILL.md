@@ -24,7 +24,7 @@ Run the full AgentDash release workflow, not an ad hoc tag or npm publish.
 This skill coordinates:
 
 - stable changelog drafting via `release-changelog`
-- canary verification and publish status from `master`
+- canary verification and publish status from `main`
 - Docker smoke testing via `scripts/docker-onboard-smoke.sh`
 - manual stable promotion from a chosen source ref
 - GitHub Release creation
@@ -47,7 +47,7 @@ Before proceeding, verify all of the following:
 2. The immutable source checkout is clean, including untracked files.
 3. There is at least one canary or candidate commit since the last stable tag.
 4. The candidate SHA has passed the verification gate or is about to.
-5. If manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `master`.
+5. If manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `main`.
 6. For an owned-package release, npm trusted publishing is configured for the exact package and package-specific workflow. Local token auth is not an allowed fallback.
 7. If running through Paperclip, you have issue context for status updates and follow-up task creation.
 
@@ -66,7 +66,7 @@ Collect these inputs up front:
 
 Paperclip now uses a commit-driven release model:
 
-1. every push to `master` publishes a canary automatically
+1. every push to `main` publishes a canary automatically
 2. canaries use `YYYY.MDD.P-canary.N`
 3. stable releases use `YYYY.MDD.P`
 4. the middle slot is `MDD`, where `M` is the UTC month and `DD` is the zero-padded UTC day
@@ -85,7 +85,7 @@ Critical consequences:
 
 For canary validation:
 
-- inspect the latest successful canary run on `master`
+- inspect the latest successful canary run on `main`
 - record the canary version and source SHA
 
 For stable promotion:
@@ -132,7 +132,7 @@ For PRs that touch release logic, the repo also runs a canary release dry-run in
 
 ## Step 4 — Validate the Canary
 
-The normal canary path is automatic from `master` via:
+The normal canary path is automatic from `main` via:
 
 - `.github/workflows/release.yml`
 
@@ -165,7 +165,7 @@ Confirm:
 If smoke testing fails:
 
 - stop the stable release
-- fix the issue on `master`
+- fix the issue on `main`
 - wait for the next automatic canary
 - rerun smoke testing
 

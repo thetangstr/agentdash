@@ -55,7 +55,7 @@ jobs:
       # setup-node lags behind and fails with a bare 403 that reads like a
       # permissions problem rather than an old client.
       - name: Use an npm that understands trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.5.1
 
       - name: Install dev dependencies
         # The package itself has zero runtime dependencies; this is only vitest.
