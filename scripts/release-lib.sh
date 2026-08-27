@@ -275,6 +275,11 @@ require_clean_worktree() {
 }
 
 require_on_master_branch() {
+  local dry_run="${1:-false}"
+  if [ "$dry_run" = "true" ]; then
+    return
+  fi
+
   local current_branch
   current_branch="$(git_current_branch)"
   # AgentDash: the canonical release workflow is pinned to the repository's main branch.
