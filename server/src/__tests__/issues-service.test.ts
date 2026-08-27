@@ -1118,6 +1118,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
   it("joins assignee steward with owner fallback and derives the viewer awaiting-review badge on list rows", async () => {
     const companyId = randomUUID();
     const stewardedIssueId = randomUUID();
+    const changesRequestedIssueId = randomUUID();
     const ownerFallbackIssueId = randomUUID();
     const unstewardedIssueId = randomUUID();
     const agentStewardedId = randomUUID();
@@ -1189,6 +1190,26 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
         },
       },
       {
+        id: changesRequestedIssueId,
+        companyId,
+        title: "Changes requested issue",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: agentStewardedId,
+        executionState: {
+          status: "changes_requested",
+          currentStageId: "stage-1",
+          currentStageIndex: 0,
+          currentStageType: "review",
+          currentParticipant: { type: "user", userId: viewerId },
+          returnAssignee: null,
+          reviewRequest: null,
+          completedStageIds: [],
+          lastDecisionId: null,
+          lastDecisionOutcome: null,
+        },
+      },
+      {
         id: ownerFallbackIssueId,
         companyId,
         title: "Owner fallback issue",
@@ -1245,6 +1266,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
       viewerMatchesPrincipal: true,
     });
     expect(byId.get(ownerFallbackIssueId)?.awaitingReviewByViewer).toBeNull();
+    expect(byId.get(changesRequestedIssueId)?.awaitingReviewByViewer).toBeNull();
     expect(byId.get(unstewardedIssueId)?.awaitingReviewByViewer).toBeNull();
 
     // The internal join projection never leaks onto the wire.
@@ -1256,6 +1278,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     const noViewerResult = await svc.list(companyId);
     for (const issue of noViewerResult) {
       expect(issue.awaitingReviewByViewer).toBeNull();
+      expect(issue.assigneeSteward).toBeNull();
     }
   });
 

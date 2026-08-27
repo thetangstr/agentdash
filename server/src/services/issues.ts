@@ -1564,10 +1564,10 @@ function deriveIssueAwaitingReview(
 ): IssueAwaitingReview | null {
   if (!viewerUserId) return null;
   if (!signals) return null;
-  // Only the two "waiting on a human" statuses qualify. `idle` is "nothing
-  // happening", `completed` is "all stages approved" — neither should ever
-  // light up an awaiting-review badge.
-  if (signals.status !== "pending" && signals.status !== "changes_requested") return null;
+  // Only a pending stage is waiting on the human participant. During
+  // changes_requested the issue is back with the agent, even though the
+  // execution state retains the reviewer as the current participant.
+  if (signals.status !== "pending") return null;
   if (signals.currentStageType !== "review" && signals.currentStageType !== "approval") return null;
   const participant = signals.currentParticipant;
   if (!participant) return null;
@@ -2495,7 +2495,9 @@ export function issueService(db: Db) {
         includeBlockedBy
           ? blockedByMapForIssues(db, companyId, issueIds)
           : Promise.resolve(new Map<string, IssueRelationIssueSummary[]>()),
-        buildAssigneeStewardsByIssueId(db, companyId, withRuns),
+        badgeViewerUserId
+          ? buildAssigneeStewardsByIssueId(db, companyId, withRuns)
+          : Promise.resolve(new Map<string, IssueAssigneeSteward>()),
       ]);
       const statsByIssueId = new Map(statsRows.map((row) => [row.issueId, row]));
       const lastActivityByIssueId = new Map(lastActivityRows.map((row) => [row.issueId, row]));

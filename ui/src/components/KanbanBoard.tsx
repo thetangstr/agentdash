@@ -49,7 +49,7 @@ interface KanbanBoardProps {
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
   /**
    * When "steward", columns are the distinct active-steward values
-   * (one "Unassigned" column for issues with no steward) instead of the
+   * (one "Unstewarded" column for issues with no steward) instead of the
    * default status columns. Drag-to-change-column is disabled in this
    * mode — there is no drop target the API understands.
    */
@@ -154,6 +154,7 @@ function KanbanColumn({
               isLive={liveIssueIds?.has(issue.id)}
               viewerUserId={viewerUserId}
               stewardLabelByUserId={stewardLabelByUserId}
+              draggable={draggable}
             />
           ))}
         </SortableContext>
@@ -171,6 +172,7 @@ function KanbanCard({
   isOverlay,
   viewerUserId,
   stewardLabelByUserId,
+  draggable = true,
 }: {
   issue: Issue;
   agents?: Agent[];
@@ -178,6 +180,7 @@ function KanbanCard({
   isOverlay?: boolean;
   viewerUserId?: string | null;
   stewardLabelByUserId?: Map<string, string>;
+  draggable?: boolean;
 }) {
   const {
     attributes,
@@ -186,7 +189,7 @@ function KanbanCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: issue.id, data: { issue } });
+  } = useSortable({ id: issue.id, data: { issue }, disabled: !draggable });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -216,7 +219,10 @@ function KanbanCard({
       style={style}
       {...attributes}
       {...listeners}
-      className={`rounded-md border bg-card p-2.5 cursor-grab active:cursor-grabbing transition-shadow ${
+      data-kanban-issue-id={issue.id}
+      className={`rounded-md border bg-card p-2.5 transition-shadow ${
+        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+      } ${
         isDragging && !isOverlay ? "opacity-30" : ""
       } ${isOverlay ? "shadow-lg ring-1 ring-primary/20" : "hover:shadow-sm"}`}
     >
@@ -241,7 +247,7 @@ function KanbanCard({
           )}
           {isAwaitingYourReview && (
             <span
-              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300"
+              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-400/10 dark:text-amber-300 dark:border-amber-300/35"
               title={`Awaiting your review (${awaitingReview?.stageType ?? "review"})`}
               aria-label={`Awaiting your review on ${issue.title}`}
             >
@@ -275,7 +281,7 @@ function KanbanCard({
                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${
                   isOwnerFallback
                     ? "bg-muted text-muted-foreground border-border"
-                    : "bg-emerald-50 text-emerald-900 border-emerald-200"
+                    : "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-200 dark:border-emerald-500/30"
                 }`}
                 title={tooltip}
                 aria-label={`${isOwnerFallback ? "Owner fallback" : "Steward"}: ${displayName}`}
@@ -311,7 +317,7 @@ export function KanbanBoard({
   /**
    * Build the column list and per-column buckets. When grouping by
    * steward we synthesize columns from the distinct assigneeSteward
-   * userIds present on the issue set (plus an Unassigned bucket), so
+   * userIds present on the issue set (plus an Unstewarded bucket), so
    * teams can see "everything Erik is on the hook for" at a glance.
    */
   const { columns, columnIssues } = useMemo(() => {
@@ -334,7 +340,7 @@ export function KanbanBoard({
         if (key === "__unstewarded") {
           return {
             id: key,
-            label: "Unassigned",
+            label: "Unstewarded",
             icon: <ShieldQuestion className="h-3.5 w-3.5 text-muted-foreground" />,
           };
         }
@@ -385,8 +391,7 @@ export function KanbanBoard({
   function handleDragEnd(event: DragEndEvent) {
     setActiveId(null);
     if (boardGroupBy !== "status") {
-      // Steward-grouped boards have no API-mappable drop target — accept
-      // drag-and-drop reorder visually only.
+      // Steward-grouped boards have no API-mappable drop target.
       return;
     }
     const { active, over } = event;
@@ -450,6 +455,7 @@ export function KanbanBoard({
             isOverlay
             viewerUserId={viewerUserId}
             stewardLabelByUserId={stewardLabelByUserId}
+            draggable={false}
           />
         ) : null}
       </DragOverlay>
