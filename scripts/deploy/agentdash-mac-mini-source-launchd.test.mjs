@@ -106,7 +106,8 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(update, /git fetch --all --tags/);
   assert.match(update, /pnpm install --frozen-lockfile/);
   assert.match(update, /"AGENTDASH_SOURCE_SHA=" \+ sha/);
-  assert.match(update, /launchctl kickstart -k/);
+  assert.match(update, /restart_service/);
+  assert.match(update, /agentdash-launchd-lib\.sh/);
 });
 
 test("renders readiness accepted by the native macOS bash parser", () => {
@@ -157,7 +158,8 @@ test("renders deployment-scoped readiness without delegating to target MSP prefl
   assert.doesNotMatch(readiness, /DATABASE_URL is set:.*\$DATABASE_URL/);
   assert.match(readiness, /LABEL="ai\.agentdash\.staging"/);
   assert.match(readiness, /EXPECTED_SHA="\$\{AGENTDASH_SOURCE_SHA:-0fb91d408f6082030a629c079df99902f81e3df4\}"/);
-  assert.match(readiness, /launchctl print "gui\/\$\(id -u\)\/\$LABEL"/);
+  assert.match(readiness, /launchctl print "\$LAUNCHD_TARGET"/);
+  assert.match(readiness, /LAUNCHD_DOMAIN="gui"/);
   assert.match(readiness, /actual_sha="\$\(git -C "\$REPO_DIR" rev-parse HEAD\)"/);
   assert.match(readiness, /agentdash-backup-db\.sh" --check/);
   assert.match(readiness, /Database backup tooling is ready/);

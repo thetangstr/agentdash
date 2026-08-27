@@ -92,6 +92,10 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
   }
 
   const label = input.label ?? DEFAULT_LABEL;
+  const launchdDomain = String(input.launchdDomain ?? "gui").trim();
+  if (launchdDomain !== "gui" && launchdDomain !== "system") {
+    throw new Error("launchdDomain must be \"gui\" (per-user LaunchAgent) or \"system\" (LaunchDaemon).");
+  }
   const agentdashHome = abs(input.agentdashHome ?? "~/.agentdash");
   const configDir = abs(input.configDir ?? "~/.config/agentdash");
   const launchAgentDir = abs(input.launchAgentDir ?? path.join(os.homedir(), "Library", "LaunchAgents"));
@@ -110,8 +114,14 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
     logDir,
     backupDir,
     stateDir,
-    plist: path.join(launchAgentDir, `${label}.plist`),
+    // A system LaunchDaemon's plist lives in a root-owned directory. The
+    // generator never writes there: for the system domain the plist is rendered
+    // under the agentdash home for review and explicit installation with sudo.
+    plist: launchdDomain === "system"
+      ? path.join(agentdashHome, "launchd", `${label}.plist`)
+      : path.join(launchAgentDir, `${label}.plist`),
     supervisorScript: path.join(binDir, "agentdash-source-supervisor.sh"),
+    launchdLib: path.join(binDir, "agentdash-launchd-lib.sh"),
     backupScript: path.join(binDir, "agentdash-backup-db.sh"),
     backupRunner: path.join(binDir, "agentdash-backup-db.mjs"),
     lastBackupFile: path.join(stateDir, "last-backup.json"),
@@ -125,6 +135,7 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
     version: 1,
     mode: "source-checkout",
     label,
+    launchdDomain,
     targetSha,
     remoteName: input.remoteName ?? "origin",
     toolPath: typeof input.toolPath === "string" && input.toolPath.trim() ? input.toolPath.trim() : DEFAULT_TOOL_PATH,
@@ -156,6 +167,91 @@ export function mergeSourceEnv(existingContent, plan) {
     content = setEnvValue(content, key, value);
   }
   return content;
+}
+
+/**
+ * launchd helpers shared by the readiness and update wrappers.
+ *
+ * A customer may supervise AgentDash with a system LaunchDaemon rather than a
+ * per-user LaunchAgent. Every launchctl address therefore goes through
+ * LAUNCHD_TARGET. `launchctl kickstart` needs root in the system domain; the
+ * service runs KeepAlive, so the supported non-root restart terminates the
+ * launchd-tracked process (and the listener it owns) and waits for launchd to
+ * respawn it from the updated checkout.
+ */
+export function renderSourceLaunchdLibScript(plan) {
+  return `#!/bin/bash
+# AgentDash launchd helpers (generated). Source after setting LABEL, LAUNCHD_DOMAIN and PORT.
+
+if [[ "\${LAUNCHD_DOMAIN:-gui}" == "system" ]]; then
+  LAUNCHD_TARGET="system/$LABEL"
+else
+  LAUNCHD_TARGET="gui/$(id -u)/$LABEL"
+fi
+
+service_pid() {
+  local state
+  state="$(launchctl print "$LAUNCHD_TARGET" 2>/dev/null)" || return 1
+  printf '%s\\n' "$state" | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+}
+
+pid_has_ancestor() {
+  local pid="$1"
+  local ancestor="$2"
+  local parent
+
+  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
+    if [[ "$pid" == "$ancestor" ]]; then
+      return 0
+    fi
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$parent" && "$parent" != "$pid" ]] || return 1
+    pid="$parent"
+  done
+  return 1
+}
+
+# Listener pids on PORT that descend from the given launchd pid. Never returns
+# a process the service does not own.
+listener_pids_owned_by() {
+  local pid
+  for pid in $(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do
+    if pid_has_ancestor "$pid" "$1"; then
+      printf '%s\\n' "$pid"
+    fi
+  done
+}
+
+restart_service() {
+  local before after attempt victims
+  before="$(service_pid || true)"
+  if launchctl kickstart -k "$LAUNCHD_TARGET" 2>/dev/null; then
+    echo "Restarted $LAUNCHD_TARGET with launchctl kickstart." >&2
+  else
+    if [[ ! "$before" =~ ^[0-9]+$ ]]; then
+      echo "launchctl kickstart was refused and $LAUNCHD_TARGET has no live pid. Run: sudo launchctl kickstart -k $LAUNCHD_TARGET" >&2
+      return 1
+    fi
+    victims="$(listener_pids_owned_by "$before" || true)"
+    echo "launchctl kickstart was refused (root is required in the $LAUNCHD_DOMAIN domain); sending SIGTERM to launchd pid $before\${victims:+ and its listener(s) $(printf '%s ' $victims | sed 's/ $//')} so KeepAlive respawns the service from the updated checkout." >&2
+    # shellcheck disable=SC2086
+    if ! kill -TERM $victims "$before" 2>/dev/null; then
+      echo "Could not signal the service processes (owned by another user?). Run: sudo launchctl kickstart -k $LAUNCHD_TARGET" >&2
+      return 1
+    fi
+  fi
+  for attempt in $(seq 1 60); do
+    after="$(service_pid || true)"
+    if [[ "$after" =~ ^[0-9]+$ && "$after" != "$before" ]]; then
+      echo "$LAUNCHD_TARGET is running again as pid $after." >&2
+      return 0
+    fi
+    sleep 2
+  done
+  echo "$LAUNCHD_TARGET did not respawn within 120 seconds; inspect launchctl print $LAUNCHD_TARGET and the service logs." >&2
+  return 1
+}
+`;
 }
 
 export function renderSourceSupervisorScript(plan) {
@@ -234,6 +330,15 @@ if [[ ! -f "$RUNNER" ]]; then
   echo "Backup runner is missing: $RUNNER (re-run the release control script with --write)." >&2
   exit 2
 fi
+
+# node and pnpm must be on the wrapper PATH before anything runs; a keg-only
+# Homebrew node keeps them out of the default PATH on some machines.
+for required_tool in node pnpm; do
+  if ! command -v "$required_tool" >/dev/null 2>&1; then
+    echo "$required_tool is not on the wrapper PATH ($PATH). Re-run the release control script with --tool-path naming the directory that holds node and pnpm (for example a keg-only Homebrew node@24 bin directory), then --write to refresh the wrappers." >&2
+    exit 2
+  fi
+done
 
 # The runner loads the installed checkout's own backup library
 # (packages/db/src/backup-lib.ts, exercised by runDatabaseBackup / runDatabaseRestore)
@@ -422,6 +527,24 @@ async function probeServer(postgres, connectionUrl) {
   }
 }
 
+// Read-only preflight for the v2026.827 payload: migration 0122 adds a unique
+// index on onboarding_sessions(company_id, created_by_user_id) and would fail
+// at startup if duplicates exist. Returns null when the table is absent or the
+// index already exists, otherwise the duplicate group count.
+async function countOnboardingSessionDuplicates(postgres, connectionUrl) {
+  const sql = postgres(connectionUrl, { max: 1, connect_timeout: 10 });
+  try {
+    const table = await sql.unsafe("SELECT to_regclass('public.onboarding_sessions') AS rel");
+    if (!table[0] || !table[0].rel) return null;
+    const index = await sql.unsafe("SELECT count(*)::int AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'onboarding_sessions_company_user_unique'");
+    if (index[0].n > 0) return null;
+    const rows = await sql.unsafe("SELECT count(*)::int AS n FROM (SELECT company_id, created_by_user_id FROM public.onboarding_sessions GROUP BY company_id, created_by_user_id HAVING count(*) > 1) AS dup");
+    return rows[0].n;
+  } finally {
+    await sql.end();
+  }
+}
+
 async function countRunningHeartbeatRuns(postgres, connectionUrl) {
   const sql = postgres(connectionUrl, { max: 1, connect_timeout: 10 });
   try {
@@ -560,6 +683,14 @@ async function assessReadiness() {
   for (const name of ["node", "pnpm", "git", "curl", "lsof"]) requiredTools[name] = whichOnPath(name);
   const missingTools = Object.keys(requiredTools).filter((name) => !requiredTools[name]);
   const runningRuns = driver.postgres && server ? await countRunningHeartbeatRuns(driver.postgres, connection.url) : null;
+  let onboardingDuplicates = null;
+  if (driver.postgres && server) {
+    try {
+      onboardingDuplicates = await countOnboardingSessionDuplicates(driver.postgres, connection.url);
+    } catch (error) {
+      log("warning: migration preflight could not run: " + scrub(error && error.message ? error.message : error));
+    }
+  }
   const writable = directoryWritable(backupDir);
   const engine = server ? selectEngine(requested, tools, repositoryEngine) : null;
   const remediation = [];
@@ -582,6 +713,9 @@ async function assessReadiness() {
   } else if (missingTools.length > 0) {
     error = "Required tools are not on the wrapper PATH: " + missingTools.join(", ") + " (PATH=" + (env.PATH || "") + ").";
     remediation.push("Re-run the release control script with --tool-path naming the directories that hold " + missingTools.join(", ") + " (for example a keg-only Homebrew node@24 bin directory), then --write to refresh the wrappers.");
+  } else if (onboardingDuplicates != null && onboardingDuplicates > 0) {
+    error = "Migration preflight: " + onboardingDuplicates + " duplicate (company_id, created_by_user_id) group(s) in onboarding_sessions would make migration 0122's unique index fail at startup.";
+    remediation.push("Resolve the duplicate onboarding_sessions rows with explicit operator approval before upgrading (keep the most recent row per company/user), then re-run --check.");
   }
   return {
     ok: error === null,
@@ -598,6 +732,7 @@ async function assessReadiness() {
     repositoryEngine: { available: repositoryEngine.available, module: repositoryEngine.module, reason: repositoryEngine.reason || null, restoreValidation: repositoryEngine.restoreValidation },
     runningHeartbeatRuns: runningRuns,
     runningHeartbeatRunsPolicy: "a backup run with the javascript engine refuses while this is greater than zero; --check only reports it",
+    migrationPreflight: { onboardingSessionsDuplicateGroups: onboardingDuplicates },
     backupDir: backupDir,
     backupDirWritable: writable,
     remediation: remediation,
@@ -881,7 +1016,9 @@ REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 BASE_URL="${baseUrl}"
 LABEL="${plan.label}"
+LAUNCHD_DOMAIN="${plan.launchdDomain}"
 PORT="${plan.env.PORT}"
+. "${plan.paths.launchdLib}"
 
 set -a
 . "$ENV_FILE"
@@ -894,22 +1031,6 @@ file_mode() {
   else
     stat -c %a "$1"
   fi
-}
-
-pid_has_ancestor() {
-  local pid="$1"
-  local ancestor="$2"
-  local parent
-
-  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
-    if [[ "$pid" == "$ancestor" ]]; then
-      return 0
-    fi
-    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
-    [[ -n "$parent" && "$parent" != "$pid" ]] || return 1
-    pid="$parent"
-  done
-  return 1
 }
 
 for attempt in $(seq 1 30); do
@@ -935,16 +1056,16 @@ if (payload.bootstrapStatus !== "ready") {
 NODE
 echo "[PASS] Authenticated application health is ready at $BASE_URL/api/health"
 
-if ! launchd_state="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null)"; then
-  echo "launchd service is not loaded: $LABEL" >&2
+if ! launchd_state="$(launchctl print "$LAUNCHD_TARGET" 2>/dev/null)"; then
+  echo "launchd service is not loaded: $LAUNCHD_TARGET" >&2
   exit 1
 fi
 launchd_pid="$(printf '%s\n' "$launchd_state" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
 if [[ ! "$launchd_pid" =~ ^[0-9]+$ ]]; then
-  echo "launchd service has no live PID: $LABEL" >&2
+  echo "launchd service has no live PID: $LAUNCHD_TARGET" >&2
   exit 1
 fi
-echo "[PASS] launchd service is loaded: $LABEL"
+echo "[PASS] launchd service is loaded: $LAUNCHD_TARGET"
 
 actual_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
 case "$actual_sha" in
@@ -1008,7 +1129,7 @@ while IFS= read -r listener_pid; do
   fi
 done <<< "$listener_pids"
 if [[ "$listener_owned" != "true" ]]; then
-  echo "Configured PORT=$PORT is not owned by launchd service $LABEL" >&2
+  echo "Configured PORT=$PORT is not owned by launchd service $LAUNCHD_TARGET" >&2
   exit 1
 fi
 echo "[PASS] listener process belongs to launchd service"
@@ -1057,7 +1178,10 @@ REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 STATE_DIR="${plan.paths.stateDir}"
 LABEL="${plan.label}"
+LAUNCHD_DOMAIN="${plan.launchdDomain}"
+PORT="${plan.env.PORT}"
 TARGET_SHA="$1"
+. "${plan.paths.launchdLib}"
 mkdir -p "$STATE_DIR/receipts"
 
 case "$TARGET_SHA" in
@@ -1127,7 +1251,10 @@ content = pattern.test(content)
 fs.writeFileSync(file, content, { mode: 0o600 });
 fs.chmodSync(file, 0o600);
 NODE
-launchctl kickstart -k "gui/$(id -u)/$LABEL"
+# Restart the service in its own launchd domain. In the system domain
+# launchctl kickstart needs root; restart_service then terminates the tracked
+# process so KeepAlive respawns it, and waits for a new pid before readiness.
+restart_service
 "${plan.paths.readinessScript}"
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1233,12 +1360,22 @@ Use this mode when Docker is unavailable on the first design-partner Mac mini. I
 
 ## Service
 
+${plan.launchdDomain === "system" ? `This service is a **system LaunchDaemon** (\`system/${plan.label}\`). The rendered plist is written to \`${plan.paths.plist}\` for review only; the generator never writes into \`/Library/LaunchDaemons\`. Install or refresh it with root only if it differs from the installed one:
+
 \`\`\`sh
+sudo cp ${plan.paths.plist} /Library/LaunchDaemons/${plan.label}.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/${plan.label}.plist
+sudo launchctl kickstart -k system/${plan.label}
+launchctl print system/${plan.label}
+tail -f ${path.join(plan.paths.logDir, "launchd.err.log")}
+\`\`\`
+
+The update wrapper restarts the service with \`launchctl kickstart -k system/${plan.label}\`; when that is refused for a non-root operator it terminates the launchd-tracked process and the listener it owns and waits for KeepAlive to respawn the service before running readiness.` : `\`\`\`sh
 launchctl bootstrap gui/$(id -u) ${plan.paths.plist}
 launchctl kickstart -k gui/$(id -u)/${plan.label}
 launchctl bootout gui/$(id -u) ${plan.paths.plist}
 tail -f ${path.join(plan.paths.logDir, "launchd.err.log")}
-\`\`\`
+\`\`\``}
 
 ## Backup readiness and backups
 
@@ -1291,6 +1428,7 @@ export async function runMacMiniSourceLaunchdInstall(input = {}) {
       plan,
     ),
     supervisor: renderSourceSupervisorScript(plan),
+    launchdLib: renderSourceLaunchdLibScript(plan),
     backup: renderSourceBackupScript(plan),
     backupRunner: renderSourceBackupRunner(plan),
     readiness: renderSourceReadinessScript(plan),
@@ -1313,6 +1451,7 @@ export async function runMacMiniSourceLaunchdInstall(input = {}) {
 
   writeFileMode(plan.paths.envFile, rendered.env, 0o600);
   writeFileMode(plan.paths.supervisorScript, rendered.supervisor, 0o755);
+  writeFileMode(plan.paths.launchdLib, rendered.launchdLib, 0o755);
   writeFileMode(plan.paths.backupScript, rendered.backup, 0o755);
   writeFileMode(plan.paths.backupRunner, rendered.backupRunner, 0o755);
   writeFileMode(plan.paths.readinessScript, rendered.readiness, 0o755);
@@ -1337,6 +1476,9 @@ Options:
   --paperclip-home <path>       Default: ~/.paperclip.
   --launch-agent-dir <path>     Default: ~/Library/LaunchAgents.
   --label <label>               Default: ai.agentdash.agent.
+  --launchd-domain <gui|system> Where the service lives: gui (per-user LaunchAgent, default) or
+                                system (LaunchDaemon; plist rendered for review, never written
+                                into /Library/LaunchDaemons; restart falls back to KeepAlive).
   --better-auth-secret <value>  Optional; generated when missing and env lacks one.
   --agent-jwt-secret <value>    Optional; generated when missing and env lacks one.
   --paperclip-port <port>       Default: 3100.
@@ -1358,6 +1500,7 @@ async function main() {
       "paperclip-home": { type: "string" },
       "launch-agent-dir": { type: "string" },
       label: { type: "string" },
+      "launchd-domain": { type: "string" },
       "better-auth-secret": { type: "string" },
       "agent-jwt-secret": { type: "string" },
       "paperclip-port": { type: "string" },
@@ -1381,6 +1524,7 @@ async function main() {
     paperclipHome: values["paperclip-home"],
     launchAgentDir: values["launch-agent-dir"],
     label: values.label,
+    launchdDomain: values["launchd-domain"],
     betterAuthSecret: values["better-auth-secret"],
     agentJwtSecret: values["agent-jwt-secret"],
     paperclipPort: values["paperclip-port"],
@@ -1392,6 +1536,7 @@ async function main() {
     dryRun: result.dryRun,
     mode: result.plan.mode,
     label: result.plan.label,
+    launchdDomain: result.plan.launchdDomain,
     targetSha: result.plan.targetSha,
     toolPath: result.plan.toolPath,
     paths: result.plan.paths,

@@ -88,7 +88,14 @@ Recorded in this document once the RED run is captured (see "RED evidence" below
 
 - <https://github.com/thetangstr/agentdash/pull/538> — `claude/native-pg-backup-toolchain` → `main`, opened
   2026-08-27 after the independent review; required hosted checks: `audit`, `drift`, `check`, `verify`,
-  `policy`, `dependency-audit` (enforce_admins). Merge only when every required check is green.
+  `policy`, `dependency-audit` (enforce_admins).
+- Second hosted run (after the platform-literal fixture fix): all 16 checks passed, including
+  `launch-signoff` on ubuntu-latest and every required context.
+- **Squash-merged as `1adaf47e76f2d9b1280630d5c75582cd64e29a7f`** ("Make native backups portable to
+  tool-less embedded PostgreSQL hosts (#538)") — this is the release-control SHA for `v2026.827.3`.
+- Canonical stable **dry-run** dispatched from `main` at that SHA:
+  <https://github.com/thetangstr/agentdash/actions/runs/33092858452> (`source_ref=f552df77…`,
+  `stable_date=2026-08-27`, `dry_run=true`).
 
 ## Intended patch
 
@@ -281,3 +288,32 @@ PostgreSQL 18 (`compatible:false`, reason naming both majors) and still selected
 test had asserted `pgDump === null`, which was only true on macOS. The fixture now mirrors the system bin
 directories into a private tool directory minus `pg_dump`/`pg_dumpall`/`pg_restore`/`psql` and asserts that
 none resolves, so "no pg_dump anywhere" is literally true on every platform.
+
+## Second and third stop conditions (client report, 2026-08-27) — resolved
+
+The client's read-only preflight report named three stop conditions:
+
+- **S1** — no pg_dump/pg_restore/psql; the psql-guarded probe degraded to a no-op. Fixed by PR #538
+  (`1adaf47e`); readiness now proves the database through the driver.
+- **S2** — launchd domain hard-coded to `gui/$(id -u)/`; the install is a **system LaunchDaemon**; affected
+  readiness (`launchctl print`), the updater (`kickstart`) and the plist output path. Fixed on this branch:
+  `--launchd-domain gui|system`, shared `agentdash-launchd-lib.sh` (`LAUNCHD_TARGET`, `service_pid`,
+  `restart_service` with the KeepAlive fallback proven by a stub-launchctl regression), plist rendered under
+  the agentdash home for the system domain, never into `/Library/LaunchDaemons`.
+- **S3** — pnpm absent from the hard-coded wrapper PATH (only `/opt/homebrew/opt/node@24/bin` has it),
+  firing after `git checkout`. Fixed: `--tool-path` (PR #538) plus the launcher now stops before any work
+  when node or pnpm is missing, naming the override; `--check` proves node/pnpm/git/curl/lsof before mutation.
+- Also added: the migration-0122 duplicate preflight inside `--check` (no psql required).
+
+Non-blocking observations from the same report (env force-adds on `--write`, zero-cost metering,
+`PAPERCLIP_ALLOWED_HOSTNAMES` duplication collapse, a multi-line `LICENSE_PUBLIC_KEY` value, and the daily
+`com.agentdash.update` check reporting the release-control tip instead of the payload SHA) are recorded for
+follow-up and are not addressed here. The env-merge behaviour is mitigated operationally in the client
+prompt (back up and restore the runtime env around `--write`).
+
+### Delivery decision (CEO, 2026-08-27)
+
+The CEO chose the shortest path: the client fetches the control script directly from this branch by commit
+SHA with a published SHA-256, instead of waiting for a stable GitHub Release; the application payload is
+still exact `f552df77417143fd6a949eff8553b98578317f5e`. Release-control PR/merge/publish for
+`v2026.827.3` can follow later from the same commit.
