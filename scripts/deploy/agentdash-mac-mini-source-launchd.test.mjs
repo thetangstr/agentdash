@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -105,6 +106,25 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(update, /pnpm install --frozen-lockfile/);
   assert.match(update, /"AGENTDASH_SOURCE_SHA=" \+ sha/);
   assert.match(update, /launchctl kickstart -k/);
+});
+
+test("renders readiness accepted by the native macOS bash parser", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-source-readiness-"));
+  try {
+    const plan = buildMacMiniSourceLaunchdPlan({
+      repoDir: "/Users/operator/workspace/agentdash_msp_launch",
+      targetSha: "0fb91d408f6082030a629c079df99902f81e3df4",
+      publicUrl: "http://127.0.0.1:3100",
+    });
+    const readinessPath = path.join(tmp, "agentdash-readiness.sh");
+    writeFileSync(readinessPath, renderSourceReadinessScript(plan));
+
+    assert.doesNotThrow(() => {
+      execFileSync("/bin/bash", ["-n", readinessPath], { stdio: "pipe" });
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("write mode creates source launchd files with protected env mode", async () => {

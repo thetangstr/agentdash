@@ -275,7 +275,7 @@ if [[ -x "$REPO_DIR/scripts/msp-mac-mini-readiness.sh" ]]; then
     )
     if [[ -n "\${AGENTDASH_READINESS_AUTH_HEADER:-}" ]]; then
       case "$AGENTDASH_READINESS_AUTH_HEADER" in
-        Bearer\ *) harness_args+=(--bearer-token "\${AGENTDASH_READINESS_AUTH_HEADER#Bearer }") ;;
+        Bearer\\ *) harness_args+=(--bearer-token "\${AGENTDASH_READINESS_AUTH_HEADER#Bearer }") ;;
         *)
           echo "AGENTDASH_READINESS_AUTH_HEADER must use the Bearer scheme for harness smoke." >&2
           exit 2
