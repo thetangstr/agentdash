@@ -10,6 +10,7 @@ import {
   renderSourceBackupScript,
   renderSourceLaunchdPlist,
   renderSourceReadinessScript,
+  renderSourceRollbackScript,
   renderSourceSupervisorScript,
   renderSourceUpdateScript,
   runMacMiniSourceLaunchdInstall,
@@ -91,9 +92,7 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   const readiness = renderSourceReadinessScript(plan);
   assert.match(readiness, /for attempt in \$\(seq 1 30\)/);
   assert.match(readiness, /AgentDash health did not become ready/);
-  assert.match(readiness, /export AGENTDASH_ENV_FILE="\$ENV_FILE"/);
-  assert.doesNotMatch(readiness, /--env-file/);
-  assert.match(readiness, /export AGENTDASH_EXPECTED_COMPANY="\$AGENTDASH_READINESS_COMPANY_ID"/);
+  assert.match(readiness, /Source-checkout readiness passed/);
   assert.match(readiness, /harness_args=\(/);
   assert.match(readiness, /--bearer-token/);
   assert.doesNotMatch(
@@ -125,6 +124,65 @@ test("renders readiness accepted by the native macOS bash parser", () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test("defaults the local agent API to the configured source port", () => {
+  const plan = buildMacMiniSourceLaunchdPlan({
+    repoDir: "/Users/operator/staging/repo",
+    targetSha: "0fb91d408f6082030a629c079df99902f81e3df4",
+    publicUrl: "http://127.0.0.1:3231",
+    paperclipPort: 3231,
+  });
+
+  assert.equal(plan.env.PAPERCLIP_API_URL, "http://127.0.0.1:3231");
+});
+
+test("renders deployment-scoped readiness without delegating to target MSP preflight", () => {
+  const plan = buildMacMiniSourceLaunchdPlan({
+    repoDir: "/Users/operator/staging/repo",
+    targetSha: "0fb91d408f6082030a629c079df99902f81e3df4",
+    publicUrl: "http://127.0.0.1:3231",
+    envFile: "/Users/operator/staging/config/agentdash.env",
+    agentdashHome: "/Users/operator/staging/agentdash",
+    launchAgentDir: "/Users/operator/staging/launchagents",
+    label: "ai.agentdash.staging",
+    paperclipPort: 3231,
+    paperclipApiUrl: "http://127.0.0.1:3231",
+  });
+
+  const readiness = renderSourceReadinessScript(plan);
+  assert.doesNotMatch(readiness, /msp-mac-mini-readiness\.sh/);
+  assert.doesNotMatch(readiness, /DATABASE_URL is set:.*\$DATABASE_URL/);
+  assert.match(readiness, /LABEL="ai\.agentdash\.staging"/);
+  assert.match(readiness, /EXPECTED_SHA="\$\{AGENTDASH_SOURCE_SHA:-0fb91d408f6082030a629c079df99902f81e3df4\}"/);
+  assert.match(readiness, /launchctl print "gui\/\$\(id -u\)\/\$LABEL"/);
+  assert.match(readiness, /actual_sha="\$\(git -C "\$REPO_DIR" rev-parse HEAD\)"/);
+  assert.match(readiness, /DATABASE_URL is configured/);
+  assert.match(readiness, /pid_has_ancestor/);
+  assert.match(readiness, /listener process belongs to launchd service/);
+});
+
+test("records recoverable rollback state before source checkout", () => {
+  const plan = buildMacMiniSourceLaunchdPlan({
+    repoDir: "/Users/operator/staging/repo",
+    targetSha: "0fb91d408f6082030a629c079df99902f81e3df4",
+    publicUrl: "http://127.0.0.1:3231",
+    agentdashHome: "/Users/operator/staging/agentdash",
+  });
+
+  const update = renderSourceUpdateScript(plan);
+  const pendingStateIndex = update.indexOf("pending.json");
+  const checkoutIndex = update.indexOf('git checkout --detach "$TARGET_SHA"');
+  assert.ok(pendingStateIndex >= 0, "update must persist pending rollback state");
+  assert.ok(pendingStateIndex < checkoutIndex, "pending rollback state must exist before checkout");
+  assert.match(update, /rm -f "\$STATE_DIR\/pending\.json"/);
+
+  const rollback = renderSourceRollbackScript(plan);
+  assert.match(
+    rollback,
+    /if \[\[ -f "\$PENDING_FILE" \]\]; then\s+rollback_source="\$PENDING_FILE"\s+elif \[\[ -f "\$STATE_FILE" \]\]; then/,
+  );
+  assert.match(rollback, /previousSha/);
 });
 
 test("write mode creates source launchd files with protected env mode", async () => {

@@ -126,7 +126,7 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated",
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private",
       PAPERCLIP_PUBLIC_URL: publicUrl,
-      PAPERCLIP_API_URL: input.paperclipApiUrl ?? "http://127.0.0.1:3100",
+      PAPERCLIP_API_URL: input.paperclipApiUrl ?? `http://127.0.0.1:${port}`,
       PAPERCLIP_MIGRATION_AUTO_APPLY: "true",
       AGENTDASH_REQUIRE_AGENT_HARNESS_PREFLIGHT: "true",
       AGENTDASH_SOURCE_SHA: targetSha,
@@ -240,9 +240,40 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 BASE_URL="${baseUrl}"
+LABEL="${plan.label}"
+PORT="${plan.env.PORT}"
+
+set -a
+. "$ENV_FILE"
+set +a
+EXPECTED_SHA="\${AGENTDASH_SOURCE_SHA:-${plan.targetSha}}"
+
+file_mode() {
+  if stat -f %Lp "$1" >/dev/null 2>&1; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
+pid_has_ancestor() {
+  local pid="$1"
+  local ancestor="$2"
+  local parent
+
+  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
+    if [[ "$pid" == "$ancestor" ]]; then
+      return 0
+    fi
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$parent" && "$parent" != "$pid" ]] || return 1
+    pid="$parent"
+  done
+  return 1
+}
 
 for attempt in $(seq 1 30); do
-  if curl -fsS "$BASE_URL/api/health" >/dev/null; then
+  if health_json="$(curl -fsS "$BASE_URL/api/health")"; then
     break
   fi
   if [[ "$attempt" -eq 30 ]]; then
@@ -252,39 +283,121 @@ for attempt in $(seq 1 30); do
   sleep 2
 done
 
-if [[ -x "$REPO_DIR/scripts/msp-mac-mini-readiness.sh" ]]; then
-  export AGENTDASH_ENV_FILE="$ENV_FILE"
-  args=(
-    "$REPO_DIR/scripts/msp-mac-mini-readiness.sh"
-    --base-url "$BASE_URL"
-  )
-  if [[ -n "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
-    export AGENTDASH_EXPECTED_COMPANY="$AGENTDASH_READINESS_COMPANY_ID"
-  fi
-  "\${args[@]}"
+node - "$health_json" <<'NODE'
+const payload = JSON.parse(process.argv[2]);
+if (payload.status !== "ok") throw new Error("Unexpected health status: " + payload.status);
+if (payload.deploymentMode !== "authenticated") {
+  throw new Error("Unexpected deployment mode: " + payload.deploymentMode);
+}
+if (payload.bootstrapStatus !== "ready") {
+  throw new Error("Unexpected bootstrap status: " + payload.bootstrapStatus);
+}
+NODE
+echo "[PASS] Authenticated application health is ready at $BASE_URL/api/health"
 
-  if [[ "\${AGENTDASH_READINESS_RUN_HARNESS_SMOKE:-}" == "true" ]]; then
-    if [[ -z "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
-      echo "AGENTDASH_READINESS_COMPANY_ID is required when running harness smoke." >&2
-      exit 1
-    fi
-    harness_args=(
-      "$REPO_DIR/scripts/agent-harness-smoke.sh"
-      --base-url "$BASE_URL"
-      --company-id "$AGENTDASH_READINESS_COMPANY_ID"
-    )
-    if [[ -n "\${AGENTDASH_READINESS_AUTH_HEADER:-}" ]]; then
-      case "$AGENTDASH_READINESS_AUTH_HEADER" in
-        Bearer\\ *) harness_args+=(--bearer-token "\${AGENTDASH_READINESS_AUTH_HEADER#Bearer }") ;;
-        *)
-          echo "AGENTDASH_READINESS_AUTH_HEADER must use the Bearer scheme for harness smoke." >&2
-          exit 2
-          ;;
-      esac
-    fi
-    "\${harness_args[@]}"
-  fi
+if ! launchd_state="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null)"; then
+  echo "launchd service is not loaded: $LABEL" >&2
+  exit 1
 fi
+launchd_pid="$(printf '%s\n' "$launchd_state" | awk '$1 == "pid" && $2 == "=" { print $3; exit }')"
+if [[ ! "$launchd_pid" =~ ^[0-9]+$ ]]; then
+  echo "launchd service has no live PID: $LABEL" >&2
+  exit 1
+fi
+echo "[PASS] launchd service is loaded: $LABEL"
+
+actual_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
+case "$actual_sha" in
+  "$EXPECTED_SHA"*) ;;
+  *)
+    echo "Unexpected source SHA $actual_sha; expected $EXPECTED_SHA" >&2
+    exit 1
+    ;;
+esac
+echo "[PASS] Source SHA matches the configured deployment pin"
+
+if [[ "$(file_mode "$ENV_FILE")" != "600" ]]; then
+  echo "Runtime env file must have mode 600: $ENV_FILE" >&2
+  exit 1
+fi
+[[ "\${PAPERCLIP_DEPLOYMENT_MODE:-}" == "authenticated" ]] || {
+  echo "PAPERCLIP_DEPLOYMENT_MODE must be authenticated" >&2
+  exit 1
+}
+[[ "\${PAPERCLIP_DEPLOYMENT_EXPOSURE:-}" == "private" ]] || {
+  echo "PAPERCLIP_DEPLOYMENT_EXPOSURE must be private" >&2
+  exit 1
+}
+for required_secret in BETTER_AUTH_SECRET PAPERCLIP_AGENT_JWT_SECRET; do
+  if [[ -z "\${!required_secret:-}" ]]; then
+    echo "$required_secret is required" >&2
+    exit 1
+  fi
+done
+echo "[PASS] Runtime env mode and private authenticated posture are valid"
+
+if [[ -n "\${DATABASE_URL:-}" ]]; then
+  echo "[PASS] DATABASE_URL is configured"
+  if command -v psql >/dev/null 2>&1; then
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT 1" >/dev/null
+    echo "[PASS] PostgreSQL connection responds"
+  fi
+elif [[ -n "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT:-}" ]]; then
+  echo "[PASS] Embedded PostgreSQL is configured"
+else
+  echo "DATABASE_URL or PAPERCLIP_EMBEDDED_POSTGRES_PORT is required" >&2
+  exit 1
+fi
+
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "lsof is required to prove launchd owns configured PORT=$PORT" >&2
+  exit 1
+fi
+listener_pids="$(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+if [[ -z "$listener_pids" ]]; then
+  echo "No process is listening on configured PORT=$PORT" >&2
+  exit 1
+fi
+listener_owned=false
+while IFS= read -r listener_pid; do
+  if [[ -n "$listener_pid" ]] && pid_has_ancestor "$listener_pid" "$launchd_pid"; then
+    listener_owned=true
+    break
+  fi
+done <<< "$listener_pids"
+if [[ "$listener_owned" != "true" ]]; then
+  echo "Configured PORT=$PORT is not owned by launchd service $LABEL" >&2
+  exit 1
+fi
+echo "[PASS] listener process belongs to launchd service"
+
+if [[ "\${AGENTDASH_READINESS_RUN_HARNESS_SMOKE:-}" == "true" ]]; then
+  if [[ -z "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
+    echo "AGENTDASH_READINESS_COMPANY_ID is required when running harness smoke." >&2
+    exit 1
+  fi
+  if [[ ! -x "$REPO_DIR/scripts/agent-harness-smoke.sh" ]]; then
+    echo "Agent harness smoke script is unavailable in the pinned source checkout." >&2
+    exit 1
+  fi
+  harness_args=(
+    "$REPO_DIR/scripts/agent-harness-smoke.sh"
+    --base-url "$BASE_URL"
+    --company-id "$AGENTDASH_READINESS_COMPANY_ID"
+  )
+  if [[ -n "\${AGENTDASH_READINESS_AUTH_HEADER:-}" ]]; then
+    case "$AGENTDASH_READINESS_AUTH_HEADER" in
+      Bearer\\ *) harness_args+=(--bearer-token "\${AGENTDASH_READINESS_AUTH_HEADER#Bearer }") ;;
+      *)
+        echo "AGENTDASH_READINESS_AUTH_HEADER must use the Bearer scheme for harness smoke." >&2
+        exit 2
+        ;;
+    esac
+  fi
+  "\${harness_args[@]}"
+fi
+
+echo "Source-checkout readiness passed."
 `;
 }
 
@@ -315,6 +428,18 @@ esac
 
 cd "$REPO_DIR"
 previous_sha="$(git rev-parse HEAD)"
+pending_previous_sha="\${AGENTDASH_PENDING_PREVIOUS_SHA:-$previous_sha}"
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$STATE_DIR/pending.json" <<JSON
+{
+  "version": 1,
+  "mode": "source-checkout",
+  "previousSha": "$pending_previous_sha",
+  "targetSha": "$TARGET_SHA",
+  "startedAt": "$started_at"
+}
+JSON
+chmod 600 "$STATE_DIR/pending.json"
 "${plan.paths.backupScript}" >/tmp/agentdash-last-backup-path.txt
 backup_path="$(cat /tmp/agentdash-last-backup-path.txt)"
 git fetch --all --tags --prune
@@ -360,6 +485,7 @@ cat > "$receipt" <<JSON
 }
 JSON
 chmod 600 "$STATE_DIR/state.json" "$receipt"
+rm -f "$STATE_DIR/pending.json"
 echo "$receipt"
 `;
 }
@@ -370,12 +496,17 @@ set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 STATE_FILE="${path.join(plan.paths.stateDir, "state.json")}"
-if [[ ! -f "$STATE_FILE" ]]; then
-  echo "No source deployment state found at $STATE_FILE" >&2
+PENDING_FILE="${path.join(plan.paths.stateDir, "pending.json")}"
+if [[ -f "$PENDING_FILE" ]]; then
+  rollback_source="$PENDING_FILE"
+elif [[ -f "$STATE_FILE" ]]; then
+  rollback_source="$STATE_FILE"
+else
+  echo "No source deployment or pending rollback state found." >&2
   exit 1
 fi
-previous_sha="$(node -e "const s=require(process.argv[1]); if(!s.previousSha) process.exit(2); console.log(s.previousSha)" "$STATE_FILE")"
-"${plan.paths.updateScript}" "$previous_sha"
+previous_sha="$(node -e "const s=require(process.argv[1]); if(!s.previousSha) process.exit(2); console.log(s.previousSha)" "$rollback_source")"
+AGENTDASH_PENDING_PREVIOUS_SHA="$previous_sha" "${plan.paths.updateScript}" "$previous_sha"
 `;
 }
 
