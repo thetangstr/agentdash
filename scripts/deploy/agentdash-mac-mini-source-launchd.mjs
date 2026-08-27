@@ -545,6 +545,10 @@ async function assessReadiness() {
   }
   const tools = resolvePgTools(server ? server.major : null);
   const searched = tools.searched.concat(["repository engine: " + backupLibPath, "PostgreSQL driver: " + driver.path]);
+  // The updater needs these on the wrapper PATH after the backup; prove them now.
+  const requiredTools = {};
+  for (const name of ["node", "pnpm", "git", "curl", "lsof"]) requiredTools[name] = whichOnPath(name);
+  const missingTools = Object.keys(requiredTools).filter((name) => !requiredTools[name]);
   const runningRuns = driver.postgres && server ? await countRunningHeartbeatRuns(driver.postgres, connection.url) : null;
   const writable = directoryWritable(backupDir);
   const engine = server ? selectEngine(requested, tools, repositoryEngine) : null;
@@ -565,6 +569,9 @@ async function assessReadiness() {
   } else if (!writable) {
     error = "Backup directory is not writable: " + backupDir;
     remediation.push("Fix permissions on " + backupDir + " so the launchd user can write mode-600 archives.");
+  } else if (missingTools.length > 0) {
+    error = "Required tools are not on the wrapper PATH: " + missingTools.join(", ") + " (PATH=" + (env.PATH || "") + ").";
+    remediation.push("Re-run the release control script with --tool-path naming the directories that hold " + missingTools.join(", ") + " (for example a keg-only Homebrew node@24 bin directory), then --write to refresh the wrappers.");
   }
   return {
     ok: error === null,
@@ -575,6 +582,8 @@ async function assessReadiness() {
     connection: connectionInfo,
     pgDump: tools.pgDump,
     pgRestore: tools.pgRestore,
+    tools: requiredTools,
+    toolPath: env.PATH || "",
     searched: searched,
     repositoryEngine: { available: repositoryEngine.available, module: repositoryEngine.module, reason: repositoryEngine.reason || null, restoreValidation: repositoryEngine.restoreValidation },
     runningHeartbeatRuns: runningRuns,
@@ -919,7 +928,7 @@ echo "[PASS] Runtime env mode and private authenticated posture are valid"
 # PostgreSQL driver, needs no PostgreSQL client binary, and never prints the URL.
 backup_probe="$("${plan.paths.backupScript}" --check)"
 node - "$backup_probe" <<'NODE'
-const lines = String(process.argv[2]).trim().split(/\r?\n/).filter((line) => line.trim().length > 0);
+const lines = String(process.argv[2]).trim().split(/\\r?\\n/).filter((line) => line.trim().length > 0);
 let probe = null;
 for (let index = lines.length - 1; index >= 0 && !probe; index -= 1) {
   try { probe = JSON.parse(lines[index]); } catch { probe = null; }
@@ -1267,6 +1276,8 @@ Options:
   --better-auth-secret <value>  Optional; generated when missing and env lacks one.
   --agent-jwt-secret <value>    Optional; generated when missing and env lacks one.
   --paperclip-port <port>       Default: 3100.
+  --tool-path <PATH>            PATH exported by every generated wrapper; must hold node, pnpm, git,
+                                curl and lsof. Default: ${DEFAULT_TOOL_PATH}
   --write                       Write files. Without this, prints a dry-run plan.
   --help                        Show help.
 `);
@@ -1286,6 +1297,7 @@ async function main() {
       "better-auth-secret": { type: "string" },
       "agent-jwt-secret": { type: "string" },
       "paperclip-port": { type: "string" },
+      "tool-path": { type: "string" },
       write: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -1308,6 +1320,7 @@ async function main() {
     betterAuthSecret: values["better-auth-secret"],
     agentJwtSecret: values["agent-jwt-secret"],
     paperclipPort: values["paperclip-port"],
+    toolPath: values["tool-path"],
     write: values.write,
   });
 
@@ -1316,6 +1329,7 @@ async function main() {
     mode: result.plan.mode,
     label: result.plan.label,
     targetSha: result.plan.targetSha,
+    toolPath: result.plan.toolPath,
     paths: result.plan.paths,
     env: {
       PAPERCLIP_PUBLIC_URL: result.plan.env.PAPERCLIP_PUBLIC_URL,

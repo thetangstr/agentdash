@@ -416,6 +416,11 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
       assert.equal(probe.pgDump, null);
       assert.ok(Array.isArray(probe.searched) && probe.searched.length > 0, "probe must list searched locations");
       assert.equal(probe.repositoryEngine.available, true);
+      // pnpm exec prepends the workspace bin directories; the wrapper PATH must be the tail.
+      assert.ok(probe.toolPath.endsWith(toolPath), `probe must report the wrapper PATH it ran under; got ${probe.toolPath}`);
+      for (const tool of ["node", "pnpm", "git", "curl", "lsof"]) {
+        assert.ok(probe.tools[tool], `probe must resolve ${tool} on the wrapper PATH`);
+      }
       assert.equal(archivesIn(plan.paths.backupDir).length, 0, "--check must not write an archive");
 
       const run = runScript(plan.paths.backupScript, [], baseEnv);
@@ -576,6 +581,47 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
     });
   } finally {
     await pg.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The shells embed Node programs as heredocs. `bash -n` cannot see inside them,
+ * and a template-literal escape mistake in the generator renders a syntax error
+ * that only surfaces on the customer machine (measured: an unescaped
+ * `split(/\r?\n/)` became literal CR/LF and readiness failed after restart).
+ */
+function embeddedNodePrograms(script) {
+  const programs = [];
+  const pattern = /node -(?: [^\n]*)? <<'NODE'\n([\s\S]*?)\nNODE\n/g;
+  let match;
+  while ((match = pattern.exec(script)) !== null) programs.push(match[1]);
+  return programs;
+}
+
+test("every embedded node heredoc in the rendered shells is valid JavaScript", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-native-backup-heredoc-"));
+  try {
+    const { plan } = renderInstall(tmp);
+    const rendered = {
+      readiness: renderSourceReadinessScript(plan),
+      update: renderSourceUpdateScript(plan),
+      rollback: renderSourceRollbackScript(plan),
+    };
+    let checked = 0;
+    for (const [name, script] of Object.entries(rendered)) {
+      for (const [index, program] of embeddedNodePrograms(script).entries()) {
+        const file = path.join(tmp, `${name}-${index}.cjs`);
+        writeFileSync(file, program);
+        assert.doesNotThrow(
+          () => execFileSync(process.execPath, ["--check", file], { stdio: "pipe" }),
+          `${name} heredoc #${index} must parse`,
+        );
+        checked += 1;
+      }
+    }
+    assert.ok(checked >= 2, "readiness and update must embed node programs");
+  } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });

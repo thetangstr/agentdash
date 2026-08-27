@@ -10,7 +10,8 @@ communication, no OTA installation. Client installation remains a separate, expl
 
 - Canonical repository: `/Volumes/home/Projects_Hosted/agentdash` (local `main` at `b19bf176`, diverged
   from `origin/main`; left untouched).
-- Isolated worktree for this lane: `/Users/Kailor/.config/superpowers/worktrees/agentdash/claude-native-pg-backup`
+- Isolated worktree for this lane: `~/.config/superpowers/worktrees/agentdash/claude-native-pg-backup` (linked
+  worktree of the canonical repository)
 - Branch: `claude/native-pg-backup-toolchain`
 - Base: `origin/main` = `e1b16cdfa35c5d225181f18ce2aa0fee8c743b80` ("Keep native OTA failures recoverable and
   private" — the `v2026.827.2` release-control SHA).
@@ -105,8 +106,8 @@ embedded PostgreSQL 18 from this checkout's `@embedded-postgres/darwin-arm64@18.
 node/pnpm/system utilities plus a fake embedded `bin` holding only `initdb`/`pg_ctl`/`postgres`, and seeds a
 synthetic schema — enum, FK, index, `drizzle.__drizzle_migrations`, 423 rows).
 
-Run against the unmodified generator (`origin/main` `e1b16cdf`), captured to
-`/Users/Kailor/.config/superpowers/worktrees/agentdash/claude-native-pg-backup.red.log`:
+Run against the unmodified generator (`origin/main` `e1b16cdf`), captured beside the worktree as
+`~/.config/superpowers/worktrees/agentdash/claude-native-pg-backup.red.log`:
 
 - ✖ rendered backup contract prefers compatible pg_dump but falls back to the repository engine — no
   `--check`, no repository engine, no version validation, URL passed on the pg_dump command line.
@@ -178,4 +179,37 @@ repository-engine remediation with no archive left behind. `agentdash-mac-mini-s
 
 ## Release / rehearsal log
 
-_pending_
+### Pre-publish rehearsal (branch generator, isolated staging, read-only for the instance)
+
+Staging identity (unchanged from the `v2026.827.2` lane): root
+`~/.paperclip-worktrees/instances/mkthink-ota-rehearsal.qOYDXY`, checkout at `a02aaaa4`, launchd label
+`ai.agentdash.mkthink-ota-rehearsal-qoydxy` running under the gui domain, application loopback `:3231`,
+isolated Docker PostgreSQL 16.15 on loopback `:55432`, synthetic data only. Evidence directory (mode 700):
+`<staging root>/evidence/v2026.827.3-prepublish/`.
+
+The client's tool-less environment was reproduced without touching the instance: a copy of the staging env
+with the rehearsal-only `PG_DUMP_BIN` override removed, and `--tool-path` set to a directory holding only
+`node` and `pnpm` plus the macOS system directories (no `pg_dump` resolvable). Wrappers were rendered into
+a separate agentdash home under the evidence directory with the installed SHA pinned.
+
+- no-write plan and `--write` (wrappers only): 5 shells pass `/bin/bash -n`; runner passes `node --check`.
+- `agentdash-backup-db.sh --check`: `ok:true`, engine `javascript`, server major 16, connection source
+  `DATABASE_URL`, `pgDump:null`, tools node/pnpm/git/curl/lsof resolved on the wrapper PATH, 0 running
+  heartbeat runs, repository engine available. Password absent from every output.
+- `agentdash-backup-db.sh` (live synthetic database): `predeploy-20260827T155020Z.sql.gz`, 155241 bytes,
+  mode 600, SHA-256 `0802e46c68ebf7b4b51310e548bd800a88c7ac810b59292b5f62238b4ba74a27`, validated by a
+  throwaway-database restore of 170 tables / 629 rows in ~3 s; throwaway database dropped (none left on the
+  server); receipt and `last-backup.json` written mode 600 without secrets.
+- `agentdash-readiness.sh` (read-only): health, launchd identity, source pin and env posture passed, then the
+  embedded backup-probe parser **failed with a JavaScript syntax error** — the generator emitted
+  `split(/\r?\n/)` through a template literal, rendering literal CR/LF. Readiness therefore failed closed
+  (correct direction, wrong reason). Fixed by escaping the regex in the generator and adding a regression
+  that runs `node --check` on every embedded Node heredoc of the rendered shells.
+- Wrappers re-rendered with the fix; `agentdash-readiness.sh` then passed all eight gates against the live
+  instance: health, launchd identity, source pin, env posture, `PostgreSQL responds (server major 16,
+  connection from DATABASE_URL)`, `Database backup tooling is ready (engine=javascript,
+  validation=throwaway-database-restore)`, listener ancestry, "Source-checkout readiness passed." No
+  password in any output.
+
+The staging instance itself (checkout, database, env, launchd service) was not modified by the pre-publish
+rehearsal; the full upgrade/rollback rehearsal runs after publication with the public `v2026.827.3` asset.
