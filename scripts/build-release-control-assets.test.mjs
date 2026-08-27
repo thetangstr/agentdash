@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -9,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const builder = path.join(scriptsDir, "build-release-control-assets.mjs");
+const releaseAssets = await import("./build-release-control-assets.mjs");
 
 test("builds checksummed release-control assets with source and control provenance", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-release-control-"));
@@ -44,6 +52,60 @@ test("builds checksummed release-control assets with source and control provenan
       updaterAsset: assetName,
       updaterSha256: expectedHash,
     });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("builds an owned connector tarball with application and control provenance", () => {
+  assert.equal(typeof releaseAssets.buildAgentDashConnectReleaseAssets, "function");
+
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-connect-release-"));
+  try {
+    const packageDir = path.join(tmp, "connect");
+    const outputDir = path.join(tmp, "out");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      `${JSON.stringify({
+        name: "agentdash-connect",
+        version: "0.1.5",
+        type: "module",
+        files: ["index.mjs"],
+      }, null, 2)}\n`,
+    );
+    writeFileSync(path.join(packageDir, "index.mjs"), "export const ready = true;\n");
+
+    const result = releaseAssets.buildAgentDashConnectReleaseAssets({
+      packageDir,
+      applicationSourceSha: "f552df77417143fd6a949eff8553b98578317f5e",
+      releaseControlSha: "0123456789abcdef0123456789abcdef01234567",
+      outputDir,
+    });
+
+    const tarballName = "agentdash-connect-v0.1.5.tgz";
+    const tarball = readFileSync(path.join(outputDir, tarballName));
+    const expectedHash = createHash("sha256").update(tarball).digest("hex");
+    assert.equal(
+      readFileSync(path.join(outputDir, `${tarballName}.sha256`), "utf8"),
+      `${expectedHash}  ${tarballName}\n`,
+    );
+    assert.deepEqual(
+      JSON.parse(
+        readFileSync(path.join(outputDir, "agentdash-connect-release-v0.1.5.json"), "utf8"),
+      ),
+      {
+        version: 1,
+        packageName: "agentdash-connect",
+        packageVersion: "0.1.5",
+        packageTag: "agentdash-connect-v0.1.5",
+        applicationSourceSha: "f552df77417143fd6a949eff8553b98578317f5e",
+        releaseControlSha: "0123456789abcdef0123456789abcdef01234567",
+        tarballAsset: tarballName,
+        tarballSha256: expectedHash,
+        npmIntegrity: result.npmIntegrity,
+      },
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

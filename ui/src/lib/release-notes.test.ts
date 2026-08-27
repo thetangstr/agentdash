@@ -36,4 +36,10 @@ describe("release notes", () => {
     expect(notes[0]?.version).toMatch(/^v/);
     expect(notes.map((note) => note.version)).toContain("v0.3.1");
   });
+
+  it("does not mix package-specific notes into the application changelog", () => {
+    const versions = listReleaseNotes().map((note) => note.version);
+
+    expect(versions).not.toContain("agentdash-connect v0.1.5");
+  });
 });

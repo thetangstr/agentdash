@@ -44,6 +44,12 @@ function relativeImports(source) {
 describe("the published package", () => {
   const root = packAndExtract();
 
+  it("continues the owned package lineage at 0.1.5", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.name).toBe("agentdash-connect");
+    expect(pkg.version).toBe("0.1.5");
+  });
+
   it("ships the entry point named in bin", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     const binPath = Object.values(pkg.bin)[0];

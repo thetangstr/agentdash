@@ -174,7 +174,7 @@ jobs:
         run: |
           git checkout -B master HEAD
           git checkout -- pnpm-lock.yaml
-          ./scripts/release.sh canary --skip-verify --dry-run
+          ./scripts/release.sh canary --skip-verify --skip-npm --dry-run
 
   # The required check. Branch protection names `verify`, so this job keeps that
   # contract while the work happens in the matrix above. `always()` plus an

@@ -38,7 +38,7 @@ jobs:
       # `id-token: write` is what mints the OIDC token npm checks. Without it
       # the publish falls back to looking for a credential and fails.
       id-token: write
-      contents: read
+      contents: write
     defaults:
       run:
         working-directory: packages/connect
@@ -64,6 +64,16 @@ jobs:
       - name: Test
         run: npx vitest run --config vitest.config.mjs
 
+      - name: Verify owned package allowlist
+        run: |
+          PACKAGE_MAP="$(node ../../scripts/release-package-map.mjs list)"
+          EXPECTED="$(printf 'packages/connect\tagentdash-connect\t%s' "$(node -p "require('./package.json').version")")"
+          if [ "$PACKAGE_MAP" != "$EXPECTED" ]; then
+            echo "Owned package map does not resolve exclusively to agentdash-connect." >&2
+            printf 'Expected: %s\nActual: %s\n' "$EXPECTED" "$PACKAGE_MAP" >&2
+            exit 1
+          fi
+
       - name: Verify the tag matches the version being published
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -86,8 +96,34 @@ jobs:
           fi
           echo "$PKG_VERSION is unpublished"
 
+      - name: Verify package release notes
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          NOTES_FILE="releases/v${PKG_VERSION}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "Release notes are missing: packages/connect/$NOTES_FILE" >&2
+            exit 1
+          fi
+          grep -q "^# agentdash-connect v${PKG_VERSION}$" "$NOTES_FILE" || {
+            echo "Release notes heading does not match agentdash-connect v${PKG_VERSION}." >&2
+            exit 1
+          }
+
       - name: Pack and show exactly what would ship
         run: npm publish --dry-run
+
+      - name: Build release evidence
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        id: release_evidence
+        working-directory: .
+        run: |
+          OUTPUT_DIR="${RUNNER_TEMP}/agentdash-connect-release"
+          node scripts/build-release-control-assets.mjs \
+            --connect-package-dir packages/connect \
+            --source-sha f552df77417143fd6a949eff8553b98578317f5e \
+            --control-sha "$GITHUB_SHA" \
+            --output-dir "$OUTPUT_DIR"
+          echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
@@ -98,13 +134,53 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
+          PACKAGE_VISIBLE=false
           for attempt in 1 2 3 4 5; do
             if npm view "agentdash-connect@$PKG_VERSION" version >/dev/null 2>&1; then
               echo "agentdash-connect@$PKG_VERSION is live"
-              exit 0
+              PACKAGE_VISIBLE=true
+              break
             fi
             echo "not visible yet, retrying ($attempt/5)"
             sleep 10
           done
-          echo "Published, but the registry never served it back." >&2
-          exit 1
+          if [ "$PACKAGE_VISIBLE" != true ]; then
+            echo "Published, but the registry never served it back." >&2
+            exit 1
+          fi
+
+          ASSET_DIR="${{ steps.release_evidence.outputs.output_dir }}"
+          MANIFEST="$ASSET_DIR/agentdash-connect-release-v${PKG_VERSION}.json"
+          EXPECTED_INTEGRITY="$(node -p "JSON.parse(require('fs').readFileSync('$MANIFEST', 'utf8')).npmIntegrity")"
+          REGISTRY_INTEGRITY="$(npm view "agentdash-connect@$PKG_VERSION" dist.integrity)"
+          if [ "$REGISTRY_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
+            echo "Registry integrity does not match the reviewed tarball manifest." >&2
+            exit 1
+          fi
+
+          REGISTRY_GIT_HEAD="$(npm view "agentdash-connect@$PKG_VERSION" gitHead)"
+          if [ "$REGISTRY_GIT_HEAD" != "$GITHUB_SHA" ]; then
+            echo "Registry gitHead $REGISTRY_GIT_HEAD does not match release commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+          echo "registry integrity and gitHead match the reviewed release evidence"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          NOTES_FILE="${GITHUB_WORKSPACE}/packages/connect/releases/v${PKG_VERSION}.md"
+          ASSET_DIR="${{ steps.release_evidence.outputs.output_dir }}"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "Release notes are missing: $NOTES_FILE" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "agentdash-connect v${PKG_VERSION}" \
+            --notes-file "$NOTES_FILE" \
+            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz" \
+            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz.sha256" \
+            "$ASSET_DIR/agentdash-connect-release-v${PKG_VERSION}.json"

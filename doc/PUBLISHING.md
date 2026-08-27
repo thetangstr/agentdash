@@ -1,198 +1,100 @@
-# Publishing to npm
+# Publishing AgentDash-owned npm Packages
 
-Low-level reference for how Paperclip packages are prepared and published to npm.
+Low-level reference for npm publication from the AgentDash fork.
 
-For the maintainer workflow, use [doc/RELEASING.md](RELEASING.md). This document focuses on packaging internals.
+<!-- AgentDash: owned-release-boundary — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-owned npm publication
 
-## Current Release Entry Points
+The fork publishes only packages in the explicit allowlist at
+`scripts/release-package-map.mjs`. The current allowlist contains one package:
 
-Use these scripts:
+- `packages/connect` -> `agentdash-connect`
 
-- [`scripts/release.sh`](../scripts/release.sh) for canary and stable publish flows
-- [`scripts/create-github-release.sh`](../scripts/create-github-release.sh) after pushing a stable tag
-- [`scripts/rollback-latest.sh`](../scripts/rollback-latest.sh) to repoint `latest`
-- [`scripts/build-npm.sh`](../scripts/build-npm.sh) for the CLI packaging build
+Its canonical publisher is `.github/workflows/publish-connect.yml`, with semver
+`0.1.x`, tags `agentdash-connect-vX.Y.Z`, and npm trusted publishing/OIDC. The
+application CalVer workflow always passes `--skip-npm` and cannot publish
+inherited `@paperclipai/*` packages or unprovisioned `@agentdash/*` names. Never
+add a long-lived npm token as a fallback.
+<!-- /AgentDash: owned-release-boundary -->
 
-Paperclip no longer uses release branches or Changesets for publishing.
+For the application/OTA workflow, use [doc/RELEASING.md](RELEASING.md). It is a
+separate release line and never publishes npm packages.
 
-## Why the CLI needs special packaging
+## Owned Package Selection
 
-The CLI package, `paperclipai`, imports code from workspace packages such as:
+`scripts/release-package-map.mjs` is the only package-ownership map. It validates
+the exact package directory, name, public status, and current version. Selection
+fails closed if an allowlisted package is missing, renamed, or private.
 
-- `@paperclipai/server`
-- `@paperclipai/db`
-- `@paperclipai/shared`
-- adapter packages under `packages/adapters/`
+Do not replace the allowlist with workspace discovery. The monorepo contains
+inherited and internal package names that AgentDash does not own or intend to
+publish.
 
-Those workspace references are valid in development but not in a publishable npm package. The release flow rewrites versions temporarily, then builds a publishable CLI bundle.
+Adding another package requires all of the following in one reviewed change:
 
-## `build-npm.sh`
+1. proven registry ownership;
+2. an explicit version and tag lineage;
+3. a package-specific trusted-publisher workflow;
+4. package-content and release-selection regressions;
+5. release notes and provenance assets;
+6. no token-based credential fallback.
 
-Run:
+## `agentdash-connect` Version and Tag Lineage
 
-```bash
-./scripts/build-npm.sh
-```
+- npm package: `agentdash-connect`
+- source: `packages/connect`
+- version: semver
+- tag: `agentdash-connect-vX.Y.Z`
+- notes: `packages/connect/releases/vX.Y.Z.md`
+- workflow: `.github/workflows/publish-connect.yml`
 
-This script:
+The workflow verifies that the tag, package manifest, and release-note heading
+agree before any publish step. npm versions are immutable; if a version already
+exists, the workflow fails and requires a new patch version.
 
-1. runs the forbidden token check unless `--skip-checks` is supplied
-2. runs `pnpm -r typecheck`
-3. bundles the CLI entrypoint with esbuild into `cli/dist/index.js`
-4. verifies the bundled entrypoint with `node --check`
-5. rewrites `cli/package.json` into a publishable npm manifest and stores the dev copy as `cli/package.dev.json`
-6. copies the repo `README.md` into `cli/README.md` for npm metadata
+## Canonical Dry-run and Publish
 
-After the release script exits, the dev manifest and temporary files are restored automatically.
+After the reviewed version bump and notes merge to `main`:
 
-## Package discovery and versioning
+1. run `Publish agentdash-connect` with `dry_run: true`;
+2. require tests, owned-package validation, notes validation, and `npm publish
+   --dry-run` to pass;
+3. push the matching `agentdash-connect-vX.Y.Z` tag through the normal GitHub
+   path;
+4. let the tag-triggered workflow publish with OIDC and create the GitHub
+   Release.
 
-Public packages are discovered from:
+Do not run an ad hoc local `npm publish`, do not tag a commit that has not passed
+the normal PR gates, and do not configure `NODE_AUTH_TOKEN` or `NPM_TOKEN` as a
+fallback.
 
-- `packages/`
-- `server/`
-- `ui/`
-- `cli/`
+## Published Evidence
 
-The version rewrite step now uses [`scripts/release-package-map.mjs`](../scripts/release-package-map.mjs), which:
+The live workflow records and verifies:
 
-- finds all public packages
-- sorts them topologically by internal dependencies
-- rewrites each package version to the target release version
-- rewrites internal `workspace:*` dependency references to the exact target version
-- updates the CLI's displayed version string
+- the packed tarball and exact package contents;
+- SHA-256 checksum;
+- npm `dist.integrity`;
+- npm `gitHead` equal to the tagged release-control commit;
+- application/OTA source provenance where the connector release references an
+  application release;
+- the package-specific GitHub tag, notes, release, and attached JSON manifest.
 
-Those rewrites are temporary. The working tree is restored after publish or dry-run.
+Registry integrity or git-head drift is a hard failure. Do not accept a package
+that cannot be reconciled to the reviewed tarball and tag.
 
-## `@paperclipai/ui` packaging
+## Rollback and Remediation
 
-The UI package publishes prebuilt static assets, not the source workspace.
-
-The `ui` package uses [`scripts/generate-ui-package-json.mjs`](../scripts/generate-ui-package-json.mjs) during `prepack` to swap in a lean publish manifest that:
-
-- keeps the release-managed `name` and `version`
-- publishes only `dist/`
-- omits the source-only dependency graph from downstream installs
-
-After packing or publishing, `postpack` restores the development manifest automatically.
-
-### Manual first publish for `@paperclipai/ui`
-
-If you need to publish only the UI package once by hand, use the real package name:
-
-- `@paperclipai/ui`
-
-Recommended flow from the repo root:
-
-```bash
-# optional sanity check: this 404s until the first publish exists
-npm view @paperclipai/ui version
-
-# make sure the dist payload is fresh
-pnpm --filter @paperclipai/ui build
-
-# confirm your local npm auth before the real publish
-npm whoami
-
-# safe preview of the exact publish payload
-cd ui
-pnpm publish --dry-run --no-git-checks --access public
-
-# real publish
-pnpm publish --no-git-checks --access public
-```
-
-Notes:
-
-- Publish from `ui/`, not the repo root.
-- `prepack` automatically rewrites `ui/package.json` to the lean publish manifest, and `postpack` restores the dev manifest after the command finishes.
-- If `npm view @paperclipai/ui version` already returns the same version that is in [`ui/package.json`](../ui/package.json), do not republish. Bump the version or use the normal repo-wide release flow in [`scripts/release.sh`](../scripts/release.sh).
-
-If the first real publish returns npm `E404`, check npm-side prerequisites before retrying:
-
-- `npm whoami` must succeed first. An expired or missing npm login will block the publish.
-- For an organization-scoped package like `@paperclipai/ui`, the `paperclipai` npm organization must exist and the publisher must be a member with permission to publish to that scope.
-- The initial publish must include `--access public` for a public scoped package.
-- npm also requires either account 2FA for publishing or a granular token that is allowed to bypass 2FA.
-
-## Version formats
-
-Paperclip uses calendar versions:
-
-- stable: `YYYY.MDD.P`
-- canary: `YYYY.MDD.P-canary.N`
-
-Examples:
-
-- stable: `2026.318.0`
-- canary: `2026.318.1-canary.2`
-
-## Publish model
-
-### Canary
-
-Canaries publish under the npm dist-tag `canary`.
-
-Example:
-
-- `paperclipai@2026.318.1-canary.2`
-
-This keeps the default install path unchanged while allowing explicit installs with:
-
-```bash
-npx paperclipai@canary onboard
-```
-
-The release script now verifies two things after a canary publish:
-
-- the `canary` dist-tag resolves to the version that was just published
-- every published internal `@paperclipai/*` dependency referenced by that manifest exists on npm
-
-It also treats `latest -> canary` as a failure by default, because npm metadata can otherwise leave the default install path pointing at an unreleased canary dependency graph. Only pass `./scripts/release.sh canary --allow-canary-latest` when that `latest` behavior is explicitly intended.
-
-### Stable
-
-Stable publishes use the npm dist-tag `latest`.
-
-Example:
-
-- `paperclipai@2026.318.0`
-
-Stable publishes do not create a release commit. Instead:
-
-- package versions are rewritten temporarily
-- packages are published from the chosen source commit
-- git tag `vYYYY.MDD.P` points at that original commit
-
-## Trusted publishing
-
-The intended CI model is npm trusted publishing through GitHub OIDC.
-
-That means:
-
-- no long-lived `NPM_TOKEN` in repository secrets
-- GitHub Actions obtains short-lived publish credentials
-- trusted publisher rules are configured per workflow file
-
-See [doc/RELEASE-AUTOMATION-SETUP.md](RELEASE-AUTOMATION-SETUP.md) for the GitHub/npm setup steps.
-
-## Rollback model
-
-Rollback does not unpublish anything.
-
-It repoints the `latest` dist-tag to a prior stable version:
-
-```bash
-./scripts/rollback-latest.sh 2026.318.0
-```
-
-This is the fastest way to restore the default install path if a stable release is bad.
+npm versions are immutable and are not unpublished as an ordinary rollback. If
+the connector release is defective, stop recommending that version and publish
+a reviewed patch release. Application rollback is separate and uses the
+generated source rollback wrapper described in [doc/RELEASING.md](RELEASING.md).
 
 ## Related Files
 
-- [`scripts/build-npm.sh`](../scripts/build-npm.sh)
-- [`scripts/generate-npm-package-json.mjs`](../scripts/generate-npm-package-json.mjs)
-- [`scripts/generate-ui-package-json.mjs`](../scripts/generate-ui-package-json.mjs)
+- [`.github/workflows/publish-connect.yml`](../.github/workflows/publish-connect.yml)
+- [`packages/connect/package.json`](../packages/connect/package.json)
+- [`packages/connect/releases/`](../packages/connect/releases/)
 - [`scripts/release-package-map.mjs`](../scripts/release-package-map.mjs)
-- [`cli/esbuild.config.mjs`](../cli/esbuild.config.mjs)
-- [`doc/RELEASING.md`](RELEASING.md)
+- [`scripts/build-release-control-assets.mjs`](../scripts/build-release-control-assets.mjs)
+- [`doc/RELEASE-AUTOMATION-SETUP.md`](RELEASE-AUTOMATION-SETUP.md)

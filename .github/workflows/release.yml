@@ -105,7 +105,7 @@ jobs:
       - name: Publish canary
         env:
           GITHUB_ACTIONS: "true"
-        run: ./scripts/release.sh canary --skip-verify
+        run: ./scripts/release.sh canary --skip-verify --skip-npm
 
       - name: Push canary tag
         run: |
@@ -234,8 +234,8 @@ jobs:
           GITHUB_ACTIONS: "true"
           REPO_ROOT: ${{ github.workspace }}/source
         run: |
-          args=(stable --skip-verify --dry-run)
-          version_args=(stable --print-version)
+          args=(stable --skip-verify --skip-npm --dry-run)
+          version_args=(stable --skip-npm --print-version)
           if [ -n "${{ inputs.stable_date }}" ]; then
             args+=(--date "${{ inputs.stable_date }}")
             version_args+=(--date "${{ inputs.stable_date }}")
@@ -247,7 +247,7 @@ jobs:
       - name: Build release-control assets
         id: release_control_assets
         run: |
-          version_args=(stable --print-version)
+          version_args=(stable --skip-npm --print-version)
           if [ -n "${{ inputs.stable_date }}" ]; then
             version_args+=(--date "${{ inputs.stable_date }}")
           fi
@@ -332,8 +332,8 @@ jobs:
           GITHUB_ACTIONS: "true"
           REPO_ROOT: ${{ github.workspace }}/source
         run: |
-          args=(stable --skip-verify)
-          version_args=(stable --print-version)
+          args=(stable --skip-verify --skip-npm)
+          version_args=(stable --skip-npm --print-version)
           if [ -n "${{ inputs.stable_date }}" ]; then
             args+=(--date "${{ inputs.stable_date }}")
             version_args+=(--date "${{ inputs.stable_date }}")
