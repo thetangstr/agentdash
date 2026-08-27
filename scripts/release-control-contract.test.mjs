@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,4 +69,49 @@ test("release scripts honor explicit source and release-notes paths", () => {
   ).trim();
 
   assert.equal(output, explicitNotes);
+});
+
+test("release branch guard accepts this repository's canonical main branch", () => {
+  const tempRepo = mkdtempSync(path.join(tmpdir(), "agentdash-release-main-"));
+
+  try {
+    execFileSync("git", ["init", "-b", "main", tempRepo], { stdio: "ignore" });
+
+    execFileSync(
+      "bash",
+      [
+        "-c",
+        '. "$1/scripts/release-lib.sh"; require_on_master_branch',
+        "bash",
+        repoRoot,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, REPO_ROOT: tempRepo },
+      },
+    );
+
+    execFileSync("git", ["-C", tempRepo, "switch", "-c", "feature"], { stdio: "ignore" });
+
+    assert.throws(
+      () =>
+        execFileSync(
+          "bash",
+          [
+            "-c",
+            '. "$1/scripts/release-lib.sh"; require_on_master_branch',
+            "bash",
+            repoRoot,
+          ],
+          {
+            encoding: "utf8",
+            env: { ...process.env, REPO_ROOT: tempRepo },
+            stdio: "pipe",
+          },
+        ),
+      /current branch is feature/,
+    );
+  } finally {
+    rmSync(tempRepo, { recursive: true, force: true });
+  }
 });

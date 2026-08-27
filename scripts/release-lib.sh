@@ -277,8 +277,9 @@ require_clean_worktree() {
 require_on_master_branch() {
   local current_branch
   current_branch="$(git_current_branch)"
-  if [ "$current_branch" != "master" ]; then
-    release_fail "this release step must run from branch master, but current branch is ${current_branch:-<detached>}."
+  # AgentDash: the canonical release workflow is pinned to the repository's main branch.
+  if [ "$current_branch" != "main" ]; then
+    release_fail "this release step must run from branch main, but current branch is ${current_branch:-<detached>}."
   fi
 }
 
