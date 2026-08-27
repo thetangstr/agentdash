@@ -6,7 +6,7 @@ The release model is now commit-driven:
 
 1. Every push to `master` publishes a canary automatically.
 2. Stable releases are manually promoted from a chosen tested commit or canary tag.
-3. Stable release notes live in `releases/vYYYY.MDD.P.md`.
+3. Stable release notes live in `releases/vYYYY.MDD.P.md` on the release-control ref.
 4. Only stable releases get GitHub Releases.
 
 ## Versioning Model
@@ -49,6 +49,7 @@ Canaries only cover the first two surfaces plus an internal traceability tag.
 - stables publish from an explicitly chosen source ref
 - tags point at the original source commit, not a generated release commit
 - stable notes are always `releases/vYYYY.MDD.P.md`
+- stable promotion keeps the chosen source ref in a separate clean checkout, so release-control changes and notes cannot change the tag target
 - canaries never create GitHub Releases
 - canaries never require changelog generation
 
@@ -95,8 +96,8 @@ Before running stable:
 
 1. pick the canary commit or tag you trust
 2. resolve the target stable version with `./scripts/release.sh stable --date "$(date +%F)" --print-version`
-3. create or update `releases/vYYYY.MDD.P.md` on that source ref
-4. run the stable workflow from that source ref
+3. create or update `releases/vYYYY.MDD.P.md` on the default branch that contains the release workflow
+4. run the stable workflow from that default branch with the chosen immutable commit as `source_ref`
 
 Example:
 
@@ -104,12 +105,17 @@ Example:
 - `stable_date`: `2026-03-18`
 - resulting stable version: `2026.318.0`
 
-The workflow:
+The workflow uses two explicit checkouts:
+
+- **release control** — the default-branch workflow, release scripts, and stable notes
+- **immutable source** — the exact `source_ref` that is verified, packaged, and tagged
+
+It then:
 
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
 - publishes `YYYY.MDD.P` under npm dist-tag `latest`
-- creates git tag `vYYYY.MDD.P`
+- creates git tag `vYYYY.MDD.P` on the immutable source commit, not the release-control commit
 - creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
 
 ## Local Commands
