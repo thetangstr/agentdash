@@ -1169,6 +1169,31 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(comments[0]?.body).toContain("costUsd=");
   });
 
+  it("lets a human-triggered remediation clear an exhausted recovery budget", async () => {
+    const { agentId, issueId } = await seedExhaustedRecoveryBudgetFixture("cost");
+    const heartbeat = heartbeatService(db, { autoDispatchQueuedRuns: false });
+
+    const wake = await heartbeat.wakeup(agentId, {
+      source: "on_demand",
+      triggerDetail: "manual",
+      reason: "Human remediation after recovery exhaustion",
+      contextSnapshot: { issueId, taskId: issueId },
+      requestedByActorType: "user",
+      requestedByActorId: "staging-operator",
+    });
+
+    const remediationRun = wake
+      ? await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, wake.id)).then((rows) => rows[0] ?? null)
+      : null;
+    expect(remediationRun?.status).not.toBe("cancelled");
+    expect(remediationRun?.errorCode).toBeNull();
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.executionState).not.toMatchObject({
+      recoveryBudget: { status: "exhausted" },
+    });
+  });
+
   it("counts retry ancestry that identifies the task through taskId only", async () => {
     const { agentId, issueId, parentRunId } = await seedExhaustedRecoveryBudgetFixture("tokens");
     await db
