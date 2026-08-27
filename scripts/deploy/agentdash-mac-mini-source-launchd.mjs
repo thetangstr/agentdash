@@ -222,6 +222,7 @@ BACKUP_DIR="${plan.paths.backupDir}"
 STATE_DIR="${plan.paths.stateDir}"
 RUNNER="${plan.paths.backupRunner}"
 mkdir -p "$BACKUP_DIR" "$STATE_DIR"
+chmod 700 "$BACKUP_DIR" "$STATE_DIR"
 set -a
 . "$ENV_FILE"
 set +a
@@ -241,8 +242,12 @@ fi
 # so it can report which pg_dump / PG_DUMP_BIN / repository locations it
 # searched and fail closed.
 if [[ -f "$REPO_DIR/packages/db/package.json" ]]; then
+  if [[ ! -x "$REPO_DIR/packages/db/node_modules/.bin/tsx" ]]; then
+    echo "The installed checkout cannot run its backup library: $REPO_DIR/packages/db/node_modules/.bin/tsx is missing. Run pnpm install --frozen-lockfile in $REPO_DIR (this also restores the PostgreSQL driver) and retry." >&2
+    exit 2
+  fi
   cd "$REPO_DIR"
-  exec pnpm --silent --filter @paperclipai/db exec tsx "$RUNNER" "$@"
+  exec pnpm --filter @paperclipai/db exec tsx "$RUNNER" "$@"
 fi
 exec node "$RUNNER" "$@"
 `;
@@ -279,6 +284,9 @@ const MIN_ARCHIVE_BYTES = 1024;
 const ENGINES = ["auto", "pg_dump", "javascript"];
 const env = process.env;
 const action = process.argv.includes("--check") ? "check" : "run";
+// Everything this process creates — including the plaintext SQL the repository
+// engine writes before compressing — must be private from birth.
+process.umask(0o077);
 
 function required(name) {
   const value = env[name];
@@ -366,12 +374,14 @@ function libpqEnvironment(connectionUrl) {
   const pgEnv = Object.assign({}, env, {
     PGHOST: url.hostname,
     PGPORT: url.port || "5432",
-    PGUSER: decodeURIComponent(url.username),
-    PGPASSWORD: decodeURIComponent(url.password),
     PGDATABASE: decodeURIComponent(url.pathname.replace(/^\//, "")),
   });
+  if (url.username) pgEnv.PGUSER = decodeURIComponent(url.username);
+  if (url.password) pgEnv.PGPASSWORD = decodeURIComponent(url.password);
   const sslmode = url.searchParams.get("sslmode");
   if (sslmode) pgEnv.PGSSLMODE = sslmode;
+  const sslrootcert = url.searchParams.get("sslrootcert");
+  if (sslrootcert) pgEnv.PGSSLROOTCERT = sslrootcert;
   return pgEnv;
 }
 
@@ -587,6 +597,7 @@ async function assessReadiness() {
     searched: searched,
     repositoryEngine: { available: repositoryEngine.available, module: repositoryEngine.module, reason: repositoryEngine.reason || null, restoreValidation: repositoryEngine.restoreValidation },
     runningHeartbeatRuns: runningRuns,
+    runningHeartbeatRunsPolicy: "a backup run with the javascript engine refuses while this is greater than zero; --check only reports it",
     backupDir: backupDir,
     backupDirWritable: writable,
     remediation: remediation,
@@ -649,13 +660,30 @@ function runPgDumpEngine(readiness, stamp) {
   return { backupPath: out, sizeBytes: sizeBytes, validation: { method: "pg_restore --list", entries: entries.length } };
 }
 
+// The repository engine separates every statement with this exact line, and
+// its "-- Table:" / "-- Data for:" markers are always the first non-blank line
+// after a breakpoint. Row data lives inside INSERT statements, so a value that
+// happens to contain a marker-shaped line can never be at a chunk start.
+const STATEMENT_BREAKPOINT = "-- paperclip statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
+
 async function readArchiveExpectations(file) {
   const expectedTables = new Set();
   const expectedRows = new Map();
   const stream = fs.createReadStream(file).pipe(zlib.createGunzip());
   const reader = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let atChunkStart = true;
+  let sawBreakpoint = false;
   try {
     for await (const line of reader) {
+      if (line === STATEMENT_BREAKPOINT) {
+        atChunkStart = true;
+        sawBreakpoint = true;
+        continue;
+      }
+      if (line.trim().length === 0) continue;
+      const chunkStart = atChunkStart;
+      atChunkStart = false;
+      if (!chunkStart) continue;
       let match = line.match(/^-- Table: (\S+)\.(\S+)$/);
       if (match) {
         expectedTables.add(match[1] + "." + match[2]);
@@ -667,6 +695,9 @@ async function readArchiveExpectations(file) {
   } finally {
     reader.close();
     stream.destroy();
+  }
+  if (!sawBreakpoint) {
+    throw new Error("the archive has no statement breakpoints; it was not written by the repository engine");
   }
   return { expectedTables: expectedTables, expectedRows: expectedRows };
 }
@@ -683,15 +714,35 @@ async function validateByThrowawayRestore(readiness, file, stamp) {
     throw new Error("the archive lists no tables");
   }
   const name = "agentdash_restore_check_" + stamp.toLowerCase();
-  const adminUrl = new URL(readiness._connection.url);
-  adminUrl.pathname = "/postgres";
   const targetUrl = new URL(readiness._connection.url);
   targetUrl.pathname = "/" + name;
-  const admin = postgres(adminUrl.toString(), { max: 1, connect_timeout: 10 });
+  // CREATE/DROP DATABASE are issued over the application database connection
+  // so no separate maintenance database has to be reachable.
+  const admin = postgres(readiness._connection.url, { max: 1, connect_timeout: 10 });
   let created = false;
+  const dropThrowaway = async (databaseName) => {
+    await admin.unsafe("DROP DATABASE IF EXISTS " + quoteIdentifier(databaseName) + " WITH (FORCE)");
+  };
+  const dropOnSignal = () => {
+    if (!created) return;
+    dropThrowaway(name).catch(() => {}).finally(() => process.exit(130));
+  };
   try {
+    // A throwaway database left by an interrupted earlier run holds a full copy
+    // of the data; reclaim every one before creating another.
+    const stale = await admin.unsafe("SELECT datname FROM pg_database WHERE datname LIKE 'agentdash_restore_check_%'");
+    for (const row of stale) {
+      log("dropping stale throwaway database " + row.datname);
+      await dropThrowaway(row.datname);
+    }
     await admin.unsafe("CREATE DATABASE " + quoteIdentifier(name));
     created = true;
+    process.once("SIGINT", dropOnSignal);
+    process.once("SIGTERM", dropOnSignal);
+    // Force the repository restore path: the application library prefers a
+    // psql on PATH and would hand it the credential-bearing URL as an argument.
+    // The Node path is the only one a tool-less host has, so use it everywhere.
+    process.env.PAPERCLIP_PSQL_PATH = path.join(stateDir, "no-psql-for-restore-validation");
     await lib.runDatabaseRestore({ connectionString: targetUrl.toString(), backupFile: file, connectTimeoutSeconds: 10 });
     const check = postgres(targetUrl.toString(), { max: 1, connect_timeout: 10 });
     const mismatches = [];
@@ -721,11 +772,13 @@ async function validateByThrowawayRestore(readiness, file, stamp) {
     if (mismatches.length > 0) {
       throw new Error("restore validation mismatch: " + mismatches.slice(0, 5).join("; "));
     }
-    return { method: "throwaway-database-restore", database: name, tables: tables, rows: rows };
+    return { method: "throwaway-database-restore", restore: "node", database: name, tables: tables, rows: rows };
   } finally {
+    process.removeListener("SIGINT", dropOnSignal);
+    process.removeListener("SIGTERM", dropOnSignal);
     if (created) {
       try {
-        await admin.unsafe("DROP DATABASE " + quoteIdentifier(name) + " WITH (FORCE)");
+        await dropThrowaway(name);
       } catch (error) {
         log("warning: could not drop throwaway database " + name + ": " + scrub(error && error.message ? error.message : error));
       }
@@ -1020,24 +1073,14 @@ previous_sha="$(git rev-parse HEAD)"
 pending_previous_sha="\${AGENTDASH_PENDING_PREVIOUS_SHA:-$previous_sha}"
 
 # Prove backup capability (database reachable, compatible engine, writable
-# archive directory) before any state, checkout, config or service mutation.
-# A failed probe stops here with the searched locations and remediation.
+# archive directory, required tools on PATH) before any state, checkout,
+# config or service mutation. A failed probe stops here with the searched
+# locations and remediation.
 "${plan.paths.backupScript}" --check 1>&2
 
-started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-cat > "$STATE_DIR/pending.json" <<JSON
-{
-  "version": 1,
-  "mode": "source-checkout",
-  "previousSha": "$pending_previous_sha",
-  "targetSha": "$TARGET_SHA",
-  "startedAt": "$started_at"
-}
-JSON
-chmod 600 "$STATE_DIR/pending.json"
-
 # Create and validate the pre-update backup. The runner records the verified
-# archive in last-backup.json (mode 600); nothing below runs without it.
+# archive in last-backup.json (mode 600); nothing below runs without it, and
+# nothing has been written to deployment state yet.
 "${plan.paths.backupScript}" 1>&2
 LAST_BACKUP_FILE="${plan.paths.lastBackupFile}"
 read_backup_field() {
@@ -1051,6 +1094,23 @@ if [[ ! -s "$backup_path" ]]; then
   echo "Verified backup is missing at $backup_path; refusing to continue." >&2
   exit 1
 fi
+
+# Only now — with a validated backup on disk — record the rollback target, so a
+# failure anywhere below leaves a deterministic previous SHA for the rollback
+# wrapper. This is the first write to deployment state.
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$STATE_DIR/pending.json" <<JSON
+{
+  "version": 1,
+  "mode": "source-checkout",
+  "previousSha": "$pending_previous_sha",
+  "targetSha": "$TARGET_SHA",
+  "startedAt": "$started_at",
+  "backupPath": "$backup_path",
+  "backupSha256": "$backup_sha256"
+}
+JSON
+chmod 600 "$STATE_DIR/pending.json"
 git fetch --all --tags --prune
 git checkout --detach "$TARGET_SHA"
 pnpm install --frozen-lockfile
@@ -1195,13 +1255,17 @@ The probe prints one JSON line and never prints the database URL. It resolves th
 
 Each backup gets a \`<archive>.receipt.json\` (mode 600) with path, mode, size, SHA-256, engine, server major and validation result, and \`${plan.paths.lastBackupFile}\` records the last verified archive for the updater.
 
+Restoring a repository-engine archive (\`.sql.gz\`) is the operation validation performs: create an empty database on the same server and run the checkout's \`runDatabaseRestore\` from \`packages/db/src/backup-lib.ts\` against it. Restoring a custom-format dump (\`.dump\`) uses \`pg_restore\`. Restore only after explicit human approval.
+
+The backup runner is executed through the *currently installed* checkout (\`${plan.paths.repoDir}/packages/db\` and its \`node_modules\`). A rollback therefore also depends on that checkout being able to run its own backup library; if a failed update left \`node_modules\` unusable, run \`pnpm install --frozen-lockfile\` in the checkout before invoking the rollback wrapper. There is no flag to skip the backup gate.
+
 ## Update
 
 \`\`\`sh
 ${plan.paths.updateScript} <commit-sha>
 \`\`\`
 
-The update wrapper runs the backup readiness probe, writes pending rollback state, creates and validates a database backup, fetches the reviewed SHA, checks it out detached, installs dependencies, builds, restarts launchd, runs readiness proof, and writes a deploy receipt that names the verified backup and its SHA-256. If backup readiness or the backup itself fails, nothing is mutated.
+The update wrapper runs the backup readiness probe, creates and validates a database backup, writes pending rollback state naming that backup, fetches the reviewed SHA, checks it out detached, installs dependencies, builds, restarts launchd, runs readiness proof, and writes a deploy receipt that names the verified backup and its SHA-256. If backup readiness or the backup itself fails, no deployment state, checkout, config or service has been touched.
 
 ## Rollback rehearsal
 

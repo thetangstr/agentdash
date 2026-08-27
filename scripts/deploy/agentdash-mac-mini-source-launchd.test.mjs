@@ -84,7 +84,8 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
 
   const backup = renderSourceBackupScript(plan);
   assert.match(backup, /agentdash-backup-db\.mjs/);
-  assert.match(backup, /pnpm --silent --filter @paperclipai\/db exec tsx/);
+  assert.match(backup, /pnpm --filter @paperclipai\/db exec tsx/);
+  assert.match(backup, /node_modules\/\.bin\/tsx/);
   assert.match(backup, /AGENTDASH_BACKUP_REPO_DIR/);
   assert.doesNotMatch(backup, /resolve_pg_dump\(\)/);
   assert.doesNotMatch(backup, /\/opt\/homebrew\/opt\/libpq\/bin\/pg_dump/);

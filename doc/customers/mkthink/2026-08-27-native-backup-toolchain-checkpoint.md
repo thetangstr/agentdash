@@ -213,3 +213,49 @@ a separate agentdash home under the evidence directory with the installed SHA pi
 
 The staging instance itself (checkout, database, env, launchd service) was not modified by the pre-publish
 rehearsal; the full upgrade/rollback rehearsal runs after publication with the public `v2026.827.3` asset.
+
+### Gate results on the branch (worktree, before PR)
+
+- `node --test scripts/deploy/agentdash-native-backup.test.mjs scripts/deploy/agentdash-mac-mini-source-launchd.test.mjs` — 20/20.
+- `pnpm run test:launch-signoff` — 86/86 (now including the native backup regression).
+- `node --test scripts/release-control-contract.test.mjs` — 10/10; `pnpm run test:release-registry` — 4/4.
+- `pnpm typecheck` — passed; `pnpm build` — passed (existing Vite chunk-size advisory only).
+- `pnpm test:run` — exit 0: main server phase 317 files passed / 1 skipped, 2,825 tests passed / 10 skipped;
+  non-server projects and all 96 serialized suites passed.
+- `pnpm check:tokens` — clean (after replacing two personal absolute paths in this document with `~`-relative
+  ones); `pnpm audit:deps` — exit 0 (51 advisories in the repository baseline; 7 high / 1 critical under the
+  configured ignores); `pnpm check:architecture` — 0 errors, 8 pre-existing branding warnings;
+  `git diff --check` — clean.
+- `/bin/bash -n` on all five rendered shells; `node --check` on the rendered runner and every embedded Node
+  heredoc.
+- PR body validated with `scripts/ci/check-pr-process.mjs`.
+
+### Independent review (adversarial, against `ad32d0ae`)
+
+Verdict **APPROVE-WITH-FIXES, zero blockers**. The reviewer could not refute: no updater path mutates
+state without a validated backup; zero-byte/corrupt archives are never accepted; readiness aborts on probe
+failure; no credential reaches stdout/stderr/JSON/receipts/argv; the rendered runner has no template
+leakage and the asset stays self-contained; version parsing and the compatibility rule reject the
+Homebrew-14-vs-18 case; throwaway restore handles zero-row tables, non-public schemas, enums and quoted
+identifiers with no leftover database; connection resolution mirrors `packages/db/src/backup.ts`; scope is
+release-control only.
+
+Findings, all fixed in the follow-up commit:
+
+1. Row data containing a marker-shaped line (`-- Table: …` / `-- Data for: …`) spoofed archive
+   validation into a spurious fail-closed (reproduced by the reviewer). Markers are now honoured only at
+   the start of a statement-breakpoint-delimited chunk, and the seeded regression data includes both spoof
+   shapes.
+2. `pending.json` was written before the backup; it is now written only after the validated archive
+   exists (and names it), so a backup failure leaves deployment state untouched.
+3. `pnpm --silent` hid the fatal error when `tsx` was missing; the launcher now checks for
+   `packages/db/node_modules/.bin/tsx` with a remediation message and no longer silences pnpm.
+4. The application restore library prefers a `psql` on PATH and passes the URL as an argument; the runner
+   now pins `PAPERCLIP_PSQL_PATH` to a non-existent path so validation always uses the Node restore path
+   (`validation.restore: "node"`). A proper `PGPASSWORD` fix in the library is a separate application change.
+5. A throwaway database could survive abnormal termination; stale `agentdash_restore_check_%` databases are
+   now dropped before creating a new one, and SIGINT/SIGTERM drop the current one best-effort.
+6. Plaintext SQL and archives were briefly world-readable; the runner now sets `umask 077` and the wrapper
+   sets the backup/state directories to mode 700.
+7. Rollback depends on the current checkout being able to run its backup library; documented in the
+   RUNBOOK with the supported remediation (no skip flag).

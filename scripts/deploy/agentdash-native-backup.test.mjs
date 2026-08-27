@@ -80,8 +80,10 @@ function makeToolPath(tmp) {
   const bin = path.join(tmp, "tool-bin");
   mkdirSync(bin, { recursive: true });
   symlinkSync(process.execPath, path.join(bin, "node"));
+  // An exec wrapper rather than a symlink: pnpm may be a $0-relative shim
+  // (corepack, pnpm/action-setup) that breaks when symlinked elsewhere.
   const pnpm = execFileSync("which", ["pnpm"], { encoding: "utf8" }).trim();
-  symlinkSync(pnpm, path.join(bin, "pnpm"));
+  writeFileSync(path.join(bin, "pnpm"), `#!/bin/sh\nexec ${JSON.stringify(pnpm)} "$@"\n`, { mode: 0o755 });
   const embeddedBin = path.join(tmp, "embedded-postgres-bin");
   mkdirSync(embeddedBin, { recursive: true });
   for (const tool of ["initdb", "pg_ctl", "postgres"]) {
@@ -203,10 +205,23 @@ async function seedDatabase(postgres, connectionString) {
         `INSERT INTO issues (company_id, title, status, payload) VALUES ('11111111-1111-4111-8111-111111111111', 'Synthetic issue ${index}', '${index % 2 ? "done" : "todo"}', '{"n": ${index}, "text": "synthetic payload ${index} with some bulk to compress"}')`,
       );
     }
+    // Row data that looks like the archive's own markers (an agent pasting a
+    // dump into a comment). Validation must trust the archive structure, not
+    // every line that resembles a marker.
+    await sql.unsafe(
+      "INSERT INTO issues (company_id, title, status) VALUES ('11111111-1111-4111-8111-111111111111', $1, 'todo')",
+      ["spoof\n-- Table: public.bogus\nend"],
+    );
+    await sql.unsafe(
+      "INSERT INTO issues (company_id, title, status) VALUES ('11111111-1111-4111-8111-111111111111', $1, 'todo')",
+      ["spoof\n-- Data for: public.issues (1 rows)\nend"],
+    );
   } finally {
     await sql.end();
   }
 }
+
+const SEEDED_ISSUE_ROWS = 302;
 
 function renderInstall(tmp, extra = {}) {
   const home = path.join(tmp, "agentdash-home");
@@ -351,11 +366,15 @@ test("update wrapper probes backup readiness before pending state and records th
     const { plan } = renderInstall(tmp);
     const update = renderSourceUpdateScript(plan);
     const probeIndex = update.indexOf("--check");
+    const backupRunIndex = update.indexOf(`"${plan.paths.backupScript}" 1>&2`);
     const pendingIndex = update.indexOf("pending.json");
     const checkoutIndex = update.indexOf('git checkout --detach "$TARGET_SHA"');
     assert.ok(probeIndex >= 0, "update must probe backup readiness");
-    assert.ok(probeIndex < pendingIndex, "backup readiness must be proven before pending state is written");
+    assert.ok(backupRunIndex >= 0, "update must create the backup through the wrapper");
+    assert.ok(probeIndex < backupRunIndex, "backup readiness must be proven before the backup runs");
+    assert.ok(backupRunIndex < pendingIndex, "no deployment state may be written before a validated backup exists");
     assert.ok(pendingIndex < checkoutIndex, "pending rollback state must exist before checkout");
+    assert.match(update.slice(pendingIndex, checkoutIndex), /"backupSha256": "\$backup_sha256"/);
     assert.match(update, /backupSha256/);
     assert.match(update, /last-backup\.json/);
     assert.doesNotMatch(update, /\/tmp\/agentdash-last-backup-path\.txt/);
@@ -387,14 +406,16 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
   try {
     await seedDatabase(pg.postgres, pg.connectionString);
 
+    // HOME stays real so pnpm/corepack use their existing store instead of
+    // re-downloading; the runner never consults HOME when DATABASE_URL is set.
     const baseEnv = {
-      HOME: tmp,
+      HOME: process.env.HOME,
       PATH: toolPath,
       LANG: "C",
       DATABASE_URL: pg.connectionString,
     };
 
-    await t.test("the current wrapper fails before producing a valid backup when pg_dump is unavailable", async () => {
+    await t.test("with no pg_dump anywhere the wrapper proves readiness, then backs up through the repository engine", async () => {
       const caseDir = path.join(tmp, "case-absent");
       const { plan } = renderInstall(caseDir, { toolPath });
       writeEnvFile(plan, { DATABASE_URL: pg.connectionString });
@@ -449,8 +470,9 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
       assert.equal(summary.mode, "600");
       assert.equal(summary.server.major, 18);
       assert.equal(summary.validation.method, "throwaway-database-restore");
+      assert.equal(summary.validation.restore, "node", "validation must use the repository's Node restore path, never psql");
       assert.ok(summary.validation.tables >= 4, "validation must compare every table");
-      assert.equal(summary.validation.rows, 122 + 1 + 300);
+      assert.equal(summary.validation.rows, 122 + 1 + SEEDED_ISSUE_ROWS);
 
       const receipt = JSON.parse(readFileSync(summary.receiptPath, "utf8"));
       assert.equal(fileMode(summary.receiptPath), 0o600);
