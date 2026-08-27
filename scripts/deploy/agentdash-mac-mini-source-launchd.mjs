@@ -253,10 +253,10 @@ for attempt in $(seq 1 30); do
 done
 
 if [[ -x "$REPO_DIR/scripts/msp-mac-mini-readiness.sh" ]]; then
+  export AGENTDASH_ENV_FILE="$ENV_FILE"
   args=(
     "$REPO_DIR/scripts/msp-mac-mini-readiness.sh"
     --base-url "$BASE_URL"
-    --env-file "$ENV_FILE"
   )
   if [[ -n "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
     args+=(--expected-company-id "$AGENTDASH_READINESS_COMPANY_ID")

@@ -90,6 +90,8 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   const readiness = renderSourceReadinessScript(plan);
   assert.match(readiness, /for attempt in \$\(seq 1 30\)/);
   assert.match(readiness, /AgentDash health did not become ready/);
+  assert.match(readiness, /export AGENTDASH_ENV_FILE="\$ENV_FILE"/);
+  assert.doesNotMatch(readiness, /--env-file/);
 
   const update = renderSourceUpdateScript(plan);
   assert.match(update, /git fetch --all --tags/);
