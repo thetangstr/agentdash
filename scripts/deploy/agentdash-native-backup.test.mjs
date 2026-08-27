@@ -285,18 +285,28 @@ function archivesIn(dir) {
 }
 
 function embeddedPostgresNativeDir() {
-  // The platform package exports no entry point, so locate it through the
-  // pnpm store this checkout installed rather than through module resolution.
+  // The platform packages export no entry point, so locate the one installed
+  // for this host through the pnpm store rather than through module resolution.
+  const platform = `${process.platform}-${process.arch}`;
   const store = path.join(repoRoot, "node_modules", ".pnpm");
-  const entry = readdirSync(store).find((name) => name.startsWith("@embedded-postgres+darwin-arm64@"));
-  assert.ok(entry, "the darwin-arm64 embedded PostgreSQL package must be installed");
-  return path.join(store, entry, "node_modules", "@embedded-postgres", "darwin-arm64");
+  const entry = readdirSync(store).find((name) => name.startsWith(`@embedded-postgres+${platform}@`));
+  assert.ok(entry, `the ${platform} embedded PostgreSQL package must be installed`);
+  return { platform, dir: path.join(store, entry, "node_modules", "@embedded-postgres", platform) };
 }
 
 test("the embedded PostgreSQL distribution pinned by this checkout ships no client tools", () => {
-  const packageDir = embeddedPostgresNativeDir();
-  const tools = readdirSync(path.join(packageDir, "native", "bin")).sort();
-  assert.deepEqual(tools, ["initdb", "pg_ctl", "postgres"]);
+  const { platform, dir } = embeddedPostgresNativeDir();
+  const tools = readdirSync(path.join(dir, "native", "bin")).sort();
+  for (const required of ["initdb", "pg_ctl", "postgres"]) {
+    assert.ok(tools.includes(required), `${platform} embedded bin must ship ${required}`);
+  }
+  for (const absent of ["pg_dump", "pg_restore", "psql"]) {
+    assert.ok(!tools.includes(absent), `${platform} embedded bin must not ship ${absent}`);
+  }
+  if (platform === "darwin-arm64") {
+    // The customer's exact platform: nothing but the server itself.
+    assert.deepEqual(tools, ["initdb", "pg_ctl", "postgres"]);
+  }
   const pinned = JSON.parse(readFileSync(path.join(repoRoot, "packages/db/package.json"), "utf8"));
   assert.match(pinned.dependencies["embedded-postgres"], /18\.1\.0/);
 });
