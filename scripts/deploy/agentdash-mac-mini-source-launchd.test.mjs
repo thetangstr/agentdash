@@ -92,6 +92,13 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(readiness, /AgentDash health did not become ready/);
   assert.match(readiness, /export AGENTDASH_ENV_FILE="\$ENV_FILE"/);
   assert.doesNotMatch(readiness, /--env-file/);
+  assert.match(readiness, /export AGENTDASH_EXPECTED_COMPANY="\$AGENTDASH_READINESS_COMPANY_ID"/);
+  assert.match(readiness, /harness_args=\(/);
+  assert.match(readiness, /--bearer-token/);
+  assert.doesNotMatch(
+    readiness,
+    /--expected-company-id|--auth-header-env|--run-agent-harness-smoke|--agent-harness-command/,
+  );
 
   const update = renderSourceUpdateScript(plan);
   assert.match(update, /git fetch --all --tags/);

@@ -259,20 +259,31 @@ if [[ -x "$REPO_DIR/scripts/msp-mac-mini-readiness.sh" ]]; then
     --base-url "$BASE_URL"
   )
   if [[ -n "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
-    args+=(--expected-company-id "$AGENTDASH_READINESS_COMPANY_ID")
+    export AGENTDASH_EXPECTED_COMPANY="$AGENTDASH_READINESS_COMPANY_ID"
   fi
-  if [[ -n "\${AGENTDASH_READINESS_AUTH_HEADER:-}" ]]; then
-    args+=(--auth-header-env AGENTDASH_READINESS_AUTH_HEADER)
-  fi
+  "\${args[@]}"
+
   if [[ "\${AGENTDASH_READINESS_RUN_HARNESS_SMOKE:-}" == "true" ]]; then
     if [[ -z "\${AGENTDASH_READINESS_COMPANY_ID:-}" ]]; then
       echo "AGENTDASH_READINESS_COMPANY_ID is required when running harness smoke." >&2
       exit 1
     fi
-    harness_cmd="$REPO_DIR/scripts/agent-harness-smoke.sh --base-url $BASE_URL --company-id $AGENTDASH_READINESS_COMPANY_ID"
-    args+=(--run-agent-harness-smoke --agent-harness-command "$harness_cmd")
+    harness_args=(
+      "$REPO_DIR/scripts/agent-harness-smoke.sh"
+      --base-url "$BASE_URL"
+      --company-id "$AGENTDASH_READINESS_COMPANY_ID"
+    )
+    if [[ -n "\${AGENTDASH_READINESS_AUTH_HEADER:-}" ]]; then
+      case "$AGENTDASH_READINESS_AUTH_HEADER" in
+        Bearer\ *) harness_args+=(--bearer-token "\${AGENTDASH_READINESS_AUTH_HEADER#Bearer }") ;;
+        *)
+          echo "AGENTDASH_READINESS_AUTH_HEADER must use the Bearer scheme for harness smoke." >&2
+          exit 2
+          ;;
+      esac
+    fi
+    "\${harness_args[@]}"
   fi
-  "\${args[@]}"
 fi
 `;
 }
