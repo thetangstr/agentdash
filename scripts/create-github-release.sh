@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${REPO_ROOT:-}" ]; then
+  REPO_ROOT="$SCRIPT_ROOT"
+fi
 # shellcheck source=./release-lib.sh
-. "$REPO_ROOT/scripts/release-lib.sh"
+. "$SCRIPT_ROOT/scripts/release-lib.sh"
 
 dry_run=false
 version=""
@@ -54,7 +57,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 tag="v$version"
-notes_file="$REPO_ROOT/releases/${tag}.md"
+notes_file="$(release_notes_file "$version")"
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -z "${PUBLISH_REMOTE:-}" ] && git_remote_exists origin; then
   PUBLISH_REMOTE=origin
 fi

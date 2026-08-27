@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${REPO_ROOT:-}" ]; then
+  REPO_ROOT="$SCRIPT_ROOT"
+fi
 # shellcheck source=./release-lib.sh
-. "$REPO_ROOT/scripts/release-lib.sh"
+. "$SCRIPT_ROOT/scripts/release-lib.sh"
 CLI_DIR="$REPO_ROOT/cli"
 
 channel=""
@@ -217,7 +220,7 @@ if [ "$skip_verify" = false ]; then
   release_info ""
   release_info "==> Step 1/7: Verification gate..."
   cd "$REPO_ROOT"
-  pnpm -r typecheck
+  pnpm typecheck
   pnpm test:run
   pnpm build
 else

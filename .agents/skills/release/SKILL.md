@@ -33,7 +33,7 @@ Use this skill when leadership asks for:
 Before proceeding, verify all of the following:
 
 1. `.agents/skills/release-changelog/SKILL.md` exists and is usable.
-2. The repo working tree is clean, including untracked files.
+2. The immutable source checkout is clean, including untracked files.
 3. There is at least one canary or candidate commit since the last stable tag.
 4. The candidate SHA has passed the verification gate or is about to.
 5. If manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `master`.
@@ -183,16 +183,16 @@ Inputs:
 Before live stable:
 
 1. resolve the target stable version with `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
-2. ensure `releases/vYYYY.MDD.P.md` exists on the source ref
+2. ensure `releases/vYYYY.MDD.P.md` exists on the default-branch release-control ref
 3. run the stable workflow in dry-run mode first when practical
 4. then run the real stable publish
 
-The stable workflow:
+The stable workflow keeps the default-branch release controls and chosen source ref in separate checkouts. It:
 
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
 - publishes `YYYY.MDD.P` under dist-tag `latest`
-- creates git tag `vYYYY.MDD.P`
+- creates git tag `vYYYY.MDD.P` on the exact source ref
 - creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
 
 Local emergency/manual commands:

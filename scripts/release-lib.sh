@@ -222,6 +222,11 @@ NODE
 }
 
 release_notes_file() {
+  if [ -n "${RELEASE_NOTES_FILE:-}" ]; then
+    printf '%s\n' "$RELEASE_NOTES_FILE"
+    return
+  fi
+
   printf '%s/releases/v%s.md\n' "$REPO_ROOT" "$1"
 }
 
