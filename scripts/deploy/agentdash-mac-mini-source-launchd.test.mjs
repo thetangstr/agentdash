@@ -103,7 +103,8 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   );
 
   const update = renderSourceUpdateScript(plan);
-  assert.match(update, /git fetch --all --tags/);
+  assert.doesNotMatch(update, /git fetch --all/);
+  assert.match(update, /fetch_target_commit "\$REMOTE" "\$TARGET_SHA"/);
   assert.match(update, /pnpm install --frozen-lockfile/);
   assert.match(update, /"AGENTDASH_SOURCE_SHA=" \+ sha/);
   assert.match(update, /restart_service/);

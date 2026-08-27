@@ -259,6 +259,85 @@ echo "before=$before after=$after"
   }
 });
 
+/**
+ * The customer checkout carries a second remote (`upstream`, the Paperclip
+ * repository) whose tags collide by name with local ones. `git fetch --all
+ * --tags --prune` therefore fails ("would clobber existing tag") even though
+ * origin fetched fine and the target commit was already local, and the update
+ * aborted. The updater must fetch only the configured remote, must not need
+ * tags, and must prove the target SHA resolves before writing pending state.
+ */
+function gitInit(dir, extra = []) {
+  execFileSync("git", ["init", "-q", "-b", "main", ...extra, dir]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@example.invalid"]);
+  execFileSync("git", ["-C", dir, "config", "user.name", "test"]);
+}
+
+test("fetch_target_commit fetches only the configured remote and survives an upstream tag collision", () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-launchd-domain-fetch-"));
+  try {
+    const origin = path.join(tmp, "origin");
+    gitInit(origin);
+    writeFileSync(path.join(origin, "a.txt"), "one\n");
+    execFileSync("git", ["-C", origin, "add", "."]);
+    execFileSync("git", ["-C", origin, "commit", "-q", "-m", "one"]);
+    execFileSync("git", ["-C", origin, "tag", "canary/v2026.827.0-canary.0"]);
+
+    const upstream = path.join(tmp, "upstream");
+    gitInit(upstream);
+    writeFileSync(path.join(upstream, "b.txt"), "other\n");
+    execFileSync("git", ["-C", upstream, "add", "."]);
+    execFileSync("git", ["-C", upstream, "commit", "-q", "-m", "other"]);
+    execFileSync("git", ["-C", upstream, "tag", "canary/v2026.827.0-canary.0"]);
+
+    const checkout = path.join(tmp, "checkout");
+    execFileSync("git", ["clone", "-q", origin, checkout]);
+    execFileSync("git", ["-C", checkout, "remote", "add", "upstream", upstream]);
+
+    // The target commit lands on origin after the clone, like a release.
+    writeFileSync(path.join(origin, "a.txt"), "two\n");
+    execFileSync("git", ["-C", origin, "commit", "-q", "-am", "two"]);
+    const target = execFileSync("git", ["-C", origin, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    // The client's failure, reproduced: fetching every remote with tags is rejected.
+    const legacy = spawnSync("git", ["-C", checkout, "fetch", "--all", "--tags", "--prune"], { encoding: "utf8" });
+    assert.notEqual(legacy.status, 0, "fixture must reproduce the tag collision");
+    assert.match(legacy.stderr, /would clobber existing tag/);
+
+    const plan = basePlan(tmp, { repoDir: checkout });
+    const libPath = path.join(tmp, "launchd-lib.sh");
+    writeFileSync(libPath, renderSourceLaunchdLibScript(plan));
+    const driver = path.join(tmp, "fetch.sh");
+    writeFileSync(driver, `#!/bin/bash
+set -euo pipefail
+LABEL="x"; LAUNCHD_DOMAIN="gui"; PORT="0"
+. ${JSON.stringify(libPath)}
+cd ${JSON.stringify(checkout)}
+fetch_target_commit origin ${JSON.stringify(target)}
+git cat-file -e "${target}^{commit}" && echo "target resolvable"
+`);
+    const result = spawnSync("/bin/bash", [driver], { encoding: "utf8" });
+    assert.equal(result.status, 0, `fetch_target_commit must succeed: ${result.stderr}`);
+    assert.match(result.stdout, /target resolvable/);
+
+    const missing = spawnSync("/bin/bash", ["-c", `LABEL=x; LAUNCHD_DOMAIN=gui; PORT=0; . ${JSON.stringify(libPath)}; cd ${JSON.stringify(checkout)}; fetch_target_commit origin 0123456789abcdef0123456789abcdef01234567`], { encoding: "utf8" });
+    assert.notEqual(missing.status, 0, "an unreachable target must fail closed");
+    assert.match(missing.stderr, /not reachable|could not be fetched/i);
+
+    const update = renderSourceUpdateScript(plan);
+    assert.doesNotMatch(update, /git fetch --all/);
+    assert.match(update, /fetch_target_commit "\$REMOTE" "\$TARGET_SHA"/);
+    const fetchIndex = update.indexOf("fetch_target_commit");
+    const pendingIndex = update.indexOf('cat > "$STATE_DIR/pending.json"');
+    const checkoutIndex = update.indexOf('git checkout --detach "$TARGET_SHA"');
+    assert.ok(fetchIndex >= 0 && fetchIndex < pendingIndex, "pending state is written only after the target is fetched");
+    assert.ok(pendingIndex < checkoutIndex, "pending state precedes checkout");
+    assert.match(update, /stale pending state/i);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("the backup wrapper stops before any work when node or pnpm is missing from the wrapper PATH", () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "agentdash-launchd-domain-toolpath-"));
   try {

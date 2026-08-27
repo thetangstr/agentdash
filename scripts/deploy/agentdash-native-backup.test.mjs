@@ -385,7 +385,7 @@ test("update wrapper probes backup readiness before pending state and records th
     const update = renderSourceUpdateScript(plan);
     const probeIndex = update.indexOf("--check");
     const backupRunIndex = update.indexOf(`"${plan.paths.backupScript}" 1>&2`);
-    const pendingIndex = update.indexOf("pending.json");
+    const pendingIndex = update.indexOf('cat > "$STATE_DIR/pending.json"');
     const checkoutIndex = update.indexOf('git checkout --detach "$TARGET_SHA"');
     assert.ok(probeIndex >= 0, "update must probe backup readiness");
     assert.ok(backupRunIndex >= 0, "update must create the backup through the wrapper");

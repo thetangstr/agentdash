@@ -222,6 +222,27 @@ listener_pids_owned_by() {
   done
 }
 
+# Fetch the pinned target commit from ONE remote, without tags. A customer
+# checkout may carry other remotes (an upstream fork) whose tag names collide
+# with local tags; "git fetch --all --tags" is rejected by such a collision
+# and must never gate an upgrade. The target is a SHA, so tags are not needed.
+fetch_target_commit() {
+  local remote="$1"
+  local target="$2"
+  if ! git fetch --prune --no-tags "$remote" 2>&1 | sed 's/^/[fetch] /' >&2; then
+    echo "git fetch from remote $remote failed; the target $target could not be fetched." >&2
+    return 1
+  fi
+  if ! git cat-file -e "$target^{commit}" 2>/dev/null; then
+    # Some servers allow fetching a reachable commit by SHA; try before failing.
+    git fetch --no-tags "$remote" "$target" 2>/dev/null || true
+  fi
+  if ! git cat-file -e "$target^{commit}" 2>/dev/null; then
+    echo "Target commit $target is not reachable from remote $remote after fetch; refusing to continue." >&2
+    return 1
+  fi
+}
+
 restart_service() {
   local before after attempt victims
   before="$(service_pid || true)"
@@ -1195,6 +1216,24 @@ esac
 cd "$REPO_DIR"
 previous_sha="$(git rev-parse HEAD)"
 pending_previous_sha="\${AGENTDASH_PENDING_PREVIOUS_SHA:-$previous_sha}"
+REMOTE="${plan.remoteName}"
+
+# A pending.json left by an earlier attempt means one of two things. If it
+# names the SHA that is checked out right now, that attempt stopped before it
+# changed anything (stale pending state) and is safe to clear. If it names a
+# different SHA, a previous update really did mutate the checkout: refuse and
+# point at the rollback wrapper. The rollback wrapper itself runs this script
+# with AGENTDASH_PENDING_PREVIOUS_SHA set and is exempt.
+if [[ -f "$STATE_DIR/pending.json" && -z "\${AGENTDASH_PENDING_PREVIOUS_SHA:-}" ]]; then
+  stale_previous="$(node -e 'const s = require(process.argv[1]); console.log(s.previousSha || "")' "$STATE_DIR/pending.json" 2>/dev/null || true)"
+  if [[ "$stale_previous" == "$previous_sha" ]]; then
+    echo "Clearing stale pending state from an earlier attempt that stopped before checkout (previousSha $stale_previous == HEAD)." >&2
+    rm -f "$STATE_DIR/pending.json"
+  else
+    echo "A previous update is still pending (previousSha $stale_previous, HEAD $previous_sha). Run ${plan.paths.rollbackScript} before retrying." >&2
+    exit 1
+  fi
+fi
 
 # Prove backup capability (database reachable, compatible engine, writable
 # archive directory, required tools on PATH) before any state, checkout,
@@ -1219,9 +1258,14 @@ if [[ ! -s "$backup_path" ]]; then
   exit 1
 fi
 
-# Only now — with a validated backup on disk — record the rollback target, so a
-# failure anywhere below leaves a deterministic previous SHA for the rollback
-# wrapper. This is the first write to deployment state.
+# Fetch the pinned target from the configured remote only (no tags, no other
+# remotes). Nothing in the checkout changes until this has succeeded.
+fetch_target_commit "$REMOTE" "$TARGET_SHA"
+
+# Only now — with a validated backup on disk and the target reachable — record
+# the rollback target, so a failure anywhere below leaves a deterministic
+# previous SHA for the rollback wrapper. This is the first write to deployment
+# state and the checkout is mutated immediately after it.
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$STATE_DIR/pending.json" <<JSON
 {
@@ -1235,7 +1279,6 @@ cat > "$STATE_DIR/pending.json" <<JSON
 }
 JSON
 chmod 600 "$STATE_DIR/pending.json"
-git fetch --all --tags --prune
 git checkout --detach "$TARGET_SHA"
 pnpm install --frozen-lockfile
 pnpm run build
