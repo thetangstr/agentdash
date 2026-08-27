@@ -84,6 +84,12 @@ Candidate causes noted from source inspection only (not assumed):
 
 Recorded in this document once the RED run is captured (see "RED evidence" below).
 
+## Pull request
+
+- <https://github.com/thetangstr/agentdash/pull/538> — `claude/native-pg-backup-toolchain` → `main`, opened
+  2026-08-27 after the independent review; required hosted checks: `audit`, `drift`, `check`, `verify`,
+  `policy`, `dependency-audit` (enforce_admins). Merge only when every required check is green.
+
 ## Intended patch
 
 - Version: `v2026.827.3` (stable slot for UTC date 2026-08-27; pass `stable_date=2026-08-27` to the
@@ -259,3 +265,19 @@ Findings, all fixed in the follow-up commit:
    sets the backup/state directories to mode 700.
 7. Rollback depends on the current checkout being able to run its backup library; documented in the
    RUNBOOK with the supported remediation (no skip flag).
+
+Follow-up verification of the fix commit by the same reviewer: **APPROVE** — C1–C7 genuinely closed,
+nothing regressed, no new blockers; the marker-spoof repros now produce validated backups and a decoy
+`psql` on PATH is never invoked. Its remaining nit (measure rather than assume the Node restore path) is
+now a regression: the tool-less live case carries a decoy `psql` that logs any invocation, and the test
+asserts the log never appears.
+
+### Hosted checks on PR #538 (first run)
+
+`audit`, `check`, `drift`, `policy`, `dependency-audit`, `e2e` passed; `launch-signoff` **failed on
+ubuntu-latest** for a test-fixture reason that is itself evidence the product works: the runner image ships
+`/usr/bin/pg_dump` 16.15, the probe found it on the bounded PATH, correctly rejected it against the embedded
+PostgreSQL 18 (`compatible:false`, reason naming both majors) and still selected the `javascript` engine — the
+test had asserted `pgDump === null`, which was only true on macOS. The fixture now mirrors the system bin
+directories into a private tool directory minus `pg_dump`/`pg_dumpall`/`pg_restore`/`psql` and asserts that
+none resolves, so "no pg_dump anywhere" is literally true on every platform.

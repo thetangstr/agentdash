@@ -70,11 +70,15 @@ async function freePort() {
   });
 }
 
+const POSTGRES_CLIENT_TOOLS = new Set(["pg_dump", "pg_dumpall", "pg_restore", "psql"]);
+
 /**
  * A PATH with the tools a launchd wrapper genuinely needs (node, pnpm, the
- * macOS system utilities) and nothing else — in particular no Homebrew or
- * /usr/local prefix, so no `pg_dump` can be found the way the client machine
- * cannot find one.
+ * system utilities) and no PostgreSQL client tool at all. The system bin
+ * directories are mirrored into one private directory *minus* pg_dump,
+ * pg_dumpall, pg_restore and psql, so the fixture is literally the client's
+ * situation on every platform — including CI runners whose /usr/bin carries a
+ * distribution pg_dump.
  */
 function makeToolPath(tmp) {
   const bin = path.join(tmp, "tool-bin");
@@ -84,12 +88,26 @@ function makeToolPath(tmp) {
   // (corepack, pnpm/action-setup) that breaks when symlinked elsewhere.
   const pnpm = execFileSync("which", ["pnpm"], { encoding: "utf8" }).trim();
   writeFileSync(path.join(bin, "pnpm"), `#!/bin/sh\nexec ${JSON.stringify(pnpm)} "$@"\n`, { mode: 0o755 });
+  for (const dir of ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (POSTGRES_CLIENT_TOOLS.has(name) || existsSync(path.join(bin, name))) continue;
+      try {
+        symlinkSync(path.join(dir, name), path.join(bin, name));
+      } catch {
+        // unreadable or racing entries are irrelevant to the wrapper
+      }
+    }
+  }
   const embeddedBin = path.join(tmp, "embedded-postgres-bin");
   mkdirSync(embeddedBin, { recursive: true });
   for (const tool of ["initdb", "pg_ctl", "postgres"]) {
     writeFileSync(path.join(embeddedBin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
-  return `${bin}:${embeddedBin}:/usr/bin:/bin:/usr/sbin:/sbin`;
+  const toolPath = `${bin}:${embeddedBin}`;
+  const found = spawnSync("/bin/sh", ["-c", "command -v pg_dump pg_restore psql"], { encoding: "utf8", env: { PATH: toolPath } });
+  assert.notEqual(found.status, 0, `the fixture PATH must not resolve any PostgreSQL client tool: ${found.stdout}`);
+  return toolPath;
 }
 
 function writeFakePgTools(dir, version) {
@@ -433,11 +451,19 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
         write: false,
       });
       // Reproduce the client's PATH exactly: whatever PATH the wrapper exports,
-      // there is no pg_dump on it.
-      const backupScript = install.rendered.backup.replace(/^export PATH=.*$/m, `export PATH="${toolPath}"`);
+      // there is no pg_dump on it. A decoy psql IS on it, so the test measures
+      // (rather than assumes) that restore validation never shells out to psql
+      // — the application library would hand psql the credential-bearing URL.
+      const decoyDir = path.join(caseDir, "decoy-psql");
+      const decoyLog = path.join(caseDir, "psql-invoked.log");
+      mkdirSync(decoyDir, { recursive: true });
+      writeFileSync(path.join(decoyDir, "psql"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(decoyLog)}\nexit 1\n`, { mode: 0o755 });
+      const casePath = `${decoyDir}:${toolPath}`;
+      const backupScript = install.rendered.backup.replace(/^export PATH=.*$/m, `export PATH="${casePath}"`);
       writeRendered(plan, { ...install.rendered, backup: backupScript });
+      const caseEnv = { ...baseEnv, PATH: casePath };
 
-      const check = runScript(plan.paths.backupScript, ["--check"], baseEnv);
+      const check = runScript(plan.paths.backupScript, ["--check"], caseEnv);
       assertNoSecrets("backup --check output", check.stdout, check.stderr);
       const probe = lastJsonLine(check.stdout);
       assert.ok(probe, `--check must print a JSON readiness record; got ${JSON.stringify(check)}`);
@@ -448,13 +474,14 @@ test("native backup contract against a tool-less embedded PostgreSQL", async (t)
       assert.ok(Array.isArray(probe.searched) && probe.searched.length > 0, "probe must list searched locations");
       assert.equal(probe.repositoryEngine.available, true);
       // pnpm exec prepends the workspace bin directories; the wrapper PATH must be the tail.
-      assert.ok(probe.toolPath.endsWith(toolPath), `probe must report the wrapper PATH it ran under; got ${probe.toolPath}`);
+      assert.ok(probe.toolPath.endsWith(casePath), `probe must report the wrapper PATH it ran under; got ${probe.toolPath}`);
       for (const tool of ["node", "pnpm", "git", "curl", "lsof"]) {
         assert.ok(probe.tools[tool], `probe must resolve ${tool} on the wrapper PATH`);
       }
       assert.equal(archivesIn(plan.paths.backupDir).length, 0, "--check must not write an archive");
 
-      const run = runScript(plan.paths.backupScript, [], baseEnv);
+      const run = runScript(plan.paths.backupScript, [], caseEnv);
+      assert.ok(!existsSync(decoyLog), "restore validation must never invoke psql, even when one is on PATH");
       assertNoSecrets("backup run output", run.stdout, run.stderr);
       assert.equal(run.status, 0, `backup must succeed through the repository engine: ${run.stderr}`);
       const summary = lastJsonLine(run.stdout);
