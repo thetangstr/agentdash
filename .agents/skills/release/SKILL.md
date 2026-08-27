@@ -189,11 +189,13 @@ Before live stable:
 
 The stable workflow keeps the default-branch release controls and chosen source ref in separate checkouts. It:
 
+- requires `source_ref` to be a full 40-character commit SHA
 - re-verifies the exact source ref
 - computes the next stable patch slot for the chosen UTC date
 - publishes `YYYY.MDD.P` under dist-tag `latest`
 - creates git tag `vYYYY.MDD.P` on the exact source ref
-- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
+- builds a checksummed source-install controller with a manifest that pins source and release-control SHAs
+- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md` and uploads the controller assets
 
 Local emergency/manual commands:
 

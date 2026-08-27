@@ -27,6 +27,8 @@ test("release workflows run the workspace-link preflight before recursive typech
 test("stable workflow separates immutable source from release-control metadata", () => {
   const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
 
+  assert.match(workflow, /full 40-character commit SHA/i);
+  assert.match(workflow, /\^\[0-9a-fA-F\]\{40\}\$/);
   assert.match(workflow, /name:\s*Checkout release control/);
   assert.match(workflow, /name:\s*Checkout immutable source/);
   assert.match(workflow, /path:\s*release-control/);
@@ -35,6 +37,8 @@ test("stable workflow separates immutable source from release-control metadata",
   assert.match(workflow, /export RELEASE_NOTES_FILE=/);
   assert.match(workflow, /name:\s*Verify immutable source provenance/);
   assert.match(workflow, /git rev-parse "\$tag\^\{commit\}"/);
+  assert.match(workflow, /build-release-control-assets\.mjs/);
+  assert.match(workflow, /--asset/);
 });
 
 test("release scripts honor explicit source and release-notes paths", () => {

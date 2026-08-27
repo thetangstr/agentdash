@@ -50,6 +50,7 @@ Canaries only cover the first two surfaces plus an internal traceability tag.
 - tags point at the original source commit, not a generated release commit
 - stable notes are always `releases/vYYYY.MDD.P.md`
 - stable promotion keeps the chosen source ref in a separate clean checkout, so release-control changes and notes cannot change the tag target
+- stable source-install controls are uploaded as checksummed GitHub Release assets with source and release-control provenance
 - canaries never create GitHub Releases
 - canaries never require changelog generation
 
@@ -85,7 +86,7 @@ Use [`.github/workflows/release.yml`](../.github/workflows/release.yml) from the
 Inputs:
 
 - `source_ref`
-  - commit SHA, branch, or tag
+  - full 40-character commit SHA; branches and movable tags are rejected
 - `stable_date`
   - optional UTC date override in `YYYY-MM-DD`
   - enter a date like `2026-03-18`, not a version like `2026.318.0`
@@ -101,7 +102,7 @@ Before running stable:
 
 Example:
 
-- `source_ref`: `master`
+- `source_ref`: `0123456789abcdef0123456789abcdef01234567`
 - `stable_date`: `2026-03-18`
 - resulting stable version: `2026.318.0`
 
@@ -116,7 +117,8 @@ It then:
 - computes the next stable patch slot for the chosen UTC date
 - publishes `YYYY.MDD.P` under npm dist-tag `latest`
 - creates git tag `vYYYY.MDD.P` on the immutable source commit, not the release-control commit
-- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
+- builds the standalone Mac mini source-launchd controller from the release-control checkout, with a SHA-256 checksum and JSON provenance manifest
+- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md` and uploads those release-control assets
 
 ## Local Commands
 

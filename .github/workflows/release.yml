@@ -7,10 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Commit SHA, branch, or tag to publish as stable
+        description: Full 40-character commit SHA to publish as stable
         required: true
         type: string
-        default: main
       stable_date:
         description: Enter a UTC date in YYYY-MM-DD format, for example 2026-03-18. Do not enter a version string. The workflow will resolve that date to a stable version such as 2026.318.0, then 2026.318.1 for the next same-day stable.
         required: false
@@ -131,6 +130,15 @@ jobs:
           fetch-depth: 0
           path: release-control
 
+      - name: Require immutable source SHA
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ ! "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Error: source_ref must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+
       - name: Checkout immutable source
         uses: actions/checkout@v4
         with:
@@ -236,6 +244,39 @@ jobs:
           export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
           release-control/scripts/release.sh "${args[@]}"
 
+      - name: Build release-control assets
+        id: release_control_assets
+        run: |
+          version_args=(stable --print-version)
+          if [ -n "${{ inputs.stable_date }}" ]; then
+            version_args+=(--date "${{ inputs.stable_date }}")
+          fi
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          output_dir="${{ runner.temp }}/agentdash-release-assets"
+          node release-control/scripts/build-release-control-assets.mjs \
+            --version "$version" \
+            --source-sha "$(git -C source rev-parse HEAD)" \
+            --control-sha "$(git -C release-control rev-parse HEAD)" \
+            --source-script release-control/scripts/deploy/agentdash-mac-mini-source-launchd.mjs \
+            --output-dir "$output_dir"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Preview GitHub Release
+        env:
+          GITHUB_ACTIONS: "true"
+          PUBLISH_REMOTE: origin
+          REPO_ROOT: ${{ github.workspace }}/source
+        run: |
+          version="${{ steps.release_control_assets.outputs.version }}"
+          output_dir="${{ steps.release_control_assets.outputs.output_dir }}"
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
+          release-control/scripts/create-github-release.sh "$version" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs.sha256" \
+            --asset "$output_dir/agentdash-release-control-v${version}.json" \
+            --dry-run
+
   publish_stable:
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     needs: verify_stable
@@ -317,16 +358,34 @@ jobs:
           fi
           git push origin "refs/tags/${tag}"
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PUBLISH_REMOTE: origin
-          REPO_ROOT: ${{ github.workspace }}/source
+      - name: Build release-control assets
+        id: release_control_assets
         run: |
           version="$(git -C source tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
           if [ -z "$version" ]; then
             echo "Error: no v* tag points at HEAD after stable release." >&2
             exit 1
           fi
+          output_dir="${{ runner.temp }}/agentdash-release-assets"
+          node release-control/scripts/build-release-control-assets.mjs \
+            --version "$version" \
+            --source-sha "$(git -C source rev-parse HEAD)" \
+            --control-sha "$(git -C release-control rev-parse HEAD)" \
+            --source-script release-control/scripts/deploy/agentdash-mac-mini-source-launchd.mjs \
+            --output-dir "$output_dir"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_REMOTE: origin
+          REPO_ROOT: ${{ github.workspace }}/source
+        run: |
+          version="${{ steps.release_control_assets.outputs.version }}"
+          output_dir="${{ steps.release_control_assets.outputs.output_dir }}"
           export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
-          release-control/scripts/create-github-release.sh "$version"
+          release-control/scripts/create-github-release.sh "$version" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs.sha256" \
+            --asset "$output_dir/agentdash-release-control-v${version}.json"
