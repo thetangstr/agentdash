@@ -161,7 +161,7 @@ test("connector workflow is scoped to the owned package and creates its GitHub r
   assert.match(workflow, /id-token:\s*write/);
   assert.doesNotMatch(workflow, /^\s*(NODE_AUTH_TOKEN|NPM_TOKEN)\s*:/m);
   assert.doesNotMatch(workflow, /@paperclipai\/|@agentdash\//);
-  assert.match(workflow, /name:\s*Create GitHub Release/);
+  assert.match(workflow, /name:\s*Create or repair GitHub Release/);
   assert.match(workflow, /name:\s*Verify package release notes/);
   assert.match(workflow, /packages\/connect\/releases\/v\$\{PKG_VERSION\}\.md/);
   assert.match(workflow, /build-release-control-assets\.mjs/);
@@ -171,6 +171,14 @@ test("connector workflow is scoped to the owned package and creates its GitHub r
   assert.match(workflow, /npm view .*dist\.integrity/);
   assert.match(workflow, /npm view .*gitHead/);
   assert.match(workflow, /REGISTRY_GIT_HEAD.*GITHUB_SHA/);
+  assert.match(workflow, /id:\s*registry_state/);
+  assert.match(workflow, /already_published=true/);
+  assert.match(
+    workflow,
+    /name:\s*Publish[\s\S]*?if:.*steps\.registry_state\.outputs\.already_published != 'true'/,
+  );
+  assert.match(workflow, /gh release view "\$GITHUB_REF_NAME"/);
+  assert.match(workflow, /gh release upload "\$GITHUB_REF_NAME"[\s\S]*?--clobber/);
 
   const notesGate = workflow.indexOf("name: Verify package release notes");
   const livePublish = workflow.indexOf("name: Publish\n");

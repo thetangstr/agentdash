@@ -86,15 +86,22 @@ jobs:
           fi
           echo "tag and package.json agree on $PKG_VERSION"
 
-      - name: Check this version is not already published
+      - name: Inspect registry state
+        id: registry_state
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
           if npm view "agentdash-connect@$PKG_VERSION" version >/dev/null 2>&1; then
-            echo "agentdash-connect@$PKG_VERSION is already on the registry." >&2
-            echo "npm versions are immutable — bump the version instead." >&2
-            exit 1
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            if [ "$GITHUB_REF_TYPE" != "tag" ] || [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "agentdash-connect@$PKG_VERSION is already on the registry." >&2
+              echo "npm versions are immutable — bump the version instead." >&2
+              exit 1
+            fi
+            echo "agentdash-connect@$PKG_VERSION already exists; the live tag rerun will verify it before repairing GitHub release evidence"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "$PKG_VERSION is unpublished"
           fi
-          echo "$PKG_VERSION is unpublished"
 
       - name: Verify package release notes
         run: |
@@ -126,7 +133,7 @@ jobs:
           echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true && steps.registry_state.outputs.already_published != 'true'
         # No NODE_AUTH_TOKEN: the OIDC identity above is the credential.
         run: npm publish
 
@@ -165,7 +172,7 @@ jobs:
           fi
           echo "registry integrity and gitHead match the reviewed release evidence"
 
-      - name: Create GitHub Release
+      - name: Create or repair GitHub Release
         if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -177,10 +184,20 @@ jobs:
             echo "Release notes are missing: $NOTES_FILE" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --title "agentdash-connect v${PKG_VERSION}" \
-            --notes-file "$NOTES_FILE" \
-            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz" \
-            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz.sha256" \
+          ASSETS=(
+            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz"
+            "$ASSET_DIR/agentdash-connect-v${PKG_VERSION}.tgz.sha256"
             "$ASSET_DIR/agentdash-connect-release-v${PKG_VERSION}.json"
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "agentdash-connect v${PKG_VERSION}" \
+              --notes-file "$NOTES_FILE"
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "agentdash-connect v${PKG_VERSION}" \
+              --notes-file "$NOTES_FILE" \
+              "${ASSETS[@]}"
+          fi
