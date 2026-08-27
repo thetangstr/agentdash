@@ -100,11 +100,81 @@ Recorded in this document once the RED run is captured (see "RED evidence" below
 
 ## RED evidence
 
-_pending_
+Regression file: `scripts/deploy/agentdash-native-backup.test.mjs` (Node test runner; the live case starts a real
+embedded PostgreSQL 18 from this checkout's `@embedded-postgres/darwin-arm64@18.1.0-beta.16`, bounds PATH to
+node/pnpm/system utilities plus a fake embedded `bin` holding only `initdb`/`pg_ctl`/`postgres`, and seeds a
+synthetic schema — enum, FK, index, `drizzle.__drizzle_migrations`, 423 rows).
+
+Run against the unmodified generator (`origin/main` `e1b16cdf`), captured to
+`/Users/Kailor/.config/superpowers/worktrees/agentdash/claude-native-pg-backup.red.log`:
+
+- ✖ rendered backup contract prefers compatible pg_dump but falls back to the repository engine — no
+  `--check`, no repository engine, no version validation, URL passed on the pg_dump command line.
+- ✖ update wrapper probes backup readiness before pending state and records the verified backup — the
+  wrapper writes `pending.json` first, then calls the backup, and the receipt has no backup digest.
+- ✖ readiness proves database connectivity through the repository, not psql — readiness still shells out
+  to `psql` when present and has no backup-capability probe.
+- ✖ native backup contract against a tool-less embedded PostgreSQL (4 sub-cases):
+  - the wrapper fails before producing a valid backup: even with its PATH rewritten to the client's tool-less
+    PATH, the fixed absolute-path list finds `/opt/homebrew/bin/pg_dump` 14.17 on this host and exits 1 with
+    `pg_dump: error: server version: 18.1; pg_dump version: 14.17 (Homebrew) … aborting because of server
+    version mismatch`; no readiness JSON, no valid archive. On the client, with no binary at any fixed path,
+    `command -v pg_dump` fails silently and the wrapper exits 1 with no message at all.
+  - an incompatible `pg_dump` is not rejected — no probe exists;
+  - a compatible `pg_dump` is not validated with `pg_restore --list` — no probe exists;
+  - no engine at all does not fail with an actionable message — stderr names neither `PG_DUMP_BIN`, nor the
+    searched PATH, nor the repository engine.
+- ✔ every rendered operational shell parses under the macOS system bash (unchanged).
+- (harness fix, not a product finding: the platform package exports no entry point, so the test locates it
+  through the pnpm store.)
+
+The observed client failure ("no pg_dump/pg_restore/psql; embedded distribution has only initdb, pg_ctl,
+postgres; generated backup wrapper exits 1 under `set -euo pipefail` before creating or validating a backup")
+is therefore reproduced for its exact reason, and the additional latent failure (incompatible host `pg_dump`
+accepted without validation) is recorded.
 
 ## GREEN evidence
 
-_pending_
+Implementation (release-control only; application payload untouched):
+
+- `scripts/deploy/agentdash-mac-mini-source-launchd.mjs`
+  - `agentdash-backup-db.sh` becomes a thin launcher; the contract lives in a rendered Node runner
+    `agentdash-backup-db.mjs` executed through the installed checkout's own `tsx`
+    (`pnpm --silent --filter @paperclipai/db exec tsx`), exactly like the nightly launchd backup.
+  - The runner resolves the database the way the application and `packages/db/src/backup.ts` do
+    (`DATABASE_URL` → instance `config.json` under `PAPERCLIP_HOME`/`PAPERCLIP_INSTANCE_ID` → embedded port),
+    reads `server_version_num` through the checkout's PostgreSQL driver, and never prints the URL.
+  - Engine selection: compatible `pg_dump`/`pg_restore` pair (explicit reviewed `PG_DUMP_BIN`/`PG_RESTORE_BIN`
+    or on the wrapper PATH; pg_dump major ≥ server major; pg_restore major == pg_dump major) → custom-format
+    dump validated by `pg_restore --list`; otherwise the repository engine
+    (`packages/db/src/backup-lib.ts`, `backupEngine: "javascript"`) → gzipped SQL archive validated by a
+    genuine `runDatabaseRestore` into a throwaway database on the same server with per-table row counts
+    compared against the counts recorded in the archive, then `DROP DATABASE … WITH (FORCE)`.
+    `AGENTDASH_BACKUP_ENGINE=pg_dump|javascript` requires an engine. No credential is placed on a command
+    line (libpq environment variables are used).
+  - `--check` is read-only and prints one JSON readiness record (engine, server major, connection source,
+    pg tool verdicts, searched locations, repository-engine availability, running heartbeat runs, backup dir
+    writability, remediation). Failure exits 2 with the searched locations and supported remediations.
+  - The repository engine refuses while heartbeat runs are `running` (it reads tables sequentially).
+  - Each archive gets `<archive>.receipt.json` (mode 600: path, mode, size, SHA-256, engine, server,
+    validation) and `deployments/last-backup.json` (mode 600) for the updater.
+  - `agentdash-source-update.sh` runs `--check` before writing `pending.json`, creates/validates the backup
+    before `git fetch`/checkout, refuses to continue without the verified archive, and writes
+    `backupSha256`/`backupEngine`/`backupReceiptPath` into the deployment receipt. `/tmp` is no longer used.
+  - `agentdash-readiness.sh` proves database connectivity and backup capability through the same probe
+    (no `psql`), never printing the URL.
+  - RUNBOOK documents the probe, engines, overrides and receipts.
+- `scripts/deploy/agentdash-native-backup.test.mjs` (new) and `agentdash-mac-mini-source-launchd.test.mjs`
+  (updated assertions); `package.json` adds the new file to `test:launch-signoff`.
+
+GREEN run (same host, unmodified test cases): `node --test scripts/deploy/agentdash-native-backup.test.mjs`
+→ 10/10 passed, including the live tool-less embedded PostgreSQL 18 case: repository-engine archive
+(`predeploy-<utc>.sql.gz`, mode 600, ≥ 1 KiB, SHA-256 recorded), throwaway-database restore validated
+5 tables / 423 rows with no leftover database, receipts and `last-backup.json` written without secrets;
+incompatible `pg_dump` 14 rejected with a reason naming server major 18; compatible `pg_dump` 18 path
+validated by `pg_restore --list`; no engine → exit 2 naming `PG_DUMP_BIN`, the searched PATH and the
+repository-engine remediation with no archive left behind. `agentdash-mac-mini-source-launchd.test.mjs`
+→ 9/9 passed.
 
 ## Release / rehearsal log
 

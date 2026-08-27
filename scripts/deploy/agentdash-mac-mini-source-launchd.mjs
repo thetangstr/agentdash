@@ -13,6 +13,13 @@ import { parseArgs } from "node:util";
 
 const DEFAULT_LABEL = "ai.agentdash.agent";
 const DEFAULT_PORT = 3100;
+/**
+ * launchd starts wrappers with a minimal PATH, so every generated shell pins the
+ * directories that hold node, pnpm and the macOS system utilities. Nothing on
+ * this PATH is assumed to provide PostgreSQL client tools; the backup runner
+ * validates whatever it finds and falls back to the repository's own engine.
+ */
+const DEFAULT_TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 function expandHome(value) {
   if (!value) return value;
@@ -106,6 +113,8 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
     plist: path.join(launchAgentDir, `${label}.plist`),
     supervisorScript: path.join(binDir, "agentdash-source-supervisor.sh"),
     backupScript: path.join(binDir, "agentdash-backup-db.sh"),
+    backupRunner: path.join(binDir, "agentdash-backup-db.mjs"),
+    lastBackupFile: path.join(stateDir, "last-backup.json"),
     readinessScript: path.join(binDir, "agentdash-readiness.sh"),
     updateScript: path.join(binDir, "agentdash-source-update.sh"),
     rollbackScript: path.join(binDir, "agentdash-source-rollback.sh"),
@@ -118,6 +127,7 @@ export function buildMacMiniSourceLaunchdPlan(input = {}) {
     label,
     targetSha,
     remoteName: input.remoteName ?? "origin",
+    toolPath: typeof input.toolPath === "string" && input.toolPath.trim() ? input.toolPath.trim() : DEFAULT_TOOL_PATH,
     paths,
     env: {
       NODE_ENV: "production",
@@ -152,7 +162,7 @@ export function renderSourceSupervisorScript(plan) {
   return `#!/bin/bash
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="${plan.toolPath}"
 REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 
@@ -176,67 +186,635 @@ exec pnpm --filter @paperclipai/server exec tsx src/index.ts
 `;
 }
 
+/**
+ * The backup wrapper is a thin launcher. The decision logic lives in the
+ * rendered Node runner (`agentdash-backup-db.mjs`) because a customer Mac mini
+ * running the embedded PostgreSQL distribution has no `pg_dump`, `pg_restore`
+ * or `psql` at all — the embedded package ships only `initdb`, `pg_ctl` and
+ * `postgres`. The runner therefore:
+ *
+ * - resolves the database the same way the application and the repository's
+ *   backup CLI do (DATABASE_URL, then the instance config, then the embedded
+ *   port) and never prints the credential-bearing URL;
+ * - reads the running server's major version through the checkout's own
+ *   PostgreSQL driver;
+ * - uses `pg_dump`/`pg_restore` only when a compatible pair is found (an
+ *   explicit `PG_DUMP_BIN`/`PG_RESTORE_BIN` override, or on PATH) and validates
+ *   the custom-format dump with `pg_restore --list`;
+ * - otherwise uses the repository's own backup engine
+ *   (`packages/db/src/backup-lib.ts`, the same code the nightly launchd backup
+ *   runs) and validates the archive by restoring it into a throwaway database
+ *   on the same server and comparing every table's row count with the counts
+ *   recorded in the archive;
+ * - records path, mode, size and SHA-256 in a mode-600 receipt and in
+ *   `deployments/last-backup.json` for the updater;
+ * - answers `--check` read-only so the updater and readiness can prove backup
+ *   capability before any pending state, checkout, config or service mutation.
+ */
 export function renderSourceBackupScript(plan) {
   return `#!/bin/bash
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="${plan.toolPath}"
+REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 BACKUP_DIR="${plan.paths.backupDir}"
-mkdir -p "$BACKUP_DIR"
+STATE_DIR="${plan.paths.stateDir}"
+RUNNER="${plan.paths.backupRunner}"
+mkdir -p "$BACKUP_DIR" "$STATE_DIR"
 set -a
 . "$ENV_FILE"
 set +a
+export AGENTDASH_BACKUP_REPO_DIR="$REPO_DIR"
+export AGENTDASH_BACKUP_DIR="$BACKUP_DIR"
+export AGENTDASH_BACKUP_STATE_DIR="$STATE_DIR"
 
-resolve_pg_dump() {
-  if [[ -n "\${PG_DUMP_BIN:-}" && -x "\${PG_DUMP_BIN:-}" ]]; then
-    echo "$PG_DUMP_BIN"
-    return 0
-  fi
-
-  for candidate in \\
-    /opt/homebrew/opt/libpq/bin/pg_dump \\
-    /opt/homebrew/Cellar/libpq/*/bin/pg_dump \\
-    /usr/local/opt/libpq/bin/pg_dump \\
-    /usr/local/Cellar/libpq/*/bin/pg_dump \\
-    /opt/homebrew/bin/pg_dump \\
-    /usr/local/bin/pg_dump \\
-    /usr/bin/pg_dump; do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  command -v pg_dump
-}
-
-PG_DUMP="$(resolve_pg_dump)"
-output="$BACKUP_DIR/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
-if [[ -n "\${DATABASE_URL:-}" ]]; then
-  "$PG_DUMP" "$DATABASE_URL" -Fc > "$output"
-elif [[ -n "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT:-}" ]]; then
-  PGPASSWORD="\${POSTGRES_PASSWORD:-paperclip}" "$PG_DUMP" \\
-    -h 127.0.0.1 \\
-    -p "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT}" \\
-    -U "\${POSTGRES_USER:-paperclip}" \\
-    -d "\${POSTGRES_DB:-paperclip}" \\
-    -Fc > "$output"
-else
-  echo "DATABASE_URL or PAPERCLIP_EMBEDDED_POSTGRES_PORT is required for source-checkout backups." >&2
-  exit 1
+if [[ ! -f "$RUNNER" ]]; then
+  echo "Backup runner is missing: $RUNNER (re-run the release control script with --write)." >&2
+  exit 2
 fi
-chmod 600 "$output"
-echo "$output"
+
+# The runner loads the installed checkout's own backup library
+# (packages/db/src/backup-lib.ts, exercised by runDatabaseBackup / runDatabaseRestore)
+# through the checkout's tsx, exactly as the nightly launchd backup does. When
+# the checkout is not a usable workspace the runner still runs under plain node
+# so it can report which pg_dump / PG_DUMP_BIN / repository locations it
+# searched and fail closed.
+if [[ -f "$REPO_DIR/packages/db/package.json" ]]; then
+  cd "$REPO_DIR"
+  exec pnpm --silent --filter @paperclipai/db exec tsx "$RUNNER" "$@"
+fi
+exec node "$RUNNER" "$@"
 `;
 }
+
+export function renderSourceBackupRunner() {
+  return SOURCE_BACKUP_RUNNER;
+}
+
+const SOURCE_BACKUP_RUNNER = String.raw`#!/usr/bin/env node
+// AgentDash native database backup runner (generated by agentdash-mac-mini-source-launchd.mjs).
+//
+// Runs as:  agentdash-backup-db.sh --check   (read-only readiness probe, prints JSON)
+//           agentdash-backup-db.sh           (create + validate a backup, prints JSON)
+//
+// Environment (set by the generated wrapper): AGENTDASH_BACKUP_REPO_DIR,
+// AGENTDASH_BACKUP_DIR, AGENTDASH_BACKUP_STATE_DIR. Optional operator inputs:
+// DATABASE_URL, PAPERCLIP_HOME, PAPERCLIP_INSTANCE_ID, PAPERCLIP_EMBEDDED_POSTGRES_PORT,
+// POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, PG_DUMP_BIN, PG_RESTORE_BIN,
+// AGENTDASH_BACKUP_ENGINE (auto | pg_dump | javascript).
+//
+// This runner never prints the database URL or password.
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import readline from "node:readline";
+import zlib from "node:zlib";
+import { pathToFileURL } from "node:url";
+
+const MIN_ARCHIVE_BYTES = 1024;
+const ENGINES = ["auto", "pg_dump", "javascript"];
+const env = process.env;
+const action = process.argv.includes("--check") ? "check" : "run";
+
+function required(name) {
+  const value = env[name];
+  if (!value) {
+    log(name + " is required; it is set by the generated agentdash-backup-db.sh wrapper.");
+    process.exit(2);
+  }
+  return value;
+}
+
+function log(line) {
+  process.stderr.write("[agentdash-backup-db] " + line + "\n");
+}
+
+function emit(record) {
+  process.stdout.write(JSON.stringify(record) + "\n");
+}
+
+function scrub(message) {
+  // Restore failures quote the failing statement; never echo row data.
+  return String(message).replace(/\s*\[statement:[\s\S]*$/, "").split(/\r?\n/)[0].slice(0, 500);
+}
+
+function failClosed(code, record) {
+  emit(Object.assign({ ok: false, action: action }, record));
+  log("FAIL: " + record.error);
+  for (const item of record.searched || []) log("  searched: " + item);
+  for (const item of record.remediation || []) log("  remediation: " + item);
+  process.exit(code);
+}
+
+const repoDir = required("AGENTDASH_BACKUP_REPO_DIR");
+const backupDir = required("AGENTDASH_BACKUP_DIR");
+const stateDir = required("AGENTDASH_BACKUP_STATE_DIR");
+const dbPackageJson = path.join(repoDir, "packages", "db", "package.json");
+const backupLibPath = path.join(repoDir, "packages", "db", "src", "backup-lib.ts");
+
+function expandHome(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveConnection() {
+  const fromEnv = (env.DATABASE_URL || "").trim();
+  if (fromEnv) return { url: fromEnv, source: "DATABASE_URL" };
+  const home = env.PAPERCLIP_HOME ? path.resolve(expandHome(env.PAPERCLIP_HOME.trim())) : path.join(os.homedir(), ".paperclip");
+  const instance = (env.PAPERCLIP_INSTANCE_ID || "default").trim();
+  const configPath = path.join(home, "instances", instance, "config.json");
+  const config = readJson(configPath);
+  const database = config && config.database ? config.database : {};
+  if (database.mode === "postgres" && typeof database.connectionString === "string" && database.connectionString.trim()) {
+    return { url: database.connectionString.trim(), source: "config.database.connectionString (" + configPath + ")" };
+  }
+  const port = Number.parseInt(env.PAPERCLIP_EMBEDDED_POSTGRES_PORT || "", 10) || Number(database.embeddedPostgresPort) || 54329;
+  const user = env.POSTGRES_USER || "paperclip";
+  const password = env.POSTGRES_PASSWORD || "paperclip";
+  const name = env.POSTGRES_DB || "paperclip";
+  return {
+    url: "postgres://" + encodeURIComponent(user) + ":" + encodeURIComponent(password) + "@127.0.0.1:" + port + "/" + encodeURIComponent(name),
+    source: "embedded-postgres:" + port,
+  };
+}
+
+function describeConnection(connection) {
+  const url = new URL(connection.url);
+  return {
+    source: connection.source,
+    host: url.hostname,
+    port: url.port || "5432",
+    database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+  };
+}
+
+function libpqEnvironment(connectionUrl) {
+  const url = new URL(connectionUrl);
+  const pgEnv = Object.assign({}, env, {
+    PGHOST: url.hostname,
+    PGPORT: url.port || "5432",
+    PGUSER: decodeURIComponent(url.username),
+    PGPASSWORD: decodeURIComponent(url.password),
+    PGDATABASE: decodeURIComponent(url.pathname.replace(/^\//, "")),
+  });
+  const sslmode = url.searchParams.get("sslmode");
+  if (sslmode) pgEnv.PGSSLMODE = sslmode;
+  return pgEnv;
+}
+
+async function loadDriver() {
+  try {
+    const resolved = createRequire(dbPackageJson).resolve("postgres");
+    const mod = await import(pathToFileURL(resolved).href);
+    return { postgres: mod.default || mod, path: resolved };
+  } catch (error) {
+    return { postgres: null, path: path.join(repoDir, "packages", "db", "node_modules", "postgres"), error: scrub(error && error.message ? error.message : error) };
+  }
+}
+
+async function loadRepositoryEngine() {
+  const base = { module: backupLibPath, restoreValidation: "throwaway-database-restore" };
+  if (!fs.existsSync(backupLibPath)) {
+    return Object.assign({ available: false, reason: "not present in the installed checkout" }, base);
+  }
+  try {
+    const mod = await import(pathToFileURL(backupLibPath).href);
+    if (typeof mod.runDatabaseBackup !== "function" || typeof mod.runDatabaseRestore !== "function") {
+      return Object.assign({ available: false, reason: "runDatabaseBackup/runDatabaseRestore are not exported" }, base);
+    }
+    return Object.assign({ available: true, lib: mod }, base);
+  } catch (error) {
+    return Object.assign({ available: false, reason: "import failed: " + scrub(error && error.message ? error.message : error) }, base);
+  }
+}
+
+async function probeServer(postgres, connectionUrl) {
+  const sql = postgres(connectionUrl, { max: 1, connect_timeout: 10 });
+  try {
+    const rows = await sql.unsafe("SELECT current_setting('server_version_num') AS num, current_setting('server_version') AS version");
+    const versionNum = Number(rows[0].num);
+    return { major: Math.floor(versionNum / 10000), versionNum: versionNum, version: String(rows[0].version) };
+  } finally {
+    await sql.end();
+  }
+}
+
+async function countRunningHeartbeatRuns(postgres, connectionUrl) {
+  const sql = postgres(connectionUrl, { max: 1, connect_timeout: 10 });
+  try {
+    const exists = await sql.unsafe("SELECT to_regclass('public.heartbeat_runs') AS rel");
+    if (!exists[0] || !exists[0].rel) return null;
+    const rows = await sql.unsafe("SELECT count(*)::int AS n FROM public.heartbeat_runs WHERE status = 'running'");
+    return rows[0].n;
+  } finally {
+    await sql.end();
+  }
+}
+
+function isExecutableFile(candidate) {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function whichOnPath(name) {
+  const result = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8", env: env });
+  const out = String(result.stdout || "").trim();
+  return result.status === 0 && out ? out : null;
+}
+
+function toolVersion(binary) {
+  const result = spawnSync(binary, ["--version"], { encoding: "utf8", env: env });
+  if (result.status !== 0) return null;
+  const match = String(result.stdout || "").match(/\(PostgreSQL\)\s+(\d+)(?:\.(\d+))?/);
+  if (!match) return null;
+  return { version: match[2] ? match[1] + "." + match[2] : match[1], major: Number(match[1]) };
+}
+
+function resolvePgTools(serverMajor) {
+  const searched = [];
+  let dumpPath = null;
+  if (env.PG_DUMP_BIN) {
+    searched.push("PG_DUMP_BIN=" + env.PG_DUMP_BIN);
+    if (isExecutableFile(env.PG_DUMP_BIN)) {
+      dumpPath = env.PG_DUMP_BIN;
+    } else {
+      return {
+        pgDump: { path: env.PG_DUMP_BIN, version: null, major: null, compatible: false, reason: "PG_DUMP_BIN is set but is not an executable file" },
+        pgRestore: null,
+        searched: searched,
+      };
+    }
+  } else {
+    searched.push("PG_DUMP_BIN (unset)");
+    searched.push("PATH=" + (env.PATH || ""));
+    dumpPath = whichOnPath("pg_dump");
+  }
+  if (!dumpPath) return { pgDump: null, pgRestore: null, searched: searched };
+
+  const dumpVersion = toolVersion(dumpPath);
+  const pgDump = { path: dumpPath, version: dumpVersion ? dumpVersion.version : null, major: dumpVersion ? dumpVersion.major : null, compatible: false, reason: null };
+  if (!dumpVersion) {
+    pgDump.reason = "could not determine the pg_dump version";
+    return { pgDump: pgDump, pgRestore: null, searched: searched };
+  }
+  if (serverMajor == null) {
+    pgDump.reason = "server major version is unknown, so pg_dump compatibility cannot be validated";
+    return { pgDump: pgDump, pgRestore: null, searched: searched };
+  }
+  if (dumpVersion.major < serverMajor) {
+    pgDump.reason = "pg_dump " + dumpVersion.version + " cannot dump a PostgreSQL " + serverMajor + " server; a client at least as new as the server is required";
+    return { pgDump: pgDump, pgRestore: null, searched: searched };
+  }
+
+  let restorePath = null;
+  if (env.PG_RESTORE_BIN) {
+    searched.push("PG_RESTORE_BIN=" + env.PG_RESTORE_BIN);
+    if (isExecutableFile(env.PG_RESTORE_BIN)) restorePath = env.PG_RESTORE_BIN;
+  } else {
+    const sibling = path.join(path.dirname(dumpPath), "pg_restore");
+    searched.push("pg_restore beside pg_dump: " + sibling);
+    restorePath = isExecutableFile(sibling) ? sibling : whichOnPath("pg_restore");
+  }
+  if (!restorePath) {
+    pgDump.reason = "pg_restore is required to validate a custom-format dump but was not found (set PG_RESTORE_BIN)";
+    return { pgDump: pgDump, pgRestore: null, searched: searched };
+  }
+  const restoreVersion = toolVersion(restorePath);
+  const pgRestore = { path: restorePath, version: restoreVersion ? restoreVersion.version : null, major: restoreVersion ? restoreVersion.major : null };
+  if (!restoreVersion || restoreVersion.major !== dumpVersion.major) {
+    pgDump.reason = "pg_restore major version must match pg_dump " + dumpVersion.version;
+    return { pgDump: pgDump, pgRestore: pgRestore, searched: searched };
+  }
+  pgDump.compatible = true;
+  return { pgDump: pgDump, pgRestore: pgRestore, searched: searched };
+}
+
+function selectEngine(requested, tools, repositoryEngine) {
+  const pgDumpUsable = Boolean(tools.pgDump && tools.pgDump.compatible);
+  if (requested === "pg_dump") return pgDumpUsable ? "pg_dump" : null;
+  if (requested === "javascript") return repositoryEngine.available ? "javascript" : null;
+  if (pgDumpUsable) return "pg_dump";
+  if (repositoryEngine.available) return "javascript";
+  return null;
+}
+
+function directoryWritable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assessReadiness() {
+  const requested = (env.AGENTDASH_BACKUP_ENGINE || "auto").trim();
+  if (!ENGINES.includes(requested)) {
+    failClosed(2, { error: "AGENTDASH_BACKUP_ENGINE must be one of " + ENGINES.join(", ") + "; got " + requested, remediation: ["Unset AGENTDASH_BACKUP_ENGINE or set it to auto, pg_dump, or javascript."] });
+  }
+  const connection = resolveConnection();
+  const connectionInfo = describeConnection(connection);
+  const driver = await loadDriver();
+  const repositoryEngine = await loadRepositoryEngine();
+  let server = null;
+  let serverError = null;
+  if (driver.postgres) {
+    try {
+      server = await probeServer(driver.postgres, connection.url);
+    } catch (error) {
+      serverError = scrub(error && error.message ? error.message : error);
+    }
+  }
+  const tools = resolvePgTools(server ? server.major : null);
+  const searched = tools.searched.concat(["repository engine: " + backupLibPath, "PostgreSQL driver: " + driver.path]);
+  const runningRuns = driver.postgres && server ? await countRunningHeartbeatRuns(driver.postgres, connection.url) : null;
+  const writable = directoryWritable(backupDir);
+  const engine = server ? selectEngine(requested, tools, repositoryEngine) : null;
+  const remediation = [];
+  let error = null;
+  if (!driver.postgres) {
+    error = "The installed checkout does not provide the PostgreSQL driver needed to probe the database (" + driver.error + ").";
+    remediation.push("Install the checkout's dependencies: pnpm install --frozen-lockfile in " + repoDir + " (packages/db must resolve the postgres driver).");
+  } else if (!server) {
+    error = "PostgreSQL is not reachable through " + connectionInfo.source + " at " + connectionInfo.host + ":" + connectionInfo.port + "/" + connectionInfo.database + " (" + serverError + ").";
+    remediation.push("Confirm the AgentDash service (and its embedded PostgreSQL) is running and that DATABASE_URL / PAPERCLIP_HOME / PAPERCLIP_INSTANCE_ID in the runtime env describe the installed instance.");
+  } else if (!engine) {
+    error = "No supported backup engine is available for PostgreSQL " + server.major + " (requested engine: " + requested + ").";
+    if (tools.pgDump && tools.pgDump.reason) remediation.push("pg_dump at " + tools.pgDump.path + " was rejected: " + tools.pgDump.reason + ".");
+    remediation.push("Set PG_DUMP_BIN and PG_RESTORE_BIN to reviewed PostgreSQL client tools whose major version is at least " + server.major + ".");
+    remediation.push("Or make the repository engine available: the installed checkout must contain packages/db/src/backup-lib.ts with dependencies installed (pnpm install --frozen-lockfile in " + repoDir + ")" + (repositoryEngine.reason ? " — currently: " + repositoryEngine.reason : "") + ".");
+    remediation.push("Or set AGENTDASH_BACKUP_ENGINE=pg_dump or =javascript to require a specific engine.");
+  } else if (!writable) {
+    error = "Backup directory is not writable: " + backupDir;
+    remediation.push("Fix permissions on " + backupDir + " so the launchd user can write mode-600 archives.");
+  }
+  return {
+    ok: error === null,
+    action: action,
+    engine: engine,
+    engineRequested: requested,
+    server: server,
+    connection: connectionInfo,
+    pgDump: tools.pgDump,
+    pgRestore: tools.pgRestore,
+    searched: searched,
+    repositoryEngine: { available: repositoryEngine.available, module: repositoryEngine.module, reason: repositoryEngine.reason || null, restoreValidation: repositoryEngine.restoreValidation },
+    runningHeartbeatRuns: runningRuns,
+    backupDir: backupDir,
+    backupDirWritable: writable,
+    remediation: remediation,
+    error: error,
+    _connection: connection,
+    _driver: driver,
+    _repositoryEngine: repositoryEngine,
+  };
+}
+
+function publicView(readiness) {
+  const view = {};
+  for (const key of Object.keys(readiness)) {
+    if (!key.startsWith("_")) view[key] = readiness[key];
+  }
+  return view;
+}
+
+function utcStamp() {
+  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
+function removeIfExists(file) {
+  try {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch {
+    // keep the original failure
+  }
+}
+
+function sha256File(file) {
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function requireArchiveSize(file) {
+  const size = fs.statSync(file).size;
+  if (size < MIN_ARCHIVE_BYTES) {
+    removeIfExists(file);
+    failClosed(1, { error: "Backup archive is only " + size + " bytes; treating it as a failed backup.", remediation: ["Inspect the database and retry; an archive this small cannot contain the AgentDash schema."] });
+  }
+  return size;
+}
+
+function runPgDumpEngine(readiness, stamp) {
+  const out = path.join(backupDir, "predeploy-" + stamp + ".dump");
+  const pgEnv = libpqEnvironment(readiness._connection.url);
+  const dump = spawnSync(readiness.pgDump.path, ["--format=custom", "--no-owner", "--no-privileges", "--file=" + out], { encoding: "utf8", env: pgEnv });
+  if (dump.status !== 0) {
+    removeIfExists(out);
+    failClosed(1, { error: "pg_dump failed (exit " + dump.status + "): " + scrub(dump.stderr || dump.stdout || "no output"), remediation: ["Fix the reported pg_dump error or set AGENTDASH_BACKUP_ENGINE=javascript to use the repository engine."] });
+  }
+  fs.chmodSync(out, 0o600);
+  const sizeBytes = requireArchiveSize(out);
+  const list = spawnSync(readiness.pgRestore.path, ["--list", out], { encoding: "utf8", env: pgEnv });
+  const entries = String(list.stdout || "").split(/\r?\n/).filter((line) => /^\d+;\s+\d+\s+\d+\s+/.test(line));
+  if (list.status !== 0 || entries.length === 0) {
+    removeIfExists(out);
+    failClosed(1, { error: "pg_restore --list could not read the custom-format dump (exit " + list.status + "): " + scrub(list.stderr || "no table-of-contents entries"), remediation: ["The dump is not restorable; do not proceed with an upgrade until a validated backup exists."] });
+  }
+  return { backupPath: out, sizeBytes: sizeBytes, validation: { method: "pg_restore --list", entries: entries.length } };
+}
+
+async function readArchiveExpectations(file) {
+  const expectedTables = new Set();
+  const expectedRows = new Map();
+  const stream = fs.createReadStream(file).pipe(zlib.createGunzip());
+  const reader = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of reader) {
+      let match = line.match(/^-- Table: (\S+)\.(\S+)$/);
+      if (match) {
+        expectedTables.add(match[1] + "." + match[2]);
+        continue;
+      }
+      match = line.match(/^-- Data for: (\S+)\.(\S+) \((\d+) rows\)$/);
+      if (match) expectedRows.set(match[1] + "." + match[2], Number(match[3]));
+    }
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+  return { expectedTables: expectedTables, expectedRows: expectedRows };
+}
+
+function quoteIdentifier(value) {
+  return '"' + String(value).replaceAll('"', '""') + '"';
+}
+
+async function validateByThrowawayRestore(readiness, file, stamp) {
+  const postgres = readiness._driver.postgres;
+  const lib = readiness._repositoryEngine.lib;
+  const expectations = await readArchiveExpectations(file);
+  if (expectations.expectedTables.size === 0) {
+    throw new Error("the archive lists no tables");
+  }
+  const name = "agentdash_restore_check_" + stamp.toLowerCase();
+  const adminUrl = new URL(readiness._connection.url);
+  adminUrl.pathname = "/postgres";
+  const targetUrl = new URL(readiness._connection.url);
+  targetUrl.pathname = "/" + name;
+  const admin = postgres(adminUrl.toString(), { max: 1, connect_timeout: 10 });
+  let created = false;
+  try {
+    await admin.unsafe("CREATE DATABASE " + quoteIdentifier(name));
+    created = true;
+    await lib.runDatabaseRestore({ connectionString: targetUrl.toString(), backupFile: file, connectTimeoutSeconds: 10 });
+    const check = postgres(targetUrl.toString(), { max: 1, connect_timeout: 10 });
+    const mismatches = [];
+    let rows = 0;
+    let tables = 0;
+    try {
+      for (const key of expectations.expectedTables) {
+        const dot = key.indexOf(".");
+        const schema = key.slice(0, dot);
+        const table = key.slice(dot + 1);
+        const expected = expectations.expectedRows.get(key) || 0;
+        let actual = null;
+        try {
+          const counted = await check.unsafe("SELECT count(*)::text AS n FROM " + quoteIdentifier(schema) + "." + quoteIdentifier(table));
+          actual = Number(counted[0].n);
+        } catch (error) {
+          mismatches.push(key + ": missing after restore (" + scrub(error && error.message ? error.message : error) + ")");
+          continue;
+        }
+        tables += 1;
+        rows += actual;
+        if (actual !== expected) mismatches.push(key + ": expected " + expected + " rows, restored " + actual);
+      }
+    } finally {
+      await check.end();
+    }
+    if (mismatches.length > 0) {
+      throw new Error("restore validation mismatch: " + mismatches.slice(0, 5).join("; "));
+    }
+    return { method: "throwaway-database-restore", database: name, tables: tables, rows: rows };
+  } finally {
+    if (created) {
+      try {
+        await admin.unsafe("DROP DATABASE " + quoteIdentifier(name) + " WITH (FORCE)");
+      } catch (error) {
+        log("warning: could not drop throwaway database " + name + ": " + scrub(error && error.message ? error.message : error));
+      }
+    }
+    await admin.end();
+  }
+}
+
+async function runRepositoryEngine(readiness, stamp) {
+  if (readiness.runningHeartbeatRuns != null && readiness.runningHeartbeatRuns > 0) {
+    failClosed(1, {
+      error: readiness.runningHeartbeatRuns + " heartbeat run(s) are running. The repository backup engine reads tables one at a time and needs a quiescent database.",
+      remediation: ["Pause the agents (or wait for their runs to finish), confirm zero running heartbeat runs, then retry."],
+    });
+  }
+  const lib = readiness._repositoryEngine.lib;
+  let result;
+  try {
+    result = await lib.runDatabaseBackup({
+      connectionString: readiness._connection.url,
+      backupDir: backupDir,
+      filenamePrefix: "predeploy",
+      backupEngine: "javascript",
+      connectTimeoutSeconds: 10,
+      retention: { dailyDays: 36500, weeklyWeeks: 5200, monthlyMonths: 1200 },
+    });
+  } catch (error) {
+    failClosed(1, { error: "Repository backup engine failed: " + scrub(error && error.message ? error.message : error), remediation: ["Inspect the database and retry; do not proceed with an upgrade until a validated backup exists."] });
+  }
+  const out = path.join(backupDir, "predeploy-" + stamp + ".sql.gz");
+  fs.renameSync(result.backupFile, out);
+  fs.chmodSync(out, 0o600);
+  const sizeBytes = requireArchiveSize(out);
+  let validation;
+  try {
+    validation = await validateByThrowawayRestore(readiness, out, stamp);
+  } catch (error) {
+    removeIfExists(out);
+    failClosed(1, { error: "Backup restore validation failed: " + scrub(error && error.message ? error.message : error), remediation: ["The archive is not proven restorable; do not proceed with an upgrade until a validated backup exists."] });
+  }
+  return { backupPath: out, sizeBytes: sizeBytes, validation: validation };
+}
+
+async function main() {
+  const readiness = await assessReadiness();
+  if (action === "check" || !readiness.ok) {
+    if (!readiness.ok) failClosed(2, publicView(readiness));
+    emit(publicView(readiness));
+    return;
+  }
+
+  const stamp = utcStamp();
+  const produced = readiness.engine === "pg_dump" ? runPgDumpEngine(readiness, stamp) : await runRepositoryEngine(readiness, stamp);
+  const sha256 = sha256File(produced.backupPath);
+  const receiptPath = produced.backupPath + ".receipt.json";
+  const receipt = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    engine: readiness.engine,
+    backupPath: produced.backupPath,
+    sizeBytes: produced.sizeBytes,
+    sha256: sha256,
+    mode: "600",
+    server: readiness.server,
+    connection: readiness.connection,
+    pgDump: readiness.engine === "pg_dump" ? { path: readiness.pgDump.path, version: readiness.pgDump.version, major: readiness.pgDump.major } : null,
+    pgRestore: readiness.engine === "pg_dump" ? readiness.pgRestore : null,
+    repositoryEngine: readiness.engine === "javascript" ? { module: readiness.repositoryEngine.module } : null,
+    validation: produced.validation,
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { mode: 0o600 });
+  fs.chmodSync(receiptPath, 0o600);
+  fs.mkdirSync(stateDir, { recursive: true });
+  const lastBackupPath = path.join(stateDir, "last-backup.json");
+  fs.writeFileSync(lastBackupPath, JSON.stringify({
+    backupPath: receipt.backupPath,
+    sha256: receipt.sha256,
+    sizeBytes: receipt.sizeBytes,
+    engine: receipt.engine,
+    receiptPath: receiptPath,
+    createdAt: receipt.createdAt,
+  }, null, 2) + "\n", { mode: 0o600 });
+  fs.chmodSync(lastBackupPath, 0o600);
+  log("backup " + receipt.backupPath + " (" + receipt.sizeBytes + " bytes, sha256 " + receipt.sha256 + ", engine " + receipt.engine + ", validated by " + receipt.validation.method + ")");
+  emit(Object.assign({ ok: true, action: action, receiptPath: receiptPath }, receipt));
+}
+
+main().catch((error) => {
+  failClosed(1, { error: scrub(error && error.message ? error.message : error) });
+});
+`;
 
 export function renderSourceReadinessScript(plan) {
   const baseUrl = plan.env.PAPERCLIP_PUBLIC_URL.replace(/\/+$/, "");
   return `#!/bin/bash
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="${plan.toolPath}"
 REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 BASE_URL="${baseUrl}"
@@ -336,18 +914,20 @@ for required_secret in BETTER_AUTH_SECRET PAPERCLIP_AGENT_JWT_SECRET; do
 done
 echo "[PASS] Runtime env mode and private authenticated posture are valid"
 
-if [[ -n "\${DATABASE_URL:-}" ]]; then
-  echo "[PASS] DATABASE_URL is configured"
-  if command -v psql >/dev/null 2>&1; then
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT 1" >/dev/null
-    echo "[PASS] PostgreSQL connection responds"
-  fi
-elif [[ -n "\${PAPERCLIP_EMBEDDED_POSTGRES_PORT:-}" ]]; then
-  echo "[PASS] Embedded PostgreSQL is configured"
-else
-  echo "DATABASE_URL or PAPERCLIP_EMBEDDED_POSTGRES_PORT is required" >&2
-  exit 1
-fi
+# Database connectivity and backup capability are proven by the same read-only
+# probe the updater runs before it mutates anything. It uses the checkout's own
+# PostgreSQL driver, needs no PostgreSQL client binary, and never prints the URL.
+backup_probe="$("${plan.paths.backupScript}" --check)"
+node - "$backup_probe" <<'NODE'
+const lines = String(process.argv[2]).trim().split(/\r?\n/).filter((line) => line.trim().length > 0);
+let probe = null;
+for (let index = lines.length - 1; index >= 0 && !probe; index -= 1) {
+  try { probe = JSON.parse(lines[index]); } catch { probe = null; }
+}
+if (!probe || probe.ok !== true) throw new Error("Database backup readiness probe did not pass");
+console.log("[PASS] PostgreSQL responds (server major " + probe.server.major + ", connection from " + probe.connection.source + ")");
+console.log("[PASS] Database backup tooling is ready (engine=" + probe.engine + ", validation=" + (probe.engine === "pg_dump" ? "pg_restore --list" : probe.repositoryEngine.restoreValidation) + ")");
+NODE
 
 if ! command -v lsof >/dev/null 2>&1; then
   echo "lsof is required to prove launchd owns configured PORT=$PORT" >&2
@@ -410,7 +990,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="${plan.toolPath}"
 REPO_DIR="${plan.paths.repoDir}"
 ENV_FILE="${plan.paths.envFile}"
 STATE_DIR="${plan.paths.stateDir}"
@@ -429,6 +1009,12 @@ esac
 cd "$REPO_DIR"
 previous_sha="$(git rev-parse HEAD)"
 pending_previous_sha="\${AGENTDASH_PENDING_PREVIOUS_SHA:-$previous_sha}"
+
+# Prove backup capability (database reachable, compatible engine, writable
+# archive directory) before any state, checkout, config or service mutation.
+# A failed probe stops here with the searched locations and remediation.
+"${plan.paths.backupScript}" --check 1>&2
+
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$STATE_DIR/pending.json" <<JSON
 {
@@ -440,8 +1026,22 @@ cat > "$STATE_DIR/pending.json" <<JSON
 }
 JSON
 chmod 600 "$STATE_DIR/pending.json"
-"${plan.paths.backupScript}" >/tmp/agentdash-last-backup-path.txt
-backup_path="$(cat /tmp/agentdash-last-backup-path.txt)"
+
+# Create and validate the pre-update backup. The runner records the verified
+# archive in last-backup.json (mode 600); nothing below runs without it.
+"${plan.paths.backupScript}" 1>&2
+LAST_BACKUP_FILE="${plan.paths.lastBackupFile}"
+read_backup_field() {
+  node -e 'const s = require(process.argv[1]); const v = s[process.argv[2]]; if (typeof v !== "string" || !v) process.exit(2); console.log(v)' "$LAST_BACKUP_FILE" "$1"
+}
+backup_path="$(read_backup_field backupPath)"
+backup_sha256="$(read_backup_field sha256)"
+backup_engine="$(read_backup_field engine)"
+backup_receipt="$(read_backup_field receiptPath)"
+if [[ ! -s "$backup_path" ]]; then
+  echo "Verified backup is missing at $backup_path; refusing to continue." >&2
+  exit 1
+fi
 git fetch --all --tags --prune
 git checkout --detach "$TARGET_SHA"
 pnpm install --frozen-lockfile
@@ -481,6 +1081,9 @@ cat > "$receipt" <<JSON
   "previousSha": "$previous_sha",
   "targetSha": "$TARGET_SHA",
   "backupPath": "$backup_path",
+  "backupSha256": "$backup_sha256",
+  "backupEngine": "$backup_engine",
+  "backupReceiptPath": "$backup_receipt",
   "completedAt": "$completed_at"
 }
 JSON
@@ -494,7 +1097,7 @@ export function renderSourceRollbackScript(plan) {
   return `#!/bin/bash
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="${plan.toolPath}"
 STATE_FILE="${path.join(plan.paths.stateDir, "state.json")}"
 PENDING_FILE="${path.join(plan.paths.stateDir, "pending.json")}"
 if [[ -f "$PENDING_FILE" ]]; then
@@ -568,13 +1171,28 @@ launchctl bootout gui/$(id -u) ${plan.paths.plist}
 tail -f ${path.join(plan.paths.logDir, "launchd.err.log")}
 \`\`\`
 
+## Backup readiness and backups
+
+\`\`\`sh
+${plan.paths.backupScript} --check   # read-only: proves database reachability and backup capability
+${plan.paths.backupScript}           # creates and validates a mode-600 backup, writes a receipt
+\`\`\`
+
+The probe prints one JSON line and never prints the database URL. It resolves the database the way the application does (\`DATABASE_URL\`, then the instance config under \`PAPERCLIP_HOME\`, then the embedded PostgreSQL port), reads the server major version through the checkout's own driver, and picks the backup engine:
+
+- \`pg_dump\`/\`pg_restore\` when a compatible pair is available — an explicit reviewed \`PG_DUMP_BIN\`/\`PG_RESTORE_BIN\` override, or tools on the wrapper PATH whose major version is at least the server's. The custom-format dump is validated with \`pg_restore --list\`.
+- Otherwise the repository's own engine (\`packages/db/src/backup-lib.ts\`, the same code the nightly launchd backup uses). The gzipped SQL archive is validated by restoring it into a throwaway database on the same server and comparing every table's row count with the counts recorded in the archive. This engine needs a quiescent database: it refuses while heartbeat runs are running.
+- \`AGENTDASH_BACKUP_ENGINE=pg_dump\` or \`=javascript\` requires a specific engine.
+
+Each backup gets a \`<archive>.receipt.json\` (mode 600) with path, mode, size, SHA-256, engine, server major and validation result, and \`${plan.paths.lastBackupFile}\` records the last verified archive for the updater.
+
 ## Update
 
 \`\`\`sh
 ${plan.paths.updateScript} <commit-sha>
 \`\`\`
 
-The update wrapper runs a database backup, fetches the reviewed SHA, checks it out detached, installs dependencies, builds, restarts launchd, runs readiness proof, and writes a deploy receipt.
+The update wrapper runs the backup readiness probe, writes pending rollback state, creates and validates a database backup, fetches the reviewed SHA, checks it out detached, installs dependencies, builds, restarts launchd, runs readiness proof, and writes a deploy receipt that names the verified backup and its SHA-256. If backup readiness or the backup itself fails, nothing is mutated.
 
 ## Rollback rehearsal
 
@@ -601,6 +1219,7 @@ export async function runMacMiniSourceLaunchdInstall(input = {}) {
     ),
     supervisor: renderSourceSupervisorScript(plan),
     backup: renderSourceBackupScript(plan),
+    backupRunner: renderSourceBackupRunner(plan),
     readiness: renderSourceReadinessScript(plan),
     update: renderSourceUpdateScript(plan),
     rollback: renderSourceRollbackScript(plan),
@@ -622,6 +1241,7 @@ export async function runMacMiniSourceLaunchdInstall(input = {}) {
   writeFileMode(plan.paths.envFile, rendered.env, 0o600);
   writeFileMode(plan.paths.supervisorScript, rendered.supervisor, 0o755);
   writeFileMode(plan.paths.backupScript, rendered.backup, 0o755);
+  writeFileMode(plan.paths.backupRunner, rendered.backupRunner, 0o755);
   writeFileMode(plan.paths.readinessScript, rendered.readiness, 0o755);
   writeFileMode(plan.paths.updateScript, rendered.update, 0o755);
   writeFileMode(plan.paths.rollbackScript, rendered.rollback, 0o755);
