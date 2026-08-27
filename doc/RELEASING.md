@@ -78,7 +78,7 @@ Canaries cover verification plus an internal traceability tag. They never publis
 
 ### Canary
 
-Every push to `master` runs the canary path inside [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+Every push to `main` runs the canary path inside [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 It:
 
@@ -199,7 +199,7 @@ Do not run stable.
 
 Instead:
 
-1. fix the issue on `master`
+1. fix the issue on `main`
 2. merge the fix
 3. wait for the next automatic canary
 4. rerun smoke testing

@@ -191,6 +191,22 @@ test("repo release skills preserve the AgentDash application/package boundary", 
   }
 });
 
+test("release operator surfaces use main and pin the trusted-publishing npm client", () => {
+  const prWorkflow = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8");
+  const connectorWorkflow = readFileSync(
+    path.join(repoRoot, ".github/workflows/publish-connect.yml"),
+    "utf8",
+  );
+  const releaseDoc = readFileSync(path.join(repoRoot, "doc/RELEASING.md"), "utf8");
+  const releaseSkill = readFileSync(path.join(repoRoot, ".agents/skills/release/SKILL.md"), "utf8");
+
+  assert.doesNotMatch(prWorkflow, /git checkout -B master/);
+  assert.doesNotMatch(releaseDoc, /\bmaster\b/);
+  assert.doesNotMatch(releaseSkill, /\bmaster\b/);
+  assert.doesNotMatch(connectorWorkflow, /npm@latest/);
+  assert.match(connectorWorkflow, /npm@11\.5\.1/);
+});
+
 test("application version resolution works with an empty npm package set", () => {
   const tempRepo = mkdtempSync(path.join(tmpdir(), "agentdash-app-release-version-"));
   const tempRemote = mkdtempSync(path.join(tmpdir(), "agentdash-app-release-remote-"));
