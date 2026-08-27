@@ -469,6 +469,62 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/approvals`),
     ),
+    // Turning a file you wrote into something a person can open.
+    //
+    // You write files into your own workspace on the machine running AgentDash.
+    // Naming that path in your reply does not work: the person reading you is on a
+    // different computer, where nothing exists at that path. This uploads the file
+    // and returns a URL that opens from anywhere the board is reachable.
+    makeTool(
+      "attach_file",
+      "Attach a file you created in your workspace to an issue, and get back a URL a "
+        + "person can open. Use this whenever you refer to a file you wrote — a report, a "
+        + "spreadsheet, a diagram, an export. Put the returned url in your reply INSTEAD "
+        + "of the local path: the human reading you is on another machine, where your "
+        + "path does not exist. The path you pass is relative to your own workspace "
+        + "(e.g. \"reports/q3.md\"), never an absolute path.",
+      z.object({
+        issueId: issueIdSchema,
+        path: z
+          .string()
+          .min(1)
+          .describe("Path to the file, relative to your workspace directory. Not absolute."),
+        filename: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Name to show the human. Defaults to the file's own name."),
+      }),
+      async ({ issueId, path, filename }) => {
+        const issue = await client.requestJson<{ companyId: string }>(
+          "GET",
+          `/issues/${encodeURIComponent(issueId)}`,
+        );
+        const attachment = await client.requestJson<{
+          id: string;
+          originalFilename: string | null;
+          byteSize: number;
+          contentType: string;
+          contentPath: string;
+          url: string | null;
+        }>(
+          "POST",
+          `/companies/${encodeURIComponent(issue.companyId)}/issues/${encodeURIComponent(issueId)}/attachments/from-workspace`,
+          { body: { path, ...(filename ? { filename } : {}) } },
+        );
+        return {
+          attachmentId: attachment.id,
+          filename: attachment.originalFilename,
+          byteSize: attachment.byteSize,
+          contentType: attachment.contentType,
+          // Absolute when the instance advertises a public address; otherwise the
+          // server-relative path, and the caller should say the link is unavailable
+          // rather than inventing a host for it.
+          url: attachment.url,
+          contentPath: attachment.contentPath,
+        };
+      },
+    ),
     makeTool(
       "list_documents",
       "List issue documents",
