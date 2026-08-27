@@ -10,6 +10,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 test("release workflows run the workspace-link preflight before recursive typecheck", () => {
   const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
   const releaseScript = readFileSync(path.join(repoRoot, "scripts/release.sh"), "utf8");
+  const vercel = JSON.parse(readFileSync(path.join(repoRoot, "vercel.json"), "utf8"));
 
   assert.doesNotMatch(workflow, /run:\s*pnpm -r typecheck/);
   assert.doesNotMatch(releaseScript, /pnpm -r typecheck/);
@@ -18,6 +19,9 @@ test("release workflows run the workspace-link preflight before recursive typech
     [...workflow.matchAll(/name:\s*Typecheck[\s\S]*?run:\s*pnpm typecheck/g)].length >= 2,
     "canary and stable verification must call the root typecheck script",
   );
+  assert.match(vercel.buildCommand, /pnpm run preflight:workspace-links/);
+  assert.match(vercel.buildCommand, /pnpm --filter @paperclipai\/adapter-utils build/);
+  assert.match(vercel.buildCommand, /pnpm --filter @paperclipai\/ui build/);
 });
 
 test("stable workflow separates immutable source from release-control metadata", () => {

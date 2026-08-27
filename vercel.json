@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm --filter @paperclipai/ui build",
+  "buildCommand": "pnpm run preflight:workspace-links && pnpm --filter @paperclipai/adapter-utils build && pnpm --filter @paperclipai/ui build",
   "outputDirectory": "ui/dist",
   "rewrites": [
     {
