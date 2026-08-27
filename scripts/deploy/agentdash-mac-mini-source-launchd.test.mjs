@@ -83,11 +83,13 @@ test("renders source supervisor with pinned SHA and launchd service shape", () =
   assert.match(plist, /agentdash-source-supervisor\.sh/);
 
   const backup = renderSourceBackupScript(plan);
-  assert.match(backup, /resolve_pg_dump\(\)/);
-  assert.match(backup, /\/opt\/homebrew\/opt\/libpq\/bin\/pg_dump/);
-  assert.match(backup, /"\$PG_DUMP" "\$DATABASE_URL"/);
-  assert.match(backup, /PGPASSWORD="\$\{POSTGRES_PASSWORD:-paperclip\}" "\$PG_DUMP"/);
-  assert.match(backup, /PAPERCLIP_EMBEDDED_POSTGRES_PORT/);
+  assert.match(backup, /agentdash-backup-db\.mjs/);
+  assert.match(backup, /pnpm --filter @paperclipai\/db exec tsx/);
+  assert.match(backup, /node_modules\/\.bin\/tsx/);
+  assert.match(backup, /AGENTDASH_BACKUP_REPO_DIR/);
+  assert.doesNotMatch(backup, /resolve_pg_dump\(\)/);
+  assert.doesNotMatch(backup, /\/opt\/homebrew\/opt\/libpq\/bin\/pg_dump/);
+  assert.doesNotMatch(backup, /"\$PG_DUMP" "\$DATABASE_URL"/);
 
   const readiness = renderSourceReadinessScript(plan);
   assert.match(readiness, /for attempt in \$\(seq 1 30\)/);
@@ -157,7 +159,9 @@ test("renders deployment-scoped readiness without delegating to target MSP prefl
   assert.match(readiness, /EXPECTED_SHA="\$\{AGENTDASH_SOURCE_SHA:-0fb91d408f6082030a629c079df99902f81e3df4\}"/);
   assert.match(readiness, /launchctl print "gui\/\$\(id -u\)\/\$LABEL"/);
   assert.match(readiness, /actual_sha="\$\(git -C "\$REPO_DIR" rev-parse HEAD\)"/);
-  assert.match(readiness, /DATABASE_URL is configured/);
+  assert.match(readiness, /agentdash-backup-db\.sh" --check/);
+  assert.match(readiness, /Database backup tooling is ready/);
+  assert.doesNotMatch(readiness, /\bpsql\b/);
   assert.match(readiness, /pid_has_ancestor/);
   assert.match(readiness, /listener process belongs to launchd service/);
 });
