@@ -71,17 +71,20 @@ test("release scripts honor explicit source and release-notes paths", () => {
   assert.equal(output, explicitNotes);
 });
 
-test("release branch guard accepts this repository's canonical main branch", () => {
+test("release branch guard permits previews but keeps live canaries on main", () => {
+  const releaseScript = readFileSync(path.join(repoRoot, "scripts/release.sh"), "utf8");
   const tempRepo = mkdtempSync(path.join(tmpdir(), "agentdash-release-main-"));
 
   try {
     execFileSync("git", ["init", "-b", "main", tempRepo], { stdio: "ignore" });
 
+    assert.match(releaseScript, /require_on_master_branch "\$dry_run"/);
+
     execFileSync(
       "bash",
       [
         "-c",
-        '. "$1/scripts/release-lib.sh"; require_on_master_branch',
+        '. "$1/scripts/release-lib.sh"; require_on_master_branch false',
         "bash",
         repoRoot,
       ],
@@ -93,13 +96,27 @@ test("release branch guard accepts this repository's canonical main branch", () 
 
     execFileSync("git", ["-C", tempRepo, "switch", "-c", "feature"], { stdio: "ignore" });
 
+    execFileSync(
+      "bash",
+      [
+        "-c",
+        '. "$1/scripts/release-lib.sh"; require_on_master_branch true',
+        "bash",
+        repoRoot,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, REPO_ROOT: tempRepo },
+      },
+    );
+
     assert.throws(
       () =>
         execFileSync(
           "bash",
           [
             "-c",
-            '. "$1/scripts/release-lib.sh"; require_on_master_branch',
+            '. "$1/scripts/release-lib.sh"; require_on_master_branch false',
             "bash",
             repoRoot,
           ],
