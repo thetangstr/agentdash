@@ -93,7 +93,14 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
       }
 
       const agent = await db
-        .select({ id: agents.id, name: agents.name, companyId: agents.companyId, status: agents.status })
+        .select({
+          id: agents.id,
+          name: agents.name,
+          companyId: agents.companyId,
+          status: agents.status,
+          runtimeConfig: agents.runtimeConfig,
+          lastHeartbeatAt: agents.lastHeartbeatAt,
+        })
         .from(agents)
         .where(eq(agents.id, claimed.agentId))
         .then((rows) => rows[0] ?? null);
@@ -119,6 +126,37 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
         .update(agentConnectCodes)
         .set({ issuedApiKeyId: issued.id, updatedAt: new Date() })
         .where(eq(agentConnectCodes.id, claimed.id));
+
+      /*
+       * Wake an agent that has been waiting for a harness.
+       *
+       * An agent provisioned for somebody -- rather than created by them --
+       * starts with its heartbeat off, because switching it on before anyone
+       * has connected a harness only produces failing runs. Redeeming a connect
+       * code is exactly the moment that stops being true: a machine has just
+       * paired with it. Leaving it off here is what makes a new member's first
+       * agent look broken -- it has a key, it has an identity, and it never
+       * does anything.
+       *
+       * Narrow on purpose. Only an agent that has NEVER run is switched on, so
+       * this can never resurrect one somebody deliberately quietened. A paused
+       * or terminated agent is already refused above.
+       */
+      const runtimeConfig = (agent.runtimeConfig ?? {}) as Record<string, unknown>;
+      const heartbeat = (runtimeConfig.heartbeat ?? {}) as Record<string, unknown>;
+      if (heartbeat.enabled !== true && agent.lastHeartbeatAt === null) {
+        await db
+          .update(agents)
+          .set({
+            runtimeConfig: { ...runtimeConfig, heartbeat: { ...heartbeat, enabled: true } },
+            updatedAt: new Date(),
+          })
+          .where(eq(agents.id, agent.id))
+          .catch((err: unknown) => {
+            // A pairing that worked must not fail because this did.
+            logger.warn({ err, agentId: agent.id }, "could not enable heartbeat on first pairing");
+          });
+      }
 
       const company = await db
         .select({ name: companies.name })

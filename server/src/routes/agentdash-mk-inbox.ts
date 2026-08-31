@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request } from "express";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
@@ -115,7 +115,20 @@ export function agentdashMkInboxRoutes(db: Db) {
           // scope condition below is what keeps the result the caller's own —
           // the two are deliberately separate so widening one can never widen
           // the other.
-          ...(options.includeResolved ? [] : [inArray(approvals.status, OPEN_APPROVAL_STATUSES)]),
+          // Open means decidable, which is a question of status AND time.
+          //
+          // This filtered on status alone, and nothing anywhere marks a lapsed
+          // approval as expired -- `expiresAt` is consulted in exactly one
+          // place, at connector-send time. So an approval past its expiry sat
+          // in the inbox as actionable for ever, and deciding it did nothing.
+          // That is the same "cannot reach zero" failure the read-state rule
+          // caused, arriving by a different road.
+          ...(options.includeResolved
+            ? []
+            : [
+                inArray(approvals.status, OPEN_APPROVAL_STATUSES),
+                or(isNull(approvals.expiresAt), gt(approvals.expiresAt, new Date()))!,
+              ]),
           ...(scopeCondition ? [scopeCondition] : []),
         ),
       )
