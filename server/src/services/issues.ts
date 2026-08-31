@@ -437,13 +437,21 @@ function touchedByUserCondition(companyId: string, userId: string) {
     (
       ${issues.createdByUserId} = ${userId}
       OR ${issues.assigneeUserId} = ${userId}
-      OR EXISTS (
-        SELECT 1
-        FROM ${issueReadStates}
-        WHERE ${issueReadStates.issueId} = ${issues.id}
-          AND ${issueReadStates.companyId} = ${companyId}
-          AND ${issueReadStates.userId} = ${userId}
-      )
+      /*
+       * Reading is NOT participating.
+       *
+       * This used to include "a read-state row exists for this user", so
+       * opening an issue once enrolled you in it permanently. The effect fell
+       * hardest on the people who read the most: an administrator who browses
+       * the board acquired an inbox of other people's agents' work, none of it
+       * waiting on them, and no way to reach zero except archiving each item by
+       * hand. An inbox that cannot be emptied stops being read, and then the
+       * one approval that did need a human is missed along with the rest.
+       *
+       * What remains are the three relationships that actually place a claim on
+       * someone: they opened it, it is assigned to them, or they spoke on it.
+       * Anything broader belongs in the board view, which already exists.
+       */
       OR EXISTS (
         SELECT 1
         FROM ${issueComments}

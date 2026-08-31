@@ -173,6 +173,19 @@ export const updateAgentSchema = z.preprocess(normalizeAgentAdapterAliases, crea
   .partial()
   .extend({
     permissions: z.never().optional(),
+    /*
+     * Stewardship is not settable here, and these two exist only so the route
+     * can say so.
+     *
+     * `validate()` does `req.body = schema.parse(req.body)`, and a zod object
+     * strips keys it does not declare -- so an undeclared `steward` vanished
+     * before the handler ran and the request answered 200 having changed
+     * nothing. Declaring them as `unknown` lets them survive parsing so
+     * `PATCH /agents/:id` can return a 422 naming the real endpoint, the same
+     * way it already does for `permissions`.
+     */
+    steward: z.unknown().optional(),
+    stewardUserId: z.unknown().optional(),
     replaceAdapterConfig: z.boolean().optional(),
     status: z.enum(AGENT_STATUSES).optional(),
     spentMonthlyCents: z.number().int().nonnegative().optional(),

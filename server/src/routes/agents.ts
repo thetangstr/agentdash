@@ -3071,6 +3071,31 @@ export function agentRoutes(
       return;
     }
 
+    /*
+     * Refuse `steward` rather than silently dropping it.
+     *
+     * `updateAgentSchema` has no such field, so zod stripped it and this route
+     * answered 200 having changed nothing. That is the worst possible reply: a
+     * caller asked to pair a steward, was told it worked, re-read the agent,
+     * found `steward: null`, and concluded the backend was broken. One run did
+     * exactly that and closed its task on a root cause that did not exist.
+     *
+     * Stewardship is a separate resource with its own history and its own
+     * authority check -- it is deliberately not a column you can PATCH -- so
+     * the honest answer names where it does live.
+     */
+    if (
+      hasOwn(req.body as object, "steward") ||
+      hasOwn(req.body as object, "stewardUserId")
+    ) {
+      res.status(422).json({
+        error:
+          "Stewardship is not set here. Use POST /api/companies/:companyId/agent-stewardships " +
+          "to assign one, or POST /api/companies/:companyId/agents/:agentId/stewardship/transfer to move it.",
+      });
+      return;
+    }
+
     // AgentDash-MK: budget is a ceiling dimension, so it is checked before
     // persistence rather than trusted from the client.
     if (hasOwn(req.body as object, "budgetMonthlyCents")) {
