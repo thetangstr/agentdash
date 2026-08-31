@@ -237,6 +237,11 @@ function createDbStub(
       leftJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       groupBy: vi.fn(() => chain),
+      // The agent detail reads run health, which orders and limits. Missing
+      // links in this chain surface as a 500 from the route rather than as a
+      // mock error, so they are worth keeping complete.
+      orderBy: vi.fn(() => chain),
+      limit: vi.fn(() => chain),
       then: vi.fn((resolve, reject) => Promise.resolve(rowsForShape()).then(resolve, reject)),
     };
     return chain;
