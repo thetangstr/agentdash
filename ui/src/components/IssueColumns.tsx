@@ -14,18 +14,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAssigneeUserLabel } from "../lib/assignees";
-import type { InboxIssueColumn } from "../lib/inbox";
+import { DEFAULT_INBOX_ISSUE_COLUMNS, type InboxIssueColumn } from "../lib/inbox";
 import { cn } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Identity } from "./Identity";
+import { IssueStewardChip } from "./IssueStewardChip";
 import { StatusIcon } from "./StatusIcon";
 
-export const issueTrailingColumns: InboxIssueColumn[] = ["assignee", "project", "workspace", "parent", "labels", "updated"];
+export const issueTrailingColumns: InboxIssueColumn[] = ["assignee", "steward", "project", "workspace", "parent", "labels", "updated"];
 
 const issueColumnLabels: Record<InboxIssueColumn, string> = {
   status: "Status",
   id: "ID",
   assignee: "Assignee",
+  steward: "Steward",
   project: "Project",
   workspace: "Workspace",
   parent: "Parent issue",
@@ -37,6 +39,7 @@ const issueColumnDescriptions: Record<InboxIssueColumn, string> = {
   status: "Issue state chip on the left edge.",
   id: "Ticket identifier like PAP-1009.",
   assignee: "Assigned agent or board user.",
+  steward: "Human accountable for the assigned agent — its active steward, or its owner as fallback.",
   project: "Linked project pill with its color.",
   workspace: "Execution or project workspace used for the issue.",
   parent: "Parent issue identifier and title.",
@@ -52,6 +55,7 @@ function issueTrailingGridTemplate(columns: InboxIssueColumn[]): string {
   return columns
     .map((column) => {
       if (column === "assignee") return "minmax(6rem, 8rem)";
+      if (column === "steward") return "minmax(5rem, 9rem)";
       if (column === "project") return "minmax(4.5rem, 7rem)";
       if (column === "workspace") return "minmax(6rem, 9rem)";
       if (column === "parent") return "minmax(3.5rem, 5.5rem)";
@@ -126,7 +130,7 @@ export function IssueColumnPicker({
           className="rounded-lg px-3 py-2 text-sm"
         >
           Reset defaults
-          <span className="ml-auto text-xs text-muted-foreground">status, id, updated</span>
+          <span className="ml-auto text-xs text-muted-foreground">{DEFAULT_INBOX_ISSUE_COLUMNS.join(", ")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -210,6 +214,7 @@ export function InboxIssueTrailingColumns({
   parentTitle,
   assigneeContent,
   onFilterWorkspace,
+  stewardLabelByUserId,
 }: {
   issue: Issue;
   columns: InboxIssueColumn[];
@@ -225,6 +230,8 @@ export function InboxIssueTrailingColumns({
   parentTitle: string | null;
   assigneeContent?: ReactNode;
   onFilterWorkspace?: (workspaceId: string) => void;
+  /** Optional steward userId → display label override (company member directory). */
+  stewardLabelByUserId?: Map<string, string>;
 }) {
   const activityText = timeAgo(issue.lastActivityAt ?? issue.lastExternalCommentAt ?? issue.updatedAt);
   const userLabel = assigneeUserName ?? formatAssigneeUserLabel(issue.assigneeUserId, currentUserId) ?? "User";
@@ -268,6 +275,20 @@ export function InboxIssueTrailingColumns({
           return (
             <span key={column} className="min-w-0 truncate text-xs text-muted-foreground">
               Unassigned
+            </span>
+          );
+        }
+
+        if (column === "steward") {
+          // AgentDash: age-2 — same chip the board card renders, so list
+          // rows carry steward accountability too.
+          const steward = issue.assigneeSteward ?? null;
+          if (!steward) {
+            return <span key={column} className="min-w-0" aria-hidden="true" />;
+          }
+          return (
+            <span key={column} className="flex min-w-0 items-center">
+              <IssueStewardChip steward={steward} labelByUserId={stewardLabelByUserId} />
             </span>
           );
         }

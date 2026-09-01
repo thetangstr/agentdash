@@ -2252,6 +2252,7 @@ export function Inbox() {
                       issue={issue}
                       issueLinkState={issueLinkState}
                       selected={selected}
+                      viewerUserId={currentUserId}
                       className={
                         isArchiving
                           ? "pointer-events-none -translate-x-4 scale-[0.98] opacity-0 transition-all duration-200 ease-out"
@@ -2329,6 +2330,7 @@ export function Inbox() {
                             }
                             assigneeUserAvatarUrl={assigneeUserProfile?.image ?? null}
                             currentUserId={currentUserId}
+                            stewardLabelByUserId={companyUserLabelMap}
                             parentIdentifier={issue.parentId ? (issueById.get(issue.parentId)?.identifier ?? null) : null}
                             parentTitle={issue.parentId ? (issueById.get(issue.parentId)?.title ?? null) : null}
                           />

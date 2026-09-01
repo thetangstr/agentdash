@@ -1215,11 +1215,12 @@ describe("inbox helpers", () => {
   });
 
   it("hides the workspace column option unless isolated workspaces are enabled", () => {
-    expect(getAvailableInboxIssueColumns(false)).toEqual(["status", "id", "assignee", "project", "parent", "labels", "updated"]);
+    expect(getAvailableInboxIssueColumns(false)).toEqual(["status", "id", "assignee", "steward", "project", "parent", "labels", "updated"]);
     expect(getAvailableInboxIssueColumns(true)).toEqual([
       "status",
       "id",
       "assignee",
+      "steward",
       "project",
       "workspace",
       "parent",

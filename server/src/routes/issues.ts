@@ -945,6 +945,10 @@ export function issueRoutes(
       unreadForUserFilterRaw === "me" && req.actor.type === "board"
         ? req.actor.userId
         : unreadForUserFilterRaw;
+    // AgentDash: age-2 — always tell the service who is looking at the board
+    // so awaitingReviewByViewer can be derived without any user filter set.
+    const viewerUserId =
+      req.actor.type === "board" ? req.actor.userId : undefined;
     const rawLimit = req.query.limit as string | undefined;
     const parsedLimit = rawLimit !== undefined && /^\d+$/.test(rawLimit)
       ? Number.parseInt(rawLimit, 10)
@@ -991,6 +995,7 @@ export function issueRoutes(
       touchedByUserId,
       inboxArchivedByUserId,
       unreadForUserId,
+      viewerUserId,
       projectId: req.query.projectId as string | undefined,
       workspaceId: req.query.workspaceId as string | undefined,
       executionWorkspaceId: req.query.executionWorkspaceId as string | undefined,
@@ -1004,6 +1009,9 @@ export function issueRoutes(
       excludeRoutineExecutions:
         req.query.excludeRoutineExecutions === "true" || req.query.excludeRoutineExecutions === "1",
       includeBlockedBy: req.query.includeBlockedBy === "true" || req.query.includeBlockedBy === "1",
+      // AgentDash: age-2 — the steward chip is a human-UI affordance. Join it
+      // for board viewers only; agents and API-key callers never render it.
+      includeAssigneeSteward: req.actor.type === "board",
       q: req.query.q as string | undefined,
       limit,
       offset,

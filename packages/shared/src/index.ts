@@ -389,6 +389,8 @@ export type {
   IssueWorkProductReviewState,
   Issue,
   IssueAssigneeAdapterOverrides,
+  IssueAssigneeSteward,
+  IssueAwaitingReview,
   IssueBlockerAttention,
   IssueBlockerAttentionReason,
   IssueBlockerAttentionState,
