@@ -1002,6 +1002,9 @@ export function issueRoutes(
       excludeRoutineExecutions:
         req.query.excludeRoutineExecutions === "true" || req.query.excludeRoutineExecutions === "1",
       includeBlockedBy: req.query.includeBlockedBy === "true" || req.query.includeBlockedBy === "1",
+      // AgentDash: age-2 — the steward chip is a human-UI affordance. Join it
+      // for board viewers only; agents and API-key callers never render it.
+      includeAssigneeSteward: req.actor.type === "board",
       q: req.query.q as string | undefined,
       limit,
       offset,

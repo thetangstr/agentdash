@@ -9,6 +9,7 @@ import {
 } from "../lib/issueDetailBreadcrumb";
 import { cn } from "../lib/utils";
 import { StatusIcon } from "./StatusIcon";
+import { AwaitingReviewBadge } from "./IssueStewardChip";
 import { productivityReviewTriggerLabel } from "./ProductivityReviewBadge";
 
 type UnreadState = "hidden" | "visible" | "fading";
@@ -34,6 +35,12 @@ interface IssueRowProps {
   onArchive?: () => void;
   archiveDisabled?: boolean;
   className?: string;
+  /**
+   * AgentDash: age-2 — signed-in viewer. When set, rows whose execution
+   * stage is waiting on this user show an "Awaiting your review" badge
+   * (same rule as board cards). Omit to suppress the badge.
+   */
+  viewerUserId?: string | null;
 }
 
 export function IssueRow({
@@ -57,6 +64,7 @@ export function IssueRow({
   onArchive,
   archiveDisabled,
   className,
+  viewerUserId = null,
 }: IssueRowProps) {
   const issuePathId = issue.identifier ?? issue.id;
   const identifier = issue.identifier ?? issue.id.slice(0, 8);
@@ -108,6 +116,7 @@ export function IssueRow({
       <span className="flex min-w-0 flex-1 flex-col gap-1 sm:contents">
         <span className={cn("line-clamp-2 text-sm sm:order-2 sm:min-w-0 sm:flex-1 sm:truncate sm:line-clamp-none", titleClassName)}>
           {issue.title}{titleSuffix}
+          <AwaitingReviewBadge issue={issue} viewerUserId={viewerUserId} className="ml-1.5 align-middle" />
         </span>
         {checklistDependencyChips ? (
           <span className="flex flex-wrap gap-1 sm:order-3 sm:ml-[calc(theme(spacing.3)+theme(spacing.2))]">

@@ -131,6 +131,32 @@ const defaultViewState: IssueViewState = {
   collapsedParents: [],
 };
 
+export type IssueGroupBy = IssueViewState["groupBy"];
+
+/**
+ * AgentDash: age-2 — which Group options the board can actually render.
+ * Board columns are either status or steward; every other grouping only
+ * exists in list mode. The popover disables the rest in board mode and
+ * shows the checkmark on the grouping that is really applied, so the
+ * board never silently ignores a selection.
+ */
+const BOARD_GROUP_OPTIONS: ReadonlySet<IssueGroupBy> = new Set<IssueGroupBy>(["status", "steward"]);
+
+export function isGroupOptionAvailableInView(
+  viewMode: IssueViewState["viewMode"],
+  groupBy: IssueGroupBy,
+): boolean {
+  return viewMode === "list" || BOARD_GROUP_OPTIONS.has(groupBy);
+}
+
+/** The grouping a view actually applies — board mode collapses unsupported values to status. */
+export function resolveEffectiveGroupBy(
+  viewMode: IssueViewState["viewMode"],
+  groupBy: IssueGroupBy,
+): IssueGroupBy {
+  return isGroupOptionAvailableInView(viewMode, groupBy) ? groupBy : "status";
+}
+
 function getViewState(key: string): IssueViewState {
   try {
     const raw = localStorage.getItem(key);
@@ -960,6 +986,7 @@ export function IssuesList({
   });
 
   const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter);
+  const effectiveGroupBy = resolveEffectiveGroupBy(viewState.viewMode, viewState.groupBy);
 
   const groupedContent = useMemo<{ key: string; label: string | null; items: typeof filtered }[]>(() => {
     if (viewState.groupBy === "none") {
@@ -1329,7 +1356,9 @@ export function IssuesList({
           {/* Group — drives list-mode collapsible sections AND
               board-mode columns. "Steward" reroutes the board view to
               columns-per-steward (and in list view it groups by the
-              server-joined assigneeSteward). Available in both modes. */}
+              server-joined assigneeSteward). The board only understands
+              status/steward, so the other options are disabled there and
+              the checkmark tracks the grouping actually applied. */}
           <Popover>
               <PopoverTrigger asChild>
                 <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" title="Group">
@@ -1346,18 +1375,26 @@ export function IssuesList({
                     ["workspace", "Workspace"],
                     ["parent", "Parent Issue"],
                     ["none", "None"],
-                  ] as const).map(([value, label]) => (
-                    <button
-                      key={value}
-                      className={`flex items-center justify-between w-full px-2 py-1.5 text-sm rounded-sm ${
-                        viewState.groupBy === value ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground"
-                      }`}
-                      onClick={() => updateView({ groupBy: value })}
-                    >
-                      <span>{label}</span>
-                      {viewState.groupBy === value && <Check className="h-3.5 w-3.5" />}
-                    </button>
-                  ))}
+                  ] as const).map(([value, label]) => {
+                    const available = isGroupOptionAvailableInView(viewState.viewMode, value);
+                    const selected = effectiveGroupBy === value;
+                    return (
+                      <button
+                        key={value}
+                        disabled={!available}
+                        title={available ? undefined : "Not available in board view"}
+                        className={cn(
+                          "flex items-center justify-between w-full px-2 py-1.5 text-sm rounded-sm",
+                          selected ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
+                          !available && "cursor-not-allowed opacity-50 hover:bg-transparent",
+                        )}
+                        onClick={() => updateView({ groupBy: value })}
+                      >
+                        <span>{label}</span>
+                        {selected && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    );
+                  })}
                 </div>
               </PopoverContent>
             </Popover>
@@ -1391,7 +1428,7 @@ export function IssuesList({
           agents={agents}
           liveIssueIds={liveIssueIds}
           onUpdateIssue={onUpdateIssue}
-          boardGroupBy={viewState.groupBy === "steward" ? "steward" : "status"}
+          boardGroupBy={effectiveGroupBy === "steward" ? "steward" : "status"}
           viewerUserId={currentUserId ?? null}
           stewardLabelByUserId={companyUserLabelMap}
         />
@@ -1539,6 +1576,7 @@ export function IssuesList({
                       <IssueRow
                         issue={issue}
                         issueLinkState={issueLinkState}
+                        viewerUserId={currentUserId}
                         checklistStepNumber={checklistStepNumber}
                         checklistCurrentStep={checklistMeta?.currentStepIssueId === issue.id}
                         checklistDependencyChips={checklistDependencyChips}
@@ -1627,6 +1665,7 @@ export function IssuesList({
                               assigneeUserName={assigneeUserLabel}
                               assigneeUserAvatarUrl={assigneeUserProfile?.image ?? null}
                               currentUserId={currentUserId}
+                              stewardLabelByUserId={companyUserLabelMap}
                               parentIdentifier={parentIssue?.identifier ?? null}
                               parentTitle={parentIssue?.title ?? null}
                               assigneeContent={(

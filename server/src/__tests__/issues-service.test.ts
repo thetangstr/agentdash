@@ -1217,7 +1217,7 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
       },
     ]);
 
-    const result = await svc.list(companyId, { viewerUserId: viewerId });
+    const result = await svc.list(companyId, { viewerUserId: viewerId, includeAssigneeSteward: true });
     const byId = new Map(result.map((issue) => [issue.id, issue]));
 
     // Steward chip: explicit steward wins over owner.
@@ -1252,10 +1252,14 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
       expect((issue as Record<string, unknown>).executionReviewSignals).toBeUndefined();
     }
 
-    // Without a viewer there is no badge, even when the state matches.
+    // Without a viewer there is no badge, even when the state matches —
+    // and without the opt-in flag the steward join is skipped entirely
+    // (the field is absent, not null), so agent inbox callers don't pay
+    // for a chip they never render.
     const noViewerResult = await svc.list(companyId);
     for (const issue of noViewerResult) {
       expect(issue.awaitingReviewByViewer).toBeNull();
+      expect(issue).not.toHaveProperty("assigneeSteward");
     }
   });
 

@@ -20,8 +20,14 @@ import {
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { Identity } from "./Identity";
-import { ShieldCheck, ShieldQuestion, CircleDot } from "lucide-react";
-import type { Issue, IssueAssigneeSteward, IssueAwaitingReview } from "@paperclipai/shared";
+import { ShieldCheck, ShieldQuestion } from "lucide-react";
+import type { Issue, IssueAssigneeSteward } from "@paperclipai/shared";
+import {
+  AwaitingReviewBadge,
+  IssueStewardChip,
+  stewardDisplayName,
+  summarizeStewardBucket,
+} from "./IssueStewardChip";
 
 const boardStatuses = [
   "backlog",
@@ -70,17 +76,6 @@ interface KanbanBoardProps {
 }
 
 /* ── Steward display helpers ── */
-
-function stewardDisplayName(
-  steward: Pick<IssueAssigneeSteward, "userId" | "name" | "email">,
-  labelByUserId?: Map<string, string>,
-): string {
-  const override = labelByUserId?.get(steward.userId);
-  if (override) return override;
-  if (steward.name?.trim()) return steward.name.trim();
-  if (steward.email?.trim()) return steward.email.trim();
-  return steward.userId.slice(0, 5);
-}
 
 function stewardColumnKey(steward: IssueAssigneeSteward | null | undefined): string {
   // Stable column keys. `__steward:<userId>` for any steward (explicit or
@@ -199,16 +194,6 @@ function KanbanCard({
   };
 
   const steward = issue.assigneeSteward ?? null;
-  const awaitingReview: IssueAwaitingReview | null = viewerUserId
-    ? issue.awaitingReviewByViewer ?? null
-    : null;
-  // Cross-check the viewer field on the payload too — the server already
-  // gates this but a stale build or a forged client could ship any value;
-  // never trust the wire.
-  const viewerMatches =
-    awaitingReview?.viewerMatchesPrincipal === true &&
-    awaitingReview?.viewerUserId === viewerUserId;
-  const isAwaitingYourReview = viewerMatches;
 
   return (
     <div
@@ -239,16 +224,7 @@ function KanbanCard({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
             </span>
           )}
-          {isAwaitingYourReview && (
-            <span
-              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300"
-              title={`Awaiting your review (${awaitingReview?.stageType ?? "review"})`}
-              aria-label={`Awaiting your review on ${issue.title}`}
-            >
-              <CircleDot className="h-2.5 w-2.5" />
-              Awaiting your review
-            </span>
-          )}
+          <AwaitingReviewBadge issue={issue} viewerUserId={viewerUserId} className="ml-auto" />
         </div>
         <p className="text-sm leading-snug line-clamp-2 mb-2">{issue.title}</p>
         <div className="flex items-center gap-2 flex-wrap">
@@ -263,28 +239,7 @@ function KanbanCard({
               </span>
             );
           })()}
-          {steward && (() => {
-            const displayName = stewardDisplayName(steward, stewardLabelByUserId);
-            const isOwnerFallback = steward.source === "owner";
-            const Icon = isOwnerFallback ? ShieldQuestion : ShieldCheck;
-            const tooltip = isOwnerFallback
-              ? `Owner fallback — no active steward. ${displayName} created this agent.`
-              : `Active steward: ${displayName}`;
-            return (
-              <span
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${
-                  isOwnerFallback
-                    ? "bg-muted text-muted-foreground border-border"
-                    : "bg-emerald-50 text-emerald-900 border-emerald-200"
-                }`}
-                title={tooltip}
-                aria-label={`${isOwnerFallback ? "Owner fallback" : "Steward"}: ${displayName}`}
-              >
-                <Icon className="h-2.5 w-2.5 shrink-0" />
-                <span className="truncate max-w-[140px]">{displayName}</span>
-              </span>
-            );
-          })()}
+          {steward && <IssueStewardChip steward={steward} labelByUserId={stewardLabelByUserId} />}
         </div>
       </Link>
     </div>
@@ -339,10 +294,11 @@ export function KanbanBoard({
           };
         }
         const userId = key.slice("__steward:".length);
-        // Pick the first steward in this column to derive a display label.
-        const sample = issues.find((i) => i.assigneeSteward?.userId === userId)?.assigneeSteward;
+        // Derive the header from the whole bucket, not from whichever issue
+        // happens to sort first — a user can be explicit steward of one
+        // agent and owner-fallback of another in the same column.
+        const { steward: sample, isOwnerFallback } = summarizeStewardBucket(buckets.get(key) ?? []);
         const displayName = sample ? stewardDisplayName(sample, stewardLabelByUserId) : userId.slice(0, 5);
-        const isOwnerFallback = sample?.source === "owner";
         return {
           id: key,
           label: displayName,

@@ -166,6 +166,13 @@ export interface IssueFilters {
   includeRoutineExecutions?: boolean;
   excludeRoutineExecutions?: boolean;
   includeBlockedBy?: boolean;
+  /**
+   * AgentDash: age-2 — opt-in for the `assigneeSteward` join (1–2 extra
+   * batched queries per page). Only the board-facing list route sets it;
+   * agent inbox routes, portability scans, and other internal callers
+   * never render a steward chip and should not pay for it.
+   */
+  includeAssigneeSteward?: boolean;
   q?: string;
   limit?: number;
   offset?: number;
@@ -1489,7 +1496,8 @@ async function listIssueBlockerAttentionMap(
  * neither is known the field is null and the UI simply doesn't render a
  * chip.
  *
- * Two batched queries per list call:
+ * Two batched queries per list call that opts in via
+ * `IssueFilters.includeAssigneeSteward`:
  *   1. `stewardships.activeStewardsByAgentIds` — explicit active stewards.
  *   2. `agents.created_by_user_id` LEFT JOIN auth_users — owner fallback
  *      for any agent that did not have a steward row.
@@ -2350,6 +2358,7 @@ export function issueService(db: Db) {
       // (inbox/unread lists) get badges without passing an extra param.
       const badgeViewerUserId = filters?.viewerUserId?.trim() || contextUserId || null;
       const includeBlockedBy = filters?.includeBlockedBy === true;
+      const includeAssigneeSteward = filters?.includeAssigneeSteward === true;
       const rawSearch = filters?.q?.trim() ?? "";
       const hasSearch = rawSearch.length > 0;
       const escapedSearch = hasSearch ? escapeLikePattern(rawSearch) : "";
@@ -2495,7 +2504,9 @@ export function issueService(db: Db) {
         includeBlockedBy
           ? blockedByMapForIssues(db, companyId, issueIds)
           : Promise.resolve(new Map<string, IssueRelationIssueSummary[]>()),
-        buildAssigneeStewardsByIssueId(db, companyId, withRuns),
+        includeAssigneeSteward
+          ? buildAssigneeStewardsByIssueId(db, companyId, withRuns)
+          : Promise.resolve(new Map<string, IssueAssigneeSteward>()),
       ]);
       const statsByIssueId = new Map(statsRows.map((row) => [row.issueId, row]));
       const lastActivityByIssueId = new Map(lastActivityRows.map((row) => [row.issueId, row]));
@@ -2520,7 +2531,7 @@ export function issueService(db: Db) {
             ...(productivityReviewByIssueId.has(row.id)
               ? { productivityReview: productivityReviewByIssueId.get(row.id) }
               : {}),
-            assigneeSteward: stewardByIssueId.get(row.id) ?? null,
+            ...(includeAssigneeSteward ? { assigneeSteward: stewardByIssueId.get(row.id) ?? null } : {}),
             awaitingReviewByViewer: deriveIssueAwaitingReview(row.executionReviewSignals ?? null, badgeViewerUserId),
             // AgentDash: age-2 — internal join field consumed above; never
             // ship the raw projection on the wire.
@@ -2546,7 +2557,7 @@ export function issueService(db: Db) {
           ...(productivityReviewByIssueId.has(row.id)
             ? { productivityReview: productivityReviewByIssueId.get(row.id) }
             : {}),
-          assigneeSteward: stewardByIssueId.get(row.id) ?? null,
+          ...(includeAssigneeSteward ? { assigneeSteward: stewardByIssueId.get(row.id) ?? null } : {}),
           awaitingReviewByViewer: deriveIssueAwaitingReview(
             row.executionReviewSignals ?? null,
             badgeViewerUserId,

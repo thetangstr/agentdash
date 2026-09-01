@@ -38,6 +38,8 @@ export const inboxIssueColumns = [
   "status",
   "id",
   "assignee",
+  // AgentDash: age-2 — accountable human for the assigned agent.
+  "steward",
   "project",
   "workspace",
   "parent",
@@ -45,7 +47,7 @@ export const inboxIssueColumns = [
   "updated",
 ] as const;
 export type InboxIssueColumn = (typeof inboxIssueColumns)[number];
-export const DEFAULT_INBOX_ISSUE_COLUMNS: InboxIssueColumn[] = ["status", "id", "assignee", "updated"];
+export const DEFAULT_INBOX_ISSUE_COLUMNS: InboxIssueColumn[] = ["status", "id", "assignee", "steward", "updated"];
 export interface InboxFilterPreferences {
   allCategoryFilter: InboxCategoryFilter;
   allApprovalFilter: InboxApprovalFilter;
