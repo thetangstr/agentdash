@@ -206,6 +206,77 @@ describe("issue graph liveness classifier", () => {
     expect(paused[0]?.state).toBe("blocked_by_uninvokable_assignee");
   });
 
+  it("does not auto-escalate a paused product manager's blocker to an engineering lead", () => {
+    // Regression: a paused PM must retain ownership until triage — the liveness
+    // recovery must not reassign the blocker to an invokable engineering lead.
+    const findings = classifyIssueGraphLiveness({
+      issues: [
+        issue(),
+        issue({
+          id: blockerId,
+          identifier: "PAP-1710",
+          title: "PM triage",
+          status: "todo",
+          assigneeAgentId: "pm-agent",
+        }),
+      ],
+      relations: blocks,
+      agents: [
+        agent(),
+        manager,
+        agent({ id: "pm-agent", name: "Priya", role: "pm", status: "paused", reportsTo: managerId }),
+      ],
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("still escalates a paused non-PM blocker assignee", () => {
+    const findings = classifyIssueGraphLiveness({
+      issues: [
+        issue(),
+        issue({
+          id: blockerId,
+          identifier: "PAP-1711",
+          title: "Engineering unblock work",
+          status: "todo",
+          assigneeAgentId: "eng-agent",
+        }),
+      ],
+      relations: blocks,
+      agents: [
+        agent(),
+        manager,
+        agent({ id: "eng-agent", name: "Theo", role: "engineer", status: "paused", reportsTo: managerId }),
+      ],
+    });
+
+    expect(findings[0]?.state).toBe("blocked_by_uninvokable_assignee");
+  });
+
+  it("still escalates a terminated product manager (only a paused PM is held for triage)", () => {
+    const findings = classifyIssueGraphLiveness({
+      issues: [
+        issue(),
+        issue({
+          id: blockerId,
+          identifier: "PAP-1712",
+          title: "PM triage",
+          status: "todo",
+          assigneeAgentId: "pm-agent",
+        }),
+      ],
+      relations: blocks,
+      agents: [
+        agent(),
+        manager,
+        agent({ id: "pm-agent", name: "Priya", role: "pm", status: "terminated", reportsTo: managerId }),
+      ],
+    });
+
+    expect(findings[0]?.state).toBe("blocked_by_uninvokable_assignee");
+  });
+
   it("detects invalid in_review execution participant", () => {
     const findings = classifyIssueGraphLiveness({
       issues: [
