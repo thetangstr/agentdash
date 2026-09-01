@@ -6,7 +6,7 @@
 
 Every steward surface is on for every company. A company that simply wants agents that run on their own — no human↔agent pairing — still gets pairing UI, "Needs a steward" badges, steward-routed escalations, and "your steward" wording in every agent prompt.
 
-Decided 2026-09-01 (Kailor):
+Decided 2026-09-01 with the founder:
 
 | Decision | Choice | Why |
 |---|---|---|
