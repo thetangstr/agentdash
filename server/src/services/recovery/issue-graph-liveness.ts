@@ -103,6 +103,20 @@ export interface IssueGraphLivenessInput {
 
 const INVOKABLE_AGENT_STATUSES = new Set(["active", "idle", "running", "error"]);
 const BLOCKING_AGENT_STATUSES = new Set(["paused", "terminated", "pending_approval"]);
+// AgentDash: role strings that designate a Product Manager. "pm" is the canonical
+// AgentRole; "product_manager" covers proposal-created agents that use the long form.
+const PRODUCT_MANAGER_ROLES = new Set(["pm", "product_manager"]);
+
+/**
+ * A paused Product Manager must not be auto-escalated to an engineering lead:
+ * engineering runs only after PM triage. Only the *paused* state is held — a
+ * terminated or pending-approval PM is genuinely unavailable and still escalates.
+ */
+function isPausedProductManager(agent: IssueLivenessAgentInput | null | undefined): boolean {
+  return Boolean(
+    agent && agent.status === "paused" && agent.role && PRODUCT_MANAGER_ROLES.has(agent.role.toLowerCase()),
+  );
+}
 
 function issueLabel(issue: IssueLivenessIssueInput) {
   return issue.identifier ?? issue.id;
@@ -471,6 +485,10 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
     if (!blocker.assigneeAgentId) return null;
 
     const blockerAgent = agentsById.get(blocker.assigneeAgentId);
+    // AgentDash: hold a paused Product Manager's blocker instead of escalating it to
+    // an engineering lead — engineering must not run before PM triage. The paused PM
+    // retains ownership until it resumes; manual reassignment is unaffected.
+    if (isPausedProductManager(blockerAgent)) return null;
     if (!blockerAgent || blockerAgent.companyId !== source.companyId || BLOCKING_AGENT_STATUSES.has(blockerAgent.status)) {
       return finding({
         issue: source,

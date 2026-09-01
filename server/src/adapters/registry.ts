@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type {
   AdapterEnvironmentCheck,
@@ -220,6 +221,23 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * AgentDash: read the managed AGENTS.md role contract for injection into the live
+ * Hermes prompt. The hermes-paperclip-adapter only renders `promptTemplate`, so the
+ * bundle content must be merged by the wrapper (the other local adapters inject the
+ * bundle themselves). Non-fatal: a missing or unreadable bundle yields null and the
+ * run falls back to the task template alone.
+ */
+async function readHermesInstructionsContract(filePath: string): Promise<string | null> {
+  try {
+    const content = await readFile(filePath, "utf8");
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
 }
 
 function deriveHermesPaperclipTaskConfig(ctx: { config?: unknown; context?: unknown }) {
@@ -674,6 +692,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
+    const runConfig = readRecord(normalizedCtx.config) ?? {};
     const existingEnv =
       typeof existingConfig.env === "object" && existingConfig.env !== null && !Array.isArray(existingConfig.env)
         ? (existingConfig.env as Record<string, string>)
@@ -693,6 +712,16 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
+    // AgentDash: bind the run's resolved model/provider. heartbeat resolves the
+    // effective model (base agent config + model profile + issue override) onto
+    // ctx.config, but the hermes-paperclip-adapter reads only agent.adapterConfig —
+    // bridge it so the run uses the configured per-agent model instead of falling
+    // back to the profile/global default.
+    const resolvedModel = readNonEmptyString(runConfig.model);
+    if (resolvedModel) patchedConfig.model = resolvedModel;
+    const resolvedProvider = readNonEmptyString(runConfig.provider);
+    if (resolvedProvider) patchedConfig.provider = resolvedProvider;
+
     // AgentDash: when managed profiles are enabled, scope this run to the agent's
     // own Hermes profile by invoking its alias wrapper (`hermes -p <profile>`).
     // Provisions the profile if it is missing (covers agents created by any path,
@@ -705,11 +734,18 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     // Hermes' package default prompt predates authenticated mode and shows bare curl examples.
     // In authenticated mode, replace it with an equivalent auth-aware template.
-    if (promptTemplate) {
-      patchedConfig.promptTemplate = `${HERMES_AUTH_GUARD_PROMPT}\n\n${promptTemplate}`;
-    } else {
-      patchedConfig.promptTemplate = HERMES_AUTHENTICATED_DEFAULT_PROMPT_TEMPLATE;
-    }
+    const taskTemplate = promptTemplate
+      ? `${HERMES_AUTH_GUARD_PROMPT}\n\n${promptTemplate}`
+      : HERMES_AUTHENTICATED_DEFAULT_PROMPT_TEMPLATE;
+
+    // AgentDash: inject the managed AGENTS.md role contract so it is retained
+    // alongside the task context. The bundle's instructionsFilePath is persisted on
+    // the agent config (and mirrored onto the run config); the Hermes package only
+    // renders promptTemplate, so the contract is prepended here.
+    const instructionsFilePath =
+      readNonEmptyString(existingConfig.instructionsFilePath) ?? readNonEmptyString(runConfig.instructionsFilePath);
+    const roleContract = instructionsFilePath ? await readHermesInstructionsContract(instructionsFilePath) : null;
+    patchedConfig.promptTemplate = roleContract ? `${roleContract}\n\n${taskTemplate}` : taskTemplate;
 
     const patchedCtx = {
       ...taskPatchedCtx,
