@@ -188,7 +188,9 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   if (config && !config.command && configCommand) {
     config.command = configCommand;
   }
-  const fallbackCodexCommand = process.env.AGENTDASH_CODEX_COMMAND ?? "codex-acp";
+  // Our local duplicate removed during the origin/main integration: upstream's
+  // defaultCodexCommand()/resolveCodexCommand already reads AGENTDASH_CODEX_COMMAND
+  // and is covered by command.test.ts, so this declaration only shadowed it.
   if (config && !config.command) {
     config.command = fallbackCodexCommand;
   }
