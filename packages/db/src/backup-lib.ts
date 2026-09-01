@@ -955,6 +955,75 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
   }
 }
 
+/**
+ * A `COPY … FROM stdin` block, split into the command and its payload.
+ *
+ * The backup WRITER emits table data as `COPY … FROM stdin;`, raw TSV, then a
+ * `\.` terminator (see the writer above). The statement reader hands that back
+ * as ONE string, so the naive `sql.unsafe(statement)` pushes the TSV rows at
+ * the parser as if they were SQL and the restore dies on the first data line —
+ * measured as `syntax error at or near "1"`.
+ *
+ * Returns null for anything that is not such a block, so ordinary DDL keeps
+ * its existing path untouched.
+ */
+function parseCopyFromStdin(statement: string): { command: string; payload: string } | null {
+  // The writer prefixes each data block with `-- Data for: schema.table (n rows)`,
+  // so the COPY command is not the first line. Skipping leading comments and
+  // blanks is load-bearing: reading line 0 as the header silently returns null
+  // here and hands the whole block — TSV and all — back to sql.unsafe(), which
+  // is exactly the failure this function exists to prevent.
+  const allLines = statement.split("\n");
+  let headerIndex = 0;
+  while (
+    headerIndex < allLines.length &&
+    (allLines[headerIndex]!.trim() === "" || allLines[headerIndex]!.trim().startsWith("--"))
+  ) {
+    headerIndex += 1;
+  }
+  if (headerIndex >= allLines.length) return null;
+
+  const header = allLines[headerIndex]!.trim();
+  if (!/^COPY\s.+\sFROM\s+stdin\s*;?$/i.test(header)) return null;
+
+  const body = allLines.slice(headerIndex + 1).join("\n");
+  // The terminator is a lone `\.` on its own line. Everything before it is
+  // payload; anything after it is not ours to interpret.
+  const lines = body.split("\n");
+  const terminator = lines.findIndex((line) => line === "\\.");
+  const dataLines = terminator === -1 ? lines : lines.slice(0, terminator);
+  const payload = dataLines.length > 0 ? `${dataLines.join("\n")}\n` : "";
+
+  return {
+    // postgres.js wants the command without the trailing semicolon.
+    command: header.replace(/;$/, ""),
+    payload,
+  };
+}
+
+/**
+ * Stream one COPY block in through the driver's own COPY support.
+ *
+ * This exists because there is no `psql` on a deployment that uses embedded
+ * PostgreSQL — the embedded package ships only `initdb`, `pg_ctl` and
+ * `postgres`. `restoreWithPsql` therefore cannot succeed there, and this node
+ * path is not a fallback but the ONLY path. Until this function existed, every
+ * backup written by this very library was unrestorable on such a host: the
+ * backups ran nightly, were retained, and could not have been used.
+ */
+async function restoreCopyBlock(
+  sql: ReturnType<typeof postgres>,
+  copy: { command: string; payload: string },
+): Promise<void> {
+  const writable = (await sql.unsafe(copy.command).writable()) as NodeJS.WritableStream;
+  await new Promise<void>((resolve, reject) => {
+    writable.on("error", reject);
+    writable.on("finish", resolve);
+    if (copy.payload.length > 0) writable.write(copy.payload);
+    writable.end();
+  });
+}
+
 export async function runDatabaseRestore(opts: RunDatabaseRestoreOptions): Promise<void> {
   const connectTimeout = Math.max(1, Math.trunc(opts.connectTimeoutSeconds ?? 5));
   try {
@@ -973,6 +1042,11 @@ export async function runDatabaseRestore(opts: RunDatabaseRestoreOptions): Promi
   try {
     await sql`SELECT 1`;
     for await (const statement of readRestoreStatements(opts.backupFile)) {
+      const copy = parseCopyFromStdin(statement);
+      if (copy) {
+        await restoreCopyBlock(sql, copy);
+        continue;
+      }
       await sql.unsafe(statement).execute();
     }
   } catch (error) {

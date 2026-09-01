@@ -368,3 +368,69 @@ describe("InboxGroupHeader", () => {
     });
   });
 });
+
+describe("InboxIssueTrailingColumns steward column", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  const renderSteward = (
+    root: ReturnType<typeof createRoot>,
+    issue: Issue,
+    stewardLabelByUserId?: Map<string, string>,
+  ) => {
+    act(() => {
+      root.render(
+        <InboxIssueTrailingColumns
+          issue={issue}
+          columns={["steward"]}
+          projectName={null}
+          projectColor={null}
+          workspaceName={null}
+          assigneeName={null}
+          currentUserId={null}
+          parentIdentifier={null}
+          parentTitle={null}
+          stewardLabelByUserId={stewardLabelByUserId}
+        />,
+      );
+    });
+  };
+
+  it("renders the steward chip, distinguishing owner fallbacks, and stays blank without a steward", () => {
+    const root = createRoot(container);
+
+    renderSteward(
+      root,
+      createIssue({
+        assigneeAgentId: "agent-1",
+        assigneeSteward: { userId: "user-2", name: "Jordan Lee", email: "jordan@example.com", source: "steward" },
+      }),
+    );
+    expect(container.querySelector('[aria-label="Steward: Jordan Lee"]')).not.toBeNull();
+
+    renderSteward(
+      root,
+      createIssue({
+        assigneeAgentId: "agent-1",
+        assigneeSteward: { userId: "user-3", name: null, email: "owner@example.com", source: "owner" },
+      }),
+      new Map([["user-3", "Sam Owner"]]),
+    );
+    expect(container.querySelector('[aria-label="Owner fallback: Sam Owner"]')).not.toBeNull();
+
+    renderSteward(root, createIssue({ assigneeAgentId: "agent-1", assigneeSteward: null }));
+    expect(container.textContent).toBe("");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+});

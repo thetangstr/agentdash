@@ -87,6 +87,12 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     label: "Hermes Agent",
     description: "Local Hermes CLI agent",
     icon: HermesIcon,
+    // Recommended, because on a self-hosted install it is usually the only one
+    // present. Without this flag it rendered only inside the collapsed "More
+    // Agent Adapter Types" panel — two clicks away and never the default —
+    // while the wizard defaulted to Claude Code on machines where Claude was
+    // not installed at all. The first agent a customer created could not run.
+    recommended: true,
   },
   pi_local: {
     label: "Pi",

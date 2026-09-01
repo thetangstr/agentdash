@@ -12,11 +12,13 @@ import {
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
   feedbackVoteValueSchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   updateCompanySchema,
 } from "@paperclipai/shared";
 import { badRequest, forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
+import { isMkInviteCode } from "../lib/mk-invite-codes.js";
 import {
   accessService,
   agentService,
@@ -28,7 +30,14 @@ import {
 } from "../services/index.js";
 import { DomainAlreadyClaimedError } from "../services/companies.js";
 import type { StorageService } from "../storage/types.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import {
+  assertBoard,
+  assertCompanyAccess,
+  assertCompanyAdministrator,
+  assertInstanceAdmin,
+  getActorInfo,
+} from "./authz.js";
+import { deploymentKind } from "../services/license.js";
 import { isBillingDisabled } from "../services/tier-policy.js";
 
 // AgentDash (#157): pro_past_due is intentionally excluded — past-due customers
@@ -101,6 +110,34 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     assertCompanyAccess(req, target.companyId);
   }
 
+  /**
+   * A company's name and description are its identity, not its branding.
+   *
+   * A CEO agent legitimately manages the colour and the logo. Renaming the
+   * company is a different act: it is the answer to "who are we", and it
+   * belongs with the people who set direction.
+   *
+   * Parsing with a narrower schema alone would answer this with a 400
+   * "Validation error", which is precisely the unhelpful refusal Gate 1
+   * removed elsewhere — the reader cannot tell a boundary from a bug. So the
+   * refusal is explicit and says what the rule is, and the narrow schema stays
+   * behind it as the belt to that braces.
+   */
+  const AGENT_FORBIDDEN_IDENTITY_FIELDS = ["name", "description"] as const;
+
+  function assertAgentMayNotChangeIdentity(req: Request) {
+    if (req.actor.type !== "agent") return;
+    const body = req.body as Record<string, unknown> | null | undefined;
+    if (!body || typeof body !== "object") return;
+    const attempted = AGENT_FORBIDDEN_IDENTITY_FIELDS.filter((field) => field in body);
+    if (attempted.length === 0) return;
+    throw forbidden(
+      `An agent cannot change the company's ${attempted.join(" or ")}. `
+      + "The name and description are the company's identity and can only be "
+      + "changed by an owner, admin or operator.",
+    );
+  }
+
   async function assertCanUpdateBranding(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") return;
@@ -113,6 +150,19 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
     if (actorAgent.role !== "ceo") {
       throw forbidden("Only CEO agents can update company branding");
     }
+  }
+
+  async function assertCanUpdateProductProfile(req: Request, companyId: string) {
+    assertBoard(req);
+    // Delegates to the shared predicate rather than repeating it: this same
+    // owner-or-admin question is asked by the billing routes, and a security
+    // check with two copies is one that will eventually disagree with itself.
+    await assertCompanyAdministrator(
+      access,
+      req,
+      companyId,
+      "Company owner or admin access required to change product profile",
+    );
   }
 
   async function assertCanManagePortability(req: Request, companyId: string, capability: "imports" | "exports") {
@@ -308,6 +358,52 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
 
   router.post("/", validate(createCompanySchema), async (req, res) => {
     assertBoard(req);
+
+    // AgentDash-MK: a non-default product profile is granted by invite code.
+    //
+    // `createCompanySchema` has always accepted `productProfile`, and nothing
+    // checked it — so MK was not opt-in, it was merely unadvertised. Any
+    // authenticated board user could self-select the whole governance profile.
+    //
+    // Gated in `authenticated` deployments only. `local_trusted` is the
+    // founder's own machine with no untrusted callers, and it is the mode the
+    // MK acceptance specs run in — they create MK companies over raw HTTP by
+    // design, so gating that mode would break the suite to protect nobody.
+    const requestedProfile = req.body.productProfile;
+    const suppliedInviteCode = req.body.inviteCode;
+    // The code is an authorization input, never company data. Deleted before
+    // the body is spread into `svc.create`, so it cannot land in a row that
+    // company portability would later export.
+    delete req.body.inviteCode;
+
+    // On-prem is exempt, like `local_trusted`, and for the same reason.
+    //
+    // The invite code exists to stop a stranger on the managed service granting
+    // themselves the governance profile. On a self-hosted install there is no
+    // stranger: the operator owns the box, the database and this process, and
+    // could set the column by hand in less time than asking us for a code.
+    //
+    // Leaving it gated there had a cost that was invisible until a real cold
+    // install: a workspace created without a code silently became `default`,
+    // and `default` turns off fact requests, deliverables, directives and
+    // governance — while onboarding still seeded a board-pack goal whose every
+    // task depends on exactly those surfaces. The operator got four collection
+    // tasks and no mechanism to collect with, and nothing anywhere said why.
+    const selfHosted = deploymentKind() === "on_prem";
+    if (
+      requestedProfile
+      && requestedProfile !== "default"
+      && options.deploymentMode === "authenticated"
+      && !selfHosted
+      && !isMkInviteCode(suppliedInviteCode)
+    ) {
+      res.status(403).json({
+        code: "mk_invite_code_required",
+        error:
+          "This workspace profile requires an invite code. Ask the AgentDash team for one.",
+      });
+      return;
+    }
     // AgentDash (AGE-104): no instance-admin gate here. The FRE Plan B
     // contract (AGE-55) is that any authenticated board user can create
     // their first company and is promoted to `owner` membership below.
@@ -442,16 +538,29 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
         adminCount === 0 && !hasExistingCompany;
     }
 
+    // AgentDash (#448/#449/#451): the creator's "owner" membership is inserted
+    // in the SAME transaction as the company row (see companyService.create).
+    // Auth reads memberships fresh per request, so any request racing between
+    // "company created" and "membership inserted" used to get a 403.
+    const ownerPrincipalId = req.actor.userId ?? "local-board";
     let company: Awaited<ReturnType<typeof svc.create>>;
     try {
-      company = await svc.create({
-        ...req.body,
-        // When the flag is ON we still persist the domain (so the historical
-        // record reflects who created it) but we skip the uniqueness check.
-        // When the partial unique index would fire, the catch below converts
-        // it to a 409.
-        emailDomain,
-      }, allowMultiTenantPerDomain);
+      company = await svc.create(
+        {
+          ...req.body,
+          // When the flag is ON we still persist the domain (so the historical
+          // record reflects who created it) but we skip the uniqueness check.
+          // When the partial unique index would fire, the catch below converts
+          // it to a 409.
+          emailDomain,
+        },
+        allowMultiTenantPerDomain,
+        {
+          principalType: "user",
+          principalId: ownerPrincipalId,
+          membershipRole: "admin",
+        },
+      );
     } catch (err) {
       if (err instanceof DomainAlreadyClaimedError) {
         res.status(409).json({
@@ -465,15 +574,14 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       throw err;
     }
 
-    // AgentDash (AGE-55): existing behavior already promotes the creator to a
-    // board ("owner") membership. We rely on that here so the at-least-one-
-    // admin invariant holds from the moment the company exists.
+    // AgentDash (AGE-55): the creator's "owner" membership already exists — it
+    // was inserted atomically with the company above, so the at-least-one-admin
+    // invariant holds from the moment the company exists.
     //
     // GH #72: owners need `agents:create` to hit the agent-hires endpoint and
     // configuration reads. setPrincipalPermission internally upserts membership
-    // as "member", so it must run BEFORE the "owner" promotion below — otherwise
-    // the second ensureMembership demotes the creator back to "member".
-    const ownerPrincipalId = req.actor.userId ?? "local-board";
+    // as "member", so it must run BEFORE the "owner" re-assert below — otherwise
+    // its internal ensureMembership would leave the creator demoted to "member".
     await access.setPrincipalPermission(
       company.id,
       "user",
@@ -552,10 +660,56 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       if (actorAgent.companyId !== companyId) {
         throw forbidden("Agent key cannot access another company");
       }
-      body = updateCompanyBrandingSchema.parse(req.body);
+      // Colour and logo only. `updateCompanyBrandingSchema` also carries name
+      // and description — that is correct for a human and was, until this was
+      // probed on a live instance, the reason a CEO agent could rename the
+      // company and rewrite its description. See `agentCompanyBrandingSchema`.
+      assertAgentMayNotChangeIdentity(req);
+      body = agentCompanyBrandingSchema.parse(req.body);
     } else {
       assertBoard(req);
       body = updateCompanySchema.parse(req.body);
+
+      // The code is an authorization input, never company data — stripped here
+      // for the same reason `POST /companies` strips it, so it cannot land in a
+      // row that a portability export would later carry. Update accepted it
+      // (the schema extends create's) and did NOT strip it, which was its own
+      // small leak independent of the gate below.
+      const suppliedInviteCode =
+        typeof body.inviteCode === "string" ? body.inviteCode : undefined;
+      delete body.inviteCode;
+
+      if (
+        body.productProfile !== undefined &&
+        body.productProfile !== existingCompany.productProfile
+      ) {
+        await assertCanUpdateProductProfile(req, companyId);
+
+        // AgentDash-MK: the same invite-code gate `POST /companies` applies.
+        //
+        // Without this, the create-time gate was decorative: an owner refused a
+        // profile at creation could set `name` then immediately PATCH the
+        // profile in, because update only checked role. Role answers "may this
+        // person configure the company", which is not the same question as "is
+        // this workspace entitled to the profile" — and only the second one is
+        // what a code grants. Both must hold.
+        //
+        // Scoped to `authenticated` exactly as create is: `local_trusted` is the
+        // founder's own machine, and the MK acceptance specs create profiled
+        // companies over raw HTTP there by design.
+        if (
+          body.productProfile !== "default" &&
+          options.deploymentMode === "authenticated" &&
+          !isMkInviteCode(suppliedInviteCode)
+        ) {
+          res.status(403).json({
+            code: "mk_invite_code_required",
+            error:
+              "This workspace profile requires an invite code. Ask the AgentDash team for one.",
+          });
+          return;
+        }
+      }
 
       if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
         body = {
@@ -592,7 +746,16 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
   router.patch("/:companyId/branding", validate(updateCompanyBrandingSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCanUpdateBranding(req, companyId);
-    const company = await svc.update(companyId, req.body);
+    /**
+     * Re-parsed after the guard, because the `validate` middleware above runs
+     * before we know who is asking. `name` is a legitimate field of the human
+     * schema, so it passed validation and reached the update — this route was
+     * the second way a CEO agent renamed the company on the live instance.
+     */
+    assertAgentMayNotChangeIdentity(req);
+    const payload =
+      req.actor.type === "agent" ? agentCompanyBrandingSchema.parse(req.body) : req.body;
+    const company = await svc.update(companyId, payload);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
       return;
@@ -607,7 +770,10 @@ export function companyRoutes(db: Db, storage?: StorageService, options: Company
       action: "company.branding_updated",
       entityType: "company",
       entityId: companyId,
-      details: req.body,
+      // What was applied, not what was sent. Logging the raw body would record
+      // a `name` change that the parse above refused, which is a false audit
+      // entry — the worst kind, because it is the record you reach for later.
+      details: payload,
     });
     res.json(company);
   });

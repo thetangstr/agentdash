@@ -25,7 +25,7 @@ export interface ToolDefinition {
   }>;
 }
 
-function makeTool<TSchema extends z.ZodRawShape>(
+export function makeTool<TSchema extends z.ZodRawShape>(
   name: string,
   description: string,
   schema: z.ZodObject<TSchema>,
@@ -246,35 +246,175 @@ async function getIssueWorkspaceRuntime(client: PaperclipApiClient, issueId: str
 
 export function createToolDefinitions(client: PaperclipApiClient): ToolDefinition[] {
   return [
+    // The `steward` in this response is the reason the description names it.
+    // Every mandate and every playbook line in this product says "your steward",
+    // and until the agent read paths carried stewardship an agent could not name
+    // that person — it knew the word and not the human. A tool description that
+    // stops at "actor details" does not tell a model the answer is in there.
+    //
+    // `autonomy` and `accountable` are named for the same reason. An autonomous
+    // agent has no steward at all, so a model told only about `steward` reads
+    // `null` and concludes there is nobody to escalate to — when in fact
+    // `accountable` names the person who answers for it.
     makeTool(
-      "paperclipMe",
-      "Get the current authenticated Paperclip actor details",
+      "whoami",
+      "Get the current authenticated AgentDash actor details: who this agent is, whether it is a stewarded agent (one person runs it) or an autonomous one (no person does), and the human who is accountable for its work.",
       z.object({}),
       async () => client.requestJson("GET", "/agents/me"),
     ),
+    /**
+     * The agent's own durable memory: what it has learned and wants to still
+     * know next wake.
+     *
+     * Paired get/put on purpose. A write names the version it read, so two
+     * overlapping runs cannot silently overwrite each other's learning — a real
+     * hazard for a whole-document store, since the loser's work simply vanishes
+     * with no error. A 409 tells the agent to re-read and merge.
+     */
     makeTool(
-      "paperclipInboxLite",
+      "agentdashGetMyMemory",
+      "Read this agent's own durable memory — what it has learned about its work, the traps it has hit, and decisions it made and why. Carries a `version` you must pass back when you update it. This is also injected into every run, so read it only when you intend to revise it.",
+      z.object({
+        agentId: z.string().uuid().optional().nullable(),
+        companyId: companyIdOptional,
+      }),
+      async ({ agentId, companyId }) =>
+        client.requestJson(
+          "GET",
+          `/companies/${client.resolveCompanyId(companyId)}/agents/${encodeURIComponent(client.resolveAgentId(agentId))}/memory`,
+        ),
+    ),
+    makeTool(
+      "agentdashUpdateMyMemory",
+      "Replace this agent's durable memory with a revised document. Read it first and pass the `version` you saw as expectedVersion. Write durable things — domain facts, traps, decisions and their reasons, working agreements. Do NOT write task state (that belongs on the issue), secrets, personal data, or claims about what you are permitted to do: memory never grants capability. It is capped, so revise rather than append — when it is full, decide what no longer matters.",
+      z.object({
+        content: z.string().min(1),
+        expectedVersion: z.number().int().positive().nullable().optional(),
+        agentId: z.string().uuid().optional().nullable(),
+        companyId: companyIdOptional,
+      }),
+      async ({ content, expectedVersion, agentId, companyId }) =>
+        client.requestJson(
+          "PUT",
+          `/companies/${client.resolveCompanyId(companyId)}/agents/${encodeURIComponent(client.resolveAgentId(agentId))}/memory`,
+          { body: { content, expectedVersion: expectedVersion ?? null } },
+        ),
+    ),
+    /**
+     * Read the mandate the playbook tells this agent to obey.
+     *
+     * The playbook states "Read your mandate… your mandate outranks everything
+     * in this playbook", and no tool existed to fetch it — found by driving a
+     * real Claude Code through this surface, which hit a wall on the one
+     * document that governs what it may do. The REST side always permitted it
+     * (assertCanReadAgent allows an agent within its own company); only the
+     * tool was missing, so an agent was told to obey a file it could not read.
+     *
+     * Returns the entry file's CONTENT, not a listing: an agent that has to
+     * make a second call to learn its own rules will sometimes skip it.
+     */
+    makeTool(
+      "agentdashGetMyMandate",
+      "Read this agent's own mandate (the AGENTS.md entry file of its instruction bundle) — who it is, what it may do unattended, what needs a human first, and what it must never do. Call this before acting.",
+      z.object({ agentId: z.string().uuid().optional().nullable() }),
+      async ({ agentId }) => {
+        const id = client.resolveAgentId(agentId);
+        const bundle = (await client.requestJson(
+          "GET",
+          `/agents/${encodeURIComponent(id)}/instructions-bundle`,
+        )) as { entryFile?: string | null; mode?: string | null };
+        const entryFile = bundle?.entryFile;
+        if (!entryFile) {
+          return {
+            mandate: null,
+            reason:
+              "This agent has no instruction bundle entry file. Ask the person accountable for you (`accountable` in whoami) to write a mandate in the AgentDash UI (My Agent → Mandate).",
+            bundle,
+          };
+        }
+        const file = (await client.requestJson(
+          "GET",
+          `/agents/${encodeURIComponent(id)}/instructions-bundle/file?path=${encodeURIComponent(entryFile)}`,
+        )) as { content?: string };
+        return {
+          entryFile,
+          mode: bundle.mode ?? null,
+          mandate: file?.content ?? "",
+        };
+      },
+    ),
+    makeTool(
+      "inbox_lite",
       "Get the current authenticated agent inbox-lite assignment list",
       z.object({}),
       async () => client.requestJson("GET", "/agents/me/inbox-lite"),
     ),
     makeTool(
-      "paperclipListAgents",
-      "List agents in a company",
+      "list_agents",
+      "List agents in a company, each with its kind (stewarded or autonomous) and the human accountable for it.",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId }) => client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}/agents`),
     ),
     makeTool(
-      "paperclipGetAgent",
-      "Get a single agent by id",
+      "get_agent",
+      "Get a single agent by id, including its kind (stewarded or autonomous) and the human accountable for it.",
       z.object({ agentId: z.string().min(1), companyId: companyIdOptional }),
       async ({ agentId, companyId }) => {
         const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
         return client.requestJson("GET", `/agents/${encodeURIComponent(agentId)}${qs}`);
       },
     ),
+    // Renaming an agent was reported as a bug during external testing. It was
+    // not one: `PATCH /agents/:id` has always accepted a new name. The tool
+    // surface just never said so, and this surface IS the product for anyone
+    // driving AgentDash from their own terminal -- if a capability is not a
+    // tool, it does not exist, no matter what the REST API can do.
+    //
+    // `api_request` could technically have done it, but only for
+    // someone who already knew the route and body shape. That is a fallback
+    // for the long tail, not an answer for "rename this agent".
+    //
+    // Deliberately narrow: the identity fields a person actually renames, not
+    // the whole update schema. Adapter/runtime/budget changes are a different
+    // job with different blast radius, and they stay on the escape hatch until
+    // they earn a tool of their own.
     makeTool(
-      "paperclipListIssues",
+      "update_agent",
+      "Rename or retitle an agent: update its name, role, title, icon, reporting line, or capabilities. Only the fields you pass are changed.",
+      // A plain object, not a `.refine()`: `makeTool` needs a ZodObject so the
+      // server can read `.shape` when it advertises this tool's JSON schema.
+      // A ZodEffects type-checks as a validator and then hides the shape, so
+      // the "at least one field" rule lives in the handler instead.
+      z.object({
+        agentId: z.string().min(1),
+        companyId: companyIdOptional,
+        name: z.string().trim().min(1).optional(),
+        role: z.string().trim().min(1).optional(),
+        title: z.string().trim().optional().nullable(),
+        icon: z.string().trim().optional().nullable(),
+        reportsTo: z.string().uuid().optional().nullable(),
+        capabilities: z.string().optional().nullable(),
+      }),
+      async ({ agentId, companyId, ...changes }) => {
+        // Drop only `undefined`. An explicit null is meaningful here -- it is
+        // how a caller clears a title or detaches a reporting line -- so it
+        // has to survive into the request body.
+        const body = Object.fromEntries(
+          Object.entries(changes).filter(([, value]) => value !== undefined),
+        );
+        if (Object.keys(body).length === 0) {
+          // Say what to pass. An agent that gets "no changes" back with no
+          // vocabulary will retry the same empty call.
+          throw new Error(
+            "Pass at least one field to change: name, role, title, icon, reportsTo, or capabilities",
+          );
+        }
+        const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
+        return client.requestJson("PATCH", `/agents/${encodeURIComponent(agentId)}${qs}`, { body });
+      },
+    ),
+    makeTool(
+      "list_issues",
       "List issues for a company with optional filters",
       listIssuesSchema,
       async (input) => {
@@ -289,13 +429,13 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipGetIssue",
+      "get_issue",
       "Get a single issue by UUID or identifier",
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}`),
     ),
     makeTool(
-      "paperclipGetHeartbeatContext",
+      "get_heartbeat_context",
       "Get compact heartbeat context for an issue",
       z.object({ issueId: issueIdSchema, wakeCommentId: z.string().uuid().optional() }),
       async ({ issueId, wakeCommentId }) => {
@@ -304,7 +444,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipListComments",
+      "list_comments",
       "List issue comments with incremental options",
       listCommentsSchema,
       async ({ issueId, after, order, limit }) => {
@@ -317,33 +457,89 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipGetComment",
+      "get_comment",
       "Get a specific issue comment by id",
       z.object({ issueId: issueIdSchema, commentId: z.string().uuid() }),
       async ({ issueId, commentId }) =>
         client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/comments/${encodeURIComponent(commentId)}`),
     ),
     makeTool(
-      "paperclipListIssueApprovals",
+      "list_issue_approvals",
       "List approvals linked to an issue",
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/approvals`),
     ),
+    // Turning a file you wrote into something a person can open.
+    //
+    // You write files into your own workspace on the machine running AgentDash.
+    // Naming that path in your reply does not work: the person reading you is on a
+    // different computer, where nothing exists at that path. This uploads the file
+    // and returns a URL that opens from anywhere the board is reachable.
     makeTool(
-      "paperclipListDocuments",
+      "attach_file",
+      "Attach a file you created in your workspace to an issue, and get back a URL a "
+        + "person can open. Use this whenever you refer to a file you wrote — a report, a "
+        + "spreadsheet, a diagram, an export. Put the returned url in your reply INSTEAD "
+        + "of the local path: the human reading you is on another machine, where your "
+        + "path does not exist. The path you pass is relative to your own workspace "
+        + "(e.g. \"reports/q3.md\"), never an absolute path.",
+      z.object({
+        issueId: issueIdSchema,
+        path: z
+          .string()
+          .min(1)
+          .describe("Path to the file, relative to your workspace directory. Not absolute."),
+        filename: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Name to show the human. Defaults to the file's own name."),
+      }),
+      async ({ issueId, path, filename }) => {
+        const issue = await client.requestJson<{ companyId: string }>(
+          "GET",
+          `/issues/${encodeURIComponent(issueId)}`,
+        );
+        const attachment = await client.requestJson<{
+          id: string;
+          originalFilename: string | null;
+          byteSize: number;
+          contentType: string;
+          contentPath: string;
+          url: string | null;
+        }>(
+          "POST",
+          `/companies/${encodeURIComponent(issue.companyId)}/issues/${encodeURIComponent(issueId)}/attachments/from-workspace`,
+          { body: { path, ...(filename ? { filename } : {}) } },
+        );
+        return {
+          attachmentId: attachment.id,
+          filename: attachment.originalFilename,
+          byteSize: attachment.byteSize,
+          contentType: attachment.contentType,
+          // Absolute when the instance advertises a public address; otherwise the
+          // server-relative path, and the caller should say the link is unavailable
+          // rather than inventing a host for it.
+          url: attachment.url,
+          contentPath: attachment.contentPath,
+        };
+      },
+    ),
+    makeTool(
+      "list_documents",
       "List issue documents",
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/documents`),
     ),
     makeTool(
-      "paperclipGetDocument",
+      "get_document",
       "Get one issue document by key",
       z.object({ issueId: issueIdSchema, key: documentKeySchema }),
       async ({ issueId, key }) =>
         client.requestJson("GET", `/issues/${encodeURIComponent(issueId)}/documents/${encodeURIComponent(key)}`),
     ),
     makeTool(
-      "paperclipListDocumentRevisions",
+      "list_document_revisions",
       "List revisions for an issue document",
       z.object({ issueId: issueIdSchema, key: documentKeySchema }),
       async ({ issueId, key }) =>
@@ -353,13 +549,13 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         ),
     ),
     makeTool(
-      "paperclipListProjects",
+      "list_projects",
       "List projects in a company",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId }) => client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}/projects`),
     ),
     makeTool(
-      "paperclipGetProject",
+      "get_project",
       "Get a project by id or company-scoped short reference",
       z.object({ projectId: projectIdSchema, companyId: companyIdOptional }),
       async ({ projectId, companyId }) => {
@@ -368,13 +564,13 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipGetIssueWorkspaceRuntime",
+      "get_issue_workspace_runtime",
       "Get the current execution workspace and runtime services for an issue, including service URLs",
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => getIssueWorkspaceRuntime(client, issueId),
     ),
     makeTool(
-      "paperclipControlIssueWorkspaceServices",
+      "control_issue_workspace_services",
       "Start, stop, or restart the current issue execution workspace runtime services",
       issueWorkspaceRuntimeControlSchema,
       async ({ issueId, action, ...target }) => {
@@ -391,7 +587,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipWaitForIssueWorkspaceService",
+      "wait_for_issue_workspace_service",
       "Wait until an issue execution workspace runtime service is running and has a URL when one is exposed",
       waitForIssueWorkspaceServiceSchema,
       async ({ issueId, runtimeServiceId, serviceName, timeoutSeconds }) => {
@@ -417,19 +613,19 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipListGoals",
+      "list_goals",
       "List goals in a company",
       z.object({ companyId: companyIdOptional }),
       async ({ companyId }) => client.requestJson("GET", `/companies/${client.resolveCompanyId(companyId)}/goals`),
     ),
     makeTool(
-      "paperclipGetGoal",
+      "get_goal",
       "Get a goal by id",
       z.object({ goalId: goalIdSchema }),
       async ({ goalId }) => client.requestJson("GET", `/goals/${encodeURIComponent(goalId)}`),
     ),
     makeTool(
-      "paperclipListApprovals",
+      "list_approvals",
       "List approvals in a company",
       z.object({ companyId: companyIdOptional, status: z.string().optional() }),
       async ({ companyId, status }) => {
@@ -438,7 +634,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipCreateApproval",
+      "create_approval",
       "Create a board approval request, optionally linked to one or more issues",
       createApprovalToolSchema,
       async ({ companyId, ...body }) =>
@@ -447,7 +643,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipMandatedAttest",
+      "mandated_attest",
       "Perform a mandated action: verify the agent's mandate (in-scope, under-cap, unexpired), KYA the counterparty (valid-at-T), then attest the action. Returns { authorized, reason?, receipt? }. Denied when out-of-scope/over-cap/expired or the counterparty can't be verified.",
       z.object({
         companyId: companyIdOptional,
@@ -461,39 +657,39 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/mandated-actions`, { body }),
     ),
     makeTool(
-      "paperclipGetApproval",
+      "get_approval",
       "Get an approval by id",
       z.object({ approvalId: approvalIdSchema }),
       async ({ approvalId }) => client.requestJson("GET", `/approvals/${encodeURIComponent(approvalId)}`),
     ),
     makeTool(
-      "paperclipGetApprovalIssues",
+      "get_approval_issues",
       "List issues linked to an approval",
       z.object({ approvalId: approvalIdSchema }),
       async ({ approvalId }) => client.requestJson("GET", `/approvals/${encodeURIComponent(approvalId)}/issues`),
     ),
     makeTool(
-      "paperclipListApprovalComments",
+      "list_approval_comments",
       "List comments for an approval",
       z.object({ approvalId: approvalIdSchema }),
       async ({ approvalId }) => client.requestJson("GET", `/approvals/${encodeURIComponent(approvalId)}/comments`),
     ),
     makeTool(
-      "paperclipCreateIssue",
+      "create_issue",
       "Create a new issue",
       createIssueToolSchema,
       async ({ companyId, ...body }) =>
         client.requestJson("POST", `/companies/${client.resolveCompanyId(companyId)}/issues`, { body }),
     ),
     makeTool(
-      "paperclipUpdateIssue",
+      "update_issue",
       "Patch an issue, optionally including a comment; include resume=true when intentionally requesting follow-up on resumable closed work",
       updateIssueToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("PATCH", `/issues/${encodeURIComponent(issueId)}`, { body }),
     ),
     makeTool(
-      "paperclipCheckoutIssue",
+      "checkout_issue",
       "Checkout an issue for an agent",
       checkoutIssueToolSchema,
       async ({ issueId, agentId, expectedStatuses }) =>
@@ -505,20 +701,20 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipReleaseIssue",
+      "release_issue",
       "Release an issue checkout",
       z.object({ issueId: issueIdSchema }),
       async ({ issueId }) => client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/release`, { body: {} }),
     ),
     makeTool(
-      "paperclipAddComment",
+      "add_comment",
       "Add a comment to an issue; include resume=true when intentionally requesting follow-up on resumable closed work",
       addCommentToolSchema,
       async ({ issueId, ...body }) =>
         client.requestJson("POST", `/issues/${encodeURIComponent(issueId)}/comments`, { body }),
     ),
     makeTool(
-      "paperclipSuggestTasks",
+      "suggest_tasks",
       "Create a suggest_tasks interaction on an issue",
       createSuggestTasksToolSchema,
       async ({ issueId, ...body }) =>
@@ -530,7 +726,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipAskUserQuestions",
+      "ask_user_questions",
       "Create an ask_user_questions interaction on an issue",
       createAskUserQuestionsToolSchema,
       async ({ issueId, ...body }) =>
@@ -542,7 +738,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipRequestConfirmation",
+      "request_confirmation",
       "Create a request_confirmation interaction on an issue",
       createRequestConfirmationToolSchema,
       async ({ issueId, ...body }) =>
@@ -554,7 +750,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipUpsertIssueDocument",
+      "upsert_issue_document",
       "Create or update an issue document",
       upsertDocumentToolSchema,
       async ({ issueId, key, ...body }) =>
@@ -565,7 +761,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         ),
     ),
     makeTool(
-      "paperclipRestoreIssueDocumentRevision",
+      "restore_issue_document_revision",
       "Restore a prior revision of an issue document",
       z.object({
         issueId: issueIdSchema,
@@ -580,7 +776,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         ),
     ),
     makeTool(
-      "paperclipLinkIssueApproval",
+      "link_issue_approval",
       "Link an approval to an issue",
       z.object({ issueId: issueIdSchema }).merge(linkIssueApprovalSchema),
       async ({ issueId, approvalId }) =>
@@ -589,7 +785,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         }),
     ),
     makeTool(
-      "paperclipUnlinkIssueApproval",
+      "unlink_issue_approval",
       "Unlink an approval from an issue",
       z.object({ issueId: issueIdSchema, approvalId: approvalIdSchema }),
       async ({ issueId, approvalId }) =>
@@ -599,7 +795,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
         ),
     ),
     makeTool(
-      "paperclipApprovalDecision",
+      "approval_decision",
       "Approve, reject, request revision, or resubmit an approval",
       approvalDecisionSchema,
       async ({ approvalId, action, decisionNote, payloadJson }) => {
@@ -621,7 +817,7 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
     makeTool(
-      "paperclipAddApprovalComment",
+      "add_approval_comment",
       "Add a comment to an approval",
       z.object({ approvalId: approvalIdSchema, body: z.string().min(1) }),
       async ({ approvalId, body }) =>
@@ -629,9 +825,62 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
           body: { body },
         }),
     ),
+    // Bug filing, as a tool rather than a form.
+    //
+    // The report that actually helps is the one written where the failure
+    // happened, by whoever (or whatever) was holding the context at the time.
+    // Asking a person to stop, open a browser, find the repo and retype what
+    // just went wrong loses most of that — so most of it never gets filed.
+    // "Tell your agent to file a bug" keeps the context, because the agent
+    // still has the command it ran and the error it got back.
+    //
+    // The tool is deliberately thin: no repo, no labels, no owner. Those are
+    // instance configuration, and an agent that had to guess them would file
+    // into the wrong place with confidence.
     makeTool(
-      "paperclipApiRequest",
-      "Make a JSON request to an existing Paperclip /api endpoint for unsupported operations",
+      "report_issue",
+      "File a bug report or feature request as a GitHub issue on the AgentDash team's queue. Use this when the user says something like 'file a bug' or 'report this', or when you hit a defect worth recording. Include what you were doing, what you expected, what happened, and the exact error — you have that context and the user should not have to retype it.",
+      z.object({
+        kind: z
+          .enum(["bug", "feature"])
+          .describe("bug for something broken, feature for something missing"),
+        title: z
+          .string()
+          .trim()
+          .min(3)
+          .max(160)
+          .describe("One line naming the specific failure, not the area it is in"),
+        description: z
+          .string()
+          .trim()
+          .min(10)
+          .max(8000)
+          .describe(
+            "What you were doing, what you expected, what happened instead, and the verbatim error or response. Markdown is fine.",
+          ),
+        companyId: companyIdOptional,
+      }),
+      async ({ kind, title, description, companyId }) =>
+        client.requestJson("POST", "/issue-reports", {
+          body: {
+            kind,
+            title,
+            description,
+            // Server-side actors override this; sending it is only meaningful
+            // for a board credential driving the tool on a person's behalf.
+            ...(companyId ? { companyId } : {}),
+          },
+        }),
+    ),
+    makeTool(
+      "report_issue_status",
+      "Check whether issue reporting is configured on this instance, and which GitHub repo reports land in. Call this before telling a user their bug was filed somewhere.",
+      z.object({}),
+      async () => client.requestJson("GET", "/issue-reports/config"),
+    ),
+    makeTool(
+      "api_request",
+      "Make a JSON request to an existing AgentDash /api endpoint for unsupported operations",
       apiRequestSchema,
       async ({ method, path, jsonBody }) => {
         if (!path.startsWith("/") || path.includes("..")) {

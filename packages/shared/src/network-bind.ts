@@ -1,7 +1,21 @@
 import type { BindMode, DeploymentExposure, DeploymentMode } from "./constants.js";
 
 export const LOOPBACK_BIND_HOST = "127.0.0.1";
-export const ALL_INTERFACES_BIND_HOST = "0.0.0.0";
+/**
+ * Dual-stack, not IPv4-only.
+ *
+ * `0.0.0.0` binds every IPv4 interface and nothing else, so a client that
+ * resolves the host to an IPv6 address hangs until it times out. That is not
+ * hypothetical: macOS resolves a Bonjour `.local` name to IPv6 first, and real
+ * Claude Code failed at 30s against the exact address the instance advertises,
+ * while `curl` hid the problem by falling back to IPv4 on its own.
+ *
+ * Binding `::` without `ipv6Only` accepts both families on one socket, so "lan"
+ * means what it says. Hosts with IPv6 disabled fall back to `0.0.0.0` at listen
+ * time.
+ */
+export const ALL_INTERFACES_BIND_HOST = "::";
+export const ALL_INTERFACES_BIND_HOST_IPV4 = "0.0.0.0";
 
 function normalizeHost(host: string | null | undefined): string | undefined {
   const trimmed = host?.trim();

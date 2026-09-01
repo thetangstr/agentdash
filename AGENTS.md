@@ -5,7 +5,7 @@ Guidance for human and AI contributors working in this repository.
 ## 1. Purpose
 
 Paperclip is a control plane for AI-agent companies.
-The current implementation target is V1 and is defined in `doc/SPEC-implementation.md`.
+The current implementation target is AgentDash v2 (a CoS-led, multi-human AI workspace built on Paperclip); the inherited V1 build contract it draws on is defined in `doc/SPEC-implementation.md`.
 
 ## 2. Read This First
 
@@ -182,47 +182,6 @@ A change is done when all are true:
 4. Docs updated when behavior or commands change
 5. PR description follows the [PR template](.github/PULL_REQUEST_TEMPLATE.md) with all sections filled in (including AgentDash Review and Model Used)
 
-## 11. Fork-Specific: HenkDz/paperclip
-
-This is a fork of `paperclipai/paperclip` with QoL patches and an **external-only** Hermes adapter story on branch `feat/externalize-hermes-adapter` ([tree](https://github.com/HenkDz/paperclip/tree/feat/externalize-hermes-adapter)).
-
-### Branch Strategy
-
-- `feat/externalize-hermes-adapter` → core has **no** `hermes-paperclip-adapter` dependency and **no** built-in `hermes_local` registration. Install Hermes via the Adapter Plugin manager (`@henkey/hermes-paperclip-adapter` or a `file:` path).
-- Older fork branches may still document built-in Hermes; treat this file as authoritative for the externalize branch.
-
-### Hermes (plugin only)
-
-- Register through **Board → Adapter manager** (same as Droid). Type remains `hermes_local` once the package is loaded.
-- UI uses generic **config-schema** + **ui-parser.js** from the package — no Hermes imports in `server/` or `ui/` source.
-- Optional: `file:` entry in `~/.paperclip/adapter-plugins.json` for local dev of the adapter repo.
-
-### Local Dev
-
-- Fork runs on port 3101+ (auto-detects if 3100 is taken by upstream instance)
-- `npx vite build` hangs on NTFS — use `node node_modules/vite/bin/vite.js build` instead
-- Server startup from NTFS takes 30-60s — don't assume failure immediately
-- Kill ALL paperclip processes before starting: `pkill -f "paperclip"; pkill -f "tsx.*index.ts"`
-- Vite cache survives `rm -rf dist` — delete both: `rm -rf ui/dist ui/node_modules/.vite`
-
-### Fork QoL Patches (not in upstream)
-
-These are local modifications in the fork's UI. If re-copying source, these must be re-applied:
-
-1. **stderr_group** — amber accordion for MCP init noise in `RunTranscriptView.tsx`
-2. **tool_group** — accordion for consecutive non-terminal tools (write, read, search, browser)
-3. **Dashboard excerpt** — `LatestRunCard` strips markdown, shows first 3 lines/280 chars
-
-### Plugin System
-
-PR #2218 (`feat/external-adapter-phase1`) adds external adapter support. See root `AGENTS.md` for full details.
-
-- Adapters can be loaded as external plugins via `~/.paperclip/adapter-plugins.json`
-- The plugin-loader should have ZERO hardcoded adapter imports — pure dynamic loading
-- `createServerAdapter()` must include ALL optional fields (especially `detectModel`)
-- Built-in UI adapters can shadow external plugin parsers — remove built-in when fully externalizing
-- Reference external adapters: Hermes (`@henkey/hermes-paperclip-adapter` or `file:`) and Droid (npm)
-
 <!-- AgentDash: agent-facing-feature-convention — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash Fork: Adding Agent-Facing Features
 
@@ -291,6 +250,38 @@ The system enforces per-workspace run quotas before each agent task starts. The 
 
 All four prompt surfaces (`default/AGENTS.md`, `ceo/AGENTS.md`, `chief_of_staff/AGENTS.md`, `agent-creator-from-proposal.ts`) have been updated in the `agent-run-quota` named block to describe the enforcement behavior. Agents should not retry quota-blocked runs and should escalate to the board for an upgrade.
 <!-- /AgentDash: quota-enforcement -->
+
+<!-- AgentDash: harness-directives — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash-MK: Harness→Agent Control Channel (Slice 1)
+
+Every human in an `agentdash_mk` company has two agents: an autonomous one inside AgentDash, and a local harness agent (their own Claude Code) that supervises it. The harness is the authority and pushes the AgentDash agent's operating constraints. This is that push channel.
+
+### The two halves, and why they are separate
+
+- **Ceilings** (structured: `providers`, `dataScopes`, `permissions`, budget, destructive actions, minimum approval) grant and revoke. Enforced at `resolveActingAs`.
+- **Directives** (free text) shape behaviour. They reach the agent's runtime context and prompt, and they **cannot grant capability**. Nothing in the authorization path reads `agent_directives`, and nothing may be added that does.
+
+The separation is structural rather than conventional: capability lives in `agent_governance_policies`, directives live in `agent_directives`, and there is no column in the latter an enforcement point could consult.
+
+### Narrowing only
+
+`PUT /api/companies/:companyId/agents/:agentId/governance/harness-request` writes the **existing steward request** — no third term is added to `effective = owner ceiling ∩ steward request`. A pushed value broader than the owner ceiling is **clamped** to the ceiling and reported in `clamped`, not accepted and not 422'd. Rejecting would leave the previous, broader request in force, so the clamp is the fail-safe direction.
+
+### Key files
+
+- `packages/db/src/schema/agent_directives.ts` — append-only versioned rows, partial unique index on the active version
+- `server/src/services/agent-directives.ts` — storage plus the supersede-and-insert invariant; deliberately holds no policy logic
+- `server/src/routes/agent-directives.ts` — 404 outside the profile, 403 for anyone but the active steward
+- `server/src/services/agent-governance.ts` — `pushHarnessStewardRequest` (the clamp)
+- `server/src/services/heartbeat.ts` — injects `paperclipAgentDirectives` into the run context every tick
+- `packages/adapter-utils/src/server-utils.ts` — `renderAgentDirectivesPrompt`, wired into every adapter's prompt assembly
+- `packages/mcp-server/src/harness.ts` — the local Claude's four tools
+- `server/src/__tests__/agentdash-mk-harness-directives.test.ts` — including the clamp and the "a directive cannot widen `resolveActingAs`" case
+
+### Agent-facing impact
+
+All four prompt surfaces carry the `agentdash-mk-harness-directives` named block. Agents must treat directives as authoritative about HOW they work, must not read them as authorization, and must report rather than retry when a harness push narrows something away.
+<!-- /AgentDash: harness-directives -->
 
 <!-- AgentDash: slack-connector — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## AgentDash: Slack Connector (AGE-108)

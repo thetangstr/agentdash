@@ -6,7 +6,7 @@ import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IssuesList } from "./IssuesList";
+import { IssuesList, isGroupOptionAvailableInView, resolveEffectiveGroupBy } from "./IssuesList";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const companyState = vi.hoisted(() => ({
@@ -946,6 +946,42 @@ describe("IssuesList", () => {
     });
   });
 
+  it("collapses a list-only grouping to status columns on the board but keeps steward columns", async () => {
+    mockIssuesApi.list.mockImplementation(() => Promise.resolve([]));
+
+    for (const [storedGroupBy, expectedBoardGroupBy] of [
+      ["priority", "status"],
+      ["steward", "steward"],
+    ] as const) {
+      localStorage.setItem(
+        "paperclip:test-issues:company-1",
+        JSON.stringify({ viewMode: "board", groupBy: storedGroupBy }),
+      );
+      mockKanbanBoard.mockReset();
+
+      const { root } = renderWithQueryClient(
+        <IssuesList
+          issues={[createIssue({ id: `issue-${storedGroupBy}`, status: "todo" })]}
+          agents={[]}
+          projects={[]}
+          viewStateKey="paperclip:test-issues"
+          onUpdateIssue={() => undefined}
+        />,
+        container,
+      );
+
+      await waitForAssertion(() => {
+        expect(mockKanbanBoard).toHaveBeenLastCalledWith(expect.objectContaining({
+          boardGroupBy: expectedBoardGroupBy,
+        }));
+      });
+
+      act(() => {
+        root.unmount();
+      });
+    }
+  });
+
   it("shows a refinement hint when a board column hits its server cap", async () => {
     localStorage.setItem(
       "paperclip:test-issues:company-1",
@@ -1570,5 +1606,24 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
+  });
+});
+
+describe("issue grouping view rules", () => {
+  it("only lets the board group by status or steward", () => {
+    expect(isGroupOptionAvailableInView("board", "status")).toBe(true);
+    expect(isGroupOptionAvailableInView("board", "steward")).toBe(true);
+    for (const value of ["priority", "assignee", "workspace", "parent", "none"] as const) {
+      expect(isGroupOptionAvailableInView("board", value)).toBe(false);
+      expect(isGroupOptionAvailableInView("list", value)).toBe(true);
+    }
+  });
+
+  it("collapses unsupported board groupings to status without touching list mode", () => {
+    expect(resolveEffectiveGroupBy("board", "priority")).toBe("status");
+    expect(resolveEffectiveGroupBy("board", "none")).toBe("status");
+    expect(resolveEffectiveGroupBy("board", "steward")).toBe("steward");
+    expect(resolveEffectiveGroupBy("list", "priority")).toBe("priority");
+    expect(resolveEffectiveGroupBy("list", "none")).toBe("none");
   });
 });

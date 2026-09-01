@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Expose `mandatedActionService.performMandatedAction` (2b-core) to agents: a REST route `POST /companies/:companyId/mandated-actions` and an AgentDash MCP tool `paperclipMandatedAttest` that wraps it.
+**Goal:** Expose `mandatedActionService.performMandatedAction` (2b-core) to agents: a REST route `POST /companies/:companyId/mandated-actions` and an AgentDash MCP tool `mandated_attest` that wraps it.
 
 **Architecture:** Shared zod schema → Express route (factory `mandatedActionRoutes(db)`, mounted in `app.ts`, gated by `assertCompanyAccess`) → the 2b-core service. Separate stdio MCP server adds a `makeTool` that POSTs to the route via `client.requestJson`.
 
@@ -127,7 +127,7 @@ git commit -m "feat(server): mandated-actions route (POST /companies/:id/mandate
 
 ---
 
-### Task 2: AgentDash MCP tool `paperclipMandatedAttest`
+### Task 2: AgentDash MCP tool `mandated_attest`
 
 **Files:**
 - Modify: `packages/mcp-server/src/tools.ts`
@@ -135,10 +135,10 @@ git commit -m "feat(server): mandated-actions route (POST /companies/:id/mandate
 **Interfaces:**
 - Consumes: the route from Task 1 via `client.requestJson`.
 
-- [ ] **Step 1: Add the tool.** In `packages/mcp-server/src/tools.ts`, add a `makeTool(...)` entry in the tools array (near the approvals tools, e.g. after `paperclipCreateApproval`):
+- [ ] **Step 1: Add the tool.** In `packages/mcp-server/src/tools.ts`, add a `makeTool(...)` entry in the tools array (near the approvals tools, e.g. after `create_approval`):
 ```ts
 makeTool(
-  "paperclipMandatedAttest",
+  "mandated_attest",
   "Perform a mandated action: verify the agent's mandate (in-scope, under-cap, unexpired), KYA the counterparty (valid-at-T), then attest the action. Returns { authorized, reason?, receipt? }. Denied when out-of-scope/over-cap/expired or the counterparty can't be verified.",
   z.object({
     companyId: companyIdOptional,
@@ -159,7 +159,7 @@ makeTool(
 - [ ] **Step 3: Commit.**
 ```bash
 git add packages/mcp-server/src/tools.ts
-git commit -m "feat(mcp): add paperclipMandatedAttest tool wrapping the mandated-actions route"
+git commit -m "feat(mcp): add mandated_attest tool wrapping the mandated-actions route"
 ```
 
 ---

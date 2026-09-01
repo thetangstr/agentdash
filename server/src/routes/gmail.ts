@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { connectorService } from "../services/connectors.js";
 import { gmailConnectorService } from "../services/gmail-connector.js";
 import {
@@ -231,7 +231,7 @@ export function gmailRoutes(db: Db) {
   router.post(
     "/companies/:companyId/connectors/gmail/:connectionId/drafts",
     async (req, res) => {
-      assertCompanyAccess(req, req.params.companyId as string);
+      assertCanSetCompanyDirection(req, req.params.companyId as string);
       const companyId = req.params.companyId as string;
       const connectionId = req.params.connectionId as string;
       const actor = getActorInfo(req);
@@ -273,7 +273,7 @@ export function gmailRoutes(db: Db) {
   router.post(
     "/companies/:companyId/connectors/gmail/:connectionId/send",
     async (req, res) => {
-      assertCompanyAccess(req, req.params.companyId as string);
+      assertCanSetCompanyDirection(req, req.params.companyId as string);
       const companyId = req.params.companyId as string;
       const connectionId = req.params.connectionId as string;
       const actor = getActorInfo(req);

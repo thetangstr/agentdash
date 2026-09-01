@@ -2,8 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -31,6 +31,14 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
+import {
+  CONNECT_CODE_MAX_RETRIES,
+  CONNECT_CODE_TTL_MS,
+  createConnectCode,
+  formatConnectCode,
+  hashConnectCode,
+  isConnectCodeHashCollisionError,
+} from "../lib/connect-codes.js";
 import { buildRequireTierDeps } from "../middleware/build-tier-deps.js";
 import {
   freeTierCapExceededPayload,
@@ -53,9 +61,19 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { actorHumanRole, assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { agentGovernanceService } from "../services/agent-governance.js";
+import { agentStewardshipService } from "../services/agent-stewardships.js";
 import {
-  assertNoAgentHostWorkspaceCommandMutation,
+  accountabilityLabel,
+  type AgentAccountability,
+  agentAccountabilityService,
+  assertAgentMayHoldKey,
+  normalizeAgentAutonomy,
+} from "../services/agent-accountability.js";
+import { logger } from "../middleware/logger.js";
+import {
+  assertHostWorkspaceCommandAuthority,
   collectAgentAdapterWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -95,6 +113,7 @@ import {
   loadDefaultAgentInstructionsBundle,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
+import { LEGACY_PROMPT_TEMPLATE_PATH } from "../services/agent-instructions.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { recoveryService } from "../services/recovery/service.js";
@@ -166,6 +185,11 @@ export function agentRoutes(
   const router = Router();
   const svc = agentService(db);
   const access = accessService(db);
+  // AgentDash-MK: steward authority + owner-ceiling enforcement for agent
+  // configuration. No-ops for `default`-profile companies.
+  const governance = agentGovernanceService(db);
+  const stewardships = agentStewardshipService(db);
+  const accountability = agentAccountabilityService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
   const environmentsSvc = environmentService(db);
@@ -468,18 +492,80 @@ export function agentRoutes(
     };
   }
 
+  /**
+   * Attach the human steward, and the human answerable, to agent rows.
+   *
+   * Stewardship was readable only through the dedicated
+   * `/agents/:id/stewardship` route, which returns the raw row: a durable
+   * principal id and nothing else. An agent reading the agent list or another
+   * agent's record therefore got names, roles and adapters but no way to say
+   * which person stands behind any of them, even though every mandate this
+   * product writes talks about "your steward". Carrying the steward on the
+   * read paths agents actually call is what makes that name available.
+   *
+   * `name` and `email` come from the same auth user row that
+   * `/companies/:companyId/user-directory` already returns to any caller with
+   * company access — including agent keys, which pass `assertCompanyAccess` for
+   * their own company. So this widens no one's view of contact details; it only
+   * puts the person next to the agent they are accountable for.
+   */
+  async function attachHumanContext<T extends { id: string }>(companyId: string, rows: T[]) {
+    const agentIds = rows.map((row) => row.id);
+    const [stewardsByAgentId, accountabilityByAgentId] = await Promise.all([
+      stewardships.activeStewardsByAgentIds(companyId, agentIds),
+      accountability.resolveForAgents(companyId, agentIds),
+    ]);
+    return rows.map((row) => ({
+      ...row,
+      steward: stewardsByAgentId.get(row.id) ?? null,
+      // Who answers for this agent, and why them. Carried next to `steward`
+      // rather than derived by each reader: for an autonomous agent the answer
+      // is somebody who does not steward it, and a board or another agent that
+      // has to infer that from two nullable fields will infer it differently.
+      accountable: toAccountableParty(accountabilityByAgentId.get(row.id) ?? null),
+    }));
+  }
+
+  /**
+   * The wire shape for "who answers for this agent", or null when nobody does.
+   *
+   * Null is a real answer — a stewarded agent whose pairing was never finished —
+   * and it is deliberately distinguishable from an autonomous agent, which
+   * always has somebody. `via` travels with the name so a screen can explain
+   * itself instead of showing a person with no reason attached.
+   */
+  function toAccountableParty(value: AgentAccountability | null) {
+    if (!value?.userId || value.via === "unpaired") return null;
+    return {
+      userId: value.userId,
+      name: value.name,
+      email: value.email,
+      via: value.via,
+    };
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
+      stewardships.activeStewardForAgent(agent.companyId, agent.id),
+      accountability.resolveForAgent(agent.companyId, agent.id),
     ]);
 
     return {
       ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
       chainOfCommand,
+      // Present and null when nobody stewards this agent, never absent: an
+      // agent reading a missing key cannot tell "unstewarded" from "this
+      // build does not report stewards".
+      steward,
+      // Same contract, and the field that makes an autonomous agent legible:
+      // `steward` is null for one of those by definition, so `steward: null`
+      // alone cannot tell a reader whether anybody is answerable.
+      accountable: toAccountableParty(accountableFor),
       access: accessState,
     };
   }
@@ -504,6 +590,14 @@ export function agentRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "board") {
       if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
+      // Every active human member may create agents — decided 2026-08-16
+      // ("they can create their own agents if they want"). Deliberately a
+      // role check and NOT an implicit `agents:create` grant: that permission
+      // key doubles as the agent-ADMINISTRATOR predicate across governance,
+      // connectors and stewardship, and granting it to members was measured
+      // to open all of them. Creation is role-given; administration stays a
+      // grant.
+      if (actorHumanRole(req, companyId) !== null) return null;
       const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
       if (!allowed) {
         throw forbidden(
@@ -535,6 +629,66 @@ export function agentRoutes(
     const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
     if (!allowed) {
       throw forbidden("Missing permission: agents:create");
+    }
+  }
+
+  /**
+   * Fields a steward may change on their own agent. Everything outside this set
+   * requires `agents:create`.
+   *
+   * This allowlist is a security boundary, not ergonomics. `role` is excluded
+   * because promoting an agent to `ceo` grants that agent's key company-wide
+   * authority over every other agent (see the `actorAgent.role === "ceo"`
+   * branches below) — that would turn per-agent stewardship into exactly the
+   * company-wide agent administration the design forbids. `adapterConfig` and
+   * `runtimeConfig` are excluded because they carry host-executed
+   * `workspaceStrategy` commands; `spentMonthlyCents` because resetting
+   * recorded spend defeats the budget hard stop; `status`/`reportsTo`/
+   * `defaultEnvironmentId`/`adapterType` because none are ceiling-bound.
+   */
+  const STEWARD_PATCHABLE_AGENT_FIELDS = new Set([
+    "title",
+    "icon",
+    "capabilities",
+    "budgetMonthlyCents",
+  ]);
+
+  /**
+   * Board authority to configure one agent: an administrator with
+   * `agents:create`, or (in `agentdash_mk` companies) the agent's current
+   * steward. Returns which authority applied so callers can narrow what a
+   * steward is allowed to change.
+   */
+  async function requireAgentConfigurationAuthority(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward"> {
+    assertCompanyAccess(req, targetAgent.companyId);
+    const authority = await governance.resolveConfigurationAuthority(
+      targetAgent.companyId,
+      targetAgent.id,
+      req.actor,
+    );
+    if (authority) return authority;
+    // Preserve the existing error semantics for non-stewards.
+    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    return "admin";
+  }
+
+  /** 403 when a steward-authority caller touches a field only an admin may set. */
+  function assertStewardPatchScope(
+    authority: "admin" | "steward" | "agent",
+    body: Record<string, unknown>,
+  ) {
+    if (authority !== "steward") return;
+    const forbiddenFields = Object.keys(body).filter(
+      (key) => !STEWARD_PATCHABLE_AGENT_FIELDS.has(key),
+    );
+    if (forbiddenFields.length > 0) {
+      throw forbidden(
+        `Stewardship does not permit changing ${forbiddenFields.sort().join(", ")}; ` +
+          "an administrator with agents:create must make this change",
+      );
     }
   }
 
@@ -635,11 +789,13 @@ export function agentRoutes(
     };
   }
 
-  async function assertCanUpdateAgent(req: Request, targetAgent: { id: string; companyId: string }) {
+  async function assertCanUpdateAgent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ): Promise<"admin" | "steward" | "agent"> {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") {
-      await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
-      return;
+      return requireAgentConfigurationAuthority(req, targetAgent);
     }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
@@ -648,15 +804,29 @@ export function agentRoutes(
       throw forbidden("Agent key cannot access another company");
     }
 
-    if (actorAgent.id === targetAgent.id) return;
-    if (actorAgent.role === "ceo") return;
+    if (actorAgent.id === targetAgent.id) {
+      // Self-update is allowed, but not of the things that bound it. Verified
+      // live: an agent PATCHed its own budgetMonthlyCents from 0 to 99,999,999
+      // and got 200. The spend cap is the brake; an agent that can release its
+      // own brake has no cap. `reportsTo` goes with it — rewriting your own
+      // chain of command is the same move.
+      for (const field of ["budgetMonthlyCents", "reportsTo"] as const) {
+        if (req.body && Object.prototype.hasOwnProperty.call(req.body, field)) {
+          throw forbidden(
+            `An agent cannot change its own ${field}. Ask an owner, admin or operator.`,
+          );
+        }
+      }
+      return "agent";
+    }
+    if (actorAgent.role === "ceo") return "agent";
     const allowedByGrant = await access.hasPermission(
       targetAgent.companyId,
       "agent",
       actorAgent.id,
       "agents:create",
     );
-    if (allowedByGrant || canCreateAgents(actorAgent)) return;
+    if (allowedByGrant || canCreateAgents(actorAgent)) return "agent";
     throw forbidden("Only CEO or agent creators can modify other agents");
   }
 
@@ -884,9 +1054,13 @@ export function agentRoutes(
     return entries;
   }
 
-  function assertNoAgentRuntimeConfigAdapterConfigMutation(req: Request, runtimeConfig: unknown) {
+  async function assertNoAgentRuntimeConfigAdapterConfigMutation(
+    req: Request,
+    companyId: string,
+    runtimeConfig: unknown,
+  ) {
     for (const entry of listRuntimeModelProfileAdapterConfigs(runtimeConfig)) {
-      assertNoAgentAdapterConfigMutation(req, entry.adapterConfig, entry.path);
+      await assertNoAgentAdapterConfigMutation(req, companyId, entry.adapterConfig, entry.path);
     }
   }
 
@@ -1078,8 +1252,14 @@ export function agentRoutes(
       return (updated as T | null) ?? { ...agent, adapterConfig: nextAdapterConfig };
     }
 
-    const files = input?.files
-      ?? await loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(agent.role));
+    const defaultFiles = await loadDefaultAgentInstructionsBundle(
+      resolveDefaultAgentInstructionsBundleRole(agent.role),
+    );
+    // A caller-supplied AGENTS.md customizes the mandate; it does not replace
+    // the rest of the managed bundle. The default AGENTS.md references the
+    // heartbeat, soul, and tools files, and onboarding must preserve those
+    // supporting instructions while allowing explicit files to override them.
+    const files = { ...defaultFiles, ...(input?.files ?? {}) };
     const materialized = await instructions.materializeManagedBundle(
       agent,
       files,
@@ -1105,14 +1285,76 @@ export function agentRoutes(
     }
   }
 
-  async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
+  /**
+   * Instructions LOCATION — the adapterConfig path key, the bundle mode, and
+   * the external `rootPath`. Administrator only, even in a profile company.
+   *
+   * A steward must not reach this: `rootPath` is an arbitrary absolute
+   * directory that the server `mkdir -p`s and then writes files into, so
+   * granting it would hand an ordinary operator arbitrary host filesystem
+   * write. Stewards edit instruction CONTENT inside the configured root
+   * instead — see `assertCanEditInstructionsContent`.
+   */
+  async function assertCanManageInstructionsLocation(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+  ) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type !== "board") {
       throw forbidden(
         "Only board-authenticated callers can manage instructions path or bundle configuration",
       );
     }
-    await assertBoardCanManageAgentsForCompany(req, targetAgent.companyId);
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit changing where agent instructions are stored; " +
+          "an administrator with agents:create must make this change",
+      );
+    }
+  }
+
+  /**
+   * Instructions CONTENT — mandate files within the already-configured bundle
+   * root. This is the steward's mandate-editing surface (design §6.3); writes
+   * stay confined to the root an administrator chose.
+   */
+  async function assertCanEditInstructionsContent(
+    req: Request,
+    targetAgent: { id: string; companyId: string },
+    body: { path?: unknown; clearLegacyPromptTemplate?: unknown } = {},
+  ) {
+    assertCompanyAccess(req, targetAgent.companyId);
+    if (req.actor.type !== "board") {
+      throw forbidden(
+        "Only board-authenticated callers can manage instructions path or bundle configuration",
+      );
+    }
+    const authority = await requireAgentConfigurationAuthority(req, targetAgent);
+    if (authority !== "steward") return;
+
+    // A steward may only write inside the SERVER-MANAGED bundle root. An
+    // external or legacy-derived root is an arbitrary host directory (commonly
+    // the adapter's `cwd`, i.e. a real checkout), where writing files like
+    // `.claude/settings.json`, `.mcp.json`, or `Makefile` is host code
+    // execution on the next agent run. There is no filename allowlist here, so
+    // confining the ROOT is the control.
+    const bundle = await instructions.getBundle(targetAgent as never);
+    if (bundle.mode !== "managed" || !bundle.rootPath || bundle.rootPath !== bundle.managedRootPath) {
+      throw forbidden(
+        "Stewardship only permits editing instructions in the managed bundle; " +
+          "this agent uses an external instructions root, so an administrator must edit it",
+      );
+    }
+    // Both are back doors into instructions LOCATION: the legacy path writes
+    // adapterConfig.promptTemplate directly, and the clear flag rewrites the
+    // bundle-mode/root keys that assertCanManageInstructionsLocation reserves.
+    if (body.clearLegacyPromptTemplate === true) {
+      throw forbidden("Stewardship does not permit clearing the legacy prompt template");
+    }
+    if (typeof body.path === "string" && body.path.trim() === LEGACY_PROMPT_TEMPLATE_PATH) {
+      throw forbidden("Stewardship does not permit editing the legacy prompt template");
+    }
   }
 
   function assertNoAgentInstructionsConfigMutation(
@@ -1134,14 +1376,17 @@ export function agentRoutes(
     return KNOWN_INSTRUCTIONS_BUNDLE_KEYS.some((key) => adapterConfig[key] !== undefined);
   }
 
-  function assertNoAgentAdapterConfigMutation(
+  async function assertNoAgentAdapterConfigMutation(
     req: Request,
+    companyId: string,
     adapterConfig: Record<string, unknown>,
     path = "adapterConfig",
   ) {
     assertNoAgentInstructionsConfigMutation(req, adapterConfig, path);
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      companyId,
       collectAgentAdapterWorkspaceCommandPaths(adapterConfig, path),
     );
   }
@@ -1572,10 +1817,20 @@ export function agentRoutes(
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
-      res.json(result);
+      res.json(await attachHumanContext(companyId, result));
       return;
     }
-    res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+    // The restricted view redacts adapter and runtime configuration, which is
+    // where credentials live. Stewardship is not a credential — it is the org
+    // chart — so it survives the redaction rather than being stripped with it.
+    res.json(
+      await attachHumanContext(
+        companyId,
+        // Non-null: every row came from `svc.list`, and the redactor only
+        // returns null for a null input.
+        result.map((agent) => redactForRestrictedAgentView(agent)!),
+      ),
+    );
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {
@@ -1815,7 +2070,15 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const rollbackAuthority = await assertCanUpdateAgent(req, existing);
+    // A rollback restores a whole prior configuration — including fields no
+    // ceiling dimension covers (role, adapterConfig) and values captured before
+    // the current ceiling existed. Stewardship alone is not sufficient.
+    if (rollbackAuthority === "steward") {
+      throw forbidden(
+        "Stewardship does not permit configuration rollback; an administrator with agents:create must perform it",
+      );
+    }
 
     const actor = getActorInfo(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
@@ -1975,6 +2238,9 @@ export function agentRoutes(
       instructionsBundle,
       sourceIssueId: _sourceIssueId,
       sourceIssueIds: _sourceIssueIds,
+      // Defaults FALSE — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why environment preflight
+      // stays opt-in, and why configuration completeness is enforced instead.
       requireHarnessPreflight,
       ...hireInput
     } = req.body;
@@ -1984,8 +2250,8 @@ export function agentRoutes(
       hireInput.adapterType,
       rawHireAdapterConfig,
     );
-    assertNoAgentAdapterConfigMutation(req, rawHireAdapterConfig);
-    assertNoAgentRuntimeConfigAdapterConfigMutation(req, hireInput.runtimeConfig);
+    await assertNoAgentAdapterConfigMutation(req, companyId, rawHireAdapterConfig);
+    await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, hireInput.runtimeConfig);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       rawHireAdapterConfig,
@@ -2011,6 +2277,17 @@ export function agentRoutes(
       ...hireInput,
       adapterConfig: normalizedAdapterConfig,
       runtimeConfig: normalizedRuntimeConfig,
+      // A hire is a proposal for a personal agent: the whole flow exists so a
+      // person ends up with an agent of their own, and the approval payload has
+      // nowhere to carry an accountable human.
+      //
+      // Pinned rather than passed through. `createAgentHireSchema` extends the
+      // same base schema as creation, so a body asking for `autonomy:
+      // "autonomous"` would otherwise reach the insert with no accountable
+      // person resolved and fail on `agents_accountable_ck` as a 500. Creating
+      // autonomous agents goes through POST /companies/:id/agents.
+      autonomy: "stewarded" as const,
+      accountableUserId: null,
     };
 
     const company = await db
@@ -2046,6 +2323,10 @@ export function agentRoutes(
         status,
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;
@@ -2180,6 +2461,9 @@ export function agentRoutes(
     const {
       desiredSkills: requestedDesiredSkills,
       instructionsBundle,
+      // Defaults FALSE — see requireHarnessPreflight in
+      // packages/shared/src/validators/agent.ts for why environment preflight
+      // stays opt-in, and why configuration completeness is enforced instead.
       requireHarnessPreflight,
       ...createInput
     } = req.body;
@@ -2189,8 +2473,8 @@ export function agentRoutes(
       createInput.adapterType,
       rawCreateAdapterConfig,
     );
-    assertNoAgentAdapterConfigMutation(req, rawCreateAdapterConfig);
-    assertNoAgentRuntimeConfigAdapterConfigMutation(req, createInput.runtimeConfig);
+    await assertNoAgentAdapterConfigMutation(req, companyId, rawCreateAdapterConfig);
+    await assertNoAgentRuntimeConfigAdapterConfigMutation(req, companyId, createInput.runtimeConfig);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       rawCreateAdapterConfig,
@@ -2218,6 +2502,43 @@ export function agentRoutes(
       allowedSandboxProviders: allowedSandboxProvidersForAgent(createInput.adapterType),
     });
 
+    // Which kind of agent this is, and who answers for it.
+    //
+    // `stewarded` is the default, so every existing caller keeps creating
+    // personal agents. An autonomous agent has no steward to inherit
+    // accountability from, so it has to be recorded here or it never is: the
+    // person asking, or — when one agent hires another, where there is no human
+    // actor at all — whoever is already accountable for the hiring agent.
+    //
+    // An autonomous agent with nobody behind it is refused rather than created.
+    // That is the same rule `agents_accountable_ck` enforces in the database;
+    // refusing here means the caller gets a sentence they can act on instead of
+    // a constraint violation.
+    const requestedAutonomy = normalizeAgentAutonomy(createInput.autonomy);
+    if (requestedAutonomy === "stewarded" && createInput.accountableUserId) {
+      throw conflict(
+        "A stewarded agent takes its accountable human from its steward, so accountableUserId "
+          + "cannot be set on one. Assign the stewardship instead, or create the agent as autonomous.",
+      );
+    }
+    let resolvedAccountableUserId: string | null = null;
+    if (requestedAutonomy === "autonomous") {
+      const creationActor = getActorInfo(req);
+      resolvedAccountableUserId =
+        (createInput.accountableUserId as string | null | undefined)
+        ?? (req.actor.type === "board" ? req.actor.userId ?? null : null)
+        ?? (creationActor.agentId
+          ? await accountability.escalationUserId(companyId, creationActor.agentId)
+          : null);
+      if (!resolvedAccountableUserId) {
+        throw conflict(
+          "An autonomous agent needs a human who is accountable for it. Pass accountableUserId, "
+            + "or create the agent as stewarded so its steward is the answer.",
+        );
+      }
+      await accountability.assertAccountableMember(companyId, resolvedAccountableUserId);
+    }
+
     const harnessPreflightResult = requireHarnessPreflight
       ? await runRequiredHarnessPreflight({
           companyId,
@@ -2241,6 +2562,14 @@ export function agentRoutes(
         status: "idle",
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
+        // Resolved above, and set after the spread so the resolution wins over
+        // whatever the body asked for.
+        autonomy: requestedAutonomy,
+        accountableUserId: resolvedAccountableUserId,
+        // A3: ownership from the ACTOR, never the body. An agent creating an
+        // agent (chief-of-staff hires) records no human creator; the hire
+        // approval trail is its provenance.
+        createdByUserId: req.actor.type === "board" ? (req.actor.userId ?? null) : null,
       }),
     );
     if (!createdAgent) return;
@@ -2272,6 +2601,46 @@ export function agentRoutes(
       agent.id,
       req.actor.type === "board" ? (req.actor.userId ?? null) : null,
     );
+
+    // Make the creator this agent's steward, if they are not already stewarding
+    // one.
+    //
+    // Creating an agent used to leave you with no way to RUN it. The API key
+    // and the "work with it from your own terminal" prompts live on the My
+    // Agent page, `getMyAgent` returns only the agent you steward, and creation
+    // never wrote a stewardship row -- so a new admin created their first agent
+    // and then found nothing anywhere in the UI that would connect them to it.
+    // Observed on a client's own instance the day they set it up.
+    //
+    // Only when the creator has none. Stewardship is deliberately 1:1 in both
+    // directions (`assign` rejects a second one with a 409), so this cannot
+    // mean "you steward everything you create" -- it means the FIRST agent you
+    // make is yours to run, which is the case where being stranded actually
+    // happens. Later agents are paired deliberately, which is the point of the
+    // model.
+    //
+    // Best-effort: a failure here must not fail the creation. The agent exists
+    // and is valid without a steward; someone can pair it afterwards.
+    //
+    // Skipped entirely for an autonomous agent: it has no steward by
+    // definition, and `assign` now refuses one anyway.
+    if (requestedAutonomy === "stewarded" && req.actor.type === "board" && req.actor.userId) {
+      try {
+        const existing = await stewardships.activeByUser(companyId, req.actor.userId);
+        if (!existing) {
+          await stewardships.assign(companyId, {
+            agentId: agent.id,
+            userId: req.actor.userId,
+            assignedByUserId: req.actor.userId,
+          });
+        }
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id, userId: req.actor.userId },
+          "[agents] could not auto-assign stewardship to the creator",
+        );
+      }
+    }
 
     if (agent.budgetMonthlyCents > 0) {
       await budgets.upsertPolicy(
@@ -2329,8 +2698,40 @@ export function agentRoutes(
         return;
       }
     } else {
-      await assertBoardCanManageAgentsForCompany(req, existing.companyId);
+      const permissionAuthority = await requireAgentConfigurationAuthority(req, existing);
+      // `agents:create` is company-wide agent administration by another name:
+      // an agent holding it can modify every agent in the company via its own
+      // key. A steward must not be able to grant it to their own agent, and the
+      // ceiling cannot be relied on to stop them because the default ceiling is
+      // deliberately unrestricted.
+      if (permissionAuthority === "steward" && req.body.canCreateAgents) {
+        throw forbidden(
+          "Stewardship does not permit granting agent-creation authority; " +
+            "an administrator with agents:create must make this change",
+        );
+      }
     }
+
+    // AgentDash-MK: the owner ceiling binds at the service boundary, so a
+    // steward (or an admin) cannot grant an agent authority the owner withheld.
+    // This must validate the permissions that will ACTUALLY be written, not the
+    // request body: `tasks:assign` is additionally derived below from the CEO
+    // role and from canCreateAgents, so checking the raw body would let
+    // `{canCreateAgents: true, canAssignTasks: false}` slip a withheld
+    // `tasks:assign` grant past a ceiling that forbids it.
+    const willAssignTasks =
+      existing.role === "ceo" || Boolean(req.body.canCreateAgents) || Boolean(req.body.canAssignTasks);
+    await governance.assertAgentMutationWithinCeiling(
+      existing.companyId,
+      existing.id,
+      {
+        permissions: [
+          ...(req.body.canCreateAgents ? ["agents:create"] : []),
+          ...(willAssignTasks ? ["tasks:assign"] : []),
+        ],
+      },
+      { actorUserId: req.actor.userId ?? null },
+    );
 
     const agent = await svc.updatePermissions(id, req.body);
     if (!agent) {
@@ -2381,7 +2782,7 @@ export function agentRoutes(
       return;
     }
 
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
     const explicitKey = asNonEmptyString(req.body.adapterConfigKey);
@@ -2390,6 +2791,21 @@ export function agentRoutes(
     if (!adapterConfigKey) {
       res.status(422).json({
         error: `No default instructions path key for adapter type '${existing.adapterType}'. Provide adapterConfigKey.`,
+      });
+      return;
+    }
+    // `adapterConfigKey` is caller-supplied and this route writes it straight
+    // into adapterConfig, so it must be constrained to actual instructions-path
+    // keys. Unbounded, it is an arbitrary-adapterConfig writer — a caller could
+    // set `command` (the host binary every local adapter spawns) or delete
+    // `workspaceStrategy`. That is now reachable by stewards, not just admins.
+    const allowedInstructionsPathKeys = new Set(KNOWN_INSTRUCTIONS_PATH_KEYS);
+    if (defaultKey) allowedInstructionsPathKeys.add(defaultKey);
+    if (!allowedInstructionsPathKeys.has(adapterConfigKey)) {
+      res.status(422).json({
+        error:
+          `adapterConfigKey '${adapterConfigKey}' is not an instructions path key. ` +
+          `Expected one of: ${[...allowedInstructionsPathKeys].sort().join(", ")}.`,
       });
       return;
     }
@@ -2469,7 +2885,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanManageInstructionsLocation(req, existing);
 
     const actor = getActorInfo(req);
     const { bundle, adapterConfig } = await instructions.updateBundle(existing, req.body);
@@ -2535,7 +2951,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const actor = getActorInfo(req);
     const result = await instructions.writeFile(existing, req.body.path, req.body.content, {
@@ -2584,7 +3000,7 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanManageInstructionsPath(req, existing);
+    await assertCanEditInstructionsContent(req, existing, req.body ?? {});
 
     const relativePath = typeof req.query.path === "string" ? req.query.path : "";
     if (!relativePath.trim()) {
@@ -2647,26 +3063,97 @@ export function agentRoutes(
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    await assertCanUpdateAgent(req, existing);
+    const updateAuthority = await assertCanUpdateAgent(req, existing);
+    assertStewardPatchScope(updateAuthority, req.body as Record<string, unknown>);
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
       return;
     }
 
+    // AgentDash-MK: budget is a ceiling dimension, so it is checked before
+    // persistence rather than trusted from the client.
+    if (hasOwn(req.body as object, "budgetMonthlyCents")) {
+      await governance.assertAgentMutationWithinCeiling(
+        existing.companyId,
+        existing.id,
+        { monthlyBudgetCents: (req.body as { budgetMonthlyCents: number }).budgetMonthlyCents },
+        { actorUserId: req.actor.userId ?? null },
+      );
+    }
+
     const patchData = { ...(req.body as Record<string, unknown>) };
     const replaceAdapterConfig = patchData.replaceAdapterConfig === true;
     delete patchData.replaceAdapterConfig;
+
+    // Changing what kind of agent this is, or who answers for it.
+    //
+    // Reassignment is the whole point of a separate accountable column: the
+    // person who set an autonomous agent running is often not the person who
+    // should be woken by it later, and `created_by_user_id` is provenance that
+    // must not be rewritten to express that.
+    //
+    // Turning a paired agent autonomous is refused while the pairing is live.
+    // Doing it silently would end someone's stewardship as a side effect of a
+    // field edit — taking away their My Agent page, their connect code and their
+    // channel binding — so the steward is named and the pairing has to be ended
+    // deliberately first.
+    //
+    // Only administrators reach this at all: `STEWARD_PATCHABLE_AGENT_FIELDS`
+    // does not list either field, so a steward patching their own agent is
+    // refused by `assertStewardPatchScope` above.
+    if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
+      const currentAutonomy = normalizeAgentAutonomy(existing.autonomy);
+      const nextAutonomy = hasOwn(patchData, "autonomy")
+        ? normalizeAgentAutonomy(patchData.autonomy)
+        : currentAutonomy;
+      const requestedAccountable =
+        typeof patchData.accountableUserId === "string" ? patchData.accountableUserId.trim() : null;
+
+      if (nextAutonomy === "autonomous") {
+        const activeSteward = await stewardships.activeByAgent(existing.companyId, existing.id);
+        if (activeSteward) {
+          const steward = await accountability.resolveForAgent(existing.companyId, existing.id);
+          throw conflict(
+            `${existing.name} is stewarded by ${accountabilityLabel(steward) ?? activeSteward.userId}. `
+              + "End that stewardship first if this agent should run without a person; "
+              + "making it autonomous would revoke their connect code and channel binding.",
+          );
+        }
+        const resolved = requestedAccountable
+          ?? existing.accountableUserId
+          ?? (req.actor.type === "board" ? req.actor.userId ?? null : null);
+        if (!resolved) {
+          throw conflict(
+            "An autonomous agent needs a human who is accountable for it. Pass accountableUserId.",
+          );
+        }
+        await accountability.assertAccountableMember(existing.companyId, resolved);
+        patchData.accountableUserId = resolved;
+      } else {
+        if (requestedAccountable) {
+          throw conflict(
+            "A stewarded agent takes its accountable human from its steward, so accountableUserId "
+              + "cannot be set on one. Assign the stewardship instead, or make the agent autonomous.",
+          );
+        }
+        // Clearing it is deliberate: leaving a stale value behind would give the
+        // agent two answers to "who answers for this?" the moment a steward is
+        // assigned, and the stewardship is the one that means anything.
+        patchData.accountableUserId = null;
+      }
+      patchData.autonomy = nextAutonomy;
+    }
     if (hasOwn(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {
         res.status(422).json({ error: "adapterConfig must be an object" });
         return;
       }
-      assertNoAgentAdapterConfigMutation(req, adapterConfig);
+      await assertNoAgentAdapterConfigMutation(req, existing.companyId, adapterConfig);
       const changingInstructionsConfig = adapterConfigTouchesInstructionsConfig(adapterConfig);
       if (changingInstructionsConfig) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       patchData.adapterConfig = adapterConfig;
     }
@@ -2681,7 +3168,7 @@ export function agentRoutes(
         res.status(422).json({ error: "runtimeConfig must be an object" });
         return;
       }
-      assertNoAgentRuntimeConfigAdapterConfigMutation(req, runtimeConfig);
+      await assertNoAgentRuntimeConfigAdapterConfigMutation(req, existing.companyId, runtimeConfig);
       requestedRuntimeConfig = runtimeConfig;
     }
     const touchesAdapterConfiguration =
@@ -2701,7 +3188,7 @@ export function agentRoutes(
           existingAdapterConfig[key] !== undefined && requestedAdapterConfig[key] === undefined,
         )
       ) {
-        await assertCanManageInstructionsPath(req, existing);
+        await assertCanManageInstructionsLocation(req, existing);
       }
       let rawEffectiveAdapterConfig = requestedAdapterConfig ?? existingAdapterConfig;
       if (requestedAdapterConfig && !changingAdapterType && !replaceAdapterConfig) {
@@ -2782,6 +3269,31 @@ export function agentRoutes(
       entityId: agent.id,
       details: summarizeAgentUpdateDetails(patchData),
     });
+
+    // A second, specific entry when accountability moved.
+    //
+    // `agent.updated` records that a field changed; it does not answer "who was
+    // answerable for this agent in March", which is the question an audit
+    // actually asks. Recorded separately so it can be found without reading
+    // every update to the agent.
+    if (hasOwn(patchData, "autonomy") || hasOwn(patchData, "accountableUserId")) {
+      await logActivity(db, {
+        companyId: agent.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.accountability_changed",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          fromAutonomy: normalizeAgentAutonomy(existing.autonomy),
+          toAutonomy: normalizeAgentAutonomy(agent.autonomy),
+          fromAccountableUserId: existing.accountableUserId ?? null,
+          toAccountableUserId: agent.accountableUserId ?? null,
+        },
+      });
+    }
 
     res.json(agent);
   });
@@ -2939,6 +3451,9 @@ export function agentRoutes(
     if (!agent) {
       return;
     }
+    // A key is for a person to run this agent from their own terminal, which is
+    // exactly what an autonomous agent does not have.
+    assertAgentMayHoldKey(agent);
     const key = await svc.createApiKey(id, req.body.name);
 
     await logActivity(db, {
@@ -2952,6 +3467,89 @@ export function agentRoutes(
     });
 
     res.status(201).json(key);
+  });
+
+  /**
+   * Mint a short, single-use code that pairs one machine with this agent.
+   *
+   * This is the thing a steward hands to a colleague instead of a raw agent
+   * key. Same access check as minting a key, because it *is* minting a key —
+   * just deferred, scoped to one device, and worthless ten minutes from now.
+   *
+   * Any unredeemed codes for this agent are revoked first. Two live codes for
+   * one agent means a screen showing a stale one still works, which is exactly
+   * the confusion this flow exists to remove.
+   */
+  router.post("/agents/:id/connect-codes", async (req, res) => {
+    assertBoard(req);
+    const id = req.params.id as string;
+    const agent = await getAccessibleAgent(req, res, id);
+    if (!agent) return;
+
+    if (agent.status === "terminated" || agent.status === "pending_approval") {
+      res.status(409).json({ error: "This agent cannot be connected to yet." });
+      return;
+    }
+
+    // Same rule as minting a key, because redeeming this code mints one.
+    assertAgentMayHoldKey(agent);
+
+    const now = new Date();
+    await db
+      .update(agentConnectCodes)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(agentConnectCodes.agentId, agent.id),
+          isNull(agentConnectCodes.redeemedAt),
+          isNull(agentConnectCodes.revokedAt),
+        ),
+      );
+
+    // Retry on hash collision the way invite tokens do. It will not happen;
+    // silently handing back a code that belongs to another agent, if it ever
+    // did, would be a cross-tenant credential leak.
+    let code: string | null = null;
+    let expiresAt: Date | null = null;
+    for (let attempt = 0; attempt < CONNECT_CODE_MAX_RETRIES; attempt += 1) {
+      const candidate = createConnectCode();
+      const candidateExpiry = new Date(Date.now() + CONNECT_CODE_TTL_MS);
+      try {
+        await db.insert(agentConnectCodes).values({
+          companyId: agent.companyId,
+          agentId: agent.id,
+          codeHash: hashConnectCode(candidate),
+          expiresAt: candidateExpiry,
+          createdByUserId: req.actor.userId ?? null,
+        });
+        code = candidate;
+        expiresAt = candidateExpiry;
+        break;
+      } catch (err) {
+        if (!isConnectCodeHashCollisionError(err)) throw err;
+      }
+    }
+
+    if (!code || !expiresAt) {
+      res.status(500).json({ error: "Could not create a connect code. Try again." });
+      return;
+    }
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "user",
+      actorId: req.actor.userId ?? "board",
+      action: "agent.connect_code_created",
+      entityType: "agent",
+      entityId: agent.id,
+      details: { expiresAt: expiresAt.toISOString() },
+    });
+
+    res.status(201).json({
+      code: formatConnectCode(code),
+      expiresAt: expiresAt.toISOString(),
+      expiresInSeconds: Math.round(CONNECT_CODE_TTL_MS / 1000),
+    });
   });
 
   router.delete("/agents/:id/keys/:keyId", async (req, res) => {

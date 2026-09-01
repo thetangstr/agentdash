@@ -1,5 +1,6 @@
 import type {
   CostSummary,
+  CostRunActivity,
   CostByAgent,
   CostByProviderModel,
   CostByBiller,
@@ -25,6 +26,8 @@ function dateParams(from?: string, to?: string): string {
 export const costsApi = {
   summary: (companyId: string, from?: string, to?: string) =>
     api.get<CostSummary>(`/companies/${companyId}/costs/summary${dateParams(from, to)}`),
+  runActivity: (companyId: string, from?: string, to?: string) =>
+    api.get<CostRunActivity>(`/companies/${companyId}/costs/run-activity${dateParams(from, to)}`),
   byAgent: (companyId: string, from?: string, to?: string) =>
     api.get<CostByAgent[]>(`/companies/${companyId}/costs/by-agent${dateParams(from, to)}`),
   byAgentModel: (companyId: string, from?: string, to?: string) =>

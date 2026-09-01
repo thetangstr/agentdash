@@ -65,9 +65,10 @@ describe("agentJoinGrantsFromDefaults", () => {
 });
 
 describe("human invite roles", () => {
-  it("maps owner to the full management grant set", () => {
-    expect(grantsForHumanRole("owner")).toEqual([
+  it("maps admin to the full management grant set", () => {
+    expect(grantsForHumanRole("admin")).toEqual([
       { permissionKey: "agents:create", scope: null },
+      { permissionKey: "projects:create", scope: null },
       { permissionKey: "users:invite", scope: null },
       { permissionKey: "users:manage_permissions", scope: null },
       { permissionKey: "tasks:assign", scope: null },
@@ -75,23 +76,36 @@ describe("human invite roles", () => {
     ]);
   });
 
-  it("defaults legacy or missing roles to operator", () => {
-    expect(normalizeHumanRole("member")).toBe("operator");
-    expect(resolveHumanInviteRole(null)).toBe("operator");
+  it("gives member the working grants and none of the management ones", () => {
+    // agents:create is deliberately absent — that key doubles as the
+    // agent-administrator predicate; member agent-creation is role-given at
+    // the creation route instead.
+    expect(grantsForHumanRole("member")).toEqual([
+      { permissionKey: "projects:create", scope: null },
+      { permissionKey: "tasks:assign", scope: null },
+    ]);
   });
 
-  it("reads the configured human invite role from defaults", () => {
-    expect(
-      resolveHumanInviteRole({
-        human: {
-          role: "viewer",
-        },
-      }),
-    ).toBe("viewer");
+  it("normalizes every legacy string to one of the two roles", () => {
+    expect(normalizeHumanRole("owner")).toBe("admin");
+    expect(normalizeHumanRole("operator")).toBe("member");
+    expect(normalizeHumanRole("viewer")).toBe("member");
+    expect(normalizeHumanRole("member")).toBe("member");
+    expect(normalizeHumanRole("no-such-role")).toBe("member");
+    expect(resolveHumanInviteRole(null)).toBe("member");
+  });
+
+  it("reads the configured human invite role from defaults, normalized", () => {
+    // Sam's and Megan's live invites carry role "operator" in
+    // defaults_payload; the payload is not migrated — this normalization is
+    // what maps them at acceptance time.
+    expect(resolveHumanInviteRole({ human: { role: "operator" } })).toBe("member");
+    expect(resolveHumanInviteRole({ human: { role: "admin" } })).toBe("admin");
   });
 
   it("falls back to role grants when human invite defaults omit explicit grants", () => {
-    expect(humanJoinGrantsFromDefaults(null, "operator")).toEqual([
+    expect(humanJoinGrantsFromDefaults(null, "member")).toEqual([
+      { permissionKey: "projects:create", scope: null },
       { permissionKey: "tasks:assign", scope: null },
     ]);
   });
@@ -109,7 +123,7 @@ describe("human invite roles", () => {
             ],
           },
         },
-        "operator",
+        "member",
       ),
     ).toEqual([
       {

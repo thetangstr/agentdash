@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
-import { asString, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { asString, runChildProcess, NEVER_SANDBOX } from "@paperclipai/adapter-utils/server-utils";
 
 const MODELS_CACHE_TTL_MS = 60_000;
 
@@ -120,6 +120,11 @@ export async function discoverPiModels(input: {
       timeoutSec: 20,
       graceSec: 3,
       onLog: async () => {},
+      // Model discovery is not agent execution. It asks the CLI what models it
+      // supports, which legitimately reads the operator's own config in their
+      // home directory — the very thing the agent sandbox denies. Opted out
+      // explicitly so the ambient default cannot break model listing.
+      localSandbox: NEVER_SANDBOX,
     },
   );
 

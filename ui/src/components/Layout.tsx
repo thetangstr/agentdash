@@ -19,6 +19,7 @@ import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { ReportIssueButton } from "./ReportIssueButton";
 import { TrialBanner } from "./TrialBanner";
 import { UpgradePromptModal } from "./UpgradePromptModal";
 import { useDialogActions } from "../context/DialogContext";
@@ -441,9 +442,16 @@ export function Layout() {
       {/* Closes #224: opens automatically on 402 cap-exceeded errors. */}
       <UpgradePromptModal />
       <ToastViewport />
-      {/* Fixed connection status indicator — bottom-right, always visible */}
-      <div className="fixed bottom-4 right-4 z-50">
+      {/* Fixed connection status + issue reporting — bottom-right, always
+          visible. On mobile the bottom nav owns that edge, so sit above it. */}
+      <div
+        className={cn(
+          "fixed right-4 z-50 flex items-center gap-3",
+          isMobile ? "bottom-[calc(5rem+env(safe-area-inset-bottom))]" : "bottom-4",
+        )}
+      >
         <ConnectionStatus />
+        <ReportIssueButton />
       </div>
       </div>
     </GeneralSettingsProvider>

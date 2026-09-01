@@ -1,0 +1,198 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * Which address ends up in someone else's config file.
+ *
+ * The generated Claude and Codex snippets used `window.location.origin`, so the
+ * address baked into `~/.codex/config.toml` was whichever URL happened to be in
+ * the browser when Copy was pressed. Copy from a LAN address and that laptop
+ * works in one office and silently fails in every other network — and the fix
+ * then lives in a file on a colleague's machine.
+ *
+ * So the configured public URL wins when the operator has set one, and the
+ * browser origin is the fallback rather than the source of truth.
+ */
+
+const mockAgentsApi = vi.hoisted(() => ({ createKey: vi.fn(), createConnectCode: vi.fn() }));
+const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
+
+vi.mock("../../api/agents", () => ({ agentsApi: mockAgentsApi }));
+vi.mock("../../api/health", () => ({ healthApi: mockHealthApi }));
+
+const { ConnectYourHarness } = await import("./ConnectYourHarness");
+
+let container: HTMLDivElement;
+let root: ReturnType<typeof createRoot>;
+
+async function render() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <ConnectYourHarness agentId="agent-1" agentName="Chief" companyId="company-1" />
+      </QueryClientProvider>,
+    );
+  });
+  // react-query resolves over several microtask turns, so a single flush reads
+  // the pre-fetch render and reports the fallback no matter what the fix does.
+  // Settle until the component stops changing.
+  let previous = "";
+  for (let i = 0; i < 20; i += 1) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const current = container.textContent ?? "";
+    if (current === previous && i > 1) break;
+    previous = current;
+  }
+  return container.textContent ?? "";
+}
+
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  vi.clearAllMocks();
+});
+
+afterEach(async () => {
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
+describe("ConnectYourHarness", () => {
+  it("uses the configured public URL rather than the browser origin", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      publicBaseUrl: "http://mkmini.example.test:3103",
+    });
+
+    const text = await render();
+
+    expect(text).toContain("http://mkmini.example.test:3103/api/mcp");
+    // jsdom's origin is localhost; it must not reach the generated config.
+    expect(text).not.toContain("http://localhost:3000");
+  });
+
+  it("says so when the config points somewhere other than the current address", async () => {
+    mockHealthApi.get.mockResolvedValue({
+      status: "ok",
+      publicBaseUrl: "http://mkmini.example.test:3103",
+    });
+
+    const text = await render();
+
+    expect(text).toMatch(/not the address you are browsing/i);
+  });
+
+
+  /**
+   * The screen said "Copy the key now — it is shown once and never again" and
+   * then showed no key: the token lived only inside the command blocks. A
+   * person following that instruction had nothing to copy, on the screen that
+   * decides whether they can use their agent at all.
+   */
+  it("shows the key itself once it has been created", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok" });
+    mockAgentsApi.createKey.mockResolvedValue({ token: "pcp_visible_key_for_the_person" });
+
+    await render();
+    // Target the key button by name: the first button on the page is now
+    // "Create a connect code", and clicking blindly tested the wrong flow.
+    const keyButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      /create .*key/i.test(b.textContent ?? ""),
+    ) as HTMLButtonElement;
+    expect(keyButton, "the direct-key fallback must still be reachable").toBeTruthy();
+    await act(async () => keyButton.click());
+    for (let i = 0; i < 20; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      if ((container.textContent ?? "").includes("pcp_visible_key_for_the_person")) break;
+    }
+
+    const text = container.textContent ?? "";
+    expect(text, "the minted key must be on screen, not only inside a command").toContain(
+      "pcp_visible_key_for_the_person",
+    );
+    expect(text).toMatch(/copy key/i);
+  });
+
+  /**
+   * The connect code is now the path people are given, so it gets the same
+   * scrutiny the raw key did: it must be legible on screen, and the command
+   * next to it must carry both the address and the code. A code shown without
+   * a runnable command sends someone to a terminal to improvise.
+   */
+  it("shows the connect code and the exact command to run", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok", publicBaseUrl: "http://mkmini.local:3103" });
+    mockAgentsApi.createConnectCode.mockResolvedValue({
+      code: "KVTX-8F02",
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresInSeconds: 600,
+    });
+
+    await render();
+    const codeButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      /connect code/i.test(b.textContent ?? ""),
+    ) as HTMLButtonElement;
+    expect(codeButton, "creating a connect code must be the offered action").toBeTruthy();
+    await act(async () => codeButton.click());
+    for (let i = 0; i < 20; i += 1) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      if ((container.textContent ?? "").includes("KVTX-8F02")) break;
+    }
+
+    const text = container.textContent ?? "";
+    expect(text, "the code must be readable on screen").toContain("KVTX-8F02");
+    expect(text, "the command must carry the address and the code").toContain(
+      "npx agentdash-connect --url http://mkmini.local:3103 KVTX-8F02",
+    );
+    // Nobody should be told to hurry without being told how long they have.
+    expect(text).toMatch(/expires in/i);
+  });
+
+  /**
+   * One card, one action.
+   *
+   * This page grew four buttons that sounded alike — "Connect a machine",
+   * "Create a connect code", "Create CoS's key", and (on the card below)
+   * "Connect this machine" — for three different things, two of which point in
+   * opposite directions. Someone reading that cannot tell which one pairs their
+   * terminal and which one lets the agent interrupt them.
+   *
+   * So: before a code exists, exactly one action is offered here. The direct-key
+   * path still exists, but inside a disclosure, where it reads as the fallback
+   * it is rather than a peer choice.
+   */
+  it("offers exactly one action until a code exists", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok" });
+    await render();
+
+    const details = container.querySelector("details");
+    expect(details, "the key fallback must be tucked behind a disclosure").toBeTruthy();
+
+    const topLevel = Array.from(container.querySelectorAll("button")).filter(
+      (b) => !details!.contains(b),
+    );
+    expect(
+      topLevel.map((b) => b.textContent?.trim()),
+      "one card, one action",
+    ).toEqual(["Create a connect code"]);
+  });
+
+  /**
+   * A single-network install has no configured URL, and must behave exactly as
+   * it did before — otherwise this fix breaks the common case to serve the rare
+   * one.
+   */
+  it("falls back to the browser origin when no public URL is configured", async () => {
+    mockHealthApi.get.mockResolvedValue({ status: "ok" });
+
+    const text = await render();
+
+    expect(text).toContain(window.location.origin);
+    expect(text).not.toMatch(/not the address you are browsing/i);
+  });
+});

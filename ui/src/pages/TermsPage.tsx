@@ -5,7 +5,7 @@
 //
 // This is TEMPLATE content: a comprehensive, good-faith draft that reflects the
 // AgentDash product and the current plan model (Free / Pro $29 per seat / Team
-// custom, 14-day no-card trial, $0.05 per run overage). It must be reviewed with
+// custom, 14-day no-card trial). It must be reviewed with
 // legal counsel before anyone relies on it, and it carries a clearly-marked
 // placeholder for the governing law / jurisdiction.
 
@@ -86,8 +86,8 @@ export function TermsPage() {
         <P>
           Paid subscriptions renew automatically at the end of each billing period
           unless you cancel before renewal. You may cancel at any time, and your plan
-          remains active through the end of the period you have paid for. Usage beyond
-          your included agent-runs is billed as overage at $0.05 per run. Fees are
+          remains active through the end of the period you have paid for. Agent-run
+          allotments are described on the pricing page. Fees are
           exclusive of taxes, which you are responsible for where applicable. Except
           where required by law, fees are non-refundable, including for partial
           billing periods.

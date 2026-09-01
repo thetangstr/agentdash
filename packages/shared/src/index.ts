@@ -1,6 +1,7 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
 export {
   COMPANY_STATUSES,
+  COMPANY_PRODUCT_PROFILES,
   DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES,
   MAX_COMPANY_ATTACHMENT_MAX_BYTES,
   DEPLOYMENT_MODES,
@@ -8,6 +9,7 @@ export {
   BIND_MODES,
   AUTH_BASE_URL_MODES,
   AGENT_STATUSES,
+  AGENT_AUTONOMY_KINDS,
   AGENT_ADAPTER_TYPES,
   AGENT_ROLES,
   AGENT_ROLE_LABELS,
@@ -57,6 +59,7 @@ export {
   PAUSE_REASONS,
   PROJECT_COLORS,
   APPROVAL_TYPES,
+  CONNECTOR_SEND_OUTCOMES,
   APPROVAL_STATUSES,
   SECRET_PROVIDERS,
   STORAGE_PROVIDERS,
@@ -119,11 +122,13 @@ export {
   FREE_MAIL_DOMAINS,
   deriveCompanyEmailDomain,
   type CompanyStatus,
+  type CompanyProductProfile,
   type DeploymentMode,
   type DeploymentExposure,
   type BindMode,
   type AuthBaseUrlMode,
   type AgentStatus,
+  type AgentAutonomy,
   type AgentAdapterType,
   type AgentRole,
   type ModelProfileKey,
@@ -164,6 +169,7 @@ export {
   type RoutineRunSource,
   type PauseReason,
   type ApprovalType,
+  type ConnectorSendOutcome,
   type ApprovalStatus,
   type SecretProvider,
   type StorageProvider,
@@ -326,6 +332,8 @@ export type {
   AgentAccessState,
   AgentChainOfCommandEntry,
   AgentDetail,
+  AgentSteward,
+  AgentAccountableParty,
   AgentPermissions,
   AgentInstructionsBundleMode,
   AgentInstructionsFileSummary,
@@ -381,6 +389,8 @@ export type {
   IssueWorkProductReviewState,
   Issue,
   IssueAssigneeAdapterOverrides,
+  IssueAssigneeSteward,
+  IssueAwaitingReview,
   IssueBlockerAttention,
   IssueBlockerAttentionReason,
   IssueBlockerAttentionState,
@@ -447,6 +457,7 @@ export type {
   BudgetIncidentResolutionInput,
   CostEvent,
   CostSummary,
+  CostRunActivity,
   IssueCostSummary,
   CostByAgent,
   CostByProviderModel,
@@ -628,6 +639,181 @@ export {
   MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
 } from "./types/instance.js";
 
+export type {
+  AgentStewardship,
+  AgentStewardshipWithAgent,
+} from "./types/agent-stewardship.js";
+
+export {
+  AGENT_DESTRUCTIVE_ACTION_MODES,
+  AGENT_MINIMUM_APPROVAL_MODES,
+  AGENT_GOVERNANCE_CHANNELS,
+  AGENT_GOVERNANCE_TARGETS,
+  AGENT_POLICY_WILDCARD,
+  AGENT_POLICY_UNLIMITED_BUDGET_CENTS,
+  AGENT_POLICY_VIOLATION_CODES,
+  AGENT_POLICY_CEILING_EXCEEDED,
+  AGENT_POLICY_REVISION_CONFLICT,
+  DEFAULT_AGENT_GOVERNANCE_POLICY,
+  AgentPolicyCeilingError,
+  computeEffectiveAgentPolicy,
+  collectCeilingViolations,
+  assertWithinCeiling,
+  normalizeAgentGovernancePolicy,
+  policyListAllows,
+  policyListAllowsAll,
+  type AgentDestructiveActionMode,
+  type AgentMinimumApprovalMode,
+  type AgentGovernanceChannel,
+  type AgentGovernanceTarget,
+  type AgentGovernancePolicy,
+  type AgentGovernancePolicyRecord,
+  type AgentPolicyViolation,
+  type AgentPolicyViolationCode,
+} from "./types/agent-governance.js";
+
+export {
+  agentGovernancePolicySchema,
+  updateAgentGovernancePolicySchema,
+  AGENT_GOVERNANCE_CLIENT_CHANNELS,
+  type AgentGovernancePolicyInput,
+  type UpdateAgentGovernancePolicy,
+} from "./validators/agent-governance.js";
+
+export {
+  AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_DIRECTIVES_MAX_LENGTH,
+  type AgentDirective,
+  type AgentDirectiveHistory,
+  type AgentDirectiveRuntimeContext,
+} from "./types/agent-directives.js";
+
+export {
+  writeAgentMemorySchema,
+  type WriteAgentMemory,
+} from "./validators/agent-memory.js";
+
+export {
+  AGENT_MEMORY_CONTEXT_KEY,
+  AGENT_MEMORY_MAX_LENGTH,
+  type AgentMemory,
+  type AgentMemoryAuthorKind,
+  type AgentMemoryHistory,
+  type AgentMemoryRuntimeContext,
+} from "./types/agent-memory.js";
+
+export {
+  pushAgentDirectivesSchema,
+  pushHarnessAgentPolicySchema,
+  type PushAgentDirectives,
+  type PushHarnessAgentPolicy,
+} from "./validators/agent-directives.js";
+
+export {
+  WORKFLOW_ACTOR_KINDS,
+  WORKFLOW_EVENT_TYPES,
+  WORKFLOW_STEP_CLOSING_EVENT_TYPES,
+  type WorkflowActorKind,
+  type WorkflowEventType,
+  type WorkflowRunMetrics,
+} from "./types/workflow-events.js";
+
+export {
+  emitWorkflowEventSchema,
+  workflowEventPayloadSchema,
+  type EmitWorkflowEvent,
+} from "./validators/workflow-events.js";
+
+// AgentDash-MK: the review agent's recommendation half
+export {
+  WORKFLOW_RECOMMENDATION_KINDS,
+  WORKFLOW_RECOMMENDATION_MIN_CYCLES,
+  WORKFLOW_RECOMMENDATION_STATUSES,
+  WORKFLOW_RECOMMENDATION_WINDOW_CYCLES,
+  isSeatShapedStepKey,
+  type WorkflowRecommendationEvidence,
+  type WorkflowRecommendationKind,
+  type WorkflowRecommendationStatus,
+  type WorkflowRecommendationView,
+} from "./types/workflow-recommendations.js";
+
+export {
+  raiseWorkflowRecommendationSchema,
+  workflowRecommendationEvidenceSchema,
+  workflowRecommendationObservationSchema,
+  type RaiseWorkflowRecommendation,
+} from "./validators/workflow-recommendations.js";
+
+// AgentDash-MK: agent-to-agent fact requests
+export {
+  AGENT_FACT_REQUEST_STATUSES,
+  AGENT_FACT_SOURCE_KINDS,
+  type AgentFactFilterHold,
+  type AgentFactProvenance,
+  type AgentFactRequestStatus,
+  type AgentFactRequestView,
+  type AgentFactSourceKind,
+} from "./types/agent-facts.js";
+
+// AgentDash-MK: the standing filter on the return path
+export {
+  INBOUND_FILTER_CATEGORIES,
+  INBOUND_FILTER_SURFACES,
+  INBOUND_FILTER_VERDICTS,
+  type InboundFilterCategory,
+  type InboundFilterDecision,
+  type InboundFilterSurface,
+  type InboundFilterVerdict,
+} from "./types/inbound-filter.js";
+
+export {
+  answerAgentFactSchema,
+  answerAsStewardSchema,
+  askAgentFactSchema,
+  declineAgentFactSchema,
+  type AnswerAgentFact,
+  type AnswerAsSteward,
+  type AskAgentFact,
+  type DeclineAgentFact,
+} from "./validators/agent-facts.js";
+
+// AgentDash-MK: the weekly deliverable pipeline
+export {
+  AUTHORABLE_DELIVERABLE_CHECK_KINDS,
+  DELIVERABLE_CADENCES,
+  DELIVERABLE_CHECK_KINDS,
+  DELIVERABLE_CHECK_SEVERITIES,
+  DELIVERABLE_FACT_SOURCE_TYPES,
+  DELIVERABLE_RUN_STATUSES,
+  DELIVERABLE_STATUSES,
+  FACT_CORRECTION_KINDS,
+  FACT_VALUE_STATUSES,
+  type AuthorableDeliverableCheckKind,
+  type DeliverableCadence,
+  type DeliverableCheckKind,
+  type DeliverableCheckOutcome,
+  type DeliverableCheckSeverity,
+  type DeliverableFactSourceType,
+  type DeliverableReliabilityScore,
+  type DeliverableReviewSurface,
+  type DeliverableRunStatus,
+  type DeliverableStatus,
+  type FactCorrectionKind,
+  type FactProvenance,
+  type FactValueStatus,
+} from "./types/deliverables.js";
+
+export {
+  createDeliverableCheckSchema,
+  createDeliverableFactSchema,
+  createDeliverableSchema,
+  recordFactCorrectionSchema,
+  type CreateDeliverable,
+  type CreateDeliverableCheck,
+  type CreateDeliverableFact,
+  type RecordFactCorrection,
+} from "./validators/deliverables.js";
+
 export {
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
@@ -647,6 +833,7 @@ export {
 export {
   createCompanySchema,
   updateCompanySchema,
+  agentCompanyBrandingSchema,
   updateCompanyBrandingSchema,
   feedbackTargetTypeSchema,
   feedbackTraceStatusSchema,
@@ -686,6 +873,9 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  assignAgentStewardshipSchema,
+  transferAgentStewardshipSchema,
+  releaseAgentStewardshipSchema,
   type CreateAgent,
   type CreateAgentHire,
   type UpdateAgent,
@@ -698,8 +888,12 @@ export {
   type ResetAgentSession,
   type TestAdapterEnvironment,
   type UpdateAgentPermissions,
+  type AssignAgentStewardship,
+  type TransferAgentStewardship,
+  type ReleaseAgentStewardship,
   createProjectSchema,
   updateProjectSchema,
+  replaceProjectAccessSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   type CreateProject,
@@ -793,6 +987,8 @@ export {
   upsertBudgetPolicySchema,
   resolveBudgetIncidentSchema,
   resolveApprovalSchema,
+  overrideApprovalSchema,
+  APPROVAL_DECISION_CHANNELS,
   requestApprovalRevisionSchema,
   resubmitApprovalSchema,
   addApprovalCommentSchema,
@@ -800,6 +996,8 @@ export {
   type UpsertBudgetPolicy,
   type ResolveBudgetIncident,
   type ResolveApproval,
+  type OverrideApproval,
+  type ApprovalDecisionChannel,
   type RequestApprovalRevision,
   type ResubmitApproval,
   type AddApprovalComment,
@@ -1046,6 +1244,7 @@ export {
   initiateOAuthSchema,
   oauthCallbackSchema,
   connectorApprovalDecisionSchema,
+  reconcileConnectorSendExecutionSchema,
   type ConnectionAutonomyConfigInput,
   type CreateConnection,
   type UpdateConnection,
@@ -1054,6 +1253,7 @@ export {
   type InitiateOAuth,
   type OAuthCallback,
   type ConnectorApprovalDecision,
+  type ReconcileConnectorSendExecution,
 } from "./validators/index.js";
 
 // AgentDash (#234, #231): canonical agent-plan validator. Re-exported
@@ -1095,3 +1295,29 @@ export {
   humanTasteGateCardPayloadSchema,
   type HumanTasteGateCardPayload,
 } from "./validators/goals-eval-hitl.js";
+
+export {
+  HUMAN_CHANNEL_PROVIDERS,
+  EXTERNAL_CHANNEL_EVENT_STATES,
+  type HumanChannelProvider,
+  type ExternalChannelEventState,
+  type HumanChannelBinding,
+} from "./types/human-channel.js";
+
+export {
+  verifyHumanChannelBindingSchema,
+  type VerifyHumanChannelBinding,
+} from "./validators/human-channel.js";
+
+export {
+  DESTRUCTIVE_ACTION_CLASS_KEYS,
+  DEFAULT_DESTRUCTIVE_ACTION_CLASSES,
+  classifyAction,
+  type DestructiveActionClassKey,
+  type ActionClassification,
+  type DestructiveActionClassEntry,
+  type ClassifyConnectorAction,
+  type ClassifyBridgeAction,
+  type ClassifyActionInput,
+  type ClassifyActionResult,
+} from "./agent-destructive-classifier.js";

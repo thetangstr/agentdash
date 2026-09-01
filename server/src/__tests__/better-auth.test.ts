@@ -59,6 +59,41 @@ describe("Better Auth cookie scoping", () => {
     ]));
   });
 
+  it("trusts every allowed hostname on the port browsers arrive on, not only the app's", () => {
+    // Caddy terminates TLS on 3112 for several hostnames and proxies to 3102.
+    // Deriving only the listen port meant `https://mkmini.local:3112` — the
+    // address somebody in the office actually opens — was refused with 403
+    // INVALID_ORIGIN, while the one hostname named in the public base URL
+    // worked. That is how a customer's own admin could not sign in while every
+    // check against the tailnet URL passed.
+    const trustedOrigins = deriveAuthTrustedOrigins({
+      deploymentMode: "authenticated",
+      authBaseUrlMode: "explicit",
+      authPublicBaseUrl: "https://board.example.test:3112",
+      allowedHostnames: ["board.example.test", "lan.example.test"],
+      port: 3102,
+    } as Parameters<typeof deriveAuthTrustedOrigins>[0]);
+
+    expect(trustedOrigins).toEqual(expect.arrayContaining([
+      "https://board.example.test:3112",
+      "https://lan.example.test:3112",
+      "https://lan.example.test:3102",
+    ]));
+  });
+
+  it("does not invent a public port when the base URL has none", () => {
+    const trustedOrigins = deriveAuthTrustedOrigins({
+      deploymentMode: "authenticated",
+      authBaseUrlMode: "explicit",
+      authPublicBaseUrl: "https://board.example.test",
+      allowedHostnames: ["board.example.test"],
+      port: 3102,
+    } as Parameters<typeof deriveAuthTrustedOrigins>[0]);
+
+    expect(trustedOrigins).toEqual(expect.arrayContaining(["https://board.example.test:3102"]));
+    expect(trustedOrigins.filter((o) => /:\d+$/.test(o) && !o.endsWith(":3102"))).toEqual([]);
+  });
+
   it("prefers an explicit resolved listen port over the configured port", () => {
     const trustedOrigins = deriveAuthTrustedOrigins({
       deploymentMode: "authenticated",

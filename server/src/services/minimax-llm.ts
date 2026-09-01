@@ -19,7 +19,17 @@ const DEFAULT_BASE_URL = "https://api.minimaxi.com/anthropic";
 const DEFAULT_MODEL = "MiniMax-M3"; // newest/recommended; MiniMax-M2.x also valid
 const DEFAULT_MAX_TOKENS = 1024;
 
-const STUB_REPLY = "Got it. (stub reply — set MINIMAX_API_KEY to wire MiniMax)";
+/**
+ * There is deliberately no stub reply here.
+ *
+ * This adapter previously returned "Got it. (stub reply — set MINIMAX_API_KEY…)"
+ * when unconfigured. That is a harmless placeholder in a REPL and a serious bug
+ * on this path: the string is non-empty, so `dispatchLLM` cannot tell it from a
+ * real answer and posts it to a colleague's thread as the agent's turn. The same
+ * failure was already found and fixed one layer up — see `fallbackToClaudeApi`
+ * in dispatch-llm.ts, written after an agent replied to a real question with the
+ * Anthropic stub. Missing configuration must fail loudly, not answer politely.
+ */
 
 // Singleton client, re-created if the key or base URL changes (env is read at
 // call time so deployments can configure without a code change).
@@ -42,11 +52,11 @@ function getClient(): Anthropic | null {
 /**
  * CoS chat reply adapter backed by MiniMax via its Anthropic-compatible API.
  *
- * Returns a string for the assistant's next turn. Falls back to a stub when
- * MINIMAX_API_KEY is unset so local dev works without a key.
+ * Returns a string for the assistant's next turn. Throws when MINIMAX_API_KEY is
+ * unset rather than returning placeholder text — see the note above.
  *
  * Configured entirely by env:
- *   - MINIMAX_API_KEY   (required to leave stub mode)
+ *   - MINIMAX_API_KEY   (required; absence is a hard error)
  *   - MINIMAX_BASE_URL  (default https://api.minimaxi.com/anthropic)
  *   - MINIMAX_MODEL     (default MiniMax-M3)
  *   - MINIMAX_MAX_TOKENS (default 1024)
@@ -59,7 +69,11 @@ function getClient(): Anthropic | null {
  */
 export async function minimaxLLM(input: LLMInput): Promise<string> {
   const client = getClient();
-  if (!client) return STUB_REPLY;
+  if (!client) {
+    throw new Error(
+      "MINIMAX_API_KEY is not set. Refusing to answer with placeholder text.",
+    );
+  }
 
   const model = (process.env.MINIMAX_MODEL ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const maxTokens = Number(process.env.MINIMAX_MAX_TOKENS) || DEFAULT_MAX_TOKENS;
@@ -77,5 +91,8 @@ export async function minimaxLLM(input: LLMInput): Promise<string> {
     .join("\n")
     .trim();
 
-  return text || STUB_REPLY;
+  // Empty string rather than a placeholder: `dispatchLLM` already treats a
+  // falsy reply as a failed adapter and routes it to the fallback, so an empty
+  // response stays distinguishable from an answer.
+  return text;
 }

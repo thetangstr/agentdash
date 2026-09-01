@@ -1,5 +1,6 @@
 import { logger } from "../middleware/logger.js";
 import { deriveCompanyEmailDomain } from "@paperclipai/shared";
+import { loadDefaultAgentInstructionsBundle } from "./default-agent-instructions.js";
 import { SingleCompanyInstallationError } from "./companies.js";
 import {
   exceededFreeTierCapacityAction,
@@ -30,11 +31,21 @@ function isSingleCompanyOverrideActive() {
 // Chief of Staff introduces themselves and asks one substantive question.
 // Subsequent turns are LLM-driven (Phase 1+).
 
-function buildPhase0Greeting(userName: string | null | undefined): string {
+export function buildPhase0Greeting(
+  userName: string | null | undefined,
+  companyName: string | null | undefined,
+): string {
   const firstName = (userName ?? "").trim().split(/\s+/)[0] || null;
   const salutation = firstName ? `Hi ${firstName}!` : "Hi there!";
+  // The Chief of Staff belongs to THIS company, not to the product it runs on.
+  // Introducing itself as "your Chief of Staff at AgentDash" told the founder of
+  // MKThink they had hired somebody else's employee — reported as #449, where
+  // the greeting naming the vendor was the part that survived every later
+  // rewrite of this flow. Falls back to the product name only when the company
+  // has none, which is a workspace that has not been named yet.
+  const employer = (companyName ?? "").trim() || "AgentDash";
   return [
-    `${salutation} I'm your Chief of Staff at AgentDash.`,
+    `${salutation} I'm your Chief of Staff at ${employer}.`,
     `You're about to build out an AI workforce — agents that take on roles you'd normally hire employees for. My job is to figure out what kind of team you need and get them set up.`,
     `To start, tell me what you're trying to accomplish. What's your top short-term goal, and where do you want this to be in 6–12 months?`,
   ].join("\n\n");
@@ -45,12 +56,13 @@ async function postWelcomeSequence(
   conversationId: string,
   cosAgentId: string,
   userName: string | null | undefined,
+  companyName: string | null | undefined,
 ): Promise<void> {
   await conversations.postMessage({
     conversationId,
     authorKind: "agent",
     authorId: cosAgentId,
-    body: buildPhase0Greeting(userName),
+    body: buildPhase0Greeting(userName, companyName),
   });
 }
 
@@ -164,8 +176,9 @@ export function onboardingOrchestrator(deps: Deps) {
         spentMonthlyCents: 0,
         lastHeartbeatAt: null,
       });
-      // Materialize the default chief_of_staff bundle.
-      const bundleFiles = await loadCosBundleFiles();
+      // Materialize the standard agent bundle (one archetype for every role —
+      // see default-agent-instructions.ts for why the CEO persona is gone).
+      const bundleFiles = await loadDefaultAgentInstructionsBundle("default");
       const materialized = await services.instructions.materializeManagedBundle(
         created,
         bundleFiles,
@@ -193,7 +206,7 @@ export function onboardingOrchestrator(deps: Deps) {
     }
     await services.conversations.addParticipant(conversation.id, user.id, "owner");
     if (isFreshConversation) {
-      await postWelcomeSequence(services.conversations, conversation.id, cos.id, user.name);
+      await postWelcomeSequence(services.conversations, conversation.id, cos.id, user.name, company.name);
     }
 
     logger.info({ userId: user.id, companyId: company.id, cosAgentId: cos.id, conversationId: conversation.id }, "onboarding bootstrap complete");
@@ -315,21 +328,3 @@ function companyNameFromEmail(email: string | null | undefined): string {
   return root.charAt(0).toUpperCase() + root.slice(1);
 }
 
-async function loadCosBundleFiles(): Promise<Record<string, string>> {
-  // Read the four files from server/src/onboarding-assets/chief_of_staff/.
-  // Use fs.readFile + path resolution relative to the compiled JS location.
-  const { readFile } = await import("node:fs/promises");
-  const { fileURLToPath } = await import("node:url");
-  const path = await import("node:path");
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const dir = path.resolve(here, "../onboarding-assets/chief_of_staff");
-  const files: Record<string, string> = {};
-  for (const name of ["SOUL.md", "AGENTS.md", "HEARTBEAT.md", "TOOLS.md"]) {
-    try {
-      files[name] = await readFile(path.join(dir, name), "utf8");
-    } catch {
-      // missing files are tolerated; default fallback above
-    }
-  }
-  return files;
-}

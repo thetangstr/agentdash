@@ -22,6 +22,13 @@ export const companiesApi = {
       name: string;
       description?: string | null;
       budgetMonthlyCents?: number;
+      /**
+       * Only ever sent together with `inviteCode`: the server refuses a
+       * non-default profile that arrives without a valid code, and treats a
+       * code with no profile as nothing at all.
+       */
+      productProfile?: "default" | "agentdash_mk";
+      inviteCode?: string;
     },
     options?: { fromSignup?: boolean },
   ) =>

@@ -7,7 +7,7 @@
  * Design: docs/superpowers/specs/2026-05-11-self-healing-run-fixer-design.md
  */
 
-import { and, desc, eq, gte, inArray, isNull, isNotNull, lt, sql, count } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, isNotNull, lt, notInArray, sql, count } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -44,6 +44,15 @@ function readEnvConfig(): Required<RunHealerConfig> {
 }
 
 // Runs in these statuses are eligible for healing
+/**
+ * Agent states in which nothing should be healed on their behalf.
+ *
+ * Keyed on the agent, not the run: the run may look perfectly repairable, but
+ * repairing it means spending a model call for an agent whose owner has
+ * deliberately stopped it.
+ */
+const HEAL_INELIGIBLE_AGENT_STATUSES = ["paused", "terminated", "pending_approval"] as const;
+
 const HEAL_ELIGIBLE_STATUSES = ["failed", "running"] as const;
 // Error codes that indicate adapter/auth issues
 const AUTH_ERROR_PATTERNS = [
@@ -180,6 +189,7 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
     // 2. Created before minAge (give runs time to stabilize)
     // 3. Created within lookback window
     // 4. Haven't exceeded max heals per run
+    // 5. Belong to an agent that is actually supposed to be running
     const rows = await db
       .select({
         id: heartbeatRuns.id,
@@ -207,6 +217,20 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
           inArray(heartbeatRuns.status, [...HEAL_ELIGIBLE_STATUSES]),
           gte(heartbeatRuns.createdAt, cutoff),
           lt(heartbeatRuns.createdAt, minAge),
+          // Pausing an agent stops its heartbeat, and it has to stop this too.
+          //
+          // The scan already joins `agents` for the adapter type and name, and
+          // simply never looked at the status — so a paused agent's failed runs
+          // stayed eligible and were re-diagnosed every five minutes, each
+          // diagnosis being a real model call. Measured on a live instance:
+          // three failed runs belonging to paused agents drew 1,848 diagnosis
+          // attempts. Someone who pauses an agent to stop it spending has every
+          // right to expect that to be the end of it.
+          //
+          // `terminated` and `pending_approval` are here for the same reason:
+          // nothing should be repairing a run for an agent that is gone, or one
+          // that has not been approved to run in the first place.
+          notInArray(agents.status, [...HEAL_INELIGIBLE_AGENT_STATUSES]),
         ),
       );
 
@@ -339,6 +363,35 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
   /**
    * Attempt to heal a single run.
    */
+  /**
+   * One row per model call this healer spends on a run, successful or not.
+   *
+   * The count of these rows is what `maxHealsPerRun` enforces, so anything that
+   * costs a call has to be written here — otherwise the cap silently does not
+   * apply to exactly the runs that are burning the most: the ones that keep
+   * failing to diagnose.
+   *
+   * A recording failure is logged rather than thrown: the heal already
+   * happened, and losing the audit row must not turn a completed fix into an
+   * exception.
+   */
+  async function recordHealAttempt(
+    runId: string,
+    values: {
+      diagnosis: unknown;
+      fixType: string;
+      actionTaken: string;
+      succeeded: boolean;
+      costUsd: number;
+    },
+  ) {
+    try {
+      await db.insert(healAttempts).values({ runId, ...values } as typeof healAttempts.$inferInsert);
+    } catch (err) {
+      logger.error({ runId, error: err }, "run_healer: failed to record heal attempt");
+    }
+  }
+
   async function healRun(run: ScannedRun): Promise<{ fixed: boolean; action: string }> {
     // Check daily limits
     const [dailyCount, dailyCost] = await Promise.all([getDailyHealCount(), getDailyHealCost()]);
@@ -354,11 +407,41 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
     // Diagnose
     const diagnosis = await diagnose(run);
     if (!diagnosis) {
+      // Record the attempt even though there is nothing to apply.
+      //
+      // `maxHealsPerRun` is enforced by counting rows in `heal_attempts`, and
+      // this early return used to skip writing one — so a run whose diagnosis
+      // kept failing never accumulated a count and stayed eligible for the
+      // whole lookback window, drawing a fresh model call every scan. The cap
+      // existed and could not fire. On a live instance that produced 1,848
+      // diagnoses of three runs that were never going to be fixable.
+      //
+      // The call has already been paid for by the time we get here, so the
+      // attempt is a fact whether or not it produced an answer.
+      // `diagnosis` is NOT NULL, so record what actually happened rather than
+      // a null — a null insert would throw, and this recorder deliberately
+      // swallows insert errors, which would have made the cap a no-op again.
+      await recordHealAttempt(run.id, {
+        diagnosis: { outcome: "diagnosis_failed", runId: run.id },
+        fixType: "none",
+        actionTaken: "diagnosis_failed",
+        succeeded: false,
+        costUsd: 0,
+      });
       await logEvent("skipped", run.id, { reason: "diagnosis_failed_or_low_confidence" });
       return { fixed: false, action: "skipped_no_diagnosis" };
     }
 
     if (diagnosis.confidence === "low") {
+      // Same as above: the model call happened, so it counts. Otherwise a run
+      // that reliably produces a low-confidence answer is re-diagnosed forever.
+      await recordHealAttempt(run.id, {
+        diagnosis,
+        fixType: diagnosis.fixType,
+        actionTaken: "low_confidence",
+        succeeded: false,
+        costUsd: 0,
+      });
       await logEvent("skipped", run.id, {
         reason: "low_confidence",
         category: diagnosis.category,
@@ -384,19 +467,13 @@ export function runHealerService(db: Db, configOverride: RunHealerConfig = {}) {
       fixResult = { succeeded: false, actionTaken: "exception", costUsd: 0 };
     }
 
-    // Record heal attempt
-    try {
-      await db.insert(healAttempts).values({
-        runId: run.id,
-        diagnosis,
-        fixType: diagnosis.fixType,
-        actionTaken: fixResult.actionTaken,
-        succeeded: fixResult.succeeded,
-        costUsd: fixResult.costUsd,
-      });
-    } catch (err) {
-      logger.error({ runId: run.id, error: err }, "run_healer: failed to record heal attempt");
-    }
+    await recordHealAttempt(run.id, {
+      diagnosis,
+      fixType: diagnosis.fixType,
+      actionTaken: fixResult.actionTaken,
+      succeeded: fixResult.succeeded,
+      costUsd: fixResult.costUsd,
+    });
 
     await logEvent(fixResult.succeeded ? "fix_applied" : "fix_failed", run.id, {
       fixType: diagnosis.fixType,

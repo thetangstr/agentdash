@@ -32,6 +32,7 @@ function makeCompany(id: string): Company {
     name: "Paperclip",
     description: null,
     status: "active",
+    productProfile: "default",
     pauseReason: null,
     pausedAt: null,
     issuePrefix: "PAP",

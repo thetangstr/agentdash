@@ -138,10 +138,11 @@ next_stable_version() {
   local release_date="$1"
   shift
 
-  node - "$release_date" "$@" <<'NODE'
+  node - "$release_date" "$REPO_ROOT" "$@" <<'NODE'
 const input = process.argv[2];
-const packageNames = process.argv.slice(3);
-const { execSync } = require("node:child_process");
+const repoRoot = process.argv[3];
+const packageNames = process.argv.slice(4);
+const { execFileSync, execSync } = require("node:child_process");
 
 const date = input ? new Date(`${input}T00:00:00Z`) : new Date();
 if (Number.isNaN(date.getTime())) {
@@ -152,6 +153,21 @@ if (Number.isNaN(date.getTime())) {
 const stableSlot = `${date.getUTCFullYear()}.${date.getUTCMonth() + 1}${String(date.getUTCDate()).padStart(2, "0")}`;
 const pattern = new RegExp(`^${stableSlot.replace(/\./g, '\\.')}\.(\\d+)$`);
 let max = -1;
+
+try {
+  const tags = execFileSync("git", ["-C", repoRoot, "tag", "--list", `v${stableSlot}.*`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+
+  for (const tag of tags ? tags.split(/\r?\n/) : []) {
+    const match = tag.slice(1).match(pattern);
+    if (!match) continue;
+    max = Math.max(max, Number(match[1]));
+  }
+} catch {
+  // A missing tag history behaves like an empty release lineage.
+}
 
 for (const packageName of packageNames) {
   let versions = [];
@@ -185,13 +201,31 @@ next_canary_version() {
   local stable_version="$1"
   shift
 
-  node - "$stable_version" "$@" <<'NODE'
+  node - "$stable_version" "$REPO_ROOT" "$@" <<'NODE'
 const stable = process.argv[2];
-const packageNames = process.argv.slice(3);
-const { execSync } = require("node:child_process");
+const repoRoot = process.argv[3];
+const packageNames = process.argv.slice(4);
+const { execFileSync, execSync } = require("node:child_process");
 
 const pattern = new RegExp(`^${stable.replace(/\./g, '\\.')}-canary\\.(\\d+)$`);
 let max = -1;
+
+try {
+  const tags = execFileSync(
+    "git",
+    ["-C", repoRoot, "tag", "--list", `canary/v${stable}-canary.*`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  ).trim();
+
+  for (const tag of tags ? tags.split(/\r?\n/) : []) {
+    const version = tag.replace(/^canary\/v/, "");
+    const match = version.match(pattern);
+    if (!match) continue;
+    max = Math.max(max, Number(match[1]));
+  }
+} catch {
+  // A missing tag history behaves like an empty release lineage.
+}
 
 for (const packageName of packageNames) {
   let versions = [];
@@ -222,6 +256,11 @@ NODE
 }
 
 release_notes_file() {
+  if [ -n "${RELEASE_NOTES_FILE:-}" ]; then
+    printf '%s\n' "$RELEASE_NOTES_FILE"
+    return
+  fi
+
   printf '%s/releases/v%s.md\n' "$REPO_ROOT" "$1"
 }
 
@@ -270,10 +309,16 @@ require_clean_worktree() {
 }
 
 require_on_master_branch() {
+  local dry_run="${1:-false}"
+  if [ "$dry_run" = "true" ]; then
+    return
+  fi
+
   local current_branch
   current_branch="$(git_current_branch)"
-  if [ "$current_branch" != "master" ]; then
-    release_fail "this release step must run from branch master, but current branch is ${current_branch:-<detached>}."
+  # AgentDash: the canonical release workflow is pinned to the repository's main branch.
+  if [ "$current_branch" != "main" ]; then
+    release_fail "this release step must run from branch main, but current branch is ${current_branch:-<detached>}."
   fi
 }
 

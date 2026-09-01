@@ -20,6 +20,8 @@ import path from "node:path";
 import { parseCodexJsonl } from "./parse.js";
 import { codexHomeDir, readCodexAuthInfo } from "./quota.js";
 import { buildCodexExecArgs } from "./codex-args.js";
+import { resolveCodexCommand } from "./command.js";
+import { resolveSharedCodexHomeDir } from "./codex-home.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -77,7 +79,7 @@ export async function testEnvironment(
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
-  const command = asString(config.command, "codex");
+  const command = resolveCodexCommand(config, process.env);
   const target = ctx.executionTarget ?? null;
   const targetIsRemote = target?.kind === "remote";
   const cwd = resolveAdapterExecutionTargetCwd(target, asString(config.cwd, ""), process.cwd());
@@ -120,6 +122,21 @@ export async function testEnvironment(
   };
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
+  }
+  /**
+   * Probe with the credentials a run would actually use.
+   *
+   * The sandbox hands agent subprocesses a synthetic HOME, so a codex child
+   * with no CODEX_HOME looks for `auth.json` under a directory that has none
+   * and sends no bearer at all — `401 Missing bearer or basic authentication`.
+   * Meanwhile the auth CHECK below reads the server's own home and reports
+   * "authenticated", so the probe cheerfully contradicted every run.
+   *
+   * Only when the caller has not pinned one, and only for local targets: a
+   * remote target has its own home and its own credentials.
+   */
+  if (!isNonEmpty(env.CODEX_HOME) && !targetIsRemote) {
+    env.CODEX_HOME = resolveSharedCodexHomeDir(process.env);
   }
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
   try {
@@ -201,7 +218,12 @@ export async function testEnvironment(
         {
           cwd,
           env,
-          timeoutSec: 45,
+          // 150s, not 45s: first-token latency on a ChatGPT-account login is
+          // routinely over a minute — gpt-5.6-terra measured 107s answering
+          // exactly this prompt on a healthy machine whose real agent runs all
+          // succeeded. A 45s probe turned that into a permanent preflight
+          // "warn" that blocked every wake-up of a perfectly working agent.
+          timeoutSec: 150,
           graceSec: 5,
           stdin: "Respond with hello.",
           onLog: async () => {},
@@ -244,7 +266,13 @@ export async function testEnvironment(
             {
               cwd,
               env,
-              timeoutSec: 45,
+              // Same budget as the hello probe above, for the same reason:
+              // this is a full model round-trip (the model runs the curl and
+              // answers with a token), so first-token latency on a
+              // ChatGPT-account login routinely exceeds 45s. Proven in the
+              // field: the hello probe passed at 150s and this one then
+              // timed out at 45s on the same healthy machine.
+              timeoutSec: 150,
               graceSec: 5,
               stdin: buildControlPlaneApiProbePrompt(paperclipApiUrl),
               onLog: async () => {},

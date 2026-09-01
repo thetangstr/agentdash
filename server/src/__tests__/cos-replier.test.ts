@@ -1,5 +1,43 @@
-import { describe, it, expect, vi } from "vitest";
-import { cosReplier, parseTrailer } from "../services/cos-replier.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  cosReplier,
+  parseTrailer,
+  defaultAgentPlanAdapterType,
+} from "../services/cos-replier.js";
+
+describe("cosReplier.defaultAgentPlanAdapterType", () => {
+  const originalValue = process.env.AGENTDASH_DEFAULT_ADAPTER;
+
+  afterEach(() => {
+    if (originalValue === undefined) {
+      delete process.env.AGENTDASH_DEFAULT_ADAPTER;
+    } else {
+      process.env.AGENTDASH_DEFAULT_ADAPTER = originalValue;
+    }
+  });
+
+  it("honors AGENTDASH_DEFAULT_ADAPTER when it names a known adapter", () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "claude_local";
+    expect(defaultAgentPlanAdapterType()).toBe("claude_local");
+  });
+
+  it("falls back to hermes_local for an unknown adapter value", () => {
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "garbage";
+    expect(defaultAgentPlanAdapterType()).toBe("hermes_local");
+  });
+
+  it("rejects partial adapter names that only appear inside the prompt string", () => {
+    // The old string-based check matched any substring of the rendered list;
+    // "local" must NOT validate against the array-based check.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "local";
+    expect(defaultAgentPlanAdapterType()).toBe("hermes_local");
+  });
+
+  it("falls back to hermes_local when unset", () => {
+    delete process.env.AGENTDASH_DEFAULT_ADAPTER;
+    expect(defaultAgentPlanAdapterType()).toBe("hermes_local");
+  });
+});
 
 describe("cosReplier.parseTrailer", () => {
   it("extracts a fenced ```json trailer and strips it from the body", () => {

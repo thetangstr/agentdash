@@ -15,6 +15,7 @@ data/
 .pnpm-store/
 tmp-*
 cli/tmp/
+.vercel/
 
 # Scratch/seed scripts (but not scripts/ dir)
 check-*.mjs
@@ -63,6 +64,13 @@ tests/release-smoke/playwright-report/
 .omc/
 **/.omc/
 
+# OMX runtime state — interview/skill state machines and the tmux hook config.
+# The durable design docs OMX produces are carried into docs/superpowers/specs/
+# instead (see 2026-07-28-human-agent-workforce-p0-spec.md); only the scratch
+# state is ignored here.
+.omx/
+**/.omx/
+
 # Stale Next.js marketing tree from v1 — only the repo-root /marketing dir is dead.
 # (ui/src/marketing/ IS our active React marketing surface; keep tracking it.)
 /marketing/
@@ -78,3 +86,17 @@ scratch.md
 .draft.*
 tmp/
 worktrees/
+
+# Playwright run artifacts
+test-results/
+tests/e2e/test-results/
+
+# Packed MCP client, produced by `pnpm mcp:pack` and served at
+# /downloads/agentdash-mcp-server.tgz. A build artifact, not a source file.
+packages/mcp-server/*.tgz
+server/mcp-dist/
+
+# Next.js build output for the standalone docs site. `sites/` is deliberately
+# outside the pnpm workspace, so nothing else ignores these for us.
+sites/*/.next/
+sites/*/out/

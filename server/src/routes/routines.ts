@@ -11,7 +11,7 @@ import {
 import { trackRoutineCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { accessService, logActivity, routineService } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden, unauthorized } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -26,8 +26,30 @@ export function routineRoutes(
   });
   const access = accessService(db);
 
+  /**
+   * A routine is a standing, scheduled instruction — direction, not work.
+   *
+   * This returned early for agent actors, and `assertCanManageCompanyRoutine`
+   * separately allowed an agent whose own id was the assignee. Verified on the
+   * live instance: an agent POSTed an ACTIVE routine assigned to itself and got
+   * 201. That is self-direction which survives every session reset, and it is
+   * exactly what the direction guard exists to prevent.
+   */
   async function assertBoardCanAssignTasks(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
+    // Agents may not write standing instructions. This returned early for any
+    // non-board actor, and `assertCanManageCompanyRoutine` separately allowed an
+    // agent that named itself as assignee — verified live, an agent POSTed an
+    // ACTIVE routine assigned to itself and got 201. A routine survives every
+    // session reset, so that is durable self-direction.
+    //
+    // Humans keep the existing model deliberately. `tasks:assign` is a
+    // delegated permission an owner grants; requiring owner/admin/operator here
+    // instead broke ten tests that encode that delegation, which is the design
+    // saying so. The hole was agents, so agents are what this closes.
+    if (req.actor.type === "agent") {
+      throw forbidden("Agents cannot create or change routines. Ask an owner, admin or operator.");
+    }
     if (req.actor.type !== "board") return;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     const allowed = await access.canUser(companyId, req.actor.userId, "tasks:assign");

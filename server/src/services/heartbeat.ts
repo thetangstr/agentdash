@@ -3,10 +3,14 @@ import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { emitSignal } from "../observability/signals.js";
+import { preRunChecks } from "../observability/pre-run-checks.js";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
+  AGENT_DIRECTIVES_CONTEXT_KEY,
+  AGENT_MEMORY_CONTEXT_KEY,
   ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   MODEL_PROFILE_KEYS,
   isEnvironmentDriverSupportedForAdapter,
@@ -31,6 +35,7 @@ import {
   issueComments,
   issueRelations,
   issues,
+  agentFactRequests,
   issueWorkProducts,
   projects,
   projectWorkspaces,
@@ -51,11 +56,14 @@ import type {
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { costService } from "./costs.js";
+import { computeVisibleUsageCost } from "./usage-billing.js";
 import { agentRunService } from "./agent-runs.js";
 import { quotaEnforcementService, quotaExceededPayload } from "./quota-enforcement.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
+import { agentDirectivesService } from "./agent-directives.js";
+import { agentMemoryService } from "./agent-memory.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -123,6 +131,11 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-
 import { recoveryService } from "./recovery/service.js";
 import { productivityReviewService } from "./productivity-review.js";
 import { withAgentStartLock } from "./agent-start-lock.js";
+import {
+  evaluateTaskRecoveryBudget,
+  formatTaskRecoveryBudgetUsage,
+  TASK_RECOVERY_BUDGET_LIMITS,
+} from "./task-recovery-budget.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { redactEventPayload } from "../redaction.js";
 import {
@@ -158,6 +171,9 @@ const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
 const PAPERCLIP_WAKE_PAYLOAD_KEY = "paperclipWake";
 const PAPERCLIP_HARNESS_CHECKOUT_KEY = "paperclipHarnessCheckedOut";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
+/** The liveness reaper's verdict when it can no longer see a run's child process. */
+const PROCESS_LOST_ERROR_CODE = "process_lost";
+const TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE = "task_recovery_budget_exhausted";
 const REPO_ONLY_CWD_SENTINEL = "/__paperclip_repo_only__";
 const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
@@ -1208,12 +1224,6 @@ function resolveLedgerBiller(result: AdapterExecutionResult): string {
   return readNonEmptyString(result.biller) ?? readNonEmptyString(result.provider) ?? "unknown";
 }
 
-function normalizeBilledCostCents(costUsd: number | null | undefined, billingType: BillingType): number {
-  if (billingType === "subscription_included") return 0;
-  if (typeof costUsd !== "number" || !Number.isFinite(costUsd)) return 0;
-  return Math.max(0, Math.round(costUsd * 100));
-}
-
 async function resolveLedgerScopeForRun(
   db: Db,
   companyId: string,
@@ -1327,7 +1337,35 @@ function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
   };
 }
 
-function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: UsageTotals | null): UsageTotals | null {
+/**
+ * How far back to look for a usable baseline within one session.
+ *
+ * Sized for the failure runs this exists to survive: an agent on a 30-minute
+ * heartbeat that fails for three days produces ~144 rows, and the observed
+ * incident was exactly that. Bounded rather than unbounded because this runs on
+ * every completed run.
+ */
+const USAGE_BASELINE_SCAN_LIMIT = 500;
+
+/**
+ * The newest row that reported usage, from rows ordered newest first.
+ *
+ * Split out from the query so the rule can be tested without a database: rows
+ * whose `usage_json` exists but holds nothing countable — a run that recorded
+ * a shape but no totals — are as useless as a baseline as a failed run is, and
+ * both have to be skipped rather than treated as zero.
+ */
+export function pickUsageBaseline(
+  rows: Array<{ id?: string; usageJson: unknown }>,
+): { id: string | null; totals: UsageTotals } | null {
+  for (const row of rows) {
+    const totals = readRawUsageTotals(row.usageJson);
+    if (totals) return { id: row.id ?? null, totals };
+  }
+  return null;
+}
+
+export function deriveNormalizedUsageDelta(current: UsageTotals | null, previous: UsageTotals | null): UsageTotals | null {
   if (!current) return null;
   if (!previous) return { ...current };
 
@@ -2188,6 +2226,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const runLogStore = getRunLogStore();
   const secretsSvc = secretService(db);
   const companySkills = companySkillService(db);
+  const agentDirectivesSvc = agentDirectivesService(db);
+  const agentMemorySvc = agentMemoryService(db);
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
@@ -2202,6 +2242,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const workspaceOperationsSvc = workspaceOperationService(db);
   const instructionRefreshSvc = agentInstructionRefreshService({ db });
   const activeRunExecutions = new Set<string>();
+  const lastTimerCheckAtByAgent = new Map<string, number>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
@@ -2339,7 +2380,30 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .then((rows) => rows[0] ?? null);
   }
 
-  async function getLatestRunForSession(
+  /**
+   * The last run of this session that actually recorded usage.
+   *
+   * Adapters that resume a session report the session's RUNNING TOTAL, so a
+   * run's own consumption is that total minus the previous run's. The previous
+   * run therefore has to be one that reported a total — and this used to take
+   * whichever run was simply most recent, with no regard for whether it had
+   * recorded anything.
+   *
+   * A failed run records no usage. So after any run of failures — a revoked
+   * credential, an exhausted plan, a provider outage — the next success found a
+   * baseline of null, and `deriveNormalizedUsageDelta` charged the entire
+   * session history as if that one run had consumed it. Measured on a live
+   * instance: 144 consecutive failures over three days, then a six-second run
+   * booked at 11,622,466 input tokens, roughly doubling the reported spend for
+   * that agent. The tokens were real once; they were counted twice.
+   *
+   * `isNotNull` drops the failures in SQL, and `pickUsageBaseline` then skips
+   * any row whose totals are present but empty. The scan is bounded because an
+   * unbounded one on a busy session is a table scan on a hot write path;
+   * `USAGE_BASELINE_SCAN_LIMIT` is far above any real run of failures, and
+   * exhausting it leaves the previous behaviour rather than a wrong number.
+   */
+  async function getLatestUsageBaselineForSession(
     agentId: string,
     sessionId: string,
     opts?: { excludeRunId?: string | null },
@@ -2347,11 +2411,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const conditions = [
       eq(heartbeatRuns.agentId, agentId),
       eq(heartbeatRuns.sessionIdAfter, sessionId),
+      isNotNull(heartbeatRuns.usageJson),
     ];
     if (opts?.excludeRunId) {
       conditions.push(sql`${heartbeatRuns.id} <> ${opts.excludeRunId}`);
     }
-    return db
+    const rows = await db
       .select({
         id: heartbeatRuns.id,
         usageJson: heartbeatRuns.usageJson,
@@ -2359,8 +2424,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .from(heartbeatRuns)
       .where(and(...conditions))
       .orderBy(desc(heartbeatRuns.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
+      .limit(USAGE_BASELINE_SCAN_LIMIT);
+    return pickUsageBaseline(rows);
   }
 
   async function getOldestRunForSession(agentId: string, sessionId: string) {
@@ -2391,8 +2456,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
     }
 
-    const previousRun = await getLatestRunForSession(agentId, sessionId, { excludeRunId: runId });
-    const previousRawUsage = readRawUsageTotals(previousRun?.usageJson);
+    const baseline = await getLatestUsageBaselineForSession(agentId, sessionId, {
+      excludeRunId: runId,
+    });
+    const previousRawUsage = baseline?.totals ?? null;
     return {
       normalizedUsage: deriveNormalizedUsageDelta(rawUsage, previousRawUsage),
       previousRawUsage,
@@ -2929,6 +2996,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         },
       });
       publishRunLifecyclePluginEvent(updated);
+      // O6 (2026-08-16): the run healer and recovery service already NOTICE
+      // bad endings; this is where anyone gets TOLD. One emission site,
+      // because this is the one place statuses change.
+      if (updated.status === "failed" || updated.status === "timed_out") {
+        emitSignal({
+          kind: updated.status === "failed" ? "run_failed" : "run_timed_out",
+          companyId: updated.companyId,
+          summary: `run ${updated.status}${updated.errorCode ? ` (${updated.errorCode})` : ""}`,
+          detail: {
+            runId: updated.id,
+            agentId: updated.agentId ?? undefined,
+            errorCode: updated.errorCode ?? undefined,
+          },
+        });
+      }
     }
 
     return updated;
@@ -2982,6 +3064,233 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       .update(agentWakeupRequests)
       .set({ status, ...patch, updatedAt: new Date() })
       .where(eq(agentWakeupRequests.id, wakeupRequestId));
+  }
+
+  function taskRecoveryParentRunId(run: typeof heartbeatRuns.$inferSelect) {
+    const context = parseObject(run.contextSnapshot);
+    return run.retryOfRunId ??
+      readNonEmptyString(context.retryOfRunId) ??
+      readNonEmptyString(context.livenessContinuationSourceRunId) ??
+      readNonEmptyString(context.missingIssueCommentForRunId);
+  }
+
+  function taskRecoveryRunIssueId(run: typeof heartbeatRuns.$inferSelect) {
+    const context = parseObject(run.contextSnapshot);
+    return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
+  }
+
+  async function taskRecoveryAncestors(
+    run: typeof heartbeatRuns.$inferSelect,
+    issueId: string,
+  ) {
+    const ancestors: Array<typeof heartbeatRuns.$inferSelect> = [];
+    const seen = new Set<string>([run.id]);
+    let parentId = taskRecoveryParentRunId(run);
+
+    while (parentId && ancestors.length < 50 && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.id, parentId),
+            eq(heartbeatRuns.companyId, run.companyId),
+            eq(heartbeatRuns.agentId, run.agentId),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (!parent) break;
+      if (taskRecoveryRunIssueId(parent) !== issueId) break;
+      ancestors.push(parent);
+      parentId = taskRecoveryParentRunId(parent);
+    }
+
+    return ancestors;
+  }
+
+  async function cancelQueuedRunForRecoveryBudget(
+    run: typeof heartbeatRuns.$inferSelect,
+    reason: string,
+  ) {
+    const now = new Date();
+    const cancelled = await setRunStatus(run.id, "cancelled", {
+      finishedAt: now,
+      error: reason,
+      errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE,
+    });
+    await setWakeupStatus(run.wakeupRequestId, "skipped", {
+      finishedAt: now,
+      error: reason,
+    });
+    return cancelled;
+  }
+
+  async function ensureTaskRecoveryBudgetCommentOnce(input: {
+    run: typeof heartbeatRuns.$inferSelect;
+    issueId: string;
+    usageSummary: string;
+    exhaustedBy: string[];
+  }) {
+    const dimensions = input.exhaustedBy.length > 0
+      ? input.exhaustedBy.join(", ")
+      : "persisted aggregate limit";
+    const body = `Automatic recovery budget exhausted. ${input.usageSummary}. Exhausted dimensions: ${dimensions}. Further automatic wakeups and provider calls are suppressed until human remediation.`;
+
+    await db.transaction(async (tx) => {
+      const issue = await tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.id, input.issueId), eq(issues.companyId, input.run.companyId)))
+        .for("update")
+        .then((rows) => rows[0] ?? null);
+      if (!issue) return;
+
+      const existing = await tx
+        .select({ id: issueComments.id })
+        .from(issueComments)
+        .where(
+          and(
+            eq(issueComments.companyId, input.run.companyId),
+            eq(issueComments.issueId, input.issueId),
+            sql`${issueComments.body} like 'Automatic recovery budget exhausted%'`,
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (existing) return;
+
+      await tx.insert(issueComments).values({
+        companyId: input.run.companyId,
+        issueId: input.issueId,
+        authorAgentId: input.run.agentId,
+        createdByRunId: input.run.id,
+        body,
+      });
+      await tx
+        .update(issues)
+        .set({ updatedAt: new Date() })
+        .where(eq(issues.id, input.issueId));
+    });
+  }
+
+  async function enforceTaskRecoveryBudget(
+    run: typeof heartbeatRuns.$inferSelect,
+    issueId: string,
+  ): Promise<boolean> {
+    const issue = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (!issue) return false;
+
+    const executionState = parseObject(issue.executionState);
+    const existingBudget = parseObject(executionState.recoveryBudget);
+    if (existingBudget.status === "exhausted") {
+      const usage = parseObject(existingBudget.usage);
+      const usageSummary = formatTaskRecoveryBudgetUsage({
+        automaticRetries: asNumber(usage.automaticRetries, 0),
+        providerTurns: asNumber(usage.providerTurns, 0),
+        providerTokens: asNumber(usage.providerTokens, 0),
+        providerCostUsd: asNumber(usage.providerCostUsd, 0),
+        runtimeMs: asNumber(usage.runtimeMs, 0),
+      });
+      const reason = `Automatic recovery remains blocked after task recovery budget exhaustion (${usageSummary}). Human remediation must clear the exhausted recovery state before another run can start.`;
+      await cancelQueuedRunForRecoveryBudget(run, reason);
+      await ensureTaskRecoveryBudgetCommentOnce({
+        run,
+        issueId,
+        usageSummary,
+        exhaustedBy: Array.isArray(existingBudget.exhaustedBy)
+          ? existingBudget.exhaustedBy.filter((value): value is string => typeof value === "string")
+          : [],
+      });
+      return true;
+    }
+
+    if (!taskRecoveryParentRunId(run)) return false;
+    const ancestors = await taskRecoveryAncestors(run, issueId);
+    if (ancestors.length === 0) return false;
+
+    const decision = evaluateTaskRecoveryBudget(ancestors);
+    if (decision.exhaustedBy.length === 0) return false;
+
+    const now = new Date();
+    const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage);
+    const reason = `Automatic recovery budget exhausted (${decision.exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until human remediation clears the exhausted recovery state.`;
+    const recoveryBudget = {
+      status: "exhausted",
+      exhaustedBy: decision.exhaustedBy,
+      usage: decision.usage,
+      limits: TASK_RECOVERY_BUDGET_LIMITS,
+      exhaustedAt: now.toISOString(),
+      sourceRunId: ancestors[0]?.id ?? null,
+      refusedRunId: run.id,
+    };
+
+    await db
+      .update(issues)
+      .set({
+        status: "blocked",
+        executionState: { ...executionState, recoveryBudget },
+        checkoutRunId: null,
+        executionRunId: null,
+        executionAgentNameKey: null,
+        executionLockedAt: null,
+        updatedAt: now,
+      })
+      .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)));
+
+    const cancelled = await cancelQueuedRunForRecoveryBudget(run, reason);
+    if (!cancelled) return true;
+
+    const siblingRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, run.companyId),
+          eq(heartbeatRuns.agentId, run.agentId),
+          inArray(heartbeatRuns.status, ["queued", "scheduled_retry"]),
+          sql`${heartbeatRuns.id} <> ${run.id}`,
+          or(
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
+          ),
+        ),
+      );
+    for (const sibling of siblingRuns) {
+      await cancelQueuedRunForRecoveryBudget(sibling, reason);
+    }
+
+    await ensureTaskRecoveryBudgetCommentOnce({
+      run,
+      issueId,
+      usageSummary,
+      exhaustedBy: decision.exhaustedBy,
+    });
+    await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "error",
+      message: reason,
+      payload: { recoveryBudget },
+    });
+    await logActivity(db, {
+      companyId: run.companyId,
+      actorType: "system",
+      actorId: "system",
+      agentId: run.agentId,
+      runId: run.id,
+      action: "issue.recovery_budget_exhausted",
+      entityType: "issue",
+      entityId: issueId,
+      details: recoveryBudget,
+    });
+    return true;
   }
 
   async function addContinuationExhaustedCommentOnce(input: {
@@ -3958,7 +4267,118 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       intervalSec: Math.max(0, asNumber(heartbeat.intervalSec, 0)),
       wakeOnDemand: asBoolean(heartbeat.wakeOnDemand ?? heartbeat.wakeOnAssignment ?? heartbeat.wakeOnOnDemand ?? heartbeat.wakeOnAutomation, true),
       maxConcurrentRuns: normalizeMaxConcurrentRuns(heartbeat.maxConcurrentRuns),
+      /**
+       * Only spend a run when there is something to spend it on.
+       *
+       * A timer wake used to invoke the model to answer a question the database
+       * answers for nothing: "is there anything for me to do?". Measured on a
+       * live instance, 88% of one agent's wakes came back "no pending fact
+       * requests or assigned issues" — and because a wake with no issue attached
+       * cannot use the resume-delta prompt, those were also the MOST expensive
+       * wakes, re-sending the agent's entire mandate every time.
+       */
+      requireWork: asBoolean(heartbeat.requireWork, true),
+      /**
+       * How long an agent may go without waking at all.
+       *
+       * The gate above is blind to work nobody has filed yet, and mandates in
+       * this product tell agents to watch for things unprompted. So the gate is
+       * a filter on the common case, not a cage: after this long with no run,
+       * the next tick goes through regardless.
+       */
+      sweepIntervalSec: Math.max(0, asNumber(heartbeat.sweepIntervalSec, 12 * 60 * 60)),
     };
+  }
+
+  /**
+   * Is there anything for this agent to wake up for?
+   *
+   * Deliberately cheap and deliberately narrow: three indexed existence checks.
+   * Each is a thing the product already models as work aimed at this agent.
+   *
+   * Ported from the shape upstream uses in its own scheduler so a future merge
+   * lines up, with two differences. Upstream gates the whole check behind a
+   * worktree-execution cutoff, so it is off unless that override is active;
+   * here it is the default, because the measurement that prompted it says the
+   * empty wake IS the common case. And upstream looks only at assigned issues,
+   * which would silence an agent whose mandate tells it to watch for work
+   * nobody has filed yet — hence fact requests and fresh comments too, plus the
+   * sweep in the caller.
+   */
+  async function agentHasWakeworthyWork(
+    agent: typeof agents.$inferSelect,
+    since: Date | null,
+  ): Promise<boolean> {
+    const assigned = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, agent.companyId),
+          eq(issues.assigneeAgentId, agent.id),
+          inArray(issues.status, ["todo", "in_progress", "blocked"]),
+          sql`coalesce(${issues.executionState} -> 'recoveryBudget' ->> 'status', '') <> 'exhausted'`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (assigned) return true;
+
+    // A colleague's agent is blocked waiting on an answer only this one can
+    // give. That is work, even with no issue assigned.
+    const asked = await db
+      .select({ id: agentFactRequests.id })
+      .from(agentFactRequests)
+      .where(
+        and(
+          eq(agentFactRequests.companyId, agent.companyId),
+          eq(agentFactRequests.targetAgentId, agent.id),
+          inArray(agentFactRequests.status, ["asked", "escalated"]),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (asked) return true;
+
+    // Somebody said something on an issue this agent owns since it last ran.
+    // Without this it would sleep through a question put to it directly.
+    if (since) {
+      const commented = await db
+        .select({ id: issueComments.id })
+        .from(issueComments)
+        .innerJoin(issues, eq(issues.id, issueComments.issueId))
+        .where(
+          and(
+            eq(issues.companyId, agent.companyId),
+            eq(issues.assigneeAgentId, agent.id),
+            sql`coalesce(${issues.executionState} -> 'recoveryBudget' ->> 'status', '') <> 'exhausted'`,
+            gt(issueComments.createdAt, since),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (commented) return true;
+    }
+
+    return false;
+  }
+
+  async function agentHasRecoveryBudgetExhaustedWork(
+    agent: typeof agents.$inferSelect,
+  ): Promise<boolean> {
+    return db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, agent.companyId),
+          eq(issues.assigneeAgentId, agent.id),
+          inArray(issues.status, ["todo", "in_progress", "blocked"]),
+          sql`${issues.executionState} -> 'recoveryBudget' ->> 'status' = 'exhausted'`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows.length > 0);
   }
 
   function issueRunPriorityRank(priority: string | null | undefined) {
@@ -4012,8 +4432,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const context = parseObject(run.contextSnapshot);
+    const recoveryIssueId = taskRecoveryRunIssueId(run);
+    if (recoveryIssueId && await enforceTaskRecoveryBudget(run, recoveryIssueId)) {
+      logger.info(
+        { runId: run.id, issueId: recoveryIssueId, errorCode: TASK_RECOVERY_BUDGET_EXHAUSTED_ERROR_CODE },
+        "claimQueuedRun: cancelled by aggregate task recovery budget",
+      );
+      return null;
+    }
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
-      issueId: readNonEmptyString(context.issueId),
+      issueId: recoveryIssueId,
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
@@ -4093,6 +4521,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         );
         return null;
       }
+    }
+
+    // M3/M4 (2026-08-16): budget and runaway gates, in the same seam as the
+    // blocker and staleness gates above. A refused run is CANCELLED with the
+    // reason, never silently dropped.
+    const preRun = await preRunChecks(db, { companyId: run.companyId, agentId: run.agentId });
+    if (!preRun.allowed) {
+      await setRunStatus(run.id, "cancelled", {
+        finishedAt: new Date(),
+        error: preRun.reason ?? "refused by pre-run checks",
+        errorCode: preRun.errorCode ?? "pre_run_check",
+      });
+      logger.info({ runId: run.id, errorCode: preRun.errorCode }, "claimQueuedRun: refused by pre-run checks");
+      return null;
     }
 
     const claimedAt = new Date();
@@ -4709,14 +5151,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let finalizedRun = await setRunStatus(run.id, "failed", {
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
-        errorCode: "process_lost",
+        errorCode: PROCESS_LOST_ERROR_CODE,
         finishedAt: now,
         resultJson: mergeRunStopMetadataForAgent(
           { adapterType, adapterConfig },
           "failed",
           {
             resultJson: parseObject(run.resultJson),
-            errorCode: "process_lost",
+            errorCode: PROCESS_LOST_ERROR_CODE,
             errorMessage: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
           },
         ),
@@ -4845,7 +5287,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const outputTokens = usage?.outputTokens ?? 0;
     const cachedInputTokens = usage?.cachedInputTokens ?? 0;
     const billingType = normalizeLedgerBillingType(result.billingType);
-    const additionalCostCents = normalizeBilledCostCents(result.costUsd, billingType);
+    const visibleCost = computeVisibleUsageCost({
+      inputTokens,
+      outputTokens,
+      providerCostUsd: result.costUsd,
+      billingType,
+    });
+    const additionalCostCents = visibleCost.costCents;
     const hasTokenUsage = inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0;
     const provider = result.provider ?? "unknown";
     const biller = resolveLedgerBiller(result);
@@ -5195,6 +5643,49 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       context.paperclipTaskMarkdown = taskMarkdown;
     } else {
       delete context.paperclipTaskMarkdown;
+    }
+    // AgentDash-MK: the harness→agent directives channel lands here.
+    //
+    // Injected on every tick, not once at agent creation, because a steward's
+    // harness can push a new version between two heartbeats and a constraint
+    // the agent stopped being told about is not a constraint. Re-read rather
+    // than cached for the same reason.
+    //
+    // No product-profile check: this is a single indexed lookup that returns
+    // nothing for a company whose harness never pushed, and the routes that
+    // write the table already 404 outside `agentdash_mk`. Adding a profile
+    // query here would cost a round trip to learn what the empty result
+    // already says. The `delete` branch keeps a default-profile company's
+    // context byte-identical to before.
+    //
+    // This is the ONLY place directives enter the runtime, and they enter as
+    // TEXT. Nothing downstream turns them into an authorization input — the
+    // agent's actual capability is `resolveActingAs`, which has never heard of
+    // this table.
+    const activeDirectives = await agentDirectivesSvc.activeForRuntime(agent.companyId, agent.id);
+    if (activeDirectives) {
+      context[AGENT_DIRECTIVES_CONTEXT_KEY] = activeDirectives;
+    } else {
+      delete context[AGENT_DIRECTIVES_CONTEXT_KEY];
+    }
+
+    // AgentDash: the agent's own durable memory, injected on EVERY run —
+    // fresh and resumed alike, for the same reason directives are: a thing the
+    // agent stops being told is a thing it stops knowing.
+    //
+    // This is what makes memory survive the events that end a session. A CLI
+    // session is keyed per adapter, so a fallback hop from Codex to Hermes
+    // orphans it and the agent wakes with no recollection of its own work;
+    // memory is re-read from the database and does not care which adapter ran.
+    //
+    // It enters as TEXT, like directives, and nothing downstream reads it for an
+    // authorization decision. The agent wrote it, so treating it as a capability
+    // input would let an agent widen its own reach by describing it.
+    const activeMemory = await agentMemorySvc.activeForRuntime(agent.companyId, agent.id);
+    if (activeMemory) {
+      context[AGENT_MEMORY_CONTEXT_KEY] = activeMemory;
+    } else {
+      delete context[AGENT_MEMORY_CONTEXT_KEY];
     }
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;
@@ -5944,25 +6435,53 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         rawUsage,
       });
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
+      const billingType = normalizeLedgerBillingType(adapterResult.billingType);
+      const visibleCost = computeVisibleUsageCost({
+        inputTokens: normalizedUsage?.inputTokens ?? 0,
+        outputTokens: normalizedUsage?.outputTokens ?? 0,
+        providerCostUsd: adapterResult.costUsd,
+        billingType,
+      });
 
       let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
-      if (isHeartbeatRunTerminalStatus(latestRun?.status)) {
+      const adapterExitedCleanly =
+        !adapterResult.timedOut && (adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage;
+      // `process_lost` is the reaper's inference, not an observation: it fires
+      // when the server can no longer see the child, and after a restart that
+      // is a guess. A detached process group routinely outlives the restart,
+      // finishes the work, and reports back here with a real result -- so the
+      // adapter's clean exit is ground truth and supersedes the guess. A
+      // `cancelled` run is an operator decision and is never superseded.
+      const supersedesLivenessGuess =
+        adapterExitedCleanly &&
+        latestRun?.status === "failed" &&
+        latestRun.errorCode === PROCESS_LOST_ERROR_CODE;
+      const adoptedTerminalStatus =
+        isHeartbeatRunTerminalStatus(latestRun?.status) && !supersedesLivenessGuess;
+
+      if (adoptedTerminalStatus) {
         outcome = latestRun.status;
       } else if (adapterResult.timedOut) {
         outcome = "timed_out";
-      } else if ((adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage) {
+      } else if (adapterExitedCleanly) {
         outcome = "succeeded";
       } else {
         outcome = "failed";
       }
+      // When a status is adopted rather than derived, the reason already on the
+      // run is the true one. Falling through to "Adapter failed" here replaced
+      // an honest `process_lost` diagnosis with a generic one that pointed
+      // operators at the adapter instead of at the restart that caused it.
       const runErrorMessage =
         outcome === "cancelled"
           ? (latestRun?.error ?? adapterResult.errorMessage ?? "Cancelled")
           : outcome === "succeeded"
             ? null
             : redactCurrentUserText(
-                adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
+                adapterResult.errorMessage ??
+                  (adoptedTerminalStatus ? latestRun?.error : null) ??
+                  (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
                 currentUserRedactionOptions,
               );
       const runErrorCode =
@@ -5971,7 +6490,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           : outcome === "cancelled"
             ? (latestRun?.errorCode ?? "cancelled")
             : outcome === "failed"
-              ? (adapterResult.errorCode ?? "adapter_failed")
+              ? (adapterResult.errorCode ??
+                (adoptedTerminalStatus ? latestRun?.errorCode : null) ??
+                "adapter_failed")
               : null;
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
@@ -5994,7 +6515,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               : "failed";
 
       const usageJson =
-        normalizedUsage || adapterResult.costUsd != null
+        normalizedUsage || adapterResult.costUsd != null || visibleCost.costCents > 0
           ? ({
               ...(normalizedUsage ?? {}),
               ...(rawUsage ? {
@@ -6014,8 +6535,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               provider: readNonEmptyString(adapterResult.provider) ?? "unknown",
               biller: resolveLedgerBiller(adapterResult),
               model: readNonEmptyString(adapterResult.model) ?? "unknown",
-              ...(adapterResult.costUsd != null ? { costUsd: adapterResult.costUsd } : {}),
-              billingType: normalizeLedgerBillingType(adapterResult.billingType),
+              ...(adapterResult.costUsd != null || visibleCost.costCents > 0
+                ? {
+                    costUsd: visibleCost.costCents / 100,
+                    costSource: visibleCost.source,
+                  }
+                : {}),
+              billingType,
             } as Record<string, unknown>)
           : null;
 
@@ -7904,6 +8430,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
+      let skippedNoWork = 0;
 
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
@@ -7911,9 +8438,65 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (!policy.enabled || policy.intervalSec <= 0) continue;
 
         checked += 1;
-        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
+        const lastRunAt = agent.lastHeartbeatAt ?? agent.createdAt;
+        const persistedBaseline = new Date(lastRunAt).getTime();
+        const baseline = Math.max(
+          persistedBaseline,
+          lastTimerCheckAtByAgent.get(agent.id) ?? persistedBaseline,
+        );
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
+        lastTimerCheckAtByAgent.set(agent.id, now.getTime());
+
+        // A due timer may be polled while its previous wake is still active.
+        // Treat that as a skip so the scheduler does not count a coalesced run
+        // as newly enqueued and emit a misleading INFO line every 30 seconds.
+        const activeRun = await db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.companyId, agent.companyId),
+              eq(heartbeatRuns.agentId, agent.id),
+              inArray(heartbeatRuns.status, ["queued", "running", "scheduled"]),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (activeRun) {
+          skipped += 1;
+          continue;
+        }
+
+        // Preserve the full wakeworthy-work contract (assigned blocked work,
+        // fact requests, new comments, explicit sweeps, and opt-out agents).
+        // The in-memory baseline above bounds these indexed checks and their
+        // visible skip log to the configured heartbeat interval.
+        const sweepDue =
+          policy.sweepIntervalSec > 0 && elapsedMs >= policy.sweepIntervalSec * 1000;
+        let wakeworthy: boolean | null = null;
+        const hasWakeworthyWork = async () => {
+          wakeworthy ??= await agentHasWakeworthyWork(agent, new Date(lastRunAt));
+          return wakeworthy;
+        };
+        if (policy.requireWork && !sweepDue) {
+          if (!(await hasWakeworthyWork())) {
+            skippedNoWork += 1;
+            continue;
+          }
+        }
+
+        // A sweep may preserve mandate-driven discovery for an otherwise empty
+        // agent, but it must not bypass a durable per-task recovery exhaustion
+        // marker when that exhausted assignment is the agent's only known work.
+        if (
+          (sweepDue || !policy.requireWork) &&
+          await agentHasRecoveryBudgetExhaustedWork(agent) &&
+          !(await hasWakeworthyWork())
+        ) {
+          skippedNoWork += 1;
+          continue;
+        }
 
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
@@ -7931,7 +8514,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         else skipped += 1;
       }
 
-      return { checked, enqueued, skipped };
+      if (skippedNoWork > 0) {
+        // Visible on purpose. A scheduler that quietly decides not to run is
+        // indistinguishable from a broken one, and "is the heartbeat working?"
+        // is the first question anybody asks about a quiet board.
+        logger.info({ skippedNoWork, checked, enqueued }, "heartbeat: skipped agents with nothing to do");
+      }
+      return { checked, enqueued, skipped, skippedNoWork };
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),

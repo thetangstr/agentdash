@@ -6,6 +6,15 @@ interface EntityRowProps {
   leading?: ReactNode;
   identifier?: string;
   title: string;
+  /**
+   * Rendered immediately after the title, inside the same line.
+   *
+   * For a fact about what the row *is* rather than what state it is in — an
+   * agent's kind, say. Those belong next to the name, where someone reads
+   * identity, instead of in `trailing`, where the fixed-width status columns
+   * leave no room for a third pill.
+   */
+  titleBadge?: ReactNode;
   subtitle?: string;
   trailing?: ReactNode;
   selected?: boolean;
@@ -18,6 +27,7 @@ export function EntityRow({
   leading,
   identifier,
   title,
+  titleBadge,
   subtitle,
   trailing,
   selected,
@@ -44,6 +54,7 @@ export function EntityRow({
             </span>
           )}
           <span className="truncate">{title}</span>
+          {titleBadge}
         </div>
         {subtitle && (
           <p className="text-xs text-muted-foreground truncate mt-0.5">{subtitle}</p>

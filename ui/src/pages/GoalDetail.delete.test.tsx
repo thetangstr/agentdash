@@ -54,6 +54,25 @@ const mockClosePanel = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
 const mockPushToast = vi.hoisted(() => vi.fn());
 
+/**
+ * Deleting a goal is company direction, so the control now exists only for
+ * someone the server says may set direction. These tests are about the delete
+ * affordance itself, so they grant that capability and keep asserting the
+ * behaviour; the permission boundary has its own tests in
+ * `hooks/useCapability.test.tsx` and `__tests__/company-direction-authz.test.ts`.
+ */
+vi.mock("../api/capabilities", () => ({
+  capabilitiesApi: {
+    get: vi.fn().mockResolvedValue({
+      companyId: "company-1",
+      actorType: "board",
+      membershipRole: "owner",
+      isInstanceAdmin: false,
+      capabilities: { "direction:set": true },
+    }),
+  },
+}));
+
 vi.mock("../api/goals", () => ({
   goalsApi: mockGoalsApi,
 }));

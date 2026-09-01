@@ -79,6 +79,20 @@ export interface UserProfileProviderUsage {
 
 export interface UserProfileResponse {
   user: UserProfileIdentity;
+  /**
+   * Has spend ever been measured for this COMPANY — not for this person.
+   *
+   * The per-person totals below cannot answer the question on their own. A zero
+   * on someone's profile has two completely different meanings: "this person
+   * has run nothing" and "we do not meter anything here". Reporting the second
+   * as the first is a judgement about a colleague's work, made out of a gap in
+   * our own instrumentation.
+   *
+   * Scoped company-wide and deliberately unbounded by date, exactly as
+   * `CostSummary.measured` is: once the company has measured anything, a zero
+   * for one person is a real zero and should read as one.
+   */
+  measured: boolean;
   stats: UserProfileWindowStats[];
   daily: UserProfileDailyPoint[];
   recentIssues: UserProfileIssueSummary[];

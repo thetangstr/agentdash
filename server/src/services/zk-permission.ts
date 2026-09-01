@@ -25,6 +25,7 @@ import { Group } from "@semaphore-protocol/group";
 import { generateProof, verifyProof } from "@semaphore-protocol/proof";
 import type { Db } from "@paperclipai/db";
 import { zkPermissionProofs } from "@paperclipai/db";
+import { resolveSemaphoreArtifacts } from "./zk-artifacts.js";
 
 // Local mirror of the Semaphore v4 proof shape. The package's node `types` entry is
 // mis-packaged (points at a non-existent index.node.d.ts) so `SemaphoreProof` is not
@@ -143,7 +144,14 @@ export async function generatePermissionProof(input: {
   const identity = new Identity(input.proverIdentitySeed);
   const message = messageFor(input.scope, input.validAtEpoch);
   const externalNullifier = externalNullifierFor(input.scope, input.validAtEpoch);
-  const proof = await generateProof(identity, input.group, message, externalNullifier);
+  // Resolve the merkle-tree depth the SAME way generateProof would (the leaf's merkle-proof
+  // length), then hand it verified, complete wasm/zkey. This bypasses @zk-kit/artifacts'
+  // truncation-prone streaming download — the root cause of the nondeterministic zk flake —
+  // while producing a byte-identical proof (explicit depth == the value it would compute).
+  const leafIndex = input.group.indexOf(identity.commitment);
+  const merkleTreeDepth = input.group.generateMerkleProof(leafIndex).siblings.length || 1;
+  const snarkArtifacts = await resolveSemaphoreArtifacts(merkleTreeDepth);
+  const proof = await generateProof(identity, input.group, message, externalNullifier, merkleTreeDepth, snarkArtifacts);
   const proofBytes = canonicalizeProof(proof);
   return {
     scheme: ZK_SCHEME,

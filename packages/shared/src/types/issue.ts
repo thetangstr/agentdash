@@ -224,6 +224,39 @@ export interface IssueExecutionState {
   lastDecisionOutcome: IssueExecutionDecisionOutcome | null;
 }
 
+/**
+ * Slim projection of the assignee agent's active steward joined onto the
+ * issues-list payload. Built once per list call by joining
+ * `activeStewardsByAgentIds` against `agents.created_by_user_id` (owner
+ * fallback) so board / list cards can render a steward chip without a
+ * per-card round trip. `source: "steward"` means an explicit steward is
+ * currently assigned; `source: "owner"` means no active steward was found
+ * and we're surfacing whoever created the agent. `null` means the agent
+ * has neither and the chip should be hidden.
+ */
+export interface IssueAssigneeSteward {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  source: "steward" | "owner";
+}
+
+/**
+ * Slim derivation of `Issue.executionState` for board / list rows.
+ * Computed server-side per request so list payloads stay light
+ * (the list projection deliberately nulls the full executionState to
+ * avoid hauling stage history onto index routes). `viewerMatchesPrincipal`
+ * is true only when the requested `viewerUserId` is the same principal
+ * the current execution stage is waiting on — that is the exact condition
+ * for an "awaiting your review" badge.
+ */
+export interface IssueAwaitingReview {
+  viewerUserId: string;
+  stageType: IssueExecutionStageType;
+  status: IssueExecutionStateStatus;
+  viewerMatchesPrincipal: boolean;
+}
+
 export interface IssueExecutionDecision {
   id: string;
   companyId: string;
@@ -297,6 +330,9 @@ export interface Issue {
   lastExternalCommentAt?: Date | null;
   lastActivityAt?: Date | null;
   isUnreadForMe?: boolean;
+  // Age-2: steward accountability on cards. Server-joined on list payloads.
+  assigneeSteward?: IssueAssigneeSteward | null;
+  awaitingReviewByViewer?: IssueAwaitingReview | null;
   createdAt: Date;
   updatedAt: Date;
 }

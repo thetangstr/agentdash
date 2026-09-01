@@ -3,11 +3,29 @@ import type { AdapterModelProfileDefinition } from "@paperclipai/adapter-utils";
 export const type = "claude_local";
 export const label = "Claude Code (local)";
 
+/**
+ * The Claude 5 family, then the 4.x models kept for agents already pinned to
+ * them. Newest first, because the picker is read top-down and the first entry
+ * is what someone takes when they have no opinion.
+ *
+ * This list had gone stale in the same way the Codex one had -- it stopped at
+ * Opus 4.7 and offered a `claude-haiku-4-6` that is not a released model --
+ * with the same consequence: nothing validates it server-side, so a missing
+ * entry makes a model unreachable from the UI without making it unsupported.
+ * `claude-opus-5` was simply not selectable on the client's install.
+ *
+ * IDs are the exact published strings. They carry no date suffix; appending
+ * one (`claude-opus-5-20260401`) is a 404, and the two dated entries at the
+ * bottom are dated because those particular models are published that way.
+ */
 export const models = [
+  { id: "claude-opus-5", label: "Claude Opus 5" },
+  { id: "claude-fable-5", label: "Claude Fable 5 — most capable" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
   { id: "claude-opus-4-7", label: "Claude Opus 4.7" },
   { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku-4-6", label: "Claude Haiku 4.6" },
   { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 ];
@@ -18,7 +36,7 @@ export const modelProfiles: AdapterModelProfileDefinition[] = [
     label: "Cheap",
     description: "Use Claude Sonnet as the lower-cost Claude Code lane while preserving the agent's primary model.",
     adapterConfig: {
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       effort: "low",
     },
     source: "adapter_default",

@@ -79,7 +79,7 @@ describe("CompanyAccess", () => {
           principalType: "user",
           principalId: "user-1",
           status: "active",
-          membershipRole: "owner",
+          membershipRole: "admin",
           createdAt: "2026-04-10T00:00:00.000Z",
           updatedAt: "2026-04-10T00:00:00.000Z",
           user: {
@@ -96,7 +96,7 @@ describe("CompanyAccess", () => {
           principalType: "user",
           principalId: "user-2",
           status: "active",
-          membershipRole: "operator",
+          membershipRole: "member",
           createdAt: "2026-04-10T00:00:00.000Z",
           updatedAt: "2026-04-10T00:00:00.000Z",
           user: {
@@ -109,7 +109,7 @@ describe("CompanyAccess", () => {
         },
       ],
       access: {
-        currentUserRole: "owner",
+        currentUserRole: "admin",
         canManageMembers: true,
         canInviteUsers: true,
         canApproveJoinRequests: true,
@@ -130,7 +130,7 @@ describe("CompanyAccess", () => {
         requestingUserId: "user-2",
         invite: {
           allowedJoinTypes: "human",
-          humanRole: "operator",
+          humanRole: "member",
         },
       },
       {
@@ -211,9 +211,9 @@ describe("CompanyAccess", () => {
     await flushReact();
 
     expect(document.body.textContent).toContain("Implicit grants from role");
-    expect(document.body.textContent).toContain("Owner currently includes these permissions automatically.");
+    expect(document.body.textContent).toContain("Admin currently includes these permissions automatically.");
     expect(document.body.textContent).toContain(
-      "Included implicitly by the Owner role. Add an explicit grant only if it should stay after the role changes.",
+      "Included implicitly by the Admin role. Add an explicit grant only if it should stay after the role changes.",
     );
 
     await act(async () => {
@@ -258,7 +258,7 @@ describe("CompanyAccess", () => {
     await flushReact();
 
     expect(updateMemberAccessMock).toHaveBeenCalledWith("company-1", "member-1", {
-      membershipRole: "owner",
+      membershipRole: "admin",
       status: "active",
       grants: [],
     });
@@ -349,7 +349,7 @@ describe("CompanyAccess", () => {
         },
       ],
       access: {
-        currentUserRole: "owner",
+        currentUserRole: "admin",
         canManageMembers: true,
         canInviteUsers: true,
         canApproveJoinRequests: false,

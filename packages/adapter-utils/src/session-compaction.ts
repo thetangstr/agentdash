@@ -36,6 +36,35 @@ const ADAPTER_MANAGED_SESSION_POLICY: SessionCompactionPolicy = {
   maxSessionAgeHours: 0,
 };
 
+/**
+ * A ceiling for adapters that manage their own context but bill for the whole
+ * thing anyway.
+ *
+ * "Native context management" means the adapter will not overflow its window —
+ * it compacts on its own. It does not mean the session is cheap: every call
+ * still re-reads the accumulated history, and on a heartbeat the gap between
+ * wakes is long enough that the provider's prompt cache has gone cold, so that
+ * history is charged as fresh input. Measured on a live instance, a session left
+ * to run reached 400k+ input per wake, ~194k of it uncached, to produce a few
+ * hundred tokens of output.
+ *
+ * Rotation also refreshes the agent's instructions. They are sent once per
+ * session now rather than on every wake, so a session that never rotates is one
+ * where the mandate is never re-stated — and the adapter's own compaction can
+ * summarise it away without telling anybody. Rotating on a bounded threshold
+ * puts a floor under that: a fresh session, the mandate again, and a handoff
+ * summary carrying the thread forward.
+ *
+ * Deliberately generous. This is a backstop against unbounded growth, not a
+ * per-wake reset; an agent doing real work should reach it rarely.
+ */
+const ADAPTER_MANAGED_WITH_CEILING_POLICY: SessionCompactionPolicy = {
+  enabled: true,
+  maxSessionRuns: 40,
+  maxRawInputTokens: 250_000,
+  maxSessionAgeHours: 24,
+};
+
 export const LEGACY_SESSIONED_ADAPTER_TYPES = new Set([
   "acpx_local",
   "claude_local",
@@ -61,7 +90,7 @@ export const ADAPTER_SESSION_MANAGEMENT: Record<string, AdapterSessionManagement
   codex_local: {
     supportsSessionResume: true,
     nativeContextManagement: "confirmed",
-    defaultSessionCompaction: ADAPTER_MANAGED_SESSION_POLICY,
+    defaultSessionCompaction: ADAPTER_MANAGED_WITH_CEILING_POLICY,
   },
   cursor: {
     supportsSessionResume: true,
@@ -86,7 +115,7 @@ export const ADAPTER_SESSION_MANAGEMENT: Record<string, AdapterSessionManagement
   hermes_local: {
     supportsSessionResume: true,
     nativeContextManagement: "confirmed",
-    defaultSessionCompaction: ADAPTER_MANAGED_SESSION_POLICY,
+    defaultSessionCompaction: ADAPTER_MANAGED_WITH_CEILING_POLICY,
   },
 };
 

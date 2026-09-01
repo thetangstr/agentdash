@@ -11,6 +11,7 @@ import { queryKeys } from "../lib/queryKeys";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { EntityRow } from "../components/EntityRow";
+import { AgentKindBadge } from "@/components/AgentKindBadge";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
@@ -39,6 +40,35 @@ function filterAgents(agents: Agent[], tab: FilterTab, showTerminated: boolean):
   return agents
     .filter((a) => matchesFilter(a.status, tab, showTerminated))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Whether this agent wakes on its own.
+ *
+ * `runtimeConfig.heartbeat.enabled` defaults to absent, and the heartbeat
+ * service treats missing-or-false as never-run-this-agent. The agent then sits
+ * at `idle` — indistinguishable on this page from one that is simply between
+ * tasks — and does nothing forever. That is how MKThink's instance recorded
+ * zero runs for days while everything looked healthy.
+ *
+ * Leaving the default off is defensible: waking on a timer spends money
+ * unattended, and that should be a decision. Leaving it invisible is not.
+ */
+function isScheduled(agent: Agent): boolean {
+  const heartbeat = agent.runtimeConfig?.heartbeat;
+  if (!heartbeat || typeof heartbeat !== "object" || Array.isArray(heartbeat)) return false;
+  return (heartbeat as { enabled?: unknown }).enabled === true;
+}
+
+function NotScheduledBadge() {
+  return (
+    <span
+      className="whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+      title="No heartbeat schedule: this agent only runs when someone wakes it."
+    >
+      Not scheduled
+    </span>
+  );
 }
 
 function getConfiguredModel(agent: Agent): string | null {
@@ -229,6 +259,9 @@ export function Agents() {
               <EntityRow
                 key={agent.id}
                 title={agent.name}
+                titleBadge={
+                  agent.status === "terminated" ? null : <AgentKindBadge agent={agent} />
+                }
                 subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
                 to={agentUrl(agent)}
                 className={agent.pausedAt && tab !== "paused" ? "opacity-50" : ""}
@@ -251,6 +284,7 @@ export function Agents() {
                       ) : (
                         <StatusBadge status={agent.status} />
                       )}
+                      {isScheduled(agent) || agent.status === "terminated" ? null : <NotScheduledBadge />}
                     </span>
                     <div className="hidden sm:flex items-center gap-3">
                       {liveRunByAgent.has(agent.id) && (
@@ -272,7 +306,8 @@ export function Agents() {
                       <span className="text-xs text-muted-foreground w-16 text-right">
                         {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
                       </span>
-                      <span className="w-20 flex justify-end">
+                      <span className="flex w-20 justify-end gap-1">
+                        {isScheduled(agent) || agent.status === "terminated" ? null : <NotScheduledBadge />}
                         <StatusBadge status={agent.status} />
                       </span>
                     </div>
@@ -342,6 +377,9 @@ function OrgTreeNode({
         </span>
         <div className="flex-1 min-w-0">
           <span className="text-sm font-medium">{node.name}</span>
+          {agent && node.status !== "terminated" ? (
+            <AgentKindBadge agent={agent} className="ml-2 align-middle" />
+          ) : null}
           <span className="text-xs text-muted-foreground ml-2">
             {roleLabels[node.role] ?? node.role}
             {agent?.title ? ` - ${agent.title}` : ""}
@@ -358,6 +396,7 @@ function OrgTreeNode({
             ) : (
               <StatusBadge status={node.status} />
             )}
+            {agent && !isScheduled(agent) && node.status !== "terminated" ? <NotScheduledBadge /> : null}
           </span>
           <div className="hidden sm:flex items-center gap-3">
             {liveRunByAgent.has(node.id) && (
@@ -383,7 +422,8 @@ function OrgTreeNode({
                 </span>
               </>
             )}
-            <span className="w-20 flex justify-end">
+            <span className="flex w-20 justify-end gap-1">
+              {agent && !isScheduled(agent) && node.status !== "terminated" ? <NotScheduledBadge /> : null}
               <StatusBadge status={node.status} />
             </span>
           </div>

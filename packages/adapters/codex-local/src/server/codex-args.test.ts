@@ -16,6 +16,7 @@ describe("buildCodexExecArgs", () => {
       "--search",
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--model",
       "gpt-5.4",
       "-c",
@@ -38,6 +39,7 @@ describe("buildCodexExecArgs", () => {
     expect(result.args).toEqual([
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--model",
       "gpt-5.5",
       "-c",
@@ -56,12 +58,17 @@ describe("buildCodexExecArgs", () => {
 
     expect(result.fastModeRequested).toBe(true);
     expect(result.fastModeApplied).toBe(false);
-    expect(result.fastModeIgnoredReason).toContain(
-      "currently only supported on gpt-5.4 or manually configured model IDs",
-    );
+    // Assert the shape of the explanation, not its exact wording: the message
+    // lists whichever models currently support fast mode, so pinning the full
+    // sentence turns every model release into a spurious test failure. What
+    // has to hold is that the reason names the rejected model and points at
+    // the manual-model escape hatch.
+    expect(result.fastModeIgnoredReason).toContain("gpt-5.3-codex");
+    expect(result.fastModeIgnoredReason).toContain("manually configured model IDs");
     expect(result.args).toEqual([
       "exec",
       "--json",
+      "--skip-git-repo-check",
       "--model",
       "gpt-5.3-codex",
       "-",

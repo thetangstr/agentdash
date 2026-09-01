@@ -111,7 +111,7 @@ Shows:
 ### Set a Budget
 ```sh
 # Company monthly budget: $100
-curl -X PATCH http://127.0.0.1:3100/api/companies/:companyId/budgets \
+curl -X PATCH http://127.0.0.1:3102/api/companies/:companyId/budgets \
   -H "Content-Type: application/json" \
   -d '{"budgetMonthlyCents": 10000}'
 ```

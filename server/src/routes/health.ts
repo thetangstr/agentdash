@@ -8,7 +8,11 @@ import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-se
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { companyService } from "../services/companies.js";
+import { readAdapterStatus } from "../services/adapter-presets.js";
 import { serverVersion } from "../version.js";
+import { computeHealthChecks, type HealthChecks } from "../observability/health-checks.js";
+import { alerterStatus } from "../observability/alerter.js";
+import { configuredPublicBaseUrl } from "../lib/public-base-url.js";
 
 // AgentDash: self-serve-bootstrap — gate the first-user self-serve company
 // creation + instance-admin promotion behind an env flag so existing
@@ -70,8 +74,12 @@ export function healthRoutes(
       return;
     }
 
+    // O4 (2026-08-16): checks that can go DEGRADED — disk headroom, backup
+    // freshness, stuck runs — instead of "ok" meaning only "the process is
+    // up". A health check that cannot go red is decoration.
+    let checks: HealthChecks;
     try {
-      await db.execute(sql`SELECT 1`);
+      checks = await computeHealthChecks(db);
     } catch (error) {
       logger.warn({ err: error }, "Health check database probe failed");
       res.status(503).json({
@@ -139,21 +147,33 @@ export function healthRoutes(
         ? await companyService(db).hasActiveCompany()
         : false;
 
+    // AgentDash: adapter readiness — the MCP onboarding journey gates plan
+    // proposal on a configured model. Read from process.env; cheap + sync.
+    const adapter = readAdapterStatus();
+
     if (!exposeFullDetails) {
       res.json({
-        status: "ok",
+        status: checks.status,
         deploymentMode: opts.deploymentMode,
         bootstrapStatus,
         bootstrapInviteActive,
         selfServeBootstrap,
         instanceHasCompany,
+        adapterReady: adapter.ready,
+        adapterPreset: adapter.preset,
+        ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
         ...(devServer ? { devServer } : {}),
       });
       return;
     }
 
     res.json({
-      status: "ok",
+      status: checks.status,
+      db: checks.db,
+      disk: checks.disk,
+      backup: checks.backup,
+      runs: checks.runs,
+      alerter: alerterStatus(),
       version: serverVersion,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
@@ -162,6 +182,10 @@ export function healthRoutes(
       bootstrapInviteActive,
       selfServeBootstrap,
       instanceHasCompany,
+      adapterReady: adapter.ready,
+      adapterPreset: adapter.preset,
+      adapterReason: adapter.reason,
+      ...(configuredPublicBaseUrl() ? { publicBaseUrl: configuredPublicBaseUrl() } : {}),
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },

@@ -51,12 +51,40 @@ async function parseResponseBody(response: Response): Promise<unknown> {
 export class PaperclipApiClient {
   constructor(private readonly config: PaperclipMcpConfig) {}
 
+  /**
+   * AgentDash (MCP-native signup): whether a bearer credential is configured.
+   * Empty means the session is unauthenticated — only public endpoints
+   * (/health, /onboarding/mcp-signup) are reachable.
+   */
+  get hasApiKey(): boolean {
+    return this.config.apiKey.trim().length > 0;
+  }
+
+  /**
+   * AgentDash (MCP-native signup): upgrade the running session in place —
+   * agentdash_sign_up calls this with the freshly minted board key so the
+   * SAME MCP session continues authenticated without a restart.
+   */
+  setApiKey(apiKey: string): void {
+    this.config.apiKey = apiKey;
+  }
+
   get defaults() {
     return {
       companyId: this.config.companyId,
       agentId: this.config.agentId,
       runId: this.config.runId,
     };
+  }
+
+  /** Normalized API base URL (always ends with /api). */
+  get apiUrl(): string {
+    return this.config.apiUrl;
+  }
+
+  /** The web-app origin (API base URL without the trailing /api). */
+  get appBaseUrl(): string {
+    return this.config.apiUrl.replace(/\/api$/, "");
   }
 
   resolveCompanyId(companyId?: string | null): string {
@@ -81,8 +109,10 @@ export class PaperclipApiClient {
     }
 
     const url = new URL(path.slice(1), `${this.config.apiUrl}/`);
+    // AgentDash (MCP-native signup): omit Authorization entirely when no key
+    // is configured — public endpoints must not receive a bogus bearer token.
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.config.apiKey}`,
+      ...(this.hasApiKey ? { Authorization: `Bearer ${this.config.apiKey}` } : {}),
       Accept: "application/json",
     };
     if (options.body !== undefined) {

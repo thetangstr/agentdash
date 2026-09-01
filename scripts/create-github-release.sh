@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${REPO_ROOT:-}" ]; then
+  REPO_ROOT="$SCRIPT_ROOT"
+fi
 # shellcheck source=./release-lib.sh
-. "$REPO_ROOT/scripts/release-lib.sh"
+. "$SCRIPT_ROOT/scripts/release-lib.sh"
 
 dry_run=false
 version=""
+assets=()
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/create-github-release.sh <version> [--dry-run]
+  ./scripts/create-github-release.sh <version> [--asset <path>]... [--dry-run]
 
 Examples:
   ./scripts/create-github-release.sh 2026.318.0
+  ./scripts/create-github-release.sh 2026.318.0 --asset /tmp/release-control.json
   ./scripts/create-github-release.sh 2026.318.0 --dry-run
 
 Notes:
@@ -28,6 +33,11 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=true ;;
+    --asset)
+      shift
+      [ $# -gt 0 ] || { echo "Error: --asset requires a path." >&2; exit 1; }
+      assets+=("$1")
+      ;;
     -h|--help)
       usage
       exit 0
@@ -54,7 +64,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 tag="v$version"
-notes_file="$REPO_ROOT/releases/${tag}.md"
+notes_file="$(release_notes_file "$version")"
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -z "${PUBLISH_REMOTE:-}" ] && git_remote_exists origin; then
   PUBLISH_REMOTE=origin
 fi
@@ -75,14 +85,25 @@ if [ ! -f "$notes_file" ]; then
   exit 1
 fi
 
+for asset in "${assets[@]}"; do
+  if [ ! -f "$asset" ]; then
+    echo "Error: release asset not found at $asset." >&2
+    exit 1
+  fi
+done
+
+if [ "$dry_run" = true ]; then
+  printf '[dry-run] gh release create %q -R %q --title %q --notes-file %q' "$tag" "$GITHUB_REPO" "$tag" "$notes_file"
+  for asset in "${assets[@]}"; do
+    printf ' --asset %q' "$asset"
+  done
+  printf '\n'
+  exit 0
+fi
+
 if ! git -C "$REPO_ROOT" rev-parse "$tag" >/dev/null 2>&1; then
   echo "Error: local git tag $tag does not exist." >&2
   exit 1
-fi
-
-if [ "$dry_run" = true ]; then
-  echo "[dry-run] gh release create $tag -R $GITHUB_REPO --title $tag --notes-file $notes_file"
-  exit 0
 fi
 
 if ! git -C "$REPO_ROOT" ls-remote --exit-code --tags "$PUBLISH_REMOTE" "refs/tags/$tag" >/dev/null 2>&1; then
@@ -96,4 +117,9 @@ if gh release view "$tag" -R "$GITHUB_REPO" >/dev/null 2>&1; then
 else
   gh release create "$tag" -R "$GITHUB_REPO" --title "$tag" --notes-file "$notes_file"
   echo "Created GitHub Release $tag"
+fi
+
+if [ "${#assets[@]}" -gt 0 ]; then
+  gh release upload "$tag" -R "$GITHUB_REPO" "${assets[@]}" --clobber
+  echo "Uploaded ${#assets[@]} release-control asset(s) to $tag"
 fi

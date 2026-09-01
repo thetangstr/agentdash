@@ -1,6 +1,9 @@
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 
+export const COMPANY_PRODUCT_PROFILES = ["default", "agentdash_mk"] as const;
+export type CompanyProductProfile = (typeof COMPANY_PRODUCT_PROFILES)[number];
+
 export const DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const MAX_COMPANY_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
 
@@ -26,6 +29,22 @@ export const AGENT_STATUSES = [
   "terminated",
 ] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+/**
+ * Whether an agent mirrors one person or works on its own (decided 2026-08-19).
+ *
+ * `stewarded` — one human runs it, and that pairing is what the My Agent page,
+ * the connect code, the API key, the channel binding and every escalation are
+ * built on. `agent_stewardships` holds the pairing, 1:1 in both directions.
+ *
+ * `autonomous` — part of a team that runs without a person at a terminal: no
+ * steward, no key, and escalations go to the human made accountable for it.
+ *
+ * A single string rather than a boolean because the board has to name the kinds
+ * to a person, and "autonomy: false" is not a thing anyone says out loud.
+ */
+export const AGENT_AUTONOMY_KINDS = ["stewarded", "autonomous"] as const;
+export type AgentAutonomy = (typeof AGENT_AUTONOMY_KINDS)[number];
 
 // AgentDash (cos-onboarding Phase A): `claude_api` and `hermes_local` are
 // added for discoverability (autocomplete + exhaustive-switch hints used by
@@ -333,8 +352,38 @@ export const APPROVAL_TYPES = [
   "budget_override_required",
   "request_board_approval",
   "mandate_violation",
+  // AgentDash-MK: an agent asking to WRITE through a connector. Never executed
+  // by the agent; the steward decides and the server executes with the
+  // connection owner's credential.
+  "connector_send",
+  // AgentDash-MK: the inbound filter held return-path content. The agent whose
+  // content it is asks for its release; the decision is an ordinary approval,
+  // because a second decision boundary is a second thing to get wrong.
+  "inbound_content_review",
+  // AgentDash-MK: a named approver signing off one cycle of a deliverable.
+  // Two of these per run, in sequence, and nothing ships without both. The
+  // decider is the user named in the payload, never the requesting agent's
+  // steward — who signs an artifact off is a property of the artifact.
+  "deliverable_review",
+  // AgentDash-MK: the review agent asking a pipeline's owner to decide on a
+  // suggestion it derived from three or more cycles of accumulated events.
+  // Advisory: approving one records that a human agreed, and nothing acts on
+  // it. It routes through the approvals service rather than inventing a
+  // parallel decision path, and the decider is the pipeline owner named in the
+  // payload — never up the org chart.
+  "workflow_recommendation",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
+
+/**
+ * Outcome of executing an approved `connector_send`.
+ *
+ * Deliberately NOT an approval status. The human's decision and the write's
+ * outcome are different facts: an approval can be cleanly `approved` while the
+ * write that followed it landed, failed, or — worst case — is unknowable.
+ */
+export const CONNECTOR_SEND_OUTCOMES = ["succeeded", "failed", "outcome_unknown"] as const;
+export type ConnectorSendOutcome = (typeof CONNECTOR_SEND_OUTCOMES)[number];
 
 export const APPROVAL_STATUSES = [
   "pending",
@@ -498,19 +547,29 @@ export const COMPANY_MEMBERSHIP_ROLES = [
 ] as const;
 export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
 
-export const HUMAN_COMPANY_MEMBERSHIP_ROLES = [
-  "owner",
-  "admin",
-  "operator",
-  "viewer",
-] as const;
+/**
+ * Exactly two human roles, decided 2026-08-16: `admin` sets direction and can
+ * change anything; `member` does the work and owns what they create.
+ *
+ * The strings in LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES existed before the
+ * collapse and may still appear in stored rows, invite payloads, and older
+ * clients. They are accepted on read and normalized away by
+ * `normalizeHumanRole` — never written back, never compared against directly.
+ * `owner` folds into `admin`; `operator` and `viewer` fold into `member`.
+ * Note the viewer→member mapping is a power UPGRADE (viewer was read-only
+ * everywhere): measured before shipping, the only viewer rows in existence
+ * were uat test users.
+ */
+export const HUMAN_COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
 export type HumanCompanyMembershipRole = (typeof HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
 
+export const LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES = ["owner", "operator", "viewer"] as const;
+export type LegacyHumanCompanyMembershipRole =
+  (typeof LEGACY_HUMAN_COMPANY_MEMBERSHIP_ROLES)[number];
+
 export const HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS: Record<HumanCompanyMembershipRole, string> = {
-  owner: "Owner",
   admin: "Admin",
-  operator: "Operator",
-  viewer: "Viewer",
+  member: "Member",
 };
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;
@@ -530,6 +589,17 @@ export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
 export const PERMISSION_KEYS = [
   "agents:create",
+  /**
+   * Create and edit your OWN projects, without company-direction authority.
+   *
+   * Added because the role matrix had no way to express what a colleague
+   * actually needs. Project creation was gated on `assertCanSetCompanyDirection`
+   * — owner, admin or operator — so the only way to let someone start a project
+   * was to also let them rewrite the company's goals. `viewer` could do neither.
+   *
+   * Direction stays where it was. This grants the work, not the say-so.
+   */
+  "projects:create",
   "environments:manage",
   "users:invite",
   "users:manage_permissions",
@@ -978,7 +1048,7 @@ export const FREE_MAIL_DOMAINS: ReadonlySet<string> = new Set([
  * - Corp emails (domain NOT in {@link FREE_MAIL_DOMAINS}) → bare lowercased
  *   domain (e.g. `acme.com`). One company per domain is enforced.
  * - Free-mail emails (domain IN {@link FREE_MAIL_DOMAINS}) → full lowercased
- *   email address (e.g. `kailortang@gmail.com`) so each personal user gets
+ *   email address (e.g. `person@example.com`) so each personal user gets
  *   their own personal workspace without colliding on `gmail.com`.
  *
  * Throws when the input is not parseable as a single `local@host` email.

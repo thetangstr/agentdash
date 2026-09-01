@@ -64,6 +64,20 @@ function headersFromExpressRequest(req: Request): Headers {
   return headersFromNodeHeaders(req.headers);
 }
 
+/** The explicit port in a URL, or null when it has none or is unparseable. */
+function readPort(rawUrl: string | undefined | null): number | null {
+  const value = (rawUrl ?? "").trim();
+  if (!value) return null;
+  try {
+    const port = new URL(value).port;
+    if (!port) return null;
+    const parsed = Number.parseInt(port, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: number }): string[] {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
   const trustedOrigins = new Set<string>();
@@ -76,14 +90,32 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
     }
   }
   if (config.deploymentMode === "authenticated") {
-    const port = opts?.listenPort ?? config.port;
-    const needsPortVariants = port !== 80 && port !== 443;
+    /**
+     * Both the port the application listens on AND the port browsers arrive on.
+     *
+     * These are the same only when nothing sits in front. On the MKThink Mini
+     * Caddy terminates TLS on 3112 for four hostnames and proxies to 3102, and
+     * this function produced `:3102` variants for every one of them — a port
+     * where nothing serves TLS — while `:3112` existed only for the single
+     * hostname named in the public base URL.
+     *
+     * So the tailnet address could sign in and `https://mkmini.local:3112`,
+     * which is what somebody in the office actually opens, was refused with
+     * `403 INVALID_ORIGIN`. That is how the customer's own admin could not log
+     * in while every check we ran against the tailnet URL passed.
+     */
+    const listenPort = opts?.listenPort ?? config.port;
+    const publicPort = readPort(baseUrl) ?? readPort(process.env.PAPERCLIP_PUBLIC_URL);
+    const ports = new Set<number>([listenPort, ...(publicPort ? [publicPort] : [])]);
     for (const hostname of config.allowedHostnames) {
       const trimmed = hostname.trim().toLowerCase();
       if (!trimmed) continue;
       trustedOrigins.add(`https://${trimmed}`);
       trustedOrigins.add(`http://${trimmed}`);
-      if (needsPortVariants) {
+      for (const port of ports) {
+        // 80 and 443 are implied by the bare-host entries above; the URL API
+        // normalizes them away, so adding them back would be noise.
+        if (port === 80 || port === 443) continue;
         trustedOrigins.add(`https://${trimmed}:${port}`);
         trustedOrigins.add(`http://${trimmed}:${port}`);
       }
@@ -91,6 +123,70 @@ export function deriveAuthTrustedOrigins(config: Config, opts?: { listenPort?: n
   }
 
   return Array.from(trustedOrigins);
+}
+
+// AgentDash (MCP-native first login): one-shot capture registry for the
+// password-reset URL. capturePasswordResetUrl() registers a resolver here,
+// then calls auth.api.requestPasswordReset; the sendResetPassword callback
+// (configured inside createBetterAuthInstance) drains + removes the resolver
+// and SKIPS the email when a capture is pending — so the MCP signup flow
+// routes the one-time reset link straight to the agent instead of (only) to
+// email. Module-level on purpose: one server process owns one auth instance.
+const passwordResetUrlCaptures = new Map<string, Array<(url: string) => void>>();
+
+/**
+ * AgentDash (MCP-native first login): mint a one-time password-reset URL for
+ * `email` and return it directly (no email in the critical path). Used by
+ * POST /onboarding/mcp-signup so the founding user sets a browser password by
+ * clicking a link the agent hands them — independent of Resend being wired.
+ *
+ * Registers a resolver, fires Better Auth's requestPasswordReset (which
+ * generates the token + invokes sendResetPassword, which resolves the resolver
+ * with the reset URL), and awaits it with a timeout so signup can never hang.
+ * Returns null on timeout/failure so the caller falls back to the text hint.
+ */
+export async function capturePasswordResetUrl(
+  auth: BetterAuthInstance,
+  email: string,
+  timeoutMs = 5000,
+): Promise<string | null> {
+  const emailKey = email.trim().toLowerCase();
+  let resolver: (url: string) => void = () => {};
+  const urlPromise = new Promise<string>((resolve) => {
+    resolver = resolve;
+  });
+  const queue = passwordResetUrlCaptures.get(emailKey) ?? [];
+  queue.push(resolver);
+  passwordResetUrlCaptures.set(emailKey, queue);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Fire the reset flow; sendResetPassword drains the resolver. Don't await
+    // the call itself — the resolver resolves whenever the callback fires
+    // (better-auth may run sendResetPassword in the background).
+    void auth.api.requestPasswordReset({ body: { email } });
+    return await Promise.race([
+      urlPromise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } catch (err) {
+    logger.warn(
+      { email, error: err instanceof Error ? err.message : String(err) },
+      "[auth] capturePasswordResetUrl: requestPasswordReset threw",
+    );
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+    // Clean up if the resolver never fired (timeout/error path).
+    const remaining = passwordResetUrlCaptures.get(emailKey);
+    if (remaining) {
+      const filtered = remaining.filter((r) => r !== resolver);
+      if (filtered.length === 0) passwordResetUrlCaptures.delete(emailKey);
+      else passwordResetUrlCaptures.set(emailKey, filtered);
+    }
+  }
 }
 
 export interface CreateBetterAuthInstanceOptions {
@@ -103,6 +199,58 @@ export interface CreateBetterAuthInstanceOptions {
    * has to retry workspace bootstrap manually.
    */
   onUserCreated?: (user: { id: string; email: string; name: string | null }) => Promise<void>;
+}
+
+const DEFAULT_RESET_TOKEN_TTL_SECONDS = 3600; // Better Auth's own default
+const MAX_RESET_TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
+
+/**
+ * How long a password-reset link stays valid, in seconds.
+ *
+ * Better Auth defaults to 1 hour, which is the right posture for a hosted
+ * instance where the user is sitting at a browser when they click "forgot
+ * password". It is the wrong posture for an on-premise install you are about
+ * to physically relocate: the operator wants to mint a link for the customer's
+ * admin *before* travelling, and have it still work when the machine is
+ * plugged in at the other end. The URL host is an mDNS name that follows the
+ * machine, so the link itself survives the move — only the clock did not.
+ *
+ * Left at the 1-hour default unless AGENTDASH_RESET_TOKEN_TTL_SECONDS says
+ * otherwise, so no deployment gets a weaker window by accident. Capped at 30
+ * days: past that this stops being a reset link and becomes a bearer
+ * credential sitting in someone's inbox.
+ */
+function resolveResetTokenTtlSeconds(): number {
+  const raw = process.env.AGENTDASH_RESET_TOKEN_TTL_SECONDS?.trim();
+  if (!raw) return DEFAULT_RESET_TOKEN_TTL_SECONDS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    logger.warn(
+      { value: raw },
+      "[auth] AGENTDASH_RESET_TOKEN_TTL_SECONDS is not a positive integer — using the 1 hour default",
+    );
+    return DEFAULT_RESET_TOKEN_TTL_SECONDS;
+  }
+  if (parsed > MAX_RESET_TOKEN_TTL_SECONDS) {
+    logger.warn(
+      { requested: parsed, cap: MAX_RESET_TOKEN_TTL_SECONDS },
+      "[auth] AGENTDASH_RESET_TOKEN_TTL_SECONDS exceeds the 30 day cap — clamping",
+    );
+    return MAX_RESET_TOKEN_TTL_SECONDS;
+  }
+  return parsed;
+}
+
+/**
+ * Render a TTL in seconds as something a human reads in an email body, so the
+ * copy cannot drift from the configured value. "1 hour", "7 days", "90 minutes".
+ */
+export function formatTokenLifetime(seconds: number): string {
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  if (seconds % (24 * 3600) === 0) return plural(seconds / (24 * 3600), "day");
+  if (seconds % 3600 === 0) return plural(seconds / 3600, "hour");
+  if (seconds % 60 === 0) return plural(seconds / 60, "minute");
+  return plural(seconds, "second");
 }
 
 export function createBetterAuthInstance(
@@ -122,6 +270,7 @@ export function createBetterAuthInstance(
   const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
   const socialProviders = buildSocialProviders();
+  const resetTokenTtlSeconds = resolveResetTokenTtlSeconds();
 
   const authConfig: BetterAuthOptions = {
     baseURL: baseUrl,
@@ -139,6 +288,7 @@ export function createBetterAuthInstance(
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
+      resetPasswordTokenExpiresIn: resetTokenTtlSeconds,
       disableSignUp: config.authDisableSignUp,
       // Better Auth 1.4.x fires this from POST /api/auth/request-password-reset
       // (not /forget-password — that was the 1.3.x path). It hands us:
@@ -154,7 +304,21 @@ export function createBetterAuthInstance(
       sendResetPassword: async ({ user, token }: { user: { email: string }; token: string }) => {
         const appUrl = derivePublicAppUrl(publicUrl) ?? "http://localhost:3100";
         const resetUrl = `${appUrl}/reset-password?token=${encodeURIComponent(token)}`;
-        const { subject, html, text } = resetPasswordEmailTemplate({ resetUrl });
+        // MCP-native first login: if a capture is pending for this email,
+        // route the one-time reset link to the MCP signup caller instead of
+        // emailing it. One-shot (drain + delete). Email stays the path only
+        // for the normal "Forgot password" flow (no pending capture).
+        const emailKey = user.email.trim().toLowerCase();
+        const resolvers = passwordResetUrlCaptures.get(emailKey);
+        if (resolvers && resolvers.length > 0) {
+          passwordResetUrlCaptures.delete(emailKey);
+          for (const resolve of resolvers) resolve(resetUrl);
+          return;
+        }
+        const { subject, html, text } = resetPasswordEmailTemplate({
+          resetUrl,
+          lifetime: formatTokenLifetime(resetTokenTtlSeconds),
+        });
         await sendEmail({ to: user.email, subject, html, text });
       },
     },

@@ -40,3 +40,8 @@ export function conflict(message: string, details?: unknown) {
 export function unprocessable(message: string, details?: unknown) {
   return new HttpError(422, message, details);
 }
+
+/** A dependency the operator has not configured yet — not the caller's fault. */
+export function serviceUnavailable(message: string, details?: unknown) {
+  return new HttpError(503, message, details);
+}

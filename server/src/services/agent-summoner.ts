@@ -4,6 +4,88 @@ interface Deps {
   adapterFor: (adapterType: string) => any;
 }
 
+/** What `llmSummonAdapter` needs to read an agent's mandate. */
+interface InstructionsReader {
+  getBundle: (agent: any) => Promise<{ entryFile?: string | null }>;
+  readFile: (agent: any, relativePath: string) => Promise<{ content?: string | null }>;
+}
+
+/**
+ * Read the agent's mandate — the entry file of its instruction bundle.
+ *
+ * Returns null rather than throwing: `readFile` throws `notFound` for an agent
+ * whose bundle was never written, which is the normal state for an agent created
+ * before the mandate wizard existed. A missing mandate is a weaker reply, not a
+ * failed one.
+ */
+async function readMandate(instructions: InstructionsReader, agent: any): Promise<string | null> {
+  try {
+    const bundle = await instructions.getBundle(agent);
+    const entry = bundle.entryFile;
+    if (!entry) return null;
+    const file = await instructions.readFile(agent, entry);
+    const content = file.content?.trim();
+    return content ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The adapter that makes a summoned agent actually answer.
+ *
+ * What this replaces was an `execute` hardcoded at the route to return the
+ * literal text "Stub agent" + " reply". Every @mention in the product returned it,
+ * beside a `replier` that was already wired to a real model through the same
+ * `dispatchLLM` — so the capability existed and the summoner simply bypassed it.
+ *
+ * Two things it does that the stub could not:
+ *
+ *  - **It speaks as the agent.** The mandate becomes the system prompt, so the
+ *    file the owner produced in the wizard is what governs the reply. Without
+ *    it, the summoner sent a bare transcript with no identity at all, and a
+ *    reply that ignores its own mandate is worse than no reply — it looks like
+ *    the limits were considered and overruled.
+ *  - **It fails out loud.** A dispatch error propagates, and an empty completion
+ *    throws. Returning placeholder text on failure is what made this defect
+ *    survive: the chat looked like it worked.
+ */
+export function llmSummonAdapter(deps: {
+  instructions: InstructionsReader;
+  dispatch: (input: {
+    system: string;
+    messages: Array<{ role: "user" | "assistant"; content: string }>;
+  }) => Promise<string>;
+}) {
+  return {
+    execute: async ({ agent, prompt }: { agent: any; prompt: string }) => {
+      const mandate = await readMandate(deps.instructions, agent);
+      const system =
+        mandate ??
+        `You are ${agent?.name ?? "an agent"}, an agent at this company.` +
+          ` Your role is ${agent?.role ?? "unspecified"}.` +
+          ` You have no mandate on file yet, so stay strictly within what you were asked,` +
+          ` and say plainly when something needs a person to decide.`;
+
+      const output = await deps.dispatch({
+        system,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      if (!output?.trim()) {
+        // Never substitute placeholder text. An empty completion is a fault to
+        // surface, and a plausible-looking filler reply in a team chat is
+        // indistinguishable from a real answer.
+        throw new Error(
+          `Agent ${agent?.id ?? "unknown"} produced an empty reply when summoned.`,
+        );
+      }
+
+      return { output };
+    },
+  };
+}
+
 export function agentSummoner(deps: Deps) {
   return {
     summon: async (input: { conversationId: string; agentId: string; triggeringMessageId: string }) => {
@@ -11,15 +93,42 @@ export function agentSummoner(deps: Deps) {
       const agent = await deps.agents.getById(input.agentId);
       if (!agent) throw new Error(`Agent ${input.agentId} not found`);
       const adapter = deps.adapterFor(agent.adapterType);
-      const result = await adapter.execute({
-        agent,
-        prompt: buildSummonPrompt(recent),
-      });
+      let result: { output?: string };
+      try {
+        result = await adapter.execute({ agent, prompt: buildSummonPrompt(recent) });
+      } catch (err) {
+        /**
+         * Say that the answer failed, rather than saying nothing.
+         *
+         * Silence is indistinguishable from being ignored: the person @-mentions
+         * their colleague's agent, nothing appears, and they are left deciding
+         * whether to wait or ask again. The failure was visible only in the
+         * server log, which is not where they are looking.
+         *
+         * This is not the thing being guarded against elsewhere. Inventing an
+         * ANSWER is forbidden because a wrong figure travels; reporting that no
+         * answer was produced invents nothing, and it is genuinely this agent's
+         * failure to report. The message says plainly that nothing was answered,
+         * so it cannot be mistaken for a reply.
+         */
+        const reason = err instanceof Error ? err.message : String(err);
+        await deps.conversations.postMessage({
+          conversationId: input.conversationId,
+          authorKind: "agent",
+          authorId: agent.id,
+          body:
+            `I could not answer this — my model call failed, so nothing here is an answer.\n\n` +
+            `${reason}\n\n` +
+            `Ask again, or tell whoever looks after this workspace.`,
+        });
+        throw err;
+      }
+
       return deps.conversations.postMessage({
         conversationId: input.conversationId,
         authorKind: "agent",
         authorId: agent.id,
-        body: result.output,
+        body: result.output as string,
       });
     },
   };

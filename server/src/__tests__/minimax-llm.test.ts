@@ -44,9 +44,13 @@ describe("minimaxLLM", () => {
     }
   });
 
-  it("returns a stub and never constructs a client when MINIMAX_API_KEY is unset", async () => {
-    const reply = await minimaxLLM(INPUT);
-    expect(reply).toContain("stub reply");
+  it("throws, and never constructs a client, when MINIMAX_API_KEY is unset", async () => {
+    // Was: returned "Got it. (stub reply — set MINIMAX_API_KEY…)". That string
+    // is non-empty, so `dispatchLLM` could not tell it from a real answer and
+    // would post it to a colleague's thread as the agent's turn. Now that
+    // MiniMax is the default adapter, an unconfigured deployment must fail
+    // loudly rather than answer politely.
+    await expect(minimaxLLM(INPUT)).rejects.toThrow(/MINIMAX_API_KEY is not set/);
     expect(AnthropicCtor).not.toHaveBeenCalled();
     expect(messagesCreate).not.toHaveBeenCalled();
   });

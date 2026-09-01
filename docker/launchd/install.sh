@@ -239,10 +239,17 @@ PAPERCLIP_TAILNET_BIND_HOST=${TAILNET_HOST_VALUE}
 # Auto-apply DB migrations on startup
 PAPERCLIP_MIGRATION_AUTO_APPLY=true
 
-# CoS chat adapter. Only claude_api, claude_local, and hermes_local are
-# supported for CoS chat. Agent execution can use additional adapters.
-AGENTDASH_DEFAULT_ADAPTER=hermes_local
-AGENTDASH_HERMES_COMMAND=${HERMES_COMMAND_VALUE}
+# CoS chat adapter. claude_api is the customer default — it degrades to stub
+# replies when ANTHROPIC_API_KEY is unset (no crash-loop), and the customer
+# wires a real key (or picks openai/gemini/stub) during onboarding via
+# agentdash_setup_adapter. hermes_local/claude_local need a binary on PATH.
+AGENTDASH_DEFAULT_ADAPTER=claude_api
+
+# Heartbeat scheduler OFF by default on a fresh install. Agents are resumed
+# explicitly after the customer confirms their team during onboarding; this
+# prevents the server from spawning adapters (and crash-looping) before any
+# model is configured. Flip to "true" once the fleet is meant to self-drive.
+HEARTBEAT_SCHEDULER_ENABLED=false
 
 # Optional production integrations.
 # ANTHROPIC_API_KEY=

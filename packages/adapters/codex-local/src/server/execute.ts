@@ -30,6 +30,8 @@ import {
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
   renderTemplate,
+  renderAgentDirectivesPrompt,
+  renderAgentMemoryPrompt,
   renderPaperclipWakePrompt,
   stringifyPaperclipWakePayload,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -42,22 +44,13 @@ import {
   isCodexUnknownSessionError,
 } from "./parse.js";
 import { pathExists, prepareManagedCodexHome, resolveManagedCodexHomeDir, resolveSharedCodexHomeDir } from "./codex-home.js";
+import { resolveCodexCommand } from "./command.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_ROLLOUT_NOISE_RE =
   /^\d{4}-\d{2}-\d{2}T[^\s]+\s+ERROR\s+codex_core::rollout::list:\s+state db missing rollout path for thread\s+[a-z0-9-]+$/i;
-
-// Portable codex command fallback. Honors AGENTDASH_CODEX_COMMAND, else
-// defaults to `codex-acp` on PATH. (Was a hardcoded developer-specific
-// absolute path — ENOENT on any other machine.)
-function defaultCodexCommand(): string {
-  const configured = process.env.AGENTDASH_CODEX_COMMAND;
-  return typeof configured === "string" && configured.trim().length > 0
-    ? configured.trim()
-    : "codex-acp";
-}
 
 function stripCodexRolloutNoise(text: string): string {
   const parts = text.split(/\r?\n/);
@@ -295,7 +288,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
-  const command = asString(config.command, defaultCodexCommand());
+  const command = resolveCodexCommand(config, process.env);
   const model = asString(config.model, "");
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
@@ -560,8 +553,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: Boolean(sessionId) });
-  const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
-  const promptInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
+  const resumingSession = Boolean(sessionId);
+  const shouldUseResumeDeltaPrompt = resumingSession && wakePrompt.length > 0;
+  /**
+   * Never re-send the instructions into a session that already has them.
+   *
+   * The prefix is the agent's whole mandate — tens of thousands of tokens of
+   * text that does not change between wakes. It used to be skipped only when
+   * the wake ALSO carried an issue payload, because that is the case the resume
+   * delta was written for. So the cheap path applied when the agent had work,
+   * and the expensive path applied when it had none: a timer wake with nothing
+   * assigned re-sent the entire mandate every time.
+   *
+   * Measured on a live instance: one session held 260 user messages of which
+   * only 15 were distinct — the same 49KB block 202 times, ~2.87M tokens of
+   * pure repetition, all of it re-read by every later call in that session.
+   *
+   * Resuming is the only condition that matters. If the session is resumed the
+   * instructions are already in its context; if it is fresh they are sent
+   * below. Rotation is what refreshes them: `evaluateSessionCompaction` nulls
+   * the session id when a session gets too long, which lands here as a fresh
+   * session and re-sends the mandate along with a handoff summary.
+   */
+  const promptInstructionsPrefix = resumingSession ? "" : instructionsPrefix;
   instructionsChars = promptInstructionsPrefix.length;
   const continuationSummary = parseObject(context.paperclipContinuationSummary);
   const continuationSummaryBody = asString(continuationSummary.body, "").trim() || null;
@@ -626,9 +640,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   })();
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  // AgentDash-MK: standing directives from the steward's harness. Placed ahead
+  // of the wake/task sections because they constrain HOW the work is done, and
+  // rendered on every turn — including resumed sessions, where the bootstrap
+  // prompt is suppressed — because a constraint the agent stops being told
+  // about stops being a constraint.
+  const agentDirectivesNote = renderAgentDirectivesPrompt(context.paperclipAgentDirectives);
+  // AgentDash: the agent's own durable memory. After directives because it is
+  // the agent's own writing and ranks below its steward's, and rendered on
+  // every turn for the same reason directives are — plus one of its own: a
+  // resumed session may be resuming under a DIFFERENT adapter than the one
+  // that built the memory, and this is the only channel that survives that.
+  const agentMemoryNote = renderAgentMemoryPrompt(context.paperclipAgentMemory);
   const prompt = joinPromptSections([
     promptInstructionsPrefix,
     renderedBootstrapPrompt,
+    agentDirectivesNote,
+    agentMemoryNote,
     wakePrompt,
     codexFallbackHandoffNote,
     sessionHandoffNote,

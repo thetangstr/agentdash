@@ -174,6 +174,16 @@ export const agentsApi = {
     api.post<AgentSkillSnapshot>(agentPath(id, companyId, "/skills/sync"), { desiredSkills }),
   createKey: (id: string, name: string, companyId?: string) =>
     api.post<AgentKeyCreated>(agentPath(id, companyId, "/keys"), { name }),
+  /**
+   * A short, single-use code someone types on their own machine, in place of
+   * being handed a raw agent key. Minting one revokes any earlier unredeemed
+   * code for this agent, so a stale code on a screen somewhere stops working.
+   */
+  createConnectCode: (id: string, companyId?: string) =>
+    api.post<{ code: string; expiresAt: string; expiresInSeconds: number }>(
+      agentPath(id, companyId, "/connect-codes"),
+      {},
+    ),
   revokeKey: (agentId: string, keyId: string, companyId?: string) =>
     api.delete<{ ok: true }>(agentPath(agentId, companyId, `/keys/${encodeURIComponent(keyId)}`)),
   runtimeState: (id: string, companyId?: string) =>

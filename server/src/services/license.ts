@@ -92,11 +92,30 @@ export function verifyLicense(
   return { valid: true, claims };
 }
 
+/**
+ * An SPKI PEM is multi-line, and an env file is not.
+ *
+ * Both documented ways of carrying the public key were broken. Writing the PEM
+ * across real lines in `agentdash.env` breaks the moment anything sources that
+ * file (`command not found: PUBLIC`), and the single-line `\n`-escaped form our
+ * own template ships went straight to `crypto.createPublicKey`, which wants
+ * real newlines and rejects the literal backslash-n. So an operator following
+ * either documented format got `no_public_key` or `bad_key_or_signature` on
+ * every gated route, with nothing pointing at the escaping as the cause.
+ *
+ * Accept the escaped form and restore the newlines. A PEM never legitimately
+ * contains a backslash, so this cannot corrupt a well-formed key.
+ */
+export function normalizePublicKeyPem(pem: string | undefined): string | undefined {
+  if (!pem) return pem;
+  return pem.includes("\\n") ? pem.replace(/\\r\\n|\\n/g, "\n") : pem;
+}
+
 /** Verify the license configured via env (AGENTDASH_LICENSE_KEY + _PUBLIC_KEY). */
 export function licenseStatusFromEnv(now: number = Date.now()): LicenseStatus {
   return verifyLicense(
     process.env.AGENTDASH_LICENSE_KEY,
-    process.env.AGENTDASH_LICENSE_PUBLIC_KEY,
+    normalizePublicKeyPem(process.env.AGENTDASH_LICENSE_PUBLIC_KEY),
     now,
   );
 }

@@ -9,11 +9,12 @@
  *   - packages/db/src/schema/**.ts     (excluding index.ts and *.test.ts / *.spec.ts)
  *
  * Rule: when triggered, the same diff MUST also touch (any status: A/M/D/R) at
- * least one of the four prompt surfaces:
+ * least one of the prompt surfaces:
  *   - server/src/onboarding-assets/default/AGENTS.md
- *   - server/src/onboarding-assets/ceo/AGENTS.md
- *   - server/src/onboarding-assets/chief_of_staff/AGENTS.md
  *   - server/src/services/agent-creator-from-proposal.ts
+ * (The ceo/chief_of_staff archetype copies were surfaces too, until the
+ * persona archetypes were collapsed into `default` — one mandate for every
+ * role, so one file to keep current instead of three.)
  *
  * Bypass: include `[no-prompt-update]` (case-insensitive) in the PR title or body.
  *
@@ -42,8 +43,6 @@ const BYPASS_FLAG = "[no-prompt-update]";
 
 const PROMPT_SURFACES = [
   "server/src/onboarding-assets/default/AGENTS.md",
-  "server/src/onboarding-assets/ceo/AGENTS.md",
-  "server/src/onboarding-assets/chief_of_staff/AGENTS.md",
   "server/src/services/agent-creator-from-proposal.ts",
 ];
 

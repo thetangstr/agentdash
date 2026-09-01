@@ -7,6 +7,16 @@ description: >
 
 # Release Changelog Skill
 
+<!-- AgentDash: release-ownership-boundary — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## AgentDash release-note boundary
+
+- Application/OTA CalVer notes live at `releases/vYYYY.MDD.P.md`; resolve versions with `./scripts/release.sh stable --skip-npm --date YYYY-MM-DD --print-version`.
+- Owned `agentdash-connect` semver notes live at `packages/connect/releases/vX.Y.Z.md` and are published only by `.github/workflows/publish-connect.yml`.
+- Do not place package-specific notes in `releases/`; the application UI bundles that directory as its own changelog.
+
+The remainder of this skill generates application/OTA notes unless the caller explicitly requests the connector note path above.
+<!-- /AgentDash: release-ownership-boundary -->
+
 Generate the user-facing changelog for the **stable** Paperclip release.
 
 ## Versioning Model
@@ -57,7 +67,7 @@ git log v{last}..HEAD --oneline --no-merges
 The stable version comes from one of:
 
 - an explicit maintainer request
-- `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
+- `./scripts/release.sh stable --skip-npm --date YYYY-MM-DD --print-version`
 - the release plan already agreed in `doc/RELEASING.md`
 
 Do not derive the changelog version from a canary tag or prerelease suffix.
@@ -126,7 +136,7 @@ When a bullet item clearly maps to a merged pull request, add inline attribution
 end of the entry in this format:
 
 ```
-- **Feature name** — Description. ([#123](https://github.com/paperclipai/paperclip/pull/123), @contributor1, @contributor2)
+- **Feature name** — Description. ([#123](https://github.com/thetangstr/agentdash/pull/123), @contributor1, @contributor2)
 ```
 
 Rules:

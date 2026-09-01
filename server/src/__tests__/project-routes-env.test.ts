@@ -29,6 +29,9 @@ vi.mock("../telemetry.js", () => ({
 }));
 
 vi.mock("../services/index.js", () => ({
+  // projects.ts resolves `projects:create` for callers without direction
+  // authority, so the route module now constructs this service.
+  accessService: () => ({ canUser: async () => true }),
   agentRunService: vi.fn().mockReturnValue({ recordRun: vi.fn(), monthlyCount: vi.fn(), monthlyCountByAgent: vi.fn() }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
@@ -58,6 +61,9 @@ function registerModuleMocks() {
   }));
 
   vi.doMock("../services/index.js", () => ({
+  // projects.ts resolves `projects:create` for callers without direction
+  // authority, so the route module now constructs this service.
+  accessService: () => ({ canUser: async () => true }),
     agentInstructionRefreshService: () => ({ refreshForAgent: vi.fn(), refreshForRole: vi.fn() }),
     ISSUE_LIST_DEFAULT_LIMIT: 50,
     environmentService: () => mockEnvironmentService,

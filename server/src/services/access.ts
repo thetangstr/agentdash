@@ -1,4 +1,4 @@
-import { grantsForHumanRole } from "./company-member-roles.js";
+import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@paperclipai/db";
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -22,7 +23,16 @@ type MemberArchiveInput = {
     assigneeAgentId?: string | null;
     assigneeUserId?: string | null;
   } | null;
+  actorUserId?: string | null;
 };
+
+function resultRows(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: unknown[] }).rows;
+  }
+  return [];
+}
 
 export function accessService(db: Db) {
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
@@ -62,13 +72,11 @@ export function accessService(db: Db) {
     const membership = await getMembership(companyId, principalType, principalId);
     if (!membership || membership.status !== "active") return false;
 
-    // Check role-based permissions for human members (owner/admin/operator/viewer)
-    if (principalType === "user") {
-      const role = membership.membershipRole as "owner" | "admin" | "operator" | "viewer" | null;
-      if (role) {
-        const roleGrants = grantsForHumanRole(role);
-        if (roleGrants.some((g) => g.permissionKey === permissionKey)) return true;
-      }
+    // Check role-based permissions for human members (admin/member; legacy
+    // strings normalize away rather than being cast into a role they are not)
+    if (principalType === "user" && membership.membershipRole) {
+      const roleGrants = grantsForHumanRole(normalizeHumanRole(membership.membershipRole));
+      if (roleGrants.some((g) => g.permissionKey === permissionKey)) return true;
     }
 
     // Fall back to explicit grants
@@ -182,7 +190,7 @@ export function accessService(db: Db) {
         where ${companyMemberships.companyId} = ${companyId}
           and ${companyMemberships.principalType} = 'user'
           and ${companyMemberships.status} = 'active'
-          and ${companyMemberships.membershipRole} = 'owner'
+          and ${companyMemberships.membershipRole} in ('owner', 'admin')
         for update
       `);
 
@@ -200,8 +208,8 @@ export function accessService(db: Db) {
       if (
         existing.principalType === "user" &&
         existing.status === "active" &&
-        existing.membershipRole === "owner" &&
-        (nextStatus !== "active" || nextMembershipRole !== "owner")
+        normalizeHumanRole(existing.membershipRole) === "admin" &&
+        (nextStatus !== "active" || normalizeHumanRole(nextMembershipRole) !== "admin")
       ) {
         const activeOwnerCount = await tx
           .select({ id: companyMemberships.id })
@@ -211,12 +219,12 @@ export function accessService(db: Db) {
               eq(companyMemberships.companyId, companyId),
               eq(companyMemberships.principalType, "user"),
               eq(companyMemberships.status, "active"),
-              eq(companyMemberships.membershipRole, "owner"),
+              inArray(companyMemberships.membershipRole, ["owner", "admin"]),
             ),
           )
           .then((rows) => rows.length);
         if (activeOwnerCount <= 1) {
-          throw conflict("Cannot remove the last active owner");
+          throw conflict("Cannot remove the last active admin");
         }
       }
 
@@ -270,7 +278,7 @@ export function accessService(db: Db) {
     if (
       principalType !== "user" ||
       status !== "active" ||
-      membershipRole !== "owner"
+      normalizeHumanRole(membershipRole) !== "admin"
     ) {
       return;
     }
@@ -283,12 +291,12 @@ export function accessService(db: Db) {
           eq(companyMemberships.companyId, companyId),
           eq(companyMemberships.principalType, "user"),
           eq(companyMemberships.status, "active"),
-          eq(companyMemberships.membershipRole, "owner"),
+          inArray(companyMemberships.membershipRole, ["owner", "admin"]),
         ),
       )
       .then((rows) => rows.length);
     if (activeOwnerCount <= 1) {
-      throw conflict("Cannot remove the last active owner");
+      throw conflict("Cannot remove the last active admin");
     }
   }
 
@@ -345,9 +353,18 @@ export function accessService(db: Db) {
         where ${companyMemberships.companyId} = ${companyId}
           and ${companyMemberships.principalType} = 'user'
           and ${companyMemberships.status} = 'active'
-          and ${companyMemberships.membershipRole} = 'owner'
+          and ${companyMemberships.membershipRole} in ('owner', 'admin')
         for update
       `);
+
+      const targetLock = await tx.execute(sql`
+        select ${companyMemberships.id}
+        from ${companyMemberships}
+        where ${companyMemberships.companyId} = ${companyId}
+          and ${companyMemberships.id} = ${memberId}
+        for update
+      `);
+      if (resultRows(targetLock).length === 0) return null;
 
       const existing = await tx
         .select()
@@ -412,6 +429,21 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalId, existing.principalId),
           ),
         );
+
+      const stewardshipSvc = agentStewardshipService(db);
+      const endedStewardships = await stewardshipSvc.endActiveForUser(
+        companyId,
+        existing.principalId,
+        input.actorUserId ?? existing.principalId,
+        tx,
+      );
+      await stewardshipSvc.createActivityForArchivedStewardships({
+        companyId,
+        userId: existing.principalId,
+        endedByUserId: input.actorUserId ?? existing.principalId,
+        stewardships: endedStewardships,
+        database: tx,
+      });
 
       const archived = await tx
         .update(companyMemberships)
@@ -500,12 +532,12 @@ export function accessService(db: Db) {
       if (toArchive.length > 0 && (await isInstanceAdmin(userId))) {
         throw conflict("Instance admins cannot be removed from company access");
       }
-      const protectedArchives = toArchive.filter((row) => row.membershipRole === "owner" || row.membershipRole === "admin");
+      const protectedArchives = toArchive.filter((row) => normalizeHumanRole(row.membershipRole) === "admin");
       if (protectedArchives.length > 0) {
-        throw conflict("Owners and admins cannot be removed from company access");
+        throw conflict("Admins cannot be removed from company access");
       }
       const activeOwnerArchives = toArchive.filter(
-        (row) => row.status === "active" && row.membershipRole === "owner",
+        (row) => row.status === "active" && normalizeHumanRole(row.membershipRole) === "admin",
       );
       if (activeOwnerArchives.length > 0) {
         const activeOwnerRows = await tx
@@ -515,7 +547,7 @@ export function accessService(db: Db) {
             and(
               eq(companyMemberships.principalType, "user"),
               eq(companyMemberships.status, "active"),
-              eq(companyMemberships.membershipRole, "owner"),
+              inArray(companyMemberships.membershipRole, ["owner", "admin"]),
               inArray(companyMemberships.companyId, activeOwnerArchives.map((row) => row.companyId)),
             ),
           );
@@ -523,14 +555,15 @@ export function accessService(db: Db) {
           const remainingOwners =
             activeOwnerRows.filter((owner) => owner.companyId === row.companyId).length - 1;
           if (remainingOwners <= 0) {
-            throw conflict("Cannot remove the last active owner");
+            throw conflict("Cannot remove the last active admin");
           }
         }
       }
       if (toArchive.length > 0) {
+        const now = new Date();
         await tx
           .update(companyMemberships)
-          .set({ status: "archived", updatedAt: new Date() })
+          .set({ status: "archived", updatedAt: now })
           .where(inArray(companyMemberships.id, toArchive.map((row) => row.id)));
         await tx
           .delete(principalPermissionGrants)
@@ -541,6 +574,23 @@ export function accessService(db: Db) {
               inArray(principalPermissionGrants.companyId, toArchive.map((row) => row.companyId)),
             ),
           );
+
+        const stewardshipSvc = agentStewardshipService(db);
+        for (const membership of toArchive.filter((row) => row.principalType === "user")) {
+          const endedStewardships = await stewardshipSvc.endActiveForUser(
+            membership.companyId,
+            membership.principalId,
+            options.actorUserId ?? membership.principalId,
+            tx,
+          );
+          await stewardshipSvc.createActivityForArchivedStewardships({
+            companyId: membership.companyId,
+            userId: membership.principalId,
+            endedByUserId: options.actorUserId ?? membership.principalId,
+            stewardships: endedStewardships,
+            database: tx,
+          });
+        }
       }
 
       for (const companyId of target) {
@@ -551,7 +601,7 @@ export function accessService(db: Db) {
               .update(companyMemberships)
               .set({
                 status: "active",
-                membershipRole: existingMembership.membershipRole ?? "operator",
+                membershipRole: existingMembership.membershipRole ?? "member",
                 updatedAt: new Date(),
               })
               .where(eq(companyMemberships.id, existingMembership.id));
@@ -563,7 +613,7 @@ export function accessService(db: Db) {
           principalType: "user",
           principalId: userId,
           status: "active",
-          membershipRole: "operator",
+          membershipRole: "member",
         });
       }
     });
@@ -747,7 +797,7 @@ export function accessService(db: Db) {
         where ${companyMemberships.companyId} = ${companyId}
           and ${companyMemberships.principalType} = 'user'
           and ${companyMemberships.status} = 'active'
-          and ${companyMemberships.membershipRole} = 'owner'
+          and ${companyMemberships.membershipRole} in ('owner', 'admin')
         for update
       `);
 
@@ -765,8 +815,8 @@ export function accessService(db: Db) {
       if (
         existing.principalType === "user" &&
         existing.status === "active" &&
-        existing.membershipRole === "owner" &&
-        (nextStatus !== "active" || nextMembershipRole !== "owner")
+        normalizeHumanRole(existing.membershipRole) === "admin" &&
+        (nextStatus !== "active" || normalizeHumanRole(nextMembershipRole) !== "admin")
       ) {
         const activeOwnerCount = await tx
           .select({ id: companyMemberships.id })
@@ -776,12 +826,12 @@ export function accessService(db: Db) {
               eq(companyMemberships.companyId, companyId),
               eq(companyMemberships.principalType, "user"),
               eq(companyMemberships.status, "active"),
-              eq(companyMemberships.membershipRole, "owner"),
+              inArray(companyMemberships.membershipRole, ["owner", "admin"]),
             ),
           )
           .then((rows) => rows.length);
         if (activeOwnerCount <= 1) {
-          throw conflict("Cannot remove the last active owner");
+          throw conflict("Cannot remove the last active admin");
         }
       }
 

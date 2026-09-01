@@ -19,6 +19,19 @@ interface InlineEditorProps {
   nullable?: boolean;
   /** When true, long display-mode markdown is clipped with a fade curtain that expands on click. */
   foldable?: boolean;
+  /**
+   * Render the value, but do not offer to edit it.
+   *
+   * This is how a permission boundary should look: a goal someone may not
+   * change simply reads as a goal. The alternative — leaving the editor live
+   * and letting the save 403 — teaches people that the product is unreliable,
+   * because a click that silently does nothing is indistinguishable from a bug.
+   *
+   * Not a disabled state on purpose. A greyed-out control still invites the
+   * question "why can't I?", and answering that on every surface costs more
+   * than simply not offering what is not available.
+   */
+  readOnly?: boolean;
 }
 
 /** Shared padding so display and edit modes occupy the exact same box. */
@@ -51,6 +64,7 @@ export function InlineEditor({
   placeholder = "Click to edit...",
   multiline = false,
   nullable = false,
+  readOnly = false,
   imageUploadHandler,
   onDropFile,
   mentions,
@@ -252,6 +266,24 @@ export function InlineEditor({
       }
     };
   }, [autosaveState, commit, draft, markDirty, multiline, multilineFocused, nullable, reset, runSave, value]);
+
+  // Checked before every other branch, and the ordering is the point.
+  //
+  // Below `if (multiline)` and `if (editing)` this does nothing for a
+  // single-line field: the click sets `editing`, and the editing branch returns
+  // an editor first. The prop landed in an earlier commit while this block
+  // silently did not, and typecheck stayed green because an unused destructured
+  // variable is legal — so `readOnly` was a no-op that looked implemented.
+  if (readOnly) {
+    const ReadOnlyTag = value && multiline ? "div" : Tag;
+    return (
+      <ReadOnlyTag
+        className={cn("rounded overflow-hidden", pad, !value && "text-muted-foreground italic", className)}
+      >
+        {value || placeholder}
+      </ReadOnlyTag>
+    );
+  }
 
   if (multiline) {
     const previewValue = autosaveState === "saved" || autosaveState === "idle" ? draft : value;

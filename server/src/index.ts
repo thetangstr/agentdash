@@ -36,6 +36,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
+import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
@@ -44,7 +45,10 @@ import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
-import { initSentry, captureServerError } from "./observability/sentry.js";
+import { initErrorSink, recordServerError } from "./observability/error-sink.js";
+import { startAlerter } from "./observability/alerter.js";
+import { emitSignal } from "./observability/signals.js";
+import { computeHealthChecks } from "./observability/health-checks.js";
 import { conflict } from "./errors.js";
 import type {
   InstanceDatabaseBackupRunResult,
@@ -89,9 +93,6 @@ export interface StartedServer {
 }
 
 export async function startServer(): Promise<StartedServer> {
-  // AgentDash: initialize remote error tracking as early as possible so any
-  // startup failure below is captured. No-op unless SENTRY_DSN is set.
-  initSentry();
   let config = loadConfig();
   initTelemetry({ enabled: config.telemetryEnabled });
   if (process.env.PAPERCLIP_SECRETS_PROVIDER === undefined) {
@@ -103,6 +104,17 @@ export async function startServer(): Promise<StartedServer> {
   if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
     process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
   }
+
+  /**
+   * Agent confinement, before anything can run an agent.
+   *
+   * Logged unconditionally, including when it is off. An operator reading a
+   * startup log should be able to tell which posture they are in without
+   * inferring it from the absence of a line — "no news" is how a security
+   * control ends up believed-on and actually-off.
+   */
+  const agentSandbox = applyAgentSandboxSettings();
+  logger.info({ agentSandbox: agentSandbox.summary }, "agent subprocess sandbox");
   
   type MigrationSummary =
     | "skipped"
@@ -192,19 +204,6 @@ export async function startServer(): Promise<StartedServer> {
     return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
   }
 
-  function rewriteLocalUrlPort(rawUrl: string | undefined, port: number): string | undefined {
-    if (!rawUrl) return undefined;
-    try {
-      const parsed = new URL(rawUrl);
-      // The URL API normalizes default ports like :80/:443 to "", so treat them as stable URLs.
-      if (!parsed.port) return rawUrl;
-      parsed.port = String(port);
-      return parsed.toString();
-    } catch {
-      return rawUrl;
-    }
-  }
-  
   const LOCAL_BOARD_USER_ID = "local-board";
   const LOCAL_BOARD_USER_EMAIL = "local@agentdash.local";
   const LOCAL_BOARD_USER_NAME = "Board";
@@ -260,7 +259,7 @@ export async function startServer(): Promise<StartedServer> {
         principalType: "user",
         principalId: LOCAL_BOARD_USER_ID,
         status: "active",
-        membershipRole: "owner",
+        membershipRole: "admin",
       });
     }
   }
@@ -449,6 +448,12 @@ export async function startServer(): Promise<StartedServer> {
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
   
+  // O1/O3 (2026-08-16): both database branches have run — the sink can
+  // persist and the alerter can subscribe. Order matters: the sink first, so
+  // an alerter failure during startup has somewhere to be recorded.
+  initErrorSink(db);
+  startAlerter();
+
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
       `local_trusted mode requires loopback host binding (received: ${config.host}). ` +
@@ -477,7 +482,11 @@ export async function startServer(): Promise<StartedServer> {
   const requestedListenPort = config.port;
   const listenPort = await detectPort(requestedListenPort);
   if (config.authBaseUrlMode === "explicit" && config.authPublicBaseUrl) {
-    config.authPublicBaseUrl = rewriteLocalUrlPort(config.authPublicBaseUrl, listenPort);
+    const { rewritePublicBaseUrlPort } = await import("./auth/public-base-url.js");
+    config.authPublicBaseUrl = rewritePublicBaseUrlPort(config.authPublicBaseUrl, {
+      requestedPort: requestedListenPort,
+      listenPort,
+    });
   }
   
   let authReady = config.deploymentMode === "local_trusted";
@@ -487,6 +496,18 @@ export async function startServer(): Promise<StartedServer> {
     | undefined;
   let resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
+    | undefined;
+  // AgentDash: MCP-native signup — server-side user creation for
+  // POST /api/onboarding/mcp-signup. Only wired in authenticated mode where
+  // a Better Auth instance exists; without it the route answers 503.
+  let mcpSignupCreateUser:
+    | ((input: { name: string; email: string; password: string }) => Promise<{ userId: string | null }>)
+    | undefined;
+  // AgentDash: MCP-native first login — captures the one-time password-reset
+  // URL for the founding user so the MCP journey can return a browser-login
+  // link. Only wired in authenticated mode (needs the Better Auth instance).
+  let mcpSignupCaptureResetUrl:
+    | ((email: string) => Promise<string | null>)
     | undefined;
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
@@ -498,6 +519,7 @@ export async function startServer(): Promise<StartedServer> {
       deriveAuthTrustedOrigins,
       resolveBetterAuthSession,
       resolveBetterAuthSessionFromHeaders,
+      capturePasswordResetUrl,
     } = await import("./auth/better-auth.js");
     const derivedTrustedOrigins = deriveAuthTrustedOrigins(config, { listenPort });
     const envTrustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
@@ -596,6 +618,18 @@ export async function startServer(): Promise<StartedServer> {
     );
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
+    // AgentDash: MCP-native signup — expose Better Auth's server-side
+    // sign-up so the founding user can be created without a browser form.
+    // The password never leaves the route handler that generated it.
+    mcpSignupCreateUser = async (input) => {
+      const result = (await auth.api.signUpEmail({
+        body: { name: input.name, email: input.email, password: input.password },
+      })) as { user?: { id?: string } } | null | undefined;
+      return { userId: result?.user?.id ?? null };
+    };
+    // AgentDash: MCP-native first login — wire the reset-URL capture so the
+    // MCP signup response carries a browser-login link (no email dependency).
+    mcpSignupCaptureResetUrl = (email) => capturePasswordResetUrl(auth, email);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
     authReady = true;
@@ -698,6 +732,9 @@ export async function startServer(): Promise<StartedServer> {
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,
+    // AgentDash: MCP-native signup (POST /api/onboarding/mcp-signup)
+    mcpSignupCreateUser,
+    mcpSignupCaptureResetUrl,
     pluginWorkerManager,
     // AgentDash: corp-email requirement removed at user request
     // (2026-05-03) — applies to both Free and Pro tiers, so gmail/yahoo/
@@ -897,6 +934,44 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
+  // O4/O6 (2026-08-16): the health checks run on a clock, not only when
+  // polled — a stale backup or a filling disk emits a signal within the half
+  // hour instead of waiting for someone to look.
+  {
+    const healthSignalHandle = setInterval(() => {
+      void computeHealthChecks(db)
+        .then((checks) => {
+          if (checks.backup && !checks.backup.ok) {
+            emitSignal({
+              kind: "backup_stale",
+              summary: checks.backup.latestAt
+                ? `newest backup is ${checks.backup.ageHours}h old`
+                : "no backups found in the backup directory",
+              detail: { latestAt: checks.backup.latestAt, ageHours: checks.backup.ageHours },
+            });
+          }
+          if (!checks.disk.ok) {
+            emitSignal({
+              kind: "disk_low",
+              summary: `disk free below threshold: ${(checks.disk.freeBytes / 1e9).toFixed(1)} GB left`,
+              detail: { freeBytes: checks.disk.freeBytes },
+            });
+          }
+          if (!checks.runs.ok) {
+            emitSignal({
+              kind: "run_stuck",
+              summary: `${checks.runs.stuck} run(s) stuck in a live state for over 2h`,
+              detail: { stuck: checks.runs.stuck },
+            });
+          }
+        })
+        .catch((err) => {
+          logger.warn({ err }, "periodic health check failed");
+        });
+    }, 30 * 60 * 1000);
+    healthSignalHandle.unref?.();
+  }
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 
@@ -1054,16 +1129,136 @@ export async function startServer(): Promise<StartedServer> {
     }, coldSignupIntervalMs);
   }
 
+  // AgentDash-MK: expire stalled work.
+  //
+  // Two leases, one tick. A bridge task whose endpoint went quiet, and a fact
+  // request whose escalation nobody answered. Both were written with expiry
+  // semantics and neither had a caller — `sweepLapsedLeases` shipped with none
+  // at all — which meant a lapsed lease was a comment rather than a behaviour:
+  // a claimed task stayed claimed forever and a stalled fact stayed `escalated`
+  // forever. Nothing about that is visible from the outside, which is exactly
+  // why it survived.
+  //
+  // Both sweeps are conditional updates keyed on the row still being in the
+  // state that was read, so two processes ticking together cannot both reap the
+  // same row.
+  const leaseSweepIntervalMs = 60 * 1000;
+  {
+    const { bridgeService } = await import("./services/bridge.js");
+    const { agentFactRequestService } = await import("./services/agent-fact-requests.js");
+    const bridgeLeases = bridgeService(db as any);
+    const factLeases = agentFactRequestService(db as any);
+    setInterval(() => {
+      void bridgeLeases
+        .sweepLapsedLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] bridge lease sweep failed"));
+      void factLeases
+        .sweepExpiredFactLeases()
+        .catch((err: unknown) => logger.error({ err }, "[leases] fact lease sweep failed"));
+    }, leaseSweepIntervalMs).unref?.();
+  }
+
+  // AgentDash-MK: carry every open cycle forward.
+  //
+  // A separate, slower tick than the lease sweep because each pass does real
+  // work — it fetches every `system` fact through a connector and files an ask
+  // for every `human` one. Every stage is idempotent (one run per period by
+  // unique index; settled figures are not re-read; a checked run is not
+  // re-checked), so the interval is a latency choice rather than a correctness
+  // one: a person's answer moves the cycle on within two minutes of arriving.
+  //
+  // Two minutes rather than five deliberately. The run-healer's default scan is
+  // five, and two periodic jobs that both do database and network work should
+  // not share a tick.
+  const deliverableSweepIntervalMs = 2 * 60 * 1000;
+  {
+    const { deliverableRunService } = await import("./services/deliverable-runs.js");
+    const { deliverableCheckService } = await import("./services/deliverable-checks.js");
+    const { deliverableReviewService } = await import("./services/deliverable-review.js");
+    const deliverableRuns = deliverableRunService(db as any);
+    const deliverableChecks = deliverableCheckService(db as any);
+    const deliverableReview = deliverableReviewService(db as any);
+    // Sequenced rather than fired together: each stage's input is the previous
+    // stage's output, so running them concurrently would mean a cycle needed
+    // four ticks — twenty minutes — to travel from open to an approver's inbox
+    // for no reason. Every stage is individually idempotent, so a tick that
+    // overlaps the previous one is harmless.
+    const tickDeliverables = async () => {
+      await deliverableRuns.sweepDueDeliverableRuns();
+      // Push open cycles forward. A run that stalled waiting on one person
+      // would otherwise stay `collecting` forever after they answered, because
+      // nothing else would ever look at it again.
+      await deliverableRuns.sweepCollectingRuns();
+      // The check is fired by the sweep, never by the assembling agent. It is a
+      // separate call on a separate service with no import edge to assembly —
+      // the party being checked does not operate the checker.
+      await deliverableChecks.sweepAssembledRuns();
+      // And the last link: a checked run reaches its first approver without an
+      // agent having to remember to send it.
+      await deliverableReview.sweepCheckedRuns();
+    };
+    setInterval(() => {
+      void tickDeliverables().catch((err: unknown) =>
+        logger.error({ err }, "[deliverables] sweep tick failed"),
+      );
+    }, deliverableSweepIntervalMs).unref?.();
+  }
+
+  // AgentDash-MK Slice H: the review agent's recommendation half.
+  //
+  // Hourly, not two-minutely. It reads a window of accumulated cycles per
+  // pipeline and raises nothing below three of them, so nothing it produces is
+  // urgent — a recommendation is a suggestion about a pattern that has been
+  // true for weeks, and putting it in front of somebody twenty minutes sooner
+  // buys nothing. It is idempotent, so the interval is a cost choice.
+  //
+  // It observes and suggests. There is no branch in it that acts.
+  const recommendationSweepIntervalMs = 60 * 60 * 1000;
+  {
+    const { workflowRecommendationService } = await import(
+      "./services/workflow-recommendations.js"
+    );
+    const recommendations = workflowRecommendationService(db as any);
+    setInterval(() => {
+      void recommendations
+        .sweepRecommendations()
+        .catch((err: unknown) => logger.error({ err }, "[recommendations] sweep tick failed"));
+    }, recommendationSweepIntervalMs).unref?.();
+  }
+
   await new Promise<void>((resolveListen, rejectListen) => {
+    // An all-interfaces bind is `::`, which serves IPv4 and IPv6 on one socket
+    // and is what makes a Bonjour `.local` name reachable. Where IPv6 is
+    // disabled entirely, that bind fails outright -- fall back to IPv4 rather
+    // than refuse to start, and say so, because it silently narrows who can
+    // reach the instance.
+    let listenHost = config.host;
+    let triedIpv4Fallback = false;
+
     const onError = (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      const ipv6Unsupported = code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL" || code === "EINVAL";
+      if (!triedIpv4Fallback && ipv6Unsupported && listenHost === "::") {
+        triedIpv4Fallback = true;
+        listenHost = "0.0.0.0";
+        logger.warn(
+          { err, code },
+          "IPv6 bind unavailable on this host; falling back to 0.0.0.0. Clients resolving this host to an IPv6 address will not be able to reach it.",
+        );
+        // `once` has already removed this handler; re-arm it so a failing
+        // fallback rejects the promise instead of throwing unhandled.
+        // `triedIpv4Fallback` stops that turning into a loop.
+        server.once("error", onError);
+        server.listen(listenPort, listenHost, onListening);
+        return;
+      }
       server.off("error", onError);
       rejectListen(err);
     };
 
-    server.once("error", onError);
-    server.listen(listenPort, config.host, () => {
+    function onListening() {
       server.off("error", onError);
-      logger.info(`Server listening on ${config.host}:${listenPort}`);
+      logger.info(`Server listening on ${listenHost}:${listenPort}`);
       if (process.env.PAPERCLIP_OPEN_ON_LISTEN === "true") {
         const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
         const url = `http://${openHost}:${listenPort}`;
@@ -1118,9 +1313,12 @@ export async function startServer(): Promise<StartedServer> {
       }
 
       resolveListen();
-    });
+    }
+
+    server.once("error", onError);
+    server.listen(listenPort, listenHost, onListening);
   });
-  
+
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       // AgentDash: goals-eval-hitl
@@ -1202,19 +1400,19 @@ function isMainModule(metaUrl: string): boolean {
 }
 
 if (isMainModule(import.meta.url)) {
-  // AgentDash: initialize Sentry before anything else so process-level
-  // crashes during startup are captured. No-op unless SENTRY_DSN is set.
-  initSentry();
-  // Capture otherwise-unhandled crashes. These guards only run when the
-  // server is launched as the main process (not when startServer is imported
-  // by tests), and each capture is a no-op unless SENTRY_DSN is set. We keep
-  // the existing logging behavior and do not change process lifecycle.
+  // Capture otherwise-unhandled crashes into the LOCAL error sink (2026-08-16:
+  // the remote Sentry transport is gone — it was measured to drop every event
+  // because nothing ever configured it, and error payloads must not leave a
+  // client box). Before the sink is initialised in startServer(), the record
+  // call degrades to stderr — which is where a pre-database crash belongs
+  // anyway. These guards only run when the server is launched as the main
+  // process; process lifecycle is unchanged.
   process.on("uncaughtException", (err) => {
-    captureServerError(err, { kind: "uncaughtException" });
+    recordServerError(err, { kind: "uncaughtException" });
     logger.error({ err }, "uncaught exception");
   });
   process.on("unhandledRejection", (reason) => {
-    captureServerError(reason, { kind: "unhandledRejection" });
+    recordServerError(reason, { kind: "unhandledRejection" });
     logger.error({ err: reason }, "unhandled promise rejection");
   });
   void startServer().catch((err) => {

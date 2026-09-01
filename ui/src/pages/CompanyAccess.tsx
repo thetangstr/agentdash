@@ -8,6 +8,8 @@ import {
 } from "@paperclipai/shared";
 import { ShieldCheck, Trash2, Users } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
+import { ChannelBindingsTable } from "@/components/access/ChannelBindingsTable";
+import { StewardshipAssignments } from "@/components/access/StewardshipAssignments";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { issuesApi } from "@/api/issues";
@@ -29,6 +31,7 @@ import { queryKeys } from "@/lib/queryKeys";
 
 const permissionLabels: Record<PermissionKey, string> = {
   "agents:create": "Create agents",
+  "projects:create": "Create projects",
   "users:invite": "Invite humans and agents",
   "users:manage_permissions": "Manage members and grants",
   "tasks:assign": "Assign tasks",
@@ -44,10 +47,10 @@ function formatGrantSummary(member: CompanyMember) {
 }
 
 const implicitRoleGrantMap: Record<NonNullable<CompanyMember["membershipRole"]>, PermissionKey[]> = {
-  owner: ["agents:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
-  admin: ["agents:create", "users:invite", "tasks:assign", "joins:approve"],
-  operator: ["tasks:assign"],
-  viewer: [],
+  // Mirrors grantsForHumanRole on the server — the server is the authority;
+  // this map only decides which checkboxes render as "included by role".
+  admin: ["agents:create", "projects:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
+  member: ["projects:create", "tasks:assign"],
 };
 
 const reassignmentIssueStatuses = "backlog,todo,in_progress,in_review,blocked,failed,timed_out";
@@ -399,6 +402,17 @@ export function CompanyAccess() {
           )}
         </div>
       </section>
+
+      {selectedCompany?.productProfile === "agentdash_mk" && selectedCompanyId ? (
+        <>
+          <StewardshipAssignments
+            companyId={selectedCompanyId}
+            members={membersQuery.data?.members ?? []}
+            canManage={membersQuery.data?.access.canManageAgents ?? false}
+          />
+          <ChannelBindingsTable companyId={selectedCompanyId} />
+        </>
+      ) : null}
 
       <Dialog open={!!editingMember} onOpenChange={(open) => !open && setEditingMemberId(null)}>
         <DialogContent className="max-w-2xl">

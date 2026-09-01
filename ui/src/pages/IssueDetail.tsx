@@ -896,7 +896,7 @@ type IssueDetailActivityTabProps = {
   currentUserId: string | null;
   userProfileMap: Map<string, import("../lib/company-members").CompanyUserProfile>;
   pendingApprovalAction: { approvalId: string; action: "approve" | "reject" } | null;
-  onApprovalAction: (approvalId: string, action: "approve" | "reject") => void;
+  onApprovalAction: (approvalId: string, action: "approve" | "reject", revision?: number) => void;
   handoffFocusSignal?: number;
 };
 
@@ -1083,8 +1083,8 @@ function IssueDetailActivityTab({
               key={approval.id}
               approval={approval}
               requesterAgent={approval.requestedByAgentId ? agentMap.get(approval.requestedByAgentId) ?? null : null}
-              onApprove={() => onApprovalAction(approval.id, "approve")}
-              onReject={() => onApprovalAction(approval.id, "reject")}
+              onApprove={() => onApprovalAction(approval.id, "approve", approval.revision)}
+              onReject={() => onApprovalAction(approval.id, "reject", approval.revision)}
               detailLink={`/approvals/${approval.id}`}
               isPending={pendingApprovalAction?.approvalId === approval.id}
               pendingAction={
@@ -1761,11 +1761,15 @@ export function IssueDetail() {
   }, [updateChildIssue]);
 
   const approvalDecision = useMutation({
-    mutationFn: async ({ approvalId, action }: { approvalId: string; action: "approve" | "reject" }) => {
+    mutationFn: async ({
+      approvalId,
+      action,
+      revision,
+    }: { approvalId: string; action: "approve" | "reject"; revision?: number }) => {
       if (action === "approve") {
-        return approvalsApi.approve(approvalId);
+        return approvalsApi.approve(approvalId, { revision });
       }
-      return approvalsApi.reject(approvalId);
+      return approvalsApi.reject(approvalId, { revision });
     },
     onMutate: ({ approvalId, action }) => {
       setPendingApprovalAction({ approvalId, action });
@@ -3698,8 +3702,8 @@ export function IssueDetail() {
               userProfileMap={userProfileMap}
               pendingApprovalAction={pendingApprovalAction}
               handoffFocusSignal={handoffFocusSignal}
-              onApprovalAction={(approvalId, action) => {
-                approvalDecision.mutate({ approvalId, action });
+              onApprovalAction={(approvalId, action, revision) => {
+                approvalDecision.mutate({ approvalId, action, revision });
               }}
             />
           ) : null}

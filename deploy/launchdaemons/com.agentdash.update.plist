@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/yang</string>
+		<key>AGENTDASH_INSTANCE</key>
+		<string>mkboard</string>
+		<key>AGENTDASH_APP_DIR</key>
+		<string>/Users/yang/agentdash</string>
+	</dict>
+	<key>GroupName</key>
+	<string>staff</string>
+	<key>Label</key>
+	<string>com.agentdash.update</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/yang/agentdash/deploy/agentdash-update.sh</string>
+	</array>
+	<!-- 09:15 local. Deliberately not at night: if an update does go wrong,
+	     someone should be awake to see the rollback happen. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>9</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
+	<key>StandardErrorPath</key>
+	<string>/Users/yang/Library/Logs/agentdash/update.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/yang/Library/Logs/agentdash/update.log</string>
+	<key>UserName</key>
+	<string>yang</string>
+</dict>
+</plist>

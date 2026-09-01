@@ -40,17 +40,25 @@ function completionRate(stats: UserProfileWindowStats) {
   return `${Math.round((stats.completedIssues / stats.touchedIssues) * 100)}%`;
 }
 
-function HeroStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function HeroStat({ label, value, hint, muted }: { label: string; value: string; hint?: string; muted?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-2xl font-semibold tabular-nums sm:text-3xl">{value}</div>
+      {/* A sentence set at 3xl beside real figures reads as the headline number
+          rather than the absence of one, and wraps the column besides. */}
+      <div className={muted ? "text-lg font-medium text-muted-foreground" : "text-2xl font-semibold tabular-nums sm:text-3xl"}>{value}</div>
       <div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       {hint ? <div className="mt-0.5 text-xs text-muted-foreground/70">{hint}</div> : null}
     </div>
   );
 }
 
-function WindowColumn({ stats }: { stats: UserProfileWindowStats }) {
+/**
+ * The one sentence every unmeasured figure on this page uses. Short, because it
+ * sits where a number was and must not reflow the column.
+ */
+const NOT_MEASURED = "Not measured";
+
+function WindowColumn({ stats, measured }: { stats: UserProfileWindowStats; measured: boolean }) {
   const tokens = totalTokens(stats);
   return (
     <div className="flex min-w-0 flex-col gap-4 border-l border-border pl-5 first:border-l-0 first:pl-0">
@@ -68,9 +76,9 @@ function WindowColumn({ stats }: { stats: UserProfileWindowStats }) {
 
       <div className="grid grid-cols-2 gap-x-5 gap-y-1.5 pt-3 text-xs tabular-nums text-muted-foreground">
         <span>Tokens</span>
-        <span className="text-right text-foreground">{formatTokens(tokens)}</span>
+        <span className="text-right text-foreground">{measured ? formatTokens(tokens) : NOT_MEASURED}</span>
         <span>Spend</span>
-        <span className="text-right text-foreground">{formatCents(stats.costCents)}</span>
+        <span className="text-right text-foreground">{measured ? formatCents(stats.costCents) : NOT_MEASURED}</span>
         <span>Created</span>
         <span className="text-right text-foreground">{formatNumber(stats.createdIssues)}</span>
         <span>Open</span>
@@ -89,26 +97,41 @@ function Metric({ value, label }: { value: string; label: string }) {
   );
 }
 
-function UsageChart({ points }: { points: UserProfileDailyPoint[] }) {
+function UsageChart({ points, measured }: { points: UserProfileDailyPoint[]; measured: boolean }) {
   const totals = points.map((point) => totalTokens(point));
   const maxTokens = Math.max(1, ...totals);
   const maxCompleted = Math.max(1, ...points.map((point) => point.completedIssues));
   const totalTokensSum = totals.reduce((sum, value) => sum + value, 0);
+
+  /**
+   * With no metering the bars would be a flat row of zeroes under a "tokens /
+   * day" legend — a fourteen-day claim that nobody did anything. Completions we
+   * do know, so the chart draws those instead and says which it is drawing.
+   */
+  const barOf = (point: UserProfileDailyPoint) =>
+    measured ? totalTokens(point) : point.completedIssues;
+  const barMax = measured ? maxTokens : maxCompleted;
 
   return (
     <section>
       <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border pb-3">
         <h2 className="text-sm font-semibold">Last 14 days</h2>
         <div className="flex items-baseline gap-4 text-xs text-muted-foreground">
-          <span className="tabular-nums text-foreground">{formatTokens(totalTokensSum)}</span>
-          <span>tokens total</span>
+          {measured ? (
+            <>
+              <span className="tabular-nums text-foreground">{formatTokens(totalTokensSum)}</span>
+              <span>tokens total</span>
+            </>
+          ) : (
+            <span>Tokens not measured</span>
+          )}
         </div>
       </div>
       <div className="mt-6 grid grid-cols-[repeat(14,minmax(0,1fr))] items-end gap-1.5 sm:gap-2">
         {points.map((point) => {
-          const tokens = totalTokens(point);
-          const heightPct = tokens === 0 ? 0 : Math.max(2, Math.round((tokens / maxTokens) * 100));
-          const completedPct = point.completedIssues === 0
+          const tokens = barOf(point);
+          const heightPct = tokens === 0 ? 0 : Math.max(2, Math.round((tokens / barMax) * 100));
+          const completedPct = !measured || point.completedIssues === 0
             ? 0
             : Math.max(8, Math.round((point.completedIssues / maxCompleted) * 36));
           return (
@@ -116,7 +139,11 @@ function UsageChart({ points }: { points: UserProfileDailyPoint[] }) {
               <div
                 className="w-full bg-foreground/80 transition-opacity group-hover:bg-foreground"
                 style={{ height: `${heightPct}%`, minHeight: tokens === 0 ? 1 : undefined }}
-                title={`${formatShortDate(point.date)}: ${formatTokens(tokens)} tokens, ${point.completedIssues} completed`}
+                title={
+                  measured
+                    ? `${formatShortDate(point.date)}: ${formatTokens(tokens)} tokens, ${point.completedIssues} completed`
+                    : `${formatShortDate(point.date)}: ${point.completedIssues} completed`
+                }
               />
               {completedPct > 0 ? (
                 <div
@@ -137,11 +164,13 @@ function UsageChart({ points }: { points: UserProfileDailyPoint[] }) {
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-4 text-[10px] uppercase tracking-wide text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 bg-foreground/80" /> tokens / day
+          <span className="h-2 w-2 bg-foreground/80" /> {measured ? "tokens / day" : "completions / day"}
         </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-[3px] w-4 rounded-full bg-emerald-500/80" /> completions
-        </span>
+        {measured ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-[3px] w-4 rounded-full bg-emerald-500/80" /> completions
+          </span>
+        ) : null}
       </div>
     </section>
   );
@@ -255,6 +284,9 @@ export function UserProfile() {
   }
 
   const allTimeTokens = allTime ? totalTokens(allTime) : 0;
+  // Explicitly `=== true`: an older server, or a payload that lost the field in
+  // transit, must fall to "not measured" rather than to a confident zero.
+  const measured = data.measured === true;
   const metaParts = [
     data.user.membershipRole ?? "member",
     data.user.membershipStatus,
@@ -283,7 +315,12 @@ export function UserProfile() {
         </div>
 
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <HeroStat label="All-time tokens" value={formatTokens(allTimeTokens)} hint={formatCents(allTime?.costCents ?? 0) + " spent"} />
+          <HeroStat
+            label="All-time tokens"
+            value={measured ? formatTokens(allTimeTokens) : NOT_MEASURED}
+            hint={measured ? formatCents(allTime?.costCents ?? 0) + " spent" : "no metering on this instance"}
+            muted={!measured}
+          />
           <HeroStat label="Completed" value={formatNumber(allTime?.completedIssues ?? 0)} hint={allTime ? `${completionRate(allTime)} rate` : undefined} />
           <HeroStat label="Open assigned" value={formatNumber(allTime?.assignedOpenIssues ?? 0)} hint={`${formatNumber(allTime?.createdIssues ?? 0)} created`} />
           <HeroStat label="7-day actions" value={formatNumber(last7?.activityCount ?? 0)} hint={`${formatNumber(last7?.commentCount ?? 0)} comments`} />
@@ -291,10 +328,10 @@ export function UserProfile() {
       </section>
 
       <section className="grid gap-8 border-b border-border pb-8 lg:grid-cols-3">
-        {data.stats.map((entry) => <WindowColumn key={entry.key} stats={entry} />)}
+        {data.stats.map((entry) => <WindowColumn key={entry.key} stats={entry} measured={measured} />)}
       </section>
 
-      <UsageChart points={data.daily} />
+      <UsageChart points={data.daily} measured={measured} />
 
       <div className="grid gap-10 pt-2 xl:grid-cols-2">
         <section>

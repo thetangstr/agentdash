@@ -1,4 +1,7 @@
 export const queryKeys = {
+  issueReports: {
+    config: ["issue-reports", "config"] as const,
+  },
   companies: {
     all: ["companies"] as const,
     detail: (id: string) => ["companies", id] as const,
@@ -93,6 +96,33 @@ export const queryKeys = {
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,
   },
+  stewardships: {
+    byAgent: (companyId: string, agentId: string) =>
+      ["stewardships", companyId, agentId] as const,
+    history: (companyId: string, agentId: string) =>
+      ["stewardships", "history", companyId, agentId] as const,
+  },
+  myAgent: {
+    detail: (companyId: string) => ["myAgent", companyId] as const,
+    inbox: (companyId: string) => ["myAgent", "inbox", companyId] as const,
+    /**
+     * Distinct from `inbox` on purpose. That key holds the OPEN-only response
+     * My Agent renders; this one holds the open-and-resolved response the Inbox
+     * uses to scope its tabs. Sharing a key would let whichever query mounted
+     * last decide what the other saw — and the failure mode is silent, because
+     * both responses have the same shape.
+     */
+    inboxScope: (companyId: string) => ["myAgent", "inboxScope", companyId] as const,
+    channels: (companyId: string) => ["myAgent", "channels", companyId] as const,
+    hubspot: (companyId: string) => ["myAgent", "hubspot", companyId] as const,
+    overrideInbox: (companyId: string) => ["myAgent", "overrideInbox", companyId] as const,
+    governance: (companyId: string, agentId: string) =>
+      ["myAgent", "governance", companyId, agentId] as const,
+    currentWork: (companyId: string, agentId: string) =>
+      ["myAgent", "currentWork", companyId, agentId] as const,
+    activity: (companyId: string, agentId: string) =>
+      ["myAgent", "activity", companyId, agentId] as const,
+  },
   approvals: {
     list: (companyId: string, status?: string) =>
       ["approvals", companyId, status] as const,
@@ -112,6 +142,7 @@ export const queryKeys = {
     joinRequests: (companyId: string, status: string = "pending_approval") =>
       ["access", "join-requests", companyId, status] as const,
     companyMembers: (companyId: string) => ["access", "company-members", companyId] as const,
+    channelBindings: (companyId: string) => ["access", "channel-bindings", companyId] as const,
     companyUserDirectory: (companyId: string) => ["access", "company-user-directory", companyId] as const,
     adminUsers: (query: string) => ["access", "admin-users", query] as const,
     userCompanyAccess: (userId: string) => ["access", "user-company-access", userId] as const,
@@ -120,6 +151,9 @@ export const queryKeys = {
   },
   auth: {
     session: ["auth", "session"] as const,
+  },
+  onboarding: {
+    memberSessions: ["onboarding", "member-sessions"] as const,
   },
   sidebarPreferences: {
     companyOrder: (userId: string) => ["sidebar-preferences", "company-order", userId] as const,
@@ -144,6 +178,8 @@ export const queryKeys = {
   activity: (companyId: string) => ["activity", companyId] as const,
   costs: (companyId: string, from?: string, to?: string) =>
     ["costs", companyId, from, to] as const,
+  costsRunActivity: (companyId: string, from?: string, to?: string) =>
+    ["costs-run-activity", companyId, from, to] as const,
   usageByProvider: (companyId: string, from?: string, to?: string) =>
     ["usage-by-provider", companyId, from, to] as const,
   usageByBiller: (companyId: string, from?: string, to?: string) =>

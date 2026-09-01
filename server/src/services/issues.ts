@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { clearIssueDependents } from "./issue-dependents.js";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -20,6 +21,7 @@ import {
   issueRelations,
   issueComments,
   issueDocuments,
+  issueWorkProducts,
   issueReadStates,
   issueThreadInteractions,
   issues,
@@ -28,7 +30,12 @@ import {
   projects,
 } from "@paperclipai/db";
 import type {
+  IssueAssigneeSteward,
+  IssueAwaitingReview,
   IssueBlockerAttention,
+  IssueExecutionStagePrincipal,
+  IssueExecutionStageType,
+  IssueExecutionStateStatus,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
@@ -53,6 +60,8 @@ import {
   type ActiveIssueTreePauseHoldGate,
 } from "./issue-tree-control.js";
 import { parseIssueGraphLivenessIncidentKey } from "./recovery/origins.js";
+import { agentStewardshipService } from "./agent-stewardships.js";
+import { authUsers } from "@paperclipai/db";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -69,19 +78,40 @@ function assertTransition(from: string, to: string) {
   }
 }
 
+/**
+ * Stamp the moment an issue ENTERS a state, not every time it is touched while
+ * in it.
+ *
+ * `completedAt` and `cancelledAt` were set unconditionally whenever an update
+ * carried the matching status, while `startedAt` beside them was guarded. So
+ * any edit to an already-done issue — a label, a description, a probe that
+ * echoes the status back — rewrote when the work finished.
+ *
+ * Observed on the UAT instance: two issues completed on 2026-08-14 at 16:47
+ * showed 2026-08-15 14:46 after someone PATCHed them, and nothing in the
+ * response suggested a timestamp had moved. Completion times feed "how long did
+ * this take" and anything cycle-shaped, so silently rewriting them corrupts the
+ * record while looking like a successful edit.
+ *
+ * A missing timestamp is still filled in, so an issue that somehow reached
+ * `done` without one is repaired rather than left blank.
+ */
 function applyStatusSideEffects(
   status: string | undefined,
   patch: Partial<typeof issues.$inferInsert>,
+  existing?: { status?: string | null; startedAt?: Date | null; completedAt?: Date | null; cancelledAt?: Date | null } | null,
 ): Partial<typeof issues.$inferInsert> {
   if (!status) return patch;
 
-  if (status === "in_progress" && !patch.startedAt) {
+  const entering = !existing || existing.status !== status;
+
+  if (status === "in_progress" && !patch.startedAt && (entering || !existing?.startedAt)) {
     patch.startedAt = new Date();
   }
-  if (status === "done") {
+  if (status === "done" && (entering || !existing?.completedAt)) {
     patch.completedAt = new Date();
   }
-  if (status === "cancelled") {
+  if (status === "cancelled" && (entering || !existing?.cancelledAt)) {
     patch.cancelledAt = new Date();
   }
   return patch;
@@ -105,6 +135,11 @@ function buildReusedExecutionWorkspaceConfigPatchFromIssueSettings(
 }
 
 export interface IssueFilters {
+  /**
+   * A5: the actor's project-visibility condition from routes/visibility.ts.
+   * Undefined for admins. The service composes it; it never derives it.
+   */
+  visibleWhere?: SQL;
   status?: string;
   assigneeAgentId?: string;
   participantAgentId?: string;
@@ -112,6 +147,14 @@ export interface IssueFilters {
   touchedByUserId?: string;
   inboxArchivedByUserId?: string;
   unreadForUserId?: string;
+  /**
+   * AgentDash: age-2 — the requesting viewer's userId, independent of any
+   * user-scoped *filter*. Board fetches send no touched/unread filters, so
+   * without this the "awaiting your review" badge would never light on the
+   * board even though the viewer is the pending reviewer. Purely a badge
+   * input; it never narrows the WHERE clause.
+   */
+  viewerUserId?: string;
   projectId?: string;
   workspaceId?: string;
   executionWorkspaceId?: string;
@@ -123,12 +166,31 @@ export interface IssueFilters {
   includeRoutineExecutions?: boolean;
   excludeRoutineExecutions?: boolean;
   includeBlockedBy?: boolean;
+  /**
+   * AgentDash: age-2 — opt-in for the `assigneeSteward` join (1–2 extra
+   * batched queries per page). Only the board-facing list route sets it;
+   * agent inbox routes, portability scans, and other internal callers
+   * never render a steward chip and should not pay for it.
+   */
+  includeAssigneeSteward?: boolean;
   q?: string;
   limit?: number;
   offset?: number;
 }
 
-type IssueRow = typeof issues.$inferSelect;
+type IssueRow = typeof issues.$inferSelect & {
+  // Slim execution-review projection appended by `issueListSelect`. The
+  // full `executionState` is deliberately nulled on list rows to keep the
+  // payload bounded; this triple is the minimum needed to decide whether
+  // to render the "awaiting your review" badge on a card. Optional
+  // because most call sites don't construct a list-payload row and don't
+  // need the projection.
+  executionReviewSignals?: {
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null;
+};
 type IssueLabelRow = typeof labels.$inferSelect;
 type IssueActiveRunRow = {
   id: string;
@@ -196,7 +258,35 @@ export type ChildIssueCompletionSummary = {
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
   updatedAt: Date;
-  summary: string | null;
+  /**
+   * Counts, not content. A truncated preview here invites the parent to
+   * consolidate from the preview instead of fetching the source artifacts,
+   * which is exactly the lossy substitution design section 12 rules out.
+   */
+  contributionCounts: { comments: number; documents: number; workProducts: number };
+};
+
+/** One child issue's complete contribution, with author provenance. */
+export type ChildContribution = {
+  sourceIssueId: string;
+  sourceIssueIdentifier: string | null;
+  title: string;
+  status: string;
+  agentId: string | null;
+  comments: Array<{
+    id: string;
+    body: string;
+    authorAgentId: string | null;
+    authorUserId: string | null;
+    createdAt: Date;
+  }>;
+  documents: Array<{ id: string; key: string; title: string | null; format: string }>;
+  /**
+   * Work products record the RUN that produced them, not an agent directly;
+   * agent attribution comes from the child issue's assignee, which is the
+   * contribution's `agentId`.
+   */
+  workProducts: Array<{ id: string; title: string; type: string; status: string; createdByRunId: string | null }>;
 };
 
 function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
@@ -1396,6 +1486,115 @@ async function listIssueBlockerAttentionMap(
   return attentionMap;
 }
 
+/**
+ * Build a per-issue "active steward" projection for the issues-list payload.
+ *
+ * For every issue whose assigneeAgentId is set we want to know who is
+ * accountable for it: the explicit active steward if one exists, otherwise
+ * the agent's owner (the user who created the agent — whoever owns an
+ * agent is accountable when nobody is explicitly stewarding it). When
+ * neither is known the field is null and the UI simply doesn't render a
+ * chip.
+ *
+ * Two batched queries per list call that opts in via
+ * `IssueFilters.includeAssigneeSteward`:
+ *   1. `stewardships.activeStewardsByAgentIds` — explicit active stewards.
+ *   2. `agents.created_by_user_id` LEFT JOIN auth_users — owner fallback
+ *      for any agent that did not have a steward row.
+ */
+async function buildAssigneeStewardsByIssueId(
+  db: Pick<Db, "select">,
+  companyId: string,
+  issueRows: Array<{ id: string; assigneeAgentId: string | null }>,
+): Promise<Map<string, IssueAssigneeSteward>> {
+  const result = new Map<string, IssueAssigneeSteward>();
+  const agentIds = Array.from(
+    new Set(issueRows.map((row) => row.assigneeAgentId).filter((value): value is string => Boolean(value))),
+  );
+  if (agentIds.length === 0) return result;
+
+  const stewardships = agentStewardshipService(db as Db);
+  const stewardsByAgentId = await stewardships.activeStewardsByAgentIds(companyId, agentIds);
+
+  const ownerAgentIds: string[] = [];
+  for (const agentId of agentIds) {
+    if (!stewardsByAgentId.has(agentId)) ownerAgentIds.push(agentId);
+  }
+
+  type OwnerRow = { id: string; createdByUserId: string | null; name: string | null; email: string | null };
+  const ownerByAgentId = new Map<string, OwnerRow>();
+  if (ownerAgentIds.length > 0) {
+    const rows = await db
+      .select({
+        id: agents.id,
+        createdByUserId: agents.createdByUserId,
+        name: authUsers.name,
+        email: authUsers.email,
+      })
+      .from(agents)
+      .leftJoin(authUsers, eq(authUsers.id, agents.createdByUserId))
+      .where(and(eq(agents.companyId, companyId), inArray(agents.id, ownerAgentIds)));
+    for (const row of rows) ownerByAgentId.set(row.id, row);
+  }
+
+  for (const issueRow of issueRows) {
+    if (!issueRow.assigneeAgentId) continue;
+    const steward = stewardsByAgentId.get(issueRow.assigneeAgentId);
+    if (steward) {
+      result.set(issueRow.id, {
+        userId: steward.userId,
+        name: steward.name,
+        email: steward.email,
+        source: "steward",
+      });
+      continue;
+    }
+    const owner = ownerByAgentId.get(issueRow.assigneeAgentId);
+    if (owner?.createdByUserId) {
+      result.set(issueRow.id, {
+        userId: owner.createdByUserId,
+        name: owner?.name ?? null,
+        email: owner?.email ?? null,
+        source: "owner",
+      });
+    }
+  }
+  return result;
+}
+
+function deriveIssueAwaitingReview(
+  signals: {
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null,
+  viewerUserId: string | null,
+): IssueAwaitingReview | null {
+  if (!viewerUserId) return null;
+  if (!signals) return null;
+  // Only the two "waiting on a human" statuses qualify. `idle` is "nothing
+  // happening", `completed` is "all stages approved" — neither should ever
+  // light up an awaiting-review badge.
+  if (signals.status !== "pending" && signals.status !== "changes_requested") return null;
+  if (signals.currentStageType !== "review" && signals.currentStageType !== "approval") return null;
+  const participant = signals.currentParticipant;
+  if (!participant) return null;
+  // The "awaiting your review" badge requires the viewer to actually be the
+  // current stage's user principal. Agent-principal stages are the agent's
+  // job; no user sees them as "their" review. When the principal is some
+  // other user we return null — the metadata simply isn't there for this
+  // viewer, which keeps the badge strictly personal.
+  if (participant.type !== "user") return null;
+  if (participant.userId !== viewerUserId) return null;
+
+  return {
+    viewerUserId,
+    stageType: signals.currentStageType,
+    status: signals.status,
+    viewerMatchesPrincipal: true,
+  };
+}
+
 const issueListSelect = {
   id: issues.id,
   companyId: issues.companyId,
@@ -1438,7 +1637,27 @@ const issueListSelect = {
   // AgentDash: goals-eval-hitl
   definitionOfDone: sql<null>`null`,
   executionPolicy: sql<null>`null`,
+  // List payload must stay slim — the full executionState carries stage
+  // history that can grow without bound; the index-route payload test
+  // enforces `executionState: null`. We instead surface a tightly-bounded
+  // JSON projection of the three fields the "awaiting your review" badge
+  // needs (status, currentStageType, currentParticipant). It is computed
+  // once in SQL per row and parsed back to IssueAwaitingReview in JS.
   executionState: sql<null>`null`,
+  executionReviewSignals: sql<{
+    status: IssueExecutionStateStatus | null;
+    currentStageType: IssueExecutionStageType | null;
+    currentParticipant: IssueExecutionStagePrincipal | null;
+  } | null>`
+    CASE
+      WHEN ${issues.executionState} IS NULL THEN NULL
+      ELSE jsonb_build_object(
+        'status', ${issues.executionState}->>'status',
+        'currentStageType', ${issues.executionState}->'currentStageType',
+        'currentParticipant', ${issues.executionState}->'currentParticipant'
+      )
+    END
+  `,
   executionWorkspaceId: issues.executionWorkspaceId,
   executionWorkspacePreference: issues.executionWorkspacePreference,
   executionWorkspaceSettings: sql<null>`null`,
@@ -2123,6 +2342,7 @@ export function issueService(db: Db) {
 
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
+      if (filters?.visibleWhere) conditions.push(filters.visibleWhere);
       const limit = typeof filters?.limit === "number" && Number.isFinite(filters.limit)
         ? Math.max(1, Math.floor(filters.limit))
         : undefined;
@@ -2133,7 +2353,12 @@ export function issueService(db: Db) {
       const inboxArchivedByUserId = filters?.inboxArchivedByUserId?.trim() || undefined;
       const unreadForUserId = filters?.unreadForUserId?.trim() || undefined;
       const contextUserId = unreadForUserId ?? touchedByUserId ?? inboxArchivedByUserId;
+      // AgentDash: age-2 — badge viewer, independent of the context filters.
+      // Falls back to contextUserId so callers that already scope by user
+      // (inbox/unread lists) get badges without passing an extra param.
+      const badgeViewerUserId = filters?.viewerUserId?.trim() || contextUserId || null;
       const includeBlockedBy = filters?.includeBlockedBy === true;
+      const includeAssigneeSteward = filters?.includeAssigneeSteward === true;
       const rawSearch = filters?.q?.trim() ?? "";
       const hasSearch = rawSearch.length > 0;
       const escapedSearch = hasSearch ? escapeLikePattern(rawSearch) : "";
@@ -2268,7 +2493,7 @@ export function issueService(db: Db) {
       }
 
       const issueIds = withRuns.map((row) => row.id);
-      const [statsRows, readRows, lastActivityRows, blockedByMap] = await Promise.all([
+      const [statsRows, readRows, lastActivityRows, blockedByMap, stewardByIssueId] = await Promise.all([
         contextUserId
           ? userCommentStatsForIssues(db, companyId, contextUserId, issueIds)
           : Promise.resolve([]),
@@ -2279,6 +2504,9 @@ export function issueService(db: Db) {
         includeBlockedBy
           ? blockedByMapForIssues(db, companyId, issueIds)
           : Promise.resolve(new Map<string, IssueRelationIssueSummary[]>()),
+        includeAssigneeSteward
+          ? buildAssigneeStewardsByIssueId(db, companyId, withRuns)
+          : Promise.resolve(new Map<string, IssueAssigneeSteward>()),
       ]);
       const statsByIssueId = new Map(statsRows.map((row) => [row.issueId, row]));
       const lastActivityByIssueId = new Map(lastActivityRows.map((row) => [row.issueId, row]));
@@ -2303,6 +2531,11 @@ export function issueService(db: Db) {
             ...(productivityReviewByIssueId.has(row.id)
               ? { productivityReview: productivityReviewByIssueId.get(row.id) }
               : {}),
+            ...(includeAssigneeSteward ? { assigneeSteward: stewardByIssueId.get(row.id) ?? null } : {}),
+            awaitingReviewByViewer: deriveIssueAwaitingReview(row.executionReviewSignals ?? null, badgeViewerUserId),
+            // AgentDash: age-2 — internal join field consumed above; never
+            // ship the raw projection on the wire.
+            executionReviewSignals: undefined,
           };
         });
       }
@@ -2324,6 +2557,14 @@ export function issueService(db: Db) {
           ...(productivityReviewByIssueId.has(row.id)
             ? { productivityReview: productivityReviewByIssueId.get(row.id) }
             : {}),
+          ...(includeAssigneeSteward ? { assigneeSteward: stewardByIssueId.get(row.id) ?? null } : {}),
+          awaitingReviewByViewer: deriveIssueAwaitingReview(
+            row.executionReviewSignals ?? null,
+            badgeViewerUserId,
+          ),
+          // AgentDash: age-2 — internal join field consumed above; never
+          // ship the raw projection on the wire.
+          executionReviewSignals: undefined,
           ...deriveIssueUserContext(row, contextUserId, {
             myLastCommentAt: statsByIssueId.get(row.id)?.myLastCommentAt ?? null,
             myLastReadAt: readByIssueId.get(row.id) ?? null,
@@ -2550,6 +2791,114 @@ export function issueService(db: Db) {
         }));
     },
 
+    /**
+     * Every child contribution, in full, with author provenance.
+     *
+     * Design section 12: the parent must be able to retrieve complete child
+     * documents and work products, not a truncated latest-comment summary, and
+     * the consolidated output must link every required contribution and
+     * contributing agent. `complete` reports whether any required child is
+     * still outstanding, so a consolidator can tell "nothing to say" apart from
+     * "not finished yet".
+     */
+    listChildContributions: async (
+      companyId: string,
+      parentIssueId: string,
+    ): Promise<{
+      contributions: ChildContribution[];
+      contributingAgentIds: string[];
+      complete: boolean;
+    }> => {
+      const children = await db
+        .select({
+          id: issues.id,
+          identifier: issues.identifier,
+          title: issues.title,
+          status: issues.status,
+          assigneeAgentId: issues.assigneeAgentId,
+        })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.parentId, parentIssueId)))
+        .orderBy(asc(issues.issueNumber), asc(issues.createdAt));
+
+      if (children.length === 0) {
+        return { contributions: [], contributingAgentIds: [], complete: true };
+      }
+
+      const childIds = children.map((child) => child.id);
+      const [comments, docRows, workProducts] = await Promise.all([
+        db
+          .select({
+            id: issueComments.id,
+            issueId: issueComments.issueId,
+            body: issueComments.body,
+            authorAgentId: issueComments.authorAgentId,
+            authorUserId: issueComments.authorUserId,
+            createdAt: issueComments.createdAt,
+          })
+          .from(issueComments)
+          .where(and(eq(issueComments.companyId, companyId), inArray(issueComments.issueId, childIds)))
+          .orderBy(asc(issueComments.createdAt)),
+        db
+          .select({
+            issueId: issueDocuments.issueId,
+            id: documents.id,
+            key: issueDocuments.key,
+            title: documents.title,
+            format: documents.format,
+          })
+          .from(issueDocuments)
+          .innerJoin(documents, eq(documents.id, issueDocuments.documentId))
+          .where(and(eq(issueDocuments.companyId, companyId), inArray(issueDocuments.issueId, childIds))),
+        db
+          .select({
+            id: issueWorkProducts.id,
+            issueId: issueWorkProducts.issueId,
+            title: issueWorkProducts.title,
+            type: issueWorkProducts.type,
+            status: issueWorkProducts.status,
+            createdByRunId: issueWorkProducts.createdByRunId,
+          })
+          .from(issueWorkProducts)
+          .where(and(eq(issueWorkProducts.companyId, companyId), inArray(issueWorkProducts.issueId, childIds))),
+      ]);
+
+      const contributions: ChildContribution[] = children.map((child) => ({
+        sourceIssueId: child.id,
+        sourceIssueIdentifier: child.identifier,
+        title: child.title,
+        status: child.status,
+        agentId: child.assigneeAgentId,
+        // Full bodies: truncation here would recreate the gap this exists to close.
+        comments: comments
+          .filter((comment) => comment.issueId === child.id)
+          .map(({ issueId: _issueId, ...comment }) => comment),
+        documents: docRows
+          .filter((doc) => doc.issueId === child.id)
+          .map(({ issueId: _issueId, ...doc }) => doc),
+        workProducts: workProducts
+          .filter((product) => product.issueId === child.id)
+          .map(({ issueId: _issueId, ...product }) => product),
+      }));
+
+      const contributingAgentIds = [
+        ...new Set(
+          contributions
+            .flatMap((contribution) => [
+              contribution.agentId,
+              ...contribution.comments.map((comment) => comment.authorAgentId),
+            ])
+            .filter((id): id is string => !!id),
+        ),
+      ];
+
+      return {
+        contributions,
+        contributingAgentIds,
+        complete: children.every((child) => child.status === "done" || child.status === "cancelled"),
+      };
+    },
+
     getWakeableParentAfterChildCompletion: async (parentIssueId: string) => {
       const parent = await db
         .select({
@@ -2584,29 +2933,39 @@ export function issueService(db: Db) {
         return null;
       }
 
-      const childIdsForSummaries = children.slice(0, MAX_CHILD_COMPLETION_SUMMARIES).map((child) => child.id);
-      const commentRows = childIdsForSummaries.length > 0
-        ? await db
-            .select({
-              issueId: issueComments.issueId,
-              body: issueComments.body,
-              createdAt: issueComments.createdAt,
-            })
-            .from(issueComments)
-            .where(and(eq(issueComments.companyId, parent.companyId), inArray(issueComments.issueId, childIdsForSummaries)))
-            .orderBy(desc(issueComments.createdAt), desc(issueComments.id))
-        : [];
-      const latestCommentByIssueId = new Map<string, string>();
-      for (const comment of commentRows) {
-        if (!latestCommentByIssueId.has(comment.issueId)) {
-          latestCommentByIssueId.set(comment.issueId, comment.body);
-        }
-      }
+      // Counts per child rather than a truncated latest comment: the parent is
+      // told WHAT exists and where, then fetches the complete artifacts through
+      // listChildContributions.
+      const childIds = children.map((child) => child.id);
+      const [commentCounts, documentCounts, workProductCounts] = await Promise.all([
+        db
+          .select({ issueId: issueComments.issueId, count: sql<number>`count(*)::int` })
+          .from(issueComments)
+          .where(and(eq(issueComments.companyId, parent.companyId), inArray(issueComments.issueId, childIds)))
+          .groupBy(issueComments.issueId),
+        db
+          .select({ issueId: issueDocuments.issueId, count: sql<number>`count(*)::int` })
+          .from(issueDocuments)
+          .where(and(eq(issueDocuments.companyId, parent.companyId), inArray(issueDocuments.issueId, childIds)))
+          .groupBy(issueDocuments.issueId),
+        db
+          .select({ issueId: issueWorkProducts.issueId, count: sql<number>`count(*)::int` })
+          .from(issueWorkProducts)
+          .where(and(eq(issueWorkProducts.companyId, parent.companyId), inArray(issueWorkProducts.issueId, childIds)))
+          .groupBy(issueWorkProducts.issueId),
+      ]);
+      const countFor = (rows: Array<{ issueId: string; count: number }>, issueId: string) =>
+        rows.find((row) => row.issueId === issueId)?.count ?? 0;
+
       const childIssueSummaries: ChildIssueCompletionSummary[] = children
         .slice(0, MAX_CHILD_COMPLETION_SUMMARIES)
         .map((child) => ({
           ...child,
-          summary: truncateInlineSummary(latestCommentByIssueId.get(child.id)),
+          contributionCounts: {
+            comments: countFor(commentCounts, child.id),
+            documents: countFor(documentCounts, child.id),
+            workProducts: countFor(workProductCounts, child.id),
+          },
         }));
 
       return {
@@ -2948,7 +3307,7 @@ export function issueService(db: Db) {
         await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
       }
 
-      applyStatusSideEffects(issueData.status, patch);
+      applyStatusSideEffects(issueData.status, patch, existing);
       if (issueData.status && issueData.status !== "done") {
         patch.completedAt = null;
       }
@@ -3092,6 +3451,10 @@ export function issueService(db: Db) {
           .select({ documentId: issueDocuments.documentId })
           .from(issueDocuments)
           .where(eq(issueDocuments.issueId, id));
+
+        // Every dependent that would block the delete below. Shared with the
+        // project-delete path so the two cannot drift apart.
+        await clearIssueDependents(tx, sql`= ${id}`);
 
         const removedIssue = await tx
           .delete(issues)
@@ -3571,6 +3934,24 @@ export function issueService(db: Db) {
           const comment = rows[0] ?? null;
           return comment ? redactIssueComment(comment, censorUsernameInLogs) : null;
         })),
+
+    /**
+     * The body of the newest comment this agent left on this issue.
+     *
+     * Exists so a status change can be checked against what the agent just
+     * said. Agents post the comment and set the status in two separate calls,
+     * so the comment is not in hand when the update arrives — see
+     * `resolveAgentClosingStatus` in issue-blocked-declaration.ts for why that
+     * disagreement matters.
+     */
+    latestAgentCommentBody: (issueId: string, agentId: string): Promise<string | null> =>
+      db
+        .select({ body: issueComments.body })
+        .from(issueComments)
+        .where(and(eq(issueComments.issueId, issueId), eq(issueComments.authorAgentId, agentId)))
+        .orderBy(desc(issueComments.createdAt))
+        .limit(1)
+        .then((rows) => rows[0]?.body ?? null),
 
     removeComment: async (commentId: string) => {
       const currentUserRedactionOptions = {

@@ -2,7 +2,7 @@
 //
 // Refresh stale `<!-- AgentDash: SLUG -->...<!-- /AgentDash: SLUG -->` blocks
 // inside an agent's bundled AGENTS.md when the underlying source files
-// (server/src/onboarding-assets/{default,ceo,chief_of_staff}/AGENTS.md) have
+// (server/src/onboarding-assets/default/AGENTS.md) have
 // drifted from what was baked into the agent's instructions bundle at create
 // time.
 //
@@ -54,7 +54,12 @@ export interface AgentInstructionRefreshDeps {
   instructions?: ReturnType<typeof agentInstructionsService>;
 }
 
-export type SourceArchetype = "default" | "ceo" | "chief_of_staff";
+// One archetype for every agent. This used to be "default" | "ceo" |
+// "chief_of_staff", but the two persona archetypes were the same inherited
+// Paperclip CEO character on top of an identical block set, so they are gone
+// (see default-agent-instructions.ts). The union stays a named type because
+// the loader plumbing is injectable in tests.
+export type SourceArchetype = "default";
 
 interface BlockSpan {
   slug: string;
@@ -133,9 +138,15 @@ export function __resetAgentInstructionRefreshCache(): void {
 // Archetype resolution
 // ---------------------------------------------------------------------------
 
-function archetypeForAgent(agent: { role: string }): SourceArchetype {
-  if (agent.role === "ceo") return "ceo";
-  if (agent.role === "chief_of_staff") return "chief_of_staff";
+function archetypeForAgent(_agent: { role: string }): SourceArchetype {
+  // One archetype for every role. The `ceo` and `chief_of_staff` archetypes
+  // were the same inherited Paperclip persona ("You are the CEO", delegate
+  // everything, never do the work) sitting on top of an identical shared block
+  // set — this very service had kept the blocks in sync across all three
+  // copies, so the only real difference was the persona intro. The product's
+  // model is a steward and their agent, not an org chart, so the persona is
+  // gone and `default` is the source of truth. Role now carries routing and
+  // display meaning only; authority comes from permission grants.
   return "default";
 }
 

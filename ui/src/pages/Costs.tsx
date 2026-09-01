@@ -5,6 +5,7 @@ import type {
   CostByAgentModel,
   CostByBiller,
   CostByProviderModel,
+  CostRunActivity,
   CostWindowSpendRow,
   FinanceEvent,
   QuotaWindow,
@@ -73,14 +74,16 @@ function MetricTile({
   value,
   subtitle,
   icon: Icon,
+  testId,
 }: {
   label: string;
   value: string;
   subtitle: string;
   icon: ComponentType<{ className?: string }>;
+  testId?: string;
 }) {
   return (
-    <div className="border border-border p-4">
+    <div className="border border-border p-4" data-testid={testId}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
@@ -91,6 +94,65 @@ function MetricTile({
           <Icon className="h-4 w-4 text-muted-foreground" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  if (minutes < 60) return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/**
+ * The counterweight to "Not measured".
+ *
+ * A costs page that can only say what it does not know reads as though nothing
+ * is happening — which is its own false claim, and on both live instances an
+ * untrue one. Runs and wall-clock ARE recorded completely, so they go directly
+ * beside the figure we cannot produce.
+ *
+ * Renders nothing when there are no runs: an empty strip of dashes would put
+ * the page back where it started.
+ */
+function RunActivityStrip({ activity }: { activity?: CostRunActivity }) {
+  if (!activity || activity.totalRuns === 0) return null;
+  return (
+    <div
+      className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t border-border pt-3 text-xs text-muted-foreground"
+      data-testid="run-activity-strip"
+    >
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{activity.totalRuns}</span>{" "}
+        agent {activity.totalRuns === 1 ? "run" : "runs"}
+      </span>
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{activity.succeededRuns}</span> succeeded
+        {activity.failedRuns > 0 ? (
+          <>
+            {" · "}
+            <span className="tabular-nums font-medium text-foreground">{activity.failedRuns}</span> failed
+          </>
+        ) : null}
+      </span>
+      <span>
+        median{" "}
+        <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.medianSeconds)}</span>
+        {activity.p90Seconds != null ? (
+          <>
+            {" · p90 "}
+            <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.p90Seconds)}</span>
+          </>
+        ) : null}
+      </span>
+      <span>
+        <span className="tabular-nums font-medium text-foreground">{formatDuration(activity.totalSeconds)}</span>{" "}
+        total wall-clock
+      </span>
     </div>
   );
 }
@@ -240,6 +302,17 @@ export function Costs() {
       ]);
       return { summary, byAgent, byProject, byAgentModel };
     },
+    enabled: !!selectedCompanyId && customReady,
+  });
+
+  /**
+   * The counterweight to "Not measured". Spend is unmeasurable on this runtime,
+   * but runs and their wall-clock are recorded completely — without them the
+   * page reads as though nothing is happening, which is its own false claim.
+   */
+  const { data: runActivity } = useQuery({
+    queryKey: queryKeys.costsRunActivity(companyId, from || undefined, to || undefined),
+    queryFn: () => costsApi.runActivity(companyId, from || undefined, to || undefined),
     enabled: !!selectedCompanyId && customReady,
   });
 
@@ -533,6 +606,9 @@ export function Costs() {
   }
 
   const showCustomPrompt = preset === "custom" && !customReady;
+  // Absent until the server says otherwise: an unknown must never render as
+  // a measured zero, including while the request is still in flight.
+  const spendMeasured = spendData?.summary.measured === true;
   const showOverviewLoading = (spendLoading || financeLoading) && customReady;
   const overviewError = spendError ?? financeError;
 
@@ -580,16 +656,27 @@ export function Costs() {
           ) : null}
 
           <div className="grid gap-3 lg:grid-cols-4">
+            {/* "$0.00" and "we cannot measure this" are different claims, and only
+                one is true here: the local Hermes adapter emits no token counts, so
+                nothing downstream can compute a cost. Telling an owner they spent
+                nothing is the most damaging thing this page could say to someone
+                deciding whether to trust the product with money. `measured` asks
+                whether spend was EVER recorded, not whether this range was quiet. */}
             <MetricTile
+              testId="inference-spend-tile"
               label="Inference spend"
-              value={formatCents(spendData?.summary.spendCents ?? 0)}
-              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`}
+              value={spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
+              subtitle={
+                spendMeasured
+                  ? `${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`
+                  : "This agent runtime reports no token usage, so spend cannot be calculated"
+              }
               icon={DollarSign}
             />
             <MetricTile
               label="Budget"
               value={activeBudgetIncidents.length > 0 ? String(activeBudgetIncidents.length) : (
-                spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
+                spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
                   ? `${spendData.summary.utilizationPercent}%`
                   : "Open"
               )}
@@ -597,7 +684,12 @@ export function Costs() {
                 activeBudgetIncidents.length > 0
                   ? `${budgetData?.pausedAgentCount ?? 0} agents paused · ${budgetData?.pausedProjectCount ?? 0} projects paused`
                   : spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                    ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
+                    // A cap is configured and real; how much of it is gone is not
+                    // knowable without metering, and "$0.00 of $500" reads as
+                    // headroom the owner does not actually know they have.
+                    ? spendMeasured
+                      ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
+                      : `${formatCents(spendData.summary.budgetCents)} cap · usage not measured`
                     : "No monthly cap configured"
               }
               icon={Coins}
@@ -655,7 +747,7 @@ export function Costs() {
               ) : null}
 
               <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
-                <Card>
+                <Card data-testid="inference-ledger-card">
                   <CardHeader className="px-5 pt-5 pb-2">
                     <CardTitle className="text-base">Inference ledger</CardTitle>
                     <CardDescription>
@@ -666,7 +758,7 @@ export function Costs() {
                     <div className="flex flex-wrap items-end justify-between gap-3">
                       <div>
                         <div className="text-3xl font-semibold tabular-nums">
-                          {formatCents(spendData?.summary.spendCents ?? 0)}
+                          {spendMeasured ? formatCents(spendData?.summary.spendCents ?? 0) : "Not measured"}
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
                           {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
@@ -676,12 +768,18 @@ export function Costs() {
                       </div>
                       <div className="border border-border px-4 py-3 text-right">
                         <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">usage</div>
-                        <div className="mt-1 text-lg font-medium tabular-nums">
-                          {formatTokens(inferenceTokenTotal)}
+                        <div className="mt-1 text-lg font-medium tabular-nums" data-testid="inference-usage-tokens">
+                          {spendMeasured ? formatTokens(inferenceTokenTotal) : "—"}
                         </div>
                       </div>
                     </div>
-                    {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
+                    <RunActivityStrip activity={runActivity} />
+                    {/* Utilisation is spend divided by budget, so an unmeasured
+                        spend makes it 0% — a green bar reading "0% of monthly
+                        budget consumed" is the single most actionable false
+                        claim on this page. Withhold the whole thing rather than
+                        colour a bar from a number we do not have. */}
+                    {spendMeasured && spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
                       <div className="space-y-2">
                         <div className="h-2 overflow-hidden bg-muted">
                           <div

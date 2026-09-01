@@ -64,7 +64,7 @@ Monorepo (pnpm workspaces). AgentDash-specific code is tagged with `// AgentDash
 | CLI | Commander, esbuild | [cli/src/index.ts](cli/src/index.ts) |
 | Database | PostgreSQL, Drizzle ORM | [packages/db/src/schema/](packages/db/src/schema/) |
 | Shared types | Zod validators, constants | [packages/shared/src/](packages/shared/src/) |
-| Agent adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, Hermes | [packages/adapters/](packages/adapters/) |
+| Agent adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, acpx | [packages/adapters/](packages/adapters/) |
 | Plugins | JSON-RPC workers, event bus | [packages/plugins/](packages/plugins/) |
 
 ### Common commands

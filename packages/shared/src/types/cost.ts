@@ -26,6 +26,38 @@ export interface CostSummary {
   spendCents: number;
   budgetCents: number;
   utilizationPercent: number;
+  /**
+   * Has spend for this company ever been measured at all?
+   *
+   * `spendCents: 0` is ambiguous in the most damaging direction — "nothing was
+   * spent" and "nothing could be measured" are the same number. This separates
+   * them so the UI can say which it means. False on any deployment whose
+   * adapter reports no token usage, which is the case for local Hermes today.
+   */
+  measured: boolean;
+}
+
+/**
+ * What the costs page can report honestly while spend is unmeasured.
+ *
+ * Runs and their wall-clock are recorded completely — every row on both live
+ * instances carries a start and a finish — so this is the evidence that work is
+ * happening even when no cost figure can be put beside it.
+ *
+ * There is no model or provider here on purpose: `heartbeat_runs` has no such
+ * column, so they are as unavailable as the token counts, and deriving them
+ * from an agent's configured adapter would be a guess about what actually ran.
+ */
+export interface CostRunActivity {
+  companyId: string;
+  totalRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  totalSeconds: number;
+  /** Null, never 0, when there is nothing to average. */
+  medianSeconds: number | null;
+  p90Seconds: number | null;
+  lastRunAt: string | Date | null;
 }
 
 export interface IssueCostSummary {

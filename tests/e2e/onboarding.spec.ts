@@ -57,6 +57,28 @@ test.describe("Onboarding wizard", () => {
 
     await page.getByRole("button", { name: "Next" }).click();
 
+    // Step 3 — mandate. Every answer defaults to the careful option, so the
+    // step advances without input; the wizard writes AGENTS.md from these.
+    await expect(
+      page.locator("h3", { hasText: "Set the rules for" })
+    ).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Next" }).click();
+
+    // Step 4 — first goal. Pre-filled with a worked example.
+    await expect(
+      page.locator("h3", { hasText: "Your first goal" })
+    ).toBeVisible({ timeout: 30_000 });
+    // The goal is now a decision, not a default. Nothing is pre-selected, so
+    // Next stays disabled until the owner picks an example, writes their own,
+    // or explicitly skips — a workspace used to ship a goal written for a
+    // different company purely because clicking through was easier than
+    // reading. Assert the gate, then make a choice like a person would.
+    const goalNext = page.getByRole("button", { name: "Next" });
+    await expect(goalNext).toBeDisabled();
+    await page.getByText("A recurring pack or report that takes days of chasing").click();
+    await expect(goalNext).toBeEnabled();
+    await goalNext.click();
+
     await expect(
       page.locator("h3", { hasText: "Give it something to do" })
     ).toBeVisible({ timeout: 30_000 });
@@ -112,9 +134,13 @@ test.describe("Onboarding wizard", () => {
       page.locator("h3", { hasText: "Ready to launch" })
     ).toBeVisible({ timeout: 30_000 });
 
-    await expect(page.locator("text=" + COMPANY_NAME)).toBeVisible();
-    await expect(page.locator("text=" + AGENT_NAME)).toBeVisible();
-    await expect(page.locator("text=" + TASK_TITLE)).toBeVisible();
+    // .first(): the launch summary now echoes these values in more than one
+    // place (name in the header and again in the review list), and a bare
+    // text= locator is strict-mode ambiguous. The assertion's intent is "the
+    // review step shows what I entered", which the first match proves.
+    await expect(page.locator("text=" + COMPANY_NAME).first()).toBeVisible();
+    await expect(page.locator("text=" + AGENT_NAME).first()).toBeVisible();
+    await expect(page.locator("text=" + TASK_TITLE).first()).toBeVisible();
 
     await page.getByRole("button", { name: "Create & Open Issue" }).click();
 
@@ -145,9 +171,14 @@ test.describe("Onboarding wizard", () => {
     );
     expect(instructionsBundleRes.ok()).toBe(true);
     const instructionsBundle = await instructionsBundleRes.json();
+    const expectedInstructionFiles = ceoAgent.adapterType === "hermes_local"
+      // Hermes does not advertise managed-bundle support; onboarding still
+      // persists the owner's mandate as AGENTS.md for inspection and editing.
+      ? ["AGENTS.md"]
+      : ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"];
     expect(
       instructionsBundle.files.map((file: { path: string }) => file.path).sort()
-    ).toEqual(["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"]);
+    ).toEqual(expectedInstructionFiles);
 
     const issuesRes = await page.request.get(
       `${baseUrl}/api/companies/${company.id}/issues`

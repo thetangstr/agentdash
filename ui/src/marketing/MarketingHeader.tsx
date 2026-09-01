@@ -11,6 +11,8 @@ export function MarketingHeader() {
         </a>
         <nav className="mkt-header__nav" aria-label="Primary">
           <a href="/">Product</a>
+          {/* AgentDash: MCP-native setup page */}
+          <a href="/mcp">MCP</a>
           <a href="/consulting">Consulting</a>
           <a href="/assess">Assessment</a>
           <a href="/about">About</a>

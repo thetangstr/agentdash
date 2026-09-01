@@ -7,7 +7,8 @@
 // + plaintext body would impersonate a trusted brand using AgentDash's
 // verified-domain DKIM/SPF as cover.
 import { describe, it, expect } from "vitest";
-import { sanitizeDisplayName, inviteEmailTemplate } from "../auth/email.ts";
+import { sanitizeDisplayName, inviteEmailTemplate, resetPasswordEmailTemplate } from "../auth/email.ts";
+import { formatTokenLifetime } from "../auth/better-auth.ts";
 
 describe("sanitizeDisplayName", () => {
   it("returns null for null/undefined/empty", () => {
@@ -100,5 +101,53 @@ describe("inviteEmailTemplate", () => {
     // create a second header line in some MTAs. The CRLF-free subject
     // assertion above covers that case.
     expect(t.text).toContain("CarolFwd: spam invited"); // CR/LF dropped, words remain plaintext
+  });
+});
+
+// The reset-link lifetime is configurable per deployment
+// (AGENTDASH_RESET_TOKEN_TTL_SECONDS), because an on-premise box gets its link
+// minted before it is physically relocated. The risk these tests guard is copy
+// drift: an email that claims "1 hour" while the token lives a week teaches the
+// recipient the message is untrustworthy.
+describe("formatTokenLifetime", () => {
+  it("renders whole days, hours and minutes in the largest exact unit", () => {
+    expect(formatTokenLifetime(3600)).toBe("1 hour");
+    expect(formatTokenLifetime(7200)).toBe("2 hours");
+    expect(formatTokenLifetime(86_400)).toBe("1 day");
+    expect(formatTokenLifetime(604_800)).toBe("7 days");
+    expect(formatTokenLifetime(5400)).toBe("90 minutes");
+    expect(formatTokenLifetime(90)).toBe("90 seconds");
+  });
+
+  it("singularises exactly at one", () => {
+    expect(formatTokenLifetime(60)).toBe("1 minute");
+    expect(formatTokenLifetime(1)).toBe("1 second");
+  });
+});
+
+describe("resetPasswordEmailTemplate lifetime copy", () => {
+  it("defaults to 1 hour when no lifetime is passed", () => {
+    const t = resetPasswordEmailTemplate({ resetUrl: "https://example.test/reset?token=abc" });
+    expect(t.text).toContain("expires in 1 hour");
+    expect(t.html).toContain("expires in 1 hour");
+  });
+
+  it("uses the configured lifetime in both the text and html parts", () => {
+    const t = resetPasswordEmailTemplate({
+      resetUrl: "https://example.test/reset?token=abc",
+      lifetime: formatTokenLifetime(604_800),
+    });
+    expect(t.text).toContain("expires in 7 days");
+    expect(t.html).toContain("expires in 7 days");
+    // The stale hardcoded string must be gone, not merely accompanied.
+    expect(t.text).not.toContain("1 hour");
+    expect(t.html).not.toContain("1 hour");
+  });
+
+  it("keeps the reset URL in both parts so a mangled link is recoverable", () => {
+    const url = "https://example.test/reset?token=abc&x=1";
+    const t = resetPasswordEmailTemplate({ resetUrl: url, lifetime: "7 days" });
+    expect(t.text).toContain(url);
+    expect(t.html).toContain("&amp;x=1"); // html-escaped, same URL
   });
 });

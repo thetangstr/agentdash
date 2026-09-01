@@ -74,4 +74,23 @@ describe("forbidden token check", () => {
     expect(error).toHaveBeenCalledWith("  server/file.ts:1:found");
     expect(error).toHaveBeenCalledWith("\nBuild blocked. Remove the forbidden token(s) before publishing.");
   });
+
+  it("keeps tracked source and documentation portable across local usernames", () => {
+    const log = vi.fn();
+    const error = vi.fn();
+    const personalUsername = ["Kai", "lor"].join("");
+
+    const exitCode = runForbiddenTokenCheck({
+      repoRoot: process.cwd(),
+      tokens: resolveDynamicForbiddenTokens(
+        { USER: personalUsername, LOGNAME: personalUsername },
+        { userInfo: () => ({ username: personalUsername }) },
+      ),
+      log,
+      error,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(error).not.toHaveBeenCalled();
+  });
 });

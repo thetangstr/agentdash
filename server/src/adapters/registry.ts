@@ -188,6 +188,7 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
   if (config && !config.command && configCommand) {
     config.command = configCommand;
   }
+  const fallbackCodexCommand = process.env.AGENTDASH_CODEX_COMMAND ?? "codex-acp";
   if (config && !config.command) {
     config.command = fallbackCodexCommand;
   }
@@ -216,10 +217,8 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
       : null;
   return readNonEmptyString(config?.hermesCommand)
     ?? readNonEmptyString(agentConfig?.hermesCommand)
-    // Portable fallback: honor AGENTDASH_HERMES_COMMAND, else "hermes" on PATH.
-    // (Was a hardcoded developer-specific absolute path, which broke on any other
-    // machine when an agent had no config — the round-trip probe would ENOENT.)
-    ?? defaultHermesCommand();
+    ?? process.env.AGENTDASH_HERMES_COMMAND
+    ?? DEFAULT_HERMES_COMMAND;
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -629,7 +628,35 @@ const piLocalAdapter: ServerAdapterModule = {
 
 // hermes-paperclip-adapter v0.2.0 predates the authToken field; cast is
 // intentional until hermes ships a matching AdapterExecutionContext type.
+import {
+  applyHermesSessionUsage,
+  readHermesSessionId,
+  readHermesSessionUsage,
+} from "./hermes-usage.js";
+
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
+
+/**
+ * Run Hermes, then read what it spent out of its own ledger.
+ *
+ * Nothing about the invocation changes — the earlier attempt at this passed
+ * `--usage-file`, which Hermes rejects outside one-shot mode and this adapter
+ * runs `chat`. Hermes records `session_model_usage` in its state database for
+ * every run regardless, so the totals are read afterwards, by session id.
+ *
+ * Wrapped so metering can never fail a run: a missing or unreadable ledger
+ * leaves the result exactly as the adapter returned it.
+ */
+async function withHermesSessionUsage(
+  result: AdapterExecutionResult,
+): Promise<AdapterExecutionResult> {
+  try {
+    const sessionId = readHermesSessionId(result);
+    return applyHermesSessionUsage(result, readHermesSessionUsage(sessionId));
+  } catch {
+    return result;
+  }
+}
 
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
@@ -651,7 +678,9 @@ const hermesLocalAdapter: ServerAdapterModule = {
         "[hermes] Ignoring invalid persisted session id parsed from resume help text.\n",
       );
     }
-    if (!taskPatchedCtx.authToken) return sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx));
+    if (!taskPatchedCtx.authToken) {
+      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
+    }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const existingEnv =
@@ -699,7 +728,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx));
+    return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx)));
   },
   // AgentDash: ensure the agent's managed profile exists before the env check so
   // harness-preflight passes for an agent created by any path, and run the check

@@ -782,7 +782,7 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
             principalType: "user",
             principalId: uid,
             status: "active",
-            membershipRole: "owner",
+            membershipRole: "admin",
           })
           .onConflictDoNothing({
             target: [
@@ -802,7 +802,7 @@ export function trialService(db: Db, deps: TrialServiceDeps = {}) {
           principalType: "user",
           principalId: uid,
           status: "active",
-          membershipRole: "owner",
+          membershipRole: "admin",
         })
         .onConflictDoNothing({
           target: [

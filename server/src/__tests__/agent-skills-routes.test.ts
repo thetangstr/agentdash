@@ -633,6 +633,18 @@ describe.sequential("agent skill routes", () => {
       }));
 
     expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "11111111-1111-4111-8111-111111111111",
+      }),
+      expect.objectContaining({
+        "AGENTS.md": "You are QA.",
+        "HEARTBEAT.md": expect.any(String),
+        "SOUL.md": expect.any(String),
+        "TOOLS.md": expect.any(String),
+      }),
+      { entryFile: "AGENTS.md", replaceExisting: false },
+    );
     expect(mockAgentService.update).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
       expect.objectContaining({
@@ -670,7 +682,7 @@ describe.sequential("agent skill routes", () => {
     expect(mockAgentInstructionsService.materializeManagedBundle).not.toHaveBeenCalled();
   });
 
-  it("materializes the bundled CEO instruction set for default CEO agents", async () => {
+  it("materializes the shared steward-centric instruction set for CEO agents", async () => {
     const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
       .post("/api/companies/company-1/agents")
       .send({
@@ -688,9 +700,9 @@ describe.sequential("agent skill routes", () => {
         adapterType: "claude_local",
       }),
       expect.objectContaining({
-        "AGENTS.md": expect.stringContaining("You are the CEO."),
-        "HEARTBEAT.md": expect.stringContaining("CEO Heartbeat Checklist"),
-        "SOUL.md": expect.stringContaining("CEO Persona"),
+        "AGENTS.md": expect.stringContaining("Start actionable work in the same heartbeat."),
+        "HEARTBEAT.md": expect.stringContaining("Heartbeat Checklist"),
+        "SOUL.md": expect.stringContaining("Your steward's agent"),
         "TOOLS.md": expect.stringContaining("# Tools"),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },

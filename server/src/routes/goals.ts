@@ -9,7 +9,7 @@ import { goalService, logActivity } from "../services/index.js";
 // AgentDash: goals-eval-hitl
 import { verdictsService } from "../services/verdicts.js";
 import { badRequest } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { getTelemetryClient } from "../telemetry.js";
 
 export function goalRoutes(db: Db) {
@@ -38,7 +38,7 @@ export function goalRoutes(db: Db) {
 
   router.post("/companies/:companyId/goals", validate(createGoalSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    assertCanSetCompanyDirection(req, companyId);
     const goal = await svc.create(companyId, req.body);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -65,7 +65,7 @@ export function goalRoutes(db: Db) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    assertCanSetCompanyDirection(req, existing.companyId);
     const goal = await svc.update(id, req.body);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
@@ -94,7 +94,7 @@ export function goalRoutes(db: Db) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    assertCanSetCompanyDirection(req, existing.companyId);
     const goal = await svc.remove(id);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
@@ -122,7 +122,7 @@ export function goalRoutes(db: Db) {
       try {
         const companyId = req.params.companyId as string;
         const goalId = req.params.goalId as string;
-        assertCompanyAccess(req, companyId);
+        assertCanSetCompanyDirection(req, companyId);
         const parsed = goalMetricDefinitionSchema.safeParse(req.body);
         if (!parsed.success) {
           throw badRequest("Invalid metric definition", {

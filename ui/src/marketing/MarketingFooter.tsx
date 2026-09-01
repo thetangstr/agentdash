@@ -16,6 +16,8 @@ export function MarketingFooter() {
             <h4>Product</h4>
             <ul>
               <li><a href="/">Features</a></li>
+              {/* AgentDash: MCP-native setup page */}
+              <li><a href="/mcp">MCP setup</a></li>
               <li><a href="/assess">Assessment</a></li>
               <li><a href="/auth">Sign in</a></li>
             </ul>

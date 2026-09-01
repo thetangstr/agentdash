@@ -8,20 +8,44 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { requireLicense } from "./middleware/require-license.js";
+import { mcpRoutes } from "./routes/mcp.js";
+import { connectCodeRoutes } from "./routes/connect-codes.js";
+import { meCapabilityRoutes } from "./routes/me-capabilities.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
+import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
 // AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
 import {
   createAuthRateLimiter,
   createBillingRateLimiter,
   createDefaultApiRateLimiter,
   createInviteRateLimiter,
+  createIssueReportRateLimiter,
   createTrialRateLimiter,
 } from "./middleware/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
 import { agentRoutes } from "./routes/agents.js";
+import { agentStewardshipRoutes } from "./routes/agent-stewardships.js";
+import { agentGovernanceRoutes } from "./routes/agent-governance.js";
+import { agentDirectivesRoutes } from "./routes/agent-directives.js";
+import { agentMemoryRoutes } from "./routes/agent-memory.js";
+import { workflowMetricsRoutes } from "./routes/workflow-metrics.js";
+import { workflowRecommendationRoutes } from "./routes/workflow-recommendations.js";
+import { agentFactRequestRoutes } from "./routes/agent-fact-requests.js";
+import { deliverableRoutes } from "./routes/deliverables.js";
+import { agentdashMkInboxRoutes } from "./routes/agentdash-mk-inbox.js";
+import { connectorSendExecutionRoutes } from "./routes/connector-send-executions.js";
+import { humanChannelRoutes } from "./routes/human-channels.js";
+import { telegramConnectorRoutes } from "./routes/telegram-connector.js";
+import { whatsappConnectorRoutes } from "./routes/whatsapp-connector.js";
+import { hubspotConnectorRoutes } from "./routes/hubspot-connector.js";
+// AgentDash-MK: SharePoint read through the acting person's Entra identity.
+import { sharepointConnectorRoutes } from "./routes/sharepoint-connector.js";
+import { bridgeRoutes } from "./routes/bridge.js";
+import { teamsConnectorRoutes } from "./routes/teams-connector.js";
 import { projectRoutes } from "./routes/projects.js";
 import { issueRoutes } from "./routes/issues.js";
 import { issueTreeControlRoutes } from "./routes/issue-tree-control.js";
@@ -44,7 +68,9 @@ import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
+import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
@@ -58,6 +84,16 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes, parsePluginUiAllowedOrigins } from "./routes/plugin-ui-static.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { onboardingV2Routes } from "./routes/onboarding-v2.js";
+// AgentDash: MCP-native signup — founding-user signup over the MCP journey,
+// no browser form. Unauthenticated but hard-gated (see the route file).
+import {
+  onboardingMcpSignupRoutes,
+  type McpSignupCreateUser,
+  type McpSignupCaptureResetUrl,
+} from "./routes/onboarding-mcp-signup.js";
+// AgentDash: invite-code validation — cloud side of the fresh-install funnel
+// gate (POST /api/invites/validate). Unauthenticated, rate-limited.
+import { inviteCodeRoutes } from "./routes/invite-codes.js";
 import { billingRoutes } from "./routes/billing.js";
 import { assessRoutes } from "./routes/assess.js";
 import { agentResearchRoutes } from "./routes/agent-research.js";
@@ -139,6 +175,44 @@ export function shouldEnablePrivateHostnameGuard(opts: {
   );
 }
 
+
+/**
+ * Serve the SPA shell as it is on disk, not as it was at startup.
+ *
+ * `index.html` used to be read ONCE into a variable and served from memory by
+ * the SPA fallback, while `/` was served from disk by express.static. After any
+ * UI rebuild the asset hashes change, so every deep link (/auth, /agents,
+ * /issues) handed the browser a shell pointing at a bundle that no longer
+ * existed: the page rendered zero characters, with no error, while `/` kept
+ * working — which made it look like a routing bug. Observed repeatedly,
+ * including on the sign-in page, and rediscovered by a navigation sweep.
+ *
+ * The `no-cache` header on that response was always honest; the bytes behind it
+ * were not. Cached on mtime, so this costs a stat() per navigation rather than
+ * a read, and a rebuild is picked up without restarting the server.
+ *
+ * Returns the last good shell if the file is briefly unreadable — a rebuild
+ * replaces it non-atomically, and serving the previous shell beats serving
+ * nothing.
+ */
+export function createStaticShellReader(
+  indexHtmlPath: string,
+  transform: (html: string) => string,
+): () => string {
+  let cache: { mtimeMs: number; html: string } | null = null;
+  return () => {
+    try {
+      const { mtimeMs } = fs.statSync(indexHtmlPath);
+      if (!cache || cache.mtimeMs !== mtimeMs) {
+        cache = { mtimeMs, html: transform(fs.readFileSync(indexHtmlPath, "utf-8")) };
+      }
+    } catch {
+      // Keep the last good shell.
+    }
+    return cache?.html ?? "";
+  };
+}
+
 export async function createApp(
   db: Db,
   opts: {
@@ -170,6 +244,15 @@ export async function createApp(
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    // AgentDash: MCP-native signup — server-side user creation backed by the
+    // Better Auth instance (auth.api.signUpEmail), threaded from index.ts.
+    // Optional so buildApp stays backward-compatible for tests and
+    // local_trusted deployments; without it the route answers 503.
+    mcpSignupCreateUser?: McpSignupCreateUser;
+    // AgentDash: MCP-native first login — captures the one-time password-reset
+    // URL for the just-created founding user so the MCP journey can return a
+    // browser-login link. Optional; without it the route returns the text hint.
+    mcpSignupCaptureResetUrl?: McpSignupCaptureResetUrl;
     // AgentDash (AGE-60): when true, reject free-mail signups at the auth endpoint.
     requireCorpEmail?: boolean;
   },
@@ -242,6 +325,16 @@ export async function createApp(
     app.use(
       corpEmailSignupGuard({ enabled: opts.requireCorpEmail ?? false }),
     );
+    // AgentDash: closed-phase funnel gate on BROWSER signup. The MCP self-serve
+    // path has always been invite-gated; this door was not. Off unless the
+    // operator opts in, so local dev, the e2e suites, and existing self-hosters
+    // are unaffected.
+    app.use(
+      "/api/auth",
+      inviteCodeSignupGuard({
+        enabled: process.env.AGENTDASH_REQUIRE_SIGNUP_INVITE_CODE === "true",
+      }),
+    );
     // AgentDash (#160): rate-limit better-auth handler too (same /api/auth path).
     app.use("/api/auth", createAuthRateLimiter({ deploymentMode: opts.deploymentMode }));
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
@@ -266,6 +359,34 @@ export async function createApp(
       companyDeletionEnabled: opts.companyDeletionEnabled,
     }),
   );
+  // AgentDash on-prem SKU: the license gate, deliberately mounted HERE.
+  //
+  // Everything registered after this line is gated; everything before it is not.
+  // Two exemptions are load-bearing and must stay that way:
+  //
+  //   /api/health   — mounted immediately above. The install runbooks and the
+  //                   launchd service both poll it to decide whether the server
+  //                   came up, so gating it would make an unlicensed box look
+  //                   like a boot failure instead of a licensing problem.
+  //   /api/auth/*   — mounted on `app` before this router exists, so it is out
+  //                   of reach here by construction. An operator locked out of
+  //                   sign-in could never reach the UI to fix their license.
+  //
+  // The middleware itself no-ops unless AGENTDASH_ENFORCE_LICENSE=true AND this
+  // process is an on_prem deployment, so wiring it changes nothing for cloud or
+  // for any existing self-hoster who has not opted in. `license-enforcement.test.ts`
+  // pins both the behaviour and this ordering.
+  api.use(requireLicense);
+  // The turnkey harness endpoint: POST /api/mcp with an agent key as bearer.
+  // Mounted after the license gate on purpose — an unlicensed box should say
+  // so to a connecting harness, not serve it tools.
+  api.use(mcpRoutes());
+  // Redeeming a connect code: PUBLIC by necessity — the caller has no
+  // credential yet and is asking for one. Safety comes from the secret being
+  // ten-minute, single-use and rate-limited, not from authentication. Mounted
+  // beside the MCP endpoint because it serves the same machine, one step
+  // earlier in the same journey.
+  api.use(connectCodeRoutes(db, { deploymentMode: opts.deploymentMode }));
   api.use("/companies", companyRoutes(db, opts.storageService, {
     requireCorpEmail: opts.requireCorpEmail ?? false,
     allowMultiTenantPerDomain: true,
@@ -274,6 +395,23 @@ export async function createApp(
   }));
   api.use(companySkillRoutes(db));
   api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(agentStewardshipRoutes(db));
+  api.use(agentGovernanceRoutes(db));
+  api.use(agentDirectivesRoutes(db));
+  api.use(agentMemoryRoutes(db));
+  api.use(workflowMetricsRoutes(db));
+  // AgentDash-MK: the review agent's recommendation half. Read-only — there is
+  // no create verb, and decisions go through the approvals routes like every
+  // other decision. 404s outside `agentdash_mk`.
+  api.use(workflowRecommendationRoutes(db));
+  // AgentDash-MK: agent↔agent fact requests. 404s outside `agentdash_mk`.
+  api.use(agentFactRequestRoutes(db));
+  // AgentDash-MK: the weekly deliverable pipeline. Definition is
+  // implementer-only; runs, review, and approval follow the same profile gate.
+  api.use(deliverableRoutes(db));
+  api.use(agentdashMkInboxRoutes(db));
+  api.use(connectorSendExecutionRoutes(db));
+  api.use(humanChannelRoutes(db));
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {
@@ -297,15 +435,43 @@ export async function createApp(
   api.use(dashboardRoutes(db));
   api.use("/msp", mspRoutes(db));
   api.use(userProfileRoutes(db));
+  // What the signed-in person may do here. The UI asks; it never decides.
+  api.use(meCapabilityRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
+  // AgentDash: user-filed bug reports / feature requests -> GitHub issues.
+  // Every POST creates a real issue under one shared credential, so it gets
+  // a tighter limiter than the default API tier.
+  api.use(
+    "/issue-reports",
+    createIssueReportRateLimiter({ deploymentMode: opts.deploymentMode }),
+    issueReportRoutes(db),
+  );
   api.use(instanceSettingsRoutes(db));
+  // O2: read the local error sink (instance-admin only).
+  api.use(serverErrorRoutes(db));
   api.use("/conversations", conversationRoutes(db));
   // AgentDash: tighter cap on the invite endpoint specifically — fans
   // out to Resend (cost amplification + sender-domain reputation risk).
   // Default API limiter still covers the rest of /onboarding.
   api.use("/onboarding/invites", createInviteRateLimiter({ deploymentMode: opts.deploymentMode }));
+  // AgentDash: MCP-native signup — POST /onboarding/mcp-signup. PUBLIC
+  // (no actor) but hard-gated: authenticated mode + self-serve bootstrap
+  // flag + strictly-fresh instance; the route mounts the tight auth-tier
+  // rate limiter itself. Mounted before onboardingV2Routes so the signup
+  // path never depends on that router's auth assumptions.
+  api.use(
+    "/onboarding",
+    onboardingMcpSignupRoutes(db, {
+      deploymentMode: opts.deploymentMode,
+      createUser: opts.mcpSignupCreateUser,
+      captureResetUrl: opts.mcpSignupCaptureResetUrl,
+    }),
+  );
+  // AgentDash: invite-code validation for fresh-install signups (this
+  // instance may be the cloud validator for self-hosted installs).
+  api.use(inviteCodeRoutes({ deploymentMode: opts.deploymentMode }));
   api.use("/onboarding", onboardingV2Routes(db));
   api.use(assessRoutes(db));
   api.use(agentResearchRoutes(db));
@@ -323,6 +489,12 @@ export async function createApp(
   api.use(connectorRoutes(db));
   // AgentDash: Slack Connector (AGE-108)
   api.use("/connectors", slackConnectorRoutes(db));
+  api.use(telegramConnectorRoutes(db));
+  api.use(whatsappConnectorRoutes(db));
+  api.use(hubspotConnectorRoutes(db));
+  api.use(sharepointConnectorRoutes(db));
+  api.use(bridgeRoutes(db));
+  api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
@@ -471,6 +643,44 @@ export async function createApp(
   }));
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+  /**
+   * Serve the MCP server as an installable tarball.
+   *
+   * This is how a person on their own laptop connects their Claude Code or Codex
+   * to their agent. `npx -y <this url>` installs and runs it in one step, which
+   * is the whole turnkey path — verified end to end against a live instance.
+   *
+   * Why serve it rather than publish it: `@agentdash/mcp-server` is not on npm,
+   * and an on-prem customer is exactly the person who should not need it to be.
+   * The AgentDash box is already reachable from every machine that needs this —
+   * it is where they got their key — so it is also the right place to get the
+   * client. An air-gapped install keeps working for the same reason.
+   *
+   * Unauthenticated on purpose: it is a public client package with no secrets in
+   * it, and requiring a token to fetch the thing that consumes the token is a
+   * loop with no entry point. The key is what grants access, and the key is
+   * issued elsewhere.
+   */
+  const mcpTarballCandidates = [
+    path.resolve(__dirname, "../mcp-dist/agentdash-mcp-server.tgz"),
+    path.resolve(__dirname, "../../packages/mcp-server/agentdash-mcp-server.tgz"),
+  ];
+  app.get("/downloads/agentdash-mcp-server.tgz", (_req, res) => {
+    const tarball = mcpTarballCandidates.find((candidate) => fs.existsSync(candidate));
+    if (!tarball) {
+      // Say which command produces it. A bare 404 here sends someone hunting
+      // through their own MCP config for a mistake that is not there.
+      res.status(404).json({
+        error: "MCP client package is not built on this instance.",
+        hint: "Run `pnpm mcp:pack` where the server is installed, then retry.",
+      });
+      return;
+    }
+    res.type("application/gzip");
+    res.sendFile(tarball);
+  });
+
   if (opts.uiMode === "static") {
     // Try published location first (server/ui-dist/), then monorepo dev location (../../ui/dist)
     const candidates = [
@@ -479,7 +689,26 @@ export async function createApp(
     ];
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      const indexHtmlPath = path.join(uiDist, "index.html");
+      /**
+       * Re-read the shell when it changes on disk.
+       *
+       * This used to be read ONCE into a variable at startup and served from
+       * memory by the SPA fallback below — while `/` was served from disk by
+       * express.static. After any UI rebuild the asset hashes change, so every
+       * deep link (/auth, /agents, /issues) handed the browser a shell pointing
+       * at a bundle that no longer existed: the page rendered zero characters,
+       * with no error, while `/` kept working and made it look like a routing
+       * problem. Observed repeatedly, including on the sign-in page.
+       *
+       * The `no-cache` header below was always honest; the bytes behind it were
+       * not. Cached on mtime, so this is a stat() per navigation rather than a
+       * read, and a rebuild is picked up without restarting the server.
+       */
+      const currentIndexHtml = createStaticShellReader(indexHtmlPath, applyUiBranding);
+      // Fail fast at boot if the shell is unreadable, rather than at the first
+      // request from a person.
+      currentIndexHtml();
       // Hashed asset files (Vite emits them under /assets/<name>.<hash>.<ext>)
       // never change once built, so they can be cached aggressively.
       app.use(
@@ -519,7 +748,7 @@ export async function createApp(
           .status(200)
           .set("Content-Type", "text/html")
           .set("Cache-Control", "no-cache")
-          .end(indexHtml);
+          .end(currentIndexHtml());
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");

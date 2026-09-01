@@ -76,6 +76,7 @@ import {
   logActivity,
   notifyHireApproved
 } from "../services/index.js";
+import { memberOnboardingService } from "../services/member-onboarding.js";
 import {
   grantsForHumanRole,
   normalizeHumanRole,
@@ -974,34 +975,42 @@ async function loadCompanyAccessSummary(
       canManageMembers: false,
       canInviteUsers: false,
       canApproveJoinRequests: false,
+      canManageAgents: false,
     };
   }
   if (isLocalImplicit(req)) {
     return {
-      currentUserRole: "owner" as const,
+      currentUserRole: "admin" as const,
       canManageMembers: true,
       canInviteUsers: true,
       canApproveJoinRequests: true,
+      canManageAgents: true,
     };
   }
   const userId = req.actor.userId ?? null;
   const membership =
     userId ? await access.getMembership(companyId, "user", userId) : null;
-  const [canManageMembers, canInviteUsers, canApproveJoinRequests] =
+  const [canManageMembers, canInviteUsers, canApproveJoinRequests, canManageAgents] =
     await Promise.all([
       access.canUser(companyId, userId, "users:manage_permissions"),
       access.canUser(companyId, userId, "users:invite"),
       access.canUser(companyId, userId, "joins:approve"),
+      // AgentDash-MK: stewardship and ceiling routes gate on agents:create, a
+      // DIFFERENT permission from users:manage_permissions. Surfacing it lets
+      // those admin surfaces enable controls the server will actually accept
+      // instead of guessing from the member-management flag.
+      access.canUser(companyId, userId, "agents:create"),
     ]);
 
   return {
     currentUserRole:
       membership?.status === "active" && membership.membershipRole
-        ? normalizeHumanRole(membership.membershipRole, "operator")
+        ? normalizeHumanRole(membership.membershipRole)
         : null,
     canManageMembers,
     canInviteUsers,
     canApproveJoinRequests,
+    canManageAgents,
   };
 }
 
@@ -1050,7 +1059,7 @@ async function loadCompanyMemberRecords(
     ...member,
     principalType: "user" as const,
     membershipRole: member.membershipRole
-      ? normalizeHumanRole(member.membershipRole, "operator")
+      ? normalizeHumanRole(member.membershipRole)
       : null,
     user: userMap.get(member.principalId) ?? null,
     grants: grantsByPrincipalId.get(member.principalId) ?? [],
@@ -1059,11 +1068,13 @@ async function loadCompanyMemberRecords(
 
 type CompanyMemberRecord = Awaited<ReturnType<typeof loadCompanyMemberRecords>>[number];
 
+/**
+ * The highest human role an AGENT may invite someone at. See
+ * `assertInviteRoleCeiling` for why it is fixed rather than derived.
+ */
 const humanRoleRank: Record<HumanCompanyMembershipRole, number> = {
-  viewer: 1,
-  operator: 2,
-  admin: 3,
-  owner: 4,
+  member: 1,
+  admin: 2,
 };
 
 async function resolveActorHumanRole(
@@ -1072,21 +1083,19 @@ async function resolveActorHumanRole(
   companyId: string,
 ): Promise<HumanCompanyMembershipRole | null> {
   if (req.actor.type !== "board") return null;
-  if (isLocalImplicit(req) || req.actor.isInstanceAdmin) return "owner";
+  if (isLocalImplicit(req) || req.actor.isInstanceAdmin) return "admin";
   const userId = req.actor.userId ?? null;
   if (!userId) return null;
   const membership = await access.getMembership(companyId, "user", userId);
   if (membership?.status !== "active" || !membership.membershipRole) return null;
-  return normalizeHumanRole(membership.membershipRole, "operator");
+  return normalizeHumanRole(membership.membershipRole);
 }
 
 // AgentDash: invite-role-ceiling (P0.5) — prevent privilege escalation. A
 // human actor may only invite or approve a role at or below their own company
-// role. Board owners, local-implicit actors, and instance admins resolve to
-// "owner" via resolveActorHumanRole and so retain full ability. Agent actors
-// are gated by permission grants (users:invite / joins:approve), not human
-// role ranks, so they are exempt here — assertCompanyPermission already
-// authorized them.
+// role. Local-implicit actors and instance admins resolve to "admin" via
+// resolveActorHumanRole and so retain full ability. Agent actors are refused
+// human invites outright — see the comment inside.
 async function assertInviteRoleCeiling(
   req: Request,
   access: ReturnType<typeof accessService>,
@@ -1094,7 +1103,28 @@ async function assertInviteRoleCeiling(
   requestedRole: HumanCompanyMembershipRole | null,
 ): Promise<void> {
   if (!requestedRole) return;
-  if (req.actor.type === "agent") return;
+  /**
+   * An agent has no human role, so there is no ceiling to compare it against —
+   * which is why this used to return early and let an agent mint an invite at
+   * ANY role. Probed on the live uat instance: an agent holding `users:invite`
+   * created invites at owner, admin, operator and viewer, all 201.
+   *
+   * That is a privilege-escalation path with a human in the middle. An agent
+   * cannot grant itself authority, but it could invite a person at `owner` and
+   * have that person do anything — including to the owner who created it.
+   *
+   * The ceiling used to be `viewer` — read-only was participation without
+   * authority. The 2026-08-16 role collapse removed that tier: the lowest
+   * human role is now `member`, which creates projects and agents. There is
+   * no longer any role an agent can hand out that does not carry write
+   * authority, so agents cannot invite humans at all. Fail closed; a person
+   * extends the company, not its workers.
+   */
+  if (req.actor.type === "agent") {
+    throw forbidden(
+      "Agents cannot invite people. Ask an admin to send the invite.",
+    );
+  }
   const actorRole = await resolveActorHumanRole(req, access, companyId);
   if (!actorRole) {
     throw forbidden("Only active company members can invite users.");
@@ -1126,10 +1156,9 @@ async function getProtectedMemberReason(
   }
 
   const targetRole = member.membershipRole
-    ? normalizeHumanRole(member.membershipRole, "operator")
-    : "operator";
+    ? normalizeHumanRole(member.membershipRole)
+    : "member";
   if (opts?.operation === "archive") {
-    if (targetRole === "owner") return "Board owners cannot be removed from company access.";
     if (targetRole === "admin") return "Company admins cannot be removed from company access.";
   }
 
@@ -1893,7 +1922,7 @@ function extractInviteMessage(
 function mergeInviteDefaults(
   defaultsPayload: Record<string, unknown> | null | undefined,
   agentMessage: string | null,
-  humanRole: "owner" | "admin" | "operator" | "viewer" | null = null,
+  humanRole: HumanCompanyMembershipRole | null = null,
 ): Record<string, unknown> | null {
   const merged =
     defaultsPayload && typeof defaultsPayload === "object"
@@ -2822,7 +2851,7 @@ export function accessRoutes(
     db?: Db;
     companyId: string;
     allowedJoinTypes: "human" | "agent" | "both";
-    humanRole?: "owner" | "admin" | "operator" | "viewer" | null;
+    humanRole?: HumanCompanyMembershipRole | null;
     defaultsPayload?: Record<string, unknown> | null;
     agentMessage?: string | null;
     // AgentDash: auto-approve-invites — grant human membership immediately on accept.
@@ -2836,7 +2865,7 @@ export function accessRoutes(
     const effectiveHumanRole =
       input.allowedJoinTypes === "agent"
         ? null
-        : input.humanRole ?? "operator";
+        : input.humanRole ?? "member";
     const insertValues = {
       companyId: input.companyId,
       inviteType: "company_join" as const,
@@ -3009,11 +3038,13 @@ export function accessRoutes(
       // AgentDash: invite-role-ceiling (P0.5) — an admin must not be able to
       // invite/auto-approve an owner. The effective human role mirrors
       // createCompanyInviteForCompany: agent-only invites carry no human role,
-      // otherwise null defaults to "operator".
+      // otherwise null defaults to "member". Agent actors are refused any
+      // human-role invite in assertInviteRoleCeiling below, so no default is
+      // computed on their behalf.
       const requestedHumanRole: HumanCompanyMembershipRole | null =
         allowedJoinTypes === "agent"
           ? null
-          : normalizeHumanRole(req.body.humanRole ?? "operator", "operator");
+          : normalizeHumanRole(req.body.humanRole ?? "member", "member");
       await assertInviteRoleCeiling(req, access, companyId, requestedHumanRole);
       const inviteResult = await withTierCapacityForInviteWrite(
         companyId,
@@ -3025,7 +3056,11 @@ export function accessRoutes(
             db: dbOrTx,
             companyId,
             allowedJoinTypes,
-            humanRole: req.body.humanRole ?? null,
+            // The role that was CHECKED, not the raw body. Passing the body
+            // reopened the ceiling: an agent omitting `humanRole` was checked
+            // as viewer and then stored as operator, because invite creation
+            // has its own `?? "operator"` default. One value, checked once.
+            humanRole: requestedHumanRole,
             defaultsPayload: req.body.defaultsPayload ?? null,
             agentMessage: req.body.agentMessage ?? null,
             autoApprove: req.body.autoApprove ?? false
@@ -3522,6 +3557,10 @@ export function accessRoutes(
                 membershipRole,
               ),
               req.actor.userId ?? null,
+            );
+            await memberOnboardingService(dbOrTx).startOrResume(
+              companyId,
+              requestingUserId,
             );
 
             const approved = await dbOrTx
@@ -4055,6 +4094,10 @@ export function accessRoutes(
               grants,
               req.actor.userId ?? null
             );
+            await memberOnboardingService(dbOrTx).startOrResume(
+              companyId,
+              lockedRequest.requestingUserId,
+            );
           } else {
             const existingAgents = await txAgents.list(companyId);
             const managerId = resolveJoinRequestAgentManagerId(existingAgents);
@@ -4336,7 +4379,7 @@ export function accessRoutes(
           where ${companyMemberships.companyId} = ${companyId}
             and ${companyMemberships.principalType} = 'user'
             and ${companyMemberships.status} = 'active'
-            and ${companyMemberships.membershipRole} = 'owner'
+            and ${companyMemberships.membershipRole} in ('owner', 'admin')
           for update
         `);
 
@@ -4361,8 +4404,8 @@ export function accessRoutes(
         if (
           existing.principalType === "user" &&
           existing.status === "active" &&
-          existing.membershipRole === "owner" &&
-          (nextStatus !== "active" || nextMembershipRole !== "owner")
+          normalizeHumanRole(existing.membershipRole) === "admin" &&
+          (nextStatus !== "active" || normalizeHumanRole(nextMembershipRole) !== "admin")
         ) {
           const activeOwnerCount = await tx
             .select({ id: companyMemberships.id })
@@ -4372,12 +4415,12 @@ export function accessRoutes(
                 eq(companyMemberships.companyId, companyId),
                 eq(companyMemberships.principalType, "user"),
                 eq(companyMemberships.status, "active"),
-                eq(companyMemberships.membershipRole, "owner"),
+                inArray(companyMemberships.membershipRole, ["owner", "admin"]),
               ),
             )
             .then((rows) => rows.length);
           if (activeOwnerCount <= 1) {
-            throw conflict("Cannot remove the last active owner");
+            throw conflict("Cannot remove the last active admin");
           }
         }
 
@@ -4433,7 +4476,7 @@ export function accessRoutes(
           where ${companyMemberships.companyId} = ${companyId}
             and ${companyMemberships.principalType} = 'user'
             and ${companyMemberships.status} = 'active'
-            and ${companyMemberships.membershipRole} = 'owner'
+            and ${companyMemberships.membershipRole} in ('owner', 'admin')
           for update
         `);
 
@@ -4458,8 +4501,8 @@ export function accessRoutes(
         if (
           existing.principalType === "user" &&
           existing.status === "active" &&
-          existing.membershipRole === "owner" &&
-          (nextStatus !== "active" || nextMembershipRole !== "owner")
+          normalizeHumanRole(existing.membershipRole) === "admin" &&
+          (nextStatus !== "active" || normalizeHumanRole(nextMembershipRole) !== "admin")
         ) {
           const activeOwnerCount = await tx
             .select({ id: companyMemberships.id })
@@ -4469,12 +4512,12 @@ export function accessRoutes(
                 eq(companyMemberships.companyId, companyId),
                 eq(companyMemberships.principalType, "user"),
                 eq(companyMemberships.status, "active"),
-                eq(companyMemberships.membershipRole, "owner"),
+                inArray(companyMemberships.membershipRole, ["owner", "admin"]),
               ),
             )
             .then((rows) => rows.length);
           if (activeOwnerCount <= 1) {
-            throw conflict("Cannot remove the last active owner");
+            throw conflict("Cannot remove the last active admin");
           }
         }
 
@@ -4555,6 +4598,7 @@ export function accessRoutes(
 
       const result = await access.archiveMember(companyId, memberId, {
         reassignment: req.body.reassignment ?? null,
+        actorUserId: req.actor.userId ?? null,
       });
       if (!result) throw notFound("Member not found");
 

@@ -5,6 +5,7 @@ import {
   asString,
   ensurePathInEnv,
   runChildProcess,
+  NEVER_SANDBOX,
 } from "@paperclipai/adapter-utils/server-utils";
 
 const MODELS_CACHE_TTL_MS = 60_000;
@@ -133,6 +134,11 @@ export async function discoverOpenCodeModels(input: {
       timeoutSec: MODELS_DISCOVERY_TIMEOUT_MS / 1000,
       graceSec: 3,
       onLog: async () => {},
+      // Model discovery is not agent execution. It asks the CLI what models it
+      // supports, which legitimately reads the operator's own config in their
+      // home directory — the very thing the agent sandbox denies. Opted out
+      // explicitly so the ambient default cannot break model listing.
+      localSandbox: NEVER_SANDBOX,
     },
   );
 

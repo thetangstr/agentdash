@@ -342,7 +342,7 @@ describeEmbeddedPostgres("Test Drive trial (integration)", () => {
       )
       .then((rows) => rows[0]);
     expect(membership?.status).toBe("active");
-    expect(membership?.membershipRole).toBe("owner");
+    expect(membership?.membershipRole).toBe("admin");
 
     // planTier flipped trial -> free.
     const company = await db

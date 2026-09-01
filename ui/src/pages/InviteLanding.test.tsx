@@ -310,6 +310,7 @@ describe("InviteLandingPage", () => {
           <QueryClientProvider client={queryClient}>
             <Routes>
               <Route path="/invite/:token" element={<InviteLandingPage />} />
+              <Route path="/member-onboarding" element={<div>Member onboarding destination</div>} />
             </Routes>
           </QueryClientProvider>
         </MemoryRouter>,
@@ -357,6 +358,7 @@ describe("InviteLandingPage", () => {
     expect(setSelectedCompanyIdMock).toHaveBeenCalledWith("company-1", { source: "manual" });
     expect(queryClient.getQueryData(queryKeys.companies.all)).toBeUndefined();
     expect(localStorage.getItem("paperclip:pending-invite-token")).toBeNull();
+    expect(container.textContent).toContain("Member onboarding destination");
 
     await act(async () => {
       root.unmount();
@@ -640,6 +642,81 @@ describe("InviteLandingPage", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("does not try to accept an invite it has not loaded yet", async () => {
+    // The auto-accept effect fired on the first render where a session existed,
+    // before the invite query resolved, so acceptInvite threw "Invite not
+    // found" against a valid invite and rendered the error beside it. It was
+    // invisible while members were redirected away before the race resolved.
+    getInviteMock.mockReturnValue(new Promise(() => {}));
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", name: "Yang Tang", email: "yang@example.com", image: null },
+    });
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(acceptInviteMock).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Invite not found");
+  });
+
+  it("shows the invite to an admin who opened their own link, instead of bouncing them home", async () => {
+    // Every admin is a member, so the blanket member redirect made the invites
+    // page's "Open invite" button appear to do nothing: a new tab that landed
+    // on their own dashboard. Arriving already signed in is the signal.
+    getSessionMock.mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: {
+        id: "user-1",
+        name: "Yang Tang",
+        email: "yang@example.com",
+        image: null,
+      },
+    });
+    listCompaniesMock.mockResolvedValue([{ id: "company-1", name: "Acme Robotics" }]);
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/invite/pcp_invite_test"]}>
+          <QueryClientProvider client={queryClient}>
+            <Routes>
+              <Route path="/invite/:token" element={<InviteLandingPage />} />
+              <Route path="/" element={<div>DASHBOARD</div>} />
+            </Routes>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).not.toContain("DASHBOARD");
+    expect(container.textContent).toContain("already belongs to");
+    expect(container.textContent).toContain("copy it and send it to them");
   });
 
   it("falls back to the generated company icon when the invite logo fails to load", async () => {

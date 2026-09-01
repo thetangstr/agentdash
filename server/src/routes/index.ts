@@ -15,6 +15,7 @@ export { dashboardRoutes } from "./dashboard.js";
 export { sidebarBadgeRoutes } from "./sidebar-badges.js";
 export { sidebarPreferenceRoutes } from "./sidebar-preferences.js";
 export { inboxDismissalRoutes } from "./inbox-dismissals.js";
+export { issueReportRoutes } from "./issue-reports.js";
 export { llmRoutes } from "./llms.js";
 export { accessRoutes } from "./access.js";
 export { instanceSettingsRoutes } from "./instance-settings.js";
@@ -29,6 +30,9 @@ export { connectorRoutes } from "./connectors.js";
 export { slackConnectorRoutes } from "./slack-connector.js";
 // AgentDash: Gmail Connector (AGE-109)
 export { gmailRoutes } from "./gmail.js";
+// AgentDash: MCP-native signup — founding-user signup via the MCP journey
+export { onboardingMcpSignupRoutes } from "./onboarding-mcp-signup.js";
+export { inviteCodeRoutes } from "./invite-codes.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
 export { featureFlagRoutes } from "./feature-flags.js";

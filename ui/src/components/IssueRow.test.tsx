@@ -242,3 +242,48 @@ describe("IssueRow", () => {
     });
   });
 });
+
+describe("IssueRow awaiting-review badge", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("renders the badge only when the signed-in viewer is the pending review principal", () => {
+    const issue = createIssue({
+      awaitingReviewByViewer: {
+        viewerUserId: "user-1",
+        stageType: "review",
+        status: "pending",
+        viewerMatchesPrincipal: true,
+      },
+    });
+    const badge = () => container.querySelector('[aria-label="Awaiting your review on Inbox item"]');
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(<IssueRow issue={issue} viewerUserId="user-1" />);
+    });
+    expect(badge()).not.toBeNull();
+
+    act(() => {
+      root.render(<IssueRow issue={issue} viewerUserId="user-2" />);
+    });
+    expect(badge()).toBeNull();
+
+    act(() => {
+      root.render(<IssueRow issue={issue} />);
+    });
+    expect(badge()).toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+});

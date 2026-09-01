@@ -939,3 +939,13 @@ Export/import behavior in V1:
 - import supports collision strategies: `rename`, `skip`, `replace`
 - import supports preview (dry-run) before apply
 - GitHub imports warn on unpinned refs instead of blocking
+
+## AgentDash-MK product profile
+
+`companies.product_profile` is `default` or `agentdash_mk`. The profile adds
+one-to-one human-agent stewardship, owner policy ceilings, steward-scoped
+approvals with an explicit emergency override, a server-backed personal inbox,
+and Telegram/Teams channels. Default-profile behavior is unchanged.
+
+Design: [`docs/superpowers/specs/2026-07-28-agentdash-mk-design.md`](../docs/superpowers/specs/2026-07-28-agentdash-mk-design.md).
+API: [`docs/api/agentdash-mk.md`](../docs/api/agentdash-mk.md).

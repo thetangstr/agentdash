@@ -134,7 +134,20 @@ function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  // A5: the issue detail route checks project visibility straight against
+  // the db. This stub answers "not restricted" for any project lookup, which
+  // keeps these tests about goal context rather than visibility.
+  const dbStub = {
+    select: () => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve([
+            { id: "project-1", companyId: "company-1", visibility: "company", createdByUserId: null },
+          ]),
+      }),
+    }),
+  };
+  app.use("/api", issueRoutes(dbStub as any, {} as any));
   app.use(errorHandler);
   return app;
 }

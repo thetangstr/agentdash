@@ -25,7 +25,7 @@ import {
 } from "../services/workspace-runtime.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import {
-  assertNoAgentHostWorkspaceCommandMutation,
+  assertHostWorkspaceCommandAuthority,
   collectExecutionWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import { assertCanManageExecutionWorkspaceRuntimeServices } from "./workspace-runtime-service-authz.js";
@@ -446,8 +446,10 @@ export function executionWorkspaceRoutes(db: Db) {
       return;
     }
     assertCompanyAccess(req, existing.companyId);
-    assertNoAgentHostWorkspaceCommandMutation(
+    await assertHostWorkspaceCommandAuthority(
+      db,
       req,
+      existing.companyId,
       collectExecutionWorkspaceCommandPaths({
         config: req.body.config,
         metadata: req.body.metadata,

@@ -53,15 +53,57 @@ describe("cosInterview.nextTurn", () => {
     expect(r.state.status).toBe("ready_to_propose");
   });
 
-  it("exceeds_max after 4 follow-ups even if LLM keeps asking", async () => {
-    const llm = vi.fn().mockResolvedValue({ text: "Another?", readyToPropose: false });
+  /**
+   * At the follow-up cap the interview must PROPOSE, not vanish.
+   *
+   * It used to return assistantMessage:null with status "exceeded_max". The
+   * route posts only a truthy message and nothing anywhere handles
+   * "exceeded_max", so the user answered a question and got silence, for good.
+   * On a real run the model had already produced a full team proposal; the
+   * trailer said readyToPropose:false, that reply was counted as a follow-up,
+   * and the next turn hit the cap and discarded it. Goals never became tasks
+   * because the proposal had nowhere to land.
+   */
+  it("forces a proposal at the cap instead of going silent", async () => {
+    const llm = vi.fn().mockResolvedValue({
+      text: "Here's the team I'd propose: a Deck Assembler and a Gap Watchdog.",
+      readyToPropose: false,
+    });
     const state: InterviewState = {
       conversationId: "conv-1", turns: longTurns(11),
       fixedQuestionsAsked: 3, followUpsAsked: 4, status: "in_progress",
     };
     const r = await cosInterview({ llm } as any).nextTurn(state);
-    expect(r.state.status).toBe("exceeded_max");
-    expect(r.assistantMessage).toBeNull();
+
+    expect(r.state.status).toBe("ready_to_propose");
+    expect(r.assistantMessage, "the user got nothing back").not.toBeNull();
+    expect(r.assistantMessage).toContain("Gap Watchdog");
+  });
+
+  it("still says something when the model returns nothing at the cap", async () => {
+    // An empty string is falsy, so the route would post nothing and we would be
+    // back to the same dead thread by a different route.
+    const llm = vi.fn().mockResolvedValue({ text: "   ", readyToPropose: false });
+    const state: InterviewState = {
+      conversationId: "conv-1", turns: longTurns(11),
+      fixedQuestionsAsked: 3, followUpsAsked: 4, status: "in_progress",
+    };
+    const r = await cosInterview({ llm } as any).nextTurn(state);
+
+    expect(r.assistantMessage).toBeTruthy();
+    expect(r.assistantMessage).toMatch(/take[n]? off your plate/i);
+  });
+
+  it("terminates: the cap is still absolute", async () => {
+    // Forcing a proposal must not become an unbounded loop. Past the cap the
+    // status is terminal regardless of what the model says.
+    const llm = vi.fn().mockResolvedValue({ text: "Another question?", readyToPropose: false });
+    const state: InterviewState = {
+      conversationId: "conv-1", turns: longTurns(13),
+      fixedQuestionsAsked: 3, followUpsAsked: 9, status: "in_progress",
+    };
+    const r = await cosInterview({ llm } as any).nextTurn(state);
+    expect(r.state.status).toBe("ready_to_propose");
   });
 });
 

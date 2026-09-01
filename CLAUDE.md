@@ -55,6 +55,7 @@ If a step fails, fix it (or explicitly document it as a pre-existing failure unr
 
 MAW slash commands are installed under `.claude/commands/` (`pm.md`, `builder.md`, `tester.md`, `tpm.md`, `admin.md`, `workon.md`, `upstream-digest.md`).
 
+- MKThink production line: `mkthink/main` — protected, locked on the customer machine. Never target it with feature PRs; promote by cherry-pick PR after the change is on `main`. See `doc/TESTING.md` → "Two mains".
 - Base branch for MAW PRs: `main` (during v2 build; flips back to `agentdash-main` after the cutover described in [docs/superpowers/specs/2026-05-02-v2-base-migration-design.md](docs/superpowers/specs/2026-05-02-v2-base-migration-design.md))
 - Default issue prefix in examples: `AGE` (Linear) and `GH #` (GitHub)
 - Primary entry point: `/workon AGE-123`
@@ -97,7 +98,7 @@ When `STRIPE_SECRET_KEY` is set in production, caps are enforced as designed (Fr
 | CLI | Commander, esbuild | `cli/src/index.ts` |
 | Database | PostgreSQL, Drizzle ORM | `packages/db/src/schema/` |
 | Shared Types | Zod validators, constants | `packages/shared/src/` |
-| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw | `packages/adapters/` |
+| Agent Adapters | Claude, Codex, Cursor, Gemini, Pi, OpenCode, OpenClaw, acpx | `packages/adapters/` |
 | Plugins | JSON-RPC workers, event bus | `packages/plugins/` |
 
 ### Service pattern
@@ -161,7 +162,7 @@ export type MyStatus = (typeof MY_STATUSES)[number];
 - **Dev**: Embedded PG (leave `DATABASE_URL` unset) — auto-managed at `~/.paperclip/instances/default/db/`
 - **Reset**: `rm -rf ~/.paperclip/instances/default/db && pnpm dev`
 - **Schema → Migration**: Edit `packages/db/src/schema/*.ts` → `pnpm db:generate` → `pnpm -r typecheck`
-- **14 migrations** (0046-0059) added by AgentDash; 60 total migrations
+- **Migrations** run 0000–0114 as of 2026-08-04 (the agentdash-mk work is 0096–0114); check `packages/db/src/migrations/meta/_journal.json` for the current head
 
 ## Branding
 

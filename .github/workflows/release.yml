@@ -7,10 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Commit SHA, branch, or tag to publish as stable
+        description: Full 40-character commit SHA to publish as stable
         required: true
         type: string
-        default: main
       stable_date:
         description: Enter a UTC date in YYYY-MM-DD format, for example 2026-03-18. Do not enter a version string. The workflow will resolve that date to a stable version such as 2026.318.0, then 2026.318.1 for the next same-day stable.
         required: false
@@ -54,7 +53,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        run: pnpm typecheck
 
       - name: Run Hermes onboarding regression lane
         run: pnpm run test:regression:hermes-onboarding
@@ -106,7 +105,7 @@ jobs:
       - name: Publish canary
         env:
           GITHUB_ACTIONS: "true"
-        run: ./scripts/release.sh canary --skip-verify
+        run: ./scripts/release.sh canary --skip-verify --skip-npm
 
       - name: Push canary tag
         run: |
@@ -125,11 +124,40 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: release-control
+
+      - name: Require immutable source SHA
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ ! "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Error: source_ref must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Checkout immutable source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_ref }}
+          path: source
+
+      - name: Verify immutable source provenance
+        working-directory: source
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          requested_source="$(git rev-parse "${SOURCE_REF}^{commit}")"
+          actual_source="$(git rev-parse HEAD)"
+          if [ "$actual_source" != "$requested_source" ]; then
+            echo "Error: source checkout resolved to $actual_source, expected $requested_source." >&2
+            exit 1
+          fi
+          echo "Verified immutable source: $actual_source"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -141,20 +169,26 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
 
       - name: Install dependencies
+        working-directory: source
         run: pnpm install --no-frozen-lockfile
 
       - name: Typecheck
-        run: pnpm -r typecheck
+        working-directory: source
+        run: pnpm typecheck
 
       - name: Run Hermes onboarding regression lane
+        working-directory: source
         run: pnpm run test:regression:hermes-onboarding
 
       - name: Run tests
+        working-directory: source
         run: pnpm test:run
 
       - name: Build
+        working-directory: source
         run: pnpm build
 
   preview_stable:
@@ -166,11 +200,18 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: release-control
+
+      - name: Checkout immutable source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_ref }}
+          path: source
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -182,19 +223,59 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
 
       - name: Install dependencies
+        working-directory: source
         run: pnpm install --no-frozen-lockfile
 
       - name: Dry-run stable release
         env:
           GITHUB_ACTIONS: "true"
+          REPO_ROOT: ${{ github.workspace }}/source
         run: |
-          args=(stable --skip-verify --dry-run)
+          args=(stable --skip-verify --skip-npm --dry-run)
+          version_args=(stable --skip-npm --print-version)
           if [ -n "${{ inputs.stable_date }}" ]; then
             args+=(--date "${{ inputs.stable_date }}")
+            version_args+=(--date "${{ inputs.stable_date }}")
           fi
-          ./scripts/release.sh "${args[@]}"
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
+          release-control/scripts/release.sh "${args[@]}"
+
+      - name: Build release-control assets
+        id: release_control_assets
+        run: |
+          version_args=(stable --skip-npm --print-version)
+          if [ -n "${{ inputs.stable_date }}" ]; then
+            version_args+=(--date "${{ inputs.stable_date }}")
+          fi
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          output_dir="${{ runner.temp }}/agentdash-release-assets"
+          node release-control/scripts/build-release-control-assets.mjs \
+            --version "$version" \
+            --source-sha "$(git -C source rev-parse HEAD)" \
+            --control-sha "$(git -C release-control rev-parse HEAD)" \
+            --source-script release-control/scripts/deploy/agentdash-mac-mini-source-launchd.mjs \
+            --output-dir "$output_dir"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Preview GitHub Release
+        env:
+          GITHUB_ACTIONS: "true"
+          PUBLISH_REMOTE: origin
+          REPO_ROOT: ${{ github.workspace }}/source
+        run: |
+          version="${{ steps.release_control_assets.outputs.version }}"
+          output_dir="${{ steps.release_control_assets.outputs.output_dir }}"
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
+          release-control/scripts/create-github-release.sh "$version" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs.sha256" \
+            --asset "$output_dir/agentdash-release-control-v${version}.json" \
+            --dry-run
 
   publish_stable:
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
@@ -207,11 +288,18 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout release control
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: release-control
+
+      - name: Checkout immutable source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_ref }}
+          path: source
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -223,45 +311,91 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
 
       - name: Install dependencies
+        working-directory: source
         run: pnpm install --no-frozen-lockfile
 
       - name: Restore tracked install-time changes
+        working-directory: source
         run: git checkout -- pnpm-lock.yaml
 
       - name: Configure git author
+        working-directory: source
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Publish stable
+        id: stable_release
         env:
           GITHUB_ACTIONS: "true"
+          REPO_ROOT: ${{ github.workspace }}/source
         run: |
-          args=(stable --skip-verify)
+          args=(stable --skip-verify --skip-npm)
+          version_args=(stable --skip-npm --print-version)
           if [ -n "${{ inputs.stable_date }}" ]; then
             args+=(--date "${{ inputs.stable_date }}")
+            version_args+=(--date "${{ inputs.stable_date }}")
           fi
-          ./scripts/release.sh "${args[@]}"
+          version="$(release-control/scripts/release.sh "${version_args[@]}")"
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
+          release-control/scripts/release.sh "${args[@]}"
+          tag="v${version}"
+          tag_source="$(git -C source rev-parse "refs/tags/${tag}^{commit}")"
+          current_source="$(git -C source rev-parse HEAD)"
+          if [ "$tag_source" != "$current_source" ]; then
+            echo "Error: stable tag resolves to $tag_source, expected $current_source." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Push stable tag
+        working-directory: source
         run: |
-          tag="$(git tag --points-at HEAD | grep '^v' | head -1)"
+          tag="${{ steps.stable_release.outputs.tag }}"
           if [ -z "$tag" ]; then
-            echo "Error: no stable tag points at HEAD after release." >&2
+            echo "Error: stable release did not provide an exact tag." >&2
+            exit 1
+          fi
+          tag_source="$(git rev-parse "$tag^{commit}")"
+          current_source="$(git rev-parse HEAD)"
+          if [ "$tag_source" != "$current_source" ]; then
+            echo "Error: stable tag resolves to $tag_source, expected $current_source." >&2
             exit 1
           fi
           git push origin "refs/tags/${tag}"
+
+      - name: Build release-control assets
+        id: release_control_assets
+        run: |
+          version="${{ steps.stable_release.outputs.version }}"
+          if [ -z "$version" ]; then
+            echo "Error: stable release did not provide an exact version." >&2
+            exit 1
+          fi
+          output_dir="${{ runner.temp }}/agentdash-release-assets"
+          node release-control/scripts/build-release-control-assets.mjs \
+            --version "$version" \
+            --source-sha "$(git -C source rev-parse HEAD)" \
+            --control-sha "$(git -C release-control rev-parse HEAD)" \
+            --source-script release-control/scripts/deploy/agentdash-mac-mini-source-launchd.mjs \
+            --output-dir "$output_dir"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_REMOTE: origin
+          REPO_ROOT: ${{ github.workspace }}/source
         run: |
-          version="$(git tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
-          if [ -z "$version" ]; then
-            echo "Error: no v* tag points at HEAD after stable release." >&2
-            exit 1
-          fi
-          ./scripts/create-github-release.sh "$version"
+          version="${{ steps.release_control_assets.outputs.version }}"
+          output_dir="${{ steps.release_control_assets.outputs.output_dir }}"
+          export RELEASE_NOTES_FILE="${{ github.workspace }}/release-control/releases/v${version}.md"
+          release-control/scripts/create-github-release.sh "$version" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs" \
+            --asset "$output_dir/agentdash-mac-mini-source-launchd-v${version}.mjs.sha256" \
+            --asset "$output_dir/agentdash-release-control-v${version}.json"

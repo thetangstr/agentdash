@@ -11,7 +11,9 @@ import {
   cosReplier,
   cosOnboardingStateService,
   agentSummoner,
+  agentInstructionsService,
 } from "../services/index.js";
+import { llmSummonAdapter } from "../services/agent-summoner.js";
 import type { DeepInterviewSpecsService } from "../services/cos-replier.js";
 import { dispatchLLM } from "../services/dispatch-llm.js";
 
@@ -38,9 +40,16 @@ export function conversationRoutes(db: Db) {
     summoner: agentSummoner({
       conversations: svc,
       agents: { getById: (id: string) => agents.getById(id) },
-      adapterFor: (_t: string) => ({
-        execute: async () => ({ output: "Stub agent reply" }),
-      }),
+      // One adapter for every `adapterType`, deliberately: `dispatchLLM` already
+      // selects the model from AGENTDASH_DEFAULT_ADAPTER, which is the same
+      // selection the `replier` below uses. Branching on the agent's own
+      // `adapterType` here would let a summoned agent answer through a different
+      // model than the CoS in the same conversation, for no stated reason.
+      adapterFor: (_t: string) =>
+        llmSummonAdapter({
+          instructions: agentInstructionsService(),
+          dispatch: (input) => dispatchLLM(input),
+        }),
     }),
     // dispatchLLM routes to the CoS chat adapter selected via `agentdash setup`
     // (AGENTDASH_DEFAULT_ADAPTER). Defaults to claude_api; also supports

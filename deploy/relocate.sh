@@ -1,0 +1,261 @@
+#!/bin/zsh
+# Re-home this machine after it moves to a different network.
+#
+# Moving the Mini to the client's server room changes exactly one thing that
+# matters, and it changes it silently: the LAN IP. That IP is written into
+# three places -- each instance's PAPERCLIP_ALLOWED_HOSTNAMES, the mkcert
+# certificate's SANs, and the Caddy site blocks -- and a stale one there does
+# not produce an error anyone will notice. It produces a 403 at the hostname
+# guard, or a TLS connection Caddy drops without a certificate, at whatever
+# moment someone first tries to use the thing.
+#
+# So this is not a convenience wrapper. It exists because the failure it
+# prevents is invisible until it is embarrassing.
+#
+# Safe to run repeatedly. On a network where nothing has changed it rewrites
+# the same values, reissues an equivalent certificate, and verifies -- so
+# "run it and read the table" is always a correct thing to do, including as a
+# health check when you have not moved anywhere.
+#
+# It needs NO sudo. Restarting an instance is `kill -KILL`, and the signal
+# matters: the LaunchDaemons are KeepAlive {SuccessfulExit: false}, which means
+# launchd restarts a job only when it exits NON-zero. The server handles SIGTERM
+# gracefully and exits 0, so `kill -TERM` reads as "it meant to stop" and launchd
+# leaves it down -- measured 2026-08-17, uat stayed dead with `last exit code = 0`
+# until someone ran `sudo launchctl kickstart`. SIGKILL exits 137, which is
+# non-zero, so KeepAlive fires (also measured: runs 3 -> 4, back in ~10s).
+#
+# The cost is an unclean stop: in-flight requests are dropped and DB connections
+# close hard. Acceptable for a config reload, and much better than discovering in
+# the client's server room that the instance is down and the fix needs a
+# password. To get BOTH graceful and automatic, set KeepAlive to <true/> in the
+# four server/db plists -- one-time sudo, at home -- and switch this back to TERM.
+#
+# Usage:  deploy/relocate.sh            # do it
+#         deploy/relocate.sh --check    # report only, change nothing
+
+set -eu
+
+CHECK_ONLY=0
+[ "${1:-}" = "--check" ] && CHECK_ONLY=1
+
+CONF="$HOME/.config/agentdash"
+TLS="$CONF/tls"
+CA="$HOME/Library/Application Support/mkcert/rootCA.pem"
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node@24/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+red()    { print -P "%F{red}$1%f"; }
+green()  { print -P "%F{green}$1%f"; }
+yellow() { print -P "%F{yellow}$1%f"; }
+bold()   { print -P "%B$1%b"; }
+
+# --- 1. Where are we? ------------------------------------------------------
+IFACE=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+[ -n "$IFACE" ] || { red "No default route. Plug in the network first."; exit 1; }
+LAN_IP=$(ipconfig getifaddr "$IFACE" 2>/dev/null || true)
+[ -n "$LAN_IP" ] || { red "Interface $IFACE has no IPv4 address yet. Wait for DHCP."; exit 1; }
+
+TS_IP=$(tailscale ip -4 2>/dev/null | tail -1 || true)
+TS_NAME=$(tailscale status --json 2>/dev/null \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).Self.DNSName.replace(/\.$/,''))}catch(e){}})" || true)
+
+bold "Where this machine is now"
+print "  interface     : $IFACE"
+print "  LAN IP        : $LAN_IP"
+print "  Tailscale IP  : ${TS_IP:-(none — tailscale is down)}"
+print "  Tailscale name: ${TS_NAME:-(none)}"
+
+[ -n "$TS_IP" ] || red "  WARNING: Tailscale is not up. Remote access will not work."
+
+# mkmini.local is mDNS: it follows the machine to any LAN, so it needs no
+# updating. The IPs do.
+NAMES=(mkmini.local '*.mkmini.local' localhost 127.0.0.1 "$LAN_IP")
+HOSTS="$LAN_IP,mkmini.local"
+if [ -n "$TS_IP" ]; then NAMES+=("$TS_IP"); HOSTS="$HOSTS,$TS_IP"; fi
+if [ -n "$TS_NAME" ]; then NAMES+=("$TS_NAME"); HOSTS="$HOSTS,$TS_NAME"; fi
+
+print ""
+bold "Will set PAPERCLIP_ALLOWED_HOSTNAMES to"
+print "  $HOSTS"
+
+if [ "$CHECK_ONLY" = "1" ]; then
+  print ""
+  bold "--check: nothing was changed. Current state:"
+  for pair in "mkboard 3102 3112"; do
+    set -- ${=pair}
+    printf "  %-8s http :%s -> %s\n" "$1" "$2" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://127.0.0.1:$2/api/health || echo FAIL)"
+  done
+  exit 0
+fi
+
+# --- 2. Env files ----------------------------------------------------------
+STAMP=$(date +%Y%m%d-%H%M%S)
+print ""
+bold "Updating env files"
+for inst in mkboard; do
+  f="$CONF/$inst.env"
+  [ -f "$f" ] || { red "  missing $f"; exit 1; }
+  cp "$f" "$f.bak-$STAMP"
+  # These files carry the key more than once and the loader takes the LAST
+  # one, so only the last line may be rewritten. Editing the first would
+  # change nothing and look like it had worked.
+  last=$(grep -n '^PAPERCLIP_ALLOWED_HOSTNAMES=' "$f" | tail -1 | cut -d: -f1)
+  [ -n "$last" ] || { red "  no PAPERCLIP_ALLOWED_HOSTNAMES in $f"; exit 1; }
+  sed -i '' "${last}s|.*|PAPERCLIP_ALLOWED_HOSTNAMES=$HOSTS|" "$f"
+  green "  $inst.env line $last updated (backup: $inst.env.bak-$STAMP)"
+done
+
+# --- 3. Certificate --------------------------------------------------------
+print ""
+bold "Reissuing the TLS certificate"
+mkdir -p "$TLS"
+( cd "$TLS" && mkcert -cert-file mkmini-multi.pem -key-file mkmini-multi-key.pem "${NAMES[@]}" >/dev/null 2>&1 )
+chmod 600 "$TLS/mkmini-multi-key.pem"
+green "  SANs: $(openssl x509 -in "$TLS/mkmini-multi.pem" -noout -text | grep -A1 'Alternative Name' | tail -1 | sed 's/^ *//')"
+
+# The mkcert certificate above is only as good as the root that signs it, and
+# on an MDM-managed Mac a non-admin user cannot trust a private root at all --
+# Apple removed silent CLI trust, so the keychain prompts for admin credentials
+# however the file arrived. That is the whole reason HTTPS "worked" here and
+# still failed on the client's own laptops.
+#
+# The tailnet name is the way out: Tailscale issues a real Let's Encrypt
+# certificate for it, which every machine already trusts. It covers ONLY the
+# .ts.net name -- not mkmini.local, not the bare IPs -- so this is an addition
+# to the mkcert cert, never a replacement for it.
+TS_CERT="$TLS/ts.crt"
+TS_KEY="$TLS/ts.key"
+TS_PUBLIC_TLS=""
+if [ -n "$TS_NAME" ]; then
+  if tailscale cert --cert-file "$TS_CERT" --key-file "$TS_KEY" "$TS_NAME" >/dev/null 2>&1; then
+    TS_PUBLIC_TLS=1
+    green "  $TS_NAME: publicly-trusted cert ($(openssl x509 -in "$TS_CERT" -noout -issuer | sed 's/^issuer= *//'))"
+  else
+    # Not fatal: the name stays on the mkcert cert and keeps working for
+    # anyone who has the root. Enable DNS -> HTTPS Certificates in the
+    # Tailscale admin console to turn this on.
+    yellow "  $TS_NAME: tailnet HTTPS certs unavailable — falling back to mkcert"
+  fi
+fi
+
+# --- 4. Caddy --------------------------------------------------------------
+print ""
+bold "Rewriting Caddy site blocks"
+CADDY="$CONF/Caddyfile"
+cp "$CADDY" "$CADDY.bak-$STAMP"
+{
+  cat <<HEADER
+# Generated by deploy/relocate.sh on $(date "+%Y-%m-%d %H:%M:%S").
+# Hand edits will be overwritten the next time this machine moves networks.
+# See deploy/caddy/README.md for why each of these blocks has to exist.
+
+{
+	auto_https disable_redirects
+}
+
+(agentdash_tls) {
+	tls $TLS/mkmini-multi.pem $TLS/mkmini-multi-key.pem
+}
+HEADER
+  # The tailnet name gets its own snippet with the publicly-trusted cert, so a
+  # laptop that has never installed the mkcert root still gets a clean padlock
+  # -- and therefore a secure context, and therefore a working clipboard.
+  if [ -n "$TS_PUBLIC_TLS" ]; then
+    cat <<PUBLIC
+
+(agentdash_tls_public) {
+	tls $TS_CERT $TS_KEY
+}
+PUBLIC
+  fi
+  for pair in "3112 3102 mkboard"; do
+    set -- ${=pair}
+    tlsport=$1; appport=$2; label=$3
+    sites="https://mkmini.local:$tlsport"
+    # A request to a bare IP sends no SNI at all, so Caddy needs the address
+    # spelled out or it closes the connection before offering a certificate.
+    # Bare IPs stay on mkcert: a public CA will not certify a private address.
+    sites="$sites, https://$LAN_IP:$tlsport"
+    [ -n "$TS_IP" ] && sites="$sites, https://$TS_IP:$tlsport"
+    # Without a public cert the tailnet name joins the mkcert block as before.
+    [ -n "$TS_NAME" ] && [ -z "$TS_PUBLIC_TLS" ] && sites="$sites, https://$TS_NAME:$tlsport"
+    cat <<BLOCK
+
+# --- $label ---
+$sites {
+	import agentdash_tls
+	reverse_proxy 127.0.0.1:$appport
+}
+BLOCK
+    if [ -n "$TS_PUBLIC_TLS" ]; then
+      cat <<BLOCK
+
+# --- $label (tailnet, publicly-trusted cert) ---
+https://$TS_NAME:$tlsport {
+	import agentdash_tls_public
+	reverse_proxy 127.0.0.1:$appport
+}
+BLOCK
+    fi
+  done
+} > "$CADDY"
+
+caddy validate --config "$CADDY" >/dev/null 2>&1 || { red "  Caddyfile invalid — restoring"; cp "$CADDY.bak-$STAMP" "$CADDY"; exit 1; }
+caddy reload --config "$CADDY" >/dev/null 2>&1 || { red "  caddy reload failed"; exit 1; }
+green "  reloaded"
+
+# --- 5. Restart the instances ---------------------------------------------
+# The hostname allow-set is read at boot, so a server that is not restarted
+# keeps refusing the new IP no matter what the env file says.
+print ""
+bold "Restarting instances so they pick up the new hostname set"
+# SIGKILL, not SIGTERM -- see the header. A graceful exit is exit 0, and
+# KeepAlive {SuccessfulExit: false} does not restart a job that exited 0.
+for pid in $(pgrep -f 'tsx src/index.ts' | head -4); do kill -KILL "$pid" 2>/dev/null || true; done
+for i in $(seq 1 30); do
+  a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3102/api/health || echo 000)
+  [ "$a" = "200" ] && break
+  sleep 2
+done
+[ "$a" = "200" ] && green "  mkboard up" || red "  mkboard did NOT come back (got $a)"
+# An instance that is down here needs launchd told to start it, and that is the
+# one step in this script that wants a password. Print it rather than making
+# someone work it out while the client waits.
+if [ "$a" != "200" ]; then
+  red "  recover with:"
+  red "    sudo launchctl kickstart -k system/com.agentdash.mkboard.server"
+fi
+
+# --- 6. Prove it, on every path someone might actually use ----------------
+print ""
+bold "Verification — every address, real certificate validation"
+FAIL=0
+for host in mkmini.local "$LAN_IP" ${TS_IP:+$TS_IP} ${TS_NAME:+$TS_NAME}; do
+  for port in 3112; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 --cacert "$CA" "https://$host:$port/api/health" || echo 000)
+    if [ "$code" = "200" ]; then
+      printf "  %-40s :%s  %s\n" "$host" "$port" "$(print -P '%F{green}200%f')"
+    else
+      printf "  %-40s :%s  %s\n" "$host" "$port" "$(print -P "%F{red}$code%f")"
+      FAIL=1
+    fi
+  done
+done
+
+print ""
+if [ "$FAIL" = "0" ]; then
+  green "All paths healthy. The board is reachable from this network and over Tailscale."
+else
+  red "Something is NOT reachable. Do not tell anyone it is ready yet."
+  print "Backups of every file changed carry the suffix .bak-$STAMP"
+  exit 1
+fi
+
+# --- 7. Where to go, and what is still missing ----------------------------
+# Reachable is not the same as usable. This is the part that answers "now
+# what?" -- which URL to open, and who cannot yet get in.
+print ""
+( cd "$(dirname "$0")/../server" && node ../deploy/readiness.mjs "$LAN_IP" "${TS_NAME:-}" ) || true
+
+print ""
+print "Backups of everything this changed: *.bak-$STAMP in $CONF"

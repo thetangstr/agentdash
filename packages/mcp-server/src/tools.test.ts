@@ -36,7 +36,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipUpdateIssue");
+    const tool = getTool("update_issue");
     await tool.execute({
       issueId: "PAP-1135",
       status: "done",
@@ -58,7 +58,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipListIssues");
+    const tool = getTool("list_issues");
     const response = await tool.execute({});
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -75,7 +75,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipCheckoutIssue");
+    const tool = getTool("checkout_issue");
     await tool.execute({
       issueId: "PAP-1135",
     });
@@ -93,7 +93,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipUpsertIssueDocument");
+    const tool = getTool("upsert_issue_document");
     await tool.execute({
       issueId: "PAP-1135",
       key: "plan",
@@ -131,7 +131,7 @@ describe("paperclip MCP tools", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipControlIssueWorkspaceServices");
+    const tool = getTool("control_issue_workspace_services");
     await tool.execute({
       issueId: "PAP-1135",
       action: "restart",
@@ -171,7 +171,7 @@ describe("paperclip MCP tools", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipWaitForIssueWorkspaceService");
+    const tool = getTool("wait_for_issue_workspace_service");
     const response = await tool.execute({
       issueId: "PAP-1135",
       serviceName: "web",
@@ -188,7 +188,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipSuggestTasks");
+    const tool = getTool("suggest_tasks");
     await tool.execute({
       issueId: "PAP-1135",
       idempotencyKey: "run-1:suggest",
@@ -218,7 +218,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipRequestConfirmation");
+    const tool = getTool("request_confirmation");
     await tool.execute({
       issueId: "PAP-1135",
       idempotencyKey: "confirmation:PAP-1135:plan:33333333-3333-4333-8333-333333333333",
@@ -272,7 +272,7 @@ describe("paperclip MCP tools", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const tool = getTool("paperclipCreateApproval");
+    const tool = getTool("create_approval");
     await tool.execute({
       type: "hire_agent",
       payload: { branch: "pap-1167" },
@@ -295,7 +295,7 @@ describe("paperclip MCP tools", () => {
   it("rejects invalid generic request paths", async () => {
     vi.stubGlobal("fetch", vi.fn());
 
-    const tool = getTool("paperclipApiRequest");
+    const tool = getTool("api_request");
     const response = await tool.execute({
       method: "GET",
       path: "issues",
@@ -307,7 +307,7 @@ describe("paperclip MCP tools", () => {
   it("rejects generic request paths that escape /api", async () => {
     vi.stubGlobal("fetch", vi.fn());
 
-    const tool = getTool("paperclipApiRequest");
+    const tool = getTool("api_request");
     const response = await tool.execute({
       method: "GET",
       path: "/../../secret",
@@ -377,6 +377,19 @@ describe("paperclip MCP tools", () => {
       companyId: "11111111-1111-1111-1111-111111111111",
     });
     expect(response.content[0]?.text).toContain("msg-1");
+  });
+
+  /**
+   * The tool description is the only thing a model reads before deciding
+   * whether a tool answers its question. The server now returns a `steward` on
+   * every agent read path, and a description that stops at "actor details" or
+   * "List agents in a company" does not tell a model that the human behind an
+   * agent is in there — so the field would ship and go unread.
+   */
+  it("advertises the steward on the three tools an agent reads identities through", () => {
+    for (const name of ["whoami", "list_agents", "get_agent"]) {
+      expect(getTool(name).description).toContain("steward");
+    }
   });
 
   it("agentdashHireAgent POSTs to company agent-hires without companyId in the body", async () => {

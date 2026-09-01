@@ -115,9 +115,26 @@ async function createApp() {
     };
     next();
   });
-  app.use("/api", agentRoutes({} as any));
+  app.use("/api", agentRoutes(createDbStub() as any));
   app.use(errorHandler);
   return app;
+}
+
+/**
+ * Minimal db stub. The agent configuration routes read the owning company's
+ * product profile to decide whether AgentDash-MK steward authority applies;
+ * this returns a `default`-profile company so these tests exercise the
+ * unchanged baseline path.
+ */
+function createDbStub() {
+  const chain: any = {
+    from: () => chain,
+    leftJoin: () => chain,
+    where: () => chain,
+    then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
+      Promise.resolve([{ id: "company-1", productProfile: "default" }]).then(resolve, reject),
+  };
+  return { select: () => chain };
 }
 
 async function requestApp(

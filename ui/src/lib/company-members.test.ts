@@ -13,7 +13,7 @@ const activeMember = (overrides: Partial<CompanyMember>): CompanyMember => ({
   principalType: "user",
   principalId: overrides.principalId ?? "user-1",
   status: overrides.status ?? "active",
-  membershipRole: overrides.membershipRole ?? "operator",
+  membershipRole: overrides.membershipRole ?? "member",
   createdAt: overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
   updatedAt: overrides.updatedAt ?? "2026-01-01T00:00:00.000Z",
   user: overrides.user === undefined

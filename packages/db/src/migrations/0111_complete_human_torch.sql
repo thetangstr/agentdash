@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "connections_sharepoint_active_owner_uq" ON "connections" USING btree ("company_id","owner_type","owner_id") WHERE "connections"."provider" = 'sharepoint' and "connections"."revoked_at" is null;
