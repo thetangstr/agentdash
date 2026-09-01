@@ -4,6 +4,8 @@ on:
   pull_request:
     branches:
       - main
+      # MKThink production line — same checks, same protection as main.
+      - mkthink/main
       # Candidates land on `staging` before a test instance picks them up (see
       # doc/TESTING.md). Without this they arrived there with no verify, no
       # policy and no drift check — so the first thing to find a syntax error
