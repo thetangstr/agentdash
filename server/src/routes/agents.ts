@@ -153,6 +153,10 @@ export function agentRoutes(
     "instructionsEntryFile",
     "instructionsFilePath",
     "agentsMdPath",
+    // Which generated blocks an agent does not carry. Guarded with the rest of
+    // the bundle configuration on purpose: left ungated, an agent could suppress
+    // the blocks that constrain it and delete its own rules.
+    "instructionsSuppressedBlocks",
   ] as const;
 
   const router = Router();
