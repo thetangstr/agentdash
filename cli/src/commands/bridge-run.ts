@@ -11,7 +11,7 @@ import {
 import { DEFAULT_INTERVAL_MS, runBridgeWorker } from "../bridge/worker.js";
 
 /**
- * AgentDash-MK: `agentdash bridge run` — the local bridge worker.
+ * AgentDash-MK: `paperclipai bridge run` — the local bridge worker.
  *
  * Runs on a human's own machine, polls AgentDash for tasks, executes each one
  * under a macOS Seatbelt profile in a throwaway workspace, and submits the
@@ -24,8 +24,8 @@ export const TOKEN_ARGV_MESSAGE =
   "Refusing to start: the endpoint token must not be passed as a command-line argument.\n" +
   "`argv` is world-readable via `ps` on a shared machine, so a token there is a token\n" +
   "leaked to every local user. Use one of:\n" +
-  "  AGENTDASH_BRIDGE_TOKEN=<token> agentdash bridge run …\n" +
-  "  agentdash bridge run --token-file /path/to/token";
+  "  AGENTDASH_BRIDGE_TOKEN=<token> paperclipai bridge run …\n" +
+  "  paperclipai bridge run --token-file /path/to/token";
 
 const TOKEN_MISSING_MESSAGE =
   "Refusing to start: no endpoint token found.\n" +
