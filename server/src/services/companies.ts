@@ -33,6 +33,30 @@ import {
   documents,
   budgetIncidents,
   budgetPolicies,
+  // AgentDash (AGE-36): every table below holds a NO ACTION foreign key to
+  // agents (or, for the bridge pair, to bridge endpoints / companies) and a
+  // company_id column. None of them were cleared on company delete, so
+  // deleting a company that had used directives, the bridge, routines, or any
+  // of the rest failed with a 500 foreign-key violation.
+  agentDirectives,
+  agentMemory,
+  bridgeTasks,
+  bridgeEndpoints,
+  routines,
+  verdicts,
+  cosReviewerAssignments,
+  issueReviewQueueState,
+  issueExecutionDecisions,
+  issueThreadInteractions,
+  assistantConversations,
+  agentConnectCodes,
+  trialSessions,
+  mandates,
+  humanChannelBindings,
+  connectorSendExecutions,
+  agentRuns,
+  agentConnectorOverrides,
+  connections,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -451,6 +475,28 @@ export function companyService(db: Db) {
         // foreign-key violation.
         await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
         await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
+        // AgentDash (AGE-36): the remaining agent-referencing tables, all
+        // NO ACTION, all scoped by company. bridge_tasks first (it references
+        // bridge_endpoints), routines cascades its own triggers and runs.
+        await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
+        await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
+        await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
+        await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
+        await tx.delete(routines).where(eq(routines.companyId, id));
+        await tx.delete(verdicts).where(eq(verdicts.companyId, id));
+        await tx.delete(cosReviewerAssignments).where(eq(cosReviewerAssignments.companyId, id));
+        await tx.delete(issueReviewQueueState).where(eq(issueReviewQueueState.companyId, id));
+        await tx.delete(issueExecutionDecisions).where(eq(issueExecutionDecisions.companyId, id));
+        await tx.delete(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, id));
+        await tx.delete(assistantConversations).where(eq(assistantConversations.companyId, id));
+        await tx.delete(agentConnectCodes).where(eq(agentConnectCodes.companyId, id));
+        await tx.delete(trialSessions).where(eq(trialSessions.companyId, id));
+        await tx.delete(mandates).where(eq(mandates.companyId, id));
+        await tx.delete(humanChannelBindings).where(eq(humanChannelBindings.companyId, id));
+        await tx.delete(connectorSendExecutions).where(eq(connectorSendExecutions.companyId, id));
+        await tx.delete(agentRuns).where(eq(agentRuns.companyId, id));
+        await tx.delete(agentConnectorOverrides).where(eq(agentConnectorOverrides.companyId, id));
+        await tx.delete(connections).where(eq(connections.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));
         const rows = await tx
           .delete(companies)
