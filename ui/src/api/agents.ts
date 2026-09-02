@@ -137,6 +137,13 @@ export const agentsApi = {
     api.patch<Agent>(agentPath(id, companyId), data),
   updatePermissions: (id: string, data: AgentPermissionUpdate, companyId?: string) =>
     api.patch<AgentDetail>(agentPath(id, companyId, "/permissions"), data),
+  // AgentDash (AGE-8): board-driven instruction refresh; for an agent that has no
+  // bundle yet this materializes the default one (see agent-instruction-refresh).
+  refreshInstructions: (companyId: string, agentId: string) =>
+    api.post<{ refreshed: boolean; backfilled?: boolean }>(
+      `/companies/${companyId}/agents/${agentId}/refresh-instructions`,
+      {},
+    ),
   instructionsBundle: (id: string, companyId?: string) =>
     api.get<AgentInstructionsBundle>(agentPath(id, companyId, "/instructions-bundle")),
   updateInstructionsBundle: (

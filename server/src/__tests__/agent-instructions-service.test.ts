@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentInstructionsService } from "../services/agent-instructions.js";
+import { agentInstructionsService, resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 
 type TestAgent = {
   id: string;
@@ -357,5 +357,61 @@ describe("agent instructions service", () => {
       "Recovered managed instructions entry file from disk as AGENTS.md; previous entry docs/MISSING.md was missing.",
     ]);
     expect(exported.files).toEqual({ "AGENTS.md": "# Managed Agent\n" });
+  });
+
+  it("materializeManagedBundle with skipExisting preserves customized files and writes only missing ones", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+
+    const managedRoot = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "agents",
+      "agent-1",
+      "instructions",
+    );
+    await fs.mkdir(managedRoot, { recursive: true });
+    await fs.writeFile(path.join(managedRoot, "AGENTS.md"), "# Customized Mandate\n", "utf8");
+
+    const svc = agentInstructionsService();
+    const agent = makeAgent({});
+    const result = await svc.materializeManagedBundle(agent, {
+      "AGENTS.md": "# Default\n",
+      "HEARTBEAT.md": "heartbeat\n",
+    }, { entryFile: "AGENTS.md", replaceExisting: false, skipExisting: true });
+
+    // Existing customized AGENTS.md is untouched; the missing file is written.
+    await expect(fs.readFile(path.join(managedRoot, "AGENTS.md"), "utf8")).resolves.toBe("# Customized Mandate\n");
+    await expect(fs.readFile(path.join(managedRoot, "HEARTBEAT.md"), "utf8")).resolves.toBe("heartbeat\n");
+    expect(result.adapterConfig.instructionsBundleMode).toBe("managed");
+    expect(result.adapterConfig.instructionsFilePath).toBe(path.join(managedRoot, "AGENTS.md"));
+  });
+
+  it("resolveManagedInstructionsEntryPath resolves the deterministic entry path, honoring a stored entry file", async () => {
+    const paperclipHome = await makeTempDir("paperclip-agent-instructions-home-");
+    cleanupDirs.add(paperclipHome);
+    process.env.PAPERCLIP_HOME = paperclipHome;
+    process.env.PAPERCLIP_INSTANCE_ID = "test-instance";
+
+    const managedRoot = path.join(
+      paperclipHome,
+      "instances",
+      "test-instance",
+      "companies",
+      "company-1",
+      "agents",
+      "agent-1",
+      "instructions",
+    );
+
+    expect(resolveManagedInstructionsEntryPath(makeAgent({}))).toBe(path.join(managedRoot, "AGENTS.md"));
+    expect(
+      resolveManagedInstructionsEntryPath(makeAgent({ instructionsEntryFile: "docs/MANDATE.md" })),
+    ).toBe(path.join(managedRoot, "docs", "MANDATE.md"));
   });
 });

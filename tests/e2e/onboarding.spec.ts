@@ -171,11 +171,9 @@ test.describe("Onboarding wizard", () => {
     );
     expect(instructionsBundleRes.ok()).toBe(true);
     const instructionsBundle = await instructionsBundleRes.json();
-    const expectedInstructionFiles = ceoAgent.adapterType === "hermes_local"
-      // Hermes does not advertise managed-bundle support; onboarding still
-      // persists the owner's mandate as AGENTS.md for inspection and editing.
-      ? ["AGENTS.md"]
-      : ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"];
+    // Every onboarded agent — hermes_local included (AGE-8) — gets the full
+    // default managed bundle, with the owner's mandate materialized as AGENTS.md.
+    const expectedInstructionFiles = ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"];
     expect(
       instructionsBundle.files.map((file: { path: string }) => file.path).sort()
     ).toEqual(expectedInstructionFiles);

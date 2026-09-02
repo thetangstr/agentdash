@@ -233,6 +233,15 @@ describe("agent routes adapter validation", () => {
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
     mockLogActivity.mockResolvedValue(undefined);
+    // AgentDash (AGE-8): bundle-capable adapters (hermes_local included) go
+    // through materializeDefaultInstructionsBundleForNewAgent on create; echo
+    // the agent's config the way the real service's return contract does.
+    mockAgentInstructionsService.materializeManagedBundle.mockImplementation(
+      async (agent: { adapterConfig?: unknown }) => ({
+        bundle: {},
+        adapterConfig: { ...((agent.adapterConfig ?? {}) as Record<string, unknown>) },
+      }),
+    );
     mockAgentService.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
       id: "11111111-1111-4111-8111-111111111111",
       companyId: "company-1",
@@ -321,6 +330,33 @@ describe("agent routes adapter validation", () => {
   });
 
   it("accepts type/config aliases when agents create local adapter workers", async () => {
+    // hermes_local is bundle-capable (AGE-8), so creation now materializes the
+    // default managed bundle and persists the merged adapterConfig via update().
+    mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Hermes Agent",
+      urlKey: "hermes-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: "hermes_local",
+      adapterConfig: (patch.adapterConfig as Record<string, unknown> | undefined) ?? {},
+      runtimeConfig: {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
     const app = await createApp();
     const res = await requestApp(app, (baseUrl) =>
       request(baseUrl)
@@ -336,7 +372,10 @@ describe("agent routes adapter validation", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.adapterType).toBe("hermes_local");
-    expect(res.body.adapterConfig).toEqual({
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalled();
+    // The bundle materialization keys are added to the echoed config; what must
+    // survive untouched is the caller-supplied hermesCommand.
+    expect(res.body.adapterConfig).toMatchObject({
       hermesCommand: "/Users/example/.local/bin/hermes",
     });
   });

@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,5 +156,43 @@ describe("hermes_local execute wrapper", () => {
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain("Paperclip API safety rule:");
     expect(prompt).toContain("Heartbeat Wake");
+  });
+
+  it("injects the bundle from the deterministic managed path when adapterConfig predates the backfill", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-backfill-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+
+    // AGE-8: the refresh service backfilled the bundle onto the managed root,
+    // but this run's agent row still carries the pre-backfill adapterConfig
+    // (no instructionsFilePath). The wrapper must fall back to the
+    // deterministic instance path for this run.
+    const homeDir = join(tempDir, "paperclip-home");
+    const managedDir = join(
+      homeDir, "instances", "age8-test", "companies", "company-1", "agents", "agent-1", "instructions",
+    );
+    await mkdir(managedDir, { recursive: true });
+    const roleContract = "You are Priya, the Product Manager. Backfilled role contract.";
+    await writeFile(join(managedDir, "AGENTS.md"), roleContract + "\n", "utf8");
+
+    const prevHome = process.env.PAPERCLIP_HOME;
+    const prevInstance = process.env.PAPERCLIP_INSTANCE_ID;
+    process.env.PAPERCLIP_HOME = homeDir;
+    process.env.PAPERCLIP_INSTANCE_ID = "age8-test";
+    try {
+      const { getServerAdapter } = await import("../adapters/registry.js");
+      await getServerAdapter("hermes_local").execute(
+        buildCtx({ hermesCommand, argsPath }) as never,
+      );
+    } finally {
+      if (prevHome === undefined) delete process.env.PAPERCLIP_HOME;
+      else process.env.PAPERCLIP_HOME = prevHome;
+      if (prevInstance === undefined) delete process.env.PAPERCLIP_INSTANCE_ID;
+      else process.env.PAPERCLIP_INSTANCE_ID = prevInstance;
+    }
+
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const prompt = args[args.indexOf("-q") + 1] ?? "";
+    expect(prompt).toContain(roleContract);
+    expect(prompt).toContain("Agent ID: agent-1");
   });
 });

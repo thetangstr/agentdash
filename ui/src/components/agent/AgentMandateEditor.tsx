@@ -82,6 +82,13 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
     setError(null);
   }, [file.data, draft, agentId]);
 
+  const createMandate = useMutation({
+    mutationFn: () => agentsApi.refreshInstructions(companyId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.instructionsBundle(agentId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
+    },
+  });
   const save = useMutation({
     mutationFn: () => {
       if (!draft || draft.agentId !== agentId) {
@@ -115,6 +122,11 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
   // what reports that — `entryFile` is always populated, so keying off it left
   // this branch unreachable and handed the steward an editor that 403s on save.
   const isManaged = bundle.data?.mode === "managed";
+  // AgentDash (AGE-8): "externally managed" was shown for every non-managed
+  // state, including the agent that simply has no mandate file yet — which told
+  // the steward an administrator had put it somewhere when nobody had. Say what
+  // is true, and offer to create it.
+  const hasNoBundle = !bundle.error && bundle.data?.mode !== "managed" && bundle.data?.mode !== "external";
   if (bundle.error || !entryFile || !isManaged) {
     return (
       <section aria-labelledby="mandate-heading" className="rounded-lg border p-4">
@@ -125,8 +137,27 @@ export function AgentMandateEditor({ agentId, companyId }: Props) {
         <p className="mt-2 text-xs text-muted-foreground">
           {bundle.error instanceof Error
             ? bundle.error.message
-            : "This agent's mandate lives in an externally managed location; an administrator configures where. You can read the concepts above, but editing happens where the administrator keeps the file."}
+            : hasNoBundle
+              ? "This agent has no mandate file yet, so nothing you write here reaches it. It is created automatically before the agent's next run; you can also create it now."
+              : "This agent's mandate lives in an externally managed location; an administrator configures where. You can read the concepts above, but editing happens where the administrator keeps the file."}
         </p>
+        {hasNoBundle ? (
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+              disabled={createMandate.isPending}
+              onClick={() => createMandate.mutate()}
+            >
+              {createMandate.isPending ? "Creating…" : "Create mandate now"}
+            </button>
+            {createMandate.error ? (
+              <span className="text-xs text-destructive">
+                {createMandate.error instanceof Error ? createMandate.error.message : "Failed to create mandate"}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     );
   }
