@@ -48,9 +48,16 @@ export const HERMES_HUMAN_QUESTION_PROMPT = [
  *   - `The user did not provide a response within the time limit` — the tool
  *     result the TUI callback hands the model, in case a transcript echoes it.
  */
+//
+// Each marker is anchored to Hermes's own phrasing, never to a bare English
+// phrase: the guard scans streamed model output too, and a model in an
+// agent product will write "the agent will decide …" in ordinary prose. The
+// TUI line is matched on its timeout preamble and, separately, on its
+// dash-and-paren tail, so either half alone identifies the callback and
+// neither is something a model says by accident.
 const FALLBACK_MARKERS: RegExp[] = [
   /clarify timed out after \d+\s*s/i,
-  /agent will decide/i,
+  /[—–-]\s*agent will decide\)/i,
   /\[oneshot mode: no user available/i,
   /did not provide a response within the time limit/i,
 ];

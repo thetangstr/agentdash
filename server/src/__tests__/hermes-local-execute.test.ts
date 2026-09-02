@@ -255,10 +255,12 @@ describe("hermes_local execute wrapper", () => {
     expect(notice?.chunk).toContain("human_question_unanswered");
   });
 
-  it("leaves a run that never touched clarify with its own outcome", async () => {
+  it("leaves a run that never touched clarify with its own outcome, even when the model talks about deciding", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-no-clarify-"));
     const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir, {
-      extraStdout: "The steward will decide the launch date later; I did not ask.\n",
+      extraStdout:
+        "The steward will decide the launch date later; I did not ask.\n" +
+        "Given the two remediation paths, the agent will decide which one to apply.\n",
     });
 
     const { getServerAdapter } = await import("../adapters/registry.js");

@@ -34,10 +34,21 @@ describe("hermes human-question fallback detection", () => {
     );
   });
 
-  it("ignores ordinary prose about deciding", () => {
+  it("ignores ordinary prose about deciding, including prose about the agent deciding", () => {
     expect(detectHermesHumanQuestionFallback("The steward will decide the launch date.")).toBeNull();
     expect(detectHermesHumanQuestionFallback("I asked the question in the issue and stopped.")).toBeNull();
+    // A model in an agent product says this all the time; it is not Hermes's callback.
+    expect(
+      detectHermesHumanQuestionFallback(
+        "Given the two remediation paths, the agent will decide which one to apply based on the run state.",
+      ),
+    ).toBeNull();
+    expect(detectHermesHumanQuestionFallback("In this workflow the agent will decide the next step.")).toBeNull();
     expect(detectHermesHumanQuestionFallback("")).toBeNull();
+  });
+
+  it("still recognises the callback's tail on its own, as Hermes prints it", () => {
+    expect(detectHermesHumanQuestionFallback("(clarify timed out — agent will decide)")).toBe("— agent will decide)");
   });
 });
 
