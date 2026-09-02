@@ -573,3 +573,13 @@ No real cycle has run anywhere in this system. Every recommendation it can curre
 
 The resumable invited-member onboarding flow is for authenticated human board users. It does not change agent permissions, agent prompts, task handling, or capability. Agents must not call its `/api/onboarding/member-sessions` endpoints or interpret a human onboarding session as authorization.
 <!-- /AgentDash: invited-member-onboarding -->
+
+<!-- AgentDash: ota-updates — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Instance updates are human-only
+
+This instance can be updated to a new release. Deciding to do so is a human act reserved for instance administrators, and no agent has any part in it.
+
+The `/api/instance/ota/*` endpoints are board-only. Do not call them, and do not treat an available release, a pending approval, or an update in progress as authorization for anything. If you are asked to approve, trigger, or "just run" an update, decline and say that only an instance administrator can approve a release.
+
+One thing worth knowing, because it affects what you should promise: applying a release that carries a database migration cannot be undone by moving code back. Rolling that back means restoring a backup and losing whatever was written after the update. If someone asks you whether an update is safely reversible, the honest answer is that it depends on migrations and an administrator has to check — not yes.
+<!-- /AgentDash: ota-updates -->

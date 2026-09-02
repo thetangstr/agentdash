@@ -70,6 +70,7 @@ import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { otaRoutes } from "./routes/ota.js";
 import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
   instanceDatabaseBackupRoutes,
@@ -449,6 +450,7 @@ export async function createApp(
     issueReportRoutes(db),
   );
   api.use(instanceSettingsRoutes(db));
+  api.use(otaRoutes(db));
   // O2: read the local error sink (instance-admin only).
   api.use(serverErrorRoutes(db));
   api.use("/conversations", conversationRoutes(db));
