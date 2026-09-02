@@ -31,6 +31,54 @@ const renderedPromptSurfaces = PROMPT_SURFACES.map((surface) => ({
 }));
 
 describe("AgentDash-MK prompt surface synchronization", () => {
+  // Integrations are opt-in skills, not standing mandate (2026-09-02).
+  //
+  // These blocks were generated into every agent's AGENTS.md whether or not the
+  // capability existed, and the `connections` table on this instance is empty
+  // and always has been — so every agent carried pages about providers it
+  // cannot reach. The rules are unchanged and live in `skills/` now; they apply
+  // the moment a connection exists, which is why they are opt-in and not
+  // deleted.
+  //
+  // Asserting the ABSENCE keeps the removal deliberate: re-adding any of this
+  // to the always-loaded mandate fails here and has to be decided on purpose.
+  it("keeps integration material out of the generated mandate", () => {
+    const OPT_IN_ONLY = [
+      "connectors",
+      "gmail-connector",
+      "slack-connector",
+      "agentdash-mk-sharepoint",
+      "msp-pilot-demo-routes",
+    ];
+    for (const surface of renderedPromptSurfaces) {
+      for (const slug of OPT_IN_ONLY) {
+        expect(
+          surface.content,
+          `${surface.name} re-added the generated '${slug}' block; integrations belong in skills/`,
+        ).not.toContain(`<!-- AgentDash: ${slug}`);
+      }
+    }
+  });
+
+  // Governance prose is explicitly NOT part of that removal.
+  it("still carries the governance rules in every surface", () => {
+    for (const surface of renderedPromptSurfaces) {
+      for (const slug of [
+        "agentdash-mk-workforce",
+        "agentdash-mk-harness-directives",
+        "agentdash-mk-agent-facts",
+        "agentdash-mk-deliverables",
+        "agentdash-mk-measurement",
+        "agentdash-mk-recommendations",
+        "goals-eval-hitl",
+      ]) {
+        expect(surface.content, `${surface.name} lost the '${slug}' governance block`).toContain(
+          `<!-- AgentDash: ${slug}`,
+        );
+      }
+    }
+  });
+
   it("includes the run-attributed issue comment contract in every prompt surface", () => {
     for (const surface of renderedPromptSurfaces) {
       expect(surface.content, `${surface.name} is missing the named output contract`).toContain(

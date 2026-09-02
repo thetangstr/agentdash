@@ -261,7 +261,12 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     expect(fake.writes[0]!.content).toContain("API auth v2");
   });
 
-  it("leaves a bundle-only block alone and reports it as blocksRemoved", async () => {
+  // Behaviour change: a generated block the source no longer carries is REMOVED.
+  //
+  // It used to be audit-only, which meant the generated default could never
+  // shrink — dropping a block left it in every existing agent's bundle for ever,
+  // so agents carried connector material for providers with no connection.
+  it("removes a bundle-only generated block and reports it as blocksRemoved", async () => {
     const { db, queueAgent } = makeDb();
     queueAgent({
       id: AGENT_ID,
@@ -272,7 +277,6 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
       adapterConfig: {},
     });
 
-    // Bundle has all source blocks AS-IS plus an extra deprecated block.
     const withExtraBlock = `${SOURCE_DEFAULT}
 
 <!-- AgentDash: old-deprecated-block -->
@@ -280,7 +284,6 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
 <!-- /AgentDash: old-deprecated-block -->
 `;
     const fake = makeFakeInstructions({ [AGENT_ID]: withExtraBlock });
-
     const svc = agentInstructionRefreshService({
       db: db as any,
       loadSource: makeSourceLoader(),
@@ -288,13 +291,97 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     });
 
     const result = await svc.refreshIfStale(AGENT_ID);
-    // No mutation: refreshed=false, blocksRemoved reports the orphan.
-    expect(result.refreshed).toBe(false);
-    expect(result.blocksUpdated).toEqual([]);
-    expect(result.blocksAdded).toEqual([]);
+    expect(result.refreshed).toBe(true);
     expect(result.blocksRemoved).toEqual(["old-deprecated-block"]);
-    expect(fake.writes).toHaveLength(0);
-    expect(mockLogActivity).not.toHaveBeenCalled();
+    expect(fake.writes).toHaveLength(1);
+
+    const written = fake.writes[0]!.content;
+    expect(written).not.toContain("old-deprecated-block");
+    expect(written).not.toContain("## removed feature");
+    // Everything the source still carries survives.
+    expect(written).toContain("goals-eval-hitl");
+    expect(written).toContain("agent-api-auth");
+  });
+
+  // The guarantee that makes removal safe: only GENERATED blocks are ours to
+  // withdraw. Steward-authored prose and agent-specific text are never matched.
+  it("removal never touches steward prose or agent-specific text", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const bundle = `# Casper
+
+You are Casper, Chief of Staff to the Chief Business Officer.
+
+## Steward note
+
+Call Titus before touching a client file.
+
+${SOURCE_DEFAULT}
+
+<!-- AgentDash: old-deprecated-block -->
+## removed feature
+<!-- /AgentDash: old-deprecated-block -->
+
+## Steward note, part two
+
+This paragraph sits after the removed block and must survive.
+`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.blocksRemoved).toEqual(["old-deprecated-block"]);
+
+    const written = fake.writes[0]!.content;
+    expect(written).toContain("You are Casper, Chief of Staff to the Chief Business Officer.");
+    expect(written).toContain("Call Titus before touching a client file.");
+    expect(written).toContain("This paragraph sits after the removed block and must survive.");
+    expect(written).not.toContain("## removed feature");
+    // No accumulating gap where the block was.
+    expect(written).not.toMatch(/\n{3,}/);
+  });
+
+  it("is idempotent after a removal", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const bundle = `${SOURCE_DEFAULT}
+
+<!-- AgentDash: old-deprecated-block -->
+## removed feature
+<!-- /AgentDash: old-deprecated-block -->
+`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    expect((await svc.refreshIfStale(AGENT_ID)).refreshed).toBe(true);
+    const second = await svc.refreshIfStale(AGENT_ID);
+    expect(second.refreshed).toBe(false);
+    expect(second.blocksRemoved).toEqual([]);
+    expect(fake.writes).toHaveLength(1);
   });
 
   it("updates multiple stale blocks in a single activity_log row", async () => {
