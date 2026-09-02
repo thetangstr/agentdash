@@ -10,8 +10,6 @@ on:
   pull_request:
     branches:
       - main
-      # MKThink production line — same checks, same protection as main.
-      - mkthink/main
 
 concurrency:
   group: hermes-prompt-drift-${{ github.event.pull_request.number }}

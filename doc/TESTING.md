@@ -75,35 +75,6 @@ The lock is absent by default, so test instances are unaffected. It is opt-in
 per machine because the machine is the only thing that knows which kind of
 machine it is.
 
-### Two mains: `main` and `mkthink/main`
-
-Since 2026-09-01 the repository carries two long-lived lines:
-
-- `main` — AgentDash product development. Every feature PR lands here.
-- `mkthink/main` — the MKThink production line. Branched from `main` at
-  `4637abd72` (2026-09-01) and protected identically (same required checks,
-  linear history, no force-push). It moves only by deliberate promotion.
-
-The MKThink Mac mini is locked to `mkthink/main`:
-
-```sh
-echo mkthink/main > ~/.agentdash/deployments/allowed-branch
-```
-
-so nothing that lands on `main` can reach it until someone promotes it.
-
-Promotion rule: a change moves to `mkthink/main` only after it is squash-merged
-to `main` and has been driven on a test instance. Promote with a PR against
-`mkthink/main` carrying `git cherry-pick -x <main-sha>`; the PR matrix runs on
-that base too. Never develop on `mkthink/main` directly, and never target it
-with a feature PR. MKThink stable releases are cut with `release.yml`
-(`source_ref: mkthink/main`).
-
-A fork was considered and rejected: the mini's checkout, remote, CI, secrets and
-release workflow would all need duplicating, and every fix would become a
-cross-repo cherry-pick. The branch plus the per-machine lock gives the same
-isolation with one file on the machine.
-
 ## Standing up an instance that is not production
 
 A test instance needs its own database, its own port, and **no credentials that

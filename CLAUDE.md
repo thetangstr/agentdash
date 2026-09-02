@@ -55,7 +55,6 @@ If a step fails, fix it (or explicitly document it as a pre-existing failure unr
 
 MAW slash commands are installed under `.claude/commands/` (`pm.md`, `builder.md`, `tester.md`, `tpm.md`, `admin.md`, `workon.md`, `upstream-digest.md`).
 
-- MKThink production line: `mkthink/main` — protected, locked on the customer machine. Never target it with feature PRs; promote by cherry-pick PR after the change is on `main`. See `doc/TESTING.md` → "Two mains".
 - Base branch for MAW PRs: `main` (during v2 build; flips back to `agentdash-main` after the cutover described in [docs/superpowers/specs/2026-05-02-v2-base-migration-design.md](docs/superpowers/specs/2026-05-02-v2-base-migration-design.md))
 - Default issue prefix in examples: `AGE` (Linear) and `GH #` (GitHub)
 - Primary entry point: `/workon AGE-123`

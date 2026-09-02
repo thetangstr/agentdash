@@ -18,8 +18,6 @@ on:
   pull_request:
     branches:
       - main
-      # MKThink production line — same checks, same protection as main.
-      - mkthink/main
 
 concurrency:
   group: hermes-pr-audit-${{ github.event.pull_request.number }}

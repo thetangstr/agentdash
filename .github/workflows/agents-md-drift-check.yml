@@ -10,8 +10,6 @@ on:
   pull_request:
     branches:
       - main
-      # MKThink production line — same checks, same protection as main.
-      - mkthink/main
 
 concurrency:
   group: agents-md-drift-${{ github.event.pull_request.number }}
