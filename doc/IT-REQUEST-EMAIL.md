@@ -64,6 +64,17 @@ records, **`agentdash.mkthink.net` works just as well** — or any name you
 prefer. Just tell us which and we'll reissue the request in (3); it's one
 command on our side.
 
+**One thing that matters more than it looks: the record has to resolve for VPN
+users too.** Our main user works over FortiClient from outside the office. We
+have already confirmed that **routing over the VPN works** — he can reach the
+server at its raw IP from the VPN today. The only thing missing is the name:
+`mkmini.local` is an mDNS name, which is link-local by design and cannot cross a
+tunnel, so it dies the moment the VPN comes up. If VPN clients are handed
+10.30.65.2 as their resolver, this record fixes that outright and nothing else is
+needed. If they're handed a different resolver, or the split-tunnel config
+excludes 10.50.10.0/24 from DNS, please let us know — that's the one detail that
+would change the answer.
+
 ## 3. A TLS server certificate from your internal CA
 
 Today the server uses a self-issued certificate, so every browser shows a
@@ -133,7 +144,20 @@ already exist or propose things that can't work:
   `1c:f6:4c:69:c6:9d`) has no randomisation at all — one more reason to prefer
   the wired port. `en0` has no cable attached as of 2026-08-18, so bring one.
 - **A USB 2.5G LAN adapter is also present** (`en8`, `84:5c:31:47:29:8d`) if the
-  built-in port is inconvenient.
+  built-in port is inconvenient. Re-checked 2026-08-31: `en8` is not attached
+  today, and `en0` still has no cable.
+- **Re-verified 2026-08-31, all still true:** address 10.50.10.129, lease 80000 s
+  (22.2 h), Wi-Fi still presenting the randomised `02:e3:44:1e:93:58`,
+  `agentdash.mkthink.com` still absent from the DC, and the DC still
+  authoritative for `mkthink.com`. The CSR on disk matches the subject and SANs
+  quoted above.
+- **New on 2026-08-31 — the VPN is now the live problem, not a future one.** A
+  VPN-pool client (10.212.134.x) reached the server on 2026-08-26 using
+  `mkmini.local`, then stopped working. That was a cached mDNS record, TTL
+  4500 s (~75 min), carried in from the office and expiring afterwards. So the
+  current setup does not fail cleanly — it works for about an hour after someone
+  leaves the office and then stops, which reads as flakiness rather than as a
+  missing DNS record. This is the strongest argument for making the ask now.
 
 ## Before you send
 

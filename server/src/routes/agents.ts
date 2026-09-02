@@ -3,7 +3,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -517,15 +517,82 @@ export function agentRoutes(
     };
   }
 
+  /**
+   * What this agent's runs actually show, which is the only honest answer to
+   * "is it working".
+   *
+   * Every other signal on this page is a claim made before the fact. The stored
+   * harness preflight says "pass" for evidence gathered once, possibly against
+   * a different adapter -- three agents on one instance carried a `codex_local`
+   * pass while running on `hermes_local`, and nothing evaluated it because the
+   * readiness check is gated behind an env flag that is off by default. The
+   * agent's `status` column says `idle`, which is true of a healthy agent and
+   * of a broken one.
+   *
+   * The runs know. On one instance the primary agent had failed 163 of 304
+   * runs, and 83% of the successful runs across the fleet left no comment and
+   * no activity behind -- "succeeded" means the process exited zero, which is
+   * not the same claim as "something happened". None of that was visible
+   * anywhere.
+   *
+   * `neverRan` is its own state on purpose: an agent that has never started is
+   * not healthy and not failing, and the two need different answers. A
+   * placeholder `process` agent whose command does not exist sits here for
+   * ever, looking exactly like a working agent nobody has assigned work to.
+   */
+  async function buildAgentRunHealth(agentId: string) {
+    const [tally] = await db
+      .select({
+        total: count(),
+        succeeded: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'succeeded')::int`,
+        failed: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'failed')::int`,
+        withoutEvidence: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'succeeded' and ${heartbeatRuns.lastUsefulActionAt} is null)::int`,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+
+    const [last] = await db
+      .select({
+        status: heartbeatRuns.status,
+        error: heartbeatRuns.error,
+        errorCode: heartbeatRuns.errorCode,
+        finishedAt: heartbeatRuns.finishedAt,
+        lastUsefulActionAt: heartbeatRuns.lastUsefulActionAt,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId))
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(1);
+
+    const total = Number(tally?.total ?? 0);
+    return {
+      total,
+      succeeded: Number(tally?.succeeded ?? 0),
+      failed: Number(tally?.failed ?? 0),
+      succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
+      neverRan: total === 0,
+      last: last
+        ? {
+            status: last.status,
+            error: last.error ?? null,
+            errorCode: last.errorCode ?? null,
+            finishedAt: last.finishedAt ?? null,
+            leftEvidence: last.lastUsefulActionAt !== null,
+          }
+        : null,
+    };
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward, accountableFor] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
+      buildAgentRunHealth(agent.id),
     ]);
 
     return {
@@ -540,6 +607,8 @@ export function agentRoutes(
       // alone cannot tell a reader whether anybody is answerable.
       accountable: toAccountableParty(accountableFor),
       access: accessState,
+      // Derived from runs, not from stored claims. See buildAgentRunHealth.
+      runHealth,
     };
   }
 
@@ -3041,6 +3110,31 @@ export function agentRoutes(
 
     if (hasOwn(req.body as object, "permissions")) {
       res.status(422).json({ error: "Use /api/agents/:id/permissions for permission changes" });
+      return;
+    }
+
+    /*
+     * Refuse `steward` rather than silently dropping it.
+     *
+     * `updateAgentSchema` has no such field, so zod stripped it and this route
+     * answered 200 having changed nothing. That is the worst possible reply: a
+     * caller asked to pair a steward, was told it worked, re-read the agent,
+     * found `steward: null`, and concluded the backend was broken. One run did
+     * exactly that and closed its task on a root cause that did not exist.
+     *
+     * Stewardship is a separate resource with its own history and its own
+     * authority check -- it is deliberately not a column you can PATCH -- so
+     * the honest answer names where it does live.
+     */
+    if (
+      hasOwn(req.body as object, "steward") ||
+      hasOwn(req.body as object, "stewardUserId")
+    ) {
+      res.status(422).json({
+        error:
+          "Stewardship is not set here. Use POST /api/companies/:companyId/agent-stewardships " +
+          "to assign one, or POST /api/companies/:companyId/agents/:agentId/stewardship/transfer to move it.",
+      });
       return;
     }
 

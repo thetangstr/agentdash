@@ -1113,6 +1113,53 @@ export function AgentDetail() {
         </div>
       )}
 
+      {/*
+        What the runs actually show.
+        
+        Everything else on this page is a claim made before the fact: the stored
+        preflight says "pass" for evidence gathered once, sometimes against a
+        different adapter; `status: idle` reads the same on a healthy agent and
+        a broken one. This is the after-the-fact answer, and it is the one
+        people are looking for when they open this page.
+      */}
+      {!urlRunId && agent.runHealth ? (
+        <div className="mb-4 rounded-lg border border-border bg-card p-4">
+          <h3 className="text-sm font-semibold">What its runs show</h3>
+          {agent.runHealth.neverRan ? (
+            <p className="mt-1 text-sm text-muted-foreground">
+              This agent has never run. Nothing here is broken yet — and nothing here works yet
+              either.
+            </p>
+          ) : (
+            <>
+              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm tabular-nums">
+                <span>{agent.runHealth.total} runs</span>
+                <span className={agent.runHealth.failed > 0 ? "text-destructive" : undefined}>
+                  {agent.runHealth.failed} failed
+                </span>
+                <span
+                  title="Runs that exited zero but left no comment and no activity behind."
+                  className={
+                    agent.runHealth.succeededWithoutEvidence > 0
+                      ? "text-muted-foreground"
+                      : undefined
+                  }
+                >
+                  {agent.runHealth.succeededWithoutEvidence} succeeded without leaving anything
+                </span>
+              </div>
+              {agent.runHealth.last?.status && agent.runHealth.last.status !== "succeeded" ? (
+                <p className="mt-2 text-xs text-destructive" role="alert">
+                  Last run {agent.runHealth.last.status}
+                  {agent.runHealth.last.errorCode ? ` (${agent.runHealth.last.errorCode})` : ""}
+                  {agent.runHealth.last.error ? `: ${agent.runHealth.last.error}` : ""}
+                </p>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+
       {!urlRunId && (
         <AgentHarnessReadinessPanel
           status={harnessPreflightStatus}

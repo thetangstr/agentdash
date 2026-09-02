@@ -492,6 +492,20 @@ export function companyService(db: Db) {
       );
     },
 
+    /**
+     * Counts an administrator can act on, including one that is uncomfortable.
+     *
+     * `runsSucceededWithoutEvidence` is the number of runs that exited zero and
+     * left nothing behind -- no comment, no activity, no `lastUsefulActionAt`.
+     * Measured on one instance it was 151 of 360, and none of it was visible
+     * anywhere: "succeeded" means the process exited zero, which is not the
+     * same claim as "something happened", and the UI made no distinction. A
+     * fleet quietly burning tokens to no effect looks identical to a healthy
+     * one until somebody counts.
+     *
+     * Reported next to the successful total on purpose. The absolute number
+     * means little; the ratio is the signal.
+     */
     stats: () =>
       Promise.all([
         db
@@ -502,17 +516,43 @@ export function companyService(db: Db) {
           .select({ companyId: issues.companyId, count: count() })
           .from(issues)
           .groupBy(issues.companyId),
-      ]).then(([agentRows, issueRows]) => {
-        const result: Record<string, { agentCount: number; issueCount: number }> = {};
+        db
+          .select({
+            companyId: heartbeatRuns.companyId,
+            succeeded: count(),
+            withoutEvidence: sql<number>`count(*) filter (where ${heartbeatRuns.lastUsefulActionAt} is null)::int`,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.status, "succeeded"))
+          .groupBy(heartbeatRuns.companyId),
+      ]).then(([agentRows, issueRows, runRows]) => {
+        const result: Record<
+          string,
+          {
+            agentCount: number;
+            issueCount: number;
+            runsSucceeded: number;
+            runsSucceededWithoutEvidence: number;
+          }
+        > = {};
+        const blank = () => ({
+          agentCount: 0,
+          issueCount: 0,
+          runsSucceeded: 0,
+          runsSucceededWithoutEvidence: 0,
+        });
         for (const row of agentRows) {
-          result[row.companyId] = { agentCount: row.count, issueCount: 0 };
+          result[row.companyId] = { ...blank(), agentCount: row.count };
         }
         for (const row of issueRows) {
-          if (result[row.companyId]) {
-            result[row.companyId].issueCount = row.count;
-          } else {
-            result[row.companyId] = { agentCount: 0, issueCount: row.count };
-          }
+          result[row.companyId] = { ...(result[row.companyId] ?? blank()), issueCount: row.count };
+        }
+        for (const row of runRows) {
+          result[row.companyId] = {
+            ...(result[row.companyId] ?? blank()),
+            runsSucceeded: row.succeeded,
+            runsSucceededWithoutEvidence: Number(row.withoutEvidence ?? 0),
+          };
         }
         return result;
       }),
