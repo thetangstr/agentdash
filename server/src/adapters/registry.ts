@@ -167,6 +167,24 @@ export function normalizeHermesConfig<T extends { config?: unknown; agent?: unkn
       ? (agent.adapterConfig as Record<string, unknown>)
       : null;
 
+  // Ross GLM feasibility test (2026-09-02): an agent explicitly marked
+  // `rossFeasibilityTest` launches through ITS OWN hermesCommand — the dedicated
+  // rosstest profile wrapper — rather than the instance default. Without this,
+  // the fallback pre-fill below puts the default ("hermes") into config first,
+  // and getHermesCommandFromContext's config-first preference makes the default
+  // beat the agent's explicit wrapper. Agents without the marker are untouched,
+  // and route-level launch is separately gated by the ross_glm_feasibility_test
+  // company feature flag.
+  if (agentAdapterConfig && agentAdapterConfig.rossFeasibilityTest === true && config && !config.hermesCommand) {
+    const agentHermesCommand =
+      typeof agentAdapterConfig.hermesCommand === "string" && agentAdapterConfig.hermesCommand.trim().length > 0
+        ? agentAdapterConfig.hermesCommand
+        : undefined;
+    if (agentHermesCommand) {
+      config.hermesCommand = agentHermesCommand;
+    }
+  }
+
   const configCommand =
     typeof config?.command === "string" && config.command.length > 0 ? config.command : undefined;
   const agentCommand =
