@@ -683,10 +683,10 @@ async function withHermesSessionUsage(
 }
 
 /**
- * AgentDash (AGE-13): every Hermes run goes through the human-question guard.
- * The guard scans the run output for Hermes's clarify fallback and, if it
- * fired, refuses the run rather than reporting the agent's default decision
- * as success. See hermes-human-question.ts.
+ * AgentDash (AGE-13): every authenticated Hermes run goes through the
+ * human-question guard. The guard scans the run output for Hermes's clarify
+ * fallback and, if it fired, refuses the run rather than reporting the agent's
+ * default decision as success. See hermes-human-question.ts.
  */
 async function executeHermesFailClosed(
   ctx: Parameters<ServerAdapterModule["execute"]>[0],
@@ -719,7 +719,10 @@ const hermesLocalAdapter: ServerAdapterModule = {
       );
     }
     if (!taskPatchedCtx.authToken) {
-      return executeHermesFailClosed(taskPatchedCtx);
+      // The unauthenticated pass-through hands Hermes the original context
+      // untouched (adapter-registry.test.ts pins that); heartbeat always mints
+      // an authToken, so every AgentDash run takes the guarded path below.
+      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
