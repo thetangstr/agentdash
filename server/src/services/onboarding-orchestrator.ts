@@ -192,7 +192,7 @@ export function onboardingOrchestrator(deps: Deps) {
     // For idempotency simplicity: just always ensure one key exists.
     const existingKeys = (await services.agents.listKeys?.(cos.id)) ?? [];
     if (existingKeys.length === 0) {
-      await services.agents.createApiKey(cos.id, "default");
+      await services.agents.createApiKey(cos.id, "default", { source: "onboarding" });
     }
 
     // Step 5: ensure a conversation exists for this company; add the user as participant.
