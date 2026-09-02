@@ -12,6 +12,7 @@ import {
   createAgentHireSchema,
   createAgentSchema,
   deriveAgentUrlKey,
+  FEATURE_FLAG_KEYS,
   isUuidLike,
   resetAgentSessionSchema,
   testAdapterEnvironmentSchema,
@@ -31,6 +32,7 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { trackAgentCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
+import { featureFlagsService } from "../services/feature-flags.js";
 import {
   CONNECT_CODE_MAX_RETRIES,
   CONNECT_CODE_TTL_MS,
@@ -177,6 +179,7 @@ export function agentRoutes(
   const companySkills = companySkillService(db);
   const workspaceOperations = workspaceOperationService(db);
   const instanceSettings = instanceSettingsService(db);
+  const featureFlags = featureFlagsService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   async function assertAgentEnvironmentSelection(
@@ -3577,6 +3580,22 @@ export function agentRoutes(
     }
     assertCompanyAccess(req, agent.companyId);
 
+    // Ross GLM feasibility test (2026-09-02): an agent explicitly marked
+    // `rossFeasibilityTest` in its adapterConfig may only be launched while
+    // its company has the `ross_glm_feasibility_test` feature flag enabled.
+    // Agents without the marker never consult the flag, so behavior for
+    // every existing agent is unchanged.
+    if (
+      (agent.adapterConfig as Record<string, unknown> | null)?.rossFeasibilityTest === true &&
+      !(await featureFlags.isEnabled(agent.companyId, FEATURE_FLAG_KEYS.ROSS_GLM_FEASIBILITY_TEST))
+    ) {
+      res.status(403).json({
+        error: "The Ross GLM feasibility-test agent is feature-flagged off for this company",
+        code: "ROSS_FEASIBILITY_FLAG_DISABLED",
+      });
+      return;
+    }
+
     if (req.actor.type === "agent") {
       if (req.actor.agentId !== id) {
         res.status(403).json({ error: "Agent can only invoke itself" });
@@ -3632,6 +3651,22 @@ export function agentRoutes(
       return;
     }
     assertCompanyAccess(req, agent.companyId);
+
+    // Ross GLM feasibility test (2026-09-02): an agent explicitly marked
+    // `rossFeasibilityTest` in its adapterConfig may only be launched while
+    // its company has the `ross_glm_feasibility_test` feature flag enabled.
+    // Agents without the marker never consult the flag, so behavior for
+    // every existing agent is unchanged.
+    if (
+      (agent.adapterConfig as Record<string, unknown> | null)?.rossFeasibilityTest === true &&
+      !(await featureFlags.isEnabled(agent.companyId, FEATURE_FLAG_KEYS.ROSS_GLM_FEASIBILITY_TEST))
+    ) {
+      res.status(403).json({
+        error: "The Ross GLM feasibility-test agent is feature-flagged off for this company",
+        code: "ROSS_FEASIBILITY_FLAG_DISABLED",
+      });
+      return;
+    }
 
     if (req.actor.type === "agent") {
       if (req.actor.agentId !== id) {

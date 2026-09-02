@@ -1219,6 +1219,10 @@ export type VerdictEntityType = (typeof VERDICT_ENTITY_TYPES)[number];
 /** Known feature-flag keys for per-tenant feature gating. */
 export const FEATURE_FLAG_KEYS = {
   DOD_GUARD: "dod_guard_enabled",
+  // Ross GLM feasibility test (2026-09-02): gates launches of the agent
+  // whose adapterConfig carries rossFeasibilityTest — enforced in
+  // routes/agents.ts wakeup + heartbeat/invoke. Off by default.
+  ROSS_GLM_FEASIBILITY_TEST: "ross_glm_feasibility_test",
 } as const;
 
 // AgentDash (#157): billing-infra activity log action names.
