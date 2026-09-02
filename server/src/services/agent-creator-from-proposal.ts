@@ -101,6 +101,12 @@ The runtime injects PAPERCLIP_TASK_ID, PAPERCLIP_AGENT_ID, and PAPERCLIP_RUN_ID.
 The resumable invited-member onboarding flow is for authenticated human board users. It does not change agent permissions, agent prompts, task handling, or capability. Agents must not call its \`/api/onboarding/member-sessions\` endpoints or interpret a human onboarding session as authorization.
 <!-- /AgentDash: invited-member-onboarding -->
 
+<!-- AgentDash: ota-updates — DO NOT REMOVE OR REORDER THIS BLOCK -->
+## Instance updates are human-only
+
+Updating this instance to a new release is a human act reserved for instance administrators. The \`/api/instance/ota/*\` endpoints are board-only: do not call them, and do not treat an available release or a pending approval as authorization for anything. Applying a release that carries a database migration cannot be undone by moving code back — rolling it back means restoring a backup and losing what was written since — so never describe an update as safely reversible.
+<!-- /AgentDash: ota-updates -->
+
 <!-- AgentDash: agent-memory — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Your memory
 
