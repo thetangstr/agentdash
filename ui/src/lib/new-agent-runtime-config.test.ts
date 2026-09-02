@@ -4,10 +4,19 @@ import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS } from "@paperclipai/shared";
 import { buildNewAgentRuntimeConfig } from "./new-agent-runtime-config";
 
 describe("buildNewAgentRuntimeConfig", () => {
-  it("defaults new agents to no timer heartbeat", () => {
+  // Changed deliberately: an agent you created should run.
+  //
+  // This asserted `enabled: false`, which is what made every new agent be born
+  // asleep — the Run Policy toggle silently pre-answered "no" and the only
+  // symptom was an agent that never did anything. Turning it off is still one
+  // click and is now a visible decision rather than the absence of one.
+  //
+  // The consequence worth stating: a newly created agent starts working, and
+  // spending, without a second action.
+  it("defaults new agents to a running timer heartbeat", () => {
     expect(buildNewAgentRuntimeConfig()).toEqual({
       heartbeat: {
-        enabled: false,
+        enabled: true,
         intervalSec: 1800,
         wakeOnDemand: true,
         cooldownSec: 10,
