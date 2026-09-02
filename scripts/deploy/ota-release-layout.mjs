@@ -147,6 +147,7 @@ export function buildRelease({ releaseDir, env = process.env }) {
 export function sealRelease(releaseDir) {
   const skip = new Set(["node_modules", ".pnpm-store"]);
   let sealed = 0;
+  let sealedExecutable = 0;
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (skip.has(entry.name)) continue;
@@ -155,8 +156,21 @@ export function sealRelease(releaseDir) {
         walk(full);
       } else if (entry.isFile()) {
         try {
-          chmodSync(full, 0o444);
+          // Read-only, but KEEP the executable bit.
+          //
+          // This chmodded everything to 0444, which silently removed +x. The
+          // release's own launcher is `deploy/agentdash-server.sh`, and launchd
+          // requires an executable `ProgramArguments` — so sealing made every
+          // release unable to start, and the failure appeared at cutover rather
+          // than at build time. Caught on the first real bundle, before it was
+          // switched to.
+          //
+          // `git archive` preserves mode 100755, so the +x bit present here is
+          // the one the release commit recorded; this only takes away write.
+          const executable = (statSync(full).mode & 0o111) !== 0;
+          chmodSync(full, executable ? 0o555 : 0o444);
           sealed += 1;
+          if (executable) sealedExecutable += 1;
         } catch {
           // Non-fatal by design; see above.
         }
@@ -164,7 +178,7 @@ export function sealRelease(releaseDir) {
     }
   };
   walk(releaseDir);
-  return sealed;
+  return { sealed, sealedExecutable };
 }
 
 /**
