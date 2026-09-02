@@ -10,7 +10,7 @@ import { copyToClipboard } from "../../lib/clipboard";
  *
  * Every piece of this already worked. The two-step enrolment ceremony
  * (`POST /me/bridge/endpoints` then `.../approve`), the poller
- * (`agentdash bridge run`), and the escalation path that prefers a live
+ * (`paperclipai bridge run`), and the escalation path that prefers a live
  * `bridge:read` endpoint were all built and tested. What was missing was any way
  * for the person whose machine it is to find out — enrolment had only ever
  * happened via an operator running a seed script, so the product's most personal
@@ -26,6 +26,27 @@ import { copyToClipboard } from "../../lib/clipboard";
  * it again, so the copy has to say that plainly rather than implying it can be
  * found later in a settings page.
  */
+/**
+ * AgentDash (AGE-12): the command must name a binary that exists.
+ *
+ * The in-repo CLI package is `paperclipai` (see `cli/package.json` `bin`), and
+ * `bridge run` is registered on it in `cli/src/commands/bridge-run.ts`. This
+ * page used to print the bare product name in front of `bridge run`: no such
+ * binary is installed anywhere, and the bare npm name belongs to a third
+ * party, so running it through npx downloads and runs a stranger's package,
+ * prints an unrelated help screen, and exits 0 — which looks like success. A
+ * test pins this string to the package's real bin name.
+ */
+export const BRIDGE_CLI_BIN = "paperclipai";
+
+export function buildBridgeRunCommand(origin: string): string {
+  return [
+    `${BRIDGE_CLI_BIN} bridge run \\`,
+    `  --server ${origin} \\`,
+    "  --token-file ~/.agentdash/bridge-token",
+  ].join("\n");
+}
+
 export function ConnectYourMachine({
   companyId,
   agentName,
@@ -74,11 +95,7 @@ export function ConnectYourMachine({
   const endpoints: BridgeEndpoint[] = endpointsQuery.data?.endpoints ?? [];
   const live = endpoints.filter((endpoint) => endpoint.enrolledAt !== null);
 
-  const command = [
-    "agentdash bridge run \\",
-    `  --server ${origin} \\`,
-    "  --token-file ~/.agentdash/bridge-token",
-  ].join("\n");
+  const command = buildBridgeRunCommand(origin);
 
   const saveToken = token
     ? `mkdir -p ~/.agentdash && printf %s '${token}' > ~/.agentdash/bridge-token && chmod 600 ~/.agentdash/bridge-token`
@@ -198,6 +215,15 @@ export function ConnectYourMachine({
               It waits for questions and does nothing else. This machine can only be{" "}
               <span className="font-medium">asked things</span> — nothing here lets an agent change
               anything on it.
+            </p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              <span className="font-medium">Where the command comes from.</span> <code>{BRIDGE_CLI_BIN}</code>{" "}
+              is the AgentDash CLI that ships with this server (macOS only; it needs Node 20 or newer).
+              Your administrator installs it from the same release the server runs — there is no
+              separate download, and nothing named <code>agentdash</code> on npm is ours. To keep the
+              bridge open, run the command in a terminal you leave open, or wrap it in a login item or
+              a <code>launchd</code> agent so it starts when you sign in. When it stops, this page shows
+              the machine as last seen at the moment it went quiet.
             </p>
           </div>
         </div>
