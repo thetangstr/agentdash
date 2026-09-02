@@ -191,11 +191,23 @@ export interface AgentDetail extends Agent {
   access: AgentAccessState;
 }
 
-export interface AgentKeyCreated {
+// AgentDash (AGE-24): what minted an agent API key.
+export const AGENT_API_KEY_SOURCES = ["agent_creation", "onboarding", "connect_code", "manual"] as const;
+export type AgentApiKeySource = (typeof AGENT_API_KEY_SOURCES)[number];
+
+export interface AgentApiKeyProvenance {
+  source: AgentApiKeySource;
+  createdByUserId: string | null;
+  createdByAgentId: string | null;
+}
+
+export interface AgentKeyCreated extends AgentApiKeyProvenance {
   id: string;
   name: string;
   token: string;
   createdAt: Date;
+  /** Set on the agent-creation response for the key minted alongside the agent. */
+  autoCreated?: boolean;
 }
 
 export interface AgentConfigRevision {

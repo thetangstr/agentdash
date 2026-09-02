@@ -373,6 +373,13 @@ describe("agent routes adapter validation", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.adapterType).toBe("hermes_local");
     expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalled();
+    // AGE-24: the key minted with the agent says so, and its provenance is recorded.
+    expect(res.body.apiKey).toMatchObject({ name: "default", autoCreated: true });
+    expect(mockAgentService.createApiKey).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "default",
+      expect.objectContaining({ source: "agent_creation" }),
+    );
     // The bundle materialization keys are added to the echoed config; what must
     // survive untouched is the caller-supplied hermesCommand.
     expect(res.body.adapterConfig).toMatchObject({

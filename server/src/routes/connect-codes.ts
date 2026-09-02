@@ -115,7 +115,10 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
 
       let issued;
       try {
-        issued = await svc.createApiKey(agent.id, `${agent.name} — ${deviceName}`);
+        issued = await svc.createApiKey(agent.id, `${agent.name} — ${deviceName}`, {
+          source: "connect_code",
+          createdByUserId: (claimed as { createdByUserId?: string | null }).createdByUserId ?? null,
+        });
       } catch (err) {
         logger.error({ err, agentId: agent.id }, "connect code redeemed but key minting failed");
         res.status(500).json({ error: "Could not issue a key for this agent. Ask for a new code." });
