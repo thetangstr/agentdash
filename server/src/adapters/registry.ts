@@ -93,6 +93,7 @@ import {
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
+import { renderHermesDirectivesSection } from "./hermes-directives.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
   execute as piExecute,
@@ -785,9 +786,17 @@ const hermesLocalAdapter: ServerAdapterModule = {
       ?? readNonEmptyString(runConfig.instructionsFilePath)
       ?? resolveManagedInstructionsEntryPath(taskPatchedCtx.agent);
     const roleContract = instructionsFilePath ? await readHermesInstructionsContract(instructionsFilePath) : null;
+    // AgentDash (AGE-2): the steward's directives. Every first-party adapter
+    // renders context.paperclipAgentDirectives into its prompt; the Hermes
+    // package never did, so directives persisted, reported as pushed, and never
+    // reached the agent. They go after the mandate — the steward's newer word on
+    // HOW to work — and before the harness rules that follow.
+    const directivesNote = renderHermesDirectivesSection(
+      readRecord(taskPatchedCtx.context)?.paperclipAgentDirectives,
+    );
     // AgentDash (AGE-13): the human-question rule sits between the mandate and
     // the task so it reads as part of how this agent works, not as task text.
-    patchedConfig.promptTemplate = [roleContract, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+    patchedConfig.promptTemplate = [roleContract, directivesNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
       .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
       .join("\n\n");
 
