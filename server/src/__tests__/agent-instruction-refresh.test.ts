@@ -353,6 +353,120 @@ This paragraph sits after the removed block and must survive.
     expect(written).not.toMatch(/\n{3,}/);
   });
 
+  // Per-agent suppression: a generated block this agent should not carry.
+  //
+  // Some generated blocks describe a capability or plan tier an agent does not
+  // have. Dropping them from the shared source would change every agent's
+  // mandate, so suppression is per-agent and opt-in.
+  it("suppresses a named generated block for one agent only", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth"] },
+    });
+
+    const fake = makeFakeInstructions({ [AGENT_ID]: SOURCE_DEFAULT });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.refreshed).toBe(true);
+    expect(result.blocksRemoved).toEqual(["agent-api-auth"]);
+
+    const written = fake.writes[0]!.content;
+    expect(written).not.toContain("<!-- AgentDash: agent-api-auth");
+    // Everything not suppressed is untouched.
+    expect(written).toContain("<!-- AgentDash: goals-eval-hitl");
+  });
+
+  it("never re-adds a suppressed block on a later refresh", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth"] },
+    });
+
+    // Bundle already has the block stripped — the steady state after one pass.
+    const stripped = SOURCE_DEFAULT.replace(
+      /<!-- AgentDash: agent-api-auth[\s\S]*?<!-- \/AgentDash: agent-api-auth -->/,
+      "",
+    );
+    const fake = makeFakeInstructions({ [AGENT_ID]: stripped });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.blocksAdded).toEqual([]);
+    expect(result.refreshed).toBe(false);
+    expect(fake.writes).toHaveLength(0);
+  });
+
+  it("suppression does not leak to an agent without a list", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const stripped = SOURCE_DEFAULT.replace(
+      /<!-- AgentDash: agent-api-auth[\s\S]*?<!-- \/AgentDash: agent-api-auth -->/,
+      "",
+    );
+    const fake = makeFakeInstructions({ [AGENT_ID]: stripped });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    // No list, so the block comes back exactly as it does today.
+    expect(result.blocksAdded).toEqual(["agent-api-auth"]);
+  });
+
+  it("suppression cannot reach steward prose", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth", "not-a-real-block"] },
+    });
+
+    const bundle = `# Casper\n\nSteward note: call Titus first.\n\n${SOURCE_DEFAULT}`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    await svc.refreshIfStale(AGENT_ID);
+    const written = fake.writes[0]!.content;
+    expect(written).toContain("# Casper");
+    expect(written).toContain("Steward note: call Titus first.");
+  });
+
   it("is idempotent after a removal", async () => {
     const { db, queueAgent } = makeDb();
     queueAgent({

@@ -178,8 +178,39 @@ interface DiffResult {
   nextContent: string;
 }
 
-function diffAndApply(sourceContent: string, bundleContent: string): DiffResult {
-  const sourceBlocks = parseBlocks(sourceContent);
+/**
+ * Generated blocks this agent should not carry.
+ *
+ * Some generated blocks describe a capability or a plan tier an agent does not
+ * have. Dropping them from the shared source would change the mandate of every
+ * agent on the instance, which is a different and much larger decision — so
+ * suppression is per-agent and opt-in, and an agent with no list behaves exactly
+ * as it does today.
+ *
+ * This is deliberately a list of GENERATED slugs and nothing else. It cannot
+ * reach steward-authored prose, which lives outside the markers, and it cannot
+ * reach a block the source does not define.
+ */
+export function readSuppressedBlocks(adapterConfig: unknown): Set<string> {
+  if (!adapterConfig || typeof adapterConfig !== "object" || Array.isArray(adapterConfig)) {
+    return new Set();
+  }
+  const raw = (adapterConfig as Record<string, unknown>).instructionsSuppressedBlocks;
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((v): v is string => typeof v === "string" && v.length > 0));
+}
+
+function diffAndApply(
+  sourceContent: string,
+  bundleContent: string,
+  suppressed: Set<string> = new Set(),
+): DiffResult {
+  const allSourceBlocks = parseBlocks(sourceContent);
+  // A suppressed block is treated exactly as though the source never carried
+  // it: never added, and removed if the bundle still has it.
+  const sourceBlocks = new Map(
+    [...allSourceBlocks].filter(([slug]) => !suppressed.has(slug)),
+  );
   const bundleBlocks = parseBlocks(bundleContent);
 
   const blocksUpdated: string[] = [];
@@ -390,9 +421,13 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
 
     // Hot-path optimization: byte-compare source vs bundle. If they're equal
     // there can't be drift. Cheap.
-    if (bundleContent === sourceContent) return done(noop);
+    //
+    // Skipped when this agent suppresses blocks: an identical bundle is exactly
+    // the case where a newly-added suppression still has to be applied.
+    const suppressedForFastPath = readSuppressedBlocks(agent.adapterConfig);
+    if (bundleContent === sourceContent && suppressedForFastPath.size === 0) return done(noop);
 
-    const diff = diffAndApply(sourceContent, bundleContent);
+    const diff = diffAndApply(sourceContent, bundleContent, readSuppressedBlocks(agent.adapterConfig));
 
     if (diff.blocksRemoved.length > 0) {
       logger.info(
