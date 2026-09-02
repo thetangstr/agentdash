@@ -33,6 +33,7 @@ interface AgentFixture {
   name: string;
   role: string;
   status: string;
+  adapterType?: string;
   adapterConfig: Record<string, unknown>;
 }
 
@@ -539,5 +540,167 @@ describe("agentInstructionRefreshService.refreshAllForCompany", () => {
     expect(Object.keys(out).sort()).toEqual(["a1", "a2"]);
     expect(out.a1!.refreshed).toBe(true);
     expect(out.a2!.refreshed).toBe(false);
+  });
+});
+
+describe("agentInstructionRefreshService backfill (AGE-8 / GH #554)", () => {
+  const DEFAULT_BUNDLE: Record<string, string> = {
+    "AGENTS.md": "Default worker bundle prose.\n",
+    "HEARTBEAT.md": "heartbeat\n",
+  };
+
+  function makeBackfillFake(opts: { mode: "managed" | "external" | null }) {
+    const bundles: Record<string, string> = {};
+    const materializeCalls: Array<{ files: Record<string, string>; options: unknown }> = [];
+
+    const readFile = vi.fn(async (agent: { id: string }, _path: string) => {
+      const content = bundles[agent.id];
+      if (content === undefined) throw new Error("Instructions file not found");
+      return { path: "AGENTS.md", content, size: content.length };
+    });
+    const writeFile = vi.fn(async (agent: { id: string }, _path: string, content: string) => {
+      bundles[agent.id] = content;
+      return { adapterConfig: {} };
+    });
+    const getBundle = vi.fn(async () => ({ mode: opts.mode }));
+    const materializeManagedBundle = vi.fn(async (
+      agent: { id: string; adapterConfig?: unknown },
+      files: Record<string, string>,
+      options: unknown,
+    ) => {
+      materializeCalls.push({ files, options });
+      // Mirror the real contract: the entry file becomes readable, and the
+      // returned adapterConfig carries the managed-bundle keys.
+      bundles[agent.id] = files["AGENTS.md"] ?? "";
+      return {
+        bundle: {},
+        adapterConfig: {
+          ...((agent.adapterConfig ?? {}) as Record<string, unknown>),
+          instructionsBundleMode: "managed",
+          instructionsFilePath: "/managed/AGENTS.md",
+        },
+      };
+    });
+
+    return {
+      instructions: { readFile, writeFile, getBundle, materializeManagedBundle } as any,
+      bundles,
+      materializeCalls,
+    };
+  }
+
+  it("backfills the default managed bundle when none exists and the adapter supports bundles", async () => {
+    const { db, queueAgent } = makeDb();
+    const fixture: AgentFixture = {
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Hermes Worker",
+      role: "general",
+      status: "active",
+      adapterType: "hermes_local",
+      adapterConfig: { hermesCommand: "/bin/hermes", promptTemplate: "legacy prompt" },
+    };
+    queueAgent(fixture);
+
+    const fake = makeBackfillFake({ mode: null });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: (t) => t === "hermes_local",
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result.backfilled).toBe(true);
+    expect(result.refreshed).toBe(true);
+
+    // Materialized non-destructively: skip-existing so partial customizations win.
+    expect(fake.materializeCalls).toHaveLength(1);
+    expect(fake.materializeCalls[0]!.options).toMatchObject({
+      entryFile: "AGENTS.md",
+      replaceExisting: false,
+      skipExisting: true,
+    });
+
+    // adapterConfig persisted: managed keys added, caller config preserved,
+    // legacy prompt template stripped.
+    expect(db.update).toHaveBeenCalled();
+    const written = fixture.adapterConfig as Record<string, unknown>;
+    expect(written.instructionsBundleMode).toBe("managed");
+    expect(written.hermesCommand).toBe("/bin/hermes");
+    expect(written).not.toHaveProperty("promptTemplate");
+
+    // The backfilled AGENTS.md then went through the normal block refresh in
+    // the same pass — the default prose gained the source's AgentDash blocks.
+    expect(fake.bundles[AGENT_ID]).toContain("Default worker bundle prose.");
+    expect(fake.bundles[AGENT_ID]).toContain("AgentDash: goals-eval-hitl");
+    expect(result.blocksAdded).toEqual(["goals-eval-hitl", "agent-api-auth"]);
+
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "instructions_backfilled" }),
+    );
+  });
+
+  it("does not backfill when the adapter does not support bundles", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Process Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const fake = makeBackfillFake({ mode: null });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: () => false,
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result).toEqual({
+      refreshed: false,
+      blocksUpdated: [],
+      blocksAdded: [],
+      blocksRemoved: [],
+    });
+    expect(fake.materializeCalls).toHaveLength(0);
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("does not backfill an externally managed bundle", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "External Bundle Worker",
+      role: "general",
+      status: "active",
+      adapterType: "hermes_local",
+      adapterConfig: { instructionsBundleMode: "external", instructionsRootPath: "/elsewhere" },
+    });
+
+    const fake = makeBackfillFake({ mode: "external" });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: () => true,
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result.refreshed).toBe(false);
+    expect(result.backfilled).toBeUndefined();
+    expect(fake.materializeCalls).toHaveLength(0);
   });
 });

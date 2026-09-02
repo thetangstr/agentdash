@@ -29,6 +29,11 @@ import { agents as agentsTable } from "@paperclipai/db";
 import { and, eq, ne } from "drizzle-orm";
 import { logActivity } from "./activity-log.js";
 import { agentInstructionsService } from "./agent-instructions.js";
+import { adapterSupportsInstructionsBundle } from "../adapters/instructions-bundle-support.js";
+import {
+  loadDefaultAgentInstructionsBundle,
+  resolveDefaultAgentInstructionsBundleRole,
+} from "./default-agent-instructions.js";
 import { logger } from "../middleware/logger.js";
 
 export interface RefreshResult {
@@ -37,6 +42,8 @@ export interface RefreshResult {
   blocksAdded: string[];
   /** Blocks present in bundle but no longer in source — left alone, audit-only. */
   blocksRemoved: string[];
+  /** True when the agent had no bundle and the default managed bundle was created. */
+  backfilled?: boolean;
 }
 
 export interface AgentInstructionRefreshDeps {
@@ -52,6 +59,16 @@ export interface AgentInstructionRefreshDeps {
    * agentInstructionsService().
    */
   instructions?: ReturnType<typeof agentInstructionsService>;
+  /**
+   * Optional override for the adapter capability check that gates the
+   * no-bundle backfill. Production uses adapterSupportsInstructionsBundle.
+   */
+  supportsBundle?: (adapterType: string) => boolean;
+  /**
+   * Optional override for loading the default bundle files for a role.
+   * Production uses loadDefaultAgentInstructionsBundle.
+   */
+  loadDefaultBundle?: (role: string) => Promise<Record<string, string>>;
 }
 
 // One archetype for every agent. This used to be "default" | "ceo" |
@@ -218,6 +235,7 @@ type AgentRow = {
   name: string;
   role: string;
   status: string;
+  adapterType: string;
   adapterConfig: unknown;
 };
 
@@ -225,6 +243,9 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
   const { db } = deps;
   const loadSource = deps.loadSource ?? defaultSourceLoader;
   const instructions = deps.instructions ?? agentInstructionsService();
+  const supportsBundle = deps.supportsBundle ?? adapterSupportsInstructionsBundle;
+  const loadDefaultBundle = deps.loadDefaultBundle
+    ?? ((role: string) => loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(role)));
 
   async function loadAgent(agentId: string): Promise<AgentRow | null> {
     const rows = await db
@@ -234,6 +255,7 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
         name: agentsTable.name,
         role: agentsTable.role,
         status: agentsTable.status,
+        adapterType: agentsTable.adapterType,
         adapterConfig: agentsTable.adapterConfig,
       })
       .from(agentsTable)
@@ -254,6 +276,56 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
     }
   }
 
+  /**
+   * AgentDash (AGE-8 / GH #554): an agent whose adapter consumes the managed
+   * bundle but who has none yet (created before its adapter gained bundling,
+   * or bundle config never set) gets the default managed bundle written to
+   * disk and its adapterConfig pointed at it. Existing files on disk win
+   * (skipExisting), so a partially customized bundle is never overwritten;
+   * externally managed bundles are left alone. Returns the entry-file content
+   * after backfill, or null when no backfill applies.
+   */
+  async function backfillDefaultBundle(agent: AgentRow): Promise<string | null> {
+    if (!supportsBundle(agent.adapterType)) return null;
+
+    const agentLike = {
+      id: agent.id,
+      companyId: agent.companyId,
+      name: agent.name,
+      adapterConfig: agent.adapterConfig,
+    };
+    const existing = await instructions.getBundle(agentLike);
+    if (existing.mode === "external") return null;
+
+    const files = await loadDefaultBundle(agent.role);
+    const materialized = await instructions.materializeManagedBundle(agentLike, files, {
+      entryFile: "AGENTS.md",
+      replaceExisting: false,
+      skipExisting: true,
+    });
+    const nextAdapterConfig = { ...materialized.adapterConfig };
+    delete nextAdapterConfig.promptTemplate;
+    delete nextAdapterConfig.bootstrapPromptTemplate;
+
+    await db
+      .update(agentsTable)
+      .set({ adapterConfig: nextAdapterConfig, updatedAt: new Date() })
+      .where(eq(agentsTable.id, agent.id));
+    agent.adapterConfig = nextAdapterConfig;
+
+    await logActivity(db, {
+      companyId: agent.companyId,
+      actorType: "system",
+      actorId: "agent-instruction-refresh-service",
+      action: "instructions_backfilled",
+      entityType: "agent",
+      entityId: agent.id,
+      details: { adapterType: agent.adapterType, entryFile: "AGENTS.md" },
+    });
+
+    return readBundleEntry(agent);
+  }
+
   async function writeBundleEntry(agent: AgentRow, content: string): Promise<void> {
     await instructions.writeFile(
       { id: agent.id, companyId: agent.companyId, name: agent.name, adapterConfig: agent.adapterConfig },
@@ -268,22 +340,31 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
     const agent = await loadAgent(agentId);
     if (!agent) return noop;
 
+    let backfilled = false;
+    const done = (result: RefreshResult): RefreshResult =>
+      backfilled ? { ...result, refreshed: true, backfilled: true } : result;
+
     const archetype = archetypeForAgent(agent);
-    const [sourceContent, bundleContent] = await Promise.all([
+    const [sourceContent, existingBundleContent] = await Promise.all([
       loadSource(archetype),
       readBundleEntry(agent),
     ]);
 
+    let bundleContent = existingBundleContent;
     if (bundleContent === null) {
-      // No bundle to refresh — nothing to do (could be an external bundle on a
-      // path we don't write; create-time bundling sets this up, so this is
-      // unusual but not an error).
-      return noop;
+      // No bundle to refresh. This used to be a silent no-op (GH #554), which
+      // is how agents on adapters that gained bundling after their creation
+      // ended up running with no managed instructions at all. Backfill the
+      // default bundle instead when the adapter supports it and the agent is
+      // not on an externally managed bundle.
+      bundleContent = await backfillDefaultBundle(agent);
+      if (bundleContent === null) return noop;
+      backfilled = true;
     }
 
     // Hot-path optimization: byte-compare source vs bundle. If they're equal
     // there can't be drift. Cheap.
-    if (bundleContent === sourceContent) return noop;
+    if (bundleContent === sourceContent) return done(noop);
 
     const diff = diffAndApply(sourceContent, bundleContent);
 
@@ -301,12 +382,12 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
     }
 
     if (diff.blocksUpdated.length === 0 && diff.blocksAdded.length === 0) {
-      return {
+      return done({
         refreshed: false,
         blocksUpdated: [],
         blocksAdded: [],
         blocksRemoved: diff.blocksRemoved,
-      };
+      });
     }
 
     await writeBundleEntry(agent, diff.nextContent);
@@ -326,12 +407,12 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
       },
     });
 
-    return {
+    return done({
       refreshed: true,
       blocksUpdated: diff.blocksUpdated,
       blocksAdded: diff.blocksAdded,
       blocksRemoved: diff.blocksRemoved,
-    };
+    });
   }
 
   async function refreshAllForCompany(companyId: string): Promise<Record<string, RefreshResult>> {

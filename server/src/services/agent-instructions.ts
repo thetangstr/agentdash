@@ -141,6 +141,26 @@ function resolveManagedInstructionsRoot(agent: AgentLike): string {
   );
 }
 
+/**
+ * AgentDash: the managed bundle's entry-file path for an agent, computed the same
+ * way materialization computes it. The Hermes execute wrapper uses this when an
+ * agent's adapterConfig has not caught up with a bundle that already exists on
+ * disk (the refresh service backfills the files first, then the config row).
+ */
+export function resolveManagedInstructionsEntryPath(agent: AgentLike): string {
+  const config = asRecord(agent.adapterConfig);
+  let entryFile = ENTRY_FILE_DEFAULT;
+  const stored = asString(config[ENTRY_KEY]);
+  if (stored) {
+    try {
+      entryFile = normalizeRelativeFilePath(stored);
+    } catch {
+      entryFile = ENTRY_FILE_DEFAULT;
+    }
+  }
+  return path.resolve(resolveManagedInstructionsRoot(agent), entryFile);
+}
+
 function resolveLegacyInstructionsPath(candidatePath: string, config: Record<string, unknown>): string {
   if (path.isAbsolute(candidatePath)) return candidatePath;
   const cwd = asString(config.cwd);
@@ -688,6 +708,12 @@ export function agentInstructionsService() {
     options?: {
       clearLegacyPromptTemplate?: boolean;
       replaceExisting?: boolean;
+      /**
+       * AgentDash: write only files that do not exist yet. The backfill path uses
+       * this so an agent that already has a customized AGENTS.md keeps it and only
+       * gains the missing default files.
+       */
+      skipExisting?: boolean;
       entryFile?: string;
     },
   ): Promise<{ bundle: AgentInstructionsBundle; adapterConfig: Record<string, unknown> }> {
@@ -705,11 +731,15 @@ export function agentInstructionsService() {
     ] as const);
     for (const [relativePath, content] of normalizedEntries) {
       const absolutePath = resolvePathWithinRoot(rootPath, relativePath);
+      if (options?.skipExisting && (await statIfExists(absolutePath))?.isFile()) continue;
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, content, "utf8");
     }
     if (!normalizedEntries.some(([relativePath]) => relativePath === entryFile)) {
-      await fs.writeFile(resolvePathWithinRoot(rootPath, entryFile), "", "utf8");
+      const entryPath = resolvePathWithinRoot(rootPath, entryFile);
+      if (!(options?.skipExisting && (await statIfExists(entryPath))?.isFile())) {
+        await fs.writeFile(entryPath, "", "utf8");
+      }
     }
 
     const adapterConfig = applyBundleConfig(asRecord(agent.adapterConfig), {
