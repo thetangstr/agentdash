@@ -85,18 +85,29 @@ if [ ! -f "$notes_file" ]; then
   exit 1
 fi
 
-for asset in "${assets[@]}"; do
-  if [ ! -f "$asset" ]; then
-    echo "Error: release asset not found at $asset." >&2
-    exit 1
-  fi
-done
+# Assets are optional, and an empty array must stay expandable.
+#
+# `"${assets[@]}"` on an empty array is an unbound-variable error under `set -u`
+# in bash 3.2, which is what /bin/bash still is on macOS. So running this script
+# by hand on a Mac with no `--asset` failed before it did anything, while CI
+# never saw it: the release workflow always passes assets, and Ubuntu runners
+# ship bash 5. Guarded the way the upload at the end of this file already is.
+if [ "${#assets[@]}" -gt 0 ]; then
+  for asset in "${assets[@]}"; do
+    if [ ! -f "$asset" ]; then
+      echo "Error: release asset not found at $asset." >&2
+      exit 1
+    fi
+  done
+fi
 
 if [ "$dry_run" = true ]; then
   printf '[dry-run] gh release create %q -R %q --title %q --notes-file %q' "$tag" "$GITHUB_REPO" "$tag" "$notes_file"
-  for asset in "${assets[@]}"; do
-    printf ' --asset %q' "$asset"
-  done
+  if [ "${#assets[@]}" -gt 0 ]; then
+    for asset in "${assets[@]}"; do
+      printf ' --asset %q' "$asset"
+    done
+  fi
   printf '\n'
   exit 0
 fi
