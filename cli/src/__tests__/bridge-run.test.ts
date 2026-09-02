@@ -78,7 +78,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("agentdash bridge run — refusals (nothing may execute)", () => {
+describe("paperclipai bridge run — refusals (nothing may execute)", () => {
   it("refuses to start off macOS and executes nothing", async () => {
     const fetchImpl = vi.fn();
     const executor = vi.fn();
@@ -180,7 +180,7 @@ describe("agentdash bridge run — refusals (nothing may execute)", () => {
   });
 });
 
-describe("agentdash bridge run — startup posture", () => {
+describe("paperclipai bridge run — startup posture", () => {
   it("reads the token from a file and logs the weaker posture under --egress direct", async () => {
     const tokenFile = path.join(scratch, "token");
     writeFileSync(tokenFile, "file-token\n", { mode: 0o600 });
@@ -211,7 +211,7 @@ describe("agentdash bridge run — startup posture", () => {
   });
 });
 
-describe("agentdash bridge run — poll loop", () => {
+describe("paperclipai bridge run — poll loop", () => {
   const taskReply = {
     task: {
       id: "task-1",

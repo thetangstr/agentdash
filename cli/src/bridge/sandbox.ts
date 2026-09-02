@@ -139,7 +139,7 @@ export const defaultExecutor: TaskExecutor = (ctx) =>
           new Error(
             "the agent is not authenticated inside the sandbox. Its desktop login lives in " +
               "the home directory this profile denies, and that deny is deliberate. Set " +
-              "ANTHROPIC_API_KEY in the environment you start `agentdash bridge run` from — " +
+              "ANTHROPIC_API_KEY in the environment you start `paperclipai bridge run` from — " +
               "an env credential needs no filesystem access. Running `claude /login` will not " +
               "help: it writes to the directory the sandbox is refusing.",
           ),
