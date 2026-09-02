@@ -122,6 +122,7 @@ import {
   shouldRequireAgentHarnessPreflight,
   withAgentHarnessPreflightMetadata,
 } from "../services/agent-harness-preflight-readiness.js";
+import { adapterSupportsInstructionsBundle, resolveInstructionsPathKey } from "../adapters/instructions-bundle-support.js";
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
@@ -143,36 +144,8 @@ export function agentRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
 ) {
-  // Legacy hardcoded maps — used as fallback when adapter module does not
-  // declare capability flags explicitly.
-  const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
-    acpx_local: "instructionsFilePath",
-    claude_local: "instructionsFilePath",
-    codex_local: "instructionsFilePath",
-    droid_local: "instructionsFilePath",
-    gemini_local: "instructionsFilePath",
-    hermes_local: "instructionsFilePath",
-    opencode_local: "instructionsFilePath",
-    cursor: "instructionsFilePath",
-    pi_local: "instructionsFilePath",
-  };
-  const DEFAULT_MANAGED_INSTRUCTIONS_ADAPTER_TYPES = new Set(Object.keys(DEFAULT_INSTRUCTIONS_PATH_KEYS));
-
-  /** Check if an adapter supports the managed instructions bundle. */
-  function adapterSupportsInstructionsBundle(adapterType: string): boolean {
-    const adapter = findActiveServerAdapter(adapterType);
-    if (adapter?.supportsInstructionsBundle !== undefined) return adapter.supportsInstructionsBundle;
-    return DEFAULT_MANAGED_INSTRUCTIONS_ADAPTER_TYPES.has(adapterType);
-  }
-
-  /** Resolve the adapter config key for the instructions file path. */
-  function resolveInstructionsPathKey(adapterType: string): string | null {
-    const adapter = findActiveServerAdapter(adapterType);
-    if (adapter?.instructionsPathKey) return adapter.instructionsPathKey;
-    if (adapter?.supportsInstructionsBundle === true) return "instructionsFilePath";
-    if (adapter?.supportsInstructionsBundle === false) return null;
-    return DEFAULT_INSTRUCTIONS_PATH_KEYS[adapterType] ?? null;
-  }
+  // AgentDash: adapter bundle support lives in adapters/instructions-bundle-support.ts
+  // so the instruction-refresh service can ask the same question (AGE-8).
   const KNOWN_INSTRUCTIONS_PATH_KEYS = new Set(["instructionsFilePath", "agentsMdPath"]);
   const KNOWN_INSTRUCTIONS_BUNDLE_KEYS = [
     "instructionsBundleMode",

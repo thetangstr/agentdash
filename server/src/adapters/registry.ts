@@ -91,6 +91,7 @@ import {
   models as openclawGatewayModels,
 } from "@paperclipai/adapter-openclaw-gateway";
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
+import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
   execute as piExecute,
@@ -755,8 +756,14 @@ const hermesLocalAdapter: ServerAdapterModule = {
     // alongside the task context. The bundle's instructionsFilePath is persisted on
     // the agent config (and mirrored onto the run config); the Hermes package only
     // renders promptTemplate, so the contract is prepended here.
+    // AgentDash: an agent whose bundle was just backfilled on disk (see
+    // agent-instruction-refresh) may still carry the pre-backfill adapterConfig for
+    // this run; the managed entry-file path is deterministic, so fall back to it.
+    // readHermesInstructionsContract() returns null when no such file exists.
     const instructionsFilePath =
-      readNonEmptyString(existingConfig.instructionsFilePath) ?? readNonEmptyString(runConfig.instructionsFilePath);
+      readNonEmptyString(existingConfig.instructionsFilePath)
+      ?? readNonEmptyString(runConfig.instructionsFilePath)
+      ?? resolveManagedInstructionsEntryPath(taskPatchedCtx.agent);
     const roleContract = instructionsFilePath ? await readHermesInstructionsContract(instructionsFilePath) : null;
     patchedConfig.promptTemplate = roleContract ? `${roleContract}\n\n${taskTemplate}` : taskTemplate;
 
@@ -792,7 +799,11 @@ const hermesLocalAdapter: ServerAdapterModule = {
   syncSkills: hermesSyncSkills,
   models: hermesModels,
   supportsLocalAgentJwt: true,
-  supportsInstructionsBundle: false,
+  // AgentDash: hermes agents get the managed bundle at creation (routes/agents.ts),
+  // are backfilled by the instruction-refresh service when they have none, and the
+  // execute wrapper above injects the entry file into the live prompt. AGE-8 / GH #554.
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: hermesAgentConfigurationDoc,
   detectModel: () => detectModelFromHermes(),
