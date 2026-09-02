@@ -39,11 +39,50 @@ import { copyToClipboard } from "../../lib/clipboard";
  */
 export const BRIDGE_CLI_BIN = "paperclipai";
 
-export function buildBridgeRunCommand(origin: string): string {
+export type BridgeEgress = "loopback" | "direct";
+
+/**
+ * AgentDash: `--egress` is required and the CLI refuses to default it.
+ *
+ * `cli/src/commands/bridge-run.ts` declares the flag "Required, no default" and exits with
+ * "Refusing to start: --egress is required and has no default." The command this page printed
+ * omitted the flag entirely, so what a steward pasted could never start — and the failure read
+ * as a broken install rather than a missing argument.
+ *
+ * The fix is not to pick a value here. The CLI declines to default it because the two postures
+ * are a containment decision; defaulting it in the board would silently make that decision on
+ * the operator's behalf, which is the exact choice the CLI refused. So the page asks first and
+ * builds the command afterwards.
+ *
+ * `ANTHROPIC_API_KEY` is present for the same class of reason: the sandbox denies the home
+ * directory, so the worker cannot read a desktop `claude` login, and every task it claims fails
+ * to authenticate without a key in the environment. The worker warns about this at startup, but
+ * a steward who never scrolls back just watches tasks fail.
+ */
+const EGRESS_OPTIONS: ReadonlyArray<{ value: BridgeEgress; title: string; body: string }> = [
+  {
+    value: "loopback",
+    title: "Deny outbound (stronger)",
+    body:
+      "Localhost only. Reaching the Anthropic API needs an allowlisting proxy already running " +
+      "on this machine; without one, every task fails.",
+  },
+  {
+    value: "direct",
+    title: "Allow outbound 443 (weaker)",
+    body:
+      "The sandbox reaches api.anthropic.com directly and nothing inspects that traffic. Works " +
+      "with no extra setup.",
+  },
+];
+
+export function buildBridgeRunCommand(origin: string, egress: BridgeEgress): string {
   return [
+    "export ANTHROPIC_API_KEY=sk-ant-...",
     `${BRIDGE_CLI_BIN} bridge run \\`,
     `  --server ${origin} \\`,
-    "  --token-file ~/.agentdash/bridge-token",
+    "  --token-file ~/.agentdash/bridge-token \\",
+    `  --egress ${egress}`,
   ].join("\n");
 }
 
@@ -57,6 +96,7 @@ export function ConnectYourMachine({
   const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [egress, setEgress] = useState<BridgeEgress | null>(null);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const defaultLabel =
@@ -95,7 +135,7 @@ export function ConnectYourMachine({
   const endpoints: BridgeEndpoint[] = endpointsQuery.data?.endpoints ?? [];
   const live = endpoints.filter((endpoint) => endpoint.enrolledAt !== null);
 
-  const command = buildBridgeRunCommand(origin);
+  const command = egress ? buildBridgeRunCommand(origin, egress) : null;
 
   const saveToken = token
     ? `mkdir -p ~/.agentdash && printf %s '${token}' > ~/.agentdash/bridge-token && chmod 600 ~/.agentdash/bridge-token`
@@ -202,15 +242,57 @@ export function ConnectYourMachine({
           </div>
 
           <div>
+            <h3 className="text-xs font-semibold">2. Choose what this machine may reach</h3>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Each task runs in a sandbox. This picks how much of the network that sandbox may
+              reach. There is no default — it is your decision, not ours.
+            </p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {EGRESS_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setEgress(option.value)}
+                  aria-pressed={egress === option.value}
+                  className={`rounded-md border px-3 py-2 text-left text-xs ${
+                    egress === option.value
+                      ? "border-foreground bg-muted"
+                      : "border-border hover:bg-muted/40"
+                  }`}
+                >
+                  <span className="font-medium">{option.title}</span>
+                  <span className="mt-1 block text-muted-foreground">{option.body}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-semibold">2. Leave this running</h3>
-              <Button variant="outline" size="sm" onClick={() => copy("command", command)}>
+              <h3 className="text-xs font-semibold">3. Leave this running</h3>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!command}
+                onClick={() => command && copy("command", command)}
+              >
                 {copyLabel("command")}
               </Button>
             </div>
-            <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-              <code>{command}</code>
-            </pre>
+            {command ? (
+              <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+                <code>{command}</code>
+              </pre>
+            ) : (
+              <p className="mt-1.5 rounded-md border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
+                Choose an option above and the command appears here.
+              </p>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              <span className="font-medium">Use a real key.</span> Replace <code>sk-ant-…</code>{" "}
+              with an Anthropic API key. The sandbox cannot read a desktop <code>claude</code>{" "}
+              login, so without a key in the environment every task fails to authenticate.
+            </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
               It waits for questions and does nothing else. This machine can only be{" "}
               <span className="font-medium">asked things</span> — nothing here lets an agent change
