@@ -29,6 +29,15 @@ describe("normalizeHermesConfig Codex command fallback", () => {
     expect(ctx.config.command).toBe("/opt/codex-acp");
   });
 
+  it("treats a blank AGENTDASH_CODEX_COMMAND as unset", () => {
+    process.env.AGENTDASH_CODEX_COMMAND = "   ";
+    const ctx = { config: {} as Record<string, unknown> };
+
+    normalizeHermesConfig(ctx);
+
+    expect(ctx.config.command).toBe("codex-acp");
+  });
+
   it("preserves an explicitly configured command", () => {
     process.env.AGENTDASH_CODEX_COMMAND = "/opt/fallback-codex-acp";
     const ctx = { config: { command: "/custom/codex-acp" } };
