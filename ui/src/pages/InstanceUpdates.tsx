@@ -319,7 +319,7 @@ export function InstanceUpdates() {
       <div className="flex items-center gap-3">
         <Button
           onClick={() => setConfirming(true)}
-          disabled={!status.available || status.upToDate || approved || approve.isPending}
+          disabled={!status.available || status.upToDate || approved || approve.isPending || !status.canApply}
         >
           Update this instance
         </Button>

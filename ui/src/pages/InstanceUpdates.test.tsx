@@ -156,6 +156,7 @@ describe("InstanceUpdates", () => {
     );
     expect(container.textContent).toContain("not running from an immutable release directory");
     expect(container.textContent).toContain("a developer checkout — not updatable");
+    expect(updateButton()?.disabled).toBe(true);
   });
 
   it("disables the button when already up to date", async () => {
