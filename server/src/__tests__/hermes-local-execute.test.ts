@@ -16,15 +16,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *     renders promptTemplate, so the role contract was dropped.
  */
 
-async function writeFakeHermesCommand(dir: string): Promise<{ hermesCommand: string; argsPath: string }> {
+async function writeFakeHermesCommand(
+  dir: string,
+  options?: { extraStdout?: string },
+): Promise<{ hermesCommand: string; argsPath: string }> {
   const argsPath = join(dir, "args.json");
   const hermesCommand = join(dir, "hermes");
+  const extraStdout = options?.extraStdout ?? "";
   await writeFile(
     hermesCommand,
     [
       "#!/usr/bin/env node",
       'const fs = require("node:fs");',
       'fs.writeFileSync(process.env.HERMES_ARGS_PATH, JSON.stringify(process.argv.slice(2)));',
+      `process.stdout.write(${JSON.stringify(extraStdout)});`,
       'process.stdout.write("done\\n\\nsession_id: hermes-session-1\\n");',
     ].join("\n"),
   );
@@ -37,6 +42,7 @@ function buildCtx(overrides: {
   argsPath: string;
   adapterConfig?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
 }) {
   return {
     runId: "run-1",
@@ -57,7 +63,7 @@ function buildCtx(overrides: {
     config: overrides.config ?? {},
     context: {},
     authToken: "test-run-token",
-    onLog: async () => {},
+    onLog: overrides.onLog ?? (async () => {}),
     onMeta: async () => {},
     onSpawn: async () => {},
   };
@@ -194,5 +200,74 @@ describe("hermes_local execute wrapper", () => {
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain(roleContract);
     expect(prompt).toContain("Agent ID: agent-1");
+  });
+
+  // AgentDash (AGE-13): the human-question channel fails closed.
+  it("tells the agent the terminal clarify tool reaches nobody and to ask through an interaction instead", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-human-question-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+    const instructionsPath = join(tempDir, "AGENTS.md");
+    await writeFile(instructionsPath, "You are Priya, the Product Manager.\n", "utf8");
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildCtx({ hermesCommand, argsPath, adapterConfig: { instructionsFilePath: instructionsPath } }) as never,
+    );
+
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const prompt = args[args.indexOf("-q") + 1] ?? "";
+    expect(prompt).toContain("Never call `clarify` here.");
+    expect(prompt).toContain("ask_user_questions");
+    // Between the mandate and the task: part of how the agent works, not task text.
+    expect(prompt.indexOf("You are Priya")).toBeLessThan(prompt.indexOf("Never call `clarify`"));
+    expect(prompt.indexOf("Never call `clarify`")).toBeLessThan(prompt.indexOf("Paperclip API safety rule:"));
+  });
+
+  it("fails a run closed when Hermes's clarify fallback fires instead of accepting the agent's default decision", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-clarify-fallback-"));
+    // Exactly what the TUI callback prints, dim escape codes included.
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir, {
+      extraStdout: "\n\u001b[2m(clarify timed out after 120s — agent will decide)\u001b[0m\n",
+    });
+    const logs: Array<{ stream: string; chunk: string }> = [];
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const result = await getServerAdapter("hermes_local").execute(
+      buildCtx({
+        hermesCommand,
+        argsPath,
+        onLog: async (stream, chunk) => {
+          logs.push({ stream, chunk });
+        },
+      }) as never,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.errorCode).toBe("human_question_unanswered");
+    expect(result.errorMessage).toContain("clarify");
+    expect(result.errorMessage).toContain("ask_user_questions");
+    expect(result.errorMeta).toMatchObject({ humanQuestionFallback: "clarify timed out after 120s" });
+    // The session is still attributable: only the outcome changed.
+    expect(JSON.stringify(result)).toContain("hermes-session-1");
+    // The run log says why, in one line a steward can find.
+    const notice = logs.find((entry) => entry.chunk.includes("[agentdash] Hermes clarify fallback fired"));
+    expect(notice?.stream).toBe("stderr");
+    expect(notice?.chunk).toContain("human_question_unanswered");
+  });
+
+  it("leaves a run that never touched clarify with its own outcome", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-no-clarify-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir, {
+      extraStdout: "The steward will decide the launch date later; I did not ask.\n",
+    });
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const result = await getServerAdapter("hermes_local").execute(
+      buildCtx({ hermesCommand, argsPath }) as never,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.errorCode ?? null).toBeNull();
+    expect(result.errorMessage ?? null).toBeNull();
   });
 });

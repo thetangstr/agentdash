@@ -92,6 +92,7 @@ import {
 } from "@paperclipai/adapter-openclaw-gateway";
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
 import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
+import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
   execute as piExecute,
@@ -681,6 +682,22 @@ async function withHermesSessionUsage(
   }
 }
 
+/**
+ * AgentDash (AGE-13): every Hermes run goes through the human-question guard.
+ * The guard scans the run output for Hermes's clarify fallback and, if it
+ * fired, refuses the run rather than reporting the agent's default decision
+ * as success. See hermes-human-question.ts.
+ */
+async function executeHermesFailClosed(
+  ctx: Parameters<ServerAdapterModule["execute"]>[0],
+): Promise<AdapterExecutionResult> {
+  const guard = createHermesHumanQuestionGuard(ctx.onLog);
+  const result = await withHermesSessionUsage(
+    sanitizeHermesExecutionResult(await executeHermesLocal({ ...ctx, onLog: guard.onLog })),
+  );
+  return guard.failClosed(result);
+}
+
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
   execute: async (ctx) => {
@@ -702,7 +719,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       );
     }
     if (!taskPatchedCtx.authToken) {
-      return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
+      return executeHermesFailClosed(taskPatchedCtx);
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
@@ -765,7 +782,11 @@ const hermesLocalAdapter: ServerAdapterModule = {
       ?? readNonEmptyString(runConfig.instructionsFilePath)
       ?? resolveManagedInstructionsEntryPath(taskPatchedCtx.agent);
     const roleContract = instructionsFilePath ? await readHermesInstructionsContract(instructionsFilePath) : null;
-    patchedConfig.promptTemplate = roleContract ? `${roleContract}\n\n${taskTemplate}` : taskTemplate;
+    // AgentDash (AGE-13): the human-question rule sits between the mandate and
+    // the task so it reads as part of how this agent works, not as task text.
+    patchedConfig.promptTemplate = [roleContract, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+      .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
+      .join("\n\n");
 
     const patchedCtx = {
       ...taskPatchedCtx,
@@ -775,7 +796,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx)));
+    return executeHermesFailClosed(patchedCtx);
   },
   // AgentDash: ensure the agent's managed profile exists before the env check so
   // harness-preflight passes for an agent created by any path, and run the check
