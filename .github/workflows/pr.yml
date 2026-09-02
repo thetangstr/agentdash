@@ -34,6 +34,11 @@ jobs:
       - name: Block leftover merge-conflict markers
         run: node scripts/ci/check-conflict-markers.mjs
 
+      - name: Block escaped block scalars in workflow files
+        # A dedented heredoc inside `run: |` silently invalidates a workflow
+        # (upstream-digest.yml, 2026-05-10 → 2026-09-01); this fails the PR instead.
+        run: node scripts/ci/check-workflow-block-scalars.mjs && node --test scripts/ci/check-workflow-block-scalars.test.mjs
+
       - name: Block manual lockfile edits
         if: github.head_ref != 'chore/refresh-lockfile'
         run: |
