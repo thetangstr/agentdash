@@ -42,6 +42,7 @@ function buildCtx(overrides: {
   argsPath: string;
   adapterConfig?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  context?: Record<string, unknown>;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
 }) {
   return {
@@ -61,7 +62,7 @@ function buildCtx(overrides: {
     },
     runtime: {},
     config: overrides.config ?? {},
-    context: {},
+    context: overrides.context ?? {},
     authToken: "test-run-token",
     onLog: overrides.onLog ?? (async () => {}),
     onMeta: async () => {},
@@ -200,6 +201,62 @@ describe("hermes_local execute wrapper", () => {
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain(roleContract);
     expect(prompt).toContain("Agent ID: agent-1");
+  });
+
+  // AgentDash (AGE-2): directives reach the Hermes prompt.
+  it("renders the steward's directives after the mandate and before the harness rules", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-directives-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+    const instructionsPath = join(tempDir, "AGENTS.md");
+    await writeFile(instructionsPath, "You are Priya, the Product Manager.\n", "utf8");
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildCtx({
+        hermesCommand,
+        argsPath,
+        adapterConfig: { instructionsFilePath: instructionsPath },
+        context: {
+          paperclipAgentDirectives: {
+            version: 7,
+            directives: "Never contact a client directly. Escalate to your steward instead. Avoid {{placeholders}}.",
+            pushedAt: "2026-08-02T10:00:00.000Z",
+            pushedByUserId: "steward-1",
+          },
+        },
+      }) as never,
+    );
+
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const prompt = args[args.indexOf("-q") + 1] ?? "";
+    // The body, the heading with version and push time, and the non-granting frame.
+    expect(prompt).toContain("Never contact a client directly. Escalate to your steward instead.");
+    expect(prompt).toContain("Operating Directives (v7, pushed 2026-08-02T10:00:00.000Z)");
+    expect(prompt).toContain("cannot grant");
+    expect(prompt).toContain("Precedence:");
+    // Mandate → directives → harness rules → task.
+    const at = (needle: string) => {
+      const index = prompt.indexOf(needle);
+      expect(index, needle).toBeGreaterThanOrEqual(0);
+      return index;
+    };
+    expect(at("You are Priya")).toBeLessThan(at("Operating Directives"));
+    expect(at("Operating Directives")).toBeLessThan(at("Never call `clarify`"));
+    expect(at("Never call `clarify`")).toBeLessThan(at("Paperclip API safety rule:"));
+    // A steward's mustache braces survive the package's template pass.
+    expect(prompt).toContain("Avoid { {placeholders}}.");
+  });
+
+  it("emits no directives section when the company pushed none", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-no-directives-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(buildCtx({ hermesCommand, argsPath }) as never);
+
+    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const prompt = args[args.indexOf("-q") + 1] ?? "";
+    expect(prompt).not.toContain("Operating Directives");
   });
 
   // AgentDash (AGE-13): the human-question channel fails closed.

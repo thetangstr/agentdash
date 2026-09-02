@@ -441,6 +441,16 @@ describeEmbeddedPostgres("agentdash-mk harness directives and ceilings", () => {
     expect(first.status).toBe(201);
     expect(first.body.directive.version).toBe(1);
     expect(first.body.directive.supersededAt).toBeNull();
+    // AGE-2: "pushed" says whether the runtime will see it. This agent runs on
+    // the process adapter, which passes no context, so the push is stored and
+    // reported as undelivered rather than as applied.
+    expect(first.body.delivery).toEqual({
+      adapterType: "process",
+      delivered: false,
+      via: null,
+      detail: expect.stringContaining("will not see them"),
+    });
+    expect(first.body.warnings).toEqual([first.body.delivery.detail]);
 
     const second = await call(app, (baseUrl) =>
       request(baseUrl)
@@ -478,6 +488,21 @@ describeEmbeddedPostgres("agentdash-mk harness directives and ceilings", () => {
       );
     expect(activeRows).toHaveLength(1);
     expect(activeRows[0]!.version).toBe(2);
+  });
+
+  it("reports a push as delivered for an adapter that renders directives", async () => {
+    const { company, agent, steward } = await seed();
+    await db.update(agents).set({ adapterType: "hermes_local" }).where(eq(agents.id, agent.id));
+    const app = createApp(boardActor(company.id, steward.principalId));
+
+    const res = await call(app, (baseUrl) =>
+      request(baseUrl)
+        .post(`/api/companies/${company.id}/agents/${agent.id}/directives`)
+        .send({ directives: "Escalate anything client-facing." }),
+    );
+    expect(res.status).toBe(201);
+    expect(res.body.delivery).toMatchObject({ adapterType: "hermes_local", delivered: true, via: "prompt" });
+    expect(res.body.warnings).toBeUndefined();
   });
 
   // -- Rule A: narrowing only --------------------------------------------

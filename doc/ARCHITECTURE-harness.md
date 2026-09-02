@@ -101,6 +101,20 @@ the organization authorized.
 
 A directive saying *"you may access HubSpot"* has **zero** effect. Only a ceiling grants.
 
+**How directives reach the agent, and what wins.** Heartbeat attaches the active
+directives to every run's context (`paperclipAgentDirectives`); each adapter renders them
+into its prompt — the first-party adapters through `renderAgentDirectivesPrompt`, and
+`hermes_local` through the registry wrapper (`server/src/adapters/hermes-directives.ts`,
+AGE-2). Prompt order is fixed and is the precedence rule: **mandate (AGENTS.md) → directives
+→ harness rules → task**. Where a directive and the mandate disagree about *how* to work,
+the directive wins: it is the steward's newer word. Directives never outrank the harness
+rules appended after them (the human-question rule, the API safety rule) and, per Rule B,
+never grant. The push response carries `delivery` — whether the agent's adapter will render
+what was pushed — so "pushed" is never mistaken for "applied" on an adapter that cannot
+show it. Writing `agent_directives` rows directly is unsupported: a row written outside the
+push route has no delivery report and no steward provenance, and the runtime contract may
+change under it.
+
 This is enforced *structurally*, not by discipline: directives live in their own table
 with no column any enforcement point could consult. The authorization path does not
 choose to ignore them — there is nothing there to read. Verified: `connectors.ts`, the
