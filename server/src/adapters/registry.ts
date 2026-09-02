@@ -229,6 +229,53 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
     ?? DEFAULT_HERMES_COMMAND;
 }
 
+/**
+ * AgentDash (AGE-37): unwrap the secret envelopes persisted in
+ * adapterConfig.env before they reach the Hermes child.
+ *
+ * Env values are normalized to `{ type: "plain", value }` or
+ * `{ type: "secret_ref", secretId }` at persist time (services/secrets.ts).
+ * This wrapper merges agent.adapterConfig.env verbatim, and a verbatim object
+ * reaches the child as the literal string "[object Object]" — every env var a
+ * hermes agent configured was silently that string (observed live on 3199).
+ * Plain envelopes unwrap to their value; secret references cannot be resolved
+ * here (that needs the secret service, which the adapter never sees) and are
+ * dropped with a log line naming the key, because a wrong value is worse than
+ * an absent one.
+ */
+function unwrapHermesEnvValues(
+  env: Record<string, unknown>,
+  onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") {
+      out[key] = value;
+      continue;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      if (record.type === "plain" && typeof record.value === "string") {
+        out[key] = record.value;
+        continue;
+      }
+      if (record.type === "secret_ref") {
+        void onLog(
+          "stderr",
+          `[agentdash] adapterConfig.env[${key}] is a secret reference; the hermes wrapper cannot resolve it. ` +
+            "Move it to the server process environment or a plain value.\n",
+        );
+        continue;
+      }
+    }
+    void onLog(
+      "stderr",
+      `[agentdash] adapterConfig.env[${key}] is not a string or a plain envelope; dropping it.\n`,
+    );
+  }
+  return out;
+}
+
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -728,10 +775,12 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const runConfig = readRecord(normalizedCtx.config) ?? {};
-    const existingEnv =
+    const existingEnv = unwrapHermesEnvValues(
       typeof existingConfig.env === "object" && existingConfig.env !== null && !Array.isArray(existingConfig.env)
-        ? (existingConfig.env as Record<string, string>)
-        : {};
+        ? (existingConfig.env as Record<string, unknown>)
+        : {},
+      taskPatchedCtx.onLog,
+    );
     const explicitApiKey =
       typeof existingEnv.PAPERCLIP_API_KEY === "string" && existingEnv.PAPERCLIP_API_KEY.trim().length > 0;
     const promptTemplate =

@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -28,7 +28,9 @@ async function writeFakeHermesCommand(
     [
       "#!/usr/bin/env node",
       'const fs = require("node:fs");',
-      'fs.writeFileSync(process.env.HERMES_ARGS_PATH, JSON.stringify(process.argv.slice(2)));',
+      'const path = require("node:path");',
+      'const out = process.env.HERMES_ARGS_PATH || path.join(path.dirname(process.argv[1]), "no-env-args.json");',
+      'fs.writeFileSync(out, JSON.stringify({ argv: process.argv.slice(2), envProbe: process.env.HERMES_ARGS_PATH }));',
       `process.stdout.write(${JSON.stringify(extraStdout)});`,
       'process.stdout.write("done\\n\\nsession_id: hermes-session-1\\n");',
     ].join("\n"),
@@ -92,7 +94,8 @@ describe("hermes_local execute wrapper", () => {
       }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const modelIndex = args.indexOf("-m");
     expect(modelIndex).toBeGreaterThanOrEqual(0);
     expect(args[modelIndex + 1]).toBe("glm-5.3-flash");
@@ -115,7 +118,8 @@ describe("hermes_local execute wrapper", () => {
       }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const modelIndex = args.indexOf("-m");
     expect(modelIndex).toBeGreaterThanOrEqual(0);
     // The run-resolved config wins because heartbeat already folded the agent's
@@ -140,7 +144,8 @@ describe("hermes_local execute wrapper", () => {
       }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     // Role contract is present ...
     expect(prompt).toContain(roleContract);
@@ -159,7 +164,8 @@ describe("hermes_local execute wrapper", () => {
       buildCtx({ hermesCommand, argsPath }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain("Paperclip API safety rule:");
     expect(prompt).toContain("Heartbeat Wake");
@@ -197,10 +203,56 @@ describe("hermes_local execute wrapper", () => {
       else process.env.PAPERCLIP_INSTANCE_ID = prevInstance;
     }
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain(roleContract);
     expect(prompt).toContain("Agent ID: agent-1");
+  });
+
+  // AgentDash (AGE-37): env values reach the child unwrapped, not stringified.
+  it("unwraps a plain secret envelope in adapterConfig.env instead of passing [object Object]", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-env-envelope-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildCtx({
+        hermesCommand,
+        argsPath,
+        adapterConfig: { env: { HERMES_ARGS_PATH: { type: "plain", value: argsPath } } },
+      }) as never,
+    );
+
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { envProbe?: string };
+    expect(capture.envProbe).toBe(argsPath);
+  });
+
+  it("drops a secret-reference env value with a log naming the key rather than guessing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-env-secretref-"));
+    const { hermesCommand, argsPath } = await writeFakeHermesCommand(tempDir);
+    const logs: Array<{ stream: string; chunk: string }> = [];
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildCtx({
+        hermesCommand,
+        argsPath,
+        adapterConfig: { env: { HERMES_ARGS_PATH: { type: "secret_ref", secretId: "sec-1" } } },
+        onLog: async (stream, chunk) => {
+          logs.push({ stream, chunk });
+        },
+      }) as never,
+    );
+
+    const notice = logs.find((entry) => entry.chunk.includes("adapterConfig.env[HERMES_ARGS_PATH] is a secret reference"));
+    expect(notice?.stream).toBe("stderr");
+    expect(notice?.chunk).toContain("server process environment");
+    // The fake command ran without the var (it falls back to a sibling file):
+    // it must not have received a stringified object.
+    const fallback = join(dirname(hermesCommand), "no-env-args.json");
+    const capture = JSON.parse(await readFile(fallback, "utf8")) as { envProbe?: string };
+    expect(capture.envProbe).toBeUndefined();
   });
 
   // AgentDash (AGE-2): directives reach the Hermes prompt.
@@ -227,7 +279,8 @@ describe("hermes_local execute wrapper", () => {
       }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     // The body, the heading with version and push time, and the non-granting frame.
     expect(prompt).toContain("Never contact a client directly. Escalate to your steward instead.");
@@ -254,7 +307,8 @@ describe("hermes_local execute wrapper", () => {
     const { getServerAdapter } = await import("../adapters/registry.js");
     await getServerAdapter("hermes_local").execute(buildCtx({ hermesCommand, argsPath }) as never);
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).not.toContain("Operating Directives");
   });
@@ -271,7 +325,8 @@ describe("hermes_local execute wrapper", () => {
       buildCtx({ hermesCommand, argsPath, adapterConfig: { instructionsFilePath: instructionsPath } }) as never,
     );
 
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const capture = JSON.parse(await readFile(argsPath, "utf8")) as { argv: string[]; envProbe?: string };
+    const args = capture.argv;
     const prompt = args[args.indexOf("-q") + 1] ?? "";
     expect(prompt).toContain("Never call `clarify` here.");
     expect(prompt).toContain("ask_user_questions");
