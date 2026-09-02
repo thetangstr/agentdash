@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 import {
   CURRENT_LINK_NAME,
@@ -22,6 +22,7 @@ import {
   releaseDirName,
   releaseNameForPath,
   resolveTagCommit,
+  sealRelease,
   swapCurrent,
 } from "./ota-release-layout.mjs";
 
@@ -197,4 +198,97 @@ test("planPrune never removes a protected release however old it is", () => {
 
 test("planPrune removes nothing when there are fewer releases than the keep count", () => {
   assert.deepEqual(planPrune({ releaseNames: PRUNE_NAMES.slice(0, 2), keep: DEFAULT_KEEP_RELEASES }), []);
+});
+
+// ---------------------------------------------------------------------------
+// Sealing
+// ---------------------------------------------------------------------------
+//
+// The executable case is the one that matters, and it had no test before.
+//
+// Sealing used to chmod every file to 0444, which removes +x. A release's own
+// launcher is `deploy/agentdash-server.sh`, and launchd refuses a
+// non-executable `ProgramArguments` — so sealing made every release unable to
+// start, and the failure surfaced at cutover instead of at build time. `git
+// archive` preserves mode 100755, so the +x present in an exported release is
+// the one the commit recorded; sealing must only take away write.
+
+function seedTreeForSealing() {
+  const root = tempDir("ota-seal-");
+  mkdirSync(path.join(root, "deploy"), { recursive: true });
+  mkdirSync(path.join(root, "server", "src"), { recursive: true });
+  mkdirSync(path.join(root, "node_modules", ".bin"), { recursive: true });
+
+  writeFileSync(path.join(root, "deploy", "launcher.sh"), "#!/bin/sh\nexit 0\n");
+  chmodSync(path.join(root, "deploy", "launcher.sh"), 0o755);
+
+  writeFileSync(path.join(root, "server", "src", "index.ts"), "export {};\n");
+  chmodSync(path.join(root, "server", "src", "index.ts"), 0o644);
+
+  writeFileSync(path.join(root, "node_modules", ".bin", "tsx"), "#!/bin/sh\nexit 0\n");
+  chmodSync(path.join(root, "node_modules", ".bin", "tsx"), 0o755);
+
+  return root;
+}
+
+const mode = (p) => statSync(p).mode & 0o777;
+
+test("sealRelease keeps an executable file executable", () => {
+  const root = seedTreeForSealing();
+  try {
+    sealRelease(root);
+    const launcher = path.join(root, "deploy", "launcher.sh");
+    assert.equal(mode(launcher), 0o555, "a launcher must stay executable or launchd cannot start it");
+    assert.ok((statSync(launcher).mode & 0o111) !== 0);
+    // Still read-only: sealing takes away write, nothing else.
+    assert.equal(statSync(launcher).mode & 0o222, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sealRelease makes a plain file read-only and non-executable", () => {
+  const root = seedTreeForSealing();
+  try {
+    sealRelease(root);
+    const source = path.join(root, "server", "src", "index.ts");
+    assert.equal(mode(source), 0o444);
+    assert.equal(statSync(source).mode & 0o111, 0, "a source file must not gain +x");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sealRelease leaves node_modules alone", () => {
+  const root = seedTreeForSealing();
+  try {
+    sealRelease(root);
+    // Some toolchains write in here at runtime, so it is deliberately skipped.
+    assert.equal(mode(path.join(root, "node_modules", ".bin", "tsx")), 0o755);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sealRelease reports how much it sealed, and how much stayed executable", () => {
+  const root = seedTreeForSealing();
+  try {
+    const result = sealRelease(root);
+    assert.equal(result.sealed, 2, "two files outside node_modules");
+    assert.equal(result.sealedExecutable, 1, "one of them was executable");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sealRelease is idempotent", () => {
+  const root = seedTreeForSealing();
+  try {
+    sealRelease(root);
+    const first = mode(path.join(root, "deploy", "launcher.sh"));
+    sealRelease(root);
+    assert.equal(mode(path.join(root, "deploy", "launcher.sh")), first, "re-sealing must not degrade +x");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
