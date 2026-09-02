@@ -24,6 +24,7 @@ Examples:
 
 Notes:
   - Run this after pushing the stable tag.
+  - Assets are optional; with none, only the release itself is published.
   - Resolves the git remote automatically.
   - In GitHub Actions, origin is used explicitly.
   - If the release already exists, this script updates its title and notes.
