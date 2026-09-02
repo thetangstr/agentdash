@@ -25,6 +25,10 @@ export interface AgentKey {
   name: string;
   createdAt: Date;
   revokedAt: Date | null;
+  // AgentDash (AGE-24): what minted the key, and who when a person or agent did.
+  source: string;
+  createdByUserId: string | null;
+  createdByAgentId: string | null;
 }
 
 export interface AdapterModel {

@@ -84,12 +84,15 @@ export type {
   AgentInstructionsFileDetail,
   AgentInstructionsBundle,
   AgentKeyCreated,
+  AgentApiKeySource,
+  AgentApiKeyProvenance,
   AgentConfigRevision,
   AdapterEnvironmentCheckLevel,
   AdapterEnvironmentTestStatus,
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
 } from "./agent.js";
+export { AGENT_API_KEY_SOURCES } from "./agent.js";
 export type {
   AgentStewardship,
   AgentStewardshipWithAgent,

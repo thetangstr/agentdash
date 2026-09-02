@@ -2634,7 +2634,11 @@ export function agentRoutes(
     // the token (subsequent GET /agents/:id/keys never re-exposes it).
     let apiKey: Awaited<ReturnType<typeof svc.createApiKey>> | null = null;
     if (agent.status !== "pending_approval") {
-      apiKey = await svc.createApiKey(agent.id, "default");
+      apiKey = await svc.createApiKey(agent.id, "default", {
+        source: "agent_creation",
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+        createdByAgentId: actor.agentId ?? null,
+      });
       await logActivity(db, {
         companyId,
         actorType: actor.actorType,
@@ -2648,7 +2652,9 @@ export function agentRoutes(
       });
     }
 
-    res.status(201).json({ ...agent, apiKey });
+    // AgentDash (AGE-24): say plainly that this key was minted with the agent,
+    // so nobody finds a "default" key later and wonders who holds it.
+    res.status(201).json({ ...agent, apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
@@ -3427,7 +3433,10 @@ export function agentRoutes(
     // A key is for a person to run this agent from their own terminal, which is
     // exactly what an autonomous agent does not have.
     assertAgentMayHoldKey(agent);
-    const key = await svc.createApiKey(id, req.body.name);
+    const key = await svc.createApiKey(id, req.body.name, {
+      source: "manual",
+      createdByUserId: req.actor.userId ?? null,
+    });
 
     await logActivity(db, {
       companyId: agent.companyId,

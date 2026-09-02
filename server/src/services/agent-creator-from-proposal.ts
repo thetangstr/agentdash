@@ -36,7 +36,7 @@ export function agentCreatorFromProposal(deps: Deps) {
         entryFile: "AGENTS.md",
         replaceExisting: false,
       });
-      const apiKey = await deps.agents.createApiKey(created.id, "default");
+      const apiKey = await deps.agents.createApiKey(created.id, "default", { source: "agent_creation" });
       return { agentId: created.id, apiKey };
     },
   };

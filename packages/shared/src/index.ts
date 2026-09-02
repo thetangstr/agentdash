@@ -340,6 +340,8 @@ export type {
   AgentInstructionsFileDetail,
   AgentInstructionsBundle,
   AgentKeyCreated,
+  AgentApiKeySource,
+  AgentApiKeyProvenance,
   AgentConfigRevision,
   AdapterEnvironmentCheckLevel,
   AdapterEnvironmentTestStatus,
@@ -680,6 +682,7 @@ export {
   type UpdateAgentGovernancePolicy,
 } from "./validators/agent-governance.js";
 
+export { AGENT_API_KEY_SOURCES } from "./types/agent.js";
 export {
   AGENT_DIRECTIVES_CONTEXT_KEY,
   AGENT_DIRECTIVES_MAX_LENGTH,
