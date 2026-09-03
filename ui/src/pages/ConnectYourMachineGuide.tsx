@@ -118,15 +118,14 @@ export default function ConnectYourMachineGuide() {
           <div className="rounded-md border border-border bg-muted/30 p-3">
             <p className="font-medium">
               Your inbox is delivered to you
-              <Status kind="pending" />
+              <Status kind="live" />
             </p>
             <p className="mt-1 text-muted-foreground">
               Approvals waiting on you, agents that stopped, work that finished — ordered so the
-              urgent thing is first. The server side of this is live: it keeps a durable log per
-              person, remembers how far each of your machines has caught up, and can resolve an
-              approval you decide from it. What does not exist yet is the piece inside Claude Code
-              or Codex that reads it, so there is nothing to switch on today. Setting up the steps
-              below now means you are ready when there is.
+              urgent thing is first. It is a durable log kept per person, and each of your machines
+              has its own position in it, so nothing is lost while a machine is off and nothing is
+              shown to you twice. You read it in a session you open for the purpose, and you can
+              decide an approval from there.
             </p>
           </div>
         </div>
@@ -182,6 +181,33 @@ export default function ConnectYourMachineGuide() {
             quiet — so “enrolled but never started” is distinguishable from “connected”.
           </li>
         </ol>
+      </Section>
+
+      <Section id="inbox" title="Reading your inbox in Claude Code">
+        <p>
+          Your inbox is read in a session you open for it, and nowhere else. Create the workspace
+          once:
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+          <code>{`${BRIDGE_CLI_BIN} bridge inbox-init ~/agentdash-inbox --server ${origin}`}</code>
+        </pre>
+        <p>
+          Then open a Claude Code session in <Code>~/agentdash-inbox</Code>. What is waiting on you
+          appears at the start of the session: decisions first, then agents that stopped, then work
+          that finished. Ask in that session to approve or reject something.
+        </p>
+        <p className="text-muted-foreground">
+          <span className="font-medium">It cannot interrupt your other work.</span> The hook that
+          fetches your inbox is configured inside that workspace, and a project's settings apply
+          only to sessions started in it — so your coding sessions elsewhere are untouched, and
+          nothing is ever injected into a conversation you are in the middle of. That is a property
+          of where the hook lives, not a check it performs.
+        </p>
+        <p className="text-muted-foreground">
+          You can also read it directly at any time with{" "}
+          <Code>{BRIDGE_CLI_BIN} bridge inbox</Code>. If the server is unreachable it says so and
+          exits quietly — it will never stop a session from starting.
+        </p>
       </Section>
 
       <Section id="containment" title="The one decision only you can make">
@@ -344,11 +370,16 @@ export default function ConnectYourMachineGuide() {
           is not tied to Claude Code, and nothing about the enrolment is Claude-specific.
         </p>
         <p className="text-muted-foreground">
-          What is Claude-specific today is the piece that <em>does the work locally</em> — it runs
-          the <Code>claude</Code> binary. A Codex equivalent has not been built, and we have not
-          verified what Codex offers for this, so we are not going to describe steps for it that we
-          have not run. If you work in Codex and want this, say so and it becomes a real piece of
-          work rather than a guess in a guide.
+          Two pieces are Claude-specific today. The worker that answers questions locally runs the{" "}
+          <Code>claude</Code> binary, and the inbox workspace above uses a Claude Code session
+          hook. <Code>{BRIDGE_CLI_BIN} bridge inbox</Code> itself is not — it is an ordinary
+          command that prints what is waiting, so anything able to run a command and read its
+          output can show you your inbox.
+        </p>
+        <p className="text-muted-foreground">
+          What we have not built or verified is a Codex equivalent of the session hook, so this page
+          will not describe steps for it that nobody has run. If you work in Codex and want this,
+          say so and it becomes a real piece of work rather than a guess in a guide.
         </p>
       </Section>
     </div>

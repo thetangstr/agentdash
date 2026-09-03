@@ -11,9 +11,17 @@ import { makeTool, type ToolDefinition } from "./tools.js";
  * here, which is why no port needs opening and nothing has to listen.
  *
  * The credential these tools use is a bridge endpoint token, and it reaches
- * exactly three server routes. It is deliberately NOT an AgentDash API key: it
- * cannot read issues, list agents, or decide approvals. If a task seems to
- * require any of that, the answer is to report back, not to find another route.
+ * only the bridge's own allowlisted routes. It is deliberately NOT an AgentDash
+ * API key: it cannot read issues, list agents, or decide approvals in general.
+ * If a task seems to require any of that, the answer is to report back, not to
+ * find another route.
+ *
+ * `inbox_decide` is the one exception that proves the rule. It does not widen
+ * the credential: what authorises the decision is a handle minted for one
+ * approval at one revision, delivered to this endpoint, and spent once. The
+ * server re-resolves the operator's authority when the handle is redeemed, so a
+ * steward whose permission changed since the sync is refused even holding a
+ * valid one.
  *
  * **What the operator should understand before enrolling a machine:** an
  * AgentDash owner ceiling constrains what may be *asked* of this endpoint. It
@@ -65,6 +73,54 @@ export function bridgeTools(client: PaperclipApiClient): ToolDefinition[] {
             "Submit with bridge_submit_result before the lease expires, or decline it. " +
             "A lapsed lease on an act-class task is recorded as an unknown outcome and never retried.",
         };
+      },
+    ),
+
+    makeTool(
+      "inbox_sync",
+      "Read this machine's AgentDash steward inbox: what needs a decision, what stopped, what finished. Does not acknowledge anything.",
+      z.object({
+        limit: z.number().int().min(1).max(200).optional(),
+        includeDigest: z.boolean().optional(),
+      }),
+      async ({ limit, includeDigest }) =>
+        client.requestJson("POST", "/bridge/inbox/sync", {
+          // The digest is the point of asking, so it defaults on here even
+          // though the route leaves it off.
+          body: { includeDigest: includeDigest ?? true, ...(limit === undefined ? {} : { limit }) },
+        }),
+    ),
+
+    makeTool(
+      "inbox_ack",
+      "Move this machine's inbox position forward, so acknowledged items are not shown again. Only call this once the operator has actually seen them.",
+      z.object({ seq: z.number().int().min(0) }),
+      async ({ seq }) => client.requestJson("POST", "/bridge/inbox/ack", { body: { seq } }),
+    ),
+
+    makeTool(
+      "inbox_decide",
+      "Approve or reject one AgentDash approval using a handle from inbox_sync. The handle is spent by this call and is good for one approval at one revision only.",
+      z.object({
+        token: z
+          .string()
+          .min(1)
+          .describe("The approve or reject handle from an inbox_sync item's `actions`"),
+      }),
+      async ({ token }) => {
+        const result = await client.requestJson<{ ok: boolean; reason?: string }>(
+          "POST",
+          "/bridge/inbox/decide",
+          { body: { token } },
+        );
+        if (!result.ok) {
+          // A refusal is an outcome to report, not a tool failure: the handle
+          // was spent, the revision moved on, or somebody else decided first.
+          // Sync again rather than retrying this handle -- it is now dead
+          // either way.
+          return { ...result, note: "Not applied. Run inbox_sync again for the current state." };
+        }
+        return result;
       },
     ),
 
