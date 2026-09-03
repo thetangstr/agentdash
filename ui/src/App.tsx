@@ -85,6 +85,7 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
+import ConnectYourMachineGuide from "./pages/ConnectYourMachineGuide";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 
@@ -168,6 +169,7 @@ function boardRoutes() {
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
+      <Route path="my-agent/connect-machine" element={<ConnectYourMachineGuide />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/company" element={<CompanyInbox />} />
