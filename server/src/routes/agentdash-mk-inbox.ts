@@ -7,6 +7,7 @@ import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { summarizeApprovalRisk } from "../services/approval-risk.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
@@ -22,26 +23,6 @@ export function agentdashMkInboxRoutes(db: Db) {
   const issueApprovals = issueApprovalService(db);
   const governance = agentGovernanceService(db);
 
-  /**
-   * Coarse risk band derived from the approval type and payload. Enough for the
-   * decision surface to order attention; it is not an authorization input.
-   */
-  function summarizeRisk(type: string, payload: unknown): { level: "high" | "medium" | "low"; reason: string } {
-    const record = (payload ?? {}) as Record<string, unknown>;
-    if (type === "hire_agent") {
-      return { level: "high", reason: "Creates or changes an agent" };
-    }
-    if (type === "budget_override_required") {
-      return { level: "high", reason: "Raises a spend limit" };
-    }
-    if (type === "mandate_violation") {
-      return { level: "high", reason: "Mandate violation" };
-    }
-    if (typeof record.destructive === "boolean" && record.destructive) {
-      return { level: "high", reason: "Destructive action" };
-    }
-    return { level: "medium", reason: "Governed action" };
-  }
 
   /** Who currently holds decision authority, and the minimum the ceiling demands. */
   async function resolveEffectiveAuthority(companyId: string, agentId: string) {
@@ -166,7 +147,7 @@ export function agentdashMkInboxRoutes(db: Db) {
           title: issue.title,
           status: issue.status,
         })),
-        risk: summarizeRisk(approval.type, approval.payload),
+        risk: summarizeApprovalRisk(approval.type, approval.payload),
         effectiveAuthority: approval.requestedByAgentId
           ? authorityByAgent.get(approval.requestedByAgentId) ?? {
               steward: null,

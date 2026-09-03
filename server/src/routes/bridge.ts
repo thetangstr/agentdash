@@ -116,6 +116,11 @@ export function bridgeRoutes(
    * back a single-use token to answer it; a sync claims nothing, mutates
    * nothing, and can be repeated safely. Folding the inbox into the poll would
    * have made an idempotent read share a route with a leased write.
+   *
+   * Pass `includeDigest: true` for the ordered standing summary -- urgent
+   * approvals, then blockers, then completions. That is a projection of how
+   * things stand rather than a replay of the events above, so it answers "what
+   * is waiting" while the event list answers "what changed".
    */
   router.post("/bridge/inbox/sync", async (req, res) => {
     const { endpointId } = requireEndpoint(req);
@@ -123,7 +128,11 @@ export function bridgeRoutes(
 
     const rawLimit = req.body?.limit;
     const limit = typeof rawLimit === "number" ? rawLimit : undefined;
-    const result = await inbox.syncForEndpoint(endpointId, { limit });
+    // Asked for on startup and on reconnect, not on every poll. The digest is
+    // several queries and its answer barely moves while a steward is idle, so
+    // making it the default would spend most of its cost on nobody looking.
+    const includeDigest = req.body?.includeDigest === true;
+    const result = await inbox.syncForEndpoint(endpointId, { limit, includeDigest });
     res.json(result);
   });
 
