@@ -36,6 +36,12 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   "/api/bridge/poll",
   "/api/bridge/result",
   "/api/bridge/decline",
+  // The steward inbox: read a position, move a position. Both are scoped to
+  // the endpoint's own owner by the endpoint identity, and neither decides
+  // anything -- resolving an approval from the inbox is a separate route with
+  // its own single-use token, and is not yet built.
+  "/api/bridge/inbox/sync",
+  "/api/bridge/inbox/ack",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

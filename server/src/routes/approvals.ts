@@ -13,6 +13,7 @@ import { deliverableReviewService } from "../services/deliverable-review.js";
 import { workflowRecommendationService } from "../services/workflow-recommendations.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { stewardInboxService } from "../services/steward-inbox.js";
 import { bridgeService } from "../services/bridge.js";
 import { connectorSendExecutionService } from "../services/connector-send-execution.js";
 import { accessService } from "../services/access.js";
@@ -74,6 +75,10 @@ export function approvalRoutes(
   const router = Router();
   const svc = approvalService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  // AgentDash-MK: the durable steward inbox. Recorded on the same branches
+  // that already log the lifecycle, so an inbox item exists for exactly the
+  // transitions a human is told about elsewhere.
+  const stewardInbox = stewardInboxService(db);
   const bridge = bridgeService(db);
   // AgentDash-MK Slice E: content the inbound filter held is released or
   // discarded here, on the same branches that settle a gated bridge task. The
@@ -302,6 +307,8 @@ export function approvalRoutes(
       details: { type: approval.type, issueIds: uniqueIssueIds },
     });
 
+    await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
+
     // Push the card to the deciding steward's paired channels. Awaited rather
     // than fired and forgotten so a test can observe it and so the request does
     // not outlive its own side effects — the service swallows every failure
@@ -367,6 +374,8 @@ export function approvalRoutes(
           linkedIssueIds,
         },
       });
+
+      await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
 
       if (approval.type === "mandate_violation" && approval.requestedByAgentId) {
         try {
@@ -535,6 +544,8 @@ export function approvalRoutes(
         entityId: approval.id,
         details: { type: approval.type },
       });
+
+      await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
       // A rejected bridge task terminates carrying the steward's reason, so the
       // requesting agent can read WHY rather than watch a request vanish.
       try {
@@ -635,6 +646,8 @@ export function approvalRoutes(
           requestedByAgentId: approval.requestedByAgentId,
         },
       });
+
+      await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
       // An override is still a decision, so a bridge task must follow it. Left
       // out, an overridden approval would strand its task forever.
       try {
@@ -742,6 +755,8 @@ export function approvalRoutes(
       entityId: approval.id,
       details: { type: approval.type },
     });
+
+    await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
 
     // A resubmit advances the revision, which kills every card already sent.
     // Without a fresh one the steward is left holding buttons that now fail
