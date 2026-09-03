@@ -17,6 +17,7 @@ import {
   createDb,
   stewardInboxEvents,
   stewardInboxSequences,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -89,6 +90,31 @@ describe("steward inbox caller existence", () => {
    * from its source rather than described in prose. The three original routes
    * must survive; the two new ones must be present and nothing else added.
    */
+  /**
+   * The digest and the board's decision surface must rank the same approval the
+   * same way. Two copies of a ranking drift silently -- nobody notices until
+   * the surfaces disagree about what is urgent, and by then each has users who
+   * trust it. Read from disk so a reintroduced copy fails here.
+   */
+  it("keeps exactly one approval risk classifier", () => {
+    const files = sourceFilesUnder(path.join(repoRoot, "server/src"));
+    const definers = files
+      .filter((file) => /function summarizeApprovalRisk|function summarizeRisk/.test(readFileSync(file, "utf8")))
+      .map((file) => path.relative(repoRoot, file));
+    expect(definers).toEqual(["server/src/services/approval-risk.ts"]);
+
+    // And both surfaces reach for it.
+    for (const consumer of [
+      "server/src/routes/agentdash-mk-inbox.ts",
+      "server/src/services/steward-inbox.ts",
+    ]) {
+      expect(
+        readFileSync(path.join(repoRoot, consumer), "utf8"),
+        `${consumer} should use the shared classifier`,
+      ).toContain("summarizeApprovalRisk");
+    }
+  });
+
   it("widens the bridge route allowlist by exactly the three inbox routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
@@ -816,5 +842,210 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     );
     expect(decided.status).toBe(200);
     expect(decided.body).toMatchObject({ ok: true, decision: "approved" });
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 4: the digest
+  // -----------------------------------------------------------------------
+
+  async function makeIssue(
+    companyId: string,
+    agentId: string | null,
+    status: string,
+    title = `Issue ${randomUUID().slice(0, 6)}`,
+  ) {
+    return db
+      .insert(issues)
+      .values({ companyId, title, status, assigneeAgentId: agentId })
+      .returning()
+      .then((rows) => rows[0]!);
+  }
+
+  it("returns no digest unless the client asks for one", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+
+    const plain = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    expect(plain.digest).toBeUndefined();
+
+    const withDigest = await stewardInboxService(db).syncForEndpoint(endpoint.id, {
+      includeDigest: true,
+    });
+    expect(withDigest.digest).toBeDefined();
+  });
+
+  it("orders the digest urgent approvals, then blockers, then completions", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await makeApproval(company.id, agent.id, { type: "hire_agent" });
+    await makeIssue(company.id, agent.id, "blocked");
+    await makeIssue(company.id, agent.id, "done");
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    // The contract is the reading order, so the key order is the assertion.
+    expect(Object.keys(digest).filter((k) => k !== "agentsAnsweredFor" && k !== "truncated")).toEqual([
+      "approvals",
+      "blockers",
+      "completions",
+    ]);
+    expect(digest.approvals.total).toBe(1);
+    expect(digest.blockers.total).toBe(1);
+    expect(digest.completions.total).toBe(1);
+  });
+
+  it("puts the riskiest approval first, and the longest wait ahead of a tie", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const older = await makeApproval(company.id, agent.id, { type: "connector_send" });
+    const newer = await makeApproval(company.id, agent.id, { type: "connector_send" });
+    await db
+      .update(approvals)
+      .set({ createdAt: new Date(Date.now() - 60 * 60 * 1000) })
+      .where(eq(approvals.id, older.id));
+    const risky = await makeApproval(company.id, agent.id, { type: "mandate_violation" });
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.approvals.items.map((i: any) => i.approvalId)).toEqual([
+      risky.id, // high risk beats age
+      older.id, // then the longest wait
+      newer.id,
+    ]);
+    expect((digest.approvals.items[0] as any).risk).toEqual({
+      level: "high",
+      reason: "Mandate violation",
+    });
+  });
+
+  it("makes the digest actionable rather than only informative", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await makeApproval(company.id, agent.id);
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect((digest.approvals.items[0] as any).actions).toEqual({
+      approve: expect.any(String),
+      reject: expect.any(String),
+    });
+  });
+
+  /**
+   * The cap has to be visible. A digest that shows ten of fourteen blockers and
+   * says nothing reads exactly like a digest of ten blockers.
+   */
+  it("caps the lists but never the counts, and says when it truncated", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    for (let index = 0; index < 12; index += 1) {
+      await makeIssue(company.id, agent.id, "blocked");
+    }
+    for (let index = 0; index < 8; index += 1) {
+      await makeIssue(company.id, agent.id, "done");
+    }
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.blockers.total).toBe(12);
+    expect(digest.blockers.shown).toBe(10);
+    expect(digest.blockers.items).toHaveLength(10);
+    expect(digest.completions.total).toBe(8);
+    expect(digest.completions.shown).toBe(5);
+    expect(digest.truncated).toBe(true);
+  });
+
+  it("reports nothing truncated when everything fits", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await makeIssue(company.id, agent.id, "blocked");
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.truncated).toBe(false);
+    expect(digest.blockers.shown).toBe(digest.blockers.total);
+  });
+
+  it("lists only work in the statuses each section is about", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await makeIssue(company.id, agent.id, "in_progress");
+    await makeIssue(company.id, agent.id, "backlog");
+    await makeIssue(company.id, agent.id, "cancelled");
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.blockers.total).toBe(0);
+    expect(digest.completions.total).toBe(0);
+  });
+
+  /**
+   * The bug class approval card delivery already hit: resolving through
+   * stewardship alone returns nothing for an autonomous agent, so the person
+   * actually answerable for it sees none of its work.
+   */
+  it("includes an autonomous agent's work for the human accountable for it", async () => {
+    const { company, steward } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const autonomous = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Autonomous ${randomUUID().slice(0, 6)}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        autonomy: "autonomous",
+        accountableUserId: steward.principalId,
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+    await makeIssue(company.id, autonomous.id, "blocked");
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.blockers.total).toBe(1);
+    expect((digest.blockers.items[0] as any).agentName).toBe(autonomous.name);
+  });
+
+  it("shows one person nothing about another person's agents", async () => {
+    const mine = await seed();
+    const theirs = await seed();
+    const myEndpoint = await makeEndpoint(mine.company.id, mine.steward.principalId);
+    await makeIssue(theirs.company.id, theirs.agent.id, "blocked");
+    await makeApproval(theirs.company.id, theirs.agent.id);
+
+    const digest = await stewardInboxService(db).buildDigest(myEndpoint);
+    expect(digest.approvals.total).toBe(0);
+    expect(digest.blockers.total).toBe(0);
+  });
+
+  it("answers cleanly for someone who answers for no agents", async () => {
+    const { company, owner } = await seed();
+    const endpoint = await makeEndpoint(company.id, owner.principalId);
+
+    const digest = await stewardInboxService(db).buildDigest(endpoint);
+    expect(digest.agentsAnsweredFor).toBe(0);
+    expect(digest).toMatchObject({
+      approvals: { total: 0, shown: 0 },
+      blockers: { total: 0, shown: 0 },
+      completions: { total: 0, shown: 0 },
+      truncated: false,
+    });
+  });
+
+  it("serves the digest over the route when asked", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await makeApproval(company.id, agent.id, { type: "hire_agent" });
+    await makeIssue(company.id, agent.id, "blocked");
+    const app = bridgeApp(endpoint.id, company.id);
+
+    const plain = await call(app, (baseUrl) =>
+      request(baseUrl).post("/api/bridge/inbox/sync").send({}),
+    );
+    expect(plain.body.digest).toBeUndefined();
+
+    const withDigest = await call(app, (baseUrl) =>
+      request(baseUrl).post("/api/bridge/inbox/sync").send({ includeDigest: true }),
+    );
+    expect(withDigest.status).toBe(200);
+    expect(withDigest.body.digest.approvals.total).toBe(1);
+    expect(withDigest.body.digest.blockers.total).toBe(1);
   });
 });

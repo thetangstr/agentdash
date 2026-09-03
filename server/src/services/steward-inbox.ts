@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agents,
   approvals,
   bridgeEndpoints,
   channelCallbackTokens,
   companies,
+  issues,
   stewardInboxCursors,
   stewardInboxEvents,
   stewardInboxSequences,
@@ -15,6 +17,7 @@ import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
 import { approvalAuthorityService } from "./approval-authority.js";
+import { APPROVAL_RISK_ORDER, summarizeApprovalRisk } from "./approval-risk.js";
 
 /**
  * AgentDash-MK: the steward inbox — stage 1 and 2.
@@ -74,6 +77,16 @@ export const STEWARD_INBOX_TOKEN_PROVIDER = "bridge_inbox";
  * costs the steward nothing.
  */
 const DECISION_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * How many of each section the digest will actually list.
+ *
+ * The COUNTS are never capped -- only the lists are, and every section reports
+ * both so a truncated list can never read as a complete one. A digest that
+ * silently drops the eleventh blocker is worse than one that says there are
+ * fourteen and shows ten.
+ */
+const DIGEST_LIMITS = { approvals: 10, blockers: 10, completions: 5 } as const;
 
 /** Statuses where a human decision is still possible, so buttons are useful. */
 const DECIDABLE_STATUSES = new Set(["pending", "revision_requested"]);
@@ -367,7 +380,7 @@ export function stewardInboxService(db: Db) {
    */
   async function syncForEndpoint(
     endpointId: string,
-    options: { limit?: number } = {},
+    options: { limit?: number; includeDigest?: boolean } = {},
   ): Promise<{
     lastAckedSeq: number;
     headSeq: number;
@@ -383,6 +396,12 @@ export function stewardInboxService(db: Db) {
       actions: { approve: string; reject: string } | null;
     }>;
     hasMore: boolean;
+    /**
+     * Present only when asked for. A client wants this on startup and on
+     * reconnect, and not on every poll in between -- it is several queries and
+     * the answer barely moves while a steward is idle.
+     */
+    digest?: Awaited<ReturnType<typeof buildDigest>>;
   }> {
     const endpoint = await requireInboxEndpoint(endpointId);
     const limit = Math.min(Math.max(options.limit ?? DEFAULT_SYNC_LIMIT, 1), MAX_SYNC_LIMIT);
@@ -438,6 +457,166 @@ export function stewardInboxService(db: Db) {
       headSeq: await headSeq(endpoint.companyId, endpoint.userId),
       events,
       hasMore,
+      ...(options.includeDigest ? { digest: await buildDigest(endpoint) } : {}),
+    };
+  }
+
+  /**
+   * Every agent whose work this person answers for.
+   *
+   * Resolved through accountability rather than stewardship, and in one batch:
+   * a steward answers for the agents they steward, and an accountable human
+   * answers for autonomous ones. Asking stewardship alone would silently omit
+   * every autonomous agent, which is the bug approval card delivery already
+   * hit once.
+   */
+  async function agentsAnsweredForBy(companyId: string, userId: string) {
+    const all = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(eq(agents.companyId, companyId));
+    if (all.length === 0) return [];
+    const resolved = await accountability.resolveForAgents(
+      companyId,
+      all.map((agent) => agent.id),
+    );
+    return all.filter((agent) => resolved.get(agent.id)?.userId === userId);
+  }
+
+  /**
+   * What needs this person now, in the order they should read it.
+   *
+   * Deliberately a PROJECTION OVER CURRENT STATE, not a replay of the event
+   * log. "What needs you now" is a question about how things stand, and
+   * replaying events would answer a different one -- it would surface
+   * approvals somebody else has since decided and issues that are no longer
+   * blocked, which is how a digest stops being read.
+   *
+   * The event log and the cursor already answer "what changed since I last
+   * looked". This answers "what is waiting". Keeping the two apart is also why
+   * there are no `blocker` or `completion` event kinds: emitting one per
+   * transition would put every status change a person's agents ever make into
+   * a list that only grows, which is precisely the unemptyable inbox this
+   * project has already built once and had to narrow.
+   */
+  async function buildDigest(endpoint: { id: string; companyId: string; userId: string }) {
+    const mine = await agentsAnsweredForBy(endpoint.companyId, endpoint.userId);
+    const nameById = new Map(mine.map((agent) => [agent.id, agent.name]));
+    const agentIds = mine.map((agent) => agent.id);
+
+    if (agentIds.length === 0) {
+      return {
+        agentsAnsweredFor: 0,
+        approvals: { total: 0, shown: 0, items: [] as unknown[] },
+        blockers: { total: 0, shown: 0, items: [] as unknown[] },
+        completions: { total: 0, shown: 0, items: [] as unknown[] },
+        truncated: false,
+      };
+    }
+
+    // 1. Urgent approvals first. Ranked by the same classifier the board's
+    //    decision surface uses, then oldest first so the longest wait wins a
+    //    tie rather than the alphabet.
+    const openApprovals = await db
+      .select()
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.companyId, endpoint.companyId),
+          inArray(approvals.requestedByAgentId, agentIds),
+          inArray(approvals.status, [...DECIDABLE_STATUSES]),
+        ),
+      );
+    const ranked = openApprovals
+      .map((approval) => ({ approval, risk: summarizeApprovalRisk(approval.type, approval.payload) }))
+      .sort((a, b) => {
+        const byRisk = APPROVAL_RISK_ORDER[a.risk.level] - APPROVAL_RISK_ORDER[b.risk.level];
+        if (byRisk !== 0) return byRisk;
+        return a.approval.createdAt.getTime() - b.approval.createdAt.getTime();
+      });
+    const approvalItems = await Promise.all(
+      ranked.slice(0, DIGEST_LIMITS.approvals).map(async ({ approval, risk }) => ({
+        approvalId: approval.id,
+        type: approval.type,
+        revision: approval.revision,
+        agentName: nameById.get(approval.requestedByAgentId!) ?? null,
+        risk,
+        waitingSince: approval.createdAt.toISOString(),
+        // The digest is actionable, not just informative. An approval listed
+        // here without handles would make the steward sync again to act on
+        // something already in front of them.
+        actions: await decisionActionsFor(endpoint, approval.id),
+      })),
+    );
+
+    // 2. Then blockers. An agent that stopped is the next most useful thing to
+    //    know: somebody is waiting on a person, and the mandate tells agents
+    //    that reporting blocked is a respected outcome rather than a failure.
+    const blocked = await db
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        assigneeAgentId: issues.assigneeAgentId,
+        updatedAt: issues.updatedAt,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, endpoint.companyId),
+          eq(issues.status, "blocked"),
+          inArray(issues.assigneeAgentId, agentIds),
+        ),
+      )
+      .orderBy(asc(issues.updatedAt));
+
+    // 3. Completions last, and capped hardest. Finished work is the least
+    //    urgent thing in a digest; it is here so a steward can see progress,
+    //    not so they can audit it.
+    const done = await db
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        assigneeAgentId: issues.assigneeAgentId,
+        updatedAt: issues.updatedAt,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, endpoint.companyId),
+          eq(issues.status, "done"),
+          inArray(issues.assigneeAgentId, agentIds),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt));
+
+    const issueItem = (row: {
+      id: string;
+      identifier: string | null;
+      title: string;
+      assigneeAgentId: string | null;
+      updatedAt: Date;
+    }) => ({
+      issueId: row.id,
+      identifier: row.identifier,
+      title: row.title,
+      agentName: row.assigneeAgentId ? nameById.get(row.assigneeAgentId) ?? null : null,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+
+    const blockerItems = blocked.slice(0, DIGEST_LIMITS.blockers).map(issueItem);
+    const completionItems = done.slice(0, DIGEST_LIMITS.completions).map(issueItem);
+
+    return {
+      agentsAnsweredFor: mine.length,
+      approvals: { total: ranked.length, shown: approvalItems.length, items: approvalItems },
+      blockers: { total: blocked.length, shown: blockerItems.length, items: blockerItems },
+      completions: { total: done.length, shown: completionItems.length, items: completionItems },
+      truncated:
+        ranked.length > approvalItems.length ||
+        blocked.length > blockerItems.length ||
+        done.length > completionItems.length,
     };
   }
 
@@ -549,6 +728,7 @@ export function stewardInboxService(db: Db) {
     appendEvent,
     recordApprovalEvent,
     requireInboxEndpoint,
+    buildDigest,
     syncForEndpoint,
     acknowledge,
   };
