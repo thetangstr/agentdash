@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   approvals,
   bridgeEndpoints,
+  channelCallbackTokens,
   companies,
   stewardInboxCursors,
   stewardInboxEvents,
@@ -12,6 +14,7 @@ import { badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentAccountabilityService } from "./agent-accountability.js";
+import { approvalAuthorityService } from "./approval-authority.js";
 
 /**
  * AgentDash-MK: the steward inbox — stage 1 and 2.
@@ -54,6 +57,27 @@ export const STEWARD_INBOX_CAPABILITY = "bridge:inbox";
 export const STEWARD_INBOX_KINDS = ["approval.opened", "approval.resolved"] as const;
 export type StewardInboxKind = (typeof STEWARD_INBOX_KINDS)[number];
 
+/**
+ * The provider a steward-inbox decision token is recorded under.
+ *
+ * Reuses `channel_callback_tokens` rather than adding a table: the shape was
+ * already exactly right -- opaque handle, bound revision, bound decision,
+ * single-use `consumedAt`, expiry.
+ */
+export const STEWARD_INBOX_TOKEN_PROVIDER = "bridge_inbox";
+
+/**
+ * How long a decision token lives. Much shorter than the 24 hours a Teams card
+ * token gets, and deliberately so: this one is delivered into a local AI
+ * client, where it becomes model context that may be echoed, logged, or
+ * summarised. A sync re-mints it whenever it is still needed, so a short life
+ * costs the steward nothing.
+ */
+const DECISION_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+/** Statuses where a human decision is still possible, so buttons are useful. */
+const DECIDABLE_STATUSES = new Set(["pending", "revision_requested"]);
+
 /** Default and ceiling for one sync page. */
 const DEFAULT_SYNC_LIMIT = 50;
 const MAX_SYNC_LIMIT = 200;
@@ -81,6 +105,7 @@ function resultRows(result: unknown): unknown[] {
 
 export function stewardInboxService(db: Db) {
   const accountability = agentAccountabilityService(db);
+  const authority = approvalAuthorityService(db);
 
   async function isProfileCompany(companyId: string) {
     const company = await db
@@ -224,6 +249,115 @@ export function stewardInboxService(db: Db) {
   }
 
   /**
+   * A live decision token for one endpoint, one approval, one revision, one
+   * decision — minting one only if none is already usable.
+   *
+   * Reuse matters because sync is idempotent and repeats until the client
+   * acknowledges. Minting per call would accumulate a fresh pair of live
+   * credentials every few seconds for as long as a steward left an approval
+   * undecided.
+   */
+  async function liveDecisionToken(input: {
+    endpointId: string;
+    companyId: string;
+    approvalId: string;
+    revision: number;
+    decision: "approved" | "rejected";
+  }): Promise<string> {
+    const now = new Date();
+    const existing = await db
+      .select({ token: channelCallbackTokens.token })
+      .from(channelCallbackTokens)
+      .where(
+        and(
+          eq(channelCallbackTokens.provider, STEWARD_INBOX_TOKEN_PROVIDER),
+          eq(channelCallbackTokens.bridgeEndpointId, input.endpointId),
+          eq(channelCallbackTokens.approvalId, input.approvalId),
+          eq(channelCallbackTokens.approvalRevision, input.revision),
+          eq(channelCallbackTokens.decision, input.decision),
+          isNull(channelCallbackTokens.consumedAt),
+          gt(channelCallbackTokens.expiresAt, now),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    if (existing) return existing.token;
+
+    const token = randomBytes(32).toString("base64url");
+    await db.insert(channelCallbackTokens).values({
+      token,
+      companyId: input.companyId,
+      approvalId: input.approvalId,
+      approvalRevision: input.revision,
+      decision: input.decision,
+      provider: STEWARD_INBOX_TOKEN_PROVIDER,
+      bridgeEndpointId: input.endpointId,
+      expiresAt: new Date(now.getTime() + DECISION_TOKEN_TTL_MS),
+    });
+    return token;
+  }
+
+  /**
+   * The pair of handles that let this machine decide this approval, or null.
+   *
+   * Null when the approval has moved on, or when the endpoint's owner does not
+   * hold decision authority for it. Offering a button the server would refuse
+   * is worse than offering none: the steward learns their authority only by
+   * being told no.
+   */
+  async function decisionActionsFor(
+    endpoint: { id: string; companyId: string; userId: string },
+    approvalId: string,
+  ): Promise<{ approve: string; reject: string } | null> {
+    const approval = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approvalId))
+      .then((rows) => rows[0] ?? null);
+    if (!approval || approval.companyId !== endpoint.companyId) return null;
+    if (!DECIDABLE_STATUSES.has(approval.status)) return null;
+
+    try {
+      // `requireDecisionActor`, not `requireDecisionAuthority`: this is a
+      // permission probe, and the fuller check additionally demands the
+      // revision, channel and idempotency key that belong to an actual
+      // decision. Inventing an idempotency key just to ask "may they?" would
+      // have been the wrong shape -- and quietly returned "no" for every
+      // approval, since the probe's failure is indistinguishable from a
+      // refusal here.
+      //
+      // The synthetic board actor is the same one Teams builds, for the same
+      // reason: the authority service answers about a PERSON, and the person
+      // is the endpoint's owner. The endpoint credential grants nothing.
+      await authority.requireDecisionActor(approval, {
+        userId: endpoint.userId,
+        source: "session",
+        isInstanceAdmin: false,
+        type: "board",
+      } as never);
+    } catch {
+      return null;
+    }
+
+    const [approve, reject] = await Promise.all([
+      liveDecisionToken({
+        endpointId: endpoint.id,
+        companyId: endpoint.companyId,
+        approvalId: approval.id,
+        revision: approval.revision,
+        decision: "approved",
+      }),
+      liveDecisionToken({
+        endpointId: endpoint.id,
+        companyId: endpoint.companyId,
+        approvalId: approval.id,
+        revision: approval.revision,
+        decision: "rejected",
+      }),
+    ]);
+    return { approve, reject };
+  }
+
+  /**
    * Everything this machine has not acknowledged, oldest first.
    *
    * Does NOT advance the cursor. Delivery is at-least-once on purpose: a
@@ -245,6 +379,8 @@ export function stewardInboxService(db: Db) {
       agentId: string | null;
       payload: Record<string, unknown>;
       createdAt: string;
+      /** Present only on an approval still open to this machine's owner. */
+      actions: { approve: string; reject: string } | null;
     }>;
     hasMore: boolean;
   }> {
@@ -278,10 +414,8 @@ export function stewardInboxService(db: Db) {
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    return {
-      lastAckedSeq,
-      headSeq: await headSeq(endpoint.companyId, endpoint.userId),
-      events: page.map((row) => ({
+    const events = await Promise.all(
+      page.map(async (row) => ({
         seq: row.seq,
         kind: row.kind,
         refType: row.refType,
@@ -289,7 +423,20 @@ export function stewardInboxService(db: Db) {
         agentId: row.agentId,
         payload: (row.payload ?? {}) as Record<string, unknown>,
         createdAt: row.createdAt.toISOString(),
+        // Only an opened approval is actionable. A resolved one is history, and
+        // handing back buttons for it would invite a decision the server has
+        // already refused once.
+        actions:
+          row.kind === "approval.opened" && row.refType === "approval"
+            ? await decisionActionsFor(endpoint, row.refId)
+            : null,
       })),
+    );
+
+    return {
+      lastAckedSeq,
+      headSeq: await headSeq(endpoint.companyId, endpoint.userId),
+      events,
       hasMore,
     };
   }
@@ -398,5 +545,11 @@ export function stewardInboxService(db: Db) {
     }
   }
 
-  return { appendEvent, recordApprovalEvent, syncForEndpoint, acknowledge };
+  return {
+    appendEvent,
+    recordApprovalEvent,
+    requireInboxEndpoint,
+    syncForEndpoint,
+    acknowledge,
+  };
 }

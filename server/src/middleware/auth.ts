@@ -42,6 +42,9 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // its own single-use token, and is not yet built.
   "/api/bridge/inbox/sync",
   "/api/bridge/inbox/ack",
+  // Spends a handle minted for one approval at one revision. The credential
+  // still decides nothing on its own -- see steward-inbox-decisions.ts.
+  "/api/bridge/inbox/decide",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */
