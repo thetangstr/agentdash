@@ -143,3 +143,11 @@ export {
 export { serverErrors } from "./server_errors.js";
 // A5 (2026-08-16): access list for restricted projects.
 export { projectAccess } from "./project_access.js";
+// AgentDash-MK: the durable steward inbox — an ordered, per-steward,
+// incrementally-readable log, plus the position each of a person's machines
+// has caught up to.
+export {
+  stewardInboxCursors,
+  stewardInboxEvents,
+  stewardInboxSequences,
+} from "./steward_inbox.js";

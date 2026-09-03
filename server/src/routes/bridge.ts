@@ -6,6 +6,7 @@ import { companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { stewardInboxService } from "../services/steward-inbox.js";
 import { bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -31,6 +32,7 @@ export function bridgeRoutes(db: Db) {
   const bridge = bridgeService(db);
   const access = accessService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  const inbox = stewardInboxService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -90,6 +92,40 @@ export function bridgeRoutes(db: Db) {
       },
       resultToken: claimed.resultToken,
     });
+  });
+
+  /**
+   * Read everything this machine has not acknowledged.
+   *
+   * Separate from `/bridge/poll` on purpose. A poll CLAIMS one task and hands
+   * back a single-use token to answer it; a sync claims nothing, mutates
+   * nothing, and can be repeated safely. Folding the inbox into the poll would
+   * have made an idempotent read share a route with a leased write.
+   */
+  router.post("/bridge/inbox/sync", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+
+    const rawLimit = req.body?.limit;
+    const limit = typeof rawLimit === "number" ? rawLimit : undefined;
+    const result = await inbox.syncForEndpoint(endpointId, { limit });
+    res.json(result);
+  });
+
+  /**
+   * Move this machine's position forward.
+   *
+   * The client says what it applied; the server does not infer it from the
+   * fact that a sync happened. That is what makes delivery at-least-once
+   * rather than at-most-once: a machine that dies mid-apply gets the same
+   * events again instead of losing them.
+   */
+  router.post("/bridge/inbox/ack", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    const seq = req.body?.seq;
+    if (typeof seq !== "number") throw badRequest("seq is required and must be a number");
+    const result = await inbox.acknowledge(endpointId, seq);
+    res.json(result);
   });
 
   router.post("/bridge/result", async (req, res) => {
