@@ -4,19 +4,17 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  activityLog,
-  agentStewardships,
   agents,
   approvals,
   bridgeEndpoints,
   bridgeTasks,
+  channelCallbackTokens,
   companies,
   companyMemberships,
   createDb,
-  stewardInboxCursors,
   stewardInboxEvents,
   stewardInboxSequences,
 } from "@paperclipai/db";
@@ -28,6 +26,8 @@ import { errorHandler } from "../middleware/index.js";
 import { bridgeRoutes } from "../routes/bridge.js";
 import { agentService } from "../services/index.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
+import { bridgeService } from "../services/bridge.js";
+import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
 import { companyService } from "../services/companies.js";
 import { stewardInboxService, STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
 
@@ -89,7 +89,7 @@ describe("steward inbox caller existence", () => {
    * from its source rather than described in prose. The three original routes
    * must survive; the two new ones must be present and nothing else added.
    */
-  it("widens the bridge route allowlist by exactly the two inbox routes", () => {
+  it("widens the bridge route allowlist by exactly the three inbox routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
     expect(block, "BRIDGE_ENDPOINT_ROUTES must remain a literal set").toBeTruthy();
@@ -101,6 +101,7 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/decline",
         "/api/bridge/inbox/sync",
         "/api/bridge/inbox/ack",
+        "/api/bridge/inbox/decide",
       ].sort(),
     );
   });
@@ -116,17 +117,14 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
   }, 20_000);
 
   afterEach(async () => {
-    await db.delete(stewardInboxCursors);
-    await db.delete(stewardInboxEvents);
-    await db.delete(stewardInboxSequences);
-    await db.delete(activityLog);
-    await db.delete(bridgeTasks);
-    await db.delete(bridgeEndpoints);
-    await db.delete(approvals);
-    await db.delete(agentStewardships);
-    await db.delete(agents);
-    await db.delete(companyMemberships);
-    await db.delete(companies);
+    // A full reset rather than an ordered delete list. Stage 3 fires the real
+    // post-decision effects, and those reach far further than this suite's own
+    // tables -- a wakeup writes heartbeat runs, runtime state and environment
+    // leases; a connector_send approval writes an execution row; skills get
+    // synced. Enumerating that chain here would make the teardown a second,
+    // worse copy of the production deletion order, and every new effect would
+    // break this file rather than the code it belongs to.
+    await db.execute(sql`truncate table ${companies} cascade`);
   });
 
   afterAll(async () => {
@@ -524,7 +522,7 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
       };
       next();
     });
-    app.use("/api", bridgeRoutes(db));
+    app.use("/api", bridgeRoutes(db, { autoDispatchQueuedRuns: false }));
     app.use(errorHandler);
     return app;
   }
@@ -590,5 +588,233 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
       request(baseUrl).post("/api/bridge/inbox/ack").send({}),
     );
     expect(response.status).toBe(400);
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 3: deciding from the inbox
+  // -----------------------------------------------------------------------
+
+  /** An endpoint that may also be asked to act, for the gated-task tests. */
+  async function actingEndpoint(companyId: string, userId: string) {
+    return makeEndpoint(companyId, userId, [
+      "bridge:read",
+      "bridge:act",
+      STEWARD_INBOX_CAPABILITY,
+    ]);
+  }
+
+  it("hands back a pair of handles for an approval its owner may decide", async () => {
+    const { company, steward, agent } = await seed();
+    const inbox = stewardInboxService(db);
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await inbox.recordApprovalEvent(approval.id, "approval.opened");
+
+    const synced = await inbox.syncForEndpoint(endpoint.id);
+    expect(synced.events[0]!.actions).toEqual({
+      approve: expect.any(String),
+      reject: expect.any(String),
+    });
+    expect(synced.events[0]!.actions!.approve).not.toBe(synced.events[0]!.actions!.reject);
+  });
+
+  it("reuses a live handle instead of minting one on every sync", async () => {
+    const { company, steward, agent } = await seed();
+    const inbox = stewardInboxService(db);
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await inbox.recordApprovalEvent(approval.id, "approval.opened");
+
+    const first = await inbox.syncForEndpoint(endpoint.id);
+    const second = await inbox.syncForEndpoint(endpoint.id);
+    expect(second.events[0]!.actions).toEqual(first.events[0]!.actions);
+    // Sync repeats until the client acknowledges; minting per call would leave
+    // a fresh pair of live credentials behind every few seconds.
+    expect(await db.select().from(channelCallbackTokens)).toHaveLength(2);
+  });
+
+  it("offers no handles for an approval already resolved", async () => {
+    const { company, steward, agent } = await seed();
+    const inbox = stewardInboxService(db);
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id, { status: "approved" });
+    await inbox.recordApprovalEvent(approval.id, "approval.resolved");
+
+    const synced = await inbox.syncForEndpoint(endpoint.id);
+    expect(synced.events[0]!.actions).toBeNull();
+  });
+
+  /**
+   * The test stage 3 waited on the effects extraction for. An `act` task is
+   * invisible to polling until its approval clears; deciding from the inbox has
+   * to release it, or the agent waits for ever on a decision that was made.
+   */
+  it("releases a gated bridge task when the approval is decided from the inbox", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await actingEndpoint(company.id, steward.principalId);
+    const bridge = bridgeService(db);
+    const task = await bridge.createTask(company.id, {
+      endpointId: endpoint.id,
+      requestedByAgentId: agent.id,
+      taskClass: "act",
+      instruction: "delete the stale branch",
+    });
+    await stewardInboxService(db).recordApprovalEvent(task.approvalId!, "approval.opened");
+
+    // Withheld while it waits, which is the whole point of the gate.
+    expect(await bridge.claimNextTask(endpoint.id)).toBeNull();
+
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const handles = synced.events.find((event) => event.refId === task.approvalId)!.actions!;
+    const outcome = await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, handles.approve);
+    expect(outcome).toMatchObject({ ok: true, decision: "approved" });
+
+    const claimed = await bridge.claimNextTask(endpoint.id);
+    expect(claimed, "the approved act task was still withheld").not.toBeNull();
+  });
+
+  it("terminates a gated bridge task when the approval is rejected from the inbox", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await actingEndpoint(company.id, steward.principalId);
+    const bridge = bridgeService(db);
+    const task = await bridge.createTask(company.id, {
+      endpointId: endpoint.id,
+      requestedByAgentId: agent.id,
+      taskClass: "act",
+      instruction: "delete the stale branch",
+    });
+    await stewardInboxService(db).recordApprovalEvent(task.approvalId!, "approval.opened");
+
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const handles = synced.events.find((event) => event.refId === task.approvalId)!.actions!;
+    expect(await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, handles.reject)).toMatchObject({
+      ok: true,
+      decision: "rejected",
+    });
+
+    const row = await db
+      .select()
+      .from(bridgeTasks)
+      .where(eq(bridgeTasks.id, task.id))
+      .then((rows) => rows[0]!);
+    expect(row.status).not.toBe("awaiting_approval");
+    expect(await bridge.claimNextTask(endpoint.id)).toBeNull();
+  });
+
+  it("attributes the decision to the person, not the machine", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+
+    await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, synced.events[0]!.actions!.approve);
+
+    const row = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .then((rows) => rows[0]!);
+    expect(row.decidedByUserId).toBe(steward.principalId);
+    expect(row.decidedByUserId).not.toBe(endpoint.id);
+    // The audit record must not claim a laptop decision came from the board.
+    expect(row.decisionChannel).toBe("bridge_inbox");
+  });
+
+  it("spends a handle exactly once", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const decisions = stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false });
+
+    expect(await decisions.decide(endpoint.id, synced.events[0]!.actions!.approve)).toMatchObject({
+      ok: true,
+    });
+    const replay = await decisions.decide(endpoint.id, synced.events[0]!.actions!.approve);
+    expect(replay.ok).toBe(false);
+  });
+
+  it("makes a handle inert on any machine but the one it was minted for", async () => {
+    const { company, steward, agent } = await seed();
+    const laptop = await makeEndpoint(company.id, steward.principalId);
+    const desktop = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+
+    const synced = await stewardInboxService(db).syncForEndpoint(laptop.id);
+    const laptopHandle = synced.events[0]!.actions!.approve;
+
+    // Same person, same authority, different machine. The handle still fails.
+    const stolen = await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(desktop.id, laptopHandle);
+    expect(stolen.ok).toBe(false);
+  });
+
+  it("refuses a handle minted against a revision that has since moved on", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const staleHandle = synced.events[0]!.actions!.approve;
+
+    // The ask changed after the steward was shown it.
+    await db.update(approvals).set({ revision: 2 }).where(eq(approvals.id, approval.id));
+
+    const outcome = await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, staleHandle);
+    expect(outcome.ok).toBe(false);
+    const row = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, approval.id))
+      .then((rows) => rows[0]!);
+    expect(row.status).toBe("pending");
+  });
+
+  it("refuses an expired handle", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const handle = synced.events[0]!.actions!.approve;
+
+    await db
+      .update(channelCallbackTokens)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(channelCallbackTokens.token, handle));
+
+    expect(await stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false }).decide(endpoint.id, handle)).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("refuses a decision over the route without a handle", async () => {
+    const { company, steward } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const app = bridgeApp(endpoint.id, company.id);
+    const response = await call(app, (baseUrl) =>
+      request(baseUrl).post("/api/bridge/inbox/decide").send({}),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("decides over the route for a capable endpoint", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const app = bridgeApp(endpoint.id, company.id);
+
+    const synced = await call(app, (baseUrl) =>
+      request(baseUrl).post("/api/bridge/inbox/sync").send({}),
+    );
+    const handle = synced.body.events[0].actions.approve;
+    const decided = await call(app, (baseUrl) =>
+      request(baseUrl).post("/api/bridge/inbox/decide").send({ token: handle }),
+    );
+    expect(decided.status).toBe(200);
+    expect(decided.body).toMatchObject({ ok: true, decision: "approved" });
   });
 });

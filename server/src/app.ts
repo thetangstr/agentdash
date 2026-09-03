@@ -496,7 +496,7 @@ export async function createApp(
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
-  api.use(bridgeRoutes(db));
+  api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
