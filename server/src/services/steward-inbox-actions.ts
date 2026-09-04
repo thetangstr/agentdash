@@ -38,6 +38,18 @@ import { stewardInboxService } from "./steward-inbox.js";
 /** Long enough to read a confirmation, short enough to be worthless if it leaks. */
 const HANDLE_TTL_MS = 15 * 60 * 1000;
 
+/**
+ * Bounds on one instruction.
+ *
+ * Not defensive padding: `confirm` spends the handle before it starts creating,
+ * so a failure partway through a long list leaves some work assigned and no way
+ * to retry the rest. Keeping a batch small keeps that blast radius small, and a
+ * person naming eleven assignments in one breath is better served by being
+ * asked to split it.
+ */
+const MAX_ITEMS_PER_INSTRUCTION = 10;
+const MAX_WORK_LENGTH = 500;
+
 /** The only cadences offered. Two options is the whole preference surface. */
 export const ALLOWED_CADENCE_MINUTES = [30, 60] as const;
 export const DEFAULT_CADENCE_MINUTES = 60;
@@ -197,6 +209,12 @@ export function stewardInboxActionsService(db: Db) {
     if (!Array.isArray(request.items) || request.items.length === 0) {
       return { ok: false, reason: "Nothing to assign." };
     }
+    if (request.items.length > MAX_ITEMS_PER_INSTRUCTION) {
+      return {
+        ok: false,
+        reason: `That is ${request.items.length} assignments at once; ask for at most ${MAX_ITEMS_PER_INSTRUCTION} at a time.`,
+      };
+    }
 
     const roster = await db
       .select({ id: agents.id, name: agents.name })
@@ -210,6 +228,12 @@ export function stewardInboxActionsService(db: Db) {
     for (const item of request.items) {
       const work = (item.work ?? "").trim();
       if (!work) return { ok: false, reason: `No work described for "${item.agent}".` };
+      if (work.length > MAX_WORK_LENGTH) {
+        return {
+          ok: false,
+          reason: `The work described for "${item.agent}" is too long for a title. Shorten it, or open the issue in AgentDash and describe it there.`,
+        };
+      }
       const exact = roster.filter((a) => normalize(a.name) === normalize(item.agent));
       if (exact.length === 1) {
         resolved.push({ agentId: exact[0]!.id, agentName: exact[0]!.name, work });
@@ -288,7 +312,7 @@ export function stewardInboxActionsService(db: Db) {
         entityType: "bridge_endpoint",
         entityId: endpointId,
         details: { minutes },
-      }).catch(() => {});
+      }).catch((err) => logger.warn({ err }, "inbox cadence activity not recorded"));
       return { ok: true, kind: "set_cadence", result: { minutes } };
     }
 
@@ -300,33 +324,64 @@ export function stewardInboxActionsService(db: Db) {
     }
 
     const items = (record.payload as { items?: Array<{ agentId: string; agentName: string; work: string }> }).items ?? [];
-    const issues = issueService(db);
     const created: Array<{ issueId: string; identifier: string | null; agentName: string }> = [];
+    const failed: Array<{ agentName: string; work: string; reason: string }> = [];
+    const issues = issueService(db);
 
+    /**
+     * Each item is attempted independently and any failure is REPORTED rather
+     * than thrown.
+     *
+     * `issueService.create` does not accept a transaction, so a list cannot be
+     * made atomic here, and the handle is already spent by the time this runs.
+     * Throwing on the second of three would leave the first assigned, the
+     * handle dead, and the person told only that something went wrong. Saying
+     * exactly what landed and what did not is the honest outcome, and it is
+     * what lets them ask again for the remainder.
+     */
     for (const item of items) {
-      const issue = await issues.create(endpoint.companyId, {
-        title: item.work,
-        assigneeAgentId: item.agentId,
-        createdByUserId: endpoint.userId,
-      } as never);
-      created.push({
-        issueId: issue.id,
-        identifier: (issue as { identifier?: string | null }).identifier ?? null,
-        agentName: item.agentName,
-      });
-      await logActivity(db, {
-        companyId: endpoint.companyId,
-        actorType: "user",
-        actorId: endpoint.userId,
-        action: "inbox.work_assigned",
-        entityType: "issue",
-        entityId: issue.id,
-        agentId: item.agentId,
-        details: { via: "inbox_connect", assignedTo: item.agentName },
-      }).catch((err) => logger.warn({ err }, "inbox assignment activity not recorded"));
+      try {
+        const issue = await issues.create(endpoint.companyId, {
+          title: item.work,
+          assigneeAgentId: item.agentId,
+          createdByUserId: endpoint.userId,
+        } as never);
+        created.push({
+          issueId: issue.id,
+          identifier: (issue as { identifier?: string | null }).identifier ?? null,
+          agentName: item.agentName,
+        });
+        await logActivity(db, {
+          companyId: endpoint.companyId,
+          actorType: "user",
+          actorId: endpoint.userId,
+          action: "inbox.work_assigned",
+          entityType: "issue",
+          entityId: issue.id,
+          agentId: item.agentId,
+          details: { via: "inbox_connect", assignedTo: item.agentName },
+        }).catch((err) => logger.warn({ err }, "inbox assignment activity not recorded"));
+      } catch (err) {
+        logger.error(
+          { err, endpointId, agentId: item.agentId },
+          "inbox assignment failed after the confirmation was spent",
+        );
+        failed.push({
+          agentName: item.agentName,
+          work: item.work,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
-    return { ok: true, kind: "assign_work", result: { assigned: created } };
+    if (created.length === 0 && failed.length > 0) {
+      return { ok: false, reason: "None of that could be assigned. Nothing changed." };
+    }
+    return {
+      ok: true,
+      kind: "assign_work",
+      result: { assigned: created, ...(failed.length > 0 ? { failed } : {}) },
+    };
   }
 
   return { listAgents, propose, confirm };
