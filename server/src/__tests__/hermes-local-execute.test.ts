@@ -1,5 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -383,5 +384,175 @@ describe("hermes_local execute wrapper", () => {
     expect(result.exitCode).toBe(0);
     expect(result.errorCode ?? null).toBeNull();
     expect(result.errorMessage ?? null).toBeNull();
+  });
+});
+
+/**
+ * AgentDash (AGE-14): where a the agent run starts.
+ *
+ * The hermes adapter's cwd used to fall straight through to "." — the server's
+ * own directory, the live serving checkout — when no cwd was configured. An
+ * agent started there did its work in the checkout: deploys aborted on the
+ * dirty tree and the work was one checkout from erased (~626 lines rescued on
+ * 2026-08-20). The patch (patches/hermes-paperclip-adapter@0.3.0.patch) now
+ * reads context.paperclipWorkspace the way the codex and acpx adapters do:
+ *
+ *   workspace cwd || configured cwd || ctx.config.workspaceDir || "."
+ *
+ * with the shared carve-out that an explicitly configured cwd beats the
+ * agent_home fallback (an operator who named a directory meant it).
+ */
+describe("hermes_local working-directory resolution (AGE-14)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    delete process.env.AGENTDASH_HERMES_MANAGED_PROFILES;
+  });
+
+  /** A fake hermes that records where the adapter actually started it. */
+  async function writeCwdRecordingHermesCommand(dir: string): Promise<{ hermesCommand: string; cwdPath: string }> {
+    const cwdPath = join(dir, "observed-cwd.json");
+    const hermesCommand = join(dir, "hermes");
+    await writeFile(
+      hermesCommand,
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(cwdPath)}, JSON.stringify({ cwd: process.cwd() }));`,
+        'process.stdout.write("done\\nsession_id: hermes-session-1\\n");',
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(hermesCommand, 0o755);
+    return { hermesCommand, cwdPath };
+  }
+
+  /** buildCtx without the default cwd — resolution must come from elsewhere. */
+  function buildNoCwdCtx(overrides: {
+    hermesCommand: string;
+    adapterConfigCwd?: string;
+    context?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+  }) {
+    return {
+      runId: "run-1",
+      agent: {
+        id: "agent-1",
+        companyId: "company-1",
+        name: "Priya",
+        role: "pm",
+        adapterType: "hermes_local",
+        adapterConfig: {
+          hermesCommand: overrides.hermesCommand,
+          env: { HERMES_ARGS_PATH: join("/tmp", "age14-unused-args.json") },
+          ...(overrides.adapterConfigCwd ? { cwd: overrides.adapterConfigCwd } : {}),
+        },
+      },
+      runtime: {},
+      config: overrides.config ?? {},
+      context: overrides.context ?? {},
+      authToken: "test-run-token",
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    };
+  }
+
+  it("runs a hermes agent with no configured cwd in the runtime-resolved workspace", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-age14-workspace-"));
+    const workspaceDir = join(tempDir, "project-worktree");
+    await mkdir(workspaceDir, { recursive: true });
+    const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildNoCwdCtx({
+        hermesCommand,
+        context: {
+          paperclipWorkspace: {
+            cwd: workspaceDir,
+            source: "task_session",
+          },
+        },
+      }) as never,
+    );
+
+    const observed = JSON.parse(await readFile(cwdPath, "utf8")) as { cwd: string };
+    // macOS reports the child's cwd as the resolved (/private/var/...) path.
+    expect(observed.cwd).toBe(await realpath(workspaceDir));
+  });
+
+  it("prefers the resolved project workspace over a stale configured cwd", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-age14-precedence-"));
+    const workspaceDir = join(tempDir, "project-worktree");
+    const staleConfigured = join(tempDir, "stale-configured");
+    await mkdir(workspaceDir, { recursive: true });
+    const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildNoCwdCtx({
+        hermesCommand,
+        adapterConfigCwd: staleConfigured,
+        context: {
+          paperclipWorkspace: {
+            cwd: workspaceDir,
+            source: "task_session",
+          },
+        },
+      }) as never,
+    );
+
+    const observed = JSON.parse(await readFile(cwdPath, "utf8")) as { cwd: string };
+    // The runtime resolved a real worktree for this run; the run must start
+    // there, not wherever an old config left behind points.
+    expect(observed.cwd).toBe(await realpath(workspaceDir));
+  });
+
+  it("keeps an explicitly configured cwd when the workspace fell back to agent_home", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-age14-carveout-"));
+    const configuredDir = join(tempDir, "operator-chosen");
+    await mkdir(configuredDir, { recursive: true });
+    const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await getServerAdapter("hermes_local").execute(
+      buildNoCwdCtx({
+        hermesCommand,
+        adapterConfigCwd: configuredDir,
+        context: {
+          paperclipWorkspace: {
+            cwd: join(tempDir, "agent-home"),
+            source: "agent_home",
+          },
+        },
+      }) as never,
+    );
+
+    const observed = JSON.parse(await readFile(cwdPath, "utf8")) as { cwd: string };
+    // The carve-out: an operator who named a directory meant it. agent_home is
+    // the generic fallback, not a per-run resolution, so config wins.
+    expect(observed.cwd).toBe(await realpath(configuredDir));
+  });
+
+  it("resolves the last-resort '.' against the server's own working directory (the incident mechanism)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-age14-fallthrough-"));
+    const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);
+    const serverCheckout = join(tempDir, "not-the-server-checkout");
+    await mkdir(serverCheckout, { recursive: true });
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    const previousCwd = process.cwd();
+    process.chdir(serverCheckout);
+    try {
+      await getServerAdapter("hermes_local").execute(buildNoCwdCtx({ hermesCommand }) as never);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const observed = JSON.parse(await readFile(cwdPath, "utf8")) as { cwd: string };
+    // The last-resort "." resolves to wherever the server was started — the
+    // live serving checkout. That is exactly where an agent must not work.
+    expect(observed.cwd).toBe(await realpath(serverCheckout));
   });
 });
