@@ -86,6 +86,7 @@ import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
 import ConnectYourMachineGuide from "./pages/ConnectYourMachineGuide";
+import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 
@@ -320,6 +321,10 @@ sends. No agent reports a number it cannot source.`;
 export function App() {
   return (
     <>
+      {/* Tells a person when their tab is running an older build than the
+          server is serving. Mounted here so it covers every route, including
+          the public ones, and never reloads on its own -- see the component. */}
+      <NewVersionNotice />
       <Routes>
         <Route path="auth" element={<AuthPage />} />
         <Route path="forgot-password" element={<ForgotPasswordPage />} />

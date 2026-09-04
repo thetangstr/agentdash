@@ -29,8 +29,6 @@ import { adapterLabels, roleLabels, help } from "../components/agent-config-prim
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import { useAdapterCapabilities } from "@/adapters/use-adapter-capabilities";
 import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapter-utils";
-import { MarkdownEditor } from "../components/MarkdownEditor";
-import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { accessApi } from "../api/access";
@@ -176,10 +174,6 @@ function redactEnvValue(key: string, value: unknown, censorUsernameInLogs: boole
   } catch {
     return redactPathText(String(value), censorUsernameInLogs);
   }
-}
-
-function isMarkdown(pathValue: string) {
-  return pathValue.toLowerCase().endsWith(".md");
 }
 
 function formatEnvForDisplay(envValue: unknown, censorUsernameInLogs: boolean): string {
@@ -2053,13 +2047,6 @@ function PromptsTab({
     onError: () => setAwaitingRefresh(false),
   });
 
-  const uploadMarkdownImage = useMutation({
-    mutationFn: async ({ file, namespace }: { file: File; namespace: string }) => {
-      if (!selectedCompanyId) throw new Error("Select a company to upload images");
-      return assetsApi.uploadImage(selectedCompanyId, file, namespace);
-    },
-  });
-
   useEffect(() => {
     if (!bundle) return;
     if (!bundleMatchesDraft) {
@@ -2618,28 +2605,35 @@ function PromptsTab({
             </div>
           </div>
 
+          {/*
+            Instruction files are edited as SOURCE, never through the rich
+            markdown editor, and the distinction is not cosmetic.
+
+            A mandate is source text that a machine parses. Pasting markdown
+            into a WYSIWYG surface makes it literal content, and serialising
+            back out escapes it -- a steward pasting a prepared mandate got
+            `\*\*bold\*\*` and `&#x20;` entities, which is what pushed them to
+            prepend rather than replace.
+
+            AGENTS.md was already safe by accident: the generated block markers
+            are HTML comments, MDXEditor has no visitor for mdast `html` nodes,
+            so importing threw and the component fell back to raw source. That
+            protection disappears the moment a file has no markers -- SOUL.md,
+            HEARTBEAT.md, TOOLS.md, or a brand-new AGENTS.md before any block
+            exists. Those are exactly the files a steward writes by hand.
+
+            So the editor is chosen by what these files ARE, not by whether the
+            rich one happens to cope with this one's contents.
+          */}
           {selectedFileExists && fileLoading && !selectedFileDetail ? (
             <PromptEditorSkeleton />
-          ) : isMarkdown(selectedOrEntryFile) ? (
-            <MarkdownEditor
-              key={selectedOrEntryFile}
-              value={displayValue}
-              onChange={(value) => setDraft(value ?? "")}
-              placeholder="# Agent instructions"
-              className="min-w-0 overflow-hidden"
-              contentClassName="min-h-[420px] max-w-full break-words text-sm font-mono"
-              imageUploadHandler={async (file) => {
-                const namespace = `agents/${agent.id}/instructions/${selectedOrEntryFile.replaceAll("/", "-")}`;
-                const asset = await uploadMarkdownImage.mutateAsync({ file, namespace });
-                return asset.contentPath;
-              }}
-            />
           ) : (
             <textarea
               value={displayValue}
               onChange={(event) => setDraft(event.target.value)}
               className="min-h-[420px] w-full min-w-0 rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm outline-none"
               placeholder="File contents"
+              spellCheck={false}
             />
           )}
         </div>
