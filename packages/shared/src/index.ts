@@ -340,6 +340,8 @@ export type {
   AgentInstructionsFileDetail,
   AgentInstructionsBundle,
   AgentKeyCreated,
+  AgentApiKeySource,
+  AgentApiKeyProvenance,
   AgentConfigRevision,
   AdapterEnvironmentCheckLevel,
   AdapterEnvironmentTestStatus,
@@ -680,6 +682,7 @@ export {
   type UpdateAgentGovernancePolicy,
 } from "./validators/agent-governance.js";
 
+export { AGENT_API_KEY_SOURCES } from "./types/agent.js";
 export {
   AGENT_DIRECTIVES_CONTEXT_KEY,
   AGENT_DIRECTIVES_MAX_LENGTH,
@@ -1321,3 +1324,28 @@ export {
   type ClassifyActionInput,
   type ClassifyActionResult,
 } from "./agent-destructive-classifier.js";
+
+export {
+  OTA_STATE_SCHEMA_VERSION,
+  OTA_CHANNELS,
+  OTA_DEPLOYMENT_MODES,
+  OTA_COMPATIBILITY_VERDICTS,
+  OTA_APPROVAL_STATUSES,
+  OTA_RECEIPT_OUTCOMES,
+  type OtaChannel,
+  type OtaDeploymentMode,
+  type OtaRelease,
+  type OtaInstalledRelease,
+  type OtaCompatibilityVerdict,
+  type OtaMigrationSummary,
+  type OtaCompatibility,
+  type OtaDiffSummary,
+  type OtaRollbackPlan,
+  type OtaApprovalStatus,
+  type OtaApproval,
+  type OtaUpdateStatus,
+  type OtaDeploymentState,
+  type OtaReceiptOutcome,
+  type OtaReceiptCheck,
+  type OtaReceipt,
+} from "./types/ota.js";

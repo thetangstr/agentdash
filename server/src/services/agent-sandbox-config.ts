@@ -40,6 +40,12 @@ const ENV_ALLOW = "AGENTDASH_AGENT_SANDBOX_ALLOW";
  * and confinement without it fails at exec with code 126 (measured on uat).
  * Putting that tree in the read-WRITE list would let a run rewrite the
  * interpreter every later run uses.
+ *
+ * `~/.hermes` alone is not enough for a uv-managed Hermes: the venv's python
+ * is a symlink out to `~/.local/share/uv/python/...`, so that tree must be
+ * listed too, and Hermes needs a writable session store, which is what
+ * ENV_HOME is for. Measured on an isolated instance for AGE-7; the working
+ * setting is written down in doc/AGENT-SANDBOX.md.
  */
 const ENV_READONLY = "AGENTDASH_AGENT_SANDBOX_READONLY";
 /**

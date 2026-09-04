@@ -34,16 +34,6 @@ jobs:
       - name: Block leftover merge-conflict markers
         run: node scripts/ci/check-conflict-markers.mjs
 
-      - name: Block manual lockfile edits
-        if: github.head_ref != 'chore/refresh-lockfile'
-        run: |
-          # Diff the PR branch against its merge base so recent base-branch commits
-          # do not masquerade as changes made by the PR itself.
-          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")"
-          if printf '%s\n' "$changed" | grep -qx 'pnpm-lock.yaml'; then
-            echo "Do not commit pnpm-lock.yaml in pull requests. CI owns lockfile updates."
-            exit 1
-          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -66,13 +56,45 @@ jobs:
         # loops/ARCHITECTURE.md.
         run: node ./scripts/check-architecture.mjs
 
-      - name: Validate dependency resolution when manifests change
+      # The lockfile must be the one the manifests produce.
+      #
+      # This replaces two weaker checks that between them let `main` drift to a
+      # lockfile it could not install from. One blocked `pnpm-lock.yaml` in any
+      # PR ("CI owns lockfile updates"); the other regenerated the lockfile when
+      # a manifest changed but only to see whether the command succeeded, and
+      # never compared the result to what was committed. So a manifest change
+      # landed with a stale lockfile, `pnpm install --frozen-lockfile` on the
+      # default branch failed with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH, and every
+      # job had to install with `--no-frozen-lockfile` — which is exactly the
+      # unreviewed-dependency-resolution the frozen install exists to prevent.
+      #
+      # "CI owns the lockfile" was true of the intent and false of the
+      # mechanism: the automation that owned it opened its PR as a bot, so
+      # GitHub parked every check at `action_required` waiting for a human
+      # click that never came, and the refresh could not merge.
+      #
+      # The property that actually matters is not who edited the file but
+      # whether it is reproducible. So: regenerate, then require no diff. A
+      # hand-edited lockfile that pnpm would not produce fails here, which is
+      # what the old block was really protecting against, and a manifest change
+      # without its lockfile fails too, which is what it missed.
+      - name: Lockfile must match the manifests
         run: |
-          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")"
-          manifest_pattern='(^|/)package\.json$|^pnpm-workspace\.yaml$|^\.npmrc$|^pnpmfile\.(cjs|js|mjs)$'
-          if printf '%s\n' "$changed" | grep -Eq "$manifest_pattern"; then
-            pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
+          pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
+          if ! git diff --quiet -- pnpm-lock.yaml; then
+            echo "::error::pnpm-lock.yaml does not match the manifests in this PR."
+            echo ""
+            echo "Regenerate it and commit the result:"
+            echo "  pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile"
+            echo "  git add pnpm-lock.yaml && git commit -m 'chore(lockfile): sync with manifests'"
+            echo ""
+            echo "Committing the lockfile alongside a manifest change is expected."
+            echo "What is not allowed is a lockfile pnpm would not regenerate."
+            echo ""
+            git --no-pager diff --stat -- pnpm-lock.yaml
+            exit 1
           fi
+          echo "Lockfile matches the manifests."
 
   # The test lane, split four ways.
   #

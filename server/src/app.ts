@@ -13,6 +13,7 @@ import { mcpRoutes } from "./routes/mcp.js";
 import { connectCodeRoutes } from "./routes/connect-codes.js";
 import { meCapabilityRoutes } from "./routes/me-capabilities.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
+import { apiFallthrough } from "./middleware/method-not-allowed.js";
 import { corpEmailSignupGuard } from "./middleware/corp-email-signup-guard.js";
 import { inviteCodeSignupGuard } from "./middleware/invite-code-signup-guard.js";
 // AgentDash (#160): tiered API rate limiting — auth/billing tighter than default.
@@ -70,6 +71,7 @@ import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { otaRoutes } from "./routes/ota.js";
 import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
   instanceDatabaseBackupRoutes,
@@ -449,6 +451,7 @@ export async function createApp(
     issueReportRoutes(db),
   );
   api.use(instanceSettingsRoutes(db));
+  api.use(otaRoutes(db));
   // O2: read the local error sink (instance-admin only).
   api.use(serverErrorRoutes(db));
   api.use("/conversations", conversationRoutes(db));
@@ -493,7 +496,7 @@ export async function createApp(
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
-  api.use(bridgeRoutes(db));
+  api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
@@ -627,9 +630,9 @@ export async function createApp(
     }),
   );
   app.use("/api", api);
-  app.use("/api", (_req, res) => {
-    res.status(404).json({ error: "API route not found" });
-  });
+  // AgentDash (AGE-23): a wrong method on a known route answers 405 + Allow;
+  // an unknown path keeps the 404.
+  app.use("/api", apiFallthrough(api));
   app.use(pluginUiStaticRoutes(db, {
     localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
     deploymentMode: opts.deploymentMode,

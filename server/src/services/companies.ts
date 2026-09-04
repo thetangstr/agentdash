@@ -33,6 +33,31 @@ import {
   documents,
   budgetIncidents,
   budgetPolicies,
+  // AgentDash (AGE-36): every table below holds a NO ACTION foreign key to
+  // agents (or, for the bridge pair, to bridge endpoints / companies) and a
+  // company_id column. None of them were cleared on company delete, so
+  // deleting a company that had used directives, the bridge, routines, or any
+  // of the rest failed with a 500 foreign-key violation.
+  agentDirectives,
+  agentMemory,
+  bridgeTasks,
+  bridgeEndpoints,
+  routines,
+  verdicts,
+  cosReviewerAssignments,
+  issueReviewQueueState,
+  issueExecutionDecisions,
+  issueThreadInteractions,
+  assistantConversations,
+  agentConnectCodes,
+  trialSessions,
+  mandates,
+  humanChannelBindings,
+  connectorSendExecutions,
+  agentRuns,
+  agentConnectorOverrides,
+  connections,
+  channelCallbackTokens,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -432,6 +457,18 @@ export function companyService(db: Db) {
         // to approvals via approval_id (AGE-3: company delete FK violation).
         await tx.delete(budgetIncidents).where(eq(budgetIncidents.companyId, id));
         await tx.delete(budgetPolicies).where(eq(budgetPolicies.companyId, id));
+        // Both of these reference `approvals`, so they have to go first.
+        //
+        // Found by an end-to-end proof rather than by reading: deleting a
+        // company that had ever used the bridge failed on
+        // `channel_callback_tokens_approval_id_approvals_id_fk`, and then again
+        // on `bridge_tasks_approval_id_approvals_id_fk` once the first was
+        // cleared. `channel_callback_tokens` was in no purge list at all, and
+        // `bridge_tasks` was below this line. Every inbox sync mints callback
+        // handles, so any MK company whose steward had opened their inbox could
+        // not be deleted.
+        await tx.delete(channelCallbackTokens).where(eq(channelCallbackTokens.companyId, id));
+        await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
         await tx.delete(approvals).where(eq(approvals.companyId, id));
         await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
         await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
@@ -451,6 +488,27 @@ export function companyService(db: Db) {
         // foreign-key violation.
         await tx.delete(agentGovernancePolicies).where(eq(agentGovernancePolicies.companyId, id));
         await tx.delete(agentStewardships).where(eq(agentStewardships.companyId, id));
+        // AgentDash (AGE-36): the remaining agent-referencing tables, all
+        // NO ACTION, all scoped by company. bridge_tasks first (it references
+        // bridge_endpoints), routines cascades its own triggers and runs.
+        await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
+        await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
+        await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
+        await tx.delete(routines).where(eq(routines.companyId, id));
+        await tx.delete(verdicts).where(eq(verdicts.companyId, id));
+        await tx.delete(cosReviewerAssignments).where(eq(cosReviewerAssignments.companyId, id));
+        await tx.delete(issueReviewQueueState).where(eq(issueReviewQueueState.companyId, id));
+        await tx.delete(issueExecutionDecisions).where(eq(issueExecutionDecisions.companyId, id));
+        await tx.delete(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, id));
+        await tx.delete(assistantConversations).where(eq(assistantConversations.companyId, id));
+        await tx.delete(agentConnectCodes).where(eq(agentConnectCodes.companyId, id));
+        await tx.delete(trialSessions).where(eq(trialSessions.companyId, id));
+        await tx.delete(mandates).where(eq(mandates.companyId, id));
+        await tx.delete(humanChannelBindings).where(eq(humanChannelBindings.companyId, id));
+        await tx.delete(connectorSendExecutions).where(eq(connectorSendExecutions.companyId, id));
+        await tx.delete(agentRuns).where(eq(agentRuns.companyId, id));
+        await tx.delete(agentConnectorOverrides).where(eq(agentConnectorOverrides.companyId, id));
+        await tx.delete(connections).where(eq(connections.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));
         const rows = await tx
           .delete(companies)
@@ -492,6 +550,20 @@ export function companyService(db: Db) {
       );
     },
 
+    /**
+     * Counts an administrator can act on, including one that is uncomfortable.
+     *
+     * `runsSucceededWithoutEvidence` is the number of runs that exited zero and
+     * left nothing behind -- no comment, no activity, no `lastUsefulActionAt`.
+     * Measured on one instance it was 151 of 360, and none of it was visible
+     * anywhere: "succeeded" means the process exited zero, which is not the
+     * same claim as "something happened", and the UI made no distinction. A
+     * fleet quietly burning tokens to no effect looks identical to a healthy
+     * one until somebody counts.
+     *
+     * Reported next to the successful total on purpose. The absolute number
+     * means little; the ratio is the signal.
+     */
     stats: () =>
       Promise.all([
         db
@@ -502,17 +574,43 @@ export function companyService(db: Db) {
           .select({ companyId: issues.companyId, count: count() })
           .from(issues)
           .groupBy(issues.companyId),
-      ]).then(([agentRows, issueRows]) => {
-        const result: Record<string, { agentCount: number; issueCount: number }> = {};
+        db
+          .select({
+            companyId: heartbeatRuns.companyId,
+            succeeded: count(),
+            withoutEvidence: sql<number>`count(*) filter (where ${heartbeatRuns.lastUsefulActionAt} is null)::int`,
+          })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.status, "succeeded"))
+          .groupBy(heartbeatRuns.companyId),
+      ]).then(([agentRows, issueRows, runRows]) => {
+        const result: Record<
+          string,
+          {
+            agentCount: number;
+            issueCount: number;
+            runsSucceeded: number;
+            runsSucceededWithoutEvidence: number;
+          }
+        > = {};
+        const blank = () => ({
+          agentCount: 0,
+          issueCount: 0,
+          runsSucceeded: 0,
+          runsSucceededWithoutEvidence: 0,
+        });
         for (const row of agentRows) {
-          result[row.companyId] = { agentCount: row.count, issueCount: 0 };
+          result[row.companyId] = { ...blank(), agentCount: row.count };
         }
         for (const row of issueRows) {
-          if (result[row.companyId]) {
-            result[row.companyId].issueCount = row.count;
-          } else {
-            result[row.companyId] = { agentCount: 0, issueCount: row.count };
-          }
+          result[row.companyId] = { ...(result[row.companyId] ?? blank()), issueCount: row.count };
+        }
+        for (const row of runRows) {
+          result[row.companyId] = {
+            ...(result[row.companyId] ?? blank()),
+            runsSucceeded: row.succeeded,
+            runsSucceededWithoutEvidence: Number(row.withoutEvidence ?? 0),
+          };
         }
         return result;
       }),

@@ -3,7 +3,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agentConnectCodes, agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -122,6 +122,7 @@ import {
   shouldRequireAgentHarnessPreflight,
   withAgentHarnessPreflightMetadata,
 } from "../services/agent-harness-preflight-readiness.js";
+import { adapterSupportsInstructionsBundle, resolveInstructionsPathKey } from "../adapters/instructions-bundle-support.js";
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
@@ -143,36 +144,8 @@ export function agentRoutes(
   db: Db,
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
 ) {
-  // Legacy hardcoded maps — used as fallback when adapter module does not
-  // declare capability flags explicitly.
-  const DEFAULT_INSTRUCTIONS_PATH_KEYS: Record<string, string> = {
-    acpx_local: "instructionsFilePath",
-    claude_local: "instructionsFilePath",
-    codex_local: "instructionsFilePath",
-    droid_local: "instructionsFilePath",
-    gemini_local: "instructionsFilePath",
-    hermes_local: "instructionsFilePath",
-    opencode_local: "instructionsFilePath",
-    cursor: "instructionsFilePath",
-    pi_local: "instructionsFilePath",
-  };
-  const DEFAULT_MANAGED_INSTRUCTIONS_ADAPTER_TYPES = new Set(Object.keys(DEFAULT_INSTRUCTIONS_PATH_KEYS));
-
-  /** Check if an adapter supports the managed instructions bundle. */
-  function adapterSupportsInstructionsBundle(adapterType: string): boolean {
-    const adapter = findActiveServerAdapter(adapterType);
-    if (adapter?.supportsInstructionsBundle !== undefined) return adapter.supportsInstructionsBundle;
-    return DEFAULT_MANAGED_INSTRUCTIONS_ADAPTER_TYPES.has(adapterType);
-  }
-
-  /** Resolve the adapter config key for the instructions file path. */
-  function resolveInstructionsPathKey(adapterType: string): string | null {
-    const adapter = findActiveServerAdapter(adapterType);
-    if (adapter?.instructionsPathKey) return adapter.instructionsPathKey;
-    if (adapter?.supportsInstructionsBundle === true) return "instructionsFilePath";
-    if (adapter?.supportsInstructionsBundle === false) return null;
-    return DEFAULT_INSTRUCTIONS_PATH_KEYS[adapterType] ?? null;
-  }
+  // AgentDash: adapter bundle support lives in adapters/instructions-bundle-support.ts
+  // so the instruction-refresh service can ask the same question (AGE-8).
   const KNOWN_INSTRUCTIONS_PATH_KEYS = new Set(["instructionsFilePath", "agentsMdPath"]);
   const KNOWN_INSTRUCTIONS_BUNDLE_KEYS = [
     "instructionsBundleMode",
@@ -180,6 +153,10 @@ export function agentRoutes(
     "instructionsEntryFile",
     "instructionsFilePath",
     "agentsMdPath",
+    // Which generated blocks an agent does not carry. Guarded with the rest of
+    // the bundle configuration on purpose: left ungated, an agent could suppress
+    // the blocks that constrain it and delete its own rules.
+    "instructionsSuppressedBlocks",
   ] as const;
 
   const router = Router();
@@ -544,15 +521,82 @@ export function agentRoutes(
     };
   }
 
+  /**
+   * What this agent's runs actually show, which is the only honest answer to
+   * "is it working".
+   *
+   * Every other signal on this page is a claim made before the fact. The stored
+   * harness preflight says "pass" for evidence gathered once, possibly against
+   * a different adapter -- three agents on one instance carried a `codex_local`
+   * pass while running on `hermes_local`, and nothing evaluated it because the
+   * readiness check is gated behind an env flag that is off by default. The
+   * agent's `status` column says `idle`, which is true of a healthy agent and
+   * of a broken one.
+   *
+   * The runs know. On one instance the primary agent had failed 163 of 304
+   * runs, and 83% of the successful runs across the fleet left no comment and
+   * no activity behind -- "succeeded" means the process exited zero, which is
+   * not the same claim as "something happened". None of that was visible
+   * anywhere.
+   *
+   * `neverRan` is its own state on purpose: an agent that has never started is
+   * not healthy and not failing, and the two need different answers. A
+   * placeholder `process` agent whose command does not exist sits here for
+   * ever, looking exactly like a working agent nobody has assigned work to.
+   */
+  async function buildAgentRunHealth(agentId: string) {
+    const [tally] = await db
+      .select({
+        total: count(),
+        succeeded: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'succeeded')::int`,
+        failed: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'failed')::int`,
+        withoutEvidence: sql<number>`count(*) filter (where ${heartbeatRuns.status} = 'succeeded' and ${heartbeatRuns.lastUsefulActionAt} is null)::int`,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+
+    const [last] = await db
+      .select({
+        status: heartbeatRuns.status,
+        error: heartbeatRuns.error,
+        errorCode: heartbeatRuns.errorCode,
+        finishedAt: heartbeatRuns.finishedAt,
+        lastUsefulActionAt: heartbeatRuns.lastUsefulActionAt,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId))
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(1);
+
+    const total = Number(tally?.total ?? 0);
+    return {
+      total,
+      succeeded: Number(tally?.succeeded ?? 0),
+      failed: Number(tally?.failed ?? 0),
+      succeededWithoutEvidence: Number(tally?.withoutEvidence ?? 0),
+      neverRan: total === 0,
+      last: last
+        ? {
+            status: last.status,
+            error: last.error ?? null,
+            errorCode: last.errorCode ?? null,
+            finishedAt: last.finishedAt ?? null,
+            leftEvidence: last.lastUsefulActionAt !== null,
+          }
+        : null,
+    };
+  }
+
   async function buildAgentDetail(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward, accountableFor] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
+      buildAgentRunHealth(agent.id),
     ]);
 
     return {
@@ -567,6 +611,8 @@ export function agentRoutes(
       // alone cannot tell a reader whether anybody is answerable.
       accountable: toAccountableParty(accountableFor),
       access: accessState,
+      // Derived from runs, not from stored claims. See buildAgentRunHealth.
+      runHealth,
     };
   }
 
@@ -2661,7 +2707,11 @@ export function agentRoutes(
     // the token (subsequent GET /agents/:id/keys never re-exposes it).
     let apiKey: Awaited<ReturnType<typeof svc.createApiKey>> | null = null;
     if (agent.status !== "pending_approval") {
-      apiKey = await svc.createApiKey(agent.id, "default");
+      apiKey = await svc.createApiKey(agent.id, "default", {
+        source: "agent_creation",
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+        createdByAgentId: actor.agentId ?? null,
+      });
       await logActivity(db, {
         companyId,
         actorType: actor.actorType,
@@ -2675,7 +2725,9 @@ export function agentRoutes(
       });
     }
 
-    res.status(201).json({ ...agent, apiKey });
+    // AgentDash (AGE-24): say plainly that this key was minted with the agent,
+    // so nobody finds a "default" key later and wonders who holds it.
+    res.status(201).json({ ...agent, apiKey: apiKey ? { ...apiKey, autoCreated: true } : null });
   });
 
   router.patch("/agents/:id/permissions", validate(updateAgentPermissionsSchema), async (req, res) => {
@@ -3071,6 +3123,31 @@ export function agentRoutes(
       return;
     }
 
+    /*
+     * Refuse `steward` rather than silently dropping it.
+     *
+     * `updateAgentSchema` has no such field, so zod stripped it and this route
+     * answered 200 having changed nothing. That is the worst possible reply: a
+     * caller asked to pair a steward, was told it worked, re-read the agent,
+     * found `steward: null`, and concluded the backend was broken. One run did
+     * exactly that and closed its task on a root cause that did not exist.
+     *
+     * Stewardship is a separate resource with its own history and its own
+     * authority check -- it is deliberately not a column you can PATCH -- so
+     * the honest answer names where it does live.
+     */
+    if (
+      hasOwn(req.body as object, "steward") ||
+      hasOwn(req.body as object, "stewardUserId")
+    ) {
+      res.status(422).json({
+        error:
+          "Stewardship is not set here. Use POST /api/companies/:companyId/agent-stewardships " +
+          "to assign one, or POST /api/companies/:companyId/agents/:agentId/stewardship/transfer to move it.",
+      });
+      return;
+    }
+
     // AgentDash-MK: budget is a ceiling dimension, so it is checked before
     // persistence rather than trusted from the client.
     if (hasOwn(req.body as object, "budgetMonthlyCents")) {
@@ -3454,7 +3531,10 @@ export function agentRoutes(
     // A key is for a person to run this agent from their own terminal, which is
     // exactly what an autonomous agent does not have.
     assertAgentMayHoldKey(agent);
-    const key = await svc.createApiKey(id, req.body.name);
+    const key = await svc.createApiKey(id, req.body.name, {
+      source: "manual",
+      createdByUserId: req.actor.userId ?? null,
+    });
 
     await logActivity(db, {
       companyId: agent.companyId,

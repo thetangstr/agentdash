@@ -86,6 +86,27 @@ export interface AgentSteward {
   since: Date;
 }
 
+/**
+ * Run-derived health. `succeeded` counts processes that exited zero, which is a
+ * weaker claim than "work happened" — `succeededWithoutEvidence` is how many of
+ * those left no comment and no activity behind. `neverRan` is its own state
+ * because an agent that has not started is neither healthy nor failing.
+ */
+export interface AgentRunHealth {
+  total: number;
+  succeeded: number;
+  failed: number;
+  succeededWithoutEvidence: number;
+  neverRan: boolean;
+  last: {
+    status: string;
+    error: string | null;
+    errorCode: string | null;
+    finishedAt: string | Date | null;
+    leftEvidence: boolean;
+  } | null;
+}
+
 export interface Agent {
   id: string;
   companyId: string;
@@ -143,6 +164,12 @@ export interface Agent {
    * rather than implying the agent is autonomous.
    */
   accountable?: AgentAccountableParty | null;
+  /**
+   * What this agent's runs actually show — the only signal here derived after
+   * the fact rather than claimed before it. Absent on list responses; present
+   * on the detail view.
+   */
+  runHealth?: AgentRunHealth | null;
 }
 
 /**
@@ -164,11 +191,23 @@ export interface AgentDetail extends Agent {
   access: AgentAccessState;
 }
 
-export interface AgentKeyCreated {
+// AgentDash (AGE-24): what minted an agent API key.
+export const AGENT_API_KEY_SOURCES = ["agent_creation", "onboarding", "connect_code", "manual"] as const;
+export type AgentApiKeySource = (typeof AGENT_API_KEY_SOURCES)[number];
+
+export interface AgentApiKeyProvenance {
+  source: AgentApiKeySource;
+  createdByUserId: string | null;
+  createdByAgentId: string | null;
+}
+
+export interface AgentKeyCreated extends AgentApiKeyProvenance {
   id: string;
   name: string;
   token: string;
   createdAt: Date;
+  /** Set on the agent-creation response for the key minted alongside the agent. */
+  autoCreated?: boolean;
 }
 
 export interface AgentConfigRevision {

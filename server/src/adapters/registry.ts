@@ -91,6 +91,9 @@ import {
   models as openclawGatewayModels,
 } from "@paperclipai/adapter-openclaw-gateway";
 import { listCodexModels, refreshCodexModels } from "./codex-models.js";
+import { resolveManagedInstructionsEntryPath } from "../services/agent-instructions.js";
+import { HERMES_HUMAN_QUESTION_PROMPT, createHermesHumanQuestionGuard } from "./hermes-human-question.js";
+import { renderHermesDirectivesSection } from "./hermes-directives.js";
 import { listCursorModels } from "./cursor-models.js";
 import {
   execute as piExecute,
@@ -224,6 +227,53 @@ export function getHermesCommandFromContext(ctx: { config?: unknown; agent?: unk
     ?? readNonEmptyString(agentConfig?.hermesCommand)
     ?? process.env.AGENTDASH_HERMES_COMMAND
     ?? DEFAULT_HERMES_COMMAND;
+}
+
+/**
+ * AgentDash (AGE-37): unwrap the secret envelopes persisted in
+ * adapterConfig.env before they reach the Hermes child.
+ *
+ * Env values are normalized to `{ type: "plain", value }` or
+ * `{ type: "secret_ref", secretId }` at persist time (services/secrets.ts).
+ * This wrapper merges agent.adapterConfig.env verbatim, and a verbatim object
+ * reaches the child as the literal string "[object Object]" — every env var a
+ * hermes agent configured was silently that string (observed live on 3199).
+ * Plain envelopes unwrap to their value; secret references cannot be resolved
+ * here (that needs the secret service, which the adapter never sees) and are
+ * dropped with a log line naming the key, because a wrong value is worse than
+ * an absent one.
+ */
+function unwrapHermesEnvValues(
+  env: Record<string, unknown>,
+  onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") {
+      out[key] = value;
+      continue;
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      if (record.type === "plain" && typeof record.value === "string") {
+        out[key] = record.value;
+        continue;
+      }
+      if (record.type === "secret_ref") {
+        void onLog(
+          "stderr",
+          `[agentdash] adapterConfig.env[${key}] is a secret reference; the hermes wrapper cannot resolve it. ` +
+            "Move it to the server process environment or a plain value.\n",
+        );
+        continue;
+      }
+    }
+    void onLog(
+      "stderr",
+      `[agentdash] adapterConfig.env[${key}] is not a string or a plain envelope; dropping it.\n`,
+    );
+  }
+  return out;
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -680,6 +730,22 @@ async function withHermesSessionUsage(
   }
 }
 
+/**
+ * AgentDash (AGE-13): every authenticated Hermes run goes through the
+ * human-question guard. The guard scans the run output for Hermes's clarify
+ * fallback and, if it fired, refuses the run rather than reporting the agent's
+ * default decision as success. See hermes-human-question.ts.
+ */
+async function executeHermesFailClosed(
+  ctx: Parameters<ServerAdapterModule["execute"]>[0],
+): Promise<AdapterExecutionResult> {
+  const guard = createHermesHumanQuestionGuard(ctx.onLog);
+  const result = await withHermesSessionUsage(
+    sanitizeHermesExecutionResult(await executeHermesLocal({ ...ctx, onLog: guard.onLog })),
+  );
+  return guard.failClosed(result);
+}
+
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
   execute: async (ctx) => {
@@ -701,15 +767,20 @@ const hermesLocalAdapter: ServerAdapterModule = {
       );
     }
     if (!taskPatchedCtx.authToken) {
+      // The unauthenticated pass-through hands Hermes the original context
+      // untouched (adapter-registry.test.ts pins that); heartbeat always mints
+      // an authToken, so every AgentDash run takes the guarded path below.
       return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(taskPatchedCtx)));
     }
 
     const existingConfig = (taskPatchedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
     const runConfig = readRecord(normalizedCtx.config) ?? {};
-    const existingEnv =
+    const existingEnv = unwrapHermesEnvValues(
       typeof existingConfig.env === "object" && existingConfig.env !== null && !Array.isArray(existingConfig.env)
-        ? (existingConfig.env as Record<string, string>)
-        : {};
+        ? (existingConfig.env as Record<string, unknown>)
+        : {},
+      taskPatchedCtx.onLog,
+    );
     const explicitApiKey =
       typeof existingEnv.PAPERCLIP_API_KEY === "string" && existingEnv.PAPERCLIP_API_KEY.trim().length > 0;
     const promptTemplate =
@@ -755,10 +826,28 @@ const hermesLocalAdapter: ServerAdapterModule = {
     // alongside the task context. The bundle's instructionsFilePath is persisted on
     // the agent config (and mirrored onto the run config); the Hermes package only
     // renders promptTemplate, so the contract is prepended here.
+    // AgentDash: an agent whose bundle was just backfilled on disk (see
+    // agent-instruction-refresh) may still carry the pre-backfill adapterConfig for
+    // this run; the managed entry-file path is deterministic, so fall back to it.
+    // readHermesInstructionsContract() returns null when no such file exists.
     const instructionsFilePath =
-      readNonEmptyString(existingConfig.instructionsFilePath) ?? readNonEmptyString(runConfig.instructionsFilePath);
+      readNonEmptyString(existingConfig.instructionsFilePath)
+      ?? readNonEmptyString(runConfig.instructionsFilePath)
+      ?? resolveManagedInstructionsEntryPath(taskPatchedCtx.agent);
     const roleContract = instructionsFilePath ? await readHermesInstructionsContract(instructionsFilePath) : null;
-    patchedConfig.promptTemplate = roleContract ? `${roleContract}\n\n${taskTemplate}` : taskTemplate;
+    // AgentDash (AGE-2): the steward's directives. Every first-party adapter
+    // renders context.paperclipAgentDirectives into its prompt; the Hermes
+    // package never did, so directives persisted, reported as pushed, and never
+    // reached the agent. They go after the mandate — the steward's newer word on
+    // HOW to work — and before the harness rules that follow.
+    const directivesNote = renderHermesDirectivesSection(
+      readRecord(taskPatchedCtx.context)?.paperclipAgentDirectives,
+    );
+    // AgentDash (AGE-13): the human-question rule sits between the mandate and
+    // the task so it reads as part of how this agent works, not as task text.
+    patchedConfig.promptTemplate = [roleContract, directivesNote, HERMES_HUMAN_QUESTION_PROMPT, taskTemplate]
+      .filter((section): section is string => typeof section === "string" && section.trim().length > 0)
+      .join("\n\n");
 
     const patchedCtx = {
       ...taskPatchedCtx,
@@ -768,7 +857,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
       },
     };
 
-    return withHermesSessionUsage(sanitizeHermesExecutionResult(await executeHermesLocal(patchedCtx)));
+    return executeHermesFailClosed(patchedCtx);
   },
   // AgentDash: ensure the agent's managed profile exists before the env check so
   // harness-preflight passes for an agent created by any path, and run the check
@@ -792,7 +881,11 @@ const hermesLocalAdapter: ServerAdapterModule = {
   syncSkills: hermesSyncSkills,
   models: hermesModels,
   supportsLocalAgentJwt: true,
-  supportsInstructionsBundle: false,
+  // AgentDash: hermes agents get the managed bundle at creation (routes/agents.ts),
+  // are backfilled by the instruction-refresh service when they have none, and the
+  // execute wrapper above injects the entry file into the live prompt. AGE-8 / GH #554.
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
   agentConfigurationDoc: hermesAgentConfigurationDoc,
   detectModel: () => detectModelFromHermes(),

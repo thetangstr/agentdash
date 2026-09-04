@@ -19,6 +19,7 @@ import {
   issueComments,
 } from "@paperclipai/db";
 import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { deprovisionAgentProfile } from "./hermes-profile.js";
@@ -676,7 +677,18 @@ export function agentService(db: Db) {
       });
     },
 
-    createApiKey: async (id: string, name: string) => {
+    // AgentDash (AGE-24): every minted key records what minted it and, when a
+    // person or agent did, who. Callers that omit provenance are recorded as a
+    // person creating one by hand.
+    createApiKey: async (
+      id: string,
+      name: string,
+      provenance?: {
+        source?: AgentApiKeySource;
+        createdByUserId?: string | null;
+        createdByAgentId?: string | null;
+      },
+    ) => {
       const existing = await getById(id);
       if (!existing) throw notFound("Agent not found");
       if (existing.status === "pending_approval") {
@@ -695,6 +707,9 @@ export function agentService(db: Db) {
           companyId: existing.companyId,
           name,
           keyHash,
+          source: provenance?.source ?? "manual",
+          createdByUserId: provenance?.createdByUserId ?? null,
+          createdByAgentId: provenance?.createdByAgentId ?? null,
         })
         .returning()
         .then((rows) => rows[0]);
@@ -704,6 +719,9 @@ export function agentService(db: Db) {
         name: created.name,
         token,
         createdAt: created.createdAt,
+        source: created.source as AgentApiKeySource,
+        createdByUserId: created.createdByUserId,
+        createdByAgentId: created.createdByAgentId,
       };
     },
 
@@ -714,6 +732,9 @@ export function agentService(db: Db) {
           name: agentApiKeys.name,
           createdAt: agentApiKeys.createdAt,
           revokedAt: agentApiKeys.revokedAt,
+          source: agentApiKeys.source,
+          createdByUserId: agentApiKeys.createdByUserId,
+          createdByAgentId: agentApiKeys.createdByAgentId,
         })
         .from(agentApiKeys)
         .where(eq(agentApiKeys.agentId, id)),
@@ -727,6 +748,9 @@ export function agentService(db: Db) {
           name: agentApiKeys.name,
           createdAt: agentApiKeys.createdAt,
           revokedAt: agentApiKeys.revokedAt,
+          source: agentApiKeys.source,
+          createdByUserId: agentApiKeys.createdByUserId,
+          createdByAgentId: agentApiKeys.createdByAgentId,
         })
         .from(agentApiKeys)
         .where(eq(agentApiKeys.id, keyId))

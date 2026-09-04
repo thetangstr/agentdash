@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import type { Command } from "commander";
+import { registerBridgeInboxCommands } from "./bridge-inbox.js";
 import pc from "picocolors";
 import {
   assertSandboxSupported,
@@ -11,7 +12,7 @@ import {
 import { DEFAULT_INTERVAL_MS, runBridgeWorker } from "../bridge/worker.js";
 
 /**
- * AgentDash-MK: `agentdash bridge run` — the local bridge worker.
+ * AgentDash-MK: `paperclipai bridge run` — the local bridge worker.
  *
  * Runs on a human's own machine, polls AgentDash for tasks, executes each one
  * under a macOS Seatbelt profile in a throwaway workspace, and submits the
@@ -24,8 +25,8 @@ export const TOKEN_ARGV_MESSAGE =
   "Refusing to start: the endpoint token must not be passed as a command-line argument.\n" +
   "`argv` is world-readable via `ps` on a shared machine, so a token there is a token\n" +
   "leaked to every local user. Use one of:\n" +
-  "  AGENTDASH_BRIDGE_TOKEN=<token> agentdash bridge run …\n" +
-  "  agentdash bridge run --token-file /path/to/token";
+  "  AGENTDASH_BRIDGE_TOKEN=<token> paperclipai bridge run …\n" +
+  "  paperclipai bridge run --token-file /path/to/token";
 
 const TOKEN_MISSING_MESSAGE =
   "Refusing to start: no endpoint token found.\n" +
@@ -35,6 +36,13 @@ const TOKEN_MISSING_MESSAGE =
 const SERVER_MISSING_MESSAGE =
   "Refusing to start: no server URL.\n" +
   "Set AGENTDASH_BRIDGE_SERVER in the environment, or pass --server <url>.";
+
+/** Shared with `bridge inbox`, for the same reason `resolveToken` is. */
+export function resolveServer(opts: { server?: string }, env: NodeJS.ProcessEnv): string {
+  const serverUrl = (opts.server ?? env.AGENTDASH_BRIDGE_SERVER ?? "").trim();
+  if (!serverUrl) throw new Error(SERVER_MISSING_MESSAGE);
+  return serverUrl.replace(/\/+$/, "");
+}
 
 export interface BridgeRunOptions {
   server?: string;
@@ -60,7 +68,13 @@ export interface BridgeRunDeps {
   stopSignal?: AbortSignal;
 }
 
-function resolveToken(opts: BridgeRunOptions, env: NodeJS.ProcessEnv, warn: (line: string) => void): string {
+/**
+ * Exported so `bridge inbox` resolves a credential exactly as `bridge run`
+ * does. Two copies would drift on the details that matter here -- the
+ * permissions warning, the empty-file refusal, and the deliberate refusal to
+ * accept a token in argv where `ps` can read it.
+ */
+export function resolveToken(opts: { tokenFile?: string }, env: NodeJS.ProcessEnv, warn: (line: string) => void): string {
   if (opts.tokenFile) {
     let contents: string;
     try {
@@ -218,6 +232,8 @@ export function registerBridgeCommands(program: Command): Command {
   const bridge = program
     .command("bridge")
     .description("AgentDash-MK local bridge — run agent tasks on this machine, sandboxed");
+
+  registerBridgeInboxCommands(bridge);
 
   bridge
     .command("run")

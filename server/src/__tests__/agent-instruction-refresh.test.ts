@@ -33,6 +33,7 @@ interface AgentFixture {
   name: string;
   role: string;
   status: string;
+  adapterType?: string;
   adapterConfig: Record<string, unknown>;
 }
 
@@ -260,7 +261,12 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     expect(fake.writes[0]!.content).toContain("API auth v2");
   });
 
-  it("leaves a bundle-only block alone and reports it as blocksRemoved", async () => {
+  // Behaviour change: a generated block the source no longer carries is REMOVED.
+  //
+  // It used to be audit-only, which meant the generated default could never
+  // shrink — dropping a block left it in every existing agent's bundle for ever,
+  // so agents carried connector material for providers with no connection.
+  it("removes a bundle-only generated block and reports it as blocksRemoved", async () => {
     const { db, queueAgent } = makeDb();
     queueAgent({
       id: AGENT_ID,
@@ -271,7 +277,6 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
       adapterConfig: {},
     });
 
-    // Bundle has all source blocks AS-IS plus an extra deprecated block.
     const withExtraBlock = `${SOURCE_DEFAULT}
 
 <!-- AgentDash: old-deprecated-block -->
@@ -279,7 +284,6 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
 <!-- /AgentDash: old-deprecated-block -->
 `;
     const fake = makeFakeInstructions({ [AGENT_ID]: withExtraBlock });
-
     const svc = agentInstructionRefreshService({
       db: db as any,
       loadSource: makeSourceLoader(),
@@ -287,13 +291,211 @@ describe("agentInstructionRefreshService.refreshIfStale", () => {
     });
 
     const result = await svc.refreshIfStale(AGENT_ID);
-    // No mutation: refreshed=false, blocksRemoved reports the orphan.
-    expect(result.refreshed).toBe(false);
-    expect(result.blocksUpdated).toEqual([]);
-    expect(result.blocksAdded).toEqual([]);
+    expect(result.refreshed).toBe(true);
     expect(result.blocksRemoved).toEqual(["old-deprecated-block"]);
+    expect(fake.writes).toHaveLength(1);
+
+    const written = fake.writes[0]!.content;
+    expect(written).not.toContain("old-deprecated-block");
+    expect(written).not.toContain("## removed feature");
+    // Everything the source still carries survives.
+    expect(written).toContain("goals-eval-hitl");
+    expect(written).toContain("agent-api-auth");
+  });
+
+  // The guarantee that makes removal safe: only GENERATED blocks are ours to
+  // withdraw. Steward-authored prose and agent-specific text are never matched.
+  it("removal never touches steward prose or agent-specific text", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const bundle = `# Casper
+
+You are Casper, Chief of Staff to the Chief Business Officer.
+
+## Steward note
+
+Call Titus before touching a client file.
+
+${SOURCE_DEFAULT}
+
+<!-- AgentDash: old-deprecated-block -->
+## removed feature
+<!-- /AgentDash: old-deprecated-block -->
+
+## Steward note, part two
+
+This paragraph sits after the removed block and must survive.
+`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.blocksRemoved).toEqual(["old-deprecated-block"]);
+
+    const written = fake.writes[0]!.content;
+    expect(written).toContain("You are Casper, Chief of Staff to the Chief Business Officer.");
+    expect(written).toContain("Call Titus before touching a client file.");
+    expect(written).toContain("This paragraph sits after the removed block and must survive.");
+    expect(written).not.toContain("## removed feature");
+    // No accumulating gap where the block was.
+    expect(written).not.toMatch(/\n{3,}/);
+  });
+
+  // Per-agent suppression: a generated block this agent should not carry.
+  //
+  // Some generated blocks describe a capability or plan tier an agent does not
+  // have. Dropping them from the shared source would change every agent's
+  // mandate, so suppression is per-agent and opt-in.
+  it("suppresses a named generated block for one agent only", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth"] },
+    });
+
+    const fake = makeFakeInstructions({ [AGENT_ID]: SOURCE_DEFAULT });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.refreshed).toBe(true);
+    expect(result.blocksRemoved).toEqual(["agent-api-auth"]);
+
+    const written = fake.writes[0]!.content;
+    expect(written).not.toContain("<!-- AgentDash: agent-api-auth");
+    // Everything not suppressed is untouched.
+    expect(written).toContain("<!-- AgentDash: goals-eval-hitl");
+  });
+
+  it("never re-adds a suppressed block on a later refresh", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth"] },
+    });
+
+    // Bundle already has the block stripped — the steady state after one pass.
+    const stripped = SOURCE_DEFAULT.replace(
+      /<!-- AgentDash: agent-api-auth[\s\S]*?<!-- \/AgentDash: agent-api-auth -->/,
+      "",
+    );
+    const fake = makeFakeInstructions({ [AGENT_ID]: stripped });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    expect(result.blocksAdded).toEqual([]);
+    expect(result.refreshed).toBe(false);
     expect(fake.writes).toHaveLength(0);
-    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("suppression does not leak to an agent without a list", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const stripped = SOURCE_DEFAULT.replace(
+      /<!-- AgentDash: agent-api-auth[\s\S]*?<!-- \/AgentDash: agent-api-auth -->/,
+      "",
+    );
+    const fake = makeFakeInstructions({ [AGENT_ID]: stripped });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+    // No list, so the block comes back exactly as it does today.
+    expect(result.blocksAdded).toEqual(["agent-api-auth"]);
+  });
+
+  it("suppression cannot reach steward prose", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Casper",
+      role: "chief_of_staff",
+      status: "active",
+      adapterConfig: { instructionsSuppressedBlocks: ["agent-api-auth", "not-a-real-block"] },
+    });
+
+    const bundle = `# Casper\n\nSteward note: call Titus first.\n\n${SOURCE_DEFAULT}`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    await svc.refreshIfStale(AGENT_ID);
+    const written = fake.writes[0]!.content;
+    expect(written).toContain("# Casper");
+    expect(written).toContain("Steward note: call Titus first.");
+  });
+
+  it("is idempotent after a removal", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const bundle = `${SOURCE_DEFAULT}
+
+<!-- AgentDash: old-deprecated-block -->
+## removed feature
+<!-- /AgentDash: old-deprecated-block -->
+`;
+    const fake = makeFakeInstructions({ [AGENT_ID]: bundle });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+    });
+
+    expect((await svc.refreshIfStale(AGENT_ID)).refreshed).toBe(true);
+    const second = await svc.refreshIfStale(AGENT_ID);
+    expect(second.refreshed).toBe(false);
+    expect(second.blocksRemoved).toEqual([]);
+    expect(fake.writes).toHaveLength(1);
   });
 
   it("updates multiple stale blocks in a single activity_log row", async () => {
@@ -539,5 +741,167 @@ describe("agentInstructionRefreshService.refreshAllForCompany", () => {
     expect(Object.keys(out).sort()).toEqual(["a1", "a2"]);
     expect(out.a1!.refreshed).toBe(true);
     expect(out.a2!.refreshed).toBe(false);
+  });
+});
+
+describe("agentInstructionRefreshService backfill (AGE-8 / GH #554)", () => {
+  const DEFAULT_BUNDLE: Record<string, string> = {
+    "AGENTS.md": "Default worker bundle prose.\n",
+    "HEARTBEAT.md": "heartbeat\n",
+  };
+
+  function makeBackfillFake(opts: { mode: "managed" | "external" | null }) {
+    const bundles: Record<string, string> = {};
+    const materializeCalls: Array<{ files: Record<string, string>; options: unknown }> = [];
+
+    const readFile = vi.fn(async (agent: { id: string }, _path: string) => {
+      const content = bundles[agent.id];
+      if (content === undefined) throw new Error("Instructions file not found");
+      return { path: "AGENTS.md", content, size: content.length };
+    });
+    const writeFile = vi.fn(async (agent: { id: string }, _path: string, content: string) => {
+      bundles[agent.id] = content;
+      return { adapterConfig: {} };
+    });
+    const getBundle = vi.fn(async () => ({ mode: opts.mode }));
+    const materializeManagedBundle = vi.fn(async (
+      agent: { id: string; adapterConfig?: unknown },
+      files: Record<string, string>,
+      options: unknown,
+    ) => {
+      materializeCalls.push({ files, options });
+      // Mirror the real contract: the entry file becomes readable, and the
+      // returned adapterConfig carries the managed-bundle keys.
+      bundles[agent.id] = files["AGENTS.md"] ?? "";
+      return {
+        bundle: {},
+        adapterConfig: {
+          ...((agent.adapterConfig ?? {}) as Record<string, unknown>),
+          instructionsBundleMode: "managed",
+          instructionsFilePath: "/managed/AGENTS.md",
+        },
+      };
+    });
+
+    return {
+      instructions: { readFile, writeFile, getBundle, materializeManagedBundle } as any,
+      bundles,
+      materializeCalls,
+    };
+  }
+
+  it("backfills the default managed bundle when none exists and the adapter supports bundles", async () => {
+    const { db, queueAgent } = makeDb();
+    const fixture: AgentFixture = {
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Hermes Worker",
+      role: "general",
+      status: "active",
+      adapterType: "hermes_local",
+      adapterConfig: { hermesCommand: "/bin/hermes", promptTemplate: "legacy prompt" },
+    };
+    queueAgent(fixture);
+
+    const fake = makeBackfillFake({ mode: null });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: (t) => t === "hermes_local",
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result.backfilled).toBe(true);
+    expect(result.refreshed).toBe(true);
+
+    // Materialized non-destructively: skip-existing so partial customizations win.
+    expect(fake.materializeCalls).toHaveLength(1);
+    expect(fake.materializeCalls[0]!.options).toMatchObject({
+      entryFile: "AGENTS.md",
+      replaceExisting: false,
+      skipExisting: true,
+    });
+
+    // adapterConfig persisted: managed keys added, caller config preserved,
+    // legacy prompt template stripped.
+    expect(db.update).toHaveBeenCalled();
+    const written = fixture.adapterConfig as Record<string, unknown>;
+    expect(written.instructionsBundleMode).toBe("managed");
+    expect(written.hermesCommand).toBe("/bin/hermes");
+    expect(written).not.toHaveProperty("promptTemplate");
+
+    // The backfilled AGENTS.md then went through the normal block refresh in
+    // the same pass — the default prose gained the source's AgentDash blocks.
+    expect(fake.bundles[AGENT_ID]).toContain("Default worker bundle prose.");
+    expect(fake.bundles[AGENT_ID]).toContain("AgentDash: goals-eval-hitl");
+    expect(result.blocksAdded).toEqual(["goals-eval-hitl", "agent-api-auth"]);
+
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "instructions_backfilled" }),
+    );
+  });
+
+  it("does not backfill when the adapter does not support bundles", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "Process Worker",
+      role: "general",
+      status: "active",
+      adapterConfig: {},
+    });
+
+    const fake = makeBackfillFake({ mode: null });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: () => false,
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result).toEqual({
+      refreshed: false,
+      blocksUpdated: [],
+      blocksAdded: [],
+      blocksRemoved: [],
+    });
+    expect(fake.materializeCalls).toHaveLength(0);
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it("does not backfill an externally managed bundle", async () => {
+    const { db, queueAgent } = makeDb();
+    queueAgent({
+      id: AGENT_ID,
+      companyId: COMPANY_ID,
+      name: "External Bundle Worker",
+      role: "general",
+      status: "active",
+      adapterType: "hermes_local",
+      adapterConfig: { instructionsBundleMode: "external", instructionsRootPath: "/elsewhere" },
+    });
+
+    const fake = makeBackfillFake({ mode: "external" });
+    const svc = agentInstructionRefreshService({
+      db: db as any,
+      loadSource: makeSourceLoader(),
+      instructions: fake.instructions,
+      supportsBundle: () => true,
+      loadDefaultBundle: async () => DEFAULT_BUNDLE,
+    });
+
+    const result = await svc.refreshIfStale(AGENT_ID);
+
+    expect(result.refreshed).toBe(false);
+    expect(result.backfilled).toBeUndefined();
+    expect(fake.materializeCalls).toHaveLength(0);
   });
 });

@@ -2,13 +2,14 @@ import { Router } from "express";
 import type { Request } from "express";
 import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { companies } from "@paperclipai/db";
+import { agents, companies } from "@paperclipai/db";
 import { pushAgentDirectivesSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { agentDirectivesService } from "../services/agent-directives.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertCompanyAccess } from "./authz.js";
 import { requireActiveStewardHarness } from "./agentdash-mk-harness-auth.js";
+import { describeRuntimeDirectiveDelivery } from "../adapters/runtime-directives-support.js";
 
 /**
  * AgentDash-MK: the harness→agent directives channel.
@@ -85,7 +86,21 @@ export function agentDirectivesRoutes(db: Db) {
         directives: req.body.directives,
         pushedByUserId: steward.userId,
       });
-      res.status(201).json({ directive });
+
+      // AgentDash (AGE-2): say whether the agent's runtime will actually see
+      // this. "Pushed" used to mean "stored"; for an adapter that never renders
+      // the directives that read as applied when it was not.
+      const agentRow = await db
+        .select({ adapterType: agents.adapterType })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .then((rows) => rows[0] ?? null);
+      const delivery = describeRuntimeDirectiveDelivery(agentRow?.adapterType ?? "unknown");
+      res.status(201).json({
+        directive,
+        delivery,
+        ...(delivery.delivered ? {} : { warnings: [delivery.detail] }),
+      });
     },
   );
 

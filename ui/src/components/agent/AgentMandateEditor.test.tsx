@@ -9,6 +9,7 @@ const mockAgentsApi = vi.hoisted(() => ({
   instructionsBundle: vi.fn(),
   instructionsFile: vi.fn(),
   saveInstructionsFile: vi.fn(),
+  refreshInstructions: vi.fn(),
 }));
 
 vi.mock("@/api/agents", () => ({ agentsApi: mockAgentsApi }));
@@ -43,6 +44,7 @@ describe("AgentMandateEditor", () => {
     mockAgentsApi.instructionsBundle.mockResolvedValue({ entryFile: "AGENTS.md", mode: "managed" });
     mockAgentsApi.instructionsFile.mockResolvedValue({ content: "Be helpful." });
     mockAgentsApi.saveInstructionsFile.mockResolvedValue({});
+    mockAgentsApi.refreshInstructions.mockResolvedValue({ refreshed: true, backfilled: true });
   });
 
   afterEach(() => {
@@ -117,6 +119,27 @@ describe("AgentMandateEditor", () => {
     // what a mandate is even when editing is unavailable here.
     expect(container.textContent).toMatch(/administrator configures where/i);
     expect(container.textContent).toMatch(/job description and rulebook/i);
+  });
+
+  it("says the mandate does not exist yet, and creates it on demand, when there is no bundle", async () => {
+    // AGE-8: an agent on a bundle-capable adapter with no bundle yet was told
+    // its mandate was "externally managed" — claiming an administrator put it
+    // somewhere when nobody had. The honest branch says nothing exists and
+    // offers to materialize the default bundle.
+    mockAgentsApi.instructionsBundle.mockResolvedValue({ entryFile: "AGENTS.md", mode: null });
+
+    await render();
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.textContent).toMatch(/no mandate file yet/i);
+    expect(container.textContent).not.toMatch(/externally managed/i);
+
+    const create = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Create mandate now"),
+    )!;
+    expect(create).toBeTruthy();
+    await act(async () => create.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(mockAgentsApi.refreshInstructions).toHaveBeenCalledWith("company-1", "agent-1");
   });
 
   it("surfaces a refused save instead of appearing to succeed", async () => {

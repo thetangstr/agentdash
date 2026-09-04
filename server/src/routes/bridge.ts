@@ -6,6 +6,9 @@ import { companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { stewardInboxService } from "../services/steward-inbox.js";
+import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
+import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -26,11 +29,25 @@ import { assertBoard, assertCompanyAccess } from "./authz.js";
  * The **human- and agent-facing** routes are ordinary company-scoped API
  * surface with the usual profile gate and authorization.
  */
-export function bridgeRoutes(db: Db) {
+/**
+ * @param options Threaded to the shared post-decision effects, so an approval
+ * resolved from a steward inbox wakes its requesting agent under the same
+ * configuration as the same decision taken on the board. Without this the two
+ * surfaces would differ for plugin-hosted agents.
+ */
+export function bridgeRoutes(
+  db: Db,
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    autoDispatchQueuedRuns?: boolean;
+  } = {},
+) {
   const router = Router();
   const bridge = bridgeService(db);
   const access = accessService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  const inbox = stewardInboxService(db);
+  const inboxDecisions = stewardInboxDecisionService(db, options);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -90,6 +107,69 @@ export function bridgeRoutes(db: Db) {
       },
       resultToken: claimed.resultToken,
     });
+  });
+
+  /**
+   * Read everything this machine has not acknowledged.
+   *
+   * Separate from `/bridge/poll` on purpose. A poll CLAIMS one task and hands
+   * back a single-use token to answer it; a sync claims nothing, mutates
+   * nothing, and can be repeated safely. Folding the inbox into the poll would
+   * have made an idempotent read share a route with a leased write.
+   *
+   * Pass `includeDigest: true` for the ordered standing summary -- urgent
+   * approvals, then blockers, then completions. That is a projection of how
+   * things stand rather than a replay of the events above, so it answers "what
+   * is waiting" while the event list answers "what changed".
+   */
+  router.post("/bridge/inbox/sync", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+
+    const rawLimit = req.body?.limit;
+    const limit = typeof rawLimit === "number" ? rawLimit : undefined;
+    // Asked for on startup and on reconnect, not on every poll. The digest is
+    // several queries and its answer barely moves while a steward is idle, so
+    // making it the default would spend most of its cost on nobody looking.
+    const includeDigest = req.body?.includeDigest === true;
+    const result = await inbox.syncForEndpoint(endpointId, { limit, includeDigest });
+    res.json(result);
+  });
+
+  /**
+   * Move this machine's position forward.
+   *
+   * The client says what it applied; the server does not infer it from the
+   * fact that a sync happened. That is what makes delivery at-least-once
+   * rather than at-most-once: a machine that dies mid-apply gets the same
+   * events again instead of losing them.
+   */
+  router.post("/bridge/inbox/ack", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    const seq = req.body?.seq;
+    if (typeof seq !== "number") throw badRequest("seq is required and must be a number");
+    const result = await inbox.acknowledge(endpointId, seq);
+    res.json(result);
+  });
+
+  /**
+   * Resolve an approval from the inbox.
+   *
+   * The endpoint credential is not the authority here; the handle is, and only
+   * for the one approval and revision it was minted against. Authority is then
+   * re-resolved against the endpoint's owner, so a steward whose permission
+   * changed since the sync is refused even holding a valid handle.
+   *
+   * Answers 200 with `ok: false` for the refusals a steward can actually hit —
+   * a spent handle, a superseded revision, a decision someone else already
+   * made. Those are outcomes to show them, not server faults.
+   */
+  router.post("/bridge/inbox/decide", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    await bridge.touchEndpoint(endpointId);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await inboxDecisions.decide(endpointId, token));
   });
 
   router.post("/bridge/result", async (req, res) => {
@@ -240,6 +320,11 @@ export function bridgeRoutes(db: Db) {
     // provider cannot fail this response.
     if (task.approvalId) {
       await cardDelivery.deliverForApproval(task.approvalId);
+      // The same stall, recorded durably. Card delivery reaches paired chat
+      // channels only; without this an `act` task's approval never enters the
+      // steward inbox, so a machine syncing from its cursor would never learn
+      // it was waiting -- which is the one thing the inbox exists to prevent.
+      await inbox.recordApprovalEvent(task.approvalId, "approval.opened");
     }
 
     // 202 for an act task: nothing has been dispatched, a human must decide.

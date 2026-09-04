@@ -44,6 +44,7 @@ import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
 import { InstanceAbout } from "./pages/InstanceAbout";
+import { InstanceUpdates } from "./pages/InstanceUpdates";
 import { InstanceChangelog } from "./pages/InstanceChangelog";
 import { InstanceExperimentalSettings } from "./pages/InstanceExperimentalSettings";
 import { ProfileSettings } from "./pages/ProfileSettings";
@@ -84,6 +85,8 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
+import ConnectYourMachineGuide from "./pages/ConnectYourMachineGuide";
+import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
 
@@ -167,6 +170,7 @@ function boardRoutes() {
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
+      <Route path="my-agent/connect-machine" element={<ConnectYourMachineGuide />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/company" element={<CompanyInbox />} />
@@ -317,6 +321,10 @@ sends. No agent reports a number it cannot source.`;
 export function App() {
   return (
     <>
+      {/* Tells a person when their tab is running an older build than the
+          server is serving. Mounted here so it covers every route, including
+          the public ones, and never reloads on its own -- see the component. */}
+      <NewVersionNotice />
       <Routes>
         <Route path="auth" element={<AuthPage />} />
         <Route path="forgot-password" element={<ForgotPasswordPage />} />
@@ -382,6 +390,7 @@ export function App() {
             <Route path="plugins" element={<PluginManager />} />
             <Route path="plugins/:pluginId" element={<PluginSettings />} />
             <Route path="adapters" element={<AdapterManager />} />
+            <Route path="updates" element={<InstanceUpdates />} />
             <Route path="about" element={<InstanceAbout />} />
             <Route path="changelog" element={<InstanceChangelog />} />
           </Route>
