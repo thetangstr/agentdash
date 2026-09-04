@@ -84,3 +84,70 @@ describe("bridge command name", () => {
     expect(offenders, `surfaces still naming a CLI that does not exist:\n${offenders.join("\n")}`).toEqual([]);
   });
 });
+
+/**
+ * AgentDash: one canonical user-facing command.
+ *
+ * The repo ships two names for the same CLI: `paperclipai`, which is the bin
+ * `cli/package.json` declares, and `agentdash`, which is what the in-repo
+ * wrapper is called. Both are installed, and that is fine — what is not fine is
+ * teaching both, because only one of them is safe to teach.
+ *
+ * `agentdash` on the public npm registry belongs to an unrelated third party.
+ * Somebody without our wrapper who follows an instruction to run it reaches a
+ * stranger's package, which prints a help screen and exits 0 — indistinguishable
+ * from success. That happened to a steward. So the canonical name is the
+ * packaged bin, and the alias is never the name we print.
+ */
+describe("canonical CLI command name", () => {
+  const cliPackage = JSON.parse(readFileSync(path.join(repoRoot, "cli", "package.json"), "utf8")) as {
+    bin?: Record<string, string>;
+  };
+  const canonical = Object.keys(cliPackage.bin ?? {})[0];
+  const installer = readFileSync(path.join(repoRoot, "scripts", "install-cli.sh"), "utf8");
+
+  it("is the bin the CLI package declares", () => {
+    expect(canonical).toBe("paperclipai");
+  });
+
+  it("is what the installer puts on PATH, alongside the alias", () => {
+    expect(installer).toContain(`create_symlink "${canonical}"`);
+    expect(installer).toContain('create_symlink "agentdash"');
+  });
+
+  it("is the name the installer tells a person to type", () => {
+    const told = installer.match(/Try \\?`([a-z-]+) --help/);
+    expect(told?.[1], "the installer's closing line must name the canonical command").toBe(
+      canonical,
+    );
+    expect(installer, "user-facing messages must not be prefixed with the alias").not.toMatch(
+      /echo "agentdash: /,
+    );
+  });
+
+  /**
+   * `"$VAR…"` swallows the variable: bash reads the multibyte ellipsis as part
+   * of the identifier, so the message prints without the value. Both shell
+   * scripts that did this said "installing into " and then nothing.
+   */
+  it("never interpolates a bare variable straight into a multibyte character", () => {
+    // Its own walk: the shared `walk` filters by SCANNED_EXTENSIONS, which
+    // does not include .sh, so reusing it would make this assertion vacuous.
+    const shellScripts: string[] = [];
+    const collect = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        if (SKIPPED_DIRS.has(entry)) continue;
+        const absolute = path.join(dir, entry);
+        if (statSync(absolute).isDirectory()) collect(absolute);
+        else if (entry.endsWith(".sh")) shellScripts.push(absolute);
+      }
+    };
+    collect(path.join(repoRoot, "scripts"));
+    expect(shellScripts.length, "expected to find shell scripts to scan").toBeGreaterThan(3);
+
+    const offenders = shellScripts
+      .filter((file) => /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/.test(readFileSync(file, "utf8")))
+      .map((file) => path.relative(repoRoot, file));
+    expect(offenders, "brace these as ${VAR} or the value is silently dropped").toEqual([]);
+  });
+});

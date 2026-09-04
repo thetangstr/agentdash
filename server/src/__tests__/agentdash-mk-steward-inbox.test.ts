@@ -512,6 +512,44 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(rows[0]!.agentId).toBeNull();
   });
 
+  /**
+   * The company this exercises is the one a real steward produces: an approval
+   * from a bridge task, and callback handles minted by opening the inbox.
+   *
+   * That combination could not be deleted. `channel_callback_tokens` was in no
+   * purge list, and `bridge_tasks` was purged AFTER the approvals it references.
+   * Both surfaced from an end-to-end run rather than from reading the code, and
+   * the earlier company-delete test missed them because it created neither a
+   * bridge task nor a handle.
+   */
+  it("deletes a company that actually used the bridge and the inbox", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await actingEndpoint(company.id, steward.principalId);
+    const bridge = bridgeService(db);
+    const task = await bridge.createTask(company.id, {
+      endpointId: endpoint.id,
+      requestedByAgentId: agent.id,
+      taskClass: "act",
+      instruction: "something gated",
+    });
+    await stewardInboxService(db).recordApprovalEvent(task.approvalId!, "approval.opened");
+    // Opening the inbox is what mints the handles.
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    expect(synced.events.some((event) => event.actions)).toBe(true);
+    expect(await db.select().from(channelCallbackTokens)).not.toHaveLength(0);
+    expect(await db.select().from(bridgeTasks)).not.toHaveLength(0);
+
+    await expect(companyService(db).remove(company.id)).resolves.toBeTruthy();
+
+    for (const [label, rows] of [
+      ["callback tokens", await db.select().from(channelCallbackTokens)],
+      ["bridge tasks", await db.select().from(bridgeTasks)],
+      ["inbox events", await db.select().from(stewardInboxEvents)],
+    ] as const) {
+      expect(rows, `${label} outlived the company`).toHaveLength(0);
+    }
+  });
+
   it("purges the log when its company is deleted", async () => {
     const { company, steward, agent } = await seed();
     const approval = await makeApproval(company.id, agent.id);

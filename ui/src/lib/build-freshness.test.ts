@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { isStale, parseEntryScript, runningEntryScript } from "./build-freshness";
+import {
+  isStale,
+  looksLikeStaleAssetError,
+  parseEntryScript,
+  runningEntryScript,
+} from "./build-freshness";
 
 function docWith(html: string, baseURI = "http://board.test/"): Document {
   const doc = document.implementation.createHTMLDocument("t");
@@ -89,5 +94,46 @@ describe("isStale", () => {
     }));
     await isStale({ doc: docWith(RUNNING), fetchImpl: impl as unknown as typeof fetch });
     expect(impl.mock.calls[0]?.[1]).toMatchObject({ cache: "no-store" });
+  });
+});
+
+describe("looksLikeStaleAssetError", () => {
+  /**
+   * Measured on the instance: after a deploy the previous entry script 404s.
+   * These are the wordings browsers use when that happens mid-session.
+   */
+  it.each([
+    "TypeError: Failed to fetch dynamically imported module: https://board/assets/index-OLD.js",
+    "TypeError: error loading dynamically imported module",
+    "TypeError: Importing a module script failed.",
+    "ChunkLoadError: Loading chunk 42 failed.",
+  ])("recognises %s", (message) => {
+    expect(looksLikeStaleAssetError(new Error(message.replace(/^\w+: /, "")))).toBe(true);
+  });
+
+  it("recognises a bare string reason", () => {
+    expect(looksLikeStaleAssetError("Failed to fetch dynamically imported module")).toBe(true);
+  });
+
+  it("recognises the error by name when the message does not say it", () => {
+    const err = new Error("Loading chunk 7 failed.");
+    err.name = "ChunkLoadError";
+    expect(looksLikeStaleAssetError(err)).toBe(true);
+  });
+
+  /** Ordinary application errors must not offer people a reload. */
+  it.each([
+    new Error("Request failed with status 500"),
+    new Error("Cannot read properties of undefined"),
+    new TypeError("x is not a function"),
+    "approval revision conflict",
+  ])("ignores unrelated failure %#", (reason) => {
+    expect(looksLikeStaleAssetError(reason)).toBe(false);
+  });
+
+  it("ignores values it cannot read", () => {
+    expect(looksLikeStaleAssetError(undefined)).toBe(false);
+    expect(looksLikeStaleAssetError(null)).toBe(false);
+    expect(looksLikeStaleAssetError({ nope: true })).toBe(false);
   });
 });

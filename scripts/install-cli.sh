@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
-# AgentDash: install the `agentdash` CLI onto the user's PATH.
+# AgentDash: install the `paperclipai` CLI onto the user's PATH.
+#
+# `paperclipai` is the canonical user-facing command, and both constraints that
+# bear on the choice point the same way: it is the bin this repo's CLI package
+# actually declares, and it is the name our instructions are allowed to print.
+# The bare name `agentdash` on the public npm registry belongs to an unrelated
+# third party, so telling somebody to run it sends them to a stranger's package
+# when they do not have this wrapper installed -- which has already happened to
+# a steward once. `bridge-command-name.test.ts` refuses that spelling in any
+# instruction surface for exactly that reason.
+#
+# `agentdash` is still symlinked, because it is what the in-repo wrapper is
+# called and people have it in their shell history. It is an alias, not the
+# name we teach.
 #
 # Picks the best writable directory in this order:
 #   1. /usr/local/bin (Intel Mac default, common on Linux)
 #   2. /opt/homebrew/bin (Apple Silicon Mac default with Homebrew)
 #   3. ~/.local/bin (modern XDG default; works without sudo)
 #
-# Creates a symlink at <chosen-dir>/agentdash → bin/agentdash. Also
-# symlinks `paperclipai` so the legacy command name still works.
+# Creates symlinks at <chosen-dir>/paperclipai and <chosen-dir>/agentdash,
+# both pointing at bin/agentdash.
 #
 # If the chosen directory isn't on PATH, prints the export line the user
 # needs to add to their shell rc.
@@ -48,9 +61,9 @@ choose_target() {
 }
 
 if ! TARGET_DIR="$(choose_target)"; then
-  echo "agentdash: couldn't find a writable directory for the CLI symlink." >&2
-  echo "agentdash: tried ${CANDIDATES[*]}" >&2
-  echo "agentdash: try \`sudo bash $0\` or create one of those dirs writable." >&2
+  echo "paperclipai: couldn't find a writable directory for the CLI symlink." >&2
+  echo "paperclipai: tried ${CANDIDATES[*]}" >&2
+  echo "paperclipai: try \`sudo bash $0\` or create one of those dirs writable." >&2
   exit 1
 fi
 
@@ -60,8 +73,8 @@ create_symlink() {
 
   if [ -e "$target" ] || [ -L "$target" ]; then
     if [ ! -L "$target" ]; then
-      echo "agentdash: refusing to overwrite regular file at $target" >&2
-      echo "agentdash: rename or remove it first, then re-run." >&2
+      echo "paperclipai: refusing to overwrite regular file at $target" >&2
+      echo "paperclipai: rename or remove it first, then re-run." >&2
       return 1
     fi
     rm -f "$target"
@@ -70,25 +83,25 @@ create_symlink() {
   echo "  ✓ $target → $WRAPPER"
 }
 
-echo "Installing AgentDash CLI symlinks into $TARGET_DIR…"
-create_symlink "agentdash"
+echo "Installing AgentDash CLI symlinks into ${TARGET_DIR}…"
 create_symlink "paperclipai"
+create_symlink "agentdash"
 
 # PATH check — warn the user if the target dir isn't already on PATH.
 case ":$PATH:" in
   *":$TARGET_DIR:"*)
     echo ""
-    echo "Done. Try \`agentdash --help\` from any directory."
+    echo "Done. Try \`paperclipai --help\` from any directory."
     ;;
   *)
     echo ""
-    echo "agentdash: $TARGET_DIR isn't on your PATH yet."
+    echo "paperclipai: $TARGET_DIR isn't on your PATH yet."
     case "$SHELL" in
       */zsh)  RC="$HOME/.zshrc"  ;;
       */bash) RC="$HOME/.bashrc" ;;
       *)      RC="your shell rc" ;;
     esac
-    echo "agentdash: add this line to $RC and re-open your terminal:"
+    echo "paperclipai: add this line to $RC and re-open your terminal:"
     echo ""
     echo "    export PATH=\"$TARGET_DIR:\$PATH\""
     echo ""

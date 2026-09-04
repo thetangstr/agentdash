@@ -82,3 +82,34 @@ export async function isStale(deps: FreshnessDeps = {}): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Signatures of a dynamic import that failed because the asset is gone.
+ *
+ * Vite emits content-hashed assets and a deploy replaces them, so a tab held
+ * open across a deploy 404s on any code-split chunk it has not already cached.
+ * Measured on this instance: after one deploy the previous entry script
+ * returned 404 while the new one returned 200. That surfaces as a blank screen
+ * or a thrown error on the next navigation — not as stale-looking UI.
+ *
+ * Browsers word it differently, so match on all of them rather than one.
+ */
+const STALE_ASSET_ERROR = [
+  /failed to fetch dynamically imported module/i,
+  /error loading dynamically imported module/i,
+  /importing a module script failed/i,
+  /^chunkloaderror/i,
+  /loading chunk \S+ failed/i,
+];
+
+/** Whether a thrown value looks like a chunk that no longer exists. */
+export function looksLikeStaleAssetError(reason: unknown): boolean {
+  const text =
+    reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : typeof reason === "string"
+        ? reason
+        : "";
+  if (!text) return false;
+  return STALE_ASSET_ERROR.some((pattern) => pattern.test(text));
+}

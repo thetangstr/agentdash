@@ -57,6 +57,7 @@ import {
   agentRuns,
   agentConnectorOverrides,
   connections,
+  channelCallbackTokens,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -456,6 +457,18 @@ export function companyService(db: Db) {
         // to approvals via approval_id (AGE-3: company delete FK violation).
         await tx.delete(budgetIncidents).where(eq(budgetIncidents.companyId, id));
         await tx.delete(budgetPolicies).where(eq(budgetPolicies.companyId, id));
+        // Both of these reference `approvals`, so they have to go first.
+        //
+        // Found by an end-to-end proof rather than by reading: deleting a
+        // company that had ever used the bridge failed on
+        // `channel_callback_tokens_approval_id_approvals_id_fk`, and then again
+        // on `bridge_tasks_approval_id_approvals_id_fk` once the first was
+        // cleared. `channel_callback_tokens` was in no purge list at all, and
+        // `bridge_tasks` was below this line. Every inbox sync mints callback
+        // handles, so any MK company whose steward had opened their inbox could
+        // not be deleted.
+        await tx.delete(channelCallbackTokens).where(eq(channelCallbackTokens.companyId, id));
+        await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
         await tx.delete(approvals).where(eq(approvals.companyId, id));
         await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
         await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
@@ -478,7 +491,6 @@ export function companyService(db: Db) {
         // AgentDash (AGE-36): the remaining agent-referencing tables, all
         // NO ACTION, all scoped by company. bridge_tasks first (it references
         // bridge_endpoints), routines cascades its own triggers and runs.
-        await tx.delete(bridgeTasks).where(eq(bridgeTasks.companyId, id));
         await tx.delete(bridgeEndpoints).where(eq(bridgeEndpoints.companyId, id));
         await tx.delete(agentDirectives).where(eq(agentDirectives.companyId, id));
         await tx.delete(agentMemory).where(eq(agentMemory.companyId, id));
