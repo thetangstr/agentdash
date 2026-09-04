@@ -7,6 +7,7 @@ import { approvalAuthorityService } from "./approval-authority.js";
 import { approvalDecisionEffectsService } from "./approval-decision-effects.js";
 import { approvalService } from "./index.js";
 import {
+  DECIDABLE_STATUSES,
   STEWARD_INBOX_TOKEN_PROVIDER,
   stewardInboxService,
 } from "./steward-inbox.js";
@@ -149,13 +150,28 @@ export function stewardInboxDecisionService(
         { err: error, approvalId: record.approvalId, endpointId },
         "steward inbox decision refused",
       );
+
+      /**
+       * "Already decided" and "not your decision to make" both surface here as
+       * a refusal from the authority service, and telling a steward they lack
+       * permission for something they are perfectly entitled to decide -- and
+       * may have just decided themselves -- is the wrong answer to their face.
+       *
+       * So re-read the approval and say which it is. Read after the failure
+       * rather than before: checking first would race a concurrent decision and
+       * report the stale answer.
+       */
+      const current = await approvalsSvc.getById(record.approvalId).catch(() => null);
+      const settled = current && !DECIDABLE_STATUSES.has(current.status);
+
       return {
         ok: false,
         approvalId: record.approvalId,
-        reason:
-          status === 409
+        reason: settled
+          ? `This was already ${current!.status} — nothing more to do. Sync again for the current state.`
+          : status === 409
             ? "This request changed since you saw it. Sync again and re-read it."
-            : "You are not permitted to decide this.",
+            : "You are not the person who decides this one.",
       };
     }
   }

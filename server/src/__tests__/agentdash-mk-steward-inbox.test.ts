@@ -800,6 +800,29 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(replay.ok).toBe(false);
   });
 
+  /**
+   * Telling a steward they lack permission for something they are entitled to
+   * decide -- and may have just decided themselves -- is the wrong answer to
+   * their face. The unused half of a handle pair is the ordinary way to hit it:
+   * approve, then the reject handle is still in hand.
+   */
+  it("says an approval was already decided rather than claiming you may not decide it", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const approval = await makeApproval(company.id, agent.id);
+    await stewardInboxService(db).recordApprovalEvent(approval.id, "approval.opened");
+    const synced = await stewardInboxService(db).syncForEndpoint(endpoint.id);
+    const handles = synced.events[0]!.actions!;
+    const decisions = stewardInboxDecisionService(db, { autoDispatchQueuedRuns: false });
+
+    expect(await decisions.decide(endpoint.id, handles.approve)).toMatchObject({ ok: true });
+
+    const second = await decisions.decide(endpoint.id, handles.reject);
+    expect(second.ok).toBe(false);
+    expect(second.reason).toMatch(/already approved/i);
+    expect(second.reason).not.toMatch(/not the person|not permitted/i);
+  });
+
   it("makes a handle inert on any machine but the one it was minted for", async () => {
     const { company, steward, agent } = await seed();
     const laptop = await makeEndpoint(company.id, steward.principalId);

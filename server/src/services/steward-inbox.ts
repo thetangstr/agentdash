@@ -89,7 +89,7 @@ const DECISION_TOKEN_TTL_MS = 60 * 60 * 1000;
 const DIGEST_LIMITS = { approvals: 10, blockers: 10, completions: 5 } as const;
 
 /** Statuses where a human decision is still possible, so buttons are useful. */
-const DECIDABLE_STATUSES = new Set(["pending", "revision_requested"]);
+export const DECIDABLE_STATUSES = new Set(["pending", "revision_requested"]);
 
 /** Default and ceiling for one sync page. */
 const DEFAULT_SYNC_LIMIT = 50;
