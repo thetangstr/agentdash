@@ -138,10 +138,14 @@ export const defaultExecutor: TaskExecutor = (ctx) =>
         reject(
           new Error(
             "the agent is not authenticated inside the sandbox. Its desktop login lives in " +
-              "the home directory this profile denies, and that deny is deliberate. Set " +
-              "ANTHROPIC_API_KEY in the environment you start `paperclipai bridge run` from — " +
-              "an env credential needs no filesystem access. Running `claude /login` will not " +
-              "help: it writes to the directory the sandbox is refusing.",
+              "the home directory this profile denies, and that deny is deliberate. " +
+              "To use your existing Claude subscription, do not use this command: connect " +
+              "AgentDash to the Claude Code you are already signed into and work from your " +
+              "inbox there (`paperclipai bridge inbox-init`), which runs as you with no " +
+              "sandbox and no key. For an unattended worker instead, give it a key of its " +
+              "own via ANTHROPIC_API_KEY — an env credential needs no filesystem access. " +
+              "Running `claude /login` will not help either way: it writes to the directory " +
+              "the sandbox is refusing.",
           ),
         );
         return;

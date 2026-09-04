@@ -28,7 +28,11 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { PaperclipApiClient } from "./client.js";
-import { readConfigFromEnv, type PaperclipMcpConfig } from "./config.js";
+import {
+  isControlPlaneCredential,
+  readConfigFromEnv,
+  type PaperclipMcpConfig,
+} from "./config.js";
 import { createJourneyToolDefinitions } from "./journey.js";
 import { bridgeTools } from "./bridge.js";
 import { harnessTools } from "./harness.js";
@@ -40,14 +44,42 @@ import { createToolDefinitions, type ToolDefinition } from "./tools.js";
 export const SERVER_NAME = "agentdash";
 export const SERVER_VERSION = "0.2.0";
 
-export function createAgentDashServer(config: PaperclipMcpConfig): Server {
-  const client = new PaperclipApiClient(config);
-  const tools: ToolDefinition[] = [
+/**
+ * The tools this credential can actually use.
+ *
+ * A bridge endpoint token authenticates the bridge tools and nothing else, so a
+ * steward's own Claude Code is offered only those. Advertising the whole
+ * control plane to a credential that cannot reach it produces 403s that read as
+ * a broken instance rather than the wrong credential.
+ *
+ * Exported so the surface can be asserted directly. It was previously inlined,
+ * and the only test possible was that the server object existed.
+ */
+export function buildToolSurface(
+  client: PaperclipApiClient,
+  config: PaperclipMcpConfig,
+): ToolDefinition[] {
+  if (!isControlPlaneCredential(config.apiKey)) return [...bridgeTools(client)];
+  return [
     ...createToolDefinitions(client),
     ...createJourneyToolDefinitions(client),
     ...bridgeTools(client),
     ...harnessTools(client),
   ];
+}
+
+export function createAgentDashServer(config: PaperclipMcpConfig): Server {
+  const client = new PaperclipApiClient(config);
+  /**
+   * A bridge endpoint token authenticates the bridge tools and nothing else, so
+   * a steward's own Claude Code is offered only those. Advertising the whole
+   * control plane to a credential that cannot reach it produces 403s that read
+   * as a broken instance instead of the wrong credential.
+   *
+   * The control-plane toolset stays the default, including for an empty key: a
+   * fresh install has none yet and bootstraps one through the signup tools.
+   */
+  const tools = buildToolSurface(client, config);
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 
   const server = new Server(
