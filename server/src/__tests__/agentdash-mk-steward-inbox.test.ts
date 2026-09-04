@@ -18,6 +18,7 @@ import {
   stewardInboxEvents,
   stewardInboxSequences,
   issues,
+  stewardInboxActionHandles,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -29,6 +30,10 @@ import { agentService } from "../services/index.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
+import {
+  stewardInboxActionsService,
+  suggestNames,
+} from "../services/steward-inbox-actions.js";
 import { companyService } from "../services/companies.js";
 import { stewardInboxService, STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
 
@@ -115,7 +120,7 @@ describe("steward inbox caller existence", () => {
     }
   });
 
-  it("widens the bridge route allowlist by exactly the three inbox routes", () => {
+  it("widens the bridge route allowlist by exactly the inbox routes", () => {
     const source = readFileSync(path.join(repoRoot, "server/src/middleware/auth.ts"), "utf8");
     const block = source.match(/const BRIDGE_ENDPOINT_ROUTES = new Set\(\[([\s\S]*?)\]\);/);
     expect(block, "BRIDGE_ENDPOINT_ROUTES must remain a literal set").toBeTruthy();
@@ -128,6 +133,9 @@ describe("steward inbox caller existence", () => {
         "/api/bridge/inbox/sync",
         "/api/bridge/inbox/ack",
         "/api/bridge/inbox/decide",
+        "/api/bridge/inbox/agents",
+        "/api/bridge/inbox/propose",
+        "/api/bridge/inbox/confirm",
       ].sort(),
     );
   });
@@ -903,6 +911,149 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     );
     expect(decided.status).toBe(200);
     expect(decided.body).toMatchObject({ ok: true, decision: "approved" });
+  });
+
+  // -----------------------------------------------------------------------
+  // Inbox Connect: directing work and changing preferences
+  // -----------------------------------------------------------------------
+
+  it("offers agents by name and role, and nothing else about them", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const { agents: roster } = await stewardInboxActionsService(db).listAgents(endpoint.id);
+
+    expect(roster.map((a: any) => a.name)).toContain(agent.name);
+    // Narrow on purpose: an endpoint credential has no business seeing policy.
+    expect(Object.keys(roster[0]!).sort()).toEqual(["id", "name", "role"]);
+  });
+
+  it("reads an assignment back before anything happens", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "draft the site visit agenda" }],
+    });
+
+    expect(proposal.ok).toBe(true);
+    expect(proposal.readback).toEqual([`${agent.name} — draft the site visit agenda`]);
+    expect(proposal.handle).toBeTruthy();
+    // Proposing changes nothing.
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+  });
+
+  /**
+   * The failure this path exists to prevent: a wrong name confidently assigned
+   * to the wrong agent. A near miss must come back as a question.
+   */
+  it("asks instead of guessing when a name does not resolve", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+
+    const proposal = await stewardInboxActionsService(db).propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: "Nooneatall", work: "do a thing" }],
+    });
+
+    expect(proposal.ok).toBe(false);
+    expect(proposal.handle).toBeUndefined();
+    expect(proposal.ambiguities?.[0]?.given).toBe("Nooneatall");
+    expect(agent.name).toBeTruthy();
+  });
+
+  it("suggests the near miss it can see", () => {
+    expect(suggestNames("Amelia", ["Emilia", "Casper", "Scout"])).toContain("Emilia");
+    expect(suggestNames("Casp", ["Casper", "Scout"])).toEqual(["Casper"]);
+    // Conservative rather than clever: nothing plausible means no suggestion.
+    expect(suggestNames("Zqx", ["Casper", "Scout"])).toEqual([]);
+  });
+
+  it("assigns the work only once the person confirms", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "review the figures" }],
+    });
+
+    const done = await actions.confirm(endpoint.id, proposal.handle!);
+    expect(done).toMatchObject({ ok: true, kind: "assign_work" });
+
+    const rows = await db.select().from(issues).where(eq(issues.companyId, company.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.title).toBe("review the figures");
+    expect(rows[0]!.assigneeAgentId).toBe(agent.id);
+    // Attributed to the person, never to the machine or a service identity.
+    expect(rows[0]!.createdByUserId).toBe(steward.principalId);
+  });
+
+  it("spends a confirmation exactly once", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "once only" }],
+    });
+
+    expect((await actions.confirm(endpoint.id, proposal.handle!)).ok).toBe(true);
+    expect((await actions.confirm(endpoint.id, proposal.handle!)).ok).toBe(false);
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(1);
+  });
+
+  it("makes a confirmation inert on any machine but the one it was minted for", async () => {
+    const { company, steward, agent } = await seed();
+    const laptop = await makeEndpoint(company.id, steward.principalId);
+    const desktop = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const proposal = await actions.propose(laptop.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "not from here" }],
+    });
+
+    expect((await actions.confirm(desktop.id, proposal.handle!)).ok).toBe(false);
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+  });
+
+  it("changes how often the inbox is checked, and only to an offered interval", async () => {
+    const { company, steward } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+
+    const refused = await actions.propose(endpoint.id, { kind: "set_cadence", minutes: 7 });
+    expect(refused.ok).toBe(false);
+    expect(refused.handle).toBeUndefined();
+
+    const proposal = await actions.propose(endpoint.id, { kind: "set_cadence", minutes: 30 });
+    expect(proposal.readback).toEqual(["Check for new items every 30 minutes"]);
+    expect(await actions.confirm(endpoint.id, proposal.handle!)).toMatchObject({
+      ok: true,
+      kind: "set_cadence",
+    });
+
+    const row = await db
+      .select()
+      .from(bridgeEndpoints)
+      .where(eq(bridgeEndpoints.id, endpoint.id))
+      .then((rows) => rows[0]!);
+    expect(row.checkIntervalMinutes).toBe(30);
+  });
+
+  it("leaves an unspent handle behind rather than acting on it", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    await stewardInboxActionsService(db).propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "never confirmed" }],
+    });
+
+    const handles = await db.select().from(stewardInboxActionHandles);
+    expect(handles).toHaveLength(1);
+    expect(handles[0]!.consumedAt).toBeNull();
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
   });
 
   // -----------------------------------------------------------------------

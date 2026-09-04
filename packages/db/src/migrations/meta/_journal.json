@@ -883,6 +883,13 @@
       "when": 1788505881754,
       "tag": "0125_steward_inbox_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1788592281754,
+      "tag": "0126_inbox_connect_actions",
+      "breakpoints": true
     }
   ]
 }
