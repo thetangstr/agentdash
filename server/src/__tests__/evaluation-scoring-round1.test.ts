@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EVALUATION_REVIEW_LABEL } from "@paperclipai/shared";
+import { EVALUATION_COMPOSITE_COVERAGE_FLOOR, EVALUATION_COMPOSITE_MAX_CONCENTRATION, EVALUATION_REVIEW_LABEL } from "@paperclipai/shared";
 import type { EvaluationEventRow } from "../services/evaluation/ledger.js";
 import { scoreMilestone } from "../services/evaluation/scoring/card.js";
 import { gatesPass } from "../services/evaluation/scoring/evidence.js";
 import { findingEvents } from "../services/evaluation/scorecards.js";
-import { composite } from "../services/evaluation/scoring/composite.js";
+import { COMPOSITE_COVERAGE_FLOOR, COMPOSITE_FORMULA_VERSION, composite } from "../services/evaluation/scoring/composite.js";
+import { METRICS_FORMULA_VERSION } from "../services/evaluation/scoring/metrics.js";
 import type { MetricResult } from "../services/evaluation/scoring/types.js";
 import type { ScoredCard } from "../services/evaluation/scoring/types.js";
 import { A, at, CO, commentTwin, ev, evidenced, FOUNDER, G, gates, handoff, I1, I2, iso, item, P, R, ref, roster, score, shuffle, T, verdict } from "./helpers/evaluation-fixtures.js";
@@ -506,17 +507,18 @@ describe("round 3 — verification findings", () => {
   });
 });
 
+/** A source-poor deployment: done items with verdicts, some with acceptance criteria, no handoffs and no delivery references. */
+function sourcePoor(count: number, withDod: number): EvaluationEventRow[] {
+  const window: EvaluationEventRow[] = [...roster()];
+  for (let i = 0; i < count; i++) {
+    const id = `00000000-0000-4000-8000-0000000004${i.toString().padStart(2, "0")}`;
+    window.push(...item({ id, started: 1, done: 6, dod: i < withDod, dodSetAt: i < withDod ? 0 : undefined }), verdict(id, 4, R));
+  }
+  return window;
+}
+
 describe("round 4 — verification findings", () => {
   /** The D4 reality: no GitHub adapter, no structured gates, no merge reports — ci_green and delivery_ref undecidable for every item. */
-  function sourcePoor(count: number, withDod: number): EvaluationEventRow[] {
-    const window: EvaluationEventRow[] = [...roster()];
-    for (let i = 0; i < count; i++) {
-      const id = `00000000-0000-4000-8000-0000000004${i.toString().padStart(2, "0")}`;
-      window.push(...item({ id, started: 1, done: 6, dod: i < withDod, dodSetAt: i < withDod ? 0 : undefined }), verdict(id, 4, R));
-    }
-    return window;
-  }
-
   it("HIGH 1: on a source-poor deployment O5 is judged on the decidable required classes; waiving the undecidable ones changes neither value nor coverage", () => {
     const byDefault = score(sourcePoor(10, 8));
     expect(byDefault.outcome.O5!.value).toBe(0.8);
@@ -553,6 +555,71 @@ describe("round 4 — verification findings", () => {
   });
 
   it("MEDIUM 2: the formula version moved with the arithmetic", () => {
-    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/3");
+    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/4");
+  });
+});
+
+describe("round 5 — verification findings", () => {
+  /** The first shadow company as the ledger sees it: done items with no acceptance criteria, no verdicts, no delivery references, PM handoffs only. */
+  function shadowBaseline(count: number): EvaluationEventRow[] {
+    const window: EvaluationEventRow[] = [...roster()];
+    for (let i = 0; i < count; i++) {
+      const id = `00000000-0000-4000-8000-0000000005${i.toString().padStart(2, "0")}`;
+      window.push(...item({ id, started: 1, done: 6 }), handoff(id, 0.5, A, "pm_to_builder", { issue: { id }, size: "S", acceptance: [] }));
+    }
+    return window;
+  }
+
+  it("MEDIUM 1: O3's coverage is what its terms can observe, and a composite one metric would carry alone is withheld and names it", () => {
+    const card = score(shadowBaseline(12));
+    const o3 = card.outcome.O3!;
+    expect(o3.value).toBe(0); // no consequences recorded — true, and not a score
+    expect(o3.coverage).toBe(0.667); // two T0 terms observable, the revert term for 0 of 12 delivered items
+    expect(o3.notes.some((n) => n.includes("observable for 0% of delivered items"))).toBe(true);
+    expect(card.outcomeComposite.score).toBeNull();
+    expect(card.outcomeComposite.guard.satisfied).toBe(false);
+    expect(card.outcomeComposite.guard.reason).toMatch(/^O3 alone would supply \d+% of the score; no single metric may supply more than 70%$/);
+    expect(card.outcomeComposite.guard.reasons?.some((r) => r.startsWith("the included metrics rest on"))).toBe(true); // the floor fails here too, and both are reported
+    expect(card.outcomeComposite.guard.maxConcentration).toBe(EVALUATION_COMPOSITE_MAX_CONCENTRATION);
+    // with delivery evidence on every item, O3 observes all three terms again
+    const delivered = score([...roster(), ...evidenced(I1), ...evidenced(I2)]);
+    expect(delivered.outcome.O3!.coverage).toBe(1);
+  });
+
+  it("MEDIUM 1 (unit): the concentration guard is independent of the coverage floor", () => {
+    const m = (key: string, coverage: number, value: number): MetricResult => ({ key: key as MetricResult["key"], name: key, unit: "u", value, n: 10, coverage, confidence: "high", headline: "", notes: [], breakdown: {}, detail: {}, lowerIsBetter: false, t: "T0" } as unknown as MetricResult);
+    const balanced = composite("outcome", { O1: m("O1", 1, 0.5), O3: m("O3", 1, 0), O5: m("O5", 1, 0.5) }, []);
+    expect(balanced.guard.satisfied).toBe(true);
+    expect(balanced.guard.concentration).toBeLessThanOrEqual(EVALUATION_COMPOSITE_MAX_CONCENTRATION);
+    // O3 at full coverage against O5 at 0.9: composite coverage 0.96 clears the floor, yet O3 carries 60% — allowed; at O5 0.4 it carries 77% — withheld
+    const shared = composite("outcome", { O3: m("O3", 1, 0), O5: m("O5", 0.9, 0.5) }, []);
+    expect(shared.coverage).toBeGreaterThanOrEqual(EVALUATION_COMPOSITE_COVERAGE_FLOOR);
+    expect(shared.guard.satisfied).toBe(true);
+    const lopsided = composite("outcome", { O3: m("O3", 1, 0), O5: m("O5", 0.4, 0.5) }, []);
+    expect(lopsided.coverage).toBeGreaterThanOrEqual(EVALUATION_COMPOSITE_COVERAGE_FLOOR); // the floor alone would let it through
+    expect(lopsided.guard.satisfied).toBe(false);
+    expect(lopsided.guard.reasons).toEqual([expect.stringMatching(/^O3 alone would supply 77%/)]);
+    expect(lopsided.score).toBeNull();
+  });
+
+  it("MEDIUM 2: a company whose only handoffs are PM briefs has no review source — independent_review is undecidable there, not failed", () => {
+    const none = score(shadowBaseline(4));
+    const cls = (c: ScoredCard) => perClass(c).independent_review;
+    expect(cls(none)).toMatchObject({ satisfied: 0, failed: 0, undecidable: 4 });
+    // one tester handoff anywhere in the company makes the class decidable for every item
+    const withReviewHandoff = score([...shadowBaseline(4), handoff(I1, 3, R, "tester_to_reviewer", { issue: { id: I1 }, verdict: "pass", regression_gates: gates, labels_applied: [] })]);
+    expect(cls(withReviewHandoff).undecidable).toBe(0);
+    expect(cls(withReviewHandoff).failed).toBe(4);
+  });
+
+  it("LOW 3 / 4: the composite floor lives in shared next to the other guard constants, and both formula versions moved with the arithmetic", () => {
+    expect(COMPOSITE_COVERAGE_FLOOR).toBe(EVALUATION_COMPOSITE_COVERAGE_FLOOR);
+    expect(COMPOSITE_FORMULA_VERSION).toBe("composite/4");
+    expect(METRICS_FORMULA_VERSION).toBe("metrics/2");
+  });
+
+  it("suggestion: an accepted waiver lifts O5's confidence cap but restores no weight", () => {
+    const card = score([...sourcePoor(10, 8), declared(-1, [], ["dod_present", "neutral_verdict", "independent_review"])]);
+    expect(card.outcome.O5!.notes.some((n) => n.includes("lifts the confidence cap but does not restore weight"))).toBe(true);
   });
 });

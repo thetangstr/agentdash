@@ -47,7 +47,7 @@ import type { ExceptionRecord, MetricBreakdown, MetricResult, UndecidableReason 
  * rule raised. Nothing is imputed; no volume is ever rewarded (rule 1).
  */
 
-export const METRICS_FORMULA_VERSION = "metrics/1";
+export const METRICS_FORMULA_VERSION = "metrics/2";
 const MAX_REFS = 200;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -397,6 +397,9 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
   const n = items.length;
   const total = reopens + blockersCiting + reverts;
   const value = n > 0 ? round(total / n) : null;
+  // three terms: two T0 (always observable) and the T1/T2 revert term, observable only for items with a delivery reference
+  const revertCoverage = n > 0 ? withDeliveryRef / n : 0;
+  const termCoverage = n > 0 ? round((1 + 1 + revertCoverage) / 3) : 0;
   return {
     metric: build({
       ctx,
@@ -405,6 +408,7 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
       n,
       value,
       t,
+      coverage: termCoverage,
       lowerIsBetter: true,
       headline: n === 0 ? "no delivered items" : `${words(total, "consequence")} across ${words(n, "delivered item")}: ${reopens} reopened, ${blockersCiting} cited as blockers, ${reverts} reverted`,
       detail: {
@@ -414,7 +418,7 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
         incidentTerm: "insufficient by construction: server_errors carries no company, agent, run or release link (F6)",
         recoveryIssueTerm: "not modelled: no record links a recovery issue to the item it recovers",
       },
-      notes: ["index, lower is better; consequences are T0 facts (reopen, blocker citing the item) plus T2-conditional reverts"],
+      notes: ["index, lower is better; consequences are T0 facts (reopen, blocker citing the item) plus T2-conditional reverts", `coverage is the mean of the three terms' observability; the revert term is observable for ${Math.round(revertCoverage * 100)}% of delivered items`],
     }),
     exceptions,
   };
@@ -527,7 +531,7 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   const decidableItems = t.satisfied.length + t.failed.length;
   const weak = weakContractCap(ctx);
   const notes: string[] = ["value over the items with at least one decidable required class; coverage is the share of the five default classes decidable per item"];
-  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: items are judged on the remaining classes and the waived ones lower coverage like undecidable ones; the waiver is a recorded contract exception`);
+  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: items are judged on the remaining classes and the waived ones lower coverage like undecidable ones; the waiver is a recorded contract exception — the founder's acceptance lifts the confidence cap but does not restore weight, because the records still do not exist`);
   if (limitedReviewItems > 0) notes.push(`${words(limitedReviewItems, "item")} reviewed only within a concentrated reviewer pair: those reviews weigh as limited evidence`);
   if (weak) notes.push(weak.note);
   return {

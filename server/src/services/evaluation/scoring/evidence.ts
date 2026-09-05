@@ -250,8 +250,8 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
       lateRefs: lateReview,
       limited: onlyLimited,
     };
-  } else if (!tl.sources.verdicts && !tl.sources.approvalsDecided && !tl.sources.handoffs) {
-    classes.independent_review = { state: "undecidable", reason: "no review source on this company", refs: [], tiers: [], lateRefs: lateReview };
+  } else if (!tl.sources.verdicts && !tl.sources.approvalsDecided && !tl.sources.reviewHandoffs) {
+    classes.independent_review = { state: "undecidable", reason: "no review source on this company: no verdict, decided approval or review handoff has ever been recorded — reviews through the verdict flow or tester handoffs make this class decidable", refs: [], tiers: [], lateRefs: lateReview };
   } else if (syntheticOnly && violations.length === 0) {
     classes.independent_review = { state: "undecidable", reason: "only a synthetic identity decided", refs: [], tiers: ["T0"], lateRefs: lateReview };
   } else {

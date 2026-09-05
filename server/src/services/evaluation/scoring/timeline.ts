@@ -235,6 +235,8 @@ export interface SourcePresence {
   runs: boolean;
   interactions: boolean;
   handoffs: boolean;
+  /** A review-class handoff (tester_to_reviewer / reviewer_to_tpm) exists somewhere in the company: the deployment can produce reviews this way. */
+  reviewHandoffs: boolean;
   authzRefused: boolean;
   rosterAgents: boolean;
   rosterProjects: boolean;
@@ -328,6 +330,7 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
       runs: false,
       interactions: false,
       handoffs: false,
+      reviewHandoffs: false,
       authzRefused: false,
       rosterAgents: false,
       rosterProjects: false,
@@ -566,6 +569,7 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
       case "handoff.reviewer_to_tpm":
       case "handoff.tpm_merge_report": {
         tl.sources.handoffs = true;
+        if (e.eventType === "handoff.tester_to_reviewer" || e.eventType === "handoff.reviewer_to_tpm") tl.sources.reviewHandoffs = true;
         const kept = obj(p, "payload") ?? {};
         if (obj(kept, "regression_gates")) tl.sources.regressionGates = true;
         if (obj(kept, "pr") || str(kept, "merge_result")) tl.sources.deliveryRefs = true;

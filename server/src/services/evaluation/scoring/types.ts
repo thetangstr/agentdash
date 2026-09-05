@@ -68,7 +68,7 @@ export interface CompositeResult {
   excluded: Array<{ key: EvaluationMetricKey; reason: string }>;
   /** E3/E4 present in the window: a flag, never arithmetic (§5.3). */
   flags: string[];
-  guard: { minIncluded: number; coverageFloor: number; satisfied: boolean; reason?: string };
+  guard: { minIncluded: number; coverageFloor: number; maxConcentration: number; concentration: number; satisfied: boolean; reason?: string; reasons?: string[] };
   formulaVersion: string;
 }
 

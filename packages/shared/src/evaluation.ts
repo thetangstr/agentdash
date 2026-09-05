@@ -219,6 +219,10 @@ export const EVALUATION_OUTCOME_WEIGHTS: Partial<Record<EvaluationMetricKey, num
 export const EVALUATION_OPERATING_WEIGHTS: Partial<Record<EvaluationMetricKey, number>> = { P1: 0.2, P2: 0.2, P3: 0.25, P4: 0.15, P9: 0.2 };
 /** §5.3 guards: minimum included metrics for a composite to exist. */
 export const EVALUATION_COMPOSITE_MIN_INCLUDED = { outcome: 2, operating: 3 } as const;
+/** A composite needs at least this share of its included weight resting on decidable records (rule 10 against continuous starvation). */
+export const EVALUATION_COMPOSITE_COVERAGE_FLOOR = 0.5;
+/** No single metric may supply more than this share of a composite's effective weight; otherwise the score is withheld and the metric named. */
+export const EVALUATION_COMPOSITE_MAX_CONCENTRATION = 0.7;
 
 /** §7 tier boundaries on coverage. */
 export const EVALUATION_TIER_THRESHOLDS = { high: 0.8, medium: 0.5, low: 0.2 } as const;

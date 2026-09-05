@@ -471,3 +471,29 @@ Recorded here rather than in the spec, which is at its size limit.
   status changes after a verdict, which §3 would count as writes; the check
   exists to catch implementation performed after certifying, and those acts
   still disqualify when they precede the review.
+- **Fifth verification (round 5).** The coverage floor made one defect
+  consequential: O3 reported coverage 1.0 whatever the records held, so on the
+  first shadow company — done items, no criteria, no verdicts, no delivery
+  references — the outcome composite was computable and read about 77, supplied
+  entirely by "no consequences recorded". Two changes close it. O3's coverage is
+  now the mean of its three terms' observability: the two T0 terms are always
+  observable, the revert term only for items with a delivery reference, so the
+  shadow company shows 0.667 and the note says for what share the revert term
+  could be seen. Composites gained a concentration guard beside the floor: no
+  single metric may supply more than 70% of the effective weight (Σwᵢcᵢ), and a
+  withheld composite names the metric and its share; every violated guard is
+  listed, the most specific first. Independently, any handoff type had counted
+  as a review source, so a company that only records PM briefs saw
+  independent_review fail instead of stay undecidable; presence is now judged
+  on review-class handoffs (tester_to_reviewer, reviewer_to_tpm) alone, and the
+  undecidable reason carries the remedy. The composite floor and the
+  concentration ceiling live in `packages/shared` beside the minimum-included
+  counts. `FORMULA_VERSION` is `m2-score/4` (composites `composite/4`, metrics
+  `metrics/2`). Two notes for operators: an accepted waiver lifts O5's
+  confidence cap but restores no weight, because the records still do not
+  exist; and a deployment that stops emitting structured regression gates turns
+  ci_green failures into undecidables, which lowers O5's coverage rather than
+  raising its value — the composite floor and the concentration guard hold that
+  line, and E11 (activity drop) needs its five-week baseline before it can name
+  the drop itself, so the first shadow milestone cannot detect that lever
+  through E11 alone.

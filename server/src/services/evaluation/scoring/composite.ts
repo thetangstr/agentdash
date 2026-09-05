@@ -1,4 +1,6 @@
 import {
+  EVALUATION_COMPOSITE_COVERAGE_FLOOR,
+  EVALUATION_COMPOSITE_MAX_CONCENTRATION,
   EVALUATION_COMPOSITE_MIN_INCLUDED,
   EVALUATION_OPERATING_WEIGHTS,
   EVALUATION_OUTCOME_WEIGHTS,
@@ -8,9 +10,9 @@ import {
 import { minTier } from "./confidence.js";
 import type { CompositeResult, MetricResult } from "./types.js";
 
-export const COMPOSITE_FORMULA_VERSION = "composite/3";
-/** A composite needs at least this much coverage across its included metrics, or it is withheld (rule 10 against continuous starvation). */
-export const COMPOSITE_COVERAGE_FLOOR = 0.5;
+export const COMPOSITE_FORMULA_VERSION = "composite/4";
+export const COMPOSITE_COVERAGE_FLOOR = EVALUATION_COMPOSITE_COVERAGE_FLOOR;
+export const COMPOSITE_MAX_CONCENTRATION = EVALUATION_COMPOSITE_MAX_CONCENTRATION;
 
 /**
  * Spec §5.3: a renormalised weighted mean over included metrics, values scaled
@@ -58,10 +60,16 @@ export function composite(
   const wsum = included.reduce((s, i) => s + i.weight * i.coverage, 0);
   // how much of the included weight actually rests on decidable records
   const compositeCoverage = included.length > 0 && weightSum > 0 ? Math.round((wsum / weightSum) * 1000) / 1000 : null;
-  let reason: string | undefined;
-  if (included.length < minIncluded) reason = `fewer than ${minIncluded} metrics have evidence`;
-  else if (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR) reason = `the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`;
-  const guardOk = reason === undefined;
+  // the largest share of effective weight any one metric supplies: a score must never be one metric's absence of records
+  const concentration = wsum > 0 ? Math.max(...included.map((i) => (i.weight * i.coverage) / wsum)) : 0;
+  const dominant = wsum > 0 ? included.reduce((best, i) => ((i.weight * i.coverage) / wsum > (best.weight * best.coverage) / wsum ? i : best), included[0]!) : null;
+  // every violated guard is reported; the first is the most specific one
+  const reasons: string[] = [];
+  if (included.length < minIncluded) reasons.push(`fewer than ${minIncluded} metrics have evidence`);
+  if (included.length > 0 && concentration > COMPOSITE_MAX_CONCENTRATION && dominant) reasons.push(`${dominant.key} alone would supply ${Math.round(concentration * 100)}% of the score; no single metric may supply more than ${Math.round(COMPOSITE_MAX_CONCENTRATION * 100)}%`);
+  if (included.length > 0 && (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR)) reasons.push(`the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`);
+  const reason = reasons[0];
+  const guardOk = reasons.length === 0;
   let score: number | null = null;
   let confidence: EvaluationConfidenceTier | null = null;
   if (guardOk) {
@@ -76,7 +84,7 @@ export function composite(
     included: included.sort((a, b) => (a.key < b.key ? -1 : 1)),
     excluded: excluded.sort((a, b) => (a.key < b.key ? -1 : 1)),
     flags: [...flags].sort(),
-    guard: { minIncluded, coverageFloor: COMPOSITE_COVERAGE_FLOOR, satisfied: guardOk, ...(reason ? { reason } : {}) },
+    guard: { minIncluded, coverageFloor: COMPOSITE_COVERAGE_FLOOR, maxConcentration: COMPOSITE_MAX_CONCENTRATION, concentration: Math.round(concentration * 1000) / 1000, satisfied: guardOk, ...(reason ? { reason, reasons } : {}) },
     formulaVersion: COMPOSITE_FORMULA_VERSION,
   };
 }
