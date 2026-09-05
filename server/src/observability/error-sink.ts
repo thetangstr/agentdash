@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { serverErrors } from "@paperclipai/db";
 import { emitSignal } from "./signals.js";
+import { redactUrlQuery } from "../middleware/redact-sensitive.js";
 
 /**
  * The local half of the 2026-08-16 observability decision: errors persist
@@ -66,6 +67,16 @@ export function recordServerError(err: unknown, context?: ErrorSinkContext): voi
   const error = err instanceof Error ? err : new Error(String(err));
   const fingerprint = fingerprintError(error.name, error.message, error.stack);
 
+  // AGE-83: scrub credential-bearing query values from the URL at this
+  // boundary — defense in depth, same posture as the signature above: even
+  // if a future caller hands us a raw `req.originalUrl`, the URL that
+  // reaches Postgres cannot carry a `?token=`/`?code=` value. fingerprintError
+  // does not include the URL, so grouping is unaffected. Callers keep
+  // passing `req.originalUrl` unchanged.
+  const safeContext = context
+    ? { ...context, url: context.url === undefined ? undefined : redactUrlQuery(context.url) }
+    : context;
+
   const db = sinkDb;
   if (!db) {
     console.error(`[error-sink] not initialised; dropping ${error.name}: ${error.message}`);
@@ -79,14 +90,14 @@ export function recordServerError(err: unknown, context?: ErrorSinkContext): voi
       name: error.name.slice(0, 200),
       message: error.message.slice(0, 2000),
       stack: error.stack?.slice(0, 8000) ?? null,
-      lastContext: context ? { ...context } : null,
+      lastContext: safeContext ? { ...safeContext } : null,
     })
     .onConflictDoUpdate({
       target: serverErrors.fingerprint,
       set: {
         count: sql`${serverErrors.count} + 1`,
         lastSeen: sql`now()`,
-        lastContext: context ? { ...context } : null,
+        lastContext: safeContext ? { ...safeContext } : null,
         // message/stack refresh so the row shows the latest occurrence's shape
         message: error.message.slice(0, 2000),
         stack: error.stack?.slice(0, 8000) ?? null,
@@ -96,7 +107,7 @@ export function recordServerError(err: unknown, context?: ErrorSinkContext): voi
       emitSignal({
         kind: "server_error",
         summary: `${error.name}: ${error.message.replace(ID_LIKE, "<id>").slice(0, 140)}`,
-        detail: { fingerprint, ...(context ?? {}) },
+        detail: { fingerprint, ...(safeContext ?? {}) },
       });
     })
     .catch((sinkErr) => {
