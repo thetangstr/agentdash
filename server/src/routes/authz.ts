@@ -1,15 +1,66 @@
 import type { Request } from "express";
+import type { Db } from "@paperclipai/db";
 import { forbidden, unauthorized } from "../errors.js";
 import { normalizeHumanRole } from "../services/company-member-roles.js";
+import { logAuthzRefusal } from "../services/activity-log.js";
+
+/**
+ * AGE-91 — refusal observability.
+ *
+ * The assert helpers below are synchronous and called from hundreds of routes,
+ * so they cannot receive a db handle per call. The app wires the process-wide
+ * handle once at startup (`setAuthzRefusalDb`); when it is absent — unit tests
+ * exercising the guards directly — refusal logging is a no-op and the guards
+ * behave exactly as before.
+ */
+let _refusalDb: Db | null = null;
+
+export function setAuthzRefusalDb(db: Db | null): void {
+  _refusalDb = db;
+}
+
+/**
+ * Fire-and-forget refusal record. Never throws, never awaits: the guard's
+ * throw (and therefore the HTTP status and body) is untouched whether the
+ * activity insert succeeds, fails, or is not wired up.
+ */
+function reportAuthzRefusal(
+  req: Request,
+  input: {
+    companyId: string | null;
+    entityType: string;
+    entityId: string | null;
+    reasonCode: string;
+  },
+): void {
+  const db = _refusalDb;
+  if (!db) return;
+  try {
+    void Promise.resolve(logAuthzRefusal(db, { req, ...input })).catch(() => {
+      // logAuthzRefusal already swallows its own errors; this is belt and braces
+      // so the fire-and-forget promise can never become an unhandled rejection.
+    });
+  } catch {
+    // Observability must never alter the refusal — e.g. a test double of the
+    // activity-log module that stubs other exports but not this one.
+  }
+}
 
 export function assertAuthenticated(req: Request) {
   if (req.actor.type === "none") {
+    // Anonymous 401 — no actor to attribute, deliberately not logged (AGE-91).
     throw unauthorized();
   }
 }
 
 export function assertBoard(req: Request) {
   if (req.actor.type !== "board") {
+    reportAuthzRefusal(req, {
+      companyId: null,
+      entityType: "instance",
+      entityId: null,
+      reasonCode: "BOARD_ACCESS_REQUIRED",
+    });
     throw forbidden("Board access required");
   }
 }
@@ -29,6 +80,12 @@ export function assertBoardOrgAccess(req: Request) {
   if (hasBoardOrgAccess(req)) {
     return;
   }
+  reportAuthzRefusal(req, {
+    companyId: null,
+    entityType: "instance",
+    entityId: null,
+    reasonCode: "BOARD_ORG_ACCESS_REQUIRED",
+  });
   throw forbidden("Company membership or instance admin access required");
 }
 
@@ -77,6 +134,12 @@ export async function assertCompanyAdministrator(
   message = "Company owner or admin access required",
 ): Promise<void> {
   if (await isCompanyAdministrator(access, req, companyId)) return;
+  reportAuthzRefusal(req, {
+    companyId,
+    entityType: "company",
+    entityId: companyId,
+    reasonCode: "COMPANY_ADMINISTRATOR_REQUIRED",
+  });
   throw forbidden(message);
 }
 
@@ -85,17 +148,35 @@ export function assertInstanceAdmin(req: Request) {
   if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
     return;
   }
+  reportAuthzRefusal(req, {
+    companyId: null,
+    entityType: "instance",
+    entityId: null,
+    reasonCode: "INSTANCE_ADMIN_REQUIRED",
+  });
   throw forbidden("Instance admin access required");
 }
 
 export function assertCompanyAccess(req: Request, companyId: string) {
   assertAuthenticated(req);
   if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
+    reportAuthzRefusal(req, {
+      companyId,
+      entityType: "company",
+      entityId: companyId,
+      reasonCode: "AGENT_CROSS_COMPANY",
+    });
     throw forbidden("Agent key cannot access another company");
   }
   if (req.actor.type === "board" && req.actor.source !== "local_implicit") {
     const allowedCompanies = req.actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
+      reportAuthzRefusal(req, {
+        companyId,
+        entityType: "company",
+        entityId: companyId,
+        reasonCode: "COMPANY_ACCESS_DENIED",
+      });
       throw forbidden("User does not have access to this company");
     }
     const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
@@ -103,6 +184,12 @@ export function assertCompanyAccess(req: Request, companyId: string) {
     if (!isSafeMethod && !req.actor.isInstanceAdmin && Array.isArray(req.actor.memberships)) {
       const membership = req.actor.memberships.find((item) => item.companyId === companyId);
       if (!membership || membership.status !== "active") {
+        reportAuthzRefusal(req, {
+          companyId,
+          entityType: "company",
+          entityId: companyId,
+          reasonCode: "COMPANY_MEMBERSHIP_INACTIVE",
+        });
         throw forbidden("User does not have active company access");
       }
       // The viewer read-only branch lived here until 2026-08-16. It is gone
@@ -144,12 +231,24 @@ export function assertCanSetCompanyDirection(req: Request, companyId: string) {
   assertCompanyAccess(req, companyId);
 
   if (req.actor.type === "agent") {
+    reportAuthzRefusal(req, {
+      companyId,
+      entityType: "company",
+      entityId: companyId,
+      reasonCode: "AGENT_DIRECTION_FORBIDDEN",
+    });
     throw forbidden(
       "Agents cannot change company direction. Ask an owner or admin to change the goal.",
     );
   }
   if (canSetCompanyDirection(req, companyId)) return;
 
+  reportAuthzRefusal(req, {
+    companyId,
+    entityType: "company",
+    entityId: companyId,
+    reasonCode: "COMPANY_DIRECTION_ADMIN_REQUIRED",
+  });
   throw forbidden("Only an admin can change company direction.");
 }
 
@@ -200,6 +299,12 @@ export function assertCanEditOwnedResource(
 ): void {
   assertCompanyAccess(req, companyId);
   if (req.actor.type === "agent") {
+    reportAuthzRefusal(req, {
+      companyId,
+      entityType: "company",
+      entityId: companyId,
+      reasonCode: "AGENT_OWNED_RESOURCE_FORBIDDEN",
+    });
     throw forbidden(`Agents cannot modify ${what}. Ask the ${what}'s owner or an admin.`);
   }
   if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
@@ -211,6 +316,12 @@ export function assertCanEditOwnedResource(
   ) {
     return;
   }
+  reportAuthzRefusal(req, {
+    companyId,
+    entityType: "company",
+    entityId: companyId,
+    reasonCode: "OWNED_RESOURCE_CREATOR_OR_ADMIN_REQUIRED",
+  });
   throw forbidden(`Only the ${what}'s creator or an admin can change it.`);
 }
 
