@@ -100,8 +100,26 @@ Hiring agents + inviting teammates work with caps bypassed.
 
 - **Port/host:** handled automatically — the Dockerfile sets `HOST=0.0.0.0` and
   the server honors Railway's injected `$PORT`.
-- **Redeploys:** push to `main` (or trigger in the dashboard); migrations
-  auto-apply. Keep `BETTER_AUTH_SECRET` stable across deploys.
+- **Auto-deploy on merge to `main` (hosted product):** the repo's
+  [Deploy workflow](../../.github/workflows/deploy.yml) runs on every push to
+  `main` and deploys to the production Railway service `web`
+  (`https://web-production-33a3b6.up.railway.app`) via
+  `railway up --service web --ci`, then smoke-tests the live URL. The workflow
+  is **inert until the `RAILWAY_TOKEN` repo secret is set** (a Railway *project*
+  token scoped to service `web`): without it, it logs "not configured" and exits
+  green without deploying. Removing the secret later reverts to that
+  inert-by-default state — that is the documented disable path. See
+  [LAUNCH.md §4b](../LAUNCH.md#4b-the-hosted-production-deploy-story-what-happens-on-merge)
+  for the full deploy story (Vercel UI + `/api/*` rewrite; customer instances
+  stay on the manual OTA updater regardless).
+- **Rollback:** Railway keeps the previous deployment. Roll back with one click
+  in the Railway dashboard — service → **Deployments** → pick the previous
+  deployment → **Redeploy**. Migrations are applied forward on boot; if a
+  rollback crosses a schema change, check
+  `PAPERCLIP_MIGRATION_AUTO_APPLY` behavior before re-pointing traffic.
+- **Manual redeploy:** `railway up` (or trigger in the dashboard) still works
+  for out-of-band hotfixes; migrations auto-apply. Keep `BETTER_AUTH_SECRET`
+  stable across deploys.
 - **Enabling billing later:** set `STRIPE_SECRET_KEY` + the Stripe vars from
   [LAUNCH.md](../LAUNCH.md) (this turns caps on). Re-run the preflight.
 - **Cost:** one container + Postgres. Scale the service resources in Railway as

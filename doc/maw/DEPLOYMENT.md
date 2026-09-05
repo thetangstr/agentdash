@@ -13,7 +13,7 @@ AgentDash operates across five environment tiers. Each tier has distinct infrast
 | **Development** | localhost:3100 | Embedded PG (`~/.paperclip/instances/default/db/`) | Manual (`pnpm dev`) | Developer only |
 | **CI** | GitHub Actions runners | Ephemeral (per-run) | PR open/push | Automated |
 | **Staging** | Mirrors production config | Separate DB, seeded test data | Auto on merge to `main` | Team + stakeholders |
-| **Production** | Same infra as staging, different secrets | Production DB | Manual promote (or auto for XS/S) | End users |
+| **Production** | Same infra as staging, different secrets | Production DB | Manual promote (or auto for XS/S). **Hosted product exception:** Railway auto-deploys on merge to `main` via `deploy.yml` (inert without `RAILWAY_TOKEN`; one-click rollback in the Railway dashboard) — see [doc/deploy/railway.md](../deploy/railway.md). | End users |
 | **Edge** | Client-managed (Mac minis, VPS, cloud, self-hosted) | Instance-local DB | OTA pull from release registry | Per-client |
 
 ### Data Isolation

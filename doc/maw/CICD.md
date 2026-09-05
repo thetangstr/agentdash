@@ -49,6 +49,17 @@ deploy-production.yml
 
 ---
 
+> **Reality note (AGE-48, 2026-09-05).** The hosted **production** deploy on a
+> merge to `main` is the repo's [Deploy workflow](../../.github/workflows/deploy.yml)
+> (`deploy.yml`): `railway up --service web` against the Railway production
+> (`https://web-production-33a3b6.up.railway.app`), then a live smoke test. It
+> is inert until the `RAILWAY_TOKEN` repo secret exists, and removing the
+> secret reverts it to inert. Rollback is one click in the Railway dashboard.
+> The `deploy-staging.yml` / `deploy-production.yml` flow below describes the
+> MAW staging/promote protocol; it is not the hosted-production deploy path.
+> Customer instances never auto-deploy — they follow the manual OTA-updater
+> rollout policy.
+
 ## 2. GitHub Actions Workflows
 
 ### 2.1 ci.yml -- On every PR push
