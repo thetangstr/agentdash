@@ -45,6 +45,13 @@ const BRIDGE_ENDPOINT_ROUTES = new Set([
   // Spends a handle minted for one approval at one revision. The credential
   // still decides nothing on its own -- see steward-inbox-decisions.ts.
   "/api/bridge/inbox/decide",
+  // Inbox Connect: resolving a name, reading an action back, and confirming it.
+  // None of these is a general write. `propose` mints a single-use handle over a
+  // RESOLVED action and changes nothing; `confirm` spends that handle and
+  // re-checks the person's permission before acting.
+  "/api/bridge/inbox/agents",
+  "/api/bridge/inbox/propose",
+  "/api/bridge/inbox/confirm",
 ]);
 
 /** Path without query string or trailing slash, for allowlist comparison. */

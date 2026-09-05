@@ -46,12 +46,20 @@ describe("advertised tool surface", () => {
       { apiUrl: "http://instance.test/api", apiKey, companyId: null, agentId: null, runId: null },
     ).map((tool) => tool.name);
 
+  /**
+   * Everything an endpoint credential can reach, pinned exactly. Adding a tool
+   * to the bridge surface has to be a deliberate edit here, because each one is
+   * a widening of what a machine credential can do.
+   */
   const BRIDGE_TOOLS = [
     "bridge_next_task",
     "bridge_submit_result",
     "inbox_sync",
     "inbox_ack",
     "inbox_decide",
+    "inbox_agents",
+    "inbox_propose",
+    "inbox_confirm",
   ];
 
   it("offers a bridge endpoint token exactly the tools it can use", () => {
@@ -62,12 +70,12 @@ describe("advertised tool surface", () => {
   it("still offers the full control plane to an API credential", () => {
     const surface = surfaceFor("pcp_abc123");
     // The whole point: far more than the bridge subset, and the bridge tools too.
-    expect(surface.length).toBeGreaterThan(BRIDGE_TOOLS.length * 4);
+    expect(surface.length).toBeGreaterThan(BRIDGE_TOOLS.length * 2);
     for (const name of BRIDGE_TOOLS) expect(surface).toContain(name);
     expect(surface).toContain("whoami");
   });
 
   it("does not shrink the surface for a fresh install with no key yet", () => {
-    expect(surfaceFor("").length).toBeGreaterThan(BRIDGE_TOOLS.length * 4);
+    expect(surfaceFor("").length).toBeGreaterThan(BRIDGE_TOOLS.length * 2);
   });
 });

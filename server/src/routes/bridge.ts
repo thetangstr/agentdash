@@ -8,6 +8,7 @@ import { accessService } from "../services/access.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
 import { stewardInboxDecisionService } from "../services/steward-inbox-decisions.js";
+import { stewardInboxActionsService } from "../services/steward-inbox-actions.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { bridgeService } from "../services/bridge.js";
 import { requireProductProfile } from "../services/companies.js";
@@ -48,6 +49,7 @@ export function bridgeRoutes(
   const cardDelivery = approvalCardDeliveryService(db);
   const inbox = stewardInboxService(db);
   const inboxDecisions = stewardInboxDecisionService(db, options);
+  const inboxActions = stewardInboxActionsService(db);
 
   async function requireProfileCompany(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
@@ -170,6 +172,48 @@ export function bridgeRoutes(
     const token = typeof req.body?.token === "string" ? req.body.token : null;
     if (!token) throw badRequest("token is required");
     res.json(await inboxDecisions.decide(endpointId, token));
+  });
+
+  /**
+   * The company's agents, name and role only.
+   *
+   * Enough to turn "Casper" into an id, and nothing more. An endpoint
+   * credential has no business seeing adapter configuration, budgets or policy,
+   * so this projection is deliberately narrow rather than the agents listing.
+   */
+  router.post("/bridge/inbox/agents", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    res.json(await inboxActions.listAgents(endpointId));
+  });
+
+  /**
+   * Read back what was understood, and mint a single-use handle for it.
+   *
+   * Nothing happens here. An unresolved or ambiguous name mints no handle and
+   * comes back as a question, because a wrong name silently assigned to the
+   * wrong agent is worse than asking.
+   */
+  router.post("/bridge/inbox/propose", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    const kind = req.body?.kind;
+    if (kind !== "assign_work" && kind !== "set_cadence") {
+      throw badRequest('kind must be "assign_work" or "set_cadence"');
+    }
+    res.json(await inboxActions.propose(endpointId, req.body));
+  });
+
+  /**
+   * Spend the handle and do the thing.
+   *
+   * The credential does not authorise this; the handle does, and only for the
+   * resolved action it was minted over. Permission is re-checked here rather
+   * than at propose time, so authority that changed in between is honoured.
+   */
+  router.post("/bridge/inbox/confirm", async (req, res) => {
+    const { endpointId } = requireEndpoint(req);
+    const token = typeof req.body?.token === "string" ? req.body.token : null;
+    if (!token) throw badRequest("token is required");
+    res.json(await inboxActions.confirm(endpointId, token));
   });
 
   router.post("/bridge/result", async (req, res) => {

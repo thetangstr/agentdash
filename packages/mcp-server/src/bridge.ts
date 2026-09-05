@@ -92,6 +92,44 @@ export function bridgeTools(client: PaperclipApiClient): ToolDefinition[] {
     ),
 
     makeTool(
+      "inbox_agents",
+      "List the agents in this company by name and role, so a person's instruction can be matched to a real agent.",
+      z.object({}),
+      async () => client.requestJson("POST", "/bridge/inbox/agents", { body: {} }),
+    ),
+
+    makeTool(
+      "inbox_propose",
+      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X') and for changing how often the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.",
+      z.object({
+        kind: z.enum(["assign_work", "set_cadence"]),
+        items: z
+          .array(z.object({ agent: z.string().min(1), work: z.string().min(1) }))
+          .optional()
+          .describe("For assign_work: who, and what they should do"),
+        minutes: z.number().int().optional().describe("For set_cadence: 30 or 60"),
+      }),
+      async (input) => client.requestJson("POST", "/bridge/inbox/propose", { body: input }),
+    ),
+
+    makeTool(
+      "inbox_confirm",
+      "Carry out an action the operator has just confirmed, using the handle from inbox_propose. Only call this after they have said yes to the read-back. The handle is spent by this call.",
+      z.object({ token: z.string().min(1).describe("The handle returned by inbox_propose") }),
+      async ({ token }) => {
+        const result = await client.requestJson<{ ok: boolean; reason?: string }>(
+          "POST",
+          "/bridge/inbox/confirm",
+          { body: { token } },
+        );
+        if (!result.ok) {
+          return { ...result, note: "Nothing was done. Propose it again to get a fresh read-back." };
+        }
+        return result;
+      },
+    ),
+
+    makeTool(
       "inbox_ack",
       "Move this machine's inbox position forward, so acknowledged items are not shown again. Only call this once the operator has actually seen them.",
       z.object({ seq: z.number().int().min(0) }),

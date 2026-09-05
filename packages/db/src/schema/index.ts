@@ -151,3 +151,6 @@ export {
   stewardInboxEvents,
   stewardInboxSequences,
 } from "./steward_inbox.js";
+// AgentDash-MK: a proposed action read back to a person, waiting on their
+// confirmation. Same single-use, endpoint-bound shape as a decision handle.
+export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
