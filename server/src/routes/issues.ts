@@ -4231,6 +4231,7 @@ export function issueRoutes(
           companyId,
           issueId,
           parsed.data,
+          getActorInfo(req),
         );
         res.json(updated);
       } catch (err) {
