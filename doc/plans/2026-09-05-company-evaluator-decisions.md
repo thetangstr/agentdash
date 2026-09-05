@@ -516,3 +516,11 @@ Recorded here rather than in the spec, which is at its size limit.
   had time to attract a reopen or a blocker citation; the concentration guard
   bounds what that can supply, and E9's seven-day horizon is the precedent if
   an exposure normaliser is wanted later.
+  Commit 7 changed the card's bytes (`guard.reasons` on every satisfied
+  composite, the ceiling in `guard.maxConcentration`) and its substance (a
+  72.7% pair now scores), so `FORMULA_VERSION` is `m2-score/5` and composites
+  `composite/5`; metrics stay `metrics/2`. Known approximation recorded for P6:
+  the AGE-91 refusal log deduplicates the same actor, reason, route and entity
+  within sixty seconds in process, so a retry storm on one forbidden act counts
+  once per minute per server instance and P6 is a floor on violating requests,
+  not a count of them; distinct acts on distinct items are never collapsed.
