@@ -202,7 +202,11 @@ export function stewardInboxActionsService(db: Db) {
       return {
         ok: true,
         handle,
-        readback: [`Check for new items every ${request.minutes} minutes`],
+        // Honest wording: nothing reads the stored interval yet, so the
+        // readback must not claim the checking itself changed.
+        readback: [
+          `Store a preference to check for new items every ${request.minutes} minutes (takes effect once inbox scheduling is active)`,
+        ],
       };
     }
 
@@ -313,7 +317,15 @@ export function stewardInboxActionsService(db: Db) {
         entityId: endpointId,
         details: { minutes },
       }).catch((err) => logger.warn({ err }, "inbox cadence activity not recorded"));
-      return { ok: true, kind: "set_cadence", result: { minutes } };
+      return {
+        ok: true,
+        kind: "set_cadence",
+        result: {
+          minutes,
+          storedOnly: true,
+          note: "Preference stored. It takes effect once inbox scheduling is active — nothing reads the interval yet.",
+        },
+      };
     }
 
     // Assigning work is somebody else's time. It needs the permission that
@@ -341,11 +353,13 @@ export function stewardInboxActionsService(db: Db) {
      */
     for (const item of items) {
       try {
+        // Typed, never cast: the compiler checks this literal, so a mis-keyed
+        // createdByUserId fails the build instead of silently writing NULL.
         const issue = await issues.create(endpoint.companyId, {
           title: item.work,
           assigneeAgentId: item.agentId,
           createdByUserId: endpoint.userId,
-        } as never);
+        });
         created.push({
           issueId: issue.id,
           identifier: (issue as { identifier?: string | null }).identifier ?? null,

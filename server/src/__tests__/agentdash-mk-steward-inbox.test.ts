@@ -1018,6 +1018,68 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
   });
 
+  /**
+   * The redemption-time authority property: permission is re-checked at
+   * confirm, so a steward whose access was revoked between propose and
+   * confirm must be refused. If a refactor drops the canUser call, this test
+   * — not a code reading — is what fails.
+   */
+  it("refuses to assign when the person's permission was revoked before confirming", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "review the figures" }],
+    });
+    expect(proposal.ok).toBe(true);
+
+    await db
+      .update(companyMemberships)
+      .set({ status: "suspended" })
+      .where(eq(companyMemberships.id, steward.id));
+
+    const outcome = await actions.confirm(endpoint.id, proposal.handle!);
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: "You do not have permission to assign work.",
+    });
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+  });
+
+  /**
+   * The other redemption-time property: an expired handle is refused and
+   * nothing is created. The expiry predicate lives inside the conditional
+   * UPDATE, so this backdates the row the way the decisions suite does for
+   * its own handles.
+   */
+  it("refuses an expired confirmation and creates nothing", async () => {
+    const { company, steward, agent } = await seed();
+    const endpoint = await makeEndpoint(company.id, steward.principalId);
+    const actions = stewardInboxActionsService(db);
+    const proposal = await actions.propose(endpoint.id, {
+      kind: "assign_work",
+      items: [{ agent: agent.name, work: "review the figures" }],
+    });
+    expect(proposal.handle).toBeTruthy();
+
+    await db
+      .update(stewardInboxActionHandles)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(stewardInboxActionHandles.token, proposal.handle!));
+
+    const outcome = await actions.confirm(endpoint.id, proposal.handle!);
+    expect(outcome.ok).toBe(false);
+    expect(await db.select().from(issues).where(eq(issues.companyId, company.id))).toHaveLength(0);
+    // A refused expiry does not spend the handle; it stays exactly as it was.
+    const row = await db
+      .select()
+      .from(stewardInboxActionHandles)
+      .where(eq(stewardInboxActionHandles.token, proposal.handle!))
+      .then((rows) => rows[0]!);
+    expect(row.consumedAt).toBeNull();
+  });
+
   it("changes how often the inbox is checked, and only to an offered interval", async () => {
     const { company, steward } = await seed();
     const endpoint = await makeEndpoint(company.id, steward.principalId);
@@ -1028,10 +1090,15 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     expect(refused.handle).toBeUndefined();
 
     const proposal = await actions.propose(endpoint.id, { kind: "set_cadence", minutes: 30 });
-    expect(proposal.readback).toEqual(["Check for new items every 30 minutes"]);
+    // The scheduler is not built, so the readback must say the preference is
+    // stored — never that the checking itself changed.
+    expect(proposal.readback).toEqual([
+      "Store a preference to check for new items every 30 minutes (takes effect once inbox scheduling is active)",
+    ]);
     expect(await actions.confirm(endpoint.id, proposal.handle!)).toMatchObject({
       ok: true,
       kind: "set_cadence",
+      result: { minutes: 30, storedOnly: true },
     });
 
     const row = await db
