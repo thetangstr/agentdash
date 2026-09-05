@@ -2,13 +2,18 @@ import { and, asc, desc, eq, getTableColumns, inArray, or, sql, type SQL } from 
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
+  agents,
   costEvents,
   evaluationEvents,
+  goals,
   heartbeatRuns,
   issueApprovals,
   issueComments,
+  issueLabels,
   issueThreadInteractions,
   issues,
+  labels,
+  projects,
   verdicts,
 } from "@paperclipai/db";
 import {
@@ -132,6 +137,8 @@ export async function keysetRead<Row extends { cursorTime: string }>(
   idCol: unknown,
   run: (predicate: SQL | undefined, take: number, direction: "asc" | "desc") => Promise<Row[]>,
   idOf: (row: Row) => string,
+  /** Unique per row when the tiebreak column is not (issue_labels: issue id for the cursor, issue:label for dedupe). */
+  rowKey: (row: Row) => string = idOf,
 ): Promise<{ rows: Row[]; scanned: number; nextCursor: Cursor }> {
   const t = timeCol as never;
   const i = idCol as never;
@@ -151,8 +158,8 @@ export async function keysetRead<Row extends { cursorTime: string }>(
     const lagPredicate = sql`${t} > (${cursor.time}::timestamptz - make_interval(secs => ${CURSOR_LAG_SECONDS})) AND ${upper}`;
     // Descending from the cursor: the budget is spent on the rows nearest the cursor, where a late or backdated row lands.
     const lag = await run(lagPredicate, Math.min(limit, LAG_REREAD_BUDGET), "desc");
-    const seen = new Set(progress.map(idOf));
-    rows = progress.concat(lag.filter((r) => !seen.has(idOf(r))));
+    const seen = new Set(progress.map(rowKey));
+    rows = progress.concat(lag.filter((r) => !seen.has(rowKey(r))));
   }
   return { rows, scanned: progress.length, nextCursor };
 }
@@ -251,6 +258,35 @@ function countCriteria(dod: unknown): number | null {
   if (!dod || typeof dod !== "object") return null;
   const c = (dod as Record<string, unknown>).criteria;
   return Array.isArray(c) ? c.length : null;
+}
+
+/** Criterion ids and text hashes (never the text): enough to see removal or rewording (rule 11 / E12). */
+function criteriaDigest(dod: unknown): { ids: string[]; hashes: string[] } | null {
+  if (!dod || typeof dod !== "object") return null;
+  const c = (dod as Record<string, unknown>).criteria;
+  if (!Array.isArray(c)) return null;
+  const ids: string[] = [];
+  const hashes: string[] = [];
+  for (const item of c) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    ids.push(typeof o.id === "string" ? o.id : "");
+    hashes.push(hashCanonical(typeof o.text === "string" ? o.text.trim().toLowerCase() : null).slice(0, 16));
+  }
+  return { ids, hashes };
+}
+
+const TITLE_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "that", "this", "when", "then", "than", "are", "was", "not", "but", "its", "via", "per", "add", "fix"]);
+
+/** Rule 18 / P9: a normalised token set for title matching. Tokens, not the title, are stored. */
+export function titleTokens(title: string | null | undefined): string[] {
+  if (!title) return [];
+  const tokens = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter((t) => t.length >= 3 && !TITLE_STOPWORDS.has(t));
+  return [...new Set(tokens)].sort();
 }
 
 function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
@@ -371,11 +407,17 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
     } else if (r.action === "dod_set") {
       eventType = "issue.dod_set";
       const prev = details._previous as Record<string, unknown> | null | undefined;
+      const digest = criteriaDigest(details.definitionOfDone);
+      const prevDigest = prev ? criteriaDigest(prev.definitionOfDone ?? prev) : null;
       payload = {
         ...issueRef,
         hasPrevious: "_previous" in details,
         criteriaCount: countCriteria(details.definitionOfDone),
         previousCriteriaCount: prev ? countCriteria(prev.definitionOfDone ?? prev) : null,
+        criteriaIds: digest?.ids ?? null,
+        criteriaHashes: digest?.hashes ?? null,
+        previousCriteriaIds: prevDigest?.ids ?? null,
+        previousCriteriaHashes: prevDigest?.hashes ?? null,
       };
     } else if (r.action === "issue.recovery_budget_exhausted") {
       eventType = "issue.recovery_budget_exhausted";
@@ -777,13 +819,23 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
         description: issues.description,
         definitionOfDone: issues.definitionOfDone,
         status: issues.status,
+        priority: issues.priority,
         assigneeAgentId: issues.assigneeAgentId,
         assigneeUserId: issues.assigneeUserId,
+        createdByAgentId: issues.createdByAgentId,
+        createdByUserId: issues.createdByUserId,
         projectId: issues.projectId,
         goalId: issues.goalId,
         parentId: issues.parentId,
+        originKind: issues.originKind,
+        originFingerprint: issues.originFingerprint,
+        checkoutRunId: issues.checkoutRunId,
+        executionRunId: issues.executionRunId,
+        createdAt: issues.createdAt,
+        startedAt: issues.startedAt,
         updatedAt: issues.updatedAt,
         completedAt: issues.completedAt,
+        cancelledAt: issues.cancelledAt,
         cursorTime: sql<string>`${issues.updatedAt}::text`,
       })
       .from(issues)
@@ -793,22 +845,27 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
     (r) => r.id,
   );
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.id));
+  const labelNames = await labelsFor(tx, companyId, rows.map((r) => r.id));
   const latest = await latestSnapshotHashes(tx, companyId, "issues", "issue.snapshot", rows.map((r) => r.id));
   const events: EvaluationEventInput[] = rows.flatMap((r) => {
+    const issueLabelNames = labelNames.get(r.id) ?? [];
     const hash = hashCanonical({
       title: r.title,
       description: r.description,
       definitionOfDone: r.definitionOfDone,
       status: r.status,
+      priority: r.priority,
       assigneeAgentId: r.assigneeAgentId,
       assigneeUserId: r.assigneeUserId,
       projectId: r.projectId,
       goalId: r.goalId,
       parentId: r.parentId,
+      labels: issueLabelNames,
     });
     if (latest.get(r.id) === hash) return [];
     const sc = scope.get(r.id);
     const criteria = countCriteria(r.definitionOfDone);
+    const digest = criteriaDigest(r.definitionOfDone);
     const event: EvaluationEventInput = {
       companyId,
       projectId: sc?.projectId ?? r.projectId ?? null,
@@ -825,14 +882,29 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
         issueId: r.id,
         identifier: r.identifier,
         status: r.status,
+        priority: r.priority,
         hasDod: criteria != null && criteria > 0,
         dodCriteria: criteria,
+        dodCriteriaIds: digest?.ids ?? null,
+        dodCriteriaHashes: digest?.hashes ?? null,
         assigneeAgentId: r.assigneeAgentId,
         assigneeUserId: r.assigneeUserId,
+        createdByAgentId: r.createdByAgentId,
+        createdByUserId: r.createdByUserId,
         projectId: r.projectId,
+        goalId: r.goalId,
         inheritedProjectId: !r.projectId && sc?.projectId ? sc.projectId : null,
         parentId: r.parentId,
+        labels: issueLabelNames,
+        titleTokens: titleTokens(r.title),
+        originKind: r.originKind,
+        originFingerprint: r.originFingerprint,
+        checkoutRunId: r.checkoutRunId,
+        executionRunId: r.executionRunId,
+        createdAt: r.createdAt.toISOString(),
+        startedAt: r.startedAt?.toISOString() ?? null,
         completedAt: r.completedAt?.toISOString() ?? null,
+        cancelledAt: r.cancelledAt?.toISOString() ?? null,
         contentHash: hash,
       },
     };
@@ -841,7 +913,230 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
   return { events, scanned, nextCursor };
 }
 
+/** Label names per issue for a page of issues (sorted, so the snapshot hash is stable). */
+async function labelsFor(tx: Tx, companyId: string, issueIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const ids = [...new Set(issueIds)];
+  if (ids.length === 0) return out;
+  const rows = await tx
+    .select({ issueId: issueLabels.issueId, name: labels.name })
+    .from(issueLabels)
+    .innerJoin(labels, eq(issueLabels.labelId, labels.id))
+    .where(and(eq(issueLabels.companyId, companyId), inArray(issueLabels.issueId, ids)));
+  for (const r of rows) {
+    const list = out.get(r.issueId) ?? [];
+    list.push(r.name);
+    out.set(r.issueId, list);
+  }
+  for (const [k, v] of out) out.set(k, [...new Set(v)].sort());
+  return out;
+}
+
+/**
+ * T0: label additions → issue.label_added. Adding a label does not touch the
+ * issue row, so the snapshot reader would not see it until the next issue
+ * change; this reader does. Removals are visible only through the next snapshot.
+ */
+export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(
+    cursor,
+    limit,
+    issueLabels.createdAt,
+    issueLabels.issueId,
+    (predicate, take) =>
+      tx
+        .select({
+          issueId: issueLabels.issueId,
+          labelId: issueLabels.labelId,
+          name: labels.name,
+          createdAt: issueLabels.createdAt,
+          cursorTime: sql<string>`${issueLabels.createdAt}::text`,
+        })
+        .from(issueLabels)
+        .innerJoin(labels, eq(issueLabels.labelId, labels.id))
+        .where(predicate ? and(eq(issueLabels.companyId, companyId), predicate) : eq(issueLabels.companyId, companyId))
+        .orderBy(asc(issueLabels.createdAt), asc(issueLabels.issueId), asc(issueLabels.labelId))
+        .limit(take),
+    (r) => r.issueId,
+    (r) => `${r.issueId}:${r.labelId}`,
+  );
+  const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const sc = scope.get(r.issueId);
+    return {
+      companyId,
+      projectId: sc?.projectId ?? null,
+      goalId: sc?.goalId ?? null,
+      actorType: "system",
+      actorId: null,
+      sourceTable: "issue_labels",
+      sourceId: `${r.issueId}:${r.labelId}`,
+      sourceVersion: "added",
+      eventType: "issue.label_added",
+      eventTime: r.createdAt,
+      payload: { issueId: r.issueId, identifier: sc?.identifier ?? null, label: r.name },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/**
+ * T0 roster: agents → agent.snapshot. Routing (manager := reportsTo → accountable
+ * human) and independence need these facts inside the window, so a card is a
+ * function of the ledger alone. Version = hash of the facts: a heartbeat touch
+ * that changes nothing mints nothing.
+ */
+export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agents.updatedAt, agents.id, (predicate, take) =>
+    tx
+      .select({
+        id: agents.id,
+        name: agents.name,
+        role: agents.role,
+        status: agents.status,
+        reportsTo: agents.reportsTo,
+        accountableUserId: agents.accountableUserId,
+        autonomy: agents.autonomy,
+        createdByUserId: agents.createdByUserId,
+        createdAt: agents.createdAt,
+        updatedAt: agents.updatedAt,
+        cursorTime: sql<string>`${agents.updatedAt}::text`,
+      })
+      .from(agents)
+      .where(predicate ? and(eq(agents.companyId, companyId), predicate) : eq(agents.companyId, companyId))
+      .orderBy(asc(agents.updatedAt), asc(agents.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const facts = { name: r.name, role: r.role, status: r.status, reportsTo: r.reportsTo, accountableUserId: r.accountableUserId, autonomy: r.autonomy };
+    const hash = hashCanonical(facts);
+    return {
+      companyId,
+      actorType: "system",
+      actorId: null,
+      sourceTable: "agents",
+      sourceId: r.id,
+      sourceVersion: hash,
+      sourceRowHash: hash,
+      eventType: "agent.snapshot",
+      eventTime: r.updatedAt,
+      payload: { agentId: r.id, ...facts, createdByUserId: r.createdByUserId, createdAt: r.createdAt.toISOString() },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/** T0 roster: projects → project.snapshot (status timeline, lead, target date, DoD). Version = hash + updated time so A→B→A is visible. */
+export async function readProjectSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, projects.updatedAt, projects.id, (predicate, take) =>
+    tx
+      .select({
+        id: projects.id,
+        name: projects.name,
+        status: projects.status,
+        goalId: projects.goalId,
+        leadAgentId: projects.leadAgentId,
+        targetDate: projects.targetDate,
+        definitionOfDone: projects.definitionOfDone,
+        archivedAt: projects.archivedAt,
+        createdByUserId: projects.createdByUserId,
+        createdAt: projects.createdAt,
+        updatedAt: projects.updatedAt,
+        cursorTime: sql<string>`${projects.updatedAt}::text`,
+      })
+      .from(projects)
+      .where(predicate ? and(eq(projects.companyId, companyId), predicate) : eq(projects.companyId, companyId))
+      .orderBy(asc(projects.updatedAt), asc(projects.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const digest = criteriaDigest(r.definitionOfDone);
+    const facts = {
+      name: r.name,
+      status: r.status,
+      goalId: r.goalId,
+      leadAgentId: r.leadAgentId,
+      targetDate: r.targetDate ?? null,
+      dodCriteria: countCriteria(r.definitionOfDone),
+      dodCriteriaHashes: digest?.hashes ?? null,
+      archivedAt: r.archivedAt?.toISOString() ?? null,
+    };
+    const hash = hashCanonical(facts);
+    return {
+      companyId,
+      projectId: r.id,
+      goalId: r.goalId ?? null,
+      actorType: "system",
+      actorId: null,
+      sourceTable: "projects",
+      sourceId: r.id,
+      sourceVersion: `${hash}:${r.cursorTime}`,
+      sourceRowHash: hash,
+      eventType: "project.snapshot",
+      eventTime: r.updatedAt,
+      payload: { projectId: r.id, ...facts, createdByUserId: r.createdByUserId, createdAt: r.createdAt.toISOString() },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
+/** T0 roster: goals → goal.snapshot (status timeline, owner, metric definition shape — never its prose). */
+export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, goals.updatedAt, goals.id, (predicate, take) =>
+    tx
+      .select({
+        id: goals.id,
+        title: goals.title,
+        level: goals.level,
+        status: goals.status,
+        parentId: goals.parentId,
+        ownerAgentId: goals.ownerAgentId,
+        metricDefinition: goals.metricDefinition,
+        createdAt: goals.createdAt,
+        updatedAt: goals.updatedAt,
+        cursorTime: sql<string>`${goals.updatedAt}::text`,
+      })
+      .from(goals)
+      .where(predicate ? and(eq(goals.companyId, companyId), predicate) : eq(goals.companyId, companyId))
+      .orderBy(asc(goals.updatedAt), asc(goals.id))
+      .limit(take),
+    (r) => r.id,
+  );
+  const events: EvaluationEventInput[] = rows.map((r) => {
+    const md = (r.metricDefinition ?? null) as Record<string, unknown> | null;
+    const facts = {
+      title: r.title,
+      level: r.level,
+      status: r.status,
+      parentId: r.parentId,
+      ownerAgentId: r.ownerAgentId,
+      metricDefinition: md ? { target: md.target ?? null, unit: md.unit ?? null, source: md.source ?? null, baseline: md.baseline ?? null } : null,
+    };
+    const hash = hashCanonical(facts);
+    return {
+      companyId,
+      projectId: null,
+      goalId: r.id,
+      actorType: "system",
+      actorId: null,
+      sourceTable: "goals",
+      sourceId: r.id,
+      sourceVersion: `${hash}:${r.cursorTime}`,
+      sourceRowHash: hash,
+      eventType: "goal.snapshot",
+      eventTime: r.updatedAt,
+      payload: { goalId: r.id, ...facts, createdAt: r.createdAt.toISOString() },
+    };
+  });
+  return { events, scanned, nextCursor };
+}
+
 export const SOURCE_READERS = {
+  agents: readAgentSnapshots,
+  goals: readGoalSnapshots,
+  projects: readProjectSnapshots,
   activity_log: readActivityLog,
   heartbeat_runs: readHeartbeatRuns,
   verdicts: readVerdicts,
@@ -849,5 +1144,6 @@ export const SOURCE_READERS = {
   cost_events: readCostEvents,
   issue_comments: readCommentHandoffs,
   issues: readIssueSnapshots,
+  issue_labels: readIssueLabels,
 } as const;
 export type SourceName = keyof typeof SOURCE_READERS;
