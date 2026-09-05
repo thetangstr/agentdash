@@ -1,8 +1,10 @@
 import {
+  EVALUATION_DEFAULT_REQUIRED_EVIDENCE,
   EVALUATION_EXCEPTIONS,
   EVALUATION_METRIC_NAMES,
-  type EvaluationContractV1,
+  EVALUATION_SKEW_TOLERANCE_MS,
   type EvaluationExceptionId,
+  type EvaluationExceptionSeverity,
   type EvaluationHandoffType,
   type EvaluationMetricKey,
   type EvaluationMilestoneRef,
@@ -11,13 +13,13 @@ import {
 import { labelFor, tierFor, minTier } from "./confidence.js";
 import type { ResolvedContract } from "./contract.js";
 import { gatesPass, type CriterionDisposition, type ItemEvidence } from "./evidence.js";
-import { routeFor } from "./independence.js";
+import { INDEPENDENCE_REASON_WORDS, routeFor } from "./independence.js";
 import {
-  actorKey,
   assigneeAt,
   createdAt,
   doneAt,
   firstInReviewAt,
+  isEvaluatorOutput,
   labelsAt,
   latestGoal,
   latestProject,
@@ -101,6 +103,10 @@ function words(n: number, singular: string, plural = `${singular}s`): string {
   return `${n} ${n === 1 ? singular : plural}`;
 }
 
+function dollars(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
 function headlineRatio(t: Tally, popWord: string, okWord = "satisfied"): string {
   const n = t.satisfied.length + t.failed.length + [...t.undecidable.values()].reduce((s, l) => s + l.length, 0);
   const parts = [`${okWord} ${t.satisfied.length} of ${n} ${popWord}`];
@@ -124,24 +130,26 @@ interface Build {
   notes?: string[];
   byConstruction?: boolean;
   disagreement?: boolean;
-  /** Force a ceiling (O4 status-only → Low). */
+  /** Force a ceiling (rule 16 contract exception without founder acceptance → Low). */
   cap?: "low" | "medium";
   ctx: ScoringContext;
   /** Coverage override for metrics whose decidable population is not the tally (display-only). */
   coverage?: number;
+  /** A count (P6, company row): zero is a measured value, never missing evidence. */
+  countMetric?: boolean;
 }
 
 function build(b: Build): MetricResult {
   const decidable = b.t.satisfied.length + b.t.failed.length;
-  const coverage = b.coverage ?? (b.n > 0 ? decidable / b.n : 0);
+  const coverage = b.coverage ?? (b.countMetric ? 1 : b.n > 0 ? decidable / b.n : 0);
   const conf = tierFor({
     coverage,
-    tiers: b.t.tiers,
+    tiers: b.countMetric && b.t.tiers.size === 0 ? new Set<EvaluationSourceTier>(["T0"]) : b.t.tiers,
     derivedContract: b.ctx.resolved.source === "derived",
     retrospective: b.ctx.retrospective,
     byConstruction: b.byConstruction,
     disagreement: b.disagreement,
-    emptyPopulation: b.n === 0,
+    emptyPopulation: b.countMetric ? false : b.n === 0,
   });
   let tier = conf.tier;
   const notes = [...(b.notes ?? []), ...conf.reasons];
@@ -182,15 +190,20 @@ export function exception(
   note: string,
   agentForRouting: string | null,
   qualifier?: string,
+  /** §9.1: E2 is material for delivery/authority claims, else routine. */
+  severityOverride?: EvaluationExceptionSeverity,
+  /** "Both actors' managers": further agents whose managers are routed too. */
+  alsoRouteAgents: Array<string | null> = [],
 ): ExceptionRecord {
   const def = EVALUATION_EXCEPTIONS[id];
-  const route = routeFor(agentForRouting, ctx.tl, ctx.resolved.contract.accountableUserId);
+  const route = routeFor([agentForRouting, ...alsoRouteAgents], ctx.tl, ctx.resolved.contract.accountableUserId);
   const markers: string[] = [];
   if (ctx.retrospective && id === "E1") markers.push("scored retrospectively — confidence capped");
   return {
     id,
     title: def.title,
-    severity: def.severity,
+    severity: severityOverride ?? def.severity,
+    actorAgentId: agentForRouting,
     routes: def.routes,
     key: `${id}:${subject.kind}:${subject.id}${qualifier ? `:${qualifier}` : ""}`,
     subject,
@@ -220,6 +233,15 @@ function done(ctx: ScoringContext): ItemTimeline[] {
 
 // ---------------------------------------------------------------- outcome
 
+/** Rule 16: a declared contract below the engineering default, without the founder's recorded acceptance, caps O1/O5 at limited evidence. */
+function weakContractCap(ctx: ScoringContext): { cap: "low"; note: string } | null {
+  const r = ctx.resolved;
+  if (r.source !== "declared" || r.exceptionsAccepted) return null;
+  const weak = r.summary.exceptions.filter((x) => !x.startsWith("contract derived"));
+  if (weak.length === 0) return null;
+  return { cap: "low", note: "contract exception without recorded founder acceptance: capped at limited evidence" };
+}
+
 /** O1 Acceptance satisfied: every applicable criterion has a satisfied disposition. */
 export function o1Acceptance(ctx: ScoringContext): MetricOutput {
   const t = tally();
@@ -228,7 +250,7 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
   const criteria = ctx.resolved.contract.acceptanceCriteria;
   for (const it of items) {
     if (criteria.length === 0) {
-      undecided(t, it.issueId, ctx.resolved.source === "derived" ? "no acceptance criteria declared (derived contract)" : "contract declares no acceptance criteria");
+      undecided(t, it.issueId, ctx.resolved.source === "derived" ? "no acceptance criteria declared — contract derived" : "the contract declares no acceptance criteria");
       continue;
     }
     const ds = ctx.dispositions.get(it.issueId) ?? [];
@@ -251,6 +273,7 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
   }
   const n = items.length;
   const value = n > 0 ? round(t.satisfied.length / n) : null;
+  const weak = weakContractCap(ctx);
   return {
     metric: build({
       ctx,
@@ -260,7 +283,8 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
       value,
       t,
       headline: headlineRatio(t, "done"),
-      notes: criteria.length === 0 ? ["no criterion carries a check, so acceptance cannot be decided; the gap is the measurement (§5.1)"] : [],
+      notes: [...(criteria.length === 0 ? ["no criterion carries a check, so acceptance cannot be decided; the gap is the measurement"] : []), ...(weak ? [weak.note] : [])],
+      cap: weak?.cap,
     }),
     exceptions,
   };
@@ -269,15 +293,16 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
 /** O2 Deadline adherence: the milestone against its target date (issues carry none). */
 export function o2Deadline(ctx: ScoringContext): MetricOutput {
   const t = tally();
-  const target = ctx.resolved.contract.targetDate;
+  const project = ctx.ref.kind === "project" ? latestProject(ctx.tl, ctx.ref.id) : null;
+  // §5.1: the milestone's target is the project's date or the contract's — whichever exists.
+  const target = ctx.resolved.contract.targetDate ?? project?.targetDate ?? null;
   if (!target) {
     return {
       metric: build({ ctx, key: "O2", unit: "share closed on time", n: 0, value: null, t, headline: "no target date on the milestone or its contract", notes: ["set projects.targetDate or the contract's targetDate to measure"] }),
       exceptions: [],
     };
   }
-  const due = new Date(`${target}T23:59:59.999Z`);
-  const project = ctx.ref.kind === "project" ? latestProject(ctx.tl, ctx.ref.id) : null;
+  const due = new Date(`${target}T23:59:59.999Z`); // UTC end of day; the company's local day is not in the ledger
   const goal = ctx.ref.kind === "goal" ? latestGoal(ctx.tl, ctx.ref.id) : null;
   const closedAt = project && (project.status === "completed" || project.status === "cancelled") ? project.time : goal && (goal.status === "achieved" || goal.status === "cancelled") ? goal.time : null;
   const id = ctx.ref.id;
@@ -293,7 +318,7 @@ export function o2Deadline(ctx: ScoringContext): MetricOutput {
     t.failed.push(id);
   }
   return {
-    metric: build({ ctx, key: "O2", unit: "share closed on time", n: 1, value: t.satisfied.length, t, headline: closedAt ? `closed ${closedAt <= due ? "on or before" : "after"} ${target}` : ctx.tl.asOf <= due ? `open, due ${target}` : `open past its target ${target}`, detail: { targetDate: target, closedAt: closedAt?.toISOString() ?? null } }),
+    metric: build({ ctx, key: "O2", unit: "share closed on time", n: 1, value: t.satisfied.length, t, headline: closedAt ? `closed ${closedAt <= due ? "on or before" : "after"} its target date of ${target}` : ctx.tl.asOf <= due ? `open, due ${target}` : `open past its target date of ${target}`, detail: { targetDate: target, closedAt: closedAt?.toISOString() ?? null } }),
     exceptions: [],
   };
 }
@@ -329,7 +354,7 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
       }
     }
     for (const other of ctx.tl.items.values()) {
-      if (other.issueId === it.issueId) continue;
+      if (other.issueId === it.issueId || isEvaluatorOutput(other)) continue;
       for (const b of other.blockers) {
         if (b.time <= closed) continue;
         const before = new Set(b.previous ?? []);
@@ -337,6 +362,11 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
           consequences++;
           blockersCiting++;
           t.refs.add(b.eventId);
+          // E9: the citation still stands seven days later
+          const latest = other.blockers[other.blockers.length - 1]!;
+          if (latest.blockedByIssueIds.includes(it.issueId) && ctx.tl.asOf.getTime() - b.time.getTime() > 7 * DAY) {
+            exceptions.push(exception(ctx, "E9", subjectIssue(it), b.time, [b.eventId], `cited as a blocker by ${other.identifier ?? other.issueId} after close and still cited seven days later`, ownerAgentAt(it, closed), b.eventId));
+          }
         }
       }
     }
@@ -350,6 +380,11 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
           reverts++;
           t.refs.add(rv.eventId);
           t.tiers.add("T2");
+          // E9: no re-ship of that PR within seven days of the revert
+          const reshipped = ctx.members.some((m) => m.handoffs.some((h) => h.type === "tpm_merge_report" && str(h.payload, "merge_result") === "shipped" && num(obj(h.payload, "pr") ?? {}, "number") === pr && h.time > rv.time));
+          if (!reshipped && ctx.tl.asOf.getTime() - rv.time.getTime() > 7 * DAY) {
+            exceptions.push(exception(ctx, "E9", subjectIssue(it), rv.time, [rv.eventId], `delivery reverted after close and not re-shipped within seven days`, ownerAgentAt(it, closed), rv.eventId));
+          }
         }
       }
     }
@@ -393,24 +428,24 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
   }
   t.refs.add(goal.eventId);
   t.tiers.add("T0");
-  const statusValue: Record<string, number> = { planned: 0, active: 0.5, achieved: 1, cancelled: 0 };
-  const v = statusValue[goal.status ?? ""] ?? 0;
+  // Nothing is imputed: a status is shown, never turned into a number, until the
+  // outcome target can be measured (goal measurements are not recorded on this deployment).
   if (goal.status === "achieved") t.satisfied.push(goalId);
   else if (goal.status === "cancelled") t.failed.push(goalId);
-  else t.satisfied.push(goalId); // status known: decidable; value carries the progress
+  else undecided(t, goalId, "goal still active: progress not measurable without an outcome target and measurements");
   const target = ctx.resolved.contract.outcomeTarget;
-  const notes: string[] = [];
-  if (!target) notes.push("no outcome target: status only");
-  else notes.push("outcome target declared but goal measurements are not recorded on this deployment: status only");
+  const notes: string[] = ["shown, not scored: status only until goal measurements exist"];
+  if (target) notes.push("outcome target declared but goal measurements are not recorded on this deployment");
   return {
     metric: build({
       ctx,
       key: "O4",
-      unit: "goal progress (status)",
+      unit: "goal status",
       n: 1,
-      value: v,
+      value: goal.status === "achieved" ? 1 : goal.status === "cancelled" ? 0 : null,
       t,
-      headline: `goal ${goal.title ?? goalId} is ${goal.status ?? "unknown"}${target ? `; target ${target.target} ${target.unit} unmeasured` : ""}`,
+      displayOnly: true,
+      headline: `goal ${goal.title ?? goalId} is ${goal.status ?? "unknown"}${target ? `; outcome target ${target.target} ${target.unit} has no measurements — status only` : " — status only"}`,
       detail: { goalId, status: goal.status, outcomeTarget: target, statusTransitions: (ctx.tl.goals.get(goalId) ?? []).map((s) => ({ at: s.time.toISOString(), status: s.status })) },
       notes,
       cap: "low",
@@ -423,19 +458,31 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
 export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   const t = tally();
   const items = done(ctx);
-  const required = ctx.resolved.contract.requiredEvidence;
+  const required = new Set(ctx.resolved.contract.requiredEvidence);
+  const waived = EVALUATION_DEFAULT_REQUIRED_EVIDENCE.filter((cls) => !required.has(cls));
   const perClass: Record<string, { satisfied: number; failed: number; undecidable: number }> = {};
+  let limitedItems = 0;
+  let limitedReviewItems = 0;
+  let sharedReviews = 0;
   for (const it of items) {
     const ev = ctx.evidence.get(it.issueId);
     if (!ev) {
       undecided(t, it.issueId, "no evidence computed");
       continue;
     }
+    sharedReviews += ev.sharedAccountabilityReviews;
     let failed = false;
     let und: string | null = null;
-    for (const cls of required) {
-      const r = ev.classes[cls];
+    let limited = false;
+    // Rule 16: a class the contract waived is undecidable for every item — waiving lowers coverage, never raises the value.
+    for (const cls of EVALUATION_DEFAULT_REQUIRED_EVIDENCE) {
       const pc = (perClass[cls] ??= { satisfied: 0, failed: 0, undecidable: 0 });
+      if (!required.has(cls)) {
+        pc.undecidable++;
+        und = und ?? `${cls}: waived by the contract`;
+        continue;
+      }
+      const r = ev.classes[cls];
       if (!r) {
         pc.undecidable++;
         und = und ?? `${cls}: not evaluated`;
@@ -443,8 +490,13 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
       }
       for (const ref of r.refs) t.refs.add(ref);
       for (const tier of r.tiers) t.tiers.add(tier);
-      if (r.state === "satisfied") pc.satisfied++;
-      else if (r.state === "failed") {
+      if (r.state === "satisfied") {
+        pc.satisfied++;
+        if (r.limited) {
+          limited = true;
+          limitedReviewItems++;
+        }
+      } else if (r.state === "failed") {
         pc.failed++;
         failed = true;
       } else {
@@ -454,9 +506,17 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
     }
     if (failed) t.failed.push(it.issueId);
     else if (und) undecided(t, it.issueId, und);
-    else t.satisfied.push(it.issueId);
+    else {
+      t.satisfied.push(it.issueId);
+      if (limited) limitedItems++;
+    }
   }
   const n = items.length;
+  const weak = weakContractCap(ctx);
+  const notes: string[] = [];
+  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: counted as undecidable for every item`);
+  if (limitedReviewItems > 0) notes.push(`${words(limitedReviewItems, "item")} reviewed only within a concentrated reviewer pair: those reviews weigh as limited evidence`);
+  if (weak) notes.push(weak.note);
   return {
     metric: build({
       ctx,
@@ -466,7 +526,9 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
       value: n > 0 ? round(t.satisfied.length / n) : null,
       t,
       headline: headlineRatio(t, "done", "fully evidenced"),
-      detail: { requiredEvidence: [...required], perClass },
+      detail: { requiredEvidence: [...required].sort(), waived, perClass, sharedAccountabilityReviews: sharedReviews, limitedEvidenceItems: limitedItems, limitedReviewItems },
+      notes,
+      cap: weak?.cap ?? (limitedItems > 0 && limitedItems === t.satisfied.length ? "low" : undefined),
     }),
     exceptions: [],
   };
@@ -568,7 +630,7 @@ export function p1Autonomy(ctx: ScoringContext, scope: ActorScope): MetricOutput
     if (count === 0) t.satisfied.push(it.issueId);
     else t.failed.push(it.issueId);
     if (count >= 3 || humanCompleted) {
-      exceptions.push(exception(ctx, "E8", subjectIssue(it), reachedAt, [...t.refs].slice(-count), humanCompleted ? "a human completed an agent-owned item" : `${count} human interventions on one item`, scope.agentId));
+      exceptions.push(exception(ctx, "E8", subjectIssue(it), reachedAt, [...t.refs].slice(-count), humanCompleted ? "a human completed an agent-owned item" : `${count} human interventions recorded on one item`, scope.agentId));
     }
   }
   const n = pop.length;
@@ -581,7 +643,7 @@ export function p1Autonomy(ctx: ScoringContext, scope: ActorScope): MetricOutput
       value: n > 0 ? round(t.satisfied.length / n) : null,
       t,
       headline: n === 0 ? "no agent-owned items reached review or done" : `${t.satisfied.length} of ${n} items reached review or done with no human intervention; ${words(interventionsTotal, "intervention")} in all`,
-      detail: { interventions: interventionsTotal, perItem, caveat: ctx.tl.humanActors.size > 0 && [...ctx.tl.humanActors].every((u) => u.startsWith("local-") || u === "board") ? "synthetic human identities: interventions are countable, not attributable (§7)" : null },
+      detail: { interventions: interventionsTotal, perItem: Object.fromEntries(Object.entries(perItem).slice(0, 200)), perItemCount: Object.keys(perItem).length, caveat: ctx.tl.humanActors.size > 0 && [...ctx.tl.humanActors].every((u) => u.startsWith("local-") || u === "board") ? "synthetic human identities: interventions are countable, not attributable" : null },
     }),
     exceptions,
   };
@@ -599,7 +661,11 @@ export function p2Judgment(ctx: ScoringContext, scope: ActorScope): MetricOutput
       raised++;
       t.refs.add(e.eventId);
       t.tiers.add("T0");
-      const decided = it.approvals.find((a) => a.kind === "decided" && a.type === "verdict_escalation" && a.time >= e.time);
+      // link through the approval the escalation created (nearest verdict_escalation created at or after it), then its decision by id
+      const created = it.approvals.filter((a) => a.kind === "created" && a.type === "verdict_escalation" && a.time >= e.time).sort((x, y) => x.time.getTime() - y.time.getTime())[0];
+      const decided = created
+        ? it.approvals.find((a) => a.kind === "decided" && a.approvalId === created.approvalId)
+        : it.approvals.find((a) => a.kind === "decided" && a.type === "verdict_escalation" && a.time >= e.time);
       if (!decided) undecided(t, e.eventId, "escalation not yet decided");
       else if (decided.decision === "approved") {
         approved++;
@@ -649,7 +715,7 @@ export function p2Judgment(ctx: ScoringContext, scope: ActorScope): MetricOutput
       t,
       headline: n === 0 ? "no escalations raised" : `${approved} of ${words(n, "escalation")} approved as raised`,
       detail: { raised, approved, rubricDimensions: rubric },
-      notes: ["unanswered questions are charged to the company row, not the asking agent"],
+      notes: ["value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"],
     }),
     exceptions: [],
   };
@@ -672,7 +738,8 @@ export function p3FactualAccuracy(ctx: ScoringContext, scope: ActorScope): Metri
         if (h.timestampSuspicious) {
           contradicted++;
           t.failed.push(h.eventId);
-          exceptions.push(exception(ctx, "E2", subjectIssue(it), h.time, [h.eventId], `${h.type} payload claims a time earlier than its comment by more than the tolerance (rule 4)`, scope.agentId, h.eventId));
+          const deliveryClaim = h.type === "tpm_merge_report" || h.type === "reviewer_to_tpm";
+          exceptions.push(exception(ctx, "E2", subjectIssue(it), h.time, [h.eventId], `${h.type} payload claims a time earlier than its comment by more than the ${Math.round(EVALUATION_SKEW_TOLERANCE_MS / 60_000)}-minute skew tolerance`, scope.agentId, h.eventId, deliveryClaim ? "material" : "routine"));
         } else t.satisfied.push(h.eventId);
       }
     }
@@ -795,6 +862,9 @@ export function p5Recovery(ctx: ScoringContext, scope: ActorScope): MetricOutput
     else human++;
   }
   const exhausted = scope.items.reduce((s, it) => s + it.recoveryExhausted.length, 0);
+  const allRuns = scope.items.flatMap((it) => it.runs.filter((r) => r.agentId === scope.agentId));
+  const retries = allRuns.filter((r) => r.retryOfRunId).length;
+  const successes = allRuns.filter((r) => r.status === "succeeded").length;
   const n = failedRuns.length;
   return {
     metric: build({
@@ -805,13 +875,21 @@ export function p5Recovery(ctx: ScoringContext, scope: ActorScope): MetricOutput
       value: median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 2) : null,
       t,
       displayOnly: true,
-      headline: n === 0 ? "no failed, timed-out or cancelled runs" : `${words(n, "failed run")}: median ${median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 1) : "—"} h to an action path (p90 ${percentile(recoveryMs, 0.9) != null ? round(percentile(recoveryMs, 0.9)! / HOUR, 1) : "—"} h); ${auto} auto-recovered, ${explicit} explicit recovery, ${human} human, ${unresolved} unresolved`,
-      detail: { failedRuns: n, medianHours: median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 2) : null, p90Hours: percentile(recoveryMs, 0.9) != null ? round(percentile(recoveryMs, 0.9)! / HOUR, 2) : null, autoRecovered: auto, explicitRecovery: explicit, humanEscalation: human, unresolved, recoveryBudgetExhausted: exhausted },
+      headline: n === 0 ? "no failed, timed-out or cancelled runs" : `${words(n, "failed run")}: median ${median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 1) : "—"} h to an action path (p90 ${percentile(recoveryMs, 0.9) != null ? round(percentile(recoveryMs, 0.9)! / HOUR, 1) : "—"} h); ${auto} auto-recovered, ${explicit} explicit recovery, ${human} recovered by a human, ${unresolved} unresolved`,
+      detail: { failedRuns: n, medianHours: median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 2) : null, p90Hours: percentile(recoveryMs, 0.9) != null ? round(percentile(recoveryMs, 0.9)! / HOUR, 2) : null, autoRecovered: auto, explicitRecovery: explicit, humanEscalation: human, unresolved, recoveryBudgetExhausted: exhausted, retriesPerSuccess: successes > 0 ? round(retries / successes, 2) : null },
       notes: ["shown, not scored, until its populations are stable (§5.3)"],
     }),
     exceptions: [],
   };
 }
+
+const P6_RULE_WORDS: Record<string, string> = {
+  self_review: "self-review",
+  founder_lock: "founder lock",
+  transition_not_assigned: "transition of an unassigned item",
+  merge_without_gates: "merge without gates",
+  authz_refused: "refused request",
+};
 
 /** P6 Authority compliance: detected violations as a count with rules; every detection is E3 immediate. */
 export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutput {
@@ -829,7 +907,7 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
   for (const it of ctx.members) {
     const ev = ctx.evidence.get(it.issueId);
     for (const v of ev?.violations ?? []) {
-      if (v.actorType === "agent" && v.actorId === scope.agentId) hit("self_review", it, v.time, v.eventId, `${v.kind} by a contributor (${v.reason})`);
+      if (v.actorType === "agent" && v.actorId === scope.agentId) hit("self_review", it, v.time, v.eventId, `${v.kind}: ${INDEPENDENCE_REASON_WORDS[v.reason] ?? v.reason}`);
     }
     if (locks.has(it.issueId)) {
       for (const x of [...it.transitions, ...it.assignments, ...it.comments]) {
@@ -863,10 +941,10 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
       value: n,
       t,
       displayOnly: true,
-      coverage: 1,
-      headline: n === 0 ? "no violations detected" : `${words(n, "violation")}: ${Object.entries(rules).sort().map(([k, v]) => `${k} ${v}`).join(", ")}`,
+      countMetric: true,
+      headline: n === 0 ? "no violations detected" : `${words(n, "violation")} detected: ${Object.entries(rules).sort().map(([k, v]) => `${P6_RULE_WORDS[k] ?? k} ${v}`).join(", ")}`,
       detail: { rules, refusalsLogged: ctx.tl.sources.authzRefused },
-      notes: ["a count, not a ratio: refused actions leave a record only once authz.refused is emitted (AGE-91)"],
+      notes: ["a count, not a ratio: refused actions leave a record only where the control plane records refusals"],
     }),
     exceptions,
   };
@@ -958,7 +1036,7 @@ export function p8Cost(ctx: ScoringContext, scope: ActorScope, o1SatisfiedForAge
       const c = r.runId ? costByRun.get(r.runId) : undefined;
       if (c != null && c > 3 * med) {
         anomalies++;
-        exceptions.push(exception(ctx, "E7", subjectIssue(it), r.time, [r.eventId], `run cost ${c}¢ exceeds 3× the agent's median ${med}¢`, scope.agentId, r.eventId));
+        exceptions.push(exception(ctx, "E7", subjectIssue(it), r.time, [r.eventId], `run cost ${dollars(c)} exceeds three times the agent's median run cost of ${dollars(med)}`, scope.agentId, r.eventId));
       }
     }
   }
@@ -976,9 +1054,9 @@ export function p8Cost(ctx: ScoringContext, scope: ActorScope, o1SatisfiedForAge
       value: o1SatisfiedForAgent != null && o1SatisfiedForAgent > 0 && metered > 0 ? round(totalCents / o1SatisfiedForAgent, 1) : null,
       t,
       displayOnly: true,
-      headline: n === 0 ? "no runs" : `${metered} of ${words(n, "run")} metered (${Math.round(meteringShare * 100)}%); ${totalCents}¢ in all; ${anomalies} anomalies`,
+      headline: n === 0 ? "no runs" : `${metered} of ${words(n, "run")} metered (${Math.round(meteringShare * 100)}%); ${dollars(totalCents)} in all; ${words(anomalies, "anomaly", "anomalies")}`,
       detail: { runs: n, metered, totalCents, medianRunCents: med, anomalies, selfReportedTokens, costPerSatisfiedItem: o1SatisfiedForAgent != null && o1SatisfiedForAgent > 0 && metered > 0 ? round(totalCents / o1SatisfiedForAgent, 1) : null },
-      notes: ["shown, never scored; agent_runs is derived from cost_events and is not a second source"],
+      notes: ["shown, never scored; agent_runs is derived from cost_events and is not a second source; the metering-absent exception needs at least four runs"],
     }),
     exceptions,
   };
@@ -996,7 +1074,7 @@ function jaccard(a: string[], b: string[]): number {
 /** Rule 18 successor links: cancelled item → new item within 14 days sharing lineage, parent or a fuzzy title. */
 export function successorLinks(ctx: ScoringContext): Map<string, string> {
   const links = new Map<string, string>();
-  const all = [...ctx.tl.items.values()];
+  const all = [...ctx.tl.items.values()].filter((x) => !isEvaluatorOutput(x)); // rule 12
   for (const it of ctx.members) {
     const term = terminalAt(it);
     if (!term || term.status !== "cancelled") continue;
@@ -1055,7 +1133,7 @@ export function p9DuplicateRework(ctx: ScoringContext, scope: ActorScope, succes
       duplicates++;
       t.failed.push(it.issueId);
       for (const id of it.eventIds.slice(0, 2)) t.refs.add(id);
-      exceptions.push(exception(ctx, "E6", subjectIssue(it), term?.time ?? c ?? ctx.tl.asOf, it.eventIds.slice(0, 5), "duplicate by label, origin fingerprint or title within 15 minutes", scope.agentId));
+      exceptions.push(exception(ctx, "E6", subjectIssue(it), term?.time ?? c ?? ctx.tl.asOf, it.eventIds.slice(0, 5), "duplicate detected by label, origin fingerprint, or a near-identical title created within 15 minutes", scope.agentId));
     }
     let reworkHere = 0;
     const d = doneAt(it);
@@ -1083,7 +1161,7 @@ export function p9DuplicateRework(ctx: ScoringContext, scope: ActorScope, succes
       lowerIsBetter: true,
       coverage: n > 0 ? 1 : 0,
       headline: n === 0 ? "no delivered items" : `${words(duplicates, "duplicate")} and ${words(rework, "rework event")} across ${words(n, "delivered item")}`,
-      detail: { duplicates, rework, successorLinks: [...successors.entries()].filter(([from]) => owned.some((o) => o.issueId === from)).map(([from, to]) => ({ cancelled: from, successor: to })) },
+      detail: { duplicates, rework, successorLinks: [...successors.entries()].filter(([from]) => owned.some((o) => o.issueId === from)).slice(0, 200).map(([from, to]) => ({ cancelled: from, successor: to })) },
     }),
     exceptions,
   };
@@ -1114,7 +1192,7 @@ export function companyRow(ctx: ScoringContext): { unansweredQuestions: MetricRe
     value: t.failed.length,
     t,
     displayOnly: true,
-    coverage: n > 0 ? 1 : 0,
+    countMetric: true,
     headline: n === 0 ? "no pending questions" : `${words(t.failed.length, "question")} unanswered past 48 h (median age ${median(ages) != null ? round(median(ages)! / HOUR, 1) : "—"} h) of ${n} pending`,
     detail: { pending: n, past48h: t.failed.length, medianAgeHours: median(ages) != null ? round(median(ages)! / HOUR, 1) : null },
     notes: ["charged to the company, not the asking agent"],
@@ -1145,17 +1223,9 @@ export function companyRow(ctx: ScoringContext): { unansweredQuestions: MetricRe
     value: t2.failed.length,
     t: t2,
     displayOnly: true,
-    coverage: 1,
+    countMetric: true,
     headline: `${words(hangs, "zero-turn hang")}, ${words(exhausted, "recovery budget exhausted", "recovery budgets exhausted")}`,
     detail: { zeroTurnHangs: hangs, recoveryBudgetExhausted: exhausted },
   });
   return { unansweredQuestions: unanswered, platformFailures: platform, exceptions: [] };
-}
-
-export function contractOf(ctx: ScoringContext): EvaluationContractV1 {
-  return ctx.resolved.contract;
-}
-
-export function keyOf(actorType: string, actorId: string | null): string {
-  return actorKey(actorType, actorId);
 }

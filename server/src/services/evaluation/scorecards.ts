@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { evaluationScorecards } from "@paperclipai/db";
 import { EVALUATION_CONTRACT_VERSION, type EvaluationMilestoneRef } from "@paperclipai/shared";
 import { withCompanyLock } from "./ingest.js";
-import { evaluationLedger, hashCanonical, type EvaluationEventInput } from "./ledger.js";
+import { evaluationLedger, hashCanonical, type EvaluationEventInput, type LedgerDb } from "./ledger.js";
 import { evaluationReplay, FORMULA_VERSION, MARKER_OPEN_MILESTONE } from "./replay.js";
 import type { ExceptionRecord, ScoredCard } from "./scoring/types.js";
 
@@ -21,8 +21,8 @@ import type { ExceptionRecord, ScoredCard } from "./scoring/types.js";
 export function evaluationScorecardService(db: Db) {
   const replay = evaluationReplay(db);
 
-  async function versions(companyId: string, ref: EvaluationMilestoneRef) {
-    return db
+  async function versions(companyId: string, ref: EvaluationMilestoneRef, q: LedgerDb = db) {
+    return q
       .select()
       .from(evaluationScorecards)
       .where(
@@ -50,8 +50,9 @@ export function evaluationScorecardService(db: Db) {
      */
     async snapshot(companyId: string, ref: EvaluationMilestoneRef) {
       return withCompanyLock(db, companyId, async (tx) => {
-        const rows = await versions(companyId, ref);
-        const { card, hash, state, throughSeq } = await replay.replay(companyId, ref);
+        // Everything inside the lock runs on the lock's own connection: no second pooled connection is held idle.
+        const rows = await versions(companyId, ref, tx);
+        const { card, hash, state, throughSeq } = await evaluationReplay(tx).replay(companyId, ref);
         const version = (rows[0]?.version ?? 0) + 1;
         const [row] = await tx
           .insert(evaluationScorecards)
@@ -92,14 +93,16 @@ export function evaluationScorecardService(db: Db) {
 
 /**
  * Exceptions become ledger facts (rule 9: evaluator output is itself
- * replayable and appealable). The version is a hash of the finding's content,
- * so an unchanged exception on a later snapshot dedupes and a changed one is a
- * new fact. Findings carry the evaluator actor and never enter scored
+ * replayable and appealable). The version hashes the finding's stable identity
+ * — id, subject, routing, raisedAt, evidence — never its phrasing, so an
+ * unchanged exception on a later snapshot dedupes and only a changed fact is a
+ * new row. Findings carry the evaluator actor and never enter scored
  * populations (rule 12).
  */
 export function findingEvents(companyId: string, ref: EvaluationMilestoneRef, card: ScoredCard, cardVersion: number): EvaluationEventInput[] {
   return card.exceptions.map((e: ExceptionRecord) => {
-    const content = { id: e.id, severity: e.severity, subject: e.subject, routing: e.routing, note: e.note, evidenceRefs: e.evidenceRefs, raisedAt: e.raisedAt };
+    const identity = { id: e.id, severity: e.severity, subject: e.subject, routing: e.routing, evidenceRefs: e.evidenceRefs, raisedAt: e.raisedAt };
+    const content = { ...identity, note: e.note };
     return {
       companyId,
       projectId: ref.kind === "project" ? ref.id : null,
@@ -108,7 +111,7 @@ export function findingEvents(companyId: string, ref: EvaluationMilestoneRef, ca
       actorId: null,
       sourceTable: "evaluation",
       sourceId: e.key,
-      sourceVersion: hashCanonical(content).slice(0, 32),
+      sourceVersion: hashCanonical(identity).slice(0, 32),
       eventType: "evaluation.finding",
       eventTime: new Date(e.raisedAt),
       payload: { ...content, title: e.title, routes: [...e.routes], markers: e.markers, milestoneRef: ref, cardVersion, formulaVersion: card.formulaVersion },

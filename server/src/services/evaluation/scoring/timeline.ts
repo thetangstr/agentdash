@@ -261,6 +261,11 @@ export interface Timeline {
   humanActors: Set<string>;
 }
 
+/** Events the evaluator itself authored, or contracts: never source facts, never scored (rules 9 and 12). */
+export function isEvaluatorEvent(eventType: string): boolean {
+  return eventType.startsWith("evaluation.") || eventType === "contract.declared";
+}
+
 function ref(e: EvaluationEventRow): Ref {
   return { time: e.eventTime, eventId: e.id, actorType: e.actorType, actorId: e.actorId };
 }
@@ -338,8 +343,12 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
     const t = e.eventTime;
     if (t > tl.asOf) tl.asOf = t;
     if (e.ingestTime > tl.asOf) tl.asOf = e.ingestTime;
-    const lag = e.ingestTime.getTime() - t.getTime();
-    if (lag > tl.maxIngestLagMs) tl.maxIngestLagMs = lag;
+    // Rule 13's blind window is about source facts: the evaluator's own findings
+    // (dated by the fact, appended later) and contract declarations are not lag.
+    if (!isEvaluatorEvent(e.eventType)) {
+      const lag = e.ingestTime.getTime() - t.getTime();
+      if (lag > tl.maxIngestLagMs) tl.maxIngestLagMs = lag;
+    }
     if (e.actorType === "user" && e.actorId) tl.humanActors.add(e.actorId);
     const issueId = str(p, "issueId");
     const identifier = str(p, "identifier");

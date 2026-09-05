@@ -1,8 +1,7 @@
 import { eq } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
 import { goals, projects } from "@paperclipai/db";
 import type { EvaluationMilestoneRef } from "@paperclipai/shared";
-import { evaluationLedger, type EvaluationEventRow } from "./ledger.js";
+import { evaluationLedger, type EvaluationEventRow, type LedgerDb } from "./ledger.js";
 import { cardHash, FORMULA_VERSION as SCORE_FORMULA_VERSION, scoreMilestone, selectMilestoneEvents } from "./scoring/card.js";
 import type { ScoredCard } from "./scoring/types.js";
 
@@ -36,7 +35,7 @@ export function projectMilestone(window: EvaluationEventRow[], ref: EvaluationMi
   return scoreMilestone(window, ref, throughSeq, company, { fallbackOpen: state.open });
 }
 
-export function evaluationReplay(db: Db) {
+export function evaluationReplay(db: LedgerDb) {
   const ledger = evaluationLedger(db);
 
   async function milestoneOpen(companyId: string, ref: EvaluationMilestoneRef): Promise<boolean> {

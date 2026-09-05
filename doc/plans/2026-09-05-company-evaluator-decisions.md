@@ -366,4 +366,52 @@ Recorded here rather than in the spec, which is at its size limit.
 - **Tests.** 23 fixture-ledger unit cases (determinism, rules 4, 10–19, tiers
   at 0.2/0.5/0.8, composites and guards, membership moves, each exception) plus
   the Milestone 1 suites extended for roster events, contract routes and the
-  ledger-derived open flag.
+  ledger-derived open flag; a second file pins every correction from the first
+  independent review (below).
+- **First independent review (round 1).** Three findings were real spec
+  deviations and are fixed: the §4.2 project-lead and goal-owner checks were
+  unreachable for issue reviews (now applied to every review-class event from
+  the item's project and goal at review time); a declared contract that dropped
+  evidence classes scored O5 as 100 (waived classes are now undecidable for every
+  item, so waiving lowers coverage, and a rule-16 exception without a recorded
+  founder acceptance — an `evaluation.disposition` of kind
+  `contract_exception_accepted` naming the contract event — caps O1/O5 at
+  limited evidence); rule 17 was applied per contract document (now per
+  criterion: each criterion keeps its earliest declaration time across
+  amendments). Also fixed: a narrowed DoD fails `dod_present`; a synthetic
+  decider leaves `independent_review` undecidable (rule 15); rule-19 pair reviews
+  weigh as limited evidence and cap O5 when they are the only review; the
+  evaluator's own findings no longer inflate the blind window or the digest;
+  `agent.snapshot` versions carry the row time; O4 is shown, never scored, until
+  an outcome target is measurable (nothing imputed); count metrics render zero
+  as a value; O2 falls back to the project's target date; E2 is material for
+  delivery claims; snapshots read on the lock's own connection; evaluator
+  review items cannot become successors or blocker citations (rule 12);
+  findings hash their identity, not their phrasing; an unattributed review is
+  neither credit nor violation; `ci_green` requires `pre_existing_failures`
+  named; per-agent composites carry E3/E4 flags raised anywhere about that
+  agent; the card caps exceptions at 500 and issue ids at 5000 with exact
+  counts. `FORMULA_VERSION` is `m2-score/2`. Accepted as notes: P2's value is
+  approved over decided (undecided escalations are undecidable, not failures);
+  roster names and titles are stored while issue titles are tokenised; O2's due
+  instant is UTC end of day; the per-agent metric block is O(agents × members)
+  and O3/P9 scans are quadratic in members — fine for the shadow companies,
+  to move into SQL with the replay aggregation before real load.
+- **Theo's technical review (AGE-96) and Priya's product review (AGE-97).**
+  Contributors now follow §3 in full — anyone who changed status, assignee,
+  blockers or the DoD, authored a comment or a non-review self-report, ran a
+  heartbeat on the item, or was ever its assignee. One reading is recorded:
+  review-class acts (verdicts, tester handoffs, approval decisions) are the acts
+  independence judges, so they do not by themselves make their author a
+  contributor; otherwise every second verdict on an item would be a self-review.
+  P2 links an escalation to its decision through the approval id; E9 covers
+  blocker citations still standing and reverts not re-shipped within seven days,
+  not only reopens; E14 routes both actors' managers. The card's prose follows
+  Priya's rules: no rule or section numbers in founder-facing strings (they live
+  in this record and in drill-down), no parentheses or semicolons inside an
+  undecidable reason (headlines join reasons with "; "), remedies inside
+  undecidable reasons, dollars not cents, enum keys rendered as words, markers
+  that name their cap, and two new markers — partial records when any source is
+  absent from the window, and a lag marker when records trail events by more
+  than a day. The derived-contract exception now states that acceptance is
+  insufficient by construction and names the one action that changes it.

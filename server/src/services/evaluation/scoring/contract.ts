@@ -3,7 +3,6 @@ import {
   EVALUATION_DEFAULT_REQUIRED_EVIDENCE,
   evaluationContractV1Schema,
   type EvaluationContractV1,
-  type EvaluationEvidenceClass,
   type EvaluationMilestoneRef,
 } from "@paperclipai/shared";
 import { INDEPENDENCE_RULE } from "./independence.js";
@@ -28,26 +27,45 @@ export interface ResolvedContract {
   declaredAt: Date | null;
   declaredBy: string | null;
   summary: ContractSummary;
+  /** Rule 17 is per criterion: the earliest declaration time of each criterion id across every version of the contract in the window. */
+  criterionDeclaredAt: Map<string, Date>;
+  /** Rule 16: whether the founder has recorded acceptance of this contract's exceptions (an `evaluation.disposition` naming the contract event). */
+  exceptionsAccepted: boolean;
 }
 
 export function resolveContract(tl: Timeline, ref: EvaluationMilestoneRef, members: ItemTimeline[], companyId: string): ResolvedContract {
   let declared: { contract: EvaluationContractV1; eventId: string; at: Date; by: string | null } | null = null;
+  const criterionDeclaredAt = new Map<string, Date>();
+  const versionEventIds: string[] = [];
+  let invalidVersions = 0;
   for (const e of tl.contracts) {
     const raw = obj((e.payload ?? {}) as Record<string, unknown>, "contract") ?? (e.payload as Record<string, unknown>);
     const parsed = evaluationContractV1Schema.safeParse(raw);
-    if (!parsed.success) continue;
+    if (!parsed.success) {
+      invalidVersions++;
+      continue;
+    }
     if (parsed.data.milestoneRef.kind !== ref.kind || parsed.data.milestoneRef.id !== ref.id) continue;
     declared = { contract: parsed.data, eventId: e.id, at: e.eventTime, by: e.actorId };
+    versionEventIds.push(e.id);
+    // a criterion keeps its first declaration time across amendments (rule 17 is per criterion)
+    for (const c of parsed.data.acceptanceCriteria) if (!criterionDeclaredAt.has(c.id)) criterionDeclaredAt.set(c.id, e.eventTime);
   }
   if (declared) {
     const c = declared.contract;
+    const accepted = tl.dispositions.some((d) => {
+      const p = (d.payload ?? {}) as Record<string, unknown>;
+      return d.eventType === "evaluation.disposition" && str(p, "kind") === "contract_exception_accepted" && d.actorType === "user" && versionEventIds.includes(str(p, "contractEventId") ?? "");
+    });
     return {
       contract: c,
       source: "declared",
       eventId: declared.eventId,
       declaredAt: declared.at,
       declaredBy: declared.by,
-      summary: summarise(c, "declared", declared.eventId, declared.at, declared.by),
+      summary: summarise(c, "declared", declared.eventId, declared.at, declared.by, accepted, invalidVersions),
+      criterionDeclaredAt,
+      exceptionsAccepted: accepted,
     };
   }
   const project = ref.kind === "project" ? latestProject(tl, ref.id) : null;
@@ -84,18 +102,30 @@ export function resolveContract(tl: Timeline, ref: EvaluationMilestoneRef, membe
     windowEnd: closed ? closed.toISOString() : null,
     source: "derived",
   };
-  return { contract, source: "derived", eventId: null, declaredAt: null, declaredBy: null, summary: summarise(contract, "derived", null, null, null) };
+  return {
+    contract,
+    source: "derived",
+    eventId: null,
+    declaredAt: null,
+    declaredBy: null,
+    summary: summarise(contract, "derived", null, null, null, false, invalidVersions),
+    criterionDeclaredAt: new Map(),
+    exceptionsAccepted: false,
+  };
 }
 
-function summarise(c: EvaluationContractV1, source: "declared" | "derived", eventId: string | null, at: Date | null, by: string | null): ContractSummary {
+function summarise(c: EvaluationContractV1, source: "declared" | "derived", eventId: string | null, at: Date | null, by: string | null, accepted: boolean, invalidVersions: number): ContractSummary {
   const exceptions: string[] = [];
   const missing = EVALUATION_DEFAULT_REQUIRED_EVIDENCE.filter((cls) => !c.requiredEvidence.includes(cls));
   if (source === "declared" && missing.length > 0) {
-    exceptions.push(`requiredEvidence omits ${missing.join(", ")} (below the engineering default; needs the founder's recorded acceptance — rule 16)`);
+    exceptions.push(`requiredEvidence omits ${missing.join(", ")}: below the engineering default, ${accepted ? "founder acceptance recorded" : "needs the founder's recorded acceptance"}`);
   }
   const unmeasurable = c.acceptanceCriteria.filter((x) => !x.check).length;
-  if (unmeasurable > 0) exceptions.push(`${unmeasurable} acceptance criteria without a check: unmeasurable, count against coverage (rule 16)`);
-  if (source === "derived") exceptions.push("contract derived by the evaluator from roster facts; no acceptance criteria could be derived; every metric capped at adequate evidence");
+  if (unmeasurable > 0) exceptions.push(`${unmeasurable} acceptance criteria without a check are unmeasurable and count against coverage${accepted ? "; founder acceptance recorded" : ""}`);
+  if (source === "derived") {
+    exceptions.push("contract derived by the evaluator from roster facts; no acceptance criteria could be derived, so acceptance (O1) is insufficient by construction and every other metric's confidence is capped at adequate — declare criteria with checks to make acceptance measurable");
+  }
+  if (invalidVersions > 0) exceptions.push(`${invalidVersions} declared contract version(s) failed schema validation and were ignored`);
   return {
     source,
     contractVersion: c.contractVersion,
@@ -114,15 +144,6 @@ function summarise(c: EvaluationContractV1, source: "declared" | "derived", even
   };
 }
 
-/** Rule 17: a criterion declared after an item's terminal transition cannot judge that item. */
-export function criterionAppliesTo(resolved: ResolvedContract, terminalTime: Date | null): boolean {
-  if (!resolved.declaredAt || !terminalTime) return true;
-  return resolved.declaredAt <= terminalTime;
-}
-
-export function requiredClasses(resolved: ResolvedContract): EvaluationEvidenceClass[] {
-  return [...resolved.contract.requiredEvidence];
-}
 
 /** Parse a `record` check name into a shape the evidence module can evaluate. */
 export function parseRecordCheck(record: string): { kind: "verdict.passed" | "pr.merged" | "ci.green" | "dod.present" | "project.status" | "goal.status" | "unknown"; value?: string } {
@@ -133,9 +154,4 @@ export function parseRecordCheck(record: string): { kind: "verdict.passed" | "pr
   const m = /^(project|goal)\.status=([a-z_]+)$/.exec(record);
   if (m) return { kind: m[1] === "project" ? "project.status" : "goal.status", value: m[2]! };
   return { kind: "unknown" };
-}
-
-export function contractCompanyId(tl: Timeline): string | null {
-  const first = tl.contracts[0];
-  return first ? str((first.payload ?? {}) as Record<string, unknown>, "companyId") : null;
 }

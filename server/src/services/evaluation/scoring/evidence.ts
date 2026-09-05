@@ -1,13 +1,14 @@
 import type { EvaluationContractV1, EvaluationEvidenceClass, EvaluationSourceTier } from "@paperclipai/shared";
 import { parseRecordCheck, type ResolvedContract } from "./contract.js";
-import { isSyntheticUser, reviewIndependence, type Independence } from "./independence.js";
+import { contributors, isSyntheticUser, reviewIndependence, type Independence } from "./independence.js";
 import {
-  actorKey,
   createdAt,
   doneAt,
   latestGoal,
   latestProject,
   obj,
+  projectAt,
+  snapshotAt,
   startedAt,
   str,
   terminalAt,
@@ -38,6 +39,8 @@ export interface ClassResult {
   tiers: EvaluationSourceTier[];
   /** Evidence that exists but post-dates the close (rule 4): shown, never credited. */
   lateRefs: string[];
+  /** Rule 19: satisfied only by reviews inside a concentrated reviewer pair — limited-evidence weight. */
+  limited?: boolean;
 }
 
 export interface ReviewViolation {
@@ -55,10 +58,25 @@ export interface ItemEvidence {
   violations: ReviewViolation[];
   /** Rule 19 marking: independent reviews between actors sharing an accountable human. */
   sharedAccountabilityReviews: number;
+  /** Rule 19: independent reviews that came from a concentrated reviewer pair (limited-evidence weight). */
+  concentratedPairReviews: number;
+  /** Review-class events with no attributable actor: neither credited nor a violation. */
+  unattributedReviews: number;
+}
+
+/** Rule 19 pairs (from `e14ReviewerConcentration`): `a|b` sorted keys of agents whose mutual reviews exceed 80 %. */
+export type ConcentratedPairs = ReadonlySet<string>;
+
+export function pairKey(a: string, b: string): string {
+  return [a, b].sort().join("|");
 }
 
 const GATE_KEYS = ["typecheck", "test", "build"] as const;
 
+/**
+ * §4.1 `ci_green`: typecheck, test and build all `pass` AND `pre_existing_failures`
+ * named (an array, possibly empty). Null when the payload carries no gate result.
+ */
 export function gatesPass(gates: Record<string, unknown> | null): boolean | null {
   if (!gates) return null;
   let saw = false;
@@ -68,7 +86,8 @@ export function gatesPass(gates: Record<string, unknown> | null): boolean | null
     saw = true;
     if (v !== "pass") return false;
   }
-  return saw ? true : null;
+  if (!saw) return null;
+  return Array.isArray(gates.pre_existing_failures);
 }
 
 function closeTime(it: ItemTimeline, asOf: Date): Date {
@@ -83,12 +102,33 @@ export function leftBacklogAt(it: ItemTimeline): Date | null {
   return start ?? out?.time ?? createdAt(it);
 }
 
-export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: ResolvedContract): ItemEvidence {
+/** Rule 11: a later DoD version that removed criteria or reduced their count after the item left backlog. */
+export function dodNarrowedAfter(it: ItemTimeline, boundary: Date | null): { eventId: string; time: Date } | null {
+  for (const d of it.dods) {
+    if (!d.hasPrevious) continue;
+    if (boundary && d.time < boundary) continue;
+    const countDown = d.previousCriteriaCount != null && d.criteriaCount != null && d.criteriaCount < d.previousCriteriaCount;
+    const removed = d.previousCriteriaIds && d.criteriaIds ? d.previousCriteriaIds.some((id) => id && !d.criteriaIds!.includes(id)) : false;
+    if (countDown || removed) return { eventId: d.eventId, time: d.time };
+  }
+  return null;
+}
+
+export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: ResolvedContract, concentrated: ConcentratedPairs = new Set()): ItemEvidence {
   const contract = resolved.contract;
   const close = closeTime(it, tl.asOf);
   const violations: ReviewViolation[] = [];
   let sharedCount = 0;
+  let concentratedCount = 0;
+  let unattributed = 0;
   const classes: Partial<Record<EvaluationEvidenceClass, ClassResult>> = {};
+  const reviewCtx = (at: Date) => ({ entityType: "issue" as const, projectId: projectAt(it, at), goalId: snapshotAt(it, at)?.goalId ?? contract.goalId ?? null, at });
+  const inConcentratedPair = (reviewer: string | null, at: Date) =>
+    !!reviewer &&
+    [...contributors(it, at)]
+      .filter((k) => k.startsWith("agent:"))
+      .map((k) => k.slice(6))
+      .some((c) => concentrated.has(pairKey(reviewer, c)));
 
   // ---- dod_present ----
   {
@@ -96,20 +136,25 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
     const dodEvents = it.dods.filter((d) => (d.criteriaCount ?? 0) > 0);
     const firstDod = dodEvents[0] ?? null;
     const snapWithDod = it.snapshots.find((s) => (s.dodCriteria ?? 0) > 0) ?? null;
-    if (firstDod) {
+    const narrowed = dodNarrowedAfter(it, boundary);
+    if (narrowed) {
+      classes.dod_present = { state: "failed", reason: "definition of done narrowed after the item left backlog", refs: [narrowed.eventId], tiers: ["T0"], lateRefs: [] };
+    } else if (firstDod) {
       if (doneAt(it) && firstDod.time > doneAt(it)!) {
-        classes.dod_present = { state: "failed", reason: "definition of done first set after done (rule 4)", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [firstDod.eventId] };
-      } else if (!boundary || firstDod.time <= boundary || !startedAt(it)) {
-        classes.dod_present = { state: "satisfied", reason: "definition of done in force when work started", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [] };
+        classes.dod_present = { state: "failed", reason: "definition of done first set after the item was done", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [firstDod.eventId] };
+      } else if (!boundary) {
+        classes.dod_present = { state: "undecidable", reason: "definition of done present but when the item left backlog is unknown", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [] };
+      } else if (firstDod.time <= boundary) {
+        classes.dod_present = { state: "satisfied", reason: "definition of done in force before the item left backlog", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [] };
       } else {
-        classes.dod_present = { state: "failed", reason: "definition of done set after work started (rule 11)", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [] };
+        classes.dod_present = { state: "failed", reason: "definition of done set after the item left backlog", refs: [firstDod.eventId], tiers: ["T0"], lateRefs: [] };
       }
     } else if (snapWithDod) {
       // A DoD exists but no dod_set record says when it was set.
       if (!boundary || snapWithDod.time <= boundary) {
         classes.dod_present = { state: "satisfied", reason: "definition of done present before work started", refs: [snapWithDod.eventId], tiers: ["T0"], lateRefs: [] };
       } else {
-        classes.dod_present = { state: "undecidable", reason: "definition of done present; set time unknown (no dod_set record)", refs: [snapWithDod.eventId], tiers: ["T0"], lateRefs: [] };
+        classes.dod_present = { state: "undecidable", reason: "definition of done present but no record says when it was set", refs: [snapWithDod.eventId], tiers: ["T0"], lateRefs: [] };
       }
     } else {
       classes.dod_present = { state: "failed", reason: "no definition of done", refs: [], tiers: ["T0"], lateRefs: [] };
@@ -121,11 +166,13 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
   const anyIndependentReview: string[] = [];
   const lateReview: string[] = [];
   let syntheticOnly = false;
+  const limitedReview: string[] = [];
   for (const v of it.verdicts) {
     const reviewer = v.reviewerAgentId ? { actorType: "agent", actorId: v.reviewerAgentId } : { actorType: "user", actorId: v.reviewerUserId };
-    const ind = reviewIndependence(reviewer, it, tl, contract, { entityType: "issue", at: v.time });
+    const ind = reviewIndependence(reviewer, it, tl, contract, reviewCtx(v.time));
     if (!ind.independent) {
       if (ind.reason === "synthetic") syntheticOnly = true;
+      else if (ind.reason === "no_actor") unattributed++; // a malformed record is not a self-review
       else violations.push({ eventId: v.eventId, time: v.time, actorType: reviewer.actorType, actorId: reviewer.actorId, kind: "verdict", reason: ind.reason, sharedAccountability: ind.sharedAccountability });
       continue;
     }
@@ -134,19 +181,30 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
       lateReview.push(v.eventId);
       continue;
     }
+    if (inConcentratedPair(v.reviewerAgentId, v.time)) {
+      concentratedCount++;
+      limitedReview.push(v.eventId);
+    }
     anyIndependentReview.push(v.eventId);
     if (v.outcome === "passed") passedIndependent.push(v.eventId);
   }
   for (const h of it.handoffs) {
     if (h.type !== "tester_to_reviewer") continue;
-    const ind = reviewIndependence({ actorType: h.actorType, actorId: h.actorId }, it, tl, contract, { entityType: "issue", at: h.time });
+    const ind = reviewIndependence({ actorType: h.actorType, actorId: h.actorId }, it, tl, contract, reviewCtx(h.time));
     if (!ind.independent) {
-      if (ind.reason !== "synthetic") violations.push({ eventId: h.eventId, time: h.time, actorType: h.actorType, actorId: h.actorId, kind: "handoff", reason: ind.reason, sharedAccountability: ind.sharedAccountability });
+      if (ind.reason === "no_actor") unattributed++;
+      else if (ind.reason !== "synthetic") violations.push({ eventId: h.eventId, time: h.time, actorType: h.actorType, actorId: h.actorId, kind: "handoff", reason: ind.reason, sharedAccountability: ind.sharedAccountability });
       continue;
     }
     if (ind.sharedAccountability) sharedCount++;
     if (h.time > close) lateReview.push(h.eventId);
-    else anyIndependentReview.push(h.eventId);
+    else {
+      if (h.actorType === "agent" && inConcentratedPair(h.actorId, h.time)) {
+        concentratedCount++;
+        limitedReview.push(h.eventId);
+      }
+      anyIndependentReview.push(h.eventId);
+    }
   }
   for (const a of it.approvals) {
     if (a.kind !== "decided" || a.actorType !== "user") continue;
@@ -154,9 +212,10 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
       syntheticOnly = syntheticOnly || anyIndependentReview.length === 0;
       continue;
     }
-    const ind = reviewIndependence({ actorType: "user", actorId: a.actorId }, it, tl, contract, { entityType: "issue", at: a.time });
+    const ind = reviewIndependence({ actorType: "user", actorId: a.actorId }, it, tl, contract, reviewCtx(a.time));
     if (!ind.independent) {
-      violations.push({ eventId: a.eventId, time: a.time, actorType: "user", actorId: a.actorId, kind: "approval", reason: ind.reason, sharedAccountability: false });
+      if (ind.reason === "no_actor") unattributed++;
+      else violations.push({ eventId: a.eventId, time: a.time, actorType: "user", actorId: a.actorId, kind: "approval", reason: ind.reason, sharedAccountability: false });
       continue;
     }
     if (a.time > close) {
@@ -171,23 +230,33 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
   if (passedIndependent.length > 0) {
     classes.neutral_verdict = { state: "satisfied", reason: "independent passed verdict before close", refs: passedIndependent, tiers: ["T0"], lateRefs: lateReview };
   } else if (!tl.sources.verdicts && !tl.sources.approvalsDecided) {
-    classes.neutral_verdict = { state: "undecidable", reason: "no verdict source: no verdict has ever been recorded on this company", refs: [], tiers: [], lateRefs: lateReview };
+    classes.neutral_verdict = { state: "undecidable", reason: "no verdict source: no verdict has ever been recorded on this company — reviews through the verdict flow make this class decidable", refs: [], tiers: [], lateRefs: lateReview };
   } else if (syntheticOnly && violations.length === 0 && it.verdicts.length + it.approvals.length > 0) {
-    classes.neutral_verdict = { state: "undecidable", reason: "only a synthetic identity decided (rule 15)", refs: [], tiers: ["T0"], lateRefs: lateReview };
+    classes.neutral_verdict = { state: "undecidable", reason: "only a synthetic identity decided", refs: [], tiers: ["T0"], lateRefs: lateReview };
   } else {
     const selfOnly = violations.some((v) => v.kind === "verdict");
-    classes.neutral_verdict = { state: "failed", reason: selfOnly ? "only non-independent verdicts (self-review, E4)" : lateReview.length > 0 ? "passed verdict recorded only after close (rule 4)" : "no independent passed verdict", refs: [], tiers: ["T0"], lateRefs: lateReview };
+    classes.neutral_verdict = { state: "failed", reason: selfOnly ? "only non-independent verdicts: the contributor reviewed their own work" : lateReview.length > 0 ? "passed verdict recorded only after the item was closed" : "no independent passed verdict", refs: [], tiers: ["T0"], lateRefs: lateReview };
   }
 
   // ---- independent_review ----
   if (anyIndependentReview.length > 0) {
-    classes.independent_review = { state: "satisfied", reason: "review-class event by an independent actor before close", refs: anyIndependentReview, tiers: ["T0"], lateRefs: lateReview };
+    const onlyLimited = anyIndependentReview.every((id) => limitedReview.includes(id));
+    classes.independent_review = {
+      state: "satisfied",
+      reason: onlyLimited ? "independent review only from a concentrated reviewer pair — limited evidence" : "review-class event by an independent actor before close",
+      refs: anyIndependentReview,
+      tiers: ["T0"],
+      lateRefs: lateReview,
+      limited: onlyLimited,
+    };
   } else if (!tl.sources.verdicts && !tl.sources.approvalsDecided && !tl.sources.handoffs) {
     classes.independent_review = { state: "undecidable", reason: "no review source on this company", refs: [], tiers: [], lateRefs: lateReview };
+  } else if (syntheticOnly && violations.length === 0) {
+    classes.independent_review = { state: "undecidable", reason: "only a synthetic identity decided", refs: [], tiers: ["T0"], lateRefs: lateReview };
   } else {
     classes.independent_review = {
       state: "failed",
-      reason: violations.length > 0 ? "only self-review (E4)" : lateReview.length > 0 ? "independent review only after close (rule 4)" : "no independent review",
+      reason: violations.length > 0 ? "only self-review" : lateReview.length > 0 ? "independent review only after the item was closed" : "no independent review",
       refs: [],
       tiers: ["T0"],
       lateRefs: lateReview,
@@ -205,11 +274,11 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
     if (good.length > 0) {
       classes.delivery_ref = { state: "satisfied", reason: merged.some(before) ? "merge report with PR before close" : "reviewer handoff names the PR before close", refs: good.map((h) => h.eventId), tiers: ["T2"], lateRefs: late };
     } else if (!tl.sources.deliveryRefs) {
-      classes.delivery_ref = { state: "undecidable", reason: "no delivery source: no GitHub adapter (D4) and no merge report on this company", refs: [], tiers: [], lateRefs: [] };
+      classes.delivery_ref = { state: "undecidable", reason: "no delivery source: no GitHub adapter and no merge report on this company — merge reports or the GitHub adapter make this class decidable", refs: [], tiers: [], lateRefs: [] };
     } else {
       classes.delivery_ref = {
         state: "failed",
-        reason: late.length > 0 ? "delivery reference only after close (rule 4)" : opened.length > 0 ? "PR opened, no merge or verification record" : "no delivery reference",
+        reason: late.length > 0 ? "delivery reference only after the item was closed" : opened.length > 0 ? "PR opened, no merge or verification record" : "no delivery reference",
         refs: opened.filter(before).map((h) => h.eventId),
         tiers: ["T2"],
         lateRefs: late,
@@ -227,11 +296,11 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
     if (passing.length > 0) {
       classes.ci_green = { state: "satisfied", reason: "structured regression gates passing before close", refs: passing.map((x) => x.h.eventId), tiers: ["T2"], lateRefs: latePassing };
     } else if (!tl.sources.regressionGates) {
-      classes.ci_green = { state: "undecidable", reason: "no CI evidence source: no structured regression gates and no GitHub check runs on this company", refs: [], tiers: [], lateRefs: [] };
+      classes.ci_green = { state: "undecidable", reason: "no CI evidence source: no structured regression gates and no GitHub check runs on this company — structured gate results make this class decidable", refs: [], tiers: [], lateRefs: [] };
     } else {
       classes.ci_green = {
         state: "failed",
-        reason: gateReports.some((x) => x.pass === false) ? "regression gates reported failing" : latePassing.length > 0 ? "gates passed only after close (rule 4)" : "no regression gate record",
+        reason: gateReports.some((x) => x.pass === false) ? "regression gates reported failing or without pre-existing failures named" : latePassing.length > 0 ? "gates passed only after the item was closed" : "no regression gate record",
         refs: gateReports.filter((x) => x.pass === false).map((x) => x.h.eventId),
         tiers: ["T2"],
         lateRefs: latePassing,
@@ -239,7 +308,7 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
     }
   }
 
-  return { classes, violations, sharedAccountabilityReviews: sharedCount };
+  return { classes, violations, sharedAccountabilityReviews: sharedCount, concentratedPairReviews: concentratedCount, unattributedReviews: unattributed };
 }
 
 export interface CriterionDisposition {
@@ -254,8 +323,9 @@ export function criterionDispositions(it: ItemTimeline, tl: Timeline, resolved: 
   const out: CriterionDisposition[] = [];
   const terminal = terminalAt(it)?.time ?? null;
   for (const c of resolved.contract.acceptanceCriteria) {
-    if (resolved.declaredAt && terminal && resolved.declaredAt > terminal) {
-      out.push({ criterionId: c.id, state: "undecidable", reason: "criteria declared post hoc (rule 17)", refs: resolved.eventId ? [resolved.eventId] : [] });
+    const declaredAt = resolved.criterionDeclaredAt.get(c.id) ?? resolved.declaredAt;
+    if (declaredAt && terminal && declaredAt > terminal) {
+      out.push({ criterionId: c.id, state: "undecidable", reason: "criteria were declared after this item closed, so they cannot judge it — declare criteria before work starts", refs: resolved.eventId ? [resolved.eventId] : [] });
       continue;
     }
     if (!c.check) {
@@ -286,9 +356,9 @@ export function criterionDispositions(it: ItemTimeline, tl: Timeline, resolved: 
           return d.eventType === "evaluation.disposition" && str(p, "kind") === "criterion_attest" && str(p, "criterionId") === c.id && (str(p, "issueId") == null || str(p, "issueId") === it.issueId) && d.actorType === "user" && d.actorId === attester;
         });
         const last = attest[attest.length - 1];
-        if (!last) out.push({ criterionId: c.id, state: "undecidable", reason: `awaiting attestation by ${attester}`, refs: [] });
+        if (!last) out.push({ criterionId: c.id, state: "undecidable", reason: "awaiting attestation by the criterion's named human — nothing recorded yet", refs: [] });
         else if (isSyntheticUser(attester) || reviewIndependenceKey(attester, it, tl, resolved.contract, last.eventTime)) {
-          out.push({ criterionId: c.id, state: "undecidable", reason: "attester is not independent (rule 15 / §4.2)", refs: [last.id] });
+          out.push({ criterionId: c.id, state: "undecidable", reason: "the attester is not independent of this item", refs: [last.id] });
         } else {
           const result = str((last.payload ?? {}) as Record<string, unknown>, "result");
           out.push({ criterionId: c.id, state: result === "satisfied" ? "satisfied" : "failed", reason: `attested ${result ?? "unknown"} by ${attester}`, refs: [last.id] });
@@ -309,10 +379,6 @@ function reviewIndependenceKey(userId: string, it: ItemTimeline, tl: Timeline, c
 }
 
 function fromClass(criterionId: string, cls: ClassResult | undefined): CriterionDisposition {
-  if (!cls) return { criterionId, state: "undecidable", reason: "class not evaluated", refs: [] };
+  if (!cls) return { criterionId, state: "undecidable", reason: "no evidence record was computed for this item", refs: [] };
   return { criterionId, state: cls.state, reason: cls.reason, refs: cls.refs };
-}
-
-export function actorOf(v: { actorType: string; actorId: string | null }): string {
-  return actorKey(v.actorType, v.actorId);
 }

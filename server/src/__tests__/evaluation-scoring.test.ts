@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EVALUATION_REVIEW_LABEL, type EvaluationEventType } from "@paperclipai/shared";
+import { EVALUATION_REVIEW_LABEL } from "@paperclipai/shared";
 import type { EvaluationEventRow } from "../services/evaluation/ledger.js";
 import { cardHash, scoreMilestone } from "../services/evaluation/scoring/card.js";
 import { composite, scaleTo100 } from "../services/evaluation/scoring/composite.js";
@@ -11,160 +11,7 @@ import type { MetricResult } from "../services/evaluation/scoring/types.js";
 // rules 4, 10–19, §9 exceptions, §3 membership with mid-milestone moves.
 // No database: a window is an array of ledger rows.
 
-const CO = "00000000-0000-4000-8000-00000000c0c0";
-const P = "00000000-0000-4000-8000-0000000000a1";
-const P2 = "00000000-0000-4000-8000-0000000000a2";
-const G = "00000000-0000-4000-8000-0000000000b1";
-const A = "00000000-0000-4000-8000-0000000000aa"; // builder
-const R = "00000000-0000-4000-8000-0000000000bb"; // reviewer
-const T = "00000000-0000-4000-8000-0000000000cc"; // tpm
-const FOUNDER = "founder-1";
-const t0 = new Date("2026-08-01T10:00:00.000Z");
-const at = (h: number) => new Date(t0.getTime() + h * 3_600_000);
-const iso = (h: number) => at(h).toISOString();
-
-let seq = 0;
-interface Ev {
-  type: EvaluationEventType;
-  time: Date;
-  actor?: [string, string | null];
-  issueId?: string;
-  projectId?: string | null;
-  goalId?: string | null;
-  payload?: Record<string, unknown>;
-  ingest?: Date;
-  sourceTable?: string;
-  sourceId?: string;
-}
-function ev(e: Ev): EvaluationEventRow {
-  seq++;
-  const [actorType, actorId] = e.actor ?? ["system", null];
-  return {
-    id: `e${seq}`,
-    seq,
-    companyId: CO,
-    projectId: e.projectId === undefined ? P : e.projectId,
-    goalId: e.goalId ?? null,
-    actorType,
-    actorId,
-    sourceTable: e.sourceTable ?? e.type.split(".")[0]!,
-    sourceId: e.sourceId ?? e.issueId ?? `s${seq}`,
-    sourceVersion: `v${seq}`,
-    sourceRowHash: null,
-    eventType: e.type,
-    schemaVersion: 2,
-    eventTime: e.time,
-    ingestTime: e.ingest ?? new Date(e.time.getTime() + 60_000),
-    dedupeKey: `k${seq}`,
-    payload: { ...(e.issueId ? { issueId: e.issueId, identifier: `EVL-${e.issueId.slice(-2)}` } : {}), ...(e.payload ?? {}) },
-    correlationId: null,
-  } as EvaluationEventRow;
-}
-
-function roster(): EvaluationEventRow[] {
-  return [
-    ev({ type: "agent.snapshot", time: at(0), projectId: null, sourceId: A, payload: { agentId: A, name: "Builder", role: "engineer", status: "idle", reportsTo: R, accountableUserId: FOUNDER } }),
-    ev({ type: "agent.snapshot", time: at(0), projectId: null, sourceId: R, payload: { agentId: R, name: "Reviewer", role: "reviewer", status: "idle", reportsTo: null, accountableUserId: FOUNDER } }),
-    ev({ type: "agent.snapshot", time: at(0), projectId: null, sourceId: T, payload: { agentId: T, name: "TPM", role: "tpm", status: "idle", reportsTo: null, accountableUserId: FOUNDER } }),
-    ev({ type: "project.snapshot", time: at(0), projectId: P, goalId: G, sourceId: P, payload: { projectId: P, name: "Launch", status: "in_progress", goalId: G, leadAgentId: null, targetDate: null } }),
-    ev({ type: "goal.snapshot", time: at(0), projectId: null, goalId: G, sourceId: G, payload: { goalId: G, title: "Ship", status: "active", ownerAgentId: null, metricDefinition: null } }),
-  ];
-}
-
-interface ItemOpts {
-  id: string;
-  created?: number;
-  started?: number | null;
-  review?: number | null;
-  done?: number | null;
-  assignee?: string | null;
-  dod?: boolean;
-  dodSetAt?: number;
-  labels?: string[];
-  titleTokens?: string[];
-  project?: string | null;
-  parentId?: string | null;
-  cancelled?: number | null;
-  actorDone?: [string, string | null];
-}
-/** One issue's control-plane facts: snapshot, transitions by the assignee, optional DoD. */
-function item(o: ItemOpts): EvaluationEventRow[] {
-  const created = o.created ?? 0;
-  const assignee = o.assignee === undefined ? A : o.assignee;
-  const project = o.project === undefined ? P : o.project;
-  const status = o.done != null ? "done" : o.cancelled != null ? "cancelled" : o.review != null ? "in_review" : o.started != null ? "in_progress" : "todo";
-  const out: EvaluationEventRow[] = [];
-  out.push(ev({ type: "issue.created", time: at(created), actor: ["user", "local-board"], issueId: o.id, projectId: project }));
-  out.push(
-    ev({
-      type: "issue.snapshot",
-      time: at(created),
-      issueId: o.id,
-      projectId: project,
-      sourceTable: "issues",
-      payload: {
-        status,
-        projectId: project,
-        inheritedProjectId: null,
-        goalId: G,
-        parentId: o.parentId ?? null,
-        assigneeAgentId: assignee,
-        assigneeUserId: null,
-        labels: o.labels ?? [],
-        titleTokens: o.titleTokens ?? ["ship", "thing", o.id.slice(-2)],
-        dodCriteria: o.dod ? 2 : 0,
-        dodCriteriaIds: o.dod ? ["c1", "c2"] : null,
-        createdAt: iso(created),
-        startedAt: o.started != null ? iso(o.started) : null,
-        completedAt: o.done != null ? iso(o.done) : null,
-        cancelledAt: o.cancelled != null ? iso(o.cancelled) : null,
-        originFingerprint: "default",
-      },
-    }),
-  );
-  if (o.dod && o.dodSetAt != null) {
-    out.push(ev({ type: "issue.dod_set", time: at(o.dodSetAt), actor: ["user", "local-board"], issueId: o.id, projectId: project, payload: { hasPrevious: false, criteriaCount: 2, previousCriteriaCount: null, criteriaIds: ["c1", "c2"], criteriaHashes: ["h1", "h2"] } }));
-  }
-  const agentActor: [string, string | null] = assignee ? ["agent", assignee] : ["user", "local-board"];
-  if (o.started != null) out.push(ev({ type: "issue.transition", time: at(o.started), actor: agentActor, issueId: o.id, projectId: project, payload: { from: "todo", to: "in_progress", reopened: false } }));
-  if (o.review != null) out.push(ev({ type: "issue.transition", time: at(o.review), actor: agentActor, issueId: o.id, projectId: project, payload: { from: "in_progress", to: "in_review", reopened: false } }));
-  if (o.done != null) out.push(ev({ type: "issue.transition", time: at(o.done), actor: o.actorDone ?? ["agent", R], issueId: o.id, projectId: project, payload: { from: "in_review", to: "done", reopened: false } }));
-  if (o.cancelled != null) out.push(ev({ type: "issue.transition", time: at(o.cancelled), actor: ["user", "local-board"], issueId: o.id, projectId: project, payload: { from: status === "cancelled" ? "todo" : status, to: "cancelled", reopened: false } }));
-  return out;
-}
-
-function verdict(issueId: string, h: number, reviewer: string | null, outcome = "passed", user: string | null = null): EvaluationEventRow {
-  return ev({ type: "verdict.recorded", time: at(h), actor: reviewer ? ["agent", reviewer] : ["user", user], issueId, sourceTable: "verdicts", sourceId: `v-${issueId}-${h}`, payload: { verdictId: `v-${issueId}-${h}`, entityType: "issue", outcome, reviewerAgentId: reviewer, reviewerUserId: user, rubricScores: { correctness: 4 } } });
-}
-function handoff(issueId: string, h: number, author: string, type: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}): EvaluationEventRow {
-  return ev({ type: `handoff.${type}` as EvaluationEventType, time: at(h), actor: ["agent", author], issueId, sourceTable: "issue_comments", sourceId: `c-${issueId}-${h}`, payload: { commentId: `c-${issueId}-${h}`, handoffType: type, selfReported: false, claimedTimestamp: null, timestampClamped: true, timestampSuspicious: false, droppedKeys: [], payload, ...extra } });
-}
-const gates = { typecheck: "pass", test: "pass", build: "pass" };
-/** A fully evidenced done item: DoD before start, independent passed verdict, passing gates, shipped merge report. */
-function evidenced(id: string, base = 0): EvaluationEventRow[] {
-  return [
-    ...item({ id, created: base, started: base + 1, review: base + 5, done: base + 8, dod: true, dodSetAt: base }),
-    handoff(id, base + 5, R, "tester_to_reviewer", { issue: { id }, verdict: "pass", regression_gates: gates, labels_applied: [] }),
-    verdict(id, base + 6, R),
-    handoff(id, base + 7, T, "tpm_merge_report", { issue: { id }, merge_result: "shipped", pr: { number: 42, base_branch: "main" } }),
-  ];
-}
-
-const I1 = "00000000-0000-4000-8000-000000000101";
-const I2 = "00000000-0000-4000-8000-000000000102";
-const I3 = "00000000-0000-4000-8000-000000000103";
-const I4 = "00000000-0000-4000-8000-000000000104";
-const I5 = "00000000-0000-4000-8000-000000000105";
-const ref = { kind: "project" as const, id: P };
-const score = (window: EvaluationEventRow[]) => scoreMilestone(window, ref, Math.max(...window.map((e) => Number(e.seq))), CO, { fallbackOpen: true });
-function shuffle<T>(xs: T[]): T[] {
-  const out = [...xs];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = (i * 7919) % (i + 1);
-    [out[i], out[j]] = [out[j]!, out[i]!];
-  }
-  return out;
-}
+import { A, at, CO, ev, evidenced, FOUNDER, G, gates, handoff, I1, I2, I3, iso, item, P, P2, R, ref, roster, score, shuffle, T, verdict } from "./helpers/evaluation-fixtures.js";
 
 describe("scoring — determinism and card shape", () => {
   it("the same window in any order yields the same bytes; a different cut differs; values are null at insufficient", () => {
@@ -172,10 +19,10 @@ describe("scoring — determinism and card shape", () => {
     const card = score(window);
     expect(cardHash(scoreMilestone(shuffle(window), ref, card.throughSeq, CO, { fallbackOpen: true }))).toBe(cardHash(card));
     expect(cardHash(scoreMilestone(window, ref, card.throughSeq - 1, CO, { fallbackOpen: true }))).not.toBe(cardHash(card));
-    expect(card.formulaVersion).toBe("m2-score/1");
+    expect(card.formulaVersion).toBe("m2-score/2");
     expect(card.state.open).toBe(true); // from the project.snapshot, not the fallback
     expect(card.contract.source).toBe("derived");
-    expect(card.markers).toContain("contract derived by the evaluator — confidence capped");
+    expect(card.markers).toContain("contract derived by the evaluator — confidence capped at adequate");
     expect(card.outcome.O1!.value).toBeNull();
     expect(card.outcome.O1!.confidence).toBe("insufficient");
     expect(card.outcome.O1!.headline).toMatch(/^insufficient evidence/);
@@ -230,6 +77,7 @@ describe("evidence classes (spec §4.1) and rules 4, 10, 11, 15", () => {
     expect(e4[0]!.severity).toBe("immediate");
     expect(e4[0]!.routing.founderView).toBe(true);
     expect(e4[0]!.routing.managerAgentIds).toEqual([R]); // A reports to R
+    expect(e4[0]!.note).toContain("the contributor reviewed their own work");
     expect(card.flags).toContain("E4 present");
     expect((card.outcome.O5!.detail.perClass as Record<string, { failed: number }>).neutral_verdict.failed).toBe(1);
     const p6 = card.actors.find((a) => a.actorId === A)!.metrics.P6!;
@@ -258,7 +106,9 @@ describe("evidence classes (spec §4.1) and rules 4, 10, 11, 15", () => {
     const e12 = card.exceptions.filter((e) => e.id === "E12");
     expect(e12.length).toBe(1);
     expect(e12[0]!.note).toMatch(/reduced from 2 to 1|removed/);
-    expect((card.outcome.O5!.detail.perClass as Record<string, { satisfied: number }>).dod_present.satisfied).toBe(1);
+    expect(card.markers).toContain("partial records — some sources are absent from this window (see missing sources)");
+    // §4.1: a DoD narrowed after leaving backlog never satisfies the class (round 1, MEDIUM 4)
+    expect((card.outcome.O5!.detail.perClass as Record<string, { failed: number }>).dod_present.failed).toBe(1);
     // a DoD first set after done fails the class (rule 4)
     const late = score([...roster(), ...item({ id: I2, started: 1, done: 4 }), ev({ type: "issue.dod_set", time: at(5), actor: ["user", "local-board"], issueId: I2, payload: { hasPrevious: false, criteriaCount: 1 } })]);
     expect((late.outcome.O5!.detail.perClass as Record<string, { failed: number }>).dod_present.failed).toBe(1);
@@ -311,7 +161,8 @@ describe("contracts (spec §4), rules 16 and 17, O1 and E1", () => {
     expect(e1[0]!.subject.id).toBe(I2);
     expect(e1[0]!.routing.accountableUserId).toBe(FOUNDER);
     const posthoc = score([...roster(), ...item({ id: I2, started: 1, done: 4 }), declared(10, [verdictCriterion])]);
-    expect(posthoc.outcome.O1!.breakdown.undecidable).toEqual([{ reason: "criteria declared post hoc (rule 17)", count: 1 }]);
+    expect(posthoc.outcome.O1!.breakdown.undecidable[0]!).toMatchObject({ count: 1 });
+    expect(posthoc.outcome.O1!.breakdown.undecidable[0]!.reason).toMatch(/declared after this item closed/);
     expect(posthoc.outcome.O1!.value).toBeNull();
   });
 

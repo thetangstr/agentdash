@@ -1,8 +1,8 @@
 import type { EvaluationEventRow } from "../ledger.js";
 import { leftBacklogAt } from "./evidence.js";
-import { contributors } from "./independence.js";
+import { contributors, INDEPENDENCE_REASON_WORDS } from "./independence.js";
 import { exception, type ScoringContext } from "./metrics.js";
-import { assigneeAt, currentStatus, latestSnapshot, snapshotAt, TERMINAL_STATUSES, type ItemTimeline } from "./timeline.js";
+import { assigneeAt, currentStatus, snapshotAt, TERMINAL_STATUSES, type ItemTimeline } from "./timeline.js";
 import type { ExceptionRecord } from "./types.js";
 
 /**
@@ -41,7 +41,7 @@ export function e2HashChangeWithoutActivity(ctx: ScoringContext): ExceptionRecor
       const t = s.time.getTime();
       const explained = acts.some((a) => Math.abs(a - t) <= ACTIVITY_TOLERANCE_MS);
       if (explained) continue;
-      out.push(exception(ctx, "E2", issueSubject(it), s.time, [s.eventId], "content hash changed with no control-plane activity within five minutes (rule 13)", assigneeAt(it, s.time).agentId, s.eventId));
+      out.push(exception(ctx, "E2", issueSubject(it), s.time, [s.eventId], "content changed with no control-plane activity within five minutes of it", assigneeAt(it, s.time).agentId, s.eventId));
     }
   }
   return out;
@@ -53,7 +53,7 @@ export function e4SelfReview(ctx: ScoringContext): ExceptionRecord[] {
   for (const it of ctx.members) {
     const ev = ctx.evidence.get(it.issueId);
     for (const v of ev?.violations ?? []) {
-      out.push(exception(ctx, "E4", issueSubject(it), v.time, [v.eventId], `${v.kind} by a non-independent actor (${v.reason})${v.sharedAccountability ? "; shared accountability" : ""}`, v.actorType === "agent" ? v.actorId : null, v.eventId));
+      out.push(exception(ctx, "E4", issueSubject(it), v.time, [v.eventId], `${v.kind}: ${INDEPENDENCE_REASON_WORDS[v.reason] ?? v.reason}${v.sharedAccountability ? "; the two share an accountable human" : ""}`, v.actorType === "agent" ? v.actorId : null, v.eventId));
     }
   }
   return out;
@@ -73,7 +73,7 @@ export function e5StaleWork(ctx: ScoringContext): ExceptionRecord[] {
     const pendingApproval = it.approvals.some((a) => a.kind === "created" && !decidedIds.has(a.approvalId));
     const owner = assigneeAt(it, ctx.tl.asOf);
     if (pendingInteraction || pendingApproval || owner.userId) continue;
-    out.push(exception(ctx, "E5", issueSubject(it), new Date(last + 48 * HOUR), it.eventIds.slice(-3), `${status} with no activity, pending question, approval or human owner for ${Math.floor((asOf - last) / DAY)} days`, owner.agentId));
+    out.push(exception(ctx, "E5", issueSubject(it), new Date(last + 48 * HOUR), it.eventIds.slice(-3), `${status} with no activity for more than 48 hours, and no pending question, approval or human owner`, owner.agentId));
   }
   return out;
 }
@@ -138,7 +138,7 @@ export function e12DodNarrowed(ctx: ScoringContext): ExceptionRecord[] {
       const countDown = d.previousCriteriaCount != null && d.criteriaCount != null && d.criteriaCount < d.previousCriteriaCount;
       const removed = d.previousCriteriaIds && d.criteriaIds ? d.previousCriteriaIds.filter((id) => id && !d.criteriaIds!.includes(id)) : [];
       if (!countDown && removed.length === 0) continue;
-      out.push(exception(ctx, "E12", issueSubject(it), d.time, [d.eventId], countDown ? `criteria reduced from ${d.previousCriteriaCount} to ${d.criteriaCount} after work started` : `criteria removed after work started: ${removed.join(", ")}`, d.actorType === "agent" ? d.actorId : assigneeAt(it, d.time).agentId, d.eventId));
+      out.push(exception(ctx, "E12", issueSubject(it), d.time, [d.eventId], countDown ? `definition-of-done criteria reduced from ${d.previousCriteriaCount} to ${d.criteriaCount} after work started` : `definition-of-done criteria removed after work started: ${removed.join(", ")}`, d.actorType === "agent" ? d.actorId : assigneeAt(it, d.time).agentId, d.eventId));
     }
   }
   return out;
@@ -149,15 +149,30 @@ export function e13EvidenceWithdrawn(ctx: ScoringContext): ExceptionRecord[] {
   const out: ExceptionRecord[] = [];
   for (const it of ctx.members) {
     for (const w of it.withdrawn) {
-      out.push(exception(ctx, "E13", { kind: "comment", id: w.commentId ?? w.eventId, identifier: it.identifier }, w.time, [w.eventId], `handoff comment ${w.commentId ?? ""} on ${it.identifier ?? it.issueId} no longer exists`.trim(), assigneeAt(it, w.time).agentId, w.eventId));
+      out.push(exception(ctx, "E13", { kind: "comment", id: w.commentId ?? w.eventId, identifier: it.identifier }, w.time, [w.eventId], `handoff comment ${w.commentId ?? "(id unavailable)"} on ${it.identifier ?? it.issueId} no longer exists`, assigneeAt(it, w.time).agentId, w.eventId));
     }
   }
   return out;
 }
 
-/** Rule 19 / E14: a pair whose reviews of each other exceed 80 % of either's reviews. */
-export function e14ReviewerConcentration(ctx: ScoringContext): ExceptionRecord[] {
-  const out: ExceptionRecord[] = [];
+/** Rule 19: the concentrated reviewer pairs in a member set (shared with the evidence classes, which weigh their reviews as limited). */
+export function concentratedPairs(members: ItemTimeline[]): Set<string> {
+  const pairs = new Set<string>();
+  for (const e of pairsAbove80(members)) pairs.add(e.pair);
+  return pairs;
+}
+
+interface PairStat {
+  pair: string;
+  a: string;
+  b: string;
+  ab: number;
+  ba: number;
+  ta: number;
+  tb: number;
+}
+
+function pairsAbove80(members: ItemTimeline[]): PairStat[] {
   const reviewsBy = new Map<string, Map<string, number>>(); // reviewer → reviewed contributor → count
   const total = new Map<string, number>();
   const bump = (reviewer: string, reviewed: string) => {
@@ -166,17 +181,20 @@ export function e14ReviewerConcentration(ctx: ScoringContext): ExceptionRecord[]
     reviewsBy.set(reviewer, m);
     total.set(reviewer, (total.get(reviewer) ?? 0) + 1);
   };
-  for (const it of ctx.members) {
-    const cs = [...contributors(it)].filter((k) => k.startsWith("agent:")).map((k) => k.slice(6));
-    const reviewers = [
-      ...it.verdicts.filter((v) => v.reviewerAgentId).map((v) => v.reviewerAgentId!),
-      ...it.handoffs.filter((h) => h.type === "tester_to_reviewer" && h.actorType === "agent" && h.actorId).map((h) => h.actorId!),
+  for (const it of members) {
+    const reviews: Array<{ reviewer: string; at: Date }> = [
+      ...it.verdicts.filter((v) => v.reviewerAgentId).map((v) => ({ reviewer: v.reviewerAgentId!, at: v.time })),
+      ...it.handoffs.filter((h) => h.type === "tester_to_reviewer" && h.actorType === "agent" && h.actorId).map((h) => ({ reviewer: h.actorId!, at: h.time })),
     ];
-    for (const r of reviewers) for (const c of cs) if (c !== r) bump(r, c);
+    for (const { reviewer, at } of reviews) {
+      const cs = [...contributors(it, at)].filter((k) => k.startsWith("agent:")).map((k) => k.slice(6));
+      for (const c of cs) if (c !== reviewer) bump(reviewer, c);
+    }
   }
+  const out: PairStat[] = [];
   const seen = new Set<string>();
   for (const [a, m] of [...reviewsBy.entries()].sort(([x], [y]) => (x < y ? -1 : 1))) {
-    for (const [b, ab] of m) {
+    for (const [b, ab] of [...m.entries()].sort(([x], [y]) => (x < y ? -1 : 1))) {
       const pair = [a, b].sort().join("|");
       if (seen.has(pair)) continue;
       const ba = reviewsBy.get(b)?.get(a) ?? 0;
@@ -185,11 +203,20 @@ export function e14ReviewerConcentration(ctx: ScoringContext): ExceptionRecord[]
       if (ab < 3 || ba < 3) continue;
       if (ab / ta > 0.8 || ba / tb > 0.8) {
         seen.add(pair);
-        out.push(exception(ctx, "E14", { kind: "pair", id: pair, identifier: `${ctx.tl.agents.get(a)?.name ?? a} ↔ ${ctx.tl.agents.get(b)?.name ?? b}` }, ctx.tl.asOf, [], `${ab} of ${ta} reviews by the first are of the second, ${ba} of ${tb} the other way; these reviews weigh as limited evidence for independent_review`, a));
+        out.push({ pair, a, b, ab, ba, ta, tb });
       }
     }
   }
   return out;
+}
+
+/** Rule 19 / E14: a pair whose reviews of each other exceed 80 % of either's reviews. */
+export function e14ReviewerConcentration(ctx: ScoringContext): ExceptionRecord[] {
+  return pairsAbove80(ctx.members).map(({ pair, a, b, ab, ba, ta, tb }) => {
+    const nameA = ctx.tl.agents.get(a)?.name ?? a;
+    const nameB = ctx.tl.agents.get(b)?.name ?? b;
+    return exception(ctx, "E14", { kind: "pair", id: pair, identifier: `${nameA} ↔ ${nameB}` }, ctx.tl.asOf, [], `${ab} of ${ta} reviews by ${nameA} were of ${nameB}, and ${ba} of ${tb} the reverse; their reviews of each other weigh as limited evidence for independent review`, a, undefined, undefined, [b]);
+  });
 }
 
 export function standaloneExceptions(ctx: ScoringContext, window: EvaluationEventRow[]): ExceptionRecord[] {
@@ -212,8 +239,4 @@ export function mergeExceptions(lists: ExceptionRecord[][]): ExceptionRecord[] {
   const byKey = new Map<string, ExceptionRecord>();
   for (const list of lists) for (const e of list) if (!byKey.has(e.key)) byKey.set(e.key, e);
   return [...byKey.values()].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || (a.raisedAt < b.raisedAt ? -1 : a.raisedAt > b.raisedAt ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-}
-
-export function latestSnapshotOf(it: ItemTimeline) {
-  return latestSnapshot(it);
 }

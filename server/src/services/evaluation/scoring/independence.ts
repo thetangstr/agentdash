@@ -18,25 +18,39 @@ export function isSyntheticUser(userId: string | null | undefined): boolean {
 }
 
 /**
- * Contributors (§3): every assignee the item ever had, every agent that ran on
- * it, the authors of its implementation self-reports (`builder_to_ci`), and the
- * creator when the creator also acted on it. PR authorship is T1 and absent
- * until the GitHub adapter (D4) exists.
+ * Contributors (§3): every actor with a write on the item — anyone who changed
+ * its status, assignee, blockers or DoD, authored a comment or a self-report
+ * payload, ran a heartbeat on it, or was ever its assignee — plus the creator
+ * when the creator also acted on it. Review-class acts (verdicts,
+ * `tester_to_reviewer` handoffs, approval decisions) are the acts independence
+ * judges, so they do not by themselves make their author a contributor;
+ * otherwise every second verdict would be a self-review. PR authorship is T1
+ * and absent until the GitHub adapter (D4) exists.
+ *
+ * Independence is judged as of the review: only writes at or before `until`
+ * count, so a reviewer who closes the item after recording a verdict has not
+ * reviewed their own work.
  */
-export function contributors(it: ItemTimeline): Set<string> {
+export function contributors(it: ItemTimeline, until?: Date): Set<string> {
   const out = new Set<string>();
-  for (const s of it.snapshots) {
+  const within = <T extends { time: Date }>(xs: T[]) => (until ? xs.filter((x) => x.time <= until) : xs);
+  const snaps = within(it.snapshots).length > 0 ? within(it.snapshots) : it.snapshots.slice(0, 1);
+  for (const s of snaps) {
     if (s.assigneeAgentId) out.add(actorKey("agent", s.assigneeAgentId));
     if (s.assigneeUserId) out.add(actorKey("user", s.assigneeUserId));
   }
-  for (const a of it.assignments) {
+  for (const a of within(it.assignments)) {
     if (a.toAgentId) out.add(actorKey("agent", a.toAgentId));
     if (a.toUserId) out.add(actorKey("user", a.toUserId));
     if (a.fromAgentId) out.add(actorKey("agent", a.fromAgentId));
     if (a.fromUserId) out.add(actorKey("user", a.fromUserId));
+    if (a.actorType === "agent" && a.actorId) out.add(actorKey("agent", a.actorId));
   }
-  for (const r of it.runs) if (r.agentId) out.add(actorKey("agent", r.agentId));
-  for (const h of it.handoffs) if (h.type === "builder_to_ci" && h.actorId) out.add(actorKey(h.actorType, h.actorId));
+  for (const list of [it.transitions, it.blockers, it.dods, it.comments] as Array<Array<{ time: Date; actorType: string; actorId: string | null }>>) {
+    for (const x of within(list)) if (x.actorType === "agent" && x.actorId) out.add(actorKey("agent", x.actorId));
+  }
+  for (const r of within(it.runs)) if (r.agentId) out.add(actorKey("agent", r.agentId));
+  for (const h of within(it.handoffs)) if (h.type !== "tester_to_reviewer" && h.actorId) out.add(actorKey(h.actorType, h.actorId));
   const s0 = it.snapshots[0];
   if (s0) {
     const creator = s0.createdByAgentId ? actorKey("agent", s0.createdByAgentId) : s0.createdByUserId ? actorKey("user", s0.createdByUserId) : null;
@@ -54,18 +68,21 @@ export type Independence =
 export interface ReviewContext {
   /** What the review-class event is about. */
   entityType: "issue" | "project" | "goal";
+  /** The project the item belonged to at `at` (its lead is not independent for the project's own work). */
   projectId?: string | null;
+  /** The goal the item closes (its owner is not independent for it). */
   goalId?: string | null;
   /** When the review happened; the item's assignee then is a contributor even if later reassigned. */
   at: Date;
 }
 
 /**
- * §4.2: an actor is not independent for an item if it is a contributor, the
- * project lead when the item is the project's own deliverable, or the goal
- * owner when the item closes the goal; a synthetic identity is never
- * independent (rule 15); a founder-declared exclusion never is. Rule 19: a
- * review between actors sharing an `accountableUserId` is allowed and marked.
+ * §4.2, the fuller rule applied to every review-class event: an actor is not
+ * independent for an item if it is a contributor, the lead of the project the
+ * item belongs to, or the owner of the goal the item closes; a synthetic
+ * identity is never independent (rule 15); a founder-declared exclusion never
+ * is. Rule 19: a review between actors sharing an `accountableUserId` is
+ * allowed and marked.
  */
 export function reviewIndependence(
   reviewer: { actorType: string; actorId: string | null },
@@ -82,17 +99,17 @@ export function reviewIndependence(
     return { independent: false, reason: "excluded", sharedAccountability: shared };
   }
   if (it) {
-    if (contributors(it).has(key)) return { independent: false, reason: "self_review", sharedAccountability: shared };
+    if (contributors(it, ctx.at).has(key)) return { independent: false, reason: "self_review", sharedAccountability: shared };
     const then = assigneeAt(it, ctx.at);
     if ((then.agentId && actorKey("agent", then.agentId) === key) || (then.userId && actorKey("user", then.userId) === key)) {
       return { independent: false, reason: "self_review", sharedAccountability: shared };
     }
   }
-  if (ctx.entityType === "project" && ctx.projectId) {
+  if (ctx.projectId) {
     const lead = latestLead(tl, ctx.projectId);
     if (lead && actorKey("agent", lead) === key) return { independent: false, reason: "project_lead", sharedAccountability: shared };
   }
-  if (ctx.entityType === "goal" && ctx.goalId) {
+  if (ctx.goalId) {
     const list = tl.goals.get(ctx.goalId) ?? [];
     const owner = list[list.length - 1]?.ownerAgentId ?? null;
     if (owner && actorKey("agent", owner) === key) return { independent: false, reason: "goal_owner", sharedAccountability: shared };
@@ -118,11 +135,26 @@ export function sharedAccountability(reviewer: { actorType: string; actorId: str
   return false;
 }
 
-/** §9.1 routing: manager := reportsTo; null → the accountable human. */
-export function routeFor(agentId: string | null, tl: Timeline, fallbackAccountable: string | null): { managerAgentIds: string[]; accountableUserId: string | null } {
-  if (!agentId) return { managerAgentIds: [], accountableUserId: fallbackAccountable };
-  const a = tl.agents.get(agentId);
-  if (!a) return { managerAgentIds: [], accountableUserId: fallbackAccountable };
-  if (a.reportsTo) return { managerAgentIds: [a.reportsTo], accountableUserId: a.accountableUserId ?? fallbackAccountable };
-  return { managerAgentIds: [], accountableUserId: a.accountableUserId ?? fallbackAccountable };
+/** §9.1 routing: manager := reportsTo; null → the accountable human. Several agents ("both actors' managers") union their managers. */
+export function routeFor(agentIds: string | null | Array<string | null>, tl: Timeline, fallbackAccountable: string | null): { managerAgentIds: string[]; accountableUserId: string | null } {
+  const ids = (Array.isArray(agentIds) ? agentIds : [agentIds]).filter((x): x is string => !!x);
+  const managers = new Set<string>();
+  let accountable: string | null = null;
+  for (const id of ids) {
+    const a = tl.agents.get(id);
+    if (!a) continue;
+    if (a.reportsTo) managers.add(a.reportsTo);
+    accountable = accountable ?? a.accountableUserId ?? null;
+  }
+  return { managerAgentIds: [...managers].sort(), accountableUserId: accountable ?? fallbackAccountable };
 }
+
+/** Independence reasons in founder-readable words (Priya, AGE-97). */
+export const INDEPENDENCE_REASON_WORDS: Record<string, string> = {
+  self_review: "the contributor reviewed their own work",
+  project_lead: "the project lead reviewed their own project's work",
+  goal_owner: "the goal owner reviewed work closing their own goal",
+  synthetic: "a synthetic identity decided",
+  excluded: "a reviewer excluded by the contract",
+  no_actor: "no reviewer identity recorded",
+};

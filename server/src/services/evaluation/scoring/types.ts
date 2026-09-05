@@ -80,6 +80,8 @@ export interface ExceptionRecord {
   subject: { kind: "issue" | "agent" | "pair" | "milestone" | "company" | "comment"; id: string; identifier?: string | null };
   /** Resolved routing targets from the roster (§9.1): manager := reportsTo, null → accountable human. */
   routing: { accountableUserId: string | null; managerAgentIds: string[]; founderView: boolean };
+  /** The agent the exception is about, when one is (routing target and per-actor flag). */
+  actorAgentId: string | null;
   /** eventTime of the triggering event; the exception is dated by the fact, not by detection. */
   raisedAt: string;
   evidenceRefs: string[];
@@ -130,6 +132,8 @@ export interface ScoredCard extends Record<string, unknown> {
   /** Per-agent operating rows plus the company row (`company:<id>`) for platform-owed items. */
   actors: ActorRow[];
   exceptions: ExceptionRecord[];
+  /** Exact total; `exceptions` holds at most 500, immediate and material first. */
+  exceptionsTotal: number;
   exceptionCounts: Record<string, number>;
   flags: string[];
   /** Metrics absent from every composite, with the reason (§5.3: the card always lists them). */
@@ -144,6 +148,7 @@ export interface ScoredCard extends Record<string, unknown> {
   byActorType: Record<string, number>;
   bySource: Record<string, number>;
   issueIds: string[];
+  issueCount: number;
   actorKeys: string[];
   firstEventTime: string | null;
   lastEventTime: string | null;

@@ -983,8 +983,9 @@ export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor,
 /**
  * T0 roster: agents → agent.snapshot. Routing (manager := reportsTo → accountable
  * human) and independence need these facts inside the window, so a card is a
- * function of the ledger alone. Version = hash of the facts: a heartbeat touch
- * that changes nothing mints nothing.
+ * function of the ledger alone. Minted only when the facts' hash changes (a
+ * heartbeat touch mints nothing); the version carries the row time so an
+ * A→B→A change is three facts and the last one wins in replay.
  */
 export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
   const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agents.updatedAt, agents.id, (predicate, take, direction) =>
@@ -1008,21 +1009,24 @@ export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Curs
       .limit(take),
     (r) => r.id,
   );
-  const events: EvaluationEventInput[] = rows.map((r) => {
+  const latest = await latestSnapshotHashes(tx, companyId, "agents", "agent.snapshot", rows.map((r) => r.id));
+  const events: EvaluationEventInput[] = rows.flatMap((r) => {
     const facts = { name: r.name, role: r.role, status: r.status, reportsTo: r.reportsTo, accountableUserId: r.accountableUserId, autonomy: r.autonomy };
     const hash = hashCanonical(facts);
-    return {
+    if (latest.get(r.id) === hash) return [];
+    const event: EvaluationEventInput = {
       companyId,
       actorType: "system",
       actorId: null,
       sourceTable: "agents",
       sourceId: r.id,
-      sourceVersion: hash,
+      sourceVersion: `${hash}:${r.cursorTime}`,
       sourceRowHash: hash,
       eventType: "agent.snapshot",
       eventTime: r.updatedAt,
       payload: { agentId: r.id, ...facts, createdByUserId: r.createdByUserId, createdAt: r.createdAt.toISOString() },
     };
+    return [event];
   });
   return { events, scanned, nextCursor };
 }
