@@ -23,5 +23,19 @@ describe("M3 — evaluator refusals and P6", () => {
     expect(card.exceptions.filter((e) => e.id === "E3" && e.note.includes("refused request")).length).toBe(1);
     expect(card.exceptions.filter((e) => e.id === "E3" && e.note.includes("EVALUATOR_READ_ONLY")).length).toBe(0);
     expect(card.actors.find((a) => a.actorId === A)!.metrics.P6!.n).toBe(0);
+    // the evaluator never runs on its own card: no operating row is opened for it by its refusals
+    expect(evaluatorRow).toBeUndefined();
+  });
+
+  it("the gate's own refusals are not evidence that the company records authority refusals", () => {
+    const EVALUATOR = "00000000-0000-4000-8000-0000000000e1";
+    const window = [
+      ...roster(),
+      ...item({ id: I1, started: 1, done: 4 }),
+      ev({ type: "authz.refused", time: at(2), actor: ["agent", EVALUATOR], issueId: I1, sourceTable: "activity_log", payload: { method: "PATCH", routePath: "/api/issues/:id", reasonCode: "EVALUATOR_READ_ONLY" } }),
+    ];
+    const card = score(window);
+    expect(card.missingSources.some((m) => /authority refusals/.test(m))).toBe(true);
+    expect(card.actors.some((a) => a.actorId === EVALUATOR)).toBe(false);
   });
 });

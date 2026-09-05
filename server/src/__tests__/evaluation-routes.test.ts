@@ -21,6 +21,7 @@ vi.mock("../services/evaluation/ingest.js", () => ({
 }));
 const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
 const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id.startsWith("ev-"))));
+const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "corr-1" ? { id, eventType: "evaluation.correction" } : id === "not-a-correction" ? { id, eventType: "issue.created" } : null));
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
   evaluationLedger: () => ({
@@ -29,6 +30,7 @@ vi.mock("../services/evaluation/ledger.js", () => ({
     maxSeq: vi.fn().mockResolvedValue(7),
     append,
     existing,
+    get: ledgerGet,
   }),
 }));
 vi.mock("../services/evaluation/replay.js", () => ({
@@ -47,7 +49,7 @@ const projectsList = vi.fn().mockResolvedValue([]);
 const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
 vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
 const reviewSync = vi.fn().mockResolvedValue({ projectId: "proj-eval", labelId: "lbl", created: ["i1"], updated: [], unchanged: [], unrouted: [] });
-vi.mock("../services/evaluation/review-items.js", () => ({ evaluationReviewItems: () => ({ sync: reviewSync }) }));
+vi.mock("../services/evaluation/review-items.js", () => ({ REVIEW_PROJECT_DESCRIPTION: "Review items raised by the Company Evaluator.", evaluationReviewItems: () => ({ sync: reviewSync }) }));
 vi.mock("../services/activity-log.js", () => ({ logActivity }));
 
 async function createApp(actor: Record<string, unknown>) {
@@ -255,13 +257,13 @@ describe("evaluation routes", () => {
     const filed = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed", evidenceRefs: [] });
     expect(filed.status).toBe(201);
     expect((append.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.correction", actorType: "user", actorId: "user-1" });
-    // evaluator note on the correction: the correction must exist and the note must cite
-    ledgerList.mockResolvedValueOnce([{ id: "corr-1", eventType: "evaluation.correction" }]);
+    // evaluator note on the correction: the correction must exist (by id and type) and the note must cite
     const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["ev-1"] });
     expect(note.status).toBe(201);
     expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "evaluator", sourceId: "corr-1" });
     ledgerList.mockResolvedValueOnce([]);
     expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-9/note").send({ note: "x", evidenceRefs: ["ev-1"] })).status).toBe(404);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/not-a-correction/note").send({ note: "x", evidenceRefs: ["ev-1"] })).status).toBe(404); // an event of another type is not a correction
     // the disposition is the human's: the evaluator is refused, the administrator decides
     expect((await request(evaluator).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "correction_decided", correctionEventId: "33333333-3333-4333-8333-333333333333", decision: "accepted" })).status).toBe(403);
     existing.mockResolvedValueOnce(new Set(["33333333-3333-4333-8333-333333333333"]));

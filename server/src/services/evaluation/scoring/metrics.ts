@@ -582,9 +582,13 @@ export function actorsIn(ctx: ScoringContext): ActorScope[] {
     for (const c of it.comments) if (c.actorType === "agent") add(c.actorId, it);
     for (const b of it.blockers) if (b.actorType === "agent") add(b.actorId, it);
   }
-  // refusals name their agent even when no member item is involved
+  // refusals name their agent even when no member item is involved — except the read-only gate's own, which
+  // would otherwise give the evaluator an operating row on the cards it produces (§10.4)
   const refused = new Set<string>();
-  for (const r of ctx.tl.authzRefused) if (r.actorType === "agent" && r.actorId && !map.has(r.actorId)) refused.add(r.actorId);
+  for (const r of ctx.tl.authzRefused) {
+    if (str(r.payload, "reasonCode") === "EVALUATOR_READ_ONLY") continue;
+    if (r.actorType === "agent" && r.actorId && !map.has(r.actorId)) refused.add(r.actorId);
+  }
   const scopes = [...map.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([agentId, ids]) => ({ agentId, items: ctx.members.filter((m) => ids.has(m.issueId)) }));

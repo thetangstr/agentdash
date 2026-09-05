@@ -89,6 +89,11 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     expect(titles.some((t) => t.startsWith("Evaluator: self-review"))).toBe(true);
     expect(rows.find((r) => r.title.startsWith("Evaluator: self-review"))!.assigneeUserId).toBe(FOUNDER); // falls back to the contract's accountable human
     expect(rows.find((r) => r.description?.includes("E6"))!.assigneeUserId).toBe(STEWARD);
+    // founder-facing text: paragraphs are separated, no section numbers, no formula key
+    const immediate = rows.find((r) => r.title.startsWith("Evaluator: self-review"))!;
+    expect(immediate.description).toContain("\n\nnote\n\nSubject:");
+    expect(immediate.description).not.toMatch(/§|m2-score/);
+    expect(rows.find((r) => r.title.startsWith("Evaluator digest"))!.description).not.toMatch(/§|m2-score/);
   });
 
   it("is idempotent, updates a digest in place as exceptions accrue, and never creates a second digest for the same human", async () => {
@@ -109,6 +114,25 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     expect(digest.status).toBe("todo");
   });
 
+  it("a closed item stays closed: the same key is neither recreated nor reopened, and a key with an underscore matches only itself", async () => {
+    const svc = evaluationReviewItems(db);
+    const rows = await db.select().from(issues).where(eq(issues.companyId, companyId));
+    const immediate = rows.find((r) => r.title.startsWith("Evaluator: self-review"))!;
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, immediate.id));
+    const again = await svc.sync(companyId, ref(), card([exc({ id: "E4", key: "E4:issue:c", title: "self-review", severity: "immediate" })]), 5, null);
+    expect(again.created).toEqual([]);
+    expect(again.updated).toEqual([]);
+    expect(again.closed).toEqual([immediate.id]);
+    expect((await db.select().from(issues).where(eq(issues.id, immediate.id)))[0]!.status).toBe("done");
+    expect((await db.select().from(issues).where(eq(issues.companyId, companyId))).length).toBe(rows.length);
+    // LIKE would read `_` as a wildcard: k_1 must not be found when kz1 is synced
+    const under = await svc.sync(companyId, ref(), card([exc({ id: "E4", key: "E4:issue:k_1", title: "self-review", severity: "immediate", subject: { kind: "issue", id: "k1", identifier: "EVL-21" } })]), 5, null);
+    expect(under.created.length).toBe(1);
+    const other = await svc.sync(companyId, ref(), card([exc({ id: "E4", key: "E4:issue:kz1", title: "self-review", severity: "immediate", subject: { kind: "issue", id: "kz", identifier: "EVL-22" } })]), 5, null);
+    expect(other.created.length).toBe(1);
+    expect(other.updated).toEqual([]);
+  });
+
   it("a routed human who is not an active member is reported as unassignable, never replaced by an agent", async () => {
     const svc = evaluationReviewItems(db);
     const result = await svc.sync(companyId, ref(), card([exc({ id: "E8", key: "E8:issue:m", title: "excessive intervention", routing: { accountableUserId: "nobody-9", managerAgentIds: [], founderView: false } })]), 3, null);
@@ -123,6 +147,10 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     expect(result.unrouted).toEqual(["E7:agent:q"]);
     expect(result.created).toEqual([]);
     const routed = await svc.sync(companyId, ref(), noHuman, 3, FOUNDER);
+    // an agent subject with no identifier is named, never shown as a raw id
+    const digest = (await db.select().from(issues).where(eq(issues.assigneeUserId, FOUNDER))).find((r) => r.title.startsWith("Evaluator digest"))!;
+    expect(digest.description).toContain("- an agent: note");
+    expect(digest.description).not.toContain("- q:");
     // the founder's digest for this milestone already exists from the first case: it is updated in place, never duplicated
     expect(routed.unrouted).toEqual([]);
     expect(routed.created).toEqual([]);

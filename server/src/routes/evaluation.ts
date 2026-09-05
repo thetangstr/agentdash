@@ -17,7 +17,7 @@ import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.j
 import { agentService } from "../services/agents.js";
 import { projectService } from "../services/projects.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
-import { evaluationReviewItems } from "../services/evaluation/review-items.js";
+import { REVIEW_PROJECT_DESCRIPTION, evaluationReviewItems } from "../services/evaluation/review-items.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
 
@@ -279,11 +279,7 @@ export function evaluationRoutes(db: Db) {
 
       const project =
         (await projectsSvc.list(companyId)).find((p) => p.name === EVALUATION_REVIEW_PROJECT_NAME) ??
-        (await projectsSvc.create(companyId, {
-          name: EVALUATION_REVIEW_PROJECT_NAME,
-          description: "Review items raised by the Company Evaluator. Assigned only to humans; closing one is the human's act (spec §9.2).",
-          status: "in_progress",
-        }));
+        (await projectsSvc.create(companyId, { name: EVALUATION_REVIEW_PROJECT_NAME, description: REVIEW_PROJECT_DESCRIPTION, status: "in_progress" }));
 
       let agent = (await agentsSvc.list(companyId)).find((a) => a.role === EVALUATOR_AGENT_ROLE && a.status !== "terminated") ?? null;
       let created = false;
@@ -295,12 +291,12 @@ export function evaluationRoutes(db: Db) {
           reportsTo: null,
           accountableUserId: actor.actorType === "user" ? actor.actorId : null,
           capabilities: "Reads the evaluation ledger and cards; reviews exceptions; never directs agents or changes reviewed work.",
-        } as Parameters<typeof agentsSvc.create>[1]);
+        });
         created = true;
       }
       let key: { id: string; token: string } | null = null;
       if (created || body.data.rotateKey) {
-        if (!created) await agentsSvc.revokeKeysOfKind?.(agent.id, "evaluator");
+        if (!created) await agentsSvc.revokeKeysOfKind(agent.id, "evaluator");
         const minted = await agentsSvc.createApiKey(agent.id, "evaluator (read-only)", { source: "manual", createdByUserId: actor.actorType === "user" ? actor.actorId : null }, "evaluator");
         key = { id: minted.id, token: minted.token };
       }
@@ -461,8 +457,8 @@ export function evaluationRoutes(db: Db) {
       await assertEvaluatorOrAdministrator(req, companyId);
       const body = z.object({ note: noteSchema, evidenceRefs: evidenceRefsSchema }).safeParse(req.body);
       if (!body.success) throw badRequest("note and at least one evidenceRef are required", { issues: body.error.issues });
-      const corrections = await ledger.list(companyId, { types: ["evaluation.correction"], limit: 5000 });
-      if (!corrections.some((c) => c.id === correctionEventId)) throw notFound("Correction not found");
+      const correction = await ledger.get(companyId, correctionEventId);
+      if (!correction || correction.eventType !== "evaluation.correction") throw notFound("Correction not found");
       await requireCitations(companyId, body.data.evidenceRefs);
       const who = writerActor(req);
       const now = new Date();

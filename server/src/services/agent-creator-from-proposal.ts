@@ -164,6 +164,8 @@ When you receive a verdict (\`verdict_review\` typed card or Issue comment):
 - \`escalated_to_human\` — CoS routed to a human; wait for the human-decision verdict from the bridge.
 
 The verdicts service is authoritative. If anything here conflicts with a 4xx from the API, the API wins.
+
+Issues labelled \`evaluator-review\` (project "Evaluator review items") are the Company Evaluator's review items for humans. Never pick one up, act on it, or comment on it; the evaluator never directs agents.
 <!-- /AgentDash: goals-eval-hitl -->
 
 <!-- AgentDash: agent-api-auth — DO NOT REMOVE OR REORDER THIS BLOCK -->

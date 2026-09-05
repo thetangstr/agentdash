@@ -53,6 +53,8 @@ export function evaluationScorecardService(db: Db) {
         // Everything inside the lock runs on the lock's own connection: no second pooled connection is held idle.
         const rows = await versions(companyId, ref, tx);
         const { card, hash, state, throughSeq } = await evaluationReplay(tx).replay(companyId, ref);
+        // an unchanged card is not a new version: the cadence may run daily for years without growing the table
+        if (rows[0] && rows[0].cardHash === hash) return { ...rows[0], findings: { inserted: 0, skipped: 0 }, reused: true as const };
         const version = (rows[0]?.version ?? 0) + 1;
         const [row] = await tx
           .insert(evaluationScorecards)
@@ -70,7 +72,7 @@ export function evaluationScorecardService(db: Db) {
           })
           .returning();
         const findings = await evaluationLedger(tx).append(findingEvents(companyId, ref, card, version));
-        return { ...row!, findings: { inserted: findings.inserted, skipped: findings.skipped } };
+        return { ...row!, findings: { inserted: findings.inserted, skipped: findings.skipped }, reused: false as const };
       });
     },
 

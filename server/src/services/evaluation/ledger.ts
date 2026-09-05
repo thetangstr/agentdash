@@ -246,6 +246,17 @@ export function evaluationLedger(db: LedgerDb) {
     },
 
     /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3). */
+    /** One event by id within the company, or null. */
+    async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
+      if (typeof id !== "string" || id.length === 0) return null;
+      const rows = await db
+        .select()
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.id, id)))
+        .limit(1);
+      return (rows[0] as EvaluationEventRow | undefined) ?? null;
+    },
+
     async existing(companyId: string, ids: string[]): Promise<Set<string>> {
       const wanted = [...new Set(ids)].filter((x) => typeof x === "string" && x.length > 0);
       if (wanted.length === 0) return new Set();

@@ -569,3 +569,34 @@ Recorded here rather than in the spec, which is at its size limit.
   evidence) and `POST …/evaluation/dispositions` (administrators: decide a
   correction, attest a criterion, accept a contract exception). The
   disposition is always the human's; the evaluator never decides.
+
+
+- **Milestone 3 review round 1 (independent reviewer, REQUEST CHANGES → fixed).**
+  Two blockers. Read-only had been a property of the evaluator's API key, so an
+  ordinary key minted on the evaluator agent or the local JWT the heartbeat
+  issues to any dispatched agent would have carried full agent authority; the
+  gate now derives the principal from the agent's role as well as the key's
+  kind and runs for both credential paths, so every credential that resolves to
+  the evaluator agent is read-only. A closed review item was invisible to the
+  idempotency lookup and would have been recreated on the next pass — an
+  unbounded loop for a hostile key holder; the lookup now finds the item in any
+  status and a closed one is left closed, reported as `closed`, never reopened
+  or recreated. Also fixed: the evaluator's own refusals no longer open an
+  operating row for it or count as evidence that the company records authority
+  refusals; `scorecards/snapshot` left the evaluator allowlist (the route was
+  administrator-only anyway — snapshots belong to the cadence and
+  administrators, the principal creates review items); an unchanged card adds
+  no version; the cadence visits only companies that provisioned an evaluator
+  principal, snapshots projects only, and routes unowned exceptions to an
+  administrator or records them unrouted, never to an arbitrary member;
+  immediate items keep their paragraph breaks; founder prose carries no section
+  numbers, formula keys or raw ids (agent subjects are named); the review
+  project and label are created under a per-company advisory lock; the key
+  marker lookup escapes LIKE metacharacters; correction notes look up the
+  correction by id and type; the optional call on key revocation and the cast
+  on the evaluator agent's insert are gone. Prompt surfaces (`default/AGENTS.md`
+  and the proposal-based creator) now tell agents never to pick up, act on or
+  comment on `evaluator-review` items, so the drift check passes without a
+  bypass. Recorded deviation kept: the evaluator agent's accountable human is
+  the provisioning administrator, not the founder as §10.1 writes — the founder
+  should confirm, since it decides who receives unrouted exceptions.

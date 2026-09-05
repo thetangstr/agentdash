@@ -263,16 +263,16 @@ export type EvaluationPrincipalKind = (typeof EVALUATION_PRINCIPAL_KINDS)[number
 
 /**
  * Spec §10.2: the only non-safe requests a read-only (evaluator) principal may
- * make. Each route enforces its own constraints (findings and cards are ledger
- * inserts; review items land only in the evaluator project, labelled, `todo`,
- * assigned to a human; correction notes attach evidence, never decide).
- * Everything else — issues, verdicts, approvals, agents, keys, releases — is
- * refused before any router sees it.
+ * make. Each route enforces its own constraints (findings are ledger inserts;
+ * review items land only in the evaluator project, labelled, `todo`, assigned
+ * to a human; correction notes attach evidence, never decide). Snapshots are
+ * taken by the cadence or an administrator, never by the principal. Everything
+ * else — issues, verdicts, approvals, agents, keys, releases — is refused
+ * before any router sees it.
  */
 export const EVALUATOR_WRITE_ROUTE_PATTERNS: readonly RegExp[] = [
   /^\/api\/companies\/[^/]+\/evaluation\/findings$/,
   /^\/api\/companies\/[^/]+\/evaluation\/review-items$/,
-  /^\/api\/companies\/[^/]+\/evaluation\/scorecards\/snapshot$/,
   /^\/api\/companies\/[^/]+\/evaluation\/corrections\/[^/]+\/note$/,
 ];
 
