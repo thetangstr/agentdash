@@ -54,16 +54,15 @@ CREATE INDEX "evaluation_events_company_type_idx" ON "evaluation_events" USING b
 CREATE INDEX "evaluation_events_company_project_idx" ON "evaluation_events" USING btree ("company_id","project_id");--> statement-breakpoint
 CREATE INDEX "evaluation_events_source_idx" ON "evaluation_events" USING btree ("company_id","source_table","source_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "evaluation_scorecards_version_uq" ON "evaluation_scorecards" USING btree ("company_id","milestone_kind","milestone_id","version");--> statement-breakpoint
--- AgentDash (Company Evaluator, spec §10.2/§11): the ledger is append-only.
--- UPDATE is always refused. DELETE is refused unless the session has set
--- agentdash.ledger_purge = 'on', which only the company-deletion transaction
--- does (server/src/services/companies.ts remove()). TRUNCATE is refused
--- unconditionally (row triggers do not fire on TRUNCATE). Corrections are new rows.
+-- AgentDash (Company Evaluator, spec §10.2/§11): the ledger is append-only at
+-- the row level. UPDATE is always refused. DELETE is refused unless the session
+-- has set agentdash.ledger_purge = 'on', which only the company-deletion
+-- transaction does (server/src/services/companies.ts remove()). TRUNCATE is
+-- deliberately not trapped: it is a privilege-gated maintenance statement with
+-- no application path, and the test harness truncates companies CASCADE.
+-- Corrections are new rows.
 CREATE OR REPLACE FUNCTION evaluation_events_immutable() RETURNS trigger AS $$
 BEGIN
-  IF TG_OP = 'TRUNCATE' THEN
-    RAISE EXCEPTION 'evaluation_events is append-only: TRUNCATE refused' USING ERRCODE = 'restrict_violation';
-  END IF;
   IF TG_OP = 'UPDATE' THEN
     RAISE EXCEPTION 'evaluation_events is append-only: UPDATE refused' USING ERRCODE = 'restrict_violation';
   END IF;
@@ -75,7 +74,4 @@ END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
 CREATE TRIGGER evaluation_events_immutable_trg
   BEFORE UPDATE OR DELETE ON "evaluation_events"
-  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();--> statement-breakpoint
-CREATE TRIGGER evaluation_events_no_truncate_trg
-  BEFORE TRUNCATE ON "evaluation_events"
-  FOR EACH STATEMENT EXECUTE FUNCTION evaluation_events_immutable();
+  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();

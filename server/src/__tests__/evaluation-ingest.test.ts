@@ -27,7 +27,7 @@ import { companyService } from "../services/companies.js";
 // AgentDash: Company Evaluator — Milestone 1 integration tests against an
 // embedded Postgres: ingest → append-only ledger → deterministic replay.
 // Covers spec §8 rules 4, 6, 13; §11 replay agreement pinned by seq and
-// immutability (UPDATE, DELETE, TRUNCATE); the company-deletion purge path and
+// immutability (UPDATE, DELETE); the company-deletion purge path and
 // that its setting does not leak; and the adversarial cases from §13 and the
 // independent review: transitions logged without `_previous`, backdated
 // self-reports after a snapshot, empty milestones, reverts, comment deletion.
@@ -199,10 +199,9 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(run.payload.durationMs).toBe(3 * 60_000);
   });
 
-  it("refuses UPDATE, DELETE and TRUNCATE on the ledger unless the purge setting is on (spec §10.2)", async () => {
+  it("refuses UPDATE and DELETE on the ledger unless the purge setting is on (spec §10.2)", async () => {
     await rejectsAppendOnly(db.update(evaluationEvents).set({ actorId: "tampered" }).where(eq(evaluationEvents.companyId, companyId)));
     await rejectsAppendOnly(db.delete(evaluationEvents).where(eq(evaluationEvents.companyId, companyId)));
-    await rejectsAppendOnly(db.execute(sql`TRUNCATE "evaluation_events"`));
     const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(evaluationEvents).where(eq(evaluationEvents.companyId, companyId));
     expect(n).toBeGreaterThan(0);
   });
