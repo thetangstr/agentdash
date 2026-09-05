@@ -1,26 +1,21 @@
 import { Router } from "express";
+import {
+  EVALUATION_EVENT_TYPES,
+  EVALUATION_REVIEW_PROJECT_NAME,
+  evaluationContractV1Schema,
+  type EvaluationEventType,
+  evaluationMilestoneRefSchema,
+  EVALUATOR_AGENT_ROLE,
+} from "@paperclipai/shared";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { EVALUATION_EVENT_TYPES, evaluationContractV1Schema, evaluationMilestoneRefSchema, type EvaluationEventType } from "@paperclipai/shared";
 import { badRequest } from "../errors.js";
 import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
-import {
-  EVALUATION_EVENT_TYPES,
-  EVALUATION_REVIEW_PROJECT_NAME,
-  EVALUATOR_AGENT_ROLE,
-  evaluationMilestoneRefSchema,
-  type EvaluationEventType,
-} from "@paperclipai/shared";
-import { badRequest } from "../errors.js";
-import { logActivity } from "../services/activity-log.js";
-import { accessService } from "../services/access.js";
 import { agentService } from "../services/agents.js";
 import { projectService } from "../services/projects.js";
-import { evaluationIngest, MAX_BACKFILL_PASSES } from "../services/evaluation/ingest.js";
-import { evaluationLedger } from "../services/evaluation/ledger.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
