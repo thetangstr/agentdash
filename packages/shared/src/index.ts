@@ -1277,6 +1277,8 @@ export * from "./types/interview.js";
 // (DI_SCOPES re-exported here so server-side code can import without crossing
 // the db-package boundary at the type level — see plan Phase B condition #5)
 export * from "./deep-interview.js";
+// AgentDash: Company Evaluator (Stage 1 shadow) vocabulary and contract schema
+export * from "./evaluation.js";
 
 // AgentDash: goals-eval-hitl
 // Note: VerdictOutcome, VerdictEntityType already re-exported from ./constants.js above.
