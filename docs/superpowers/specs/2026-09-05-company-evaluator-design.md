@@ -127,7 +127,12 @@ issue verdicts it refuses only reviewer = assignee; project lead and goal owner
 are checked only on project and goal verdicts and only for agent reviewers
 (`server/src/services/verdicts.ts:151-195`). The evaluator applies the fuller
 rule to every review-class event; a violation is E4 and the event counts as
-`self_review`, never as evidence. The evaluator is excluded from scoring anything
+`self_review`, never as evidence. One path is named so it is not mistaken for a
+T0/T0 disagreement: the escalation bridge writes a closing verdict with
+`reviewerUserId = decidedByUserId`, and the service guard knows nothing of PR
+authorship, so a PR-author human can lawfully record a service-valid `passed`
+verdict that the evaluator scores as non-independent. Both records stand; the
+card says which rule each satisfied. The evaluator is excluded from scoring anything
 it authored, and its own behaviour is scored by deterministic rules reviewed by
 the founder (§10.4), never by itself.
 
@@ -160,8 +165,10 @@ projects have null dates → Insufficient until set.
 
 **O3 Downstream risk index.** Per delivered item, consequences after close:
 reopen (`done`→non-terminal), an explicit recovery issue for it, a blocker added
-to another item citing it, a revert of its delivery ref (T1/T2). `value =
-consequences / delivered` (an index; lower is better). Incident attribution is
+to another item citing it — all T0 — and, **only when T1 or T2 delivery
+evidence exists**, a revert of its delivery ref. `value = consequences /
+delivered` (an index; lower is better); the T1/T2-conditional term is shown
+separately with its own coverage. Incident attribution is
 **Insufficient by construction** in Stage 1: `server_errors` carries no company,
 agent, run or release link, so it cannot be joined to a company ledger (F6).
 
@@ -182,10 +189,15 @@ An **intervention** is a human changing status, assignee or blockers on an
 agent-owned item, a human comment that reopens or redirects it (the comment
 route's implicit reopen counts), or a human taking it over. `value = items with
 zero interventions / population`; the raw count is shown too. Answering an
-agent's own `ask_user_questions` is not an intervention.
+agent's own `ask_user_questions` (interaction status `answered` or `accepted`;
+the enum is `pending|accepted|rejected|answered|cancelled|expired|failed`) is
+not an intervention.
 
 **P2 Judgment.** Escalation precision: `escalated_to_human` verdicts and
-`request_board_approval`-class approvals later approved as raised / raised.
+`request_board_approval`-class approvals later approved as raised / raised —
+"later approved" is derived through the verdict-approval bridge (a later
+`passed` verdict linked to the escalation's approval), since verdicts are
+insert-only and carry no status.
 Unanswered `ask_user_questions` past 48 h are charged to the company row, not
 the asking agent, and reported with their median pending age (a count alone is
 uninterpretable). Neutral-verdict rubric dimensions averaged with n.
@@ -197,10 +209,14 @@ ledger counts). `value = 1 − contradicted / checkable`; each contradiction is
 **E2**. Prose is neither credited nor penalised. An actor with zero checkable
 claims in a window has coverage 0 (rule 10), not a perfect score.
 
-**P4 Handoff quality.** Population: assignments, reassignments, `→in_review`
-transitions and MAW-titled comments. Well-formed = valid payload against
-`doc/maw/handoff-schemas.json` (or, for assignments, a description and a DoD),
-a named receiver, and no bounce within 24 h. `value = well-formed / handoffs`.
+**P4 Handoff quality.** Population: assignment changes (there is no
+`issue.assigned` action — they are `issue.updated` rows whose `_previous`
+carries the old assignee), `→in_review` transitions and MAW-titled comments.
+Well-formed = valid payload against `doc/maw/handoff-schemas.json` (or, for
+assignments, a description and a DoD), a **derivable receiver** — the MAW
+schemas carry no to/from field, so the receiver is the item's assignee at the
+comment's `createdAt` (and the sender is the comment author) — and no bounce
+within 24 h. `value = well-formed / handoffs`.
 
 **P5 Recovery.** Population: runs ending `failed|timed_out|cancelled`, stranded
 items (execution-semantics §7–8), `issue.recovery_budget_exhausted` (emitted in
@@ -224,10 +240,10 @@ out of Stage 1 scope; there is no population to review.
 
 **P7 Cycle time.** Per item: queue (`createdAt→startedAt`), work
 (`startedAt→first in_review`), review (`first in_review→done`), total. Median
-and p90 per milestone and per agent. Bucketed by size **only if the company's
-labels include a `size:` set** (none exists today; the MAW size labels live in
-this repo's own tickets, not in the control plane), else unbucketed with n.
-Shown, never scored.
+and p90 per milestone and per agent. Bucketed by size **only where a size signal exists**: a `size:` label set in
+the company (none today) or the MAW payload's `t_shirt_size` (T2, present on
+the 25 `pm_to_builder` payloads); size coverage is reported separately so an
+unbucketed median is not mistaken for a normalised one. Shown, never scored.
 
 **P8 Token and cost efficiency.** Source: `cost_events` per run; `usage_json` is
 the adapter's self-report and is shown only when no cost event exists, marked
@@ -300,9 +316,22 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
 3. Claims need counterparts; a contradiction costs more than the claim earns.
 4. Retroactive edits are visible: every event has `eventTime` and `ingestTime`;
    a DoD, verdict or payload dated after `done` does not satisfy that close.
-5. Clock skew tolerance 5 minutes; inside it, ingest order decides and is marked.
-6. Duplicate events are idempotent by dedupe key; two sources for one fact are
-   linked by `correlationId` and counted once.
+   **A T2 payload's own `timestamp` is never trusted as event time**: ingest
+   clamps it to `min(payload.timestamp, comment.createdAt)` — the comment row's
+   arrival is the T0 fact — and a payload timestamp earlier than its comment by
+   more than the skew tolerance is itself a checkable claim (E2).
+5. Clock skew tolerance 5 minutes. **Replay order is total and stated**: events
+   sort by `eventTime` bucketed to the tolerance, then `ingestTime`, then
+   `dedupeKey`; the sort is part of `formulaVersion`, so byte-for-byte replay
+   agreement is provable. `heartbeat_run_events.seq` orders within a run only.
+6. Duplicate events are idempotent by dedupe key `(companyId, sourceTable,
+   sourceId, eventType, sourceVersion)`; the key embeds the company so two
+   tenants can never collide. `sourceVersion` is named per table: the
+   `activity_log` row id for issue, agent and approval transitions (mutable rows
+   yield one event per transition, never one per row); `heartbeat_run_events.id`
+   and the run's `updatedAt` for runs; the comment id plus body hash for T2
+   payloads; the verdict/approval id for insert-only tables. Two sources for one
+   fact are linked by `correlationId` and counted once.
 7. Source authority is fixed: agents cannot emit T0/T1 about themselves; a T2
    payload posted by its own subject is `selfReported:true`.
 8. Splitting work is detected by the duplicate-title rule and by children closed
@@ -343,6 +372,17 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
     the item is *undecidable (criteria declared post hoc)*, never satisfied and
     never failed. Retrospective scoring therefore measures evidence hygiene
     (O5) more than acceptance (O1), and the card says which.
+18. **Cancel-and-recreate is correlated**: a cancelled item followed within 14
+    days by a new item sharing its `checkoutRunId`/`executionRunId` lineage, its
+    parent, or a fuzzy-matched title (normalised token overlap ≥ 0.6) is linked
+    as a successor; the cancellation counts as rework for P9 and the successor
+    inherits the predecessor's undecidable classes. Cancellations are otherwise
+    free, which is the hole this closes.
+19. **Reviewer concentration is visible**: reviews between actors who share an
+    `accountableUserId` are allowed (on this company every agent shares one)
+    but marked `sharedAccountability:true`; a pair whose reviews of each other
+    exceed 80 % of either's reviews in a window raises **E14** and those reviews
+    drop to Limited-evidence weight for `independent_review`.
 
 ## 9. Exceptions, escalation and appeals
 
@@ -370,6 +410,7 @@ and it is deliberate.
 | E11 emission drop | rule 10 | routine | manager |
 | E12 DoD narrowed | rule 11 | material | accountable owner + founder view |
 | E13 evidence withdrawn | rule 13 | material | accountable owner |
+| E14 reviewer concentration | rule 19 | routine | both actors' managers |
 
 ### 9.2 What an exception does, and the chatter ceiling
 
@@ -485,8 +526,17 @@ GitHub (optional adapter, D4) ┘                                      ▼
   time, ingest time, schema version, dedupe key, payload, correlation id, row
   hash). `evaluation_scorecards`: one stored JSON projection per version
   (rendering is a Milestone 4 UI concern).
-- Ingest runs on the existing periodic loop with its own interval and row
-  budget, off the request path; the card states the maximum ingest lag.
+- Ingest runs on **its own interval** (default 5 min, floor 60 s — not the
+  30 s heartbeat scheduler tick, whose fire-and-forget callbacks share the event
+  loop and pool with run dispatch), with per-source high-water-mark cursors
+  (`heartbeat_run_events.id` and other monotonic ids; `activity_log` by
+  `(createdAt, id)`), a per-tick row budget (default 5 000), a `LIKE
+  '%"handoff_type"%'` prefilter before any payload parsing, and a
+  `statement_timeout` on ingest reads. Backfill is a one-shot job, not a loop.
+  Budgets on the card: ingest tick p95 < 10 s; run-start latency delta p95
+  < 250 ms during ingest. The card states the maximum ingest lag. Ingest never
+  filters approvals by the `APPROVAL_TYPES` union: `verdict_escalation` is
+  written by the service but absent from the constant.
 - `replay(companyId, milestoneRef, throughEventId)` rebuilds a card and must
   equal the stored one byte-for-byte (the 95 % replay-agreement criterion is
   measured against this).

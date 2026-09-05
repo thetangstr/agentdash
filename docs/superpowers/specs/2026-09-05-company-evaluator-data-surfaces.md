@@ -64,7 +64,7 @@ found rather than assumed.
   an owner lock — **no owner-lock record exists**). There is **no `kind`
   column**; classification is by project, label or `originKind`.
 - DoD write: `PUT /companies/:companyId/issues/:issueId/dod`
-  (`server/src/routes/issues.ts:4212-4218`, direction-setters only) →
+  (`server/src/routes/issues.ts:4212-4241`, direction-setters only) →
   `verdictsService.setIssueDoD`, which overwrites in place and logs `dod_set`
   with `actorType:"system"` and the new value only, no previous value
   (`server/src/services/verdicts.ts:608-625`). DoD guard on leaving backlog:
@@ -82,8 +82,8 @@ found rather than assumed.
 - `issue_reference_mentions`: cross-references from title/description/comment/
   document with `matchedText`.
 - `issue_thread_interactions` (`issue_thread_interactions.ts:13-54`): kind
-  `ask_user_questions`, status `pending|answered|cancelled|expired`,
-  `sourceRunId`, `resolvedBy*`, `payload`/`result`.
+  `ask_user_questions`, status `pending|accepted|rejected|answered|cancelled|expired|failed`
+  (`constants.ts:200-208`), `sourceRunId`, `resolvedBy*`, `payload`/`result`.
 - `issue_tree_holds` / `issue_tree_hold_members`: subtree holds with `mode` and
   `releasePolicy` (not an owner lock).
 - `issue_execution_decisions`, `issue_approvals`, `issue_labels`/`labels`
@@ -95,7 +95,9 @@ found rather than assumed.
   `actorId`, `action` (dotted catalogue: `issue.*`, `agent.*`, `approval.*`,
   `heartbeat.*`, `budget.*`, `goal.*`, `project.*`, `verdict_recorded`,
   `dod_set`, …), `entityType`/`entityId`, `agentId`, `runId`, `details` jsonb
-  (`issue.updated` carries `_previous`, `issues.ts:2418`), `createdAt`. Indexes
+  (`issue.updated` carries `_previous`, `issues.ts:2407-2418`; there is **no
+  `issue.assigned` action** — assignment changes are `issue.updated` rows with
+  `_previous.assigneeAgentId`/`assigneeUserId`), `createdAt`. Indexes
   on `(companyId, createdAt)`, `runId`, `(entityType, entityId)`.
 
 ## 3. Agents, authority, stewardship
@@ -120,6 +122,11 @@ found rather than assumed.
 
 ## 4. Runs and recovery
 
+- Scheduler: one `setInterval` at `heartbeatSchedulerIntervalMs` (default
+  30 000 ms, floor 10 s, `server/src/config.ts:353`) in `server/src/index.ts:846-911`
+  whose callbacks are fire-and-forget promises on the shared event loop; the
+  run healer has its own interval (`index.ts:920-929`). The evaluator's ingest
+  takes its own interval (spec §11).
 - `heartbeat_runs` (`heartbeat_runs.ts:6-82`): status
   `queued|scheduled_retry|running|succeeded|failed|cancelled|timed_out`,
   `invocationSource`, `triggerDetail`, `exitCode`, `error`, `errorCode`,
