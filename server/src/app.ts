@@ -111,6 +111,7 @@ import { slackConnectorRoutes } from "./routes/slack-connector.js";
 import { gmailRoutes } from "./routes/gmail.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
+import { evaluationRoutes } from "./routes/evaluation.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
 import { HttpError } from "./errors.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -502,6 +503,8 @@ export async function createApp(
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
+  // AgentDash: Company Evaluator (Stage 1 shadow)
+  api.use(evaluationRoutes(db));
   api.use(featureFlagRoutes(db));
   // AgentDash: billing — always mount so /api/billing/status responds with
   // sensible defaults in dev. When Stripe is configured (STRIPE_SECRET_KEY set)

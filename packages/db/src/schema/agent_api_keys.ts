@@ -18,6 +18,12 @@ export const agentApiKeys = pgTable(
     source: text("source").notNull().default("manual"),
     createdByUserId: text("created_by_user_id"),
     createdByAgentId: uuid("created_by_agent_id"),
+    // AgentDash (Company Evaluator, decision D11): a key minted for the
+    // read-only evaluator principal carries `principalKind = "evaluator"`.
+    // The actor middleware marks such actors read-only and refuses every
+    // non-safe request outside the evaluator write allowlist. Null means an
+    // ordinary agent key; nothing changes for those.
+    principalKind: text("principal_kind"),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
