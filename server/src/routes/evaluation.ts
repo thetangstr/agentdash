@@ -7,6 +7,20 @@ import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
+import {
+  EVALUATION_EVENT_TYPES,
+  EVALUATION_REVIEW_PROJECT_NAME,
+  EVALUATOR_AGENT_ROLE,
+  evaluationMilestoneRefSchema,
+  type EvaluationEventType,
+} from "@paperclipai/shared";
+import { badRequest } from "../errors.js";
+import { logActivity } from "../services/activity-log.js";
+import { accessService } from "../services/access.js";
+import { agentService } from "../services/agents.js";
+import { projectService } from "../services/projects.js";
+import { evaluationIngest, MAX_BACKFILL_PASSES } from "../services/evaluation/ingest.js";
+import { evaluationLedger } from "../services/evaluation/ledger.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
@@ -227,6 +241,67 @@ export function evaluationRoutes(db: Db) {
         details: { version: stored.version, throughSeq: Number(stored.throughSeq), cardHash: stored.cardHash },
       });
       res.status(201).json({ stored, verify });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * D11 / spec §10.1: provision the evaluator principal — one agent with role
+   * `evaluator`, no manager (outside every reporting chain), accountable to the
+   * administrator who provisions it, and one read-only API key whose token is
+   * returned exactly once — plus the review-items project (§9.2). Idempotent:
+   * an existing evaluator is returned without a token unless `rotateKey` is
+   * set, which revokes its previous evaluator keys. Administrators only; audited.
+   */
+  router.post("/companies/:companyId/evaluation/principal", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      await assertCompanyAdministrator(access, req, companyId);
+      const body = z.object({ rotateKey: z.boolean().optional() }).safeParse(req.body ?? {});
+      if (!body.success) throw badRequest("Invalid body", { issues: body.error.issues });
+      const actor = getActorInfo(req);
+      const agentsSvc = agentService(db);
+      const projectsSvc = projectService(db);
+
+      const project =
+        (await projectsSvc.list(companyId)).find((p) => p.name === EVALUATION_REVIEW_PROJECT_NAME) ??
+        (await projectsSvc.create(companyId, {
+          name: EVALUATION_REVIEW_PROJECT_NAME,
+          description: "Review items raised by the Company Evaluator. Assigned only to humans; closing one is the human's act (spec §9.2).",
+          status: "in_progress",
+        }));
+
+      let agent = (await agentsSvc.list(companyId)).find((a) => a.role === EVALUATOR_AGENT_ROLE && a.status !== "terminated") ?? null;
+      let created = false;
+      if (!agent) {
+        agent = await agentsSvc.create(companyId, {
+          name: "Evaluator",
+          title: "Company Evaluator",
+          role: EVALUATOR_AGENT_ROLE,
+          reportsTo: null,
+          accountableUserId: actor.actorType === "user" ? actor.actorId : null,
+          capabilities: "Reads the evaluation ledger and cards; reviews exceptions; never directs agents or changes reviewed work.",
+        } as Parameters<typeof agentsSvc.create>[1]);
+        created = true;
+      }
+      let key: { id: string; token: string } | null = null;
+      if (created || body.data.rotateKey) {
+        if (!created) await agentsSvc.revokeKeysOfKind?.(agent.id, "evaluator");
+        const minted = await agentsSvc.createApiKey(agent.id, "evaluator (read-only)", { source: "manual", createdByUserId: actor.actorType === "user" ? actor.actorId : null }, "evaluator");
+        key = { id: minted.id, token: minted.token };
+      }
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        action: "evaluation.principal_provisioned",
+        entityType: "agent",
+        entityId: agent.id,
+        details: { created, keyMinted: key !== null, rotated: !created && key !== null, projectId: project.id },
+      });
+      res.status(created ? 201 : 200).json({ agent: { id: agent.id, name: agent.name, role: agent.role, reportsTo: agent.reportsTo ?? null }, key, projectId: project.id, created });
     } catch (err) {
       next(err);
     }

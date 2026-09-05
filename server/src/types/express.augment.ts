@@ -18,6 +18,10 @@ declare global {
         }>;
         isInstanceAdmin?: boolean;
         keyId?: string;
+        /** AgentDash (Company Evaluator, D11): what kind of principal the agent key mints. */
+        principalKind?: "agent" | "evaluator";
+        /** AgentDash (Company Evaluator, D11): a read-only principal — non-safe requests are refused unless allowlisted. */
+        readOnly?: boolean;
         /** Set only for the `bridge_endpoint` source: which enrolled machine this is. */
         bridgeEndpointId?: string;
         runId?: string;

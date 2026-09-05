@@ -4,11 +4,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import { isUuidLike, type DeploymentMode } from "@paperclipai/shared";
+import { isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
+import { logActivity } from "../services/activity-log.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -68,7 +69,7 @@ interface ActorMiddlewareOptions {
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
   const bridge = bridgeService(db);
-  return async (req, _res, next) => {
+  return async (req, res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
         ? {
@@ -259,6 +260,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
+    const principalKind = key.principalKind === "evaluator" ? "evaluator" : "agent";
     req.actor = {
       type: "agent",
       agentId: key.agentId,
@@ -266,7 +268,32 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       keyId: key.id,
       runId: runIdHeader || undefined,
       source: "agent_key",
+      principalKind,
+      readOnly: principalKind === "evaluator",
     };
+
+    // AgentDash (Company Evaluator, D11 / spec §10.2): read-only is a mechanism,
+    // not a prompt. A read-only principal's non-safe request is refused here,
+    // beside where the actor is minted and mirroring the bridge allowlist above,
+    // unless its path is on the evaluator write allowlist — whose routes enforce
+    // their own constraints. The refusal is recorded as `authz.refused`
+    // (fire-and-forget; the response never waits on it).
+    if (req.actor.readOnly && !isEvaluatorWriteAllowed(req.method, normalizedPath(req))) {
+      void logActivity(db, {
+        companyId: key.companyId,
+        actorType: "agent",
+        actorId: key.agentId,
+        agentId: key.agentId,
+        action: "authz.refused",
+        entityType: "agent",
+        entityId: key.agentId,
+        details: { method: req.method, routePath: normalizedPath(req), reasonCode: "EVALUATOR_READ_ONLY" },
+      }).catch((err) => {
+        logger.warn({ err }, "authz.refused record failed (evaluator read-only gate)");
+      });
+      res.status(403).json({ error: "This principal is read-only", code: "EVALUATOR_READ_ONLY" });
+      return;
+    }
 
     next();
   };

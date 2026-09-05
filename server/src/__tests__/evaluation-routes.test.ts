@@ -35,6 +35,14 @@ vi.mock("../services/evaluation/scorecards.js", () => ({
   evaluationScorecardService: () => ({ latest: vi.fn().mockResolvedValue(null), snapshot, verify }),
 }));
 vi.mock("../services/access.js", () => ({ accessService: () => ({ getMembership: vi.fn().mockResolvedValue(null), listMemberships: vi.fn().mockResolvedValue([]) }) }));
+const agentsList = vi.fn().mockResolvedValue([]);
+const agentCreate = vi.fn().mockResolvedValue({ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" });
+const createApiKey = vi.fn().mockResolvedValue({ id: "key-1", token: "tok-once" });
+const revokeKeysOfKind = vi.fn().mockResolvedValue(1);
+vi.mock("../services/agents.js", () => ({ agentService: () => ({ list: agentsList, create: agentCreate, createApiKey, revokeKeysOfKind }) }));
+const projectsList = vi.fn().mockResolvedValue([]);
+const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
+vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
 vi.mock("../services/activity-log.js", () => ({ logActivity }));
 
 async function createApp(actor: Record<string, unknown>) {
@@ -59,6 +67,11 @@ const agentKey = { type: "agent", agentId: "agent-1", companyId: "company-1", co
 describe("evaluation routes", () => {
   afterEach(() => {
     append.mockClear();
+    agentsList.mockClear();
+    agentCreate.mockClear();
+    createApiKey.mockClear();
+    revokeKeysOfKind.mockClear();
+    projectCreate.mockClear();
     tick.mockClear();
     backfill.mockClear();
     snapshot.mockClear();
@@ -159,6 +172,33 @@ describe("evaluation routes", () => {
     expect(events[0]).toMatchObject({ eventType: "contract.declared", sourceTable: "evaluation_contracts", sourceId: "project:22222222-2222-4222-8222-222222222222", projectId: "22222222-2222-4222-8222-222222222222", actorType: "user" });
     expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.contract_declared"]);
     expect((await request(admin).get(`/api/companies/${CID}/evaluation/contracts?kind=project&id=22222222-2222-4222-8222-222222222222`)).status).toBe(200);
+  it("provisions the evaluator principal once: administrators only, no manager, read-only key returned once, review project created", async () => {
+    const agent = await createApp(agentKey);
+    expect((await request(agent).post("/api/companies/company-1/evaluation/principal").send({})).status).toBe(403);
+    expect(agentCreate).not.toHaveBeenCalled();
+    const admin = await createApp(boardAdmin);
+    const first = await request(admin).post("/api/companies/company-1/evaluation/principal").send({});
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ created: true, projectId: "proj-eval", key: { id: "key-1", token: "tok-once" }, agent: { role: "evaluator", reportsTo: null } });
+    expect(agentCreate.mock.calls[0]![1]).toMatchObject({ role: "evaluator", reportsTo: null, accountableUserId: "user-1" });
+    expect(createApiKey).toHaveBeenCalledWith("agent-eval", "evaluator (read-only)", { source: "manual", createdByUserId: "user-1" }, "evaluator");
+    expect(projectCreate).toHaveBeenCalledTimes(1);
+    // second call: idempotent, no token
+    agentsList.mockResolvedValueOnce([{ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" }]);
+    projectsList.mockResolvedValueOnce([{ id: "proj-eval", name: "Evaluator review items" }]);
+    const second = await request(admin).post("/api/companies/company-1/evaluation/principal").send({});
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ created: false, key: null });
+    expect(agentCreate).toHaveBeenCalledTimes(1);
+    expect(projectCreate).toHaveBeenCalledTimes(1);
+    // rotation revokes the old evaluator keys and mints one new
+    agentsList.mockResolvedValueOnce([{ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" }]);
+    projectsList.mockResolvedValueOnce([{ id: "proj-eval", name: "Evaluator review items" }]);
+    const rotated = await request(admin).post("/api/companies/company-1/evaluation/principal").send({ rotateKey: true });
+    expect(rotated.status).toBe(200);
+    expect(rotated.body.key).toEqual({ id: "key-1", token: "tok-once" });
+    expect(revokeKeysOfKind).toHaveBeenCalledWith("agent-eval", "evaluator");
+    expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.principal_provisioned", "evaluation.principal_provisioned", "evaluation.principal_provisioned"]);
   });
 
   it("rejects a malformed snapshot body and an unknown event type filter is ignored", async () => {
