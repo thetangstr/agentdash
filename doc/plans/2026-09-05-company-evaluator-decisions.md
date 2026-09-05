@@ -94,11 +94,13 @@ to triage well.
 
 | option | cost | effect |
 |---|---|---|
-| **A. A `evaluation_scorecards` table of versioned JSON projections plus a rendered document per version** | one additive table | queryable, replayable, diff-able between versions; the document is what humans read |
+| **A. An `evaluation_scorecards` table holding one stored JSON projection per version; rendering is a Milestone 4 UI concern** | one additive table | queryable, replayable, diff-able between versions; one artifact per version for the replay-agreement check |
 | B. Documents only | none | not queryable for trend or drill-down |
 | C. Compute on every page load | none | slow, and the "replay agreement" criterion needs a stored artifact to compare against |
 
-**Recommend A.**
+**Recommend A.** (Revised after review: the first draft also stored a rendered
+document per version; that is a third artifact the projection already
+determines, so it is dropped.)
 
 ## D7 — Who reviews the plan, and who accepts the metric definitions?
 
@@ -148,47 +150,75 @@ scorecards and review items. Any later enforcement is a separate design with
 its own decision record, activated only by an explicit founder action recorded
 as a ledger event. **Not a choice — the founder's standing instruction.**
 
+## D11 — How "read-only" is enforced for the evaluator principal
+
+The first draft asserted that the evaluator's prohibition was "implemented as
+permission". The independent review showed there is nothing to implement it
+with: `principal_permission_grants` holds nine additive keys with no deny
+scope, `agent_api_keys` has no read-only notion, `POST …/verdicts` requires
+only company access, and any agent key may mutate an unassigned issue.
+
+| option | cost | effect |
+|---|---|---|
+| **A. A `principalKind` on the evaluator's API key and one deny-by-default gate in `server/src/middleware/auth.ts`, mirroring the existing bridge-endpoint allowlist: non-safe requests from a read-only actor are refused unless the path is on the evaluator write allowlist (its own `evaluation/*` routes, which enforce project/label/human-assignee)** | one column, one middleware block, four evaluation routes, tests per refused route | the prohibition becomes a property of the system; the pattern already exists in the same file; no other principal's behaviour changes |
+| B. Per-route permission checks on every write route | touches 80+ route files | large, easy to miss one, and the review found only 6 of 81 route files consult `hasPermission` today |
+| C. Prompt-level only | none | the mandate's central constraint rests on the model's obedience; the review's F2 shows what a key could do today |
+
+**Recommend A.** It is a cross-cutting change of one middleware and one column,
+so the implementation sketch below no longer claims "no existing table touched":
+it adds a nullable column to `agent_api_keys` and a gate beside the bridge
+allowlist, and it changes nothing for ordinary agent keys.
+
 ---
 
 ## Plan by milestone (acceptance summarised; details live on the board)
 
 | milestone | deliverable | acceptance |
 |---|---|---|
-| 0 Discovery and contract | this record + the spec on `main`; data-surface map on the board | independent review recorded; founder accepts §5 or names changes |
-| 1 Ledger | `evaluation_events` migration, ingest for T0 sources and T2 payloads, backfill with unknown labels, `replay` command | integration test: fixture events → replayed card equals stored; adversarial dedupe/skew tests |
-| 2 Scoring | deterministic projections for O1–O4, P1–P9, exceptions E1–E10, confidence/coverage | unit tests per formula; replay agreement 100 % on fixtures; no metric scores below its floor |
-| 3 Evaluator agent | role `evaluator`, read-only principal, exception-only prompt, budget, cached digests, review items | permission tests: every forbidden write 403; one routine message per milestone enforced |
+| 0 Discovery and contract | this record, the spec and the data-surface map on `main` | three reviews recorded and dispositioned on AGE-84; founder accepts §5 or names changes |
+| 1 Ledger | `evaluation_events` + `evaluation_scorecards` migration; ingest for T0 sources and T2 payloads with row hashes; backfill with unknown labels; `replay`; **prerequisite instrumentation**: `authz.refused` activity events and `dod_set` recording actor + previous value | integration test: fixture events → replayed card equals stored; adversarial dedupe/skew/hash tests; refusals appear in `activity_log` |
+| 2 Scoring | deterministic projections for O1–O5, P1–P9, exceptions E1–E13, tiers, renormalised composites with guards | unit tests per formula and tier boundary; replay agreement 100 % on fixtures; no value shown at the Insufficient tier; composites absent when guards fail |
+| 3 Evaluator agent | role `evaluator`, `principalKind: evaluator` key, the read-only gate (D11), evaluation routes, exception-only prompt, budget, cached digests, digest review items | every non-allowlisted non-safe request from the evaluator key → 403 with no row written; one routine review item per milestone per human enforced by the notifier |
 | 4 Surfaces | dashboard, drill-down, founder view, normalised comparison | e2e: every number links to formula and events; no unnormalised ranking |
 | 5 Shadow and calibration | two milestones scored; disagreement log; cost report; recommendation | the mandate's graduation criteria, each measured and reported |
 
 ## Implementation sketch (for review; nothing is built yet)
 
-Additive, company-scoped, following the repo's service/route/schema patterns:
+Company-scoped, following the repo's service/route/schema patterns. Additive
+except where D11 and the two instrumentation prerequisites say otherwise:
 
 - `packages/db/src/schema/evaluation_events.ts` — insert-only ledger (id,
   companyId, projectId?, goalId?, actorType/actorId, sourceTable/sourceId,
-  eventType, schemaVersion, eventTime, ingestTime, dedupeKey unique, payload
-  jsonb, correlationId?). `packages/db/src/schema/evaluation_scorecards.ts` —
-  versioned projections (companyId, milestoneRef, version, contractVersion,
-  formulaVersion, throughEventId, card jsonb, createdAt). One migration (0127),
-  forward-only, no existing table touched. Exported from `schema/index.ts`.
-- `server/src/services/evaluation/ingest.ts` — idempotent readers for T0 tables
-  and the MAW payload parser (T2); runs on the periodic loop off the request
-  path with its own interval and row budget. `replay.ts` — pure projection from
-  ordered events; `scoring.ts` — O1–O4, P1–P9 with floors; `exceptions.ts` —
-  E1–E10; `independence.ts` — the §4.2 rule shared with the verdict service's
-  guard.
+  sourceRowHash, eventType, schemaVersion, eventTime, ingestTime, dedupeKey
+  unique, payload jsonb, correlationId?) with a database rule refusing UPDATE and
+  DELETE. `packages/db/src/schema/evaluation_scorecards.ts` — one stored JSON
+  projection per version (companyId, milestoneRef, version, contractVersion,
+  formulaVersion, throughEventId, card jsonb, createdAt). `agent_api_keys`
+  gains a nullable `principalKind` (D11). One migration (0127), forward-only.
+  Exported from `schema/index.ts`.
+- `server/src/middleware/auth.ts` — read-only actor marking and the evaluator
+  write allowlist gate, beside the bridge allowlist (D11).
+- Instrumentation prerequisites in existing services (small): `authz.refused`
+  activity events on 403 refusals (incl. `NEUTRAL_VALIDATOR_VIOLATION`);
+  `dod_set` recording the real actor and `_previous` in `verdicts.ts`.
+- `server/src/services/evaluation/ingest.ts` — idempotent, hashed readers for
+  T0 tables and the MAW payload parser (T2); periodic, off the request path,
+  with interval and row budget. `replay.ts` — pure projection; `scoring.ts` —
+  O1–O5, P1–P9, tiers, composites with guards; `exceptions.ts` — E1–E13 and the
+  digest rule; `independence.ts` — §4.2, also offered to the verdict service.
 - `server/src/routes/evaluation.ts` — read routes for cards, drill-down and
-  events; one write route for corrections (`evaluation.correction` events);
-  every handler asserts company access; the evaluator principal's grants are
-  checked at the route.
+  events; write routes only for findings, review items (Evaluator project,
+  label, `todo`, human assignee enforced), scorecards, correction notes, and the
+  human `correction` and `disposition` events; every handler asserts company
+  access.
 - `packages/shared/src/constants.ts` — event types, exception ids, tiers;
   `packages/shared/src/schemas` — the contract v1 and scorecard schemas.
 - `ui/src/pages/evaluation/*` — dashboard, drill-down, founder view
   (Milestone 4).
 - Agent: role `evaluator`, `reportsTo` null, accountable human = founder,
-  Hermes profile as the other agents (D5), prompt limited to exception review,
-  budget on the card.
+  Hermes profile as the other agents (D5), key with `principalKind: evaluator`,
+  prompt limited to exception review, budget on the card. Adding the role
+  touches the four agent prompt surfaces named in AGENTS.md (Milestone 3).
 
 ## Baseline recorded at Milestone 0 (read-only, 2026-09-05)
 
