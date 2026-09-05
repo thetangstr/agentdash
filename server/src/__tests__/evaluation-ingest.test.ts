@@ -18,7 +18,7 @@ import {
   verdicts,
 } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
-import { evaluationIngest, INGEST_LOCK_NAMESPACE } from "../services/evaluation/ingest.js";
+import { evaluationIngest, INGEST_LOCK_PREFIX } from "../services/evaluation/ingest.js";
 import { MAX_HANDOFFS_PER_COMMENT } from "../services/evaluation/sources.js";
 import { evaluationLedger } from "../services/evaluation/ledger.js";
 import { MARKER_OPEN_MILESTONE } from "../services/evaluation/replay.js";
@@ -248,11 +248,65 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
 
   it("ticks for one company are serialised across service instances by a database lock (Q6.4)", async () => {
     await db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(${INGEST_LOCK_NAMESPACE}::int, hashtext(${companyId}))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${INGEST_LOCK_PREFIX + companyId}, 0))`);
       await expect(evaluationIngest(db, { rowBudget: 100 }).tick(companyId)).rejects.toThrow(/already running/);
+      // backfill reports the collision instead of throwing away committed passes
+      expect(await evaluationIngest(db, { rowBudget: 100 }).backfill(companyId, 3)).toMatchObject({ passes: 0, lockedOut: true, exhausted: false });
     });
     // released with the holder's transaction
     expect((await evaluationIngest(db, { rowBudget: 100 }).tick(companyId)).inserted).toBe(0);
+  });
+
+  it("a dense window advances the cursor: more rows than the budget at one instant are all ingested (round 2, F2)", async () => {
+    const dense = Array.from({ length: 6 }, (_, i) => ({
+      companyId,
+      actorType: "agent",
+      actorId: agentId,
+      action: "issue.touched",
+      entityType: "issue",
+      entityId: issueId,
+      agentId,
+      details: { n: i },
+      createdAt: at(70),
+    }));
+    await db.insert(activityLog).values(dense);
+    const before = (await evaluationLedger(db).countByType(companyId))["activity.other"] ?? 0;
+    const ingest = evaluationIngest(db, { rowBudget: 2, sources: ["activity_log"] });
+    const result = await ingest.backfill(companyId, 10);
+    expect(result.exhausted).toBe(true);
+    expect(result.inserted).toBe(6);
+    expect((await evaluationLedger(db).countByType(companyId))["activity.other"]).toBe(before + 6);
+    // a later row is still picked up after the dense page
+    await db.insert(activityLog).values({ companyId, actorType: "agent", actorId: agentId, action: "issue.touched", entityType: "issue", entityId: issueId, agentId, details: { n: 99 }, createdAt: at(71) });
+    expect((await ingest.tick(companyId)).inserted).toBe(1);
+  });
+
+  it("an issue touch that changes nothing hashed mints no snapshot (round 2, F3)", async () => {
+    const ingest = evaluationIngest(db, { rowBudget: 100 });
+    const before = (await evaluationLedger(db).countByType(companyId))["issue.snapshot"];
+    await db.update(issues).set({ updatedAt: at(26) }).where(eq(issues.id, issueId)); // the run lifecycle does this on every claim
+    const stats = await ingest.tick(companyId);
+    expect(stats.perSource.issues!.scanned).toBe(1);
+    expect((await evaluationLedger(db).countByType(companyId))["issue.snapshot"]).toBe(before);
+  });
+
+  it("a combined status + assignee change mints both facts from one activity row (round 2, F4)", async () => {
+    const ledger = evaluationLedger(db);
+    const before = await ledger.countByType(companyId);
+    await db.insert(activityLog).values({
+      companyId,
+      actorType: "user",
+      actorId: "local-board",
+      action: "issue.updated",
+      entityType: "issue",
+      entityId: issueId,
+      details: { status: "in_review", assigneeAgentId: agentId, _previous: { status: "in_progress", assigneeAgentId: null }, identifier: "EVL-1" },
+      createdAt: at(72), // after the dense window's cursor
+    });
+    await evaluationIngest(db, { rowBudget: 100 }).tick(companyId);
+    const after = await ledger.countByType(companyId);
+    expect(after["issue.transition"]).toBe((before["issue.transition"] ?? 0) + 1);
+    expect(after["issue.assignment_changed"]).toBe((before["issue.assignment_changed"] ?? 0) + 1);
   });
 
   it("refuses UPDATE and DELETE on the ledger unless the purge setting is on (spec §10.2)", async () => {
@@ -317,6 +371,20 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     await db.insert(activityLog).values({ companyId, actorType: "user", actorId: "local-board", action: "issue.updated", entityType: "issue", entityId: issueId, details: { status: "in_progress", _previous: { status: "todo" }, identifier: "EVL-1" }, createdAt: at(50) });
     await evaluationIngest(db, { rowBudget: 100 }).tick(companyId);
     expect(await cards.verify(companyId, ref, 1)).toMatchObject({ ok: true });
+  });
+
+  it("a stored card keeps verifying after its project closes: the open flag is pinned in the card (round 2, F1)", async () => {
+    const cards = evaluationScorecardService(db);
+    const ref = { kind: "project" as const, id: projectId };
+    const open = await cards.snapshot(companyId, ref);
+    expect((open.card as { state: { open: boolean } }).state.open).toBe(true);
+    await db.update(projects).set({ status: "completed", updatedAt: at(80) }).where(eq(projects.id, projectId));
+    expect(await cards.verify(companyId, ref, open.version)).toMatchObject({ ok: true, pinnedOpen: true });
+    const closed = await cards.snapshot(companyId, ref);
+    expect((closed.card as { markers: string[] }).markers).not.toContain(MARKER_OPEN_MILESTONE);
+    expect(closed.cardHash).not.toBe(open.cardHash);
+    expect(await cards.verify(companyId, ref, closed.version)).toMatchObject({ ok: true, pinnedOpen: false });
+    await db.update(projects).set({ status: "in_progress", updatedAt: at(81) }).where(eq(projects.id, projectId));
   });
 
   it("withdrawal detection runs on its own cadence, not every tick (Q6.2)", async () => {

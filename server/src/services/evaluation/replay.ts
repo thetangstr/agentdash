@@ -13,12 +13,16 @@ import { evaluationLedger, hashCanonical, orderEvents, type EvaluationEventRow }
  * drill-down its event set.
  *
  * Reproducibility: a card is a pure function of the ledger window
- * `seq <= throughSeq` (insertion order) plus the milestone's state flags,
- * which are derived from the milestone itself (spec §4.6), never accepted
- * from a caller. `FORMULA_VERSION` changes whenever the projection or the
- * ordering changes.
+ * `seq <= throughSeq` (insertion order) plus the milestone's state flags.
+ * `retrospective` is derived from the window itself; `open` is read from the
+ * milestone row at snapshot time (Milestone 1 has no project/goal events in
+ * the ledger yet) and is therefore **pinned inside the card**, so `verify`
+ * replays the window under the flag the card was built with and a milestone
+ * that closes later does not turn every stored version into a mismatch.
+ * Neither flag is ever accepted from a caller (spec §4.6). `FORMULA_VERSION`
+ * changes whenever the projection or the ordering changes.
  */
-export const FORMULA_VERSION = "m1-digest/2";
+export const FORMULA_VERSION = "m1-digest/3";
 
 /** Spec §4.6 card markers — single source of truth for renderer and verifier. */
 export const MARKER_OPEN_MILESTONE = "open milestone — denominators still moving";
@@ -51,6 +55,8 @@ export interface MilestoneCard extends Record<string, unknown> {
   lastEventTime: string | null;
   /** Spec §4.6 markers the renderer must show. */
   markers: string[];
+  /** The flags the markers were derived from; `open` is pinned here for verify. */
+  state: { open: boolean; retrospective: boolean };
 }
 
 /** Membership (spec §3): project events by projectId; goal-as-milestone by goalId with no projectId. */
@@ -101,6 +107,7 @@ export function projectMilestone(
     firstEventTime: events.length > 0 ? events[0]!.eventTime.toISOString() : null,
     lastEventTime: events.length > 0 ? events[events.length - 1]!.eventTime.toISOString() : null,
     markers,
+    state: { open: state.open, retrospective: state.retrospective },
   };
 }
 
@@ -115,8 +122,9 @@ export function cardHash(card: MilestoneCard): string {
 /** Retrospective if the milestone's earliest event predates the earliest ingest in the window by more than a day. */
 export function isRetrospective(window: EvaluationEventRow[], milestoneEvents: EvaluationEventRow[]): boolean {
   if (window.length === 0 || milestoneEvents.length === 0) return false;
-  const firstIngest = Math.min(...window.map((e) => e.ingestTime.getTime()));
-  const firstEvent = Math.min(...milestoneEvents.map((e) => e.eventTime.getTime()));
+  // reduce, not spread: a large window would overflow the call stack
+  const firstIngest = window.reduce((m, e) => Math.min(m, e.ingestTime.getTime()), Number.POSITIVE_INFINITY);
+  const firstEvent = milestoneEvents.reduce((m, e) => Math.min(m, e.eventTime.getTime()), Number.POSITIVE_INFINITY);
   return firstIngest - firstEvent > RETROSPECTIVE_GAP_MS;
 }
 
@@ -143,16 +151,20 @@ export function evaluationReplay(db: Db) {
 
     /**
      * Rebuild a milestone card from the ledger alone. `throughSeq` defaults to
-     * the current maximum, which is what a fresh snapshot stores.
+     * the current maximum, which is what a fresh snapshot stores. `pinned`
+     * carries the `open` flag a stored card was built with (verify); a fresh
+     * snapshot derives it.
      */
     async replay(
       companyId: string,
       ref: EvaluationMilestoneRef,
       throughSeq?: number,
+      pinned?: { open: boolean },
     ): Promise<{ card: MilestoneCard; hash: string; state: MilestoneState; throughSeq: number }> {
       const cut = throughSeq ?? (await ledger.maxSeq(companyId));
       const window = await ledger.windowUpTo(companyId, cut);
-      const state = await this.state(companyId, ref, window);
+      const derived = await this.state(companyId, ref, window);
+      const state: MilestoneState = pinned ? { ...derived, open: pinned.open } : derived;
       const card = projectMilestone(window, ref, cut, state);
       return { card, hash: cardHash(card), state, throughSeq: cut };
     },

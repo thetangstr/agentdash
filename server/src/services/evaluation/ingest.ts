@@ -56,8 +56,8 @@ const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
 const DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Operator-triggered backfill is bounded so a request cannot run for minutes. */
 export const MAX_BACKFILL_PASSES = 20;
-/** Advisory-lock namespace (two-int form: this, hashtext(companyId)). Spelled "EVL1". */
-export const INGEST_LOCK_NAMESPACE = 0x45564c31;
+/** Advisory-lock key prefix; the key is the 64-bit `hashtextextended` of prefix + companyId (collisions negligible). */
+export const INGEST_LOCK_PREFIX = "evaluation_ingest:";
 
 export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
   const rowBudget = opts.rowBudget ?? DEFAULT_ROW_BUDGET;
@@ -91,7 +91,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
     const started = Date.now();
     return db.transaction(async (tx) => {
       const lock = await tx.execute(
-        sql`select pg_try_advisory_xact_lock(${INGEST_LOCK_NAMESPACE}::int, hashtext(${companyId})) as locked`,
+        sql`select pg_try_advisory_xact_lock(hashtextextended(${INGEST_LOCK_PREFIX + companyId}, 0)) as locked`,
       );
       // The driver returns the rows as an array-like list (node-postgres would wrap them in `rows`).
       const lockRows = (Array.isArray(lock) ? lock : ((lock as { rows?: unknown[] }).rows ?? [])) as Array<{ locked?: boolean }>;
@@ -186,15 +186,28 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       }
     },
 
-    /** Backfill: tick until a pass scans nothing new, bounded, then report. */
-    async backfill(companyId: string, maxPasses = MAX_BACKFILL_PASSES): Promise<{ passes: number; inserted: number; scanned: number; exhausted: boolean }> {
+    /** Backfill: tick until a pass scans nothing new, bounded, then report. A lock collision ends the loop and is reported, not thrown: committed passes stay counted. */
+    async backfill(
+      companyId: string,
+      maxPasses = MAX_BACKFILL_PASSES,
+    ): Promise<{ passes: number; inserted: number; scanned: number; exhausted: boolean; lockedOut: boolean }> {
       const bound = Math.max(1, Math.min(maxPasses, MAX_BACKFILL_PASSES));
       let passes = 0;
       let inserted = 0;
       let scanned = 0;
       let exhausted = false;
+      let lockedOut = false;
       for (; passes < bound; ) {
-        const stats = await this.tick(companyId);
+        let stats: CompanyTickStats;
+        try {
+          stats = await this.tick(companyId);
+        } catch (err) {
+          if (err instanceof Error && /already running/.test(err.message)) {
+            lockedOut = true;
+            break;
+          }
+          throw err;
+        }
         passes++;
         inserted += stats.inserted;
         scanned += stats.scanned;
@@ -203,7 +216,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
           break;
         }
       }
-      return { passes, inserted, scanned, exhausted };
+      return { passes, inserted, scanned, exhausted, lockedOut };
     },
 
     async cursors(companyId: string) {

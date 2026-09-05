@@ -2,14 +2,16 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { evaluationScorecards } from "@paperclipai/db";
 import { EVALUATION_CONTRACT_VERSION, type EvaluationMilestoneRef } from "@paperclipai/shared";
-import { cardHash, evaluationReplay, FORMULA_VERSION } from "./replay.js";
+import { evaluationReplay, FORMULA_VERSION, MARKER_OPEN_MILESTONE } from "./replay.js";
 
 /**
  * AgentDash: Company Evaluator — stored projections (decision D6).
  *
  * One JSON card per version. Each version records the replay window it was
- * built from (`throughSeq`); `verify` rebuilds from exactly that window and
- * compares hashes, so agreement is independent of anything ingested later.
+ * built from (`throughSeq`) and pins the `open` flag inside the card;
+ * `verify` rebuilds from exactly that window under that flag and compares
+ * hashes, so agreement is independent of anything ingested later and of the
+ * milestone closing later.
  * `contractVersion` is `none` until a `contract.declared` event exists for
  * the milestone — a card never claims a contract that was not declared.
  */
@@ -67,9 +69,11 @@ export function evaluationScorecardService(db: Db) {
       if (stored.formulaVersion !== FORMULA_VERSION) {
         return { ok: false as const, reason: `formula changed (${stored.formulaVersion} → ${FORMULA_VERSION})`, version: stored.version };
       }
-      const { card, hash } = await replay.replay(companyId, ref, Number(stored.throughSeq));
-      const agrees = hash === stored.cardHash && cardHash(card) === hash;
-      return { ok: agrees, storedHash: stored.cardHash, replayHash: hash, version: stored.version, throughSeq: Number(stored.throughSeq) };
+      const storedCard = stored.card as { state?: { open?: boolean }; markers?: string[] };
+      const pinnedOpen =
+        typeof storedCard.state?.open === "boolean" ? storedCard.state.open : (storedCard.markers ?? []).includes(MARKER_OPEN_MILESTONE);
+      const { hash } = await replay.replay(companyId, ref, Number(stored.throughSeq), { open: pinnedOpen });
+      return { ok: hash === stored.cardHash, storedHash: stored.cardHash, replayHash: hash, version: stored.version, throughSeq: Number(stored.throughSeq), pinnedOpen };
     },
   };
 }

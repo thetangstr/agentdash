@@ -1,8 +1,9 @@
-import { and, asc, eq, getTableColumns, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, inArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   costEvents,
+  evaluationEvents,
   heartbeatRuns,
   issueApprovals,
   issueComments,
@@ -101,17 +102,52 @@ export const HANDOFF_FIELD_ALLOWLIST: Record<EvaluationHandoffType, readonly str
   tpm_merge_report: ["issue", "merge_result", "pr", "health_check", "smoke_test", "staging_rebase", "labels_applied", "linear_state", "wave_progress", "timestamp"],
 };
 
+/** Re-read at most this many rows behind the cursor per tick (backdated or same-instant rows a page boundary split). */
+export const LAG_REREAD_BUDGET = 1000;
+
 /**
- * Keyset predicate. The cursor time is the database's own `::text` rendering
- * (microsecond precision), never a JavaScript Date (millisecond precision) —
- * otherwise rows created by `now()` sort after their own cursor forever and
- * every tick re-reads them. The predicate reads from `cursor.time - lag` so a
- * row whose timestamp was assigned or backdated after the cursor passed is
- * still picked up; the dedupe key makes the overlap free.
+ * Keyset reads in two bounded parts, so a dense window can never stall the
+ * cursor (a time-only predicate re-admits the same page forever once more
+ * than a budget of rows share a 60-second span):
+ * - progress: rows strictly after the cursor in `(time, id)` order — these
+ *   advance the cursor and are what `scanned` counts;
+ * - lag re-read: rows at or before the cursor whose time is within the lag
+ *   window — rows whose timestamp was assigned or backdated after the cursor
+ *   passed, or split from their page by an equal timestamp. Dedupe makes the
+ *   overlap free; they never move the cursor.
+ * Cursor times are the database's own `::text` rendering (microseconds), never
+ * a JavaScript Date (milliseconds): otherwise rows created by `now()` sort
+ * after their own cursor forever.
  */
-function keysetAfter(timeCol: unknown, cursor: Cursor) {
-  if (!cursor.time) return undefined;
-  return sql`${timeCol as never} > (${cursor.time}::timestamptz - make_interval(secs => ${CURSOR_LAG_SECONDS}))`;
+export async function keysetRead<Row extends { cursorTime: string }>(
+  cursor: Cursor,
+  limit: number,
+  timeCol: unknown,
+  idCol: unknown,
+  run: (predicate: SQL | undefined, take: number) => Promise<Row[]>,
+  idOf: (row: Row) => string,
+): Promise<{ rows: Row[]; scanned: number; nextCursor: Cursor }> {
+  const t = timeCol as never;
+  const i = idCol as never;
+  const progressPredicate: SQL | undefined = !cursor.time
+    ? undefined
+    : cursor.id
+      ? sql`(${t}, ${i}) > (${cursor.time}::timestamptz, ${cursor.id}::uuid)`
+      : sql`${t} > ${cursor.time}::timestamptz`;
+  const progress = await run(progressPredicate, limit);
+  const last = progress[progress.length - 1];
+  const nextCursor: Cursor = last ? { time: last.cursorTime, id: idOf(last) } : { ...cursor };
+  let rows = progress;
+  if (cursor.time) {
+    const upper = cursor.id
+      ? sql`(${t}, ${i}) <= (${cursor.time}::timestamptz, ${cursor.id}::uuid)`
+      : sql`${t} <= ${cursor.time}::timestamptz`;
+    const lagPredicate = sql`${t} > (${cursor.time}::timestamptz - make_interval(secs => ${CURSOR_LAG_SECONDS})) AND ${upper}`;
+    const lag = await run(lagPredicate, Math.min(limit, LAG_REREAD_BUDGET));
+    const seen = new Set(progress.map(idOf));
+    rows = progress.concat(lag.filter((r) => !seen.has(idOf(r))));
+  }
+  return { rows, scanned: progress.length, nextCursor };
 }
 
 /** Select every column of a table plus the full-precision text of its cursor column. */
@@ -226,13 +262,15 @@ function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<str
  * with or without `_previous`. Approval events inherit scope through issue_approvals.
  */
 export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(activityLog.createdAt, cursor);
-  const rows = await tx
-    .select(withCursorTime(activityLog, activityLog.createdAt))
-    .from(activityLog)
-    .where(after ? and(eq(activityLog.companyId, companyId), after) : eq(activityLog.companyId, companyId))
-    .orderBy(asc(activityLog.createdAt), asc(activityLog.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, activityLog.createdAt, activityLog.id, (predicate, take) =>
+    tx
+      .select(withCursorTime(activityLog, activityLog.createdAt))
+      .from(activityLog)
+      .where(predicate ? and(eq(activityLog.companyId, companyId), predicate) : eq(activityLog.companyId, companyId))
+      .orderBy(asc(activityLog.createdAt), asc(activityLog.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const issueIds = rows.filter((r) => r.entityType === "issue" && r.entityId).map((r) => r.entityId as string);
   const approvalIds = [...new Set(rows.filter((r) => r.entityType === "approval" && r.entityId).map((r) => r.entityId as string))];
   const approvalIssue = new Map<string, string>();
@@ -246,6 +284,8 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
   const scope = await resolveIssueScope(tx, companyId, [...issueIds, ...approvalIssue.values()]);
   const events: EvaluationEventInput[] = [];
   for (const r of rows) {
+    // Rules 9/12: the evaluator's own audit rows (operator actions) never enter the ledger.
+    if (r.action.startsWith("evaluation.")) continue;
     const details = (r.details ?? {}) as Record<string, unknown>;
     const previous = (details._previous ?? {}) as Record<string, unknown>;
     const actor = actorFrom(r.actorType, r.actorId);
@@ -283,6 +323,18 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
               : null;
       const assignmentTouched =
         "assigneeAgentId" in details || "assigneeUserId" in details || "assigneeAgentId" in previous || "assigneeUserId" in previous;
+      const assignmentPayload = {
+        ...issueRef,
+        fromAgentId: previous.assigneeAgentId ?? null,
+        toAgentId: details.assigneeAgentId ?? null,
+        fromUserId: previous.assigneeUserId ?? null,
+        toUserId: details.assigneeUserId ?? null,
+        previousUnknown: !("assigneeAgentId" in previous) && !("assigneeUserId" in previous),
+      };
+      if (toStatus && assignmentTouched) {
+        // One PATCH may move status and reassign at once: both facts are minted from the one row (distinct event types).
+        events.push({ ...base, eventType: "issue.assignment_changed", payload: boundedPayload(assignmentPayload) });
+      }
       if (toStatus) {
         eventType = "issue.transition";
         const terminal = ["done", "cancelled"];
@@ -296,14 +348,7 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
         };
       } else if (assignmentTouched) {
         eventType = "issue.assignment_changed";
-        payload = {
-          ...issueRef,
-          fromAgentId: previous.assigneeAgentId ?? null,
-          toAgentId: details.assigneeAgentId ?? null,
-          fromUserId: previous.assigneeUserId ?? null,
-          toUserId: details.assigneeUserId ?? null,
-          previousUnknown: !("assigneeAgentId" in previous) && !("assigneeUserId" in previous),
-        };
+        payload = assignmentPayload;
       } else {
         payload = { ...payload, changedKeys: Object.keys(details).filter((k) => k !== "_previous" && k !== "identifier").sort() };
       }
@@ -340,19 +385,20 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
     }
     events.push({ ...base, eventType, payload: boundedPayload(payload) });
   }
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 /** T0: terminal heartbeat runs → run.finished. sourceVersion = status + finish time, so a retried run is a new fact. */
 export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(heartbeatRuns.updatedAt, cursor);
-  const rows = await tx
-    .select(withCursorTime(heartbeatRuns, heartbeatRuns.updatedAt))
-    .from(heartbeatRuns)
-    .where(and(eq(heartbeatRuns.companyId, companyId), inArray(heartbeatRuns.status, [...TERMINAL_RUN_STATUSES]), ...(after ? [after] : [])))
-    .orderBy(asc(heartbeatRuns.updatedAt), asc(heartbeatRuns.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, heartbeatRuns.updatedAt, heartbeatRuns.id, (predicate, take) =>
+    tx
+      .select(withCursorTime(heartbeatRuns, heartbeatRuns.updatedAt))
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.companyId, companyId), inArray(heartbeatRuns.status, [...TERMINAL_RUN_STATUSES]), ...(predicate ? [predicate] : [])))
+      .orderBy(asc(heartbeatRuns.updatedAt), asc(heartbeatRuns.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const issueIds = rows.map((r) => (r.contextSnapshot as Record<string, unknown> | null)?.issueId).filter((x): x is string => typeof x === "string");
   const scope = await resolveIssueScope(tx, companyId, issueIds);
   const events: EvaluationEventInput[] = rows.map((r) => {
@@ -395,8 +441,7 @@ export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Curso
       }),
     };
   });
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 function numberOrNull(v: unknown): number | null {
@@ -405,13 +450,15 @@ function numberOrNull(v: unknown): number | null {
 
 /** T0: verdicts are insert-only → verdict.recorded. Justification prose (T3) is not copied; its length is. */
 export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(verdicts.createdAt, cursor);
-  const rows = await tx
-    .select(withCursorTime(verdicts, verdicts.createdAt))
-    .from(verdicts)
-    .where(after ? and(eq(verdicts.companyId, companyId), after) : eq(verdicts.companyId, companyId))
-    .orderBy(asc(verdicts.createdAt), asc(verdicts.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, verdicts.createdAt, verdicts.id, (predicate, take) =>
+    tx
+      .select(withCursorTime(verdicts, verdicts.createdAt))
+      .from(verdicts)
+      .where(predicate ? and(eq(verdicts.companyId, companyId), predicate) : eq(verdicts.companyId, companyId))
+      .orderBy(asc(verdicts.createdAt), asc(verdicts.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId).filter((x): x is string => !!x));
   const events: EvaluationEventInput[] = rows.map((r) => {
     const sc = r.issueId ? scope.get(r.issueId) : undefined;
@@ -439,19 +486,20 @@ export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, li
       }),
     };
   });
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 /** T0: ask_user_questions and other interactions → interaction.changed, one event per status. */
 export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(issueThreadInteractions.updatedAt, cursor);
-  const rows = await tx
-    .select(withCursorTime(issueThreadInteractions, issueThreadInteractions.updatedAt))
-    .from(issueThreadInteractions)
-    .where(after ? and(eq(issueThreadInteractions.companyId, companyId), after) : eq(issueThreadInteractions.companyId, companyId))
-    .orderBy(asc(issueThreadInteractions.updatedAt), asc(issueThreadInteractions.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueThreadInteractions.updatedAt, issueThreadInteractions.id, (predicate, take) =>
+    tx
+      .select(withCursorTime(issueThreadInteractions, issueThreadInteractions.updatedAt))
+      .from(issueThreadInteractions)
+      .where(predicate ? and(eq(issueThreadInteractions.companyId, companyId), predicate) : eq(issueThreadInteractions.companyId, companyId))
+      .orderBy(asc(issueThreadInteractions.updatedAt), asc(issueThreadInteractions.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
   const events: EvaluationEventInput[] = rows.map((r) => {
     const sc = scope.get(r.issueId);
@@ -480,19 +528,20 @@ export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor
       },
     };
   });
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 /** T0: cost_events → cost.recorded (the one metering source; agent_runs is derived from it). */
 export async function readCostEvents(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(costEvents.createdAt, cursor);
-  const rows = await tx
-    .select(withCursorTime(costEvents, costEvents.createdAt))
-    .from(costEvents)
-    .where(after ? and(eq(costEvents.companyId, companyId), after) : eq(costEvents.companyId, companyId))
-    .orderBy(asc(costEvents.createdAt), asc(costEvents.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, costEvents.createdAt, costEvents.id, (predicate, take) =>
+    tx
+      .select(withCursorTime(costEvents, costEvents.createdAt))
+      .from(costEvents)
+      .where(predicate ? and(eq(costEvents.companyId, companyId), predicate) : eq(costEvents.companyId, companyId))
+      .orderBy(asc(costEvents.createdAt), asc(costEvents.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const events: EvaluationEventInput[] = rows.map((r) => ({
     companyId,
     projectId: r.projectId ?? null,
@@ -518,8 +567,7 @@ export async function readCostEvents(tx: Tx, companyId: string, cursor: Cursor, 
       costCents: r.costCents,
     },
   }));
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 const FENCE_RE = /```(?:json)?\s*\n([\s\S]*?)```/g;
@@ -569,28 +617,30 @@ export function allowlistHandoffPayload(
  * author is the item's assignee, i.e. the payload's subject (rule 7).
  */
 export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(issueComments.createdAt, cursor);
-  const rows = await tx
-    .select({
-      id: issueComments.id,
-      issueId: issueComments.issueId,
-      authorAgentId: issueComments.authorAgentId,
-      authorUserId: issueComments.authorUserId,
-      body: issueComments.body,
-      createdAt: issueComments.createdAt,
-      cursorTime: sql<string>`${issueComments.createdAt}::text`,
-    })
-    .from(issueComments)
-    .where(
-      and(
-        eq(issueComments.companyId, companyId),
-        // Cheap prefilter before any parsing (spec §11); the trigram index serves both patterns.
-        or(sql`${issueComments.body} LIKE '%"handoff_type"%'`, sql`${issueComments.body} LIKE '%"type"%'`),
-        ...(after ? [after] : []),
-      ),
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueComments.createdAt, issueComments.id, (predicate, take) =>
+    tx
+      .select({
+        id: issueComments.id,
+        issueId: issueComments.issueId,
+        authorAgentId: issueComments.authorAgentId,
+        authorUserId: issueComments.authorUserId,
+        body: issueComments.body,
+        createdAt: issueComments.createdAt,
+        cursorTime: sql<string>`${issueComments.createdAt}::text`,
+      })
+      .from(issueComments)
+      .where(
+        and(
+          eq(issueComments.companyId, companyId),
+          // Cheap prefilter before any parsing (spec §11); the trigram index serves both patterns.
+          or(sql`${issueComments.body} LIKE '%"handoff_type"%'`, sql`${issueComments.body} LIKE '%"type"%'`),
+          ...(predicate ? [predicate] : []),
+        ),
     )
-    .orderBy(asc(issueComments.createdAt), asc(issueComments.id))
-    .limit(limit);
+      .orderBy(asc(issueComments.createdAt), asc(issueComments.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.issueId));
   const events: EvaluationEventInput[] = [];
   for (const r of rows) {
@@ -636,8 +686,7 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
       });
     }
   }
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 /**
@@ -679,38 +728,63 @@ export async function detectWithdrawnComments(
     }));
 }
 
+/** The most recent stored snapshot hash per source id, so a row touch that changes nothing hashed mints nothing. */
+async function latestSnapshotHashes(tx: Tx, companyId: string, sourceTable: string, eventType: EvaluationEventType, sourceIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (sourceIds.length === 0) return out;
+  const rows = await tx
+    .selectDistinctOn([evaluationEvents.sourceId], { sourceId: evaluationEvents.sourceId, hash: evaluationEvents.sourceRowHash })
+    .from(evaluationEvents)
+    .where(
+      and(
+        eq(evaluationEvents.companyId, companyId),
+        eq(evaluationEvents.sourceTable, sourceTable),
+        eq(evaluationEvents.eventType, eventType),
+        inArray(evaluationEvents.sourceId, sourceIds),
+      ),
+    )
+    .orderBy(evaluationEvents.sourceId, desc(evaluationEvents.seq));
+  for (const r of rows) if (r.hash) out.set(r.sourceId, r.hash);
+  return out;
+}
+
 /**
  * Rule 13: a content hash per issue on every change, so a rewrite inside the
- * ingest window is visible even when no activity row explains it. The version
- * is the hash plus the row's updated time, so an A→B→A revert is three events,
- * not one. Prose stays out of the ledger; only the hash and structural fields
- * are stored.
+ * ingest window is visible even when no activity row explains it. A snapshot
+ * is minted only when the hash differs from the latest stored one (the run
+ * lifecycle touches `updated_at` on every claim and release without changing
+ * anything hashed); the version is the hash plus the row's updated time, so an
+ * A→B→A revert is still three events. Prose stays out of the ledger; only the
+ * hash and structural fields are stored.
  */
 export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const after = keysetAfter(issues.updatedAt, cursor);
-  const rows = await tx
-    .select({
-      id: issues.id,
-      identifier: issues.identifier,
-      title: issues.title,
-      description: issues.description,
-      definitionOfDone: issues.definitionOfDone,
-      status: issues.status,
-      assigneeAgentId: issues.assigneeAgentId,
-      assigneeUserId: issues.assigneeUserId,
-      projectId: issues.projectId,
-      goalId: issues.goalId,
-      parentId: issues.parentId,
-      updatedAt: issues.updatedAt,
-      completedAt: issues.completedAt,
-      cursorTime: sql<string>`${issues.updatedAt}::text`,
-    })
-    .from(issues)
-    .where(after ? and(eq(issues.companyId, companyId), after) : eq(issues.companyId, companyId))
-    .orderBy(asc(issues.updatedAt), asc(issues.id))
-    .limit(limit);
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issues.updatedAt, issues.id, (predicate, take) =>
+    tx
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        description: issues.description,
+        definitionOfDone: issues.definitionOfDone,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+        assigneeUserId: issues.assigneeUserId,
+        projectId: issues.projectId,
+        goalId: issues.goalId,
+        parentId: issues.parentId,
+        updatedAt: issues.updatedAt,
+        completedAt: issues.completedAt,
+        cursorTime: sql<string>`${issues.updatedAt}::text`,
+      })
+      .from(issues)
+      .where(predicate ? and(eq(issues.companyId, companyId), predicate) : eq(issues.companyId, companyId))
+      .orderBy(asc(issues.updatedAt), asc(issues.id))
+      .limit(take),
+    (r) => r.id,
+  );
   const scope = await resolveIssueScope(tx, companyId, rows.map((r) => r.id));
-  const events: EvaluationEventInput[] = rows.map((r) => {
+  const latest = await latestSnapshotHashes(tx, companyId, "issues", "issue.snapshot", rows.map((r) => r.id));
+  const events: EvaluationEventInput[] = rows.flatMap((r) => {
     const hash = hashCanonical({
       title: r.title,
       description: r.description,
@@ -722,9 +796,10 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
       goalId: r.goalId,
       parentId: r.parentId,
     });
+    if (latest.get(r.id) === hash) return [];
     const sc = scope.get(r.id);
     const criteria = countCriteria(r.definitionOfDone);
-    return {
+    const event: EvaluationEventInput = {
       companyId,
       projectId: sc?.projectId ?? r.projectId ?? null,
       goalId: sc?.goalId ?? r.goalId ?? null,
@@ -751,9 +826,9 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
         contentHash: hash,
       },
     };
+    return [event];
   });
-  const last = rows[rows.length - 1];
-  return { events, scanned: rows.length, nextCursor: last ? { time: last.cursorTime, id: last.id } : cursor };
+  return { events, scanned, nextCursor };
 }
 
 export const SOURCE_READERS = {

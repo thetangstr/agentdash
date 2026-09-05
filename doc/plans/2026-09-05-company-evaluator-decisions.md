@@ -192,7 +192,7 @@ allowlist, and it changes nothing for ordinary agent keys.
 | milestone | deliverable | acceptance |
 |---|---|---|
 | 0 Discovery and contract | this record, the spec and the data-surface map on `main` | three reviews recorded and dispositioned on AGE-84; founder accepts §5 or names changes |
-| 1 Ledger | `evaluation_events` + `evaluation_scorecards` migration; ingest for T0 sources and T2 payloads with row hashes; backfill with unknown labels; `replay`; **prerequisite instrumentation**: `authz.refused` activity events and `dod_set` recording actor + previous value | integration test: fixture events → replayed card equals stored; adversarial dedupe/skew/hash tests; refusals appear in `activity_log` |
+| 1 Ledger | `evaluation_events` + `evaluation_scorecards` migration; ingest for T0 sources and T2 payloads with row hashes; backfill with unknown labels; `replay`. Prerequisite instrumentation split out: `dod_set` recording actor + previous value landed separately (#611); `authz.refused` activity events are AGE-91 (in progress) and gate P6's refusal detections in Milestone 2 | integration test: fixture events → replayed card equals stored, including after the milestone closes; adversarial dedupe/skew/hash/dense-window tests |
 | 2 Scoring | deterministic projections for O1–O5, P1–P9, exceptions E1–E13, tiers, renormalised composites with guards | unit tests per formula and tier boundary; replay agreement 100 % on fixtures; no value shown at the Insufficient tier; composites absent when guards fail |
 | 3 Evaluator agent | role `evaluator`, `principalKind: evaluator` key, the read-only gate (D11), evaluation routes, exception-only prompt, budget, cached digests, digest review items | every non-allowlisted non-safe request from the evaluator key → 403 with no row written; one routine review item per milestone per human enforced by the notifier |
 | 4 Surfaces | dashboard, drill-down, founder view, normalised comparison | e2e: every number links to formula and events; no unnormalised ranking |
@@ -260,9 +260,13 @@ Recorded here rather than in the spec, which is at its size limit.
   bypass row triggers by design and are not trapped: `TRUNCATE` (privilege-gated;
   no application path; the test harness truncates `companies CASCADE`, which is
   why a statement-level TRUNCATE trigger was tried and reverted) and
-  `ALTER TABLE … DISABLE TRIGGER` (owner-only). The threat model is application
-  code, not a database owner; a separate restricted database role for the
-  evaluator stays deferred (B2).
+  `ALTER TABLE … DISABLE TRIGGER` (owner-only). The gate is a session setting
+  any SQL path can set — including plugin migrations, which run raw SQL — so it
+  is a strong accident-prevention mechanism and a weak adversary-prevention one:
+  it stops application code from deleting ledger rows by mistake or by an
+  ordinary bug, not a hostile operator with database access. A separate
+  restricted database role for the evaluator is the adversary-grade control and
+  stays deferred (B2).
 - **Ingest concurrency.** One tick per company is one transaction holding a
   per-company advisory lock, so the scheduler and the operator route (separate
   service instances, possibly separate processes) can never interleave; the
@@ -292,3 +296,21 @@ Recorded here rather than in the spec, which is at its size limit.
 - **Health gauge.** Every scheduled tick logs `maxLagMs` (now minus the oldest
   event time inserted) beside scanned/inserted counts; the shadow run's ingest
   measurement (AGE-90 c5) reads it.
+- **Second independent review (round 2, 2026-09-05).** Taken: the `open`
+  flag is pinned inside the card so a stored version keeps verifying after its
+  project or goal closes (Milestone 2 derives it from `project.snapshot` events
+  instead); keyset reads are two bounded parts — progress on `(time, id)` plus a
+  lag re-read — so a dense window can never stall a cursor; an issue snapshot is
+  minted only when its content hash changes (the run lifecycle touches
+  `updated_at` on every claim); a combined status + assignee change mints both
+  facts from one activity row; the retrospective check no longer spreads a
+  window into a call; the replay route is administrator-only while it
+  materialises the company window in Node; the operator routes' own audit rows
+  are skipped by the activity reader (rules 9/12); the lock key is 64-bit;
+  `backfill` reports a lock collision instead of discarding committed passes;
+  withdrawal-candidate lookup excludes withdrawn ids in SQL. Design limit
+  recorded: replay loads one company's whole window into memory and sorts it —
+  fine for the shadow companies, to be moved into SQL aggregation before real
+  load. Accepted as notes: the integration test is order-coupled; a terminal run
+  whose `finished_at` is filled in after its status would mint twice (no writer
+  does this today); the comments prefilter matches any JSON with a `type` key.

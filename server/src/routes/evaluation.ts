@@ -67,10 +67,12 @@ export function evaluationRoutes(db: Db) {
     }
   });
 
+  /** Replay materialises the company's window in memory; administrators only until aggregation moves into SQL. */
   router.get("/companies/:companyId/evaluation/replay", async (req, res, next) => {
     try {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      await assertCompanyAdministrator(access, req, companyId);
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
       const ref = evaluationMilestoneRefSchema.parse(q.data);

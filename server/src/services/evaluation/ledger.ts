@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
 import {
@@ -139,7 +140,7 @@ export interface AppendResult {
 const PAGE = 5000;
 
 /** Anything that can run the ledger's queries: the pool, or the transaction an ingest tick runs in. */
-export type LedgerDb = Pick<Db, "select" | "insert" | "execute">;
+export type LedgerDb = Pick<Db, "select" | "selectDistinctOn" | "insert" | "execute">;
 
 export function evaluationLedger(db: LedgerDb) {
   return {
@@ -246,7 +247,9 @@ export function evaluationLedger(db: LedgerDb) {
 
     /** Whether a contract has been declared for a milestone (a `contract.declared` event in scope). */
     async hasContract(companyId: string, ref: { kind: "project" | "goal"; id: string }): Promise<boolean> {
-      const scopeCond = ref.kind === "project" ? eq(evaluationEvents.projectId, ref.id) : eq(evaluationEvents.goalId, ref.id);
+      // Goal-as-milestone membership requires no project (same rule as selectMilestoneEvents).
+      const scopeCond =
+        ref.kind === "project" ? eq(evaluationEvents.projectId, ref.id) : and(eq(evaluationEvents.goalId, ref.id), isNull(evaluationEvents.projectId));
       const [row] = await db
         .select({ n: sql<number>`count(*)::int` })
         .from(evaluationEvents)
@@ -264,21 +267,38 @@ export function evaluationLedger(db: LedgerDb) {
       sourceTable: string,
       excludeType?: EvaluationEventType,
     ): Promise<Map<string, { projectId: string | null; goalId: string | null }>> {
+      // The exclusion happens in SQL (one row per live source id), not in Node.
+      const withdrawn = alias(evaluationEvents, "withdrawn");
+      const conds = [eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable)];
+      if (excludeType) {
+        conds.push(ne(evaluationEvents.eventType, excludeType));
+        conds.push(
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(withdrawn)
+              .where(
+                and(
+                  eq(withdrawn.companyId, evaluationEvents.companyId),
+                  eq(withdrawn.sourceTable, evaluationEvents.sourceTable),
+                  eq(withdrawn.sourceId, evaluationEvents.sourceId),
+                  eq(withdrawn.eventType, excludeType),
+                ),
+              ),
+          ),
+        );
+      }
       const rows = await db
-        .select({
+        .selectDistinctOn([evaluationEvents.sourceId], {
           sourceId: evaluationEvents.sourceId,
-          eventType: evaluationEvents.eventType,
           projectId: evaluationEvents.projectId,
           goalId: evaluationEvents.goalId,
         })
         .from(evaluationEvents)
-        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable)));
-      const excluded = new Set(rows.filter((r) => excludeType && r.eventType === excludeType).map((r) => r.sourceId));
+        .where(and(...conds))
+        .orderBy(evaluationEvents.sourceId, asc(evaluationEvents.seq));
       const out = new Map<string, { projectId: string | null; goalId: string | null }>();
-      for (const r of rows) {
-        if (excluded.has(r.sourceId)) continue;
-        if (!out.has(r.sourceId)) out.set(r.sourceId, { projectId: r.projectId, goalId: r.goalId });
-      }
+      for (const r of rows) out.set(r.sourceId, { projectId: r.projectId, goalId: r.goalId });
       return out;
     },
   };
