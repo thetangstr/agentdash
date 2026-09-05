@@ -36,6 +36,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
+import { evaluationIngest } from "./services/evaluation/ingest.js";
 import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
@@ -934,6 +935,39 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
+  // AgentDash: Company Evaluator (Stage 1 shadow) — ingest on its own interval,
+  // off by default. Reads control-plane rows into the append-only ledger; never
+  // on the heartbeat scheduler tick and never on the request path (spec §11).
+  const evaluationIngestEnabled = process.env.AGENTDASH_EVALUATION_INGEST_ENABLED === "true";
+  const evaluationIngestIntervalMs = (() => {
+    const parsed = Number(process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS);
+    const floor = 60 * 1000;
+    return Number.isFinite(parsed) && parsed >= floor ? parsed : 5 * 60 * 1000;
+  })();
+  let evaluationIngestHandle: ReturnType<typeof setInterval> | null = null;
+  if (!evaluationIngestEnabled) {
+    logger.info({ reason: "AGENTDASH_EVALUATION_INGEST_ENABLED!=true" }, "evaluation_ingest: schedule skipped");
+  } else {
+    const ingest = evaluationIngest(db as any);
+    logger.info({ intervalMs: evaluationIngestIntervalMs }, "evaluation_ingest: schedule enabled");
+    evaluationIngestHandle = setInterval(() => {
+      void ingest
+        .tickAll()
+        .then((stats) => {
+          const inserted = stats.reduce((n, s) => n + s.inserted, 0);
+          const scanned = stats.reduce((n, s) => n + s.scanned, 0);
+          const maxMs = stats.reduce((m, s) => Math.max(m, s.durationMs), 0);
+          if (inserted > 0 || maxMs > 10_000) {
+            logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs }, "evaluation_ingest: tick");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "evaluation_ingest: scheduled tick failed");
+        });
+    }, evaluationIngestIntervalMs);
+    evaluationIngestHandle.unref?.();
+  }
+
   // O4/O6 (2026-08-16): the health checks run on a clock, not only when
   // polled — a stale backup or a filling disk emits a signal within the half
   // hour instead of waiting for someone to look.

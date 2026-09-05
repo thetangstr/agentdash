@@ -58,6 +58,9 @@ import {
   agentConnectorOverrides,
   connections,
   channelCallbackTokens,
+  evaluationEvents,
+  evaluationScorecards,
+  evaluationIngestState,
 } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation, pgConstraintName } from "../lib/pg-error.js";
@@ -441,6 +444,13 @@ export function companyService(db: Db) {
 
     remove: (id: string) =>
       db.transaction(async (tx) => {
+        // AgentDash (Company Evaluator): the evaluation ledger is append-only
+        // by trigger; tenant deletion is the one sanctioned purge, gated on
+        // this session setting so no other path can delete ledger rows.
+        await tx.execute(sql`SET LOCAL agentdash.ledger_purge = 'on'`);
+        await tx.delete(evaluationScorecards).where(eq(evaluationScorecards.companyId, id));
+        await tx.delete(evaluationIngestState).where(eq(evaluationIngestState.companyId, id));
+        await tx.delete(evaluationEvents).where(eq(evaluationEvents.companyId, id));
         // Delete from child tables in dependency order
         await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.companyId, id));
         await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.companyId, id));

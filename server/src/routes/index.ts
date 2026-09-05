@@ -35,4 +35,6 @@ export { onboardingMcpSignupRoutes } from "./onboarding-mcp-signup.js";
 export { inviteCodeRoutes } from "./invite-codes.js";
 // AgentDash: goals-eval-hitl
 export { verdictRoutes } from "./verdicts.js";
+// AgentDash: Company Evaluator (Stage 1 shadow) — ledger reads + operator ingest/snapshot
+export { evaluationRoutes } from "./evaluation.js";
 export { featureFlagRoutes } from "./feature-flags.js";

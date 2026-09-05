@@ -1,0 +1,204 @@
+import { createHash } from "node:crypto";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import { evaluationEvents } from "@paperclipai/db";
+import {
+  EVALUATION_SCHEMA_VERSION,
+  EVALUATION_SKEW_TOLERANCE_MS,
+  type EvaluationActorType,
+  type EvaluationEventType,
+} from "@paperclipai/shared";
+
+/**
+ * AgentDash: Company Evaluator — the append-only ledger (spec §8 rules 4–6, §11).
+ *
+ * Pure helpers (canonical JSON, hashing, dedupe key, event-time clamping,
+ * total ordering) live here beside the insert path so tests can pin them
+ * without a database, and so replay and ingest share one definition.
+ */
+
+export interface EvaluationEventInput {
+  companyId: string;
+  projectId?: string | null;
+  goalId?: string | null;
+  actorType: EvaluationActorType;
+  actorId?: string | null;
+  sourceTable: string;
+  sourceId: string;
+  sourceVersion: string;
+  sourceRowHash?: string | null;
+  eventType: EvaluationEventType;
+  eventTime: Date;
+  payload?: Record<string, unknown>;
+  correlationId?: string | null;
+}
+
+export type EvaluationEventRow = typeof evaluationEvents.$inferSelect;
+
+/** Deterministic JSON: keys sorted at every depth, no whitespace. Dates become ISO strings. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeys(value));
+}
+
+function sortKeys(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const v = (value as Record<string, unknown>)[key];
+      if (v === undefined) continue;
+      out[key] = sortKeys(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function hashCanonical(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+/** Rule 6: the key embeds the company so tenants can never collide. */
+export function dedupeKeyFor(input: Pick<EvaluationEventInput, "companyId" | "sourceTable" | "sourceId" | "eventType" | "sourceVersion">): string {
+  return [input.companyId, input.sourceTable, input.sourceId, input.eventType, input.sourceVersion].join("|");
+}
+
+export interface ClampResult {
+  eventTime: Date;
+  /** True when the claimed time was later than arrival (impossible) or absent. */
+  clamped: boolean;
+  /** How much earlier than arrival the claim was, when it was earlier; 0 otherwise. */
+  claimedEarlierByMs: number;
+  /** Rule 4: a claim earlier than arrival by more than the tolerance is itself a checkable claim. */
+  suspicious: boolean;
+}
+
+/**
+ * Rule 4: a self-report's own timestamp is never trusted past its arrival.
+ * `eventTime = min(claimed, arrival)`; a claim earlier than arrival by more than
+ * the skew tolerance is flagged for the contradiction rules.
+ */
+export function clampEventTime(claimed: Date | string | null | undefined, arrival: Date): ClampResult {
+  const claimedDate = claimed == null ? null : claimed instanceof Date ? claimed : new Date(claimed);
+  if (!claimedDate || Number.isNaN(claimedDate.getTime())) {
+    return { eventTime: arrival, clamped: true, claimedEarlierByMs: 0, suspicious: false };
+  }
+  if (claimedDate.getTime() > arrival.getTime()) {
+    return { eventTime: arrival, clamped: true, claimedEarlierByMs: 0, suspicious: false };
+  }
+  const earlierBy = arrival.getTime() - claimedDate.getTime();
+  return {
+    eventTime: claimedDate,
+    clamped: false,
+    claimedEarlierByMs: earlierBy,
+    suspicious: earlierBy > EVALUATION_SKEW_TOLERANCE_MS,
+  };
+}
+
+/**
+ * Rule 5: the total order replay uses. Event time bucketed to the skew
+ * tolerance, then ingest time, then dedupe key. Part of every formulaVersion.
+ */
+export function compareEvents(
+  a: Pick<EvaluationEventRow, "eventTime" | "ingestTime" | "dedupeKey">,
+  b: Pick<EvaluationEventRow, "eventTime" | "ingestTime" | "dedupeKey">,
+): number {
+  const ba = Math.floor(a.eventTime.getTime() / EVALUATION_SKEW_TOLERANCE_MS);
+  const bb = Math.floor(b.eventTime.getTime() / EVALUATION_SKEW_TOLERANCE_MS);
+  if (ba !== bb) return ba - bb;
+  const ia = a.ingestTime.getTime();
+  const ib = b.ingestTime.getTime();
+  if (ia !== ib) return ia - ib;
+  return a.dedupeKey < b.dedupeKey ? -1 : a.dedupeKey > b.dedupeKey ? 1 : 0;
+}
+
+export function orderEvents<T extends Pick<EvaluationEventRow, "eventTime" | "ingestTime" | "dedupeKey">>(rows: T[]): T[] {
+  return [...rows].sort(compareEvents);
+}
+
+export interface AppendResult {
+  inserted: number;
+  skipped: number;
+  insertedIds: string[];
+}
+
+export function evaluationLedger(db: Db) {
+  return {
+    /**
+     * Insert events; duplicates by dedupe key are skipped, never overwritten.
+     * Chunked so a large backfill does not exceed parameter limits.
+     */
+    async append(events: EvaluationEventInput[]): Promise<AppendResult> {
+      if (events.length === 0) return { inserted: 0, skipped: 0, insertedIds: [] };
+      const rows = events.map((e) => ({
+        companyId: e.companyId,
+        projectId: e.projectId ?? null,
+        goalId: e.goalId ?? null,
+        actorType: e.actorType,
+        actorId: e.actorId ?? null,
+        sourceTable: e.sourceTable,
+        sourceId: e.sourceId,
+        sourceVersion: e.sourceVersion,
+        sourceRowHash: e.sourceRowHash ?? null,
+        eventType: e.eventType,
+        schemaVersion: EVALUATION_SCHEMA_VERSION,
+        eventTime: e.eventTime,
+        dedupeKey: dedupeKeyFor(e),
+        payload: e.payload ?? {},
+        correlationId: e.correlationId ?? null,
+      }));
+      // Dedupe inside the batch too, so one tick never races itself.
+      const seen = new Set<string>();
+      const unique = rows.filter((r) => (seen.has(r.dedupeKey) ? false : (seen.add(r.dedupeKey), true)));
+      const insertedIds: string[] = [];
+      const CHUNK = 500;
+      for (let i = 0; i < unique.length; i += CHUNK) {
+        const chunk = unique.slice(i, i + CHUNK);
+        const returned = await db
+          .insert(evaluationEvents)
+          .values(chunk)
+          .onConflictDoNothing({ target: evaluationEvents.dedupeKey })
+          .returning({ id: evaluationEvents.id });
+        for (const r of returned) insertedIds.push(r.id);
+      }
+      return { inserted: insertedIds.length, skipped: events.length - insertedIds.length, insertedIds };
+    },
+
+    /** Ordered read for replay and drill-down. */
+    async list(
+      companyId: string,
+      opts: { types?: EvaluationEventType[]; sinceEventTime?: Date; limit?: number } = {},
+    ): Promise<EvaluationEventRow[]> {
+      const conds = [eq(evaluationEvents.companyId, companyId)];
+      if (opts.types && opts.types.length > 0) conds.push(inArray(evaluationEvents.eventType, opts.types));
+      if (opts.sinceEventTime) conds.push(gte(evaluationEvents.eventTime, opts.sinceEventTime));
+      const rows = await db
+        .select()
+        .from(evaluationEvents)
+        .where(and(...conds))
+        .orderBy(asc(evaluationEvents.eventTime), asc(evaluationEvents.ingestTime), asc(evaluationEvents.dedupeKey))
+        .limit(Math.min(opts.limit ?? 5000, 20000));
+      return orderEvents(rows);
+    },
+
+    async countByType(companyId: string): Promise<Record<string, number>> {
+      const rows = await db
+        .select({ eventType: evaluationEvents.eventType, n: sql<number>`count(*)::int` })
+        .from(evaluationEvents)
+        .where(eq(evaluationEvents.companyId, companyId))
+        .groupBy(evaluationEvents.eventType);
+      return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
+    },
+
+    /** Source ids already ingested for a table (used by withdrawal detection). */
+    async knownSourceIds(companyId: string, sourceTable: string, limit = 20000): Promise<Set<string>> {
+      const rows = await db
+        .selectDistinct({ sourceId: evaluationEvents.sourceId })
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable)))
+        .limit(limit);
+      return new Set(rows.map((r) => r.sourceId));
+    },
+  };
+}
