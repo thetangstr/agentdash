@@ -46,6 +46,7 @@ const sharedOpts = {
 const SECRET_BODY_FIELDS = ["password", "newPassword", "currentPassword", "token"];
 export const LOG_REDACT_PATHS = [
   "req.headers.authorization",
+  "req.headers.cookie",
   ...SECRET_BODY_FIELDS.map((field) => `reqBody.${field}`),
 ];
 
