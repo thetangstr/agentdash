@@ -278,6 +278,9 @@ export const EVALUATOR_WRITE_ROUTE_PATTERNS: readonly RegExp[] = [
 
 export const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** The reason code the read-only gate records on refusals; scoring excludes these from P6. */
+export const EVALUATOR_READ_ONLY_REASON = "EVALUATOR_READ_ONLY";
+
 export function isEvaluatorWriteAllowed(method: string, path: string): boolean {
   if (SAFE_HTTP_METHODS.has(method.toUpperCase())) return true;
   const clean = path.split("?")[0]!.replace(/\/+$/, "");

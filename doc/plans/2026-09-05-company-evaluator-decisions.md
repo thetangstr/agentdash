@@ -524,3 +524,32 @@ Recorded here rather than in the spec, which is at its size limit.
   within sixty seconds in process, so a retry storm on one forbidden act counts
   once per minute per server instance and P6 is a floor on violating requests,
   not a count of them; distinct acts on distinct items are never collapsed.
+
+## Milestone 3 implementation notes (2026-09-06, principal branch)
+
+- **Read-only is a mechanism (D11, §10.2).** `agent_api_keys.principal_kind =
+  "evaluator"` mints an actor with `readOnly: true`; the actor middleware refuses
+  every non-safe request from it with 403 `EVALUATOR_READ_ONLY` unless the path
+  is on the evaluator write allowlist (findings, review-items,
+  scorecards/snapshot, corrections/:id/note), and records the refusal as an
+  `authz.refused` activity row. Scoring excludes rows with that reason code from
+  P6: the gate doing its job is not a company breach. Ordinary agent keys are
+  untouched (tests prove both).
+- **Provisioning.** `POST /companies/:companyId/evaluation/principal`
+  (administrators): one agent with role `evaluator`, `reportsTo: null`,
+  accountable to the provisioning administrator, one read-only key whose token is
+  returned exactly once; idempotent, `rotateKey` revokes the previous evaluator
+  keys; also creates the "Evaluator review items" project. The evaluator role
+  gets its own instruction bundle (`onboarding-assets/evaluator/AGENTS.md`):
+  exception review only, citation rule, budget, what it never does.
+- **Review items (§9.2) are deterministic server code**, not the agent: one
+  digest per milestone per routed human (created on the first routine
+  exception, updated in place — an update sends no message), one item per
+  immediate exception (E3, E4, material E2/E12/E13); always in the review-items
+  project, labelled `evaluator-review`, `todo`, assigned to a human — the routed
+  accountable owner, else the contract's accountable human, else the
+  administrator who ran the snapshot; exceptions with no human anywhere are
+  reported as unrouted, never assigned to an agent. Items carry their key in a
+  marker, so re-running changes nothing that has not changed. Triggered by
+  `POST …/evaluation/scorecards/snapshot?reviewItems=true` or
+  `POST …/evaluation/review-items` (evaluator principal or administrators).

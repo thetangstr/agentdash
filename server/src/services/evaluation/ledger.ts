@@ -245,6 +245,17 @@ export function evaluationLedger(db: LedgerDb) {
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
     },
 
+    /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3). */
+    async existing(companyId: string, ids: string[]): Promise<Set<string>> {
+      const wanted = [...new Set(ids)].filter((x) => typeof x === "string" && x.length > 0);
+      if (wanted.length === 0) return new Set();
+      const rows = await db
+        .select({ id: evaluationEvents.id })
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), inArray(evaluationEvents.id, wanted.slice(0, 500))));
+      return new Set(rows.map((r) => r.id));
+    },
+
     /** Whether a contract has been declared for a milestone (a `contract.declared` event in scope). */
     async hasContract(companyId: string, ref: { kind: "project" | "goal"; id: string }): Promise<boolean> {
       // Goal-as-milestone membership requires no project (same rule as selectMilestoneEvents).

@@ -4,7 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import { isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
+import { EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
@@ -287,11 +287,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         action: "authz.refused",
         entityType: "agent",
         entityId: key.agentId,
-        details: { method: req.method, routePath: normalizedPath(req), reasonCode: "EVALUATOR_READ_ONLY" },
+        details: { method: req.method, routePath: normalizedPath(req), reasonCode: EVALUATOR_READ_ONLY_REASON },
       }).catch((err) => {
         logger.warn({ err }, "authz.refused record failed (evaluator read-only gate)");
       });
-      res.status(403).json({ error: "This principal is read-only", code: "EVALUATOR_READ_ONLY" });
+      res.status(403).json({ error: "This principal is read-only", code: EVALUATOR_READ_ONLY_REASON });
       return;
     }
 

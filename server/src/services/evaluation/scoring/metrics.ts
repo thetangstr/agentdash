@@ -944,6 +944,8 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
     }
   }
   for (const r of ctx.tl.authzRefused) {
+    // The read-only evaluator principal's refusals are the mechanism of §10.2 doing its job, never a company breach.
+    if (str(r.payload, "reasonCode") === "EVALUATOR_READ_ONLY") continue;
     if (r.actorType === "agent" && r.actorId === scope.agentId) {
       const it = r.issueId ? (ctx.tl.items.get(r.issueId) ?? null) : null;
       hit("authz_refused", it, r.time, r.eventId, `refused ${str(r.payload, "method") ?? ""} ${str(r.payload, "routePath") ?? ""} (${str(r.payload, "reasonCode") ?? "no reason code"})`.trim());
