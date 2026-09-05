@@ -147,4 +147,6 @@ export interface ScoredCard extends Record<string, unknown> {
   actorKeys: string[];
   firstEventTime: string | null;
   lastEventTime: string | null;
+  /** The flags the markers were derived from; `open` is pinned here for verify. */
+  state: { open: boolean; retrospective: boolean };
 }

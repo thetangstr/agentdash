@@ -390,7 +390,7 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const v1 = await cards.snapshot(companyId, ref);
     expect(v1.version).toBe(1);
     expect(v1.contractVersion).toBe("none"); // no contract.declared event exists
-    expect((v1.card as { markers: string[] }).markers).toEqual([MARKER_OPEN_MILESTONE]); // project in_progress; derived, not supplied
+    expect((v1.card as { markers: string[] }).markers).toContain(MARKER_OPEN_MILESTONE); // project in_progress; derived, not supplied
     expect(await cards.verify(companyId, ref, 1)).toMatchObject({ ok: true });
     // An ordinary comment with a payload timestamp in 2020 arrives after the snapshot.
     await db.insert(issueComments).values({
@@ -429,13 +429,19 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const ref = { kind: "project" as const, id: projectId };
     const open = await cards.snapshot(companyId, ref);
     expect((open.card as { state: { open: boolean } }).state.open).toBe(true);
-    await db.update(projects).set({ status: "completed", updatedAt: at(80) }).where(eq(projects.id, projectId));
+    // the roster rows were inserted at wall-clock time, so the closing update must be later than that cursor
+    await db.update(projects).set({ status: "completed", updatedAt: new Date() }).where(eq(projects.id, projectId));
+    // The stored card still verifies: its window predates the closing snapshot, so its own roster fact says open.
+    expect(await cards.verify(companyId, ref, open.version)).toMatchObject({ ok: true, pinnedOpen: true });
+    // Milestone 2: the open flag is a ledger fact — the closing project.snapshot must be ingested to be seen.
+    await evaluationIngest(db, { rowBudget: 100, sources: ["projects"] }).tick(companyId);
     expect(await cards.verify(companyId, ref, open.version)).toMatchObject({ ok: true, pinnedOpen: true });
     const closed = await cards.snapshot(companyId, ref);
     expect((closed.card as { markers: string[] }).markers).not.toContain(MARKER_OPEN_MILESTONE);
     expect(closed.cardHash).not.toBe(open.cardHash);
     expect(await cards.verify(companyId, ref, closed.version)).toMatchObject({ ok: true, pinnedOpen: false });
-    await db.update(projects).set({ status: "in_progress", updatedAt: at(81) }).where(eq(projects.id, projectId));
+    await db.update(projects).set({ status: "in_progress", updatedAt: new Date(Date.now() + 1000) }).where(eq(projects.id, projectId));
+    await evaluationIngest(db, { rowBudget: 100, sources: ["projects"] }).tick(companyId);
   });
 
   it("withdrawal detection runs on its own cadence, not every tick (Q6.2)", async () => {

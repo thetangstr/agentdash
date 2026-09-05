@@ -943,7 +943,7 @@ export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor,
     limit,
     issueLabels.createdAt,
     issueLabels.issueId,
-    (predicate, take) =>
+    (predicate, take, direction) =>
       tx
         .select({
           issueId: issueLabels.issueId,
@@ -955,7 +955,7 @@ export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor,
         .from(issueLabels)
         .innerJoin(labels, eq(issueLabels.labelId, labels.id))
         .where(predicate ? and(eq(issueLabels.companyId, companyId), predicate) : eq(issueLabels.companyId, companyId))
-        .orderBy(asc(issueLabels.createdAt), asc(issueLabels.issueId), asc(issueLabels.labelId))
+        .orderBy(...ordered(direction, issueLabels.createdAt, issueLabels.issueId), direction === "asc" ? asc(issueLabels.labelId) : desc(issueLabels.labelId))
         .limit(take),
     (r) => r.issueId,
     (r) => `${r.issueId}:${r.labelId}`,
@@ -987,7 +987,7 @@ export async function readIssueLabels(tx: Tx, companyId: string, cursor: Cursor,
  * that changes nothing mints nothing.
  */
 export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agents.updatedAt, agents.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, agents.updatedAt, agents.id, (predicate, take, direction) =>
     tx
       .select({
         id: agents.id,
@@ -1004,7 +1004,7 @@ export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Curs
       })
       .from(agents)
       .where(predicate ? and(eq(agents.companyId, companyId), predicate) : eq(agents.companyId, companyId))
-      .orderBy(asc(agents.updatedAt), asc(agents.id))
+      .orderBy(...ordered(direction, agents.updatedAt, agents.id))
       .limit(take),
     (r) => r.id,
   );
@@ -1029,7 +1029,7 @@ export async function readAgentSnapshots(tx: Tx, companyId: string, cursor: Curs
 
 /** T0 roster: projects → project.snapshot (status timeline, lead, target date, DoD). Version = hash + updated time so A→B→A is visible. */
 export async function readProjectSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, projects.updatedAt, projects.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, projects.updatedAt, projects.id, (predicate, take, direction) =>
     tx
       .select({
         id: projects.id,
@@ -1047,7 +1047,7 @@ export async function readProjectSnapshots(tx: Tx, companyId: string, cursor: Cu
       })
       .from(projects)
       .where(predicate ? and(eq(projects.companyId, companyId), predicate) : eq(projects.companyId, companyId))
-      .orderBy(asc(projects.updatedAt), asc(projects.id))
+      .orderBy(...ordered(direction, projects.updatedAt, projects.id))
       .limit(take),
     (r) => r.id,
   );
@@ -1084,7 +1084,7 @@ export async function readProjectSnapshots(tx: Tx, companyId: string, cursor: Cu
 
 /** T0 roster: goals → goal.snapshot (status timeline, owner, metric definition shape — never its prose). */
 export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, goals.updatedAt, goals.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, goals.updatedAt, goals.id, (predicate, take, direction) =>
     tx
       .select({
         id: goals.id,
@@ -1100,7 +1100,7 @@ export async function readGoalSnapshots(tx: Tx, companyId: string, cursor: Curso
       })
       .from(goals)
       .where(predicate ? and(eq(goals.companyId, companyId), predicate) : eq(goals.companyId, companyId))
-      .orderBy(asc(goals.updatedAt), asc(goals.id))
+      .orderBy(...ordered(direction, goals.updatedAt, goals.id))
       .limit(take),
     (r) => r.id,
   );

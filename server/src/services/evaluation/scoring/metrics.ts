@@ -490,14 +490,26 @@ export function actorsIn(ctx: ScoringContext): ActorScope[] {
   };
   for (const it of ctx.members) {
     for (const s of it.snapshots) add(s.assigneeAgentId, it);
-    for (const a of it.assignments) add(a.toAgentId, it);
+    for (const a of it.assignments) {
+      add(a.toAgentId, it);
+      if (a.actorType === "agent") add(a.actorId, it);
+    }
     for (const r of it.runs) add(r.agentId, it);
     for (const h of it.handoffs) if (h.actorType === "agent") add(h.actorId, it);
     for (const v of it.verdicts) add(v.reviewerAgentId, it);
+    // an agent that only ever moved or commented on a member item is still an actor (P6 needs it)
+    for (const t of it.transitions) if (t.actorType === "agent") add(t.actorId, it);
+    for (const c of it.comments) if (c.actorType === "agent") add(c.actorId, it);
+    for (const b of it.blockers) if (b.actorType === "agent") add(b.actorId, it);
   }
-  return [...map.entries()]
+  // refusals name their agent even when no member item is involved
+  const refused = new Set<string>();
+  for (const r of ctx.tl.authzRefused) if (r.actorType === "agent" && r.actorId && !map.has(r.actorId)) refused.add(r.actorId);
+  const scopes = [...map.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([agentId, ids]) => ({ agentId, items: ctx.members.filter((m) => ids.has(m.issueId)) }));
+  for (const agentId of [...refused].sort()) scopes.push({ agentId, items: [] });
+  return scopes.sort((a, b) => (a.agentId < b.agentId ? -1 : 1));
 }
 
 function humanActed(actorType: string): boolean {
