@@ -1,4 +1,4 @@
-import { integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 /**
@@ -21,6 +21,9 @@ export const evaluationScorecards = pgTable(
     version: integer("version").notNull(),
     contractVersion: text("contract_version").notNull(),
     formulaVersion: text("formula_version").notNull(),
+    /** The replay window: every ledger row with seq <= throughSeq at snapshot time. */
+    throughSeq: bigint("through_seq", { mode: "number" }).notNull(),
+    /** The last milestone event inside the window, for display; null for an empty milestone. */
     throughEventId: uuid("through_event_id"),
     card: jsonb("card").$type<Record<string, unknown>>().notNull(),
     /** sha256 of the canonical card JSON — what replay agreement is measured against. */

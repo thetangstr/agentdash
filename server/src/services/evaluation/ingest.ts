@@ -11,8 +11,9 @@ import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName }
  * Reads each source after its cursor, under its own transaction with a
  * statement timeout, appends the resulting events (idempotent by dedupe key)
  * and advances the cursor. Runs on its own interval, never on the request path
- * and never on the heartbeat scheduler tick. Backfill is the same tick run to
- * exhaustion once.
+ * and never on the heartbeat scheduler tick. One pass runs at a time per
+ * instance (`seq` monotonicity relies on it). Backfill is the same tick run
+ * to exhaustion, bounded.
  */
 
 export interface IngestOptions {
@@ -44,13 +45,16 @@ export interface CompanyTickStats {
 
 const DEFAULT_ROW_BUDGET = 5000;
 const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
+/** Operator-triggered backfill is bounded so a request cannot run for minutes. */
+export const MAX_BACKFILL_PASSES = 20;
 
 export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
   const ledger = evaluationLedger(db);
   const rowBudget = opts.rowBudget ?? DEFAULT_ROW_BUDGET;
-  const statementTimeoutMs = opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS;
+  const statementTimeoutMs = Math.max(1000, Math.floor(opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS));
   const sources = opts.sources ?? (Object.keys(SOURCE_READERS) as SourceName[]);
   const now = opts.now ?? (() => new Date());
+  let inFlight = false;
 
   async function loadCursors(companyId: string): Promise<Record<string, Cursor>> {
     const rows = await db.select().from(evaluationIngestState).where(eq(evaluationIngestState.companyId, companyId));
@@ -67,81 +71,109 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       });
   }
 
-  async function readSource(companyId: string, source: SourceName, cursor: Cursor) {
+  /** Every source read runs in its own transaction with a parameterised local statement timeout. */
+  async function withTimeout<T>(fn: (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>): Promise<T> {
     return db.transaction(async (tx) => {
-      await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${Math.floor(statementTimeoutMs)}ms'`));
-      return SOURCE_READERS[source](tx, companyId, cursor, rowBudget);
+      await tx.execute(sql`select set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true)`);
+      return fn(tx);
     });
   }
 
+  async function tickOnce(companyId: string): Promise<CompanyTickStats> {
+    const started = Date.now();
+    const cursors = await loadCursors(companyId);
+    const perSource: Record<string, SourceTickStats> = {};
+    let scanned = 0;
+    let inserted = 0;
+    let skipped = 0;
+    for (const source of sources) {
+      const t0 = Date.now();
+      const result = await withTimeout((tx) => SOURCE_READERS[source](tx, companyId, cursors[source] ?? {}, rowBudget));
+      let events: EvaluationEventInput[] = result.events;
+      if (source === "issue_comments") {
+        // Rule 13: withdrawal detection rides on the comments pass; ids already
+        // recorded as withdrawn are excluded so the scan does not grow with history.
+        const known = await ledger.knownSources(companyId, "issue_comments", "evidence.withdrawn");
+        const withdrawn = await withTimeout((tx) => detectWithdrawnComments(tx, companyId, known, now()));
+        events = events.concat(withdrawn);
+      }
+      const appended = await ledger.append(events);
+      if (result.scanned > 0) await saveCursor(companyId, source, result.nextCursor);
+      perSource[source] = {
+        scanned: result.scanned,
+        produced: events.length,
+        inserted: appended.inserted,
+        skipped: appended.skipped,
+        durationMs: Date.now() - t0,
+      };
+      scanned += result.scanned;
+      inserted += appended.inserted;
+      skipped += appended.skipped;
+    }
+    return { companyId, scanned, inserted, skipped, durationMs: Date.now() - started, perSource };
+  }
+
   return {
-    /** One ingest pass for one company. */
+    /** One ingest pass for one company. Serialised with every other pass on this instance. */
     async tick(companyId: string): Promise<CompanyTickStats> {
-      const started = Date.now();
-      const cursors = await loadCursors(companyId);
-      const perSource: Record<string, SourceTickStats> = {};
-      let scanned = 0;
-      let inserted = 0;
-      let skipped = 0;
-      for (const source of sources) {
-        const t0 = Date.now();
-        const result = await readSource(companyId, source, cursors[source] ?? {});
-        let events: EvaluationEventInput[] = result.events;
-        if (source === "issue_comments") {
-          // Rule 13: withdrawal detection rides on the comments pass.
-          const known = await ledger.knownSourceIds(companyId, "issue_comments");
-          const withdrawn = await db.transaction(async (tx) => {
-            await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${Math.floor(statementTimeoutMs)}ms'`));
-            return detectWithdrawnComments(tx, companyId, known, now());
-          });
-          events = events.concat(withdrawn);
-        }
-        const appended = await ledger.append(events);
-        if (result.scanned > 0) await saveCursor(companyId, source, result.nextCursor);
-        perSource[source] = {
-          scanned: result.scanned,
-          produced: events.length,
-          inserted: appended.inserted,
-          skipped: appended.skipped,
-          durationMs: Date.now() - t0,
-        };
-        scanned += result.scanned;
-        inserted += appended.inserted;
-        skipped += appended.skipped;
+      if (inFlight) throw new Error("evaluation_ingest: a pass is already running");
+      inFlight = true;
+      try {
+        return await tickOnce(companyId);
+      } finally {
+        inFlight = false;
       }
-      return { companyId, scanned, inserted, skipped, durationMs: Date.now() - started, perSource };
     },
 
-    /** One pass over every company; errors are logged per company and never stop the loop. */
+    /** One pass over every company; errors are logged per company and never stop the loop. Skips when a pass is in flight. */
     async tickAll(): Promise<CompanyTickStats[]> {
-      const rows = await db.select({ id: companies.id }).from(companies);
-      const out: CompanyTickStats[] = [];
-      for (const { id } of rows) {
-        try {
-          out.push(await this.tick(id));
-        } catch (err) {
-          logger.error({ err, companyId: id }, "evaluation_ingest: company tick failed");
-        }
+      if (inFlight) {
+        logger.warn({}, "evaluation_ingest: previous pass still running; skipping this tick");
+        return [];
       }
-      return out;
+      inFlight = true;
+      try {
+        const rows = await db.select({ id: companies.id }).from(companies);
+        const out: CompanyTickStats[] = [];
+        for (const { id } of rows) {
+          try {
+            out.push(await tickOnce(id));
+          } catch (err) {
+            logger.error({ err, companyId: id }, "evaluation_ingest: company tick failed");
+          }
+        }
+        return out;
+      } finally {
+        inFlight = false;
+      }
     },
 
-    /** Backfill: tick until a pass scans nothing new (bounded), then report. */
-    async backfill(companyId: string, maxPasses = 200): Promise<{ passes: number; inserted: number; scanned: number }> {
+    /** Backfill: tick until a pass scans nothing new, bounded, then report. */
+    async backfill(companyId: string, maxPasses = MAX_BACKFILL_PASSES): Promise<{ passes: number; inserted: number; scanned: number; exhausted: boolean }> {
+      const bound = Math.max(1, Math.min(maxPasses, MAX_BACKFILL_PASSES));
       let passes = 0;
       let inserted = 0;
       let scanned = 0;
-      for (; passes < maxPasses; passes++) {
+      let exhausted = false;
+      for (; passes < bound; ) {
         const stats = await this.tick(companyId);
+        passes++;
         inserted += stats.inserted;
         scanned += stats.scanned;
-        if (stats.scanned === 0) break;
+        if (stats.scanned === 0) {
+          exhausted = true;
+          break;
+        }
       }
-      return { passes, inserted, scanned };
+      return { passes, inserted, scanned, exhausted };
     },
 
     async cursors(companyId: string) {
       return loadCursors(companyId);
+    },
+
+    get running() {
+      return inFlight;
     },
   };
 }

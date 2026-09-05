@@ -1,5 +1,6 @@
 CREATE TABLE "evaluation_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"seq" bigserial NOT NULL,
 	"company_id" uuid NOT NULL,
 	"project_id" uuid,
 	"goal_id" uuid,
@@ -34,6 +35,7 @@ CREATE TABLE "evaluation_scorecards" (
 	"version" integer NOT NULL,
 	"contract_version" text NOT NULL,
 	"formula_version" text NOT NULL,
+	"through_seq" bigint NOT NULL,
 	"through_event_id" uuid,
 	"card" jsonb NOT NULL,
 	"card_hash" text NOT NULL,
@@ -45,6 +47,8 @@ ALTER TABLE "evaluation_events" ADD CONSTRAINT "evaluation_events_company_id_com
 ALTER TABLE "evaluation_ingest_state" ADD CONSTRAINT "evaluation_ingest_state_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "evaluation_scorecards" ADD CONSTRAINT "evaluation_scorecards_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "evaluation_events_dedupe_uq" ON "evaluation_events" USING btree ("dedupe_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "evaluation_events_seq_uq" ON "evaluation_events" USING btree ("seq");--> statement-breakpoint
+CREATE INDEX "evaluation_events_company_seq_idx" ON "evaluation_events" USING btree ("company_id","seq");--> statement-breakpoint
 CREATE INDEX "evaluation_events_company_time_idx" ON "evaluation_events" USING btree ("company_id","event_time");--> statement-breakpoint
 CREATE INDEX "evaluation_events_company_type_idx" ON "evaluation_events" USING btree ("company_id","event_type");--> statement-breakpoint
 CREATE INDEX "evaluation_events_company_project_idx" ON "evaluation_events" USING btree ("company_id","project_id");--> statement-breakpoint
@@ -53,9 +57,13 @@ CREATE UNIQUE INDEX "evaluation_scorecards_version_uq" ON "evaluation_scorecards
 -- AgentDash (Company Evaluator, spec §10.2/§11): the ledger is append-only.
 -- UPDATE is always refused. DELETE is refused unless the session has set
 -- agentdash.ledger_purge = 'on', which only the company-deletion transaction
--- does (server/src/services/companies.ts remove()). Corrections are new rows.
+-- does (server/src/services/companies.ts remove()). TRUNCATE is refused
+-- unconditionally (row triggers do not fire on TRUNCATE). Corrections are new rows.
 CREATE OR REPLACE FUNCTION evaluation_events_immutable() RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'TRUNCATE' THEN
+    RAISE EXCEPTION 'evaluation_events is append-only: TRUNCATE refused' USING ERRCODE = 'restrict_violation';
+  END IF;
   IF TG_OP = 'UPDATE' THEN
     RAISE EXCEPTION 'evaluation_events is append-only: UPDATE refused' USING ERRCODE = 'restrict_violation';
   END IF;
@@ -67,4 +75,7 @@ END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
 CREATE TRIGGER evaluation_events_immutable_trg
   BEFORE UPDATE OR DELETE ON "evaluation_events"
-  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();
+  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();--> statement-breakpoint
+CREATE TRIGGER evaluation_events_no_truncate_trg
+  BEFORE TRUNCATE ON "evaluation_events"
+  FOR EACH STATEMENT EXECUTE FUNCTION evaluation_events_immutable();

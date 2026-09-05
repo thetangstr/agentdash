@@ -948,7 +948,7 @@ export async function startServer(): Promise<StartedServer> {
   if (!evaluationIngestEnabled) {
     logger.info({ reason: "AGENTDASH_EVALUATION_INGEST_ENABLED!=true" }, "evaluation_ingest: schedule skipped");
   } else {
-    const ingest = evaluationIngest(db as any);
+    const ingest = evaluationIngest(db);
     logger.info({ intervalMs: evaluationIngestIntervalMs }, "evaluation_ingest: schedule enabled");
     evaluationIngestHandle = setInterval(() => {
       void ingest
@@ -1379,6 +1379,10 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "failed to clear heartbeatDigest interval");
         }
       }
+
+      // AgentDash: Company Evaluator — stop the ingest interval on shutdown.
+
+      if (evaluationIngestHandle) clearInterval(evaluationIngestHandle);
 
       if (runHealerHandle) {
         try {

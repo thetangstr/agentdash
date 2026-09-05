@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigserial, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 /**
@@ -17,6 +17,13 @@ export const evaluationEvents = pgTable(
   "evaluation_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * Insertion order. Replay windows are cut on `seq`, never on a position in
+     * the event-time order, so a later ingest of an earlier-dated fact (a
+     * clamped self-report, a lagging source) cannot rewrite an already stored
+     * card. Ingest is a single writer per instance, so seq is monotone.
+     */
+    seq: bigserial("seq", { mode: "number" }).notNull(),
     companyId: uuid("company_id")
       .notNull()
       .references(() => companies.id, { onDelete: "cascade" }),
@@ -46,6 +53,8 @@ export const evaluationEvents = pgTable(
   },
   (table) => ({
     dedupeUq: uniqueIndex("evaluation_events_dedupe_uq").on(table.dedupeKey),
+    seqUq: uniqueIndex("evaluation_events_seq_uq").on(table.seq),
+    companySeqIdx: index("evaluation_events_company_seq_idx").on(table.companyId, table.seq),
     companyTimeIdx: index("evaluation_events_company_time_idx").on(table.companyId, table.eventTime),
     companyTypeIdx: index("evaluation_events_company_type_idx").on(table.companyId, table.eventType),
     companyProjectIdx: index("evaluation_events_company_project_idx").on(table.companyId, table.projectId),

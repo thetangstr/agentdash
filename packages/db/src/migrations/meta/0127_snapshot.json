@@ -1,5 +1,5 @@
 {
-  "id": "feb1384d-62fd-4c65-993d-2035e0d25282",
+  "id": "d90d644a-b4c8-4739-8185-abc5f42e721b",
   "prevId": "b69c7b67-7ce2-42c2-bda2-c0b3dfb4366a",
   "version": "7",
   "dialect": "postgresql",
@@ -10322,6 +10322,12 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
+        "seq": {
+          "name": "seq",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "company_id": {
           "name": "company_id",
           "type": "uuid",
@@ -10434,6 +10440,42 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "evaluation_events_seq_uq": {
+          "name": "evaluation_events_seq_uq",
+          "columns": [
+            {
+              "expression": "seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "evaluation_events_company_seq_idx": {
+          "name": "evaluation_events_company_seq_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -10655,6 +10697,12 @@
         "formula_version": {
           "name": "formula_version",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "through_seq": {
+          "name": "through_seq",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },

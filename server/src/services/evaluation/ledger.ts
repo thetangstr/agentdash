@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
 import {
@@ -15,6 +15,12 @@ import {
  * Pure helpers (canonical JSON, hashing, dedupe key, event-time clamping,
  * total ordering) live here beside the insert path so tests can pin them
  * without a database, and so replay and ingest share one definition.
+ *
+ * Two orders matter and must not be confused:
+ * - `seq` is insertion order. Replay windows are cut on it, so a stored card
+ *   is reproducible no matter what is ingested later.
+ * - the event-time order (`compareEvents`) is how events inside a window are
+ *   arranged for projection.
  */
 
 export interface EvaluationEventInput {
@@ -59,9 +65,10 @@ export function hashCanonical(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
-/** Rule 6: the key embeds the company so tenants can never collide. */
+/** Rule 6: the key embeds the company so tenants can never collide. Parts are escaped so `|` in a version cannot alias another key. */
 export function dedupeKeyFor(input: Pick<EvaluationEventInput, "companyId" | "sourceTable" | "sourceId" | "eventType" | "sourceVersion">): string {
-  return [input.companyId, input.sourceTable, input.sourceId, input.eventType, input.sourceVersion].join("|");
+  const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+  return [input.companyId, input.sourceTable, input.sourceId, input.eventType, input.sourceVersion].map(esc).join("|");
 }
 
 export interface ClampResult {
@@ -97,8 +104,9 @@ export function clampEventTime(claimed: Date | string | null | undefined, arriva
 }
 
 /**
- * Rule 5: the total order replay uses. Event time bucketed to the skew
- * tolerance, then ingest time, then dedupe key. Part of every formulaVersion.
+ * Rule 5: the total order used inside a replay window. Event time bucketed to
+ * the skew tolerance, then ingest time, then dedupe key (unique, so the order
+ * is total). Part of every formulaVersion.
  */
 export function compareEvents(
   a: Pick<EvaluationEventRow, "eventTime" | "ingestTime" | "dedupeKey">,
@@ -122,6 +130,9 @@ export interface AppendResult {
   skipped: number;
   insertedIds: string[];
 }
+
+/** Page size for seq-keyed reads; the window itself is unbounded. */
+const PAGE = 5000;
 
 export function evaluationLedger(db: Db) {
   return {
@@ -165,7 +176,38 @@ export function evaluationLedger(db: Db) {
       return { inserted: insertedIds.length, skipped: events.length - insertedIds.length, insertedIds };
     },
 
-    /** Ordered read for replay and drill-down. */
+    /** Highest seq for a company, 0 when the ledger is empty. The snapshot cut point. */
+    async maxSeq(companyId: string): Promise<number> {
+      const [row] = await db
+        .select({ m: sql<number>`coalesce(max(${evaluationEvents.seq}), 0)::bigint` })
+        .from(evaluationEvents)
+        .where(eq(evaluationEvents.companyId, companyId));
+      return Number(row?.m ?? 0);
+    },
+
+    /**
+     * Every event of a company with seq <= throughSeq, paged on seq so nothing
+     * is silently truncated, returned in the rule-5 order. This is the replay
+     * window; rows ingested after the cut can never enter it.
+     */
+    async windowUpTo(companyId: string, throughSeq: number): Promise<EvaluationEventRow[]> {
+      const out: EvaluationEventRow[] = [];
+      let after = 0;
+      for (;;) {
+        const page = await db
+          .select()
+          .from(evaluationEvents)
+          .where(and(eq(evaluationEvents.companyId, companyId), gt(evaluationEvents.seq, after), lte(evaluationEvents.seq, throughSeq)))
+          .orderBy(asc(evaluationEvents.seq))
+          .limit(PAGE);
+        out.push(...page);
+        if (page.length < PAGE) break;
+        after = Number(page[page.length - 1]!.seq);
+      }
+      return orderEvents(out);
+    },
+
+    /** Bounded read for drill-down and the events route (not for replay). */
     async list(
       companyId: string,
       opts: { types?: EvaluationEventType[]; sinceEventTime?: Date; limit?: number } = {},
@@ -178,7 +220,7 @@ export function evaluationLedger(db: Db) {
         .from(evaluationEvents)
         .where(and(...conds))
         .orderBy(asc(evaluationEvents.eventTime), asc(evaluationEvents.ingestTime), asc(evaluationEvents.dedupeKey))
-        .limit(Math.min(opts.limit ?? 5000, 20000));
+        .limit(Math.min(opts.limit ?? 1000, 5000));
       return orderEvents(rows);
     },
 
@@ -191,14 +233,42 @@ export function evaluationLedger(db: Db) {
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
     },
 
-    /** Source ids already ingested for a table (used by withdrawal detection). */
-    async knownSourceIds(companyId: string, sourceTable: string, limit = 20000): Promise<Set<string>> {
-      const rows = await db
-        .selectDistinct({ sourceId: evaluationEvents.sourceId })
+    /** Whether a contract has been declared for a milestone (a `contract.declared` event in scope). */
+    async hasContract(companyId: string, ref: { kind: "project" | "goal"; id: string }): Promise<boolean> {
+      const scopeCond = ref.kind === "project" ? eq(evaluationEvents.projectId, ref.id) : eq(evaluationEvents.goalId, ref.id);
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
         .from(evaluationEvents)
-        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable)))
-        .limit(limit);
-      return new Set(rows.map((r) => r.sourceId));
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.eventType, "contract.declared"), scopeCond));
+      return (row?.n ?? 0) > 0;
+    },
+
+    /**
+     * Source ids already ingested for a table with their scope, excluding ids
+     * that already have a terminal `excludeType` event (used by withdrawal
+     * detection so the scan does not grow with history).
+     */
+    async knownSources(
+      companyId: string,
+      sourceTable: string,
+      excludeType?: EvaluationEventType,
+    ): Promise<Map<string, { projectId: string | null; goalId: string | null }>> {
+      const rows = await db
+        .select({
+          sourceId: evaluationEvents.sourceId,
+          eventType: evaluationEvents.eventType,
+          projectId: evaluationEvents.projectId,
+          goalId: evaluationEvents.goalId,
+        })
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable)));
+      const excluded = new Set(rows.filter((r) => excludeType && r.eventType === excludeType).map((r) => r.sourceId));
+      const out = new Map<string, { projectId: string | null; goalId: string | null }>();
+      for (const r of rows) {
+        if (excluded.has(r.sourceId)) continue;
+        if (!out.has(r.sourceId)) out.set(r.sourceId, { projectId: r.projectId, goalId: r.goalId });
+      }
+      return out;
     },
   };
 }
