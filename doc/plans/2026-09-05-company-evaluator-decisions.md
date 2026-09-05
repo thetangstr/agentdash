@@ -435,3 +435,21 @@ Recorded here rather than in the spec, which is at its size limit.
   and later records its verdict is a self-reviewer under §3 — it will be the
   largest source of immediate exceptions in the shadow run, by design; the
   question for Milestone 5 is whether that rule should stand.
+- **Third verification (round 3).** The review-class set is both reviewer
+  handoffs (`tester_to_reviewer`, `reviewer_to_tpm`) — a reviewer handing its
+  review down the chain is not a contribution — and their comment twins,
+  matched by comment id or, when an id is missing, by the same actor within the
+  skew tolerance. A criterion's rule-17 key is its id and its check; its text
+  is prose and may be reworded without becoming a new declaration. The
+  close-time independence check counts work-changing acts only (runs, entering
+  in_progress, taking the assignment, implementation self-reports, DoD edits),
+  so a reviewer's "thanks" after its verdict changes nothing while a run after
+  it does. Under a partial waiver, items are judged on the classes the contract
+  requires and the waiver is carried by the rule-16 cap and the per-class
+  record; a contract that requires no class decides nothing. Composites weight
+  each metric by its coverage, so a value over a fifth of the items does not
+  count like one over all of them; O3 and P9 keep population denominators
+  because they are indices. The refusal detector's blindness caps P6 at limited
+  evidence rather than pretending a coverage number. The surface the twin skip
+  creates is named: directive prose inside a review handoff is unscored, as all
+  prose is.

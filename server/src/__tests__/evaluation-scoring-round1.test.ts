@@ -4,6 +4,8 @@ import type { EvaluationEventRow } from "../services/evaluation/ledger.js";
 import { scoreMilestone } from "../services/evaluation/scoring/card.js";
 import { gatesPass } from "../services/evaluation/scoring/evidence.js";
 import { findingEvents } from "../services/evaluation/scorecards.js";
+import { composite } from "../services/evaluation/scoring/composite.js";
+import type { MetricResult } from "../services/evaluation/scoring/types.js";
 import type { ScoredCard } from "../services/evaluation/scoring/types.js";
 import { A, at, CO, commentTwin, ev, evidenced, FOUNDER, G, gates, handoff, I1, I2, iso, item, P, R, ref, roster, score, shuffle, T, verdict } from "./helpers/evaluation-fixtures.js";
 import { cardHash, scoreMilestone as scoreCard } from "../services/evaluation/scoring/card.js";
@@ -110,10 +112,11 @@ describe("round 1 — contracts", () => {
     const waivedAll = score([...roster(), declared(-1, [], []), ...evidenced(I1)]);
     expect(waivedAll.outcome.O5!.value).toBeNull();
     expect(waivedAll.outcome.O5!.confidence).toBe("insufficient");
-    expect(waivedAll.outcome.O5!.breakdown.undecidable[0]!.reason).toMatch(/waived by the contract/);
+    expect(waivedAll.outcome.O5!.breakdown.undecidable[0]!.reason).toMatch(/requires no evidence class/);
     const partial = score([...roster(), declared(-1, [], ["dod_present", "neutral_verdict", "independent_review"]), ...evidenced(I1)]);
-    expect(perClass(partial).ci_green.undecidable).toBe(1);
-    expect(partial.outcome.O5!.value).toBeNull(); // every item has an undecidable class
+    expect((perClass(partial).ci_green as { waived: number }).waived).toBe(1);
+    expect(partial.outcome.O5!.value).toBe(1); // judged on the classes the contract requires…
+    expect(partial.outcome.O5!.confidence).toBe("low"); // …under the rule-16 cap until the founder accepts the waiver
     expect(partial.outcome.O5!.notes.some((n) => n.includes("waives"))).toBe(true);
     // a complete evidence set but a check-less criterion is a rule-16 exception: capped at limited until accepted
     const weakCriteria = score([...roster(), declared(-1, [{ id: "k2", text: "feels done", source: "human" }]), ...evidenced(I1)]);
@@ -337,28 +340,40 @@ describe("round 2 — verification findings", () => {
     expect(chatty.exceptions.some((e) => e.id === "E4")).toBe(true);
   });
 
-  it("HIGH 2: rule 17 keys a criterion on its id and its content — rewriting a check in place under the same id is a new declaration", () => {
+  it("HIGH 2: rule 17 keys a criterion on its id and its check — rewriting the check under the same id is a new declaration, rewording the text is not", () => {
     const first = declared(-1, [verdictCriterion]);
+    const reworded = declared(20, [{ ...verdictCriterion, text: "an independent verdict has passed" }]);
+    const kept = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), reworded]);
+    expect(kept.exceptions.filter((e) => e.id === "E1").length).toBe(1); // a typo fix erases nothing
     const rewritten = declared(20, [{ id: "k1", text: "a DoD is present", check: { kind: "record", record: "dod.present" }, source: "human" }]);
     const card = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), rewritten]);
     // the rewritten k1 is post hoc for both closed items; the original k1's verdict check no longer applies (the document was replaced)
     expect(card.outcome.O1!.breakdown.failed).toBe(0);
     expect(card.outcome.O1!.breakdown.undecidable[0]!.reason).toMatch(/declared after this item closed/);
     expect(card.exceptions.filter((e) => e.id === "E1")).toEqual([]);
-    // and the honest amendment (same id, same content) keeps the original time
+    // and the honest amendment (same id, same check) keeps the original time
     const honest = declared(20, [verdictCriterion, { id: "k9", text: "also this", check: { kind: "record", record: "ci.green" }, source: "human" }]);
-    const kept = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), honest]);
-    expect(kept.exceptions.filter((e) => e.id === "E1").length).toBe(1);
+    const amended = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), honest]);
+    expect(amended.exceptions.filter((e) => e.id === "E1").length).toBe(1);
   });
 
-  it("MEDIUM 3: O1 and O5 values are over the decidable population; a partial waiver does not pin O5 to zero", () => {
-    const window = [...roster(), declared(-1, [], ["dod_present"]), ...item({ id: I1, started: 1, done: 4, dod: true, dodSetAt: 0 }), ...item({ id: I2, started: 1, done: 4 })];
+  it("MEDIUM 3: under a partial waiver items are judged on the required classes — 8 of 10 with a DoD is 0.8, capped at limited evidence", () => {
+    const window = [...roster(), declared(-1, [], ["dod_present"])];
+    for (let i = 0; i < 10; i++) {
+      const id = `00000000-0000-4000-8000-0000000003${i.toString().padStart(2, "0")}`;
+      window.push(...item({ id, started: 1, done: 4, dod: i < 8, dodSetAt: i < 8 ? 0 : undefined }));
+    }
     const card = score(window);
-    // I1 has a DoD (satisfied on the one required class but undecidable on the waived ones → undecidable); I2 fails dod_present
-    expect(card.outcome.O5!.breakdown).toMatchObject({ satisfied: 0, failed: 1 });
-    expect(card.outcome.O5!.value).toBe(0); // 0 satisfied of 1 decidable — and coverage is 0.5, tier low, capped by the waiver
-    const twoDecidable = score([...roster(), declared(-1, [], ["dod_present"]), ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 })]);
-    expect(twoDecidable.outcome.O5!.breakdown).toMatchObject({ satisfied: 0, failed: 1 });
+    expect(card.outcome.O5!.breakdown).toMatchObject({ satisfied: 8, failed: 2 });
+    expect(card.outcome.O5!.value).toBe(0.8);
+    expect(card.outcome.O5!.confidence).toBe("low");
+    // a contract that requires no class at all decides nothing
+    const none = score([...roster(), declared(-1, [], []), ...evidenced(I1)]);
+    expect(none.outcome.O5!.value).toBeNull();
+    // O1 over decidables: 1 satisfied of 2 decidable with a third undecidable (closed before the criteria were declared) is 0.5 at coverage 2/3
+    const o1 = score([...roster(), declared(-1, [verdictCriterion]), ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), ...item({ id: "00000000-0000-4000-8000-000000000103", created: -5, started: -4, done: -2 })]);
+    expect(o1.outcome.O1!.value).toBe(0.5);
+    expect(o1.outcome.O1!.coverage).toBe(0.667);
   });
 
   it("MEDIUM 4: a verdict recorded before its author took the item over cannot certify the close", () => {
@@ -432,5 +447,54 @@ describe("round 2 — verification findings", () => {
     const one = scoreCard(window, ref, cut, CO, { fallbackOpen: true });
     expect(cardHash(scoreCard(shuffle(window), ref, cut, CO, { fallbackOpen: true }))).toBe(cardHash(one));
     expect(one.exceptions.some((e) => e.id === "E14")).toBe(true);
+  });
+});
+
+describe("round 3 — verification findings", () => {
+  it("HIGH 1: the reviewer's own reviewer_to_tpm handoff (and its twin) is a review-class act, not a later contribution", () => {
+    const card = score([...roster(), ...evidenced(I1)]); // evidenced() now carries the full MAW chain
+    expect(card.outcome.O5!.value).toBe(1);
+    expect(card.exceptions.filter((e) => e.id === "E4")).toEqual([]);
+    // the only E3 is the fixture's reviewer closing the item (the known transition-of-unassigned rule), never a self-review
+    expect(card.exceptions.filter((e) => e.id === "E3" && !e.note.startsWith("transition of an unassigned item"))).toEqual([]);
+  });
+
+  it("MEDIUM 5: the close-time set is work-changing acts only — a comment after the verdict is not a later contribution, a run is", () => {
+    const thanks = score([...roster(), ...evidenced(I1), ev({ type: "issue.comment_added", time: at(7.5), actor: ["agent", R], issueId: I1, payload: { commentId: "thanks", reopened: false } })]);
+    expect(thanks.exceptions.filter((e) => e.id === "E4")).toEqual([]);
+    const implemented = score([...roster(), ...evidenced(I1), ev({ type: "run.finished", time: at(7.5), actor: ["agent", R], issueId: I1, sourceTable: "heartbeat_runs", sourceId: "r-late", payload: { runId: "r-late", agentId: R, status: "succeeded", durationMs: 1000, usagePresent: false } })]);
+    expect(implemented.exceptions.some((e) => e.id === "E4" && e.note.includes("went on to contribute"))).toBe(true);
+  });
+
+  it("MEDIUM 6: a twin without a comment id is still skipped when a review-class handoff by the same actor is within the tolerance", () => {
+    const window = [...roster(), ...item({ id: I1, started: 1, done: 8 }), handoff(I1, 5, R, "tester_to_reviewer", { issue: { id: I1 }, verdict: "pass", regression_gates: gates, labels_applied: [] }), ev({ type: "issue.comment_added", time: at(5.01), actor: ["agent", R], issueId: I1, payload: { commentId: null, reopened: false } }), verdict(I1, 6, R)];
+    expect(score(window).exceptions.filter((e) => e.id === "E4")).toEqual([]);
+  });
+
+  it("MEDIUM 4: composites weight each metric by its coverage", () => {
+    const m = (key: MetricResult["key"], value: number, coverage: number): MetricResult => ({ key, name: key, value, unit: "", n: 10, coverage, confidence: "low", confidenceLabel: "", breakdown: { satisfied: 0, failed: 0, undecidable: [] }, headline: "", formulaVersion: "t", evidenceRefs: [], evidenceRefCount: 0, tiers: ["T0"], lowerIsBetter: false, displayOnly: false, detail: {}, notes: [] });
+    const out = composite("outcome", { O1: m("O1", 1, 0.2), O5: m("O5", 0, 1) }, []);
+    // O1 = 100 at weight 0.4×0.2 = 0.08; O5 = 0 at weight 0.15×1 = 0.15 → 8/0.23 ≈ 34.8, not the unweighted 72.7
+    expect(out.score).toBe(34.8);
+    expect(out.included.map((i) => i.coverage)).toEqual([0.2, 1]);
+  });
+
+  it("LOW 9 / 10: E11 and the metering E7 are dated by their last fact; acceptance by a real but non-accountable human does not lift the cap", () => {
+    const drop: EvaluationEventRow[] = [...roster(), ...item({ id: I2, started: 1 })];
+    const asOfHour = 24 * 7 * 6;
+    for (let week = 1; week <= 4; week++) for (let k = 0; k < 8; k++) drop.push(ev({ type: "issue.comment_added", time: at(asOfHour - week * 24 * 7 - k), actor: ["agent", A], issueId: I2, payload: { commentId: `w${week}k${k}`, reopened: false } }));
+    drop.push(ev({ type: "issue.comment_added", time: at(asOfHour - 24 * 7 * 5 - 1), actor: ["agent", A], issueId: I2, payload: { commentId: "first", reopened: false } }));
+    const later = [...drop, ev({ type: "agent.snapshot", time: at(asOfHour + 24 * 3), projectId: null, sourceId: R, payload: { agentId: R, name: "Reviewer", status: "idle", reportsTo: null, accountableUserId: FOUNDER } })];
+    const e11a = score([...drop, ev({ type: "agent.snapshot", time: at(asOfHour), projectId: null, sourceId: R, payload: { agentId: R, name: "Reviewer", status: "idle", reportsTo: null, accountableUserId: FOUNDER } })]).exceptions.find((e) => e.id === "E11");
+    const e11b = score(later).exceptions.find((e) => e.id === "E11");
+    expect(e11a && e11b && e11a.raisedAt === e11b.raisedAt).toBe(true);
+    const runs: EvaluationEventRow[] = [];
+    for (let i = 0; i < 5; i++) runs.push(ev({ type: "run.finished", time: at(1 + i), actor: ["agent", A], issueId: I1, sourceTable: "heartbeat_runs", sourceId: `u${i}`, payload: { runId: `u${i}`, agentId: A, status: "succeeded", durationMs: 60_000, usagePresent: false } }));
+    const e7a = score([...roster(), ...item({ id: I1, started: 1, done: 8 }), ...runs]).exceptions.find((e) => e.id === "E7")!;
+    const e7b = score([...roster(), ...item({ id: I1, started: 1, done: 8 }), ...runs, ev({ type: "agent.snapshot", time: at(24 * 20), projectId: null, sourceId: R, payload: { agentId: R, name: "Reviewer", status: "idle", reportsTo: null, accountableUserId: FOUNDER } })]).exceptions.find((e) => e.id === "E7")!;
+    expect(e7a.raisedAt).toBe(e7b.raisedAt);
+    const weak = declared(-1, [{ id: "k2", text: "feels done", source: "human" }]);
+    const other = score([...roster(), weak, ev({ type: "evaluation.disposition", time: at(0), actor: ["user", "someone-else"], sourceTable: "evaluation", sourceId: "acc-o", payload: { kind: "contract_exception_accepted", contractEventId: weak.id } }), ...evidenced(I1)]);
+    expect(other.outcome.O5!.confidence).toBe("low");
   });
 });

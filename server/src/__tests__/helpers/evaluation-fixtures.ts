@@ -146,6 +146,9 @@ export function evidenced(id: string, base = 0): EvaluationEventRow[] {
     handoff(id, base + 5, R, "tester_to_reviewer", { issue: { id }, verdict: "pass", regression_gates: gates, labels_applied: [] }),
     commentTwin(id, base + 5, R), // production shape: the handoff comment's activity twin
     verdict(id, base + 6, R),
+    // the reviewer hands its review down the chain: a review-class act, not a contribution
+    handoff(id, base + 6.5, R, "reviewer_to_tpm", { issue: { id }, size: "S", deployment_path: "auto", pr: { number: 42, base_branch: "main" }, verification_method: "local", labels_applied: [] }),
+    commentTwin(id, base + 6.5, R),
     handoff(id, base + 7, T, "tpm_merge_report", { issue: { id }, merge_result: "shipped", pr: { number: 42, base_branch: "main" } }),
     commentTwin(id, base + 7, T),
   ];

@@ -38,11 +38,28 @@ export function isSyntheticUser(userId: string | null | undefined): boolean {
 export interface ContributorOptions {
   /** Ignore the actor of the terminal transition (the close itself is not a contribution to the work). */
   excludeTerminalTransition?: boolean;
+  /**
+   * Work-changing acts only — runs, entering in_progress, taking the assignment,
+   * implementation self-reports, DoD edits — not comments or blocker edits. The
+   * close-time check uses this: it exists to catch implementation a reviewer
+   * performed after certifying, not a "thanks" comment.
+   */
+  workOnly?: boolean;
 }
 
+/** Review-class handoffs: the acts independence judges, never contributions to the work (§4.2). */
+export const REVIEW_CLASS_HANDOFFS = new Set(["tester_to_reviewer", "reviewer_to_tpm"]);
+const TWIN_TOLERANCE_MS = 5 * 60 * 1000;
+
+const contributorMemo = new WeakMap<ItemTimeline, Map<string, Set<string>>>();
+
 export function contributors(it: ItemTimeline, until?: Date, opts: ContributorOptions = {}): Set<string> {
-  const cache = ((it as unknown as { __contributors?: Map<string, Set<string>> }).__contributors ??= new Map());
-  const cacheKey = `${until ? until.getTime() : "all"}:${opts.excludeTerminalTransition ? 1 : 0}`;
+  let cache = contributorMemo.get(it);
+  if (!cache) {
+    cache = new Map();
+    contributorMemo.set(it, cache);
+  }
+  const cacheKey = `${until ? until.getTime() : "all"}:${opts.excludeTerminalTransition ? 1 : 0}:${opts.workOnly ? 1 : 0}`;
   const hit = cache.get(cacheKey);
   if (hit) return hit;
   const out = new Set<string>();
@@ -59,20 +76,29 @@ export function contributors(it: ItemTimeline, until?: Date, opts: ContributorOp
     if (a.fromUserId) out.add(actorKey("user", a.fromUserId));
     if (a.actorType === "agent" && a.actorId) out.add(actorKey("agent", a.actorId));
   }
-  const reviewCommentIds = new Set(it.handoffs.filter((h) => h.type === "tester_to_reviewer" && h.commentId).map((h) => h.commentId!));
-  for (const c of within(it.comments)) {
-    if (c.commentId && reviewCommentIds.has(c.commentId)) continue; // the review's own activity twin
-    if (c.actorType === "agent" && c.actorId) out.add(actorKey("agent", c.actorId));
+  const reviewHandoffs = it.handoffs.filter((h) => REVIEW_CLASS_HANDOFFS.has(h.type));
+  const reviewCommentIds = new Set(reviewHandoffs.filter((h) => h.commentId).map((h) => h.commentId!));
+  const isReviewTwin = (c: { commentId: string | null; actorType: string; actorId: string | null; time: Date }) =>
+    (!!c.commentId && reviewCommentIds.has(c.commentId)) ||
+    // fallback when a comment id is missing on either side: a review-class handoff by the same actor within the skew tolerance
+    reviewHandoffs.some((h) => h.actorType === c.actorType && h.actorId === c.actorId && Math.abs(h.time.getTime() - c.time.getTime()) <= TWIN_TOLERANCE_MS);
+  if (!opts.workOnly) {
+    for (const c of within(it.comments)) {
+      if (isReviewTwin(c)) continue; // the review's own activity twin
+      if (c.actorType === "agent" && c.actorId) out.add(actorKey("agent", c.actorId));
+    }
   }
   for (const t of within(it.transitions)) {
     if (opts.excludeTerminalTransition && TERMINAL_STATUSES.has(t.to)) continue;
+    if (opts.workOnly && t.to !== "in_progress") continue;
     if (t.actorType === "agent" && t.actorId) out.add(actorKey("agent", t.actorId));
   }
-  for (const list of [it.blockers, it.dods] as Array<Array<{ time: Date; actorType: string; actorId: string | null }>>) {
+  const editLists = opts.workOnly ? [it.dods] : [it.blockers, it.dods];
+  for (const list of editLists as Array<Array<{ time: Date; actorType: string; actorId: string | null }>>) {
     for (const x of within(list)) if (x.actorType === "agent" && x.actorId) out.add(actorKey("agent", x.actorId));
   }
   for (const r of within(it.runs)) if (r.agentId) out.add(actorKey("agent", r.agentId));
-  for (const h of within(it.handoffs)) if (h.type !== "tester_to_reviewer" && h.actorId) out.add(actorKey(h.actorType, h.actorId));
+  for (const h of within(it.handoffs)) if (!REVIEW_CLASS_HANDOFFS.has(h.type) && h.actorId) out.add(actorKey(h.actorType, h.actorId));
   const s0 = it.snapshots[0];
   if (s0) {
     const creator = s0.createdByAgentId ? actorKey("agent", s0.createdByAgentId) : s0.createdByUserId ? actorKey("user", s0.createdByUserId) : null;
@@ -130,7 +156,7 @@ export function reviewIndependence(
       return { independent: false, reason: "self_review", sharedAccountability: shared };
     }
     // a review that precedes its author's contributions cannot certify the close those contributions produced
-    if (ctx.closeAt && ctx.closeAt > ctx.at && contributors(it, ctx.closeAt, { excludeTerminalTransition: true }).has(key)) {
+    if (ctx.closeAt && ctx.closeAt > ctx.at && contributors(it, ctx.closeAt, { excludeTerminalTransition: true, workOnly: true }).has(key)) {
       return { independent: false, reason: "later_contributor", sharedAccountability: shared };
     }
   }

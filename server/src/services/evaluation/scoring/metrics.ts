@@ -462,7 +462,7 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   const items = done(ctx);
   const required = new Set(ctx.resolved.contract.requiredEvidence);
   const waived = EVALUATION_DEFAULT_REQUIRED_EVIDENCE.filter((cls) => !required.has(cls));
-  const perClass: Record<string, { satisfied: number; failed: number; undecidable: number }> = {};
+  const perClass: Record<string, { satisfied: number; failed: number; undecidable: number; waived: number }> = {};
   let limitedItems = 0;
   let limitedReviewItems = 0;
   let sharedReviews = 0;
@@ -476,12 +476,16 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
     let failed = false;
     let und: string | null = null;
     let limited = false;
-    // Rule 16: a class the contract waived is undecidable for every item — waiving lowers coverage, never raises the value.
+    // Rule 16: items are judged on the classes the contract requires; a waived class is recorded per class and
+    // through the rule-16 cap, never by pretending it was measured. No required class at all: nothing is decidable.
+    if (required.size === 0) {
+      undecided(t, it.issueId, "the contract requires no evidence class");
+      continue;
+    }
     for (const cls of EVALUATION_DEFAULT_REQUIRED_EVIDENCE) {
-      const pc = (perClass[cls] ??= { satisfied: 0, failed: 0, undecidable: 0 });
+      const pc = (perClass[cls] ??= { satisfied: 0, failed: 0, undecidable: 0, waived: 0 });
       if (!required.has(cls)) {
-        pc.undecidable++;
-        und = und ?? `${cls}: waived by the contract`;
+        pc.waived++;
         continue;
       }
       const r = ev.classes[cls];
@@ -517,7 +521,7 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   const decidable = t.satisfied.length + t.failed.length;
   const weak = weakContractCap(ctx);
   const notes: string[] = ["value over the decidable items; coverage carries the undecidable ones"];
-  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: counted as undecidable for every item`);
+  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: items are judged on the remaining classes; the waiver is a recorded contract exception`);
   if (limitedReviewItems > 0) notes.push(`${words(limitedReviewItems, "item")} reviewed only within a concentrated reviewer pair: those reviews weigh as limited evidence`);
   if (weak) notes.push(weak.note);
   return {
@@ -904,7 +908,7 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
     t.failed.push(ref);
     t.refs.add(ref);
     t.tiers.add("T0");
-    exceptions.push(exception(ctx, "E3", it ? subjectIssue(it) : { kind: "agent", id: scope.agentId }, time, [ref], `${rule}: ${note}`, scope.agentId, ref));
+    exceptions.push(exception(ctx, "E3", it ? subjectIssue(it) : { kind: "agent", id: scope.agentId }, time, [ref], `${P6_RULE_WORDS[rule] ?? rule}: ${note}`, scope.agentId, ref));
   };
   const locks = new Set(ctx.resolved.contract.founderLocks);
   for (const it of ctx.members) {
@@ -946,10 +950,13 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
       displayOnly: true,
       countMetric: true,
       // the refusal detector is blind until the control plane records refusals: say so through the tier
-      coverage: ctx.tl.sources.authzRefused ? 1 : 0.5,
+      cap: ctx.tl.sources.authzRefused ? undefined : "low",
       headline: n === 0 ? "no violations detected" : `${words(n, "violation")} detected: ${Object.entries(rules).sort().map(([k, v]) => `${P6_RULE_WORDS[k] ?? k} ${v}`).join(", ")}`,
       detail: { rules, refusalsLogged: ctx.tl.sources.authzRefused },
-      notes: ["a count, not a ratio: refused actions leave a record only where the control plane records refusals"],
+      notes: [
+        "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
+        ...(ctx.tl.sources.authzRefused ? [] : ["refused requests are not recorded in this window: the detector is blind to them"]),
+      ],
     }),
     exceptions,
   };

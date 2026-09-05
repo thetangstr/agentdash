@@ -154,9 +154,9 @@ function summarise(c: EvaluationContractV1, source: "declared" | "derived", even
   };
 }
 
-/** Rule 17 key: a criterion is its id and its content. */
+/** Rule 17 key: a criterion is its id and its check — the check is what is measured; its text is prose and may be reworded freely. */
 export function criterionKey(c: { id: string; text: string; check?: unknown }): string {
-  return `${c.id}:${hashCanonical({ text: c.text, check: c.check ?? null }).slice(0, 16)}`;
+  return `${c.id}:${hashCanonical({ check: c.check ?? null }).slice(0, 16)}`;
 }
 
 

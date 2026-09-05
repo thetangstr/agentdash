@@ -62,7 +62,7 @@ export interface CompositeResult {
   /** 0–100, null when a guard fails. */
   score: number | null;
   confidence: EvaluationConfidenceTier | null;
-  included: Array<{ key: EvaluationMetricKey; weight: number; scaled: number; confidence: EvaluationConfidenceTier }>;
+  included: Array<{ key: EvaluationMetricKey; weight: number; coverage: number; scaled: number; confidence: EvaluationConfidenceTier }>;
   excluded: Array<{ key: EvaluationMetricKey; reason: string }>;
   /** E3/E4 present in the window: a flag, never arithmetic (§5.3). */
   flags: string[];

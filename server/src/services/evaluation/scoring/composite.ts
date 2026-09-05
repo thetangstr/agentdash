@@ -8,15 +8,18 @@ import {
 import { minTier } from "./confidence.js";
 import type { CompositeResult, MetricResult } from "./types.js";
 
-export const COMPOSITE_FORMULA_VERSION = "composite/1";
+export const COMPOSITE_FORMULA_VERSION = "composite/2";
 
 /**
- * Spec §5.3: a renormalised weighted mean over included metrics,
- * `score = Σ wᵢ·vᵢ / Σ wᵢ`, values scaled to 0–100 and inverted where lower is
- * better. A metric is included only at Low confidence or better and only when
- * it has a weight. Guards: no outcome score with fewer than two included
- * metrics, no operating score with fewer than three. Composite confidence is
- * the lowest included tier. E3/E4 are flags, never arithmetic.
+ * Spec §5.3: a renormalised weighted mean over included metrics, values scaled
+ * to 0–100 and inverted where lower is better. Each weight is multiplied by
+ * the metric's coverage — `score = Σ wᵢ·cᵢ·vᵢ / Σ wᵢ·cᵢ` — because values are
+ * over the decidable population and a number resting on a fifth of the items
+ * must not count like one resting on all of them (§7). A metric is included
+ * only at Low confidence or better and only when it has a weight. Guards: no
+ * outcome score with fewer than two included metrics, no operating score with
+ * fewer than three. Composite confidence is the lowest included tier. E3/E4
+ * are flags, never arithmetic.
  */
 export function composite(
   kind: "outcome" | "operating",
@@ -44,7 +47,7 @@ export function composite(
       continue;
     }
     const scaled = scaleTo100(m);
-    included.push({ key, weight, scaled, confidence: m.confidence });
+    included.push({ key, weight, coverage: m.coverage, scaled, confidence: m.confidence });
   }
   for (const key of Object.keys(metrics).sort() as EvaluationMetricKey[]) {
     if (!(key in weights) && metrics[key]) excluded.push({ key, reason: "shown, never scored" });
@@ -53,8 +56,8 @@ export function composite(
   let score: number | null = null;
   let confidence: EvaluationConfidenceTier | null = null;
   if (guardOk) {
-    const wsum = included.reduce((s, i) => s + i.weight, 0);
-    score = Math.round((included.reduce((s, i) => s + i.weight * i.scaled, 0) / wsum) * 10) / 10;
+    const wsum = included.reduce((s, i) => s + i.weight * i.coverage, 0);
+    score = wsum > 0 ? Math.round((included.reduce((s, i) => s + i.weight * i.coverage * i.scaled, 0) / wsum) * 10) / 10 : null;
     confidence = included.map((i) => i.confidence).reduce((a, b) => minTier(a, b));
   }
   return {
