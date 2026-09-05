@@ -1,4 +1,5 @@
 import express, { Router, type Request as ExpressRequest } from "express";
+import { setAuthzRefusalDb } from "./routes/authz.js";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -342,6 +343,11 @@ export async function createApp(
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
   }
   app.use(llmRoutes(db));
+
+  // AGE-91: give the synchronous authz assert helpers a process-wide db handle
+  // so refused writes can be recorded as authz.refused activity rows. Wired
+  // before any route mounts; `setAuthzRefusalDb(null)` in tests resets it.
+  setAuthzRefusalDb(db);
 
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = opts.pluginWorkerManager ?? createPluginWorkerManager();
