@@ -34,6 +34,8 @@ export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export interface Cursor {
   time?: string;
   id?: string;
+  /** issue_comments only: when withdrawal detection (rule 13) last ran; it scans every known id, so it runs on a cadence. */
+  withdrawalCheckedAt?: string;
 }
 
 export interface SourceReadResult {
@@ -57,6 +59,9 @@ const MAX_PAYLOAD_BYTES = 16 * 1024;
 
 /** Re-read this far behind the cursor each tick; dedupe absorbs the overlap. */
 export const CURSOR_LAG_SECONDS = 60;
+
+/** One comment mints at most this many handoff events; further fenced payloads are counted, not stored. */
+export const MAX_HANDOFFS_PER_COMMENT = 8;
 
 /** How far up `parentId` a descendant is followed to inherit a project (spec §3 membership). */
 const MAX_PARENT_DEPTH = 10;
@@ -364,7 +369,8 @@ export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Curso
       actorId: r.agentId,
       sourceTable: "heartbeat_runs",
       sourceId: r.id,
-      sourceVersion: `${r.status}:${finished.toISOString()}`,
+      // A terminal run without finished_at must not become a new fact on every later touch: no time falls back in.
+      sourceVersion: `${r.status}:${r.finishedAt ? r.finishedAt.toISOString() : "none"}`,
       eventType: "run.finished",
       eventTime: finished,
       // Rule 6: the run and its cost events describe one fact.
@@ -457,7 +463,8 @@ export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor
       ...actor,
       sourceTable: "issue_thread_interactions",
       sourceId: r.id,
-      sourceVersion: `${r.status}:${r.cursorTime}`,
+      // One event per status: a row touched without a status change (result payload writes) is not a new fact.
+      sourceVersion: r.status,
       eventType: "interaction.changed",
       eventTime: r.updatedAt,
       payload: {
@@ -589,12 +596,13 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
   for (const r of rows) {
     const found = extractHandoffPayloads(r.body);
     if (found.length === 0) continue;
+    const handoffs = found.slice(0, MAX_HANDOFFS_PER_COMMENT);
     const sc = scope.get(r.issueId);
     const bodyHash = hashCanonical(r.body);
     const actor = r.authorAgentId ? { actorType: "agent" as const, actorId: r.authorAgentId } : { actorType: "user" as const, actorId: r.authorUserId ?? null };
     const selfReported =
       (!!r.authorAgentId && r.authorAgentId === sc?.assigneeAgentId) || (!!r.authorUserId && r.authorUserId === sc?.assigneeUserId);
-    for (const { type, payload } of found) {
+    for (const [handoffIndex, { type, payload }] of handoffs.entries()) {
       const clamp = clampEventTime((payload.timestamp as string | undefined) ?? null, r.createdAt);
       const { kept, droppedKeys } = allowlistHandoffPayload(type, payload);
       events.push({
@@ -604,7 +612,8 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
         ...actor,
         sourceTable: "issue_comments",
         sourceId: r.id,
-        sourceVersion: `${type}:${bodyHash}`,
+        // The position inside the comment keeps two same-type payloads in one comment as two facts.
+        sourceVersion: `${type}:${handoffIndex}:${bodyHash}`,
         sourceRowHash: bodyHash,
         eventType: `handoff.${type}` as EvaluationEventType,
         eventTime: clamp.eventTime,
@@ -613,6 +622,9 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
           issueId: r.issueId,
           identifier: sc?.identifier ?? null,
           handoffType: type,
+          handoffIndex,
+          handoffsInComment: found.length,
+          handoffsDropped: found.length - handoffs.length,
           selfReported,
           claimedTimestamp: typeof payload.timestamp === "string" ? payload.timestamp : null,
           timestampClamped: clamp.clamped,

@@ -250,3 +250,45 @@ the time Priya reviewed the same afternoon the counts were already 85 issues /
 baseline in the shadow run is pinned to an as-of timestamp. These numbers are
 the coverage floor the shadow run starts from, and the reason §7 of the spec
 refuses to show a score where evidence does not exist.
+
+## Milestone 1 review notes (2026-09-05, PR #612)
+
+Recorded here rather than in the spec, which is at its size limit.
+
+- **Immutability caveat (spec §10.2).** The ledger's row triggers refuse UPDATE
+  always and DELETE outside the tenant-deletion transaction. Two statements
+  bypass row triggers by design and are not trapped: `TRUNCATE` (privilege-gated;
+  no application path; the test harness truncates `companies CASCADE`, which is
+  why a statement-level TRUNCATE trigger was tried and reverted) and
+  `ALTER TABLE … DISABLE TRIGGER` (owner-only). The threat model is application
+  code, not a database owner; a separate restricted database role for the
+  evaluator stays deferred (B2).
+- **Ingest concurrency.** One tick per company is one transaction holding a
+  per-company advisory lock, so the scheduler and the operator route (separate
+  service instances, possibly separate processes) can never interleave; the
+  cursor advance commits with the events it covers. A locked company returns 409
+  on the operator route and is skipped with a warning by the scheduler.
+- **Withdrawal detection cadence (rule 13).** Detecting deleted comments scans
+  every known comment id, so it runs hourly (per company, recorded in the
+  `issue_comments` cursor), not every tick. Withdrawal becomes visible within an
+  hour; scoring (Milestone 2) reads the ledger, so this is a latency, not a gap.
+- **Versions are facts, not touches.** A comment's handoff payloads are versioned
+  by type, position in the comment and body hash (two same-type payloads in one
+  comment are two facts; at most 8 per comment, the rest counted). Interactions
+  are one event per status. A terminal run without `finished_at` never takes a
+  time into its version. Issue snapshots include `updated_at`, so an A→B→A
+  rewrite is three snapshots.
+- **Accepted, not fixed.** A comment whose `created_at` is backdated by the
+  productivity-review writer after insert can be stamped with the pre-backdate
+  time if a tick races the write (F9): accuracy nit, no loss, dedupe key
+  unchanged. The 60-second cursor lag covers the common case.
+- **Deferred with a reason.** Leading `(company_id, created_at/updated_at)`
+  indexes on the source tables and a `cost_events.created_at` index (E4, Theo
+  Q6.3): fine at execos-local scale, add before real load. A CHECK on
+  `agent_api_keys.principal_kind` and the visibility of
+  `GET /evaluation/events` to company-member agents (it carries per-agent cost
+  payloads): both decided in Milestone 3 when the evaluator principal exists.
+  The ingest interval is read once at boot; changing it needs a restart.
+- **Health gauge.** Every scheduled tick logs `maxLagMs` (now minus the oldest
+  event time inserted) beside scanned/inserted counts; the shadow run's ingest
+  measurement (AGE-90 c5) reads it.

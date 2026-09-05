@@ -105,8 +105,10 @@ export function clampEventTime(claimed: Date | string | null | undefined, arriva
 
 /**
  * Rule 5: the total order used inside a replay window. Event time bucketed to
- * the skew tolerance, then ingest time, then dedupe key (unique, so the order
- * is total). Part of every formulaVersion.
+ * the skew tolerance, then ingest time (millisecond), then dedupe key. The
+ * dedupe key is unique, so this is a strict total order: the result depends
+ * neither on the order rows were read in nor on sort stability. Part of every
+ * formulaVersion.
  */
 export function compareEvents(
   a: Pick<EvaluationEventRow, "eventTime" | "ingestTime" | "dedupeKey">,
@@ -129,19 +131,24 @@ export interface AppendResult {
   inserted: number;
   skipped: number;
   insertedIds: string[];
+  /** Earliest event time among the rows actually inserted; the ingest-lag gauge. Null when nothing was inserted. */
+  oldestInsertedEventTime: Date | null;
 }
 
 /** Page size for seq-keyed reads; the window itself is unbounded. */
 const PAGE = 5000;
 
-export function evaluationLedger(db: Db) {
+/** Anything that can run the ledger's queries: the pool, or the transaction an ingest tick runs in. */
+export type LedgerDb = Pick<Db, "select" | "insert" | "execute">;
+
+export function evaluationLedger(db: LedgerDb) {
   return {
     /**
      * Insert events; duplicates by dedupe key are skipped, never overwritten.
      * Chunked so a large backfill does not exceed parameter limits.
      */
     async append(events: EvaluationEventInput[]): Promise<AppendResult> {
-      if (events.length === 0) return { inserted: 0, skipped: 0, insertedIds: [] };
+      if (events.length === 0) return { inserted: 0, skipped: 0, insertedIds: [], oldestInsertedEventTime: null };
       const rows = events.map((e) => ({
         companyId: e.companyId,
         projectId: e.projectId ?? null,
@@ -163,6 +170,7 @@ export function evaluationLedger(db: Db) {
       const seen = new Set<string>();
       const unique = rows.filter((r) => (seen.has(r.dedupeKey) ? false : (seen.add(r.dedupeKey), true)));
       const insertedIds: string[] = [];
+      let oldest: Date | null = null;
       const CHUNK = 500;
       for (let i = 0; i < unique.length; i += CHUNK) {
         const chunk = unique.slice(i, i + CHUNK);
@@ -170,10 +178,13 @@ export function evaluationLedger(db: Db) {
           .insert(evaluationEvents)
           .values(chunk)
           .onConflictDoNothing({ target: evaluationEvents.dedupeKey })
-          .returning({ id: evaluationEvents.id });
-        for (const r of returned) insertedIds.push(r.id);
+          .returning({ id: evaluationEvents.id, eventTime: evaluationEvents.eventTime });
+        for (const r of returned) {
+          insertedIds.push(r.id);
+          if (!oldest || r.eventTime < oldest) oldest = r.eventTime;
+        }
       }
-      return { inserted: insertedIds.length, skipped: events.length - insertedIds.length, insertedIds };
+      return { inserted: insertedIds.length, skipped: events.length - insertedIds.length, insertedIds, oldestInsertedEventTime: oldest };
     },
 
     /** Highest seq for a company, 0 when the ledger is empty. The snapshot cut point. */

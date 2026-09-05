@@ -72,6 +72,10 @@ BEGIN
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;--> statement-breakpoint
-CREATE TRIGGER evaluation_events_immutable_trg
-  BEFORE UPDATE OR DELETE ON "evaluation_events"
-  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();
+CREATE TRIGGER evaluation_events_no_update_trg
+  BEFORE UPDATE ON "evaluation_events"
+  FOR EACH ROW EXECUTE FUNCTION evaluation_events_immutable();--> statement-breakpoint
+CREATE TRIGGER evaluation_events_no_delete_trg
+  BEFORE DELETE ON "evaluation_events"
+  FOR EACH ROW WHEN (current_setting('agentdash.ledger_purge', true) IS DISTINCT FROM 'on')
+  EXECUTE FUNCTION evaluation_events_immutable();

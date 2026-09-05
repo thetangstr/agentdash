@@ -7,11 +7,13 @@ import { companies } from "./companies.js";
  * One row per fact the evaluator learned about the company, ingested from the
  * control plane's own records (T0), verified external sources (T1) or agents'
  * structured self-reports (T2). Rows are never updated or deleted: migration
- * 0127 installs a row trigger that refuses UPDATE always and DELETE unless the
- * session has set `agentdash.ledger_purge = 'on'`, which only the
- * company-deletion path does. TRUNCATE is not trapped (privilege-gated, no
- * application path; the test harness truncates companies CASCADE).
- * Corrections are new rows that reference the disputed one.
+ * 0127 installs two row triggers — UPDATE is always refused; DELETE is refused
+ * unless the transaction has set `agentdash.ledger_purge = 'on'` (a WHEN
+ * clause, so a sanctioned purge never enters the trigger function per row),
+ * which only the company-deletion path does. Not trapped, by design: TRUNCATE
+ * (privilege-gated, no application path; the test harness truncates companies
+ * CASCADE) and `ALTER TABLE … DISABLE TRIGGER` (owner-only). Corrections are
+ * new rows that reference the disputed one.
  *
  * Spec: docs/superpowers/specs/2026-09-05-company-evaluator-design.md §8, §11.
  */

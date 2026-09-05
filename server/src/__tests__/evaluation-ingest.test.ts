@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   activityLog,
   agents,
@@ -18,7 +18,8 @@ import {
   verdicts,
 } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
-import { evaluationIngest } from "../services/evaluation/ingest.js";
+import { evaluationIngest, INGEST_LOCK_NAMESPACE } from "../services/evaluation/ingest.js";
+import { MAX_HANDOFFS_PER_COMMENT } from "../services/evaluation/sources.js";
 import { evaluationLedger } from "../services/evaluation/ledger.js";
 import { MARKER_OPEN_MILESTONE } from "../services/evaluation/replay.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
@@ -143,6 +144,8 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const ingest = evaluationIngest(db, { rowBudget: 100 });
     const first = await ingest.tick(companyId);
     expect(first.inserted).toBeGreaterThan(0);
+    expect(first.maxLagMs).toBeGreaterThan(0); // the fixtures are hours old: the lag gauge reports it
+    expect(first.withdrawalChecked).toBe(true); // first tick: never checked before
     const ledger = evaluationLedger(db);
     const byType = await ledger.countByType(companyId);
     expect(byType["issue.created"]).toBe(1);
@@ -160,6 +163,7 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(await ledger.countByType(otherCompanyId)).toEqual({});
     const second = await ingest.tick(companyId);
     expect(second.inserted).toBe(0);
+    expect(second.maxLagMs).toBeNull();
   });
 
   it("recognises reopen and recovery shapes without `_previous` (A1)", async () => {
@@ -199,6 +203,58 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(run.payload.durationMs).toBe(3 * 60_000);
   });
 
+  it("mints one event per handoff payload — two same-type payloads in one comment are two facts — and caps a comment at MAX_HANDOFFS_PER_COMMENT (F2, Q5)", async () => {
+    const ingest = evaluationIngest(db, { rowBudget: 100 });
+    const fence = (obj: Record<string, unknown>) => "```json\n" + JSON.stringify(obj) + "\n```\n";
+    await db.insert(issueComments).values([
+      { companyId, issueId, authorAgentId: agentId, body: fence({ type: "builder_to_ci", pr: 1, fix_attempt: 1 }) + "retried:\n" + fence({ type: "builder_to_ci", pr: 1, fix_attempt: 2 }), createdAt: at(20) },
+      { companyId, issueId, authorAgentId: agentId, body: Array.from({ length: MAX_HANDOFFS_PER_COMMENT + 2 }, (_, i) => fence({ type: "tester_to_reviewer", verdict: "pass", fix_attempt: i })).join("\n"), createdAt: at(21) },
+    ]);
+    await ingest.tick(companyId);
+    const byType = await evaluationLedger(db).countByType(companyId);
+    expect(byType["handoff.builder_to_ci"]).toBe(2);
+    expect(byType["handoff.tester_to_reviewer"]).toBe(MAX_HANDOFFS_PER_COMMENT);
+    const capped = await db.select().from(evaluationEvents).where(eq(evaluationEvents.eventType, "handoff.tester_to_reviewer"));
+    expect(capped.map((e) => e.payload.handoffIndex as number).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(capped[0]!.payload).toMatchObject({ handoffsInComment: MAX_HANDOFFS_PER_COMMENT + 2, handoffsDropped: 2 });
+    expect((await ingest.tick(companyId)).inserted).toBe(0);
+  });
+
+  it("an interaction touched without a status change is not a new fact; a status change is (F4)", async () => {
+    const ingest = evaluationIngest(db, { rowBudget: 100 });
+    const [row] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.companyId, companyId));
+    await db.update(issueThreadInteractions).set({ updatedAt: at(22), payload: { note: "result payload rewritten" } }).where(eq(issueThreadInteractions.id, row!.id));
+    await ingest.tick(companyId);
+    expect((await evaluationLedger(db).countByType(companyId))["interaction.changed"]).toBe(1);
+    await db.update(issueThreadInteractions).set({ status: "answered", updatedAt: at(23) }).where(eq(issueThreadInteractions.id, row!.id));
+    await ingest.tick(companyId);
+    const rows = await db.select().from(evaluationEvents).where(eq(evaluationEvents.eventType, "interaction.changed"));
+    expect(rows.map((r) => r.payload.status).sort()).toEqual(["answered", "pending"]);
+  });
+
+  it("a terminal run without finished_at is one fact even when its row is touched again (F8)", async () => {
+    const ingest = evaluationIngest(db, { rowBudget: 100 });
+    const [run] = await db
+      .insert(heartbeatRuns)
+      .values({ companyId, agentId, status: "failed", invocationSource: "assignment", exitCode: 1, startedAt: at(20), finishedAt: null, updatedAt: at(24), contextSnapshot: { issueId } })
+      .returning();
+    await ingest.tick(companyId);
+    await db.update(heartbeatRuns).set({ updatedAt: at(25) }).where(eq(heartbeatRuns.id, run!.id));
+    expect((await ingest.tick(companyId)).inserted).toBe(0);
+    const rows = await db.select().from(evaluationEvents).where(eq(evaluationEvents.sourceId, run!.id));
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.sourceVersion).toBe("failed:none");
+  });
+
+  it("ticks for one company are serialised across service instances by a database lock (Q6.4)", async () => {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${INGEST_LOCK_NAMESPACE}::int, hashtext(${companyId}))`);
+      await expect(evaluationIngest(db, { rowBudget: 100 }).tick(companyId)).rejects.toThrow(/already running/);
+    });
+    // released with the holder's transaction
+    expect((await evaluationIngest(db, { rowBudget: 100 }).tick(companyId)).inserted).toBe(0);
+  });
+
   it("refuses UPDATE and DELETE on the ledger unless the purge setting is on (spec §10.2)", async () => {
     await rejectsAppendOnly(db.update(evaluationEvents).set({ actorId: "tampered" }).where(eq(evaluationEvents.companyId, companyId)));
     await rejectsAppendOnly(db.delete(evaluationEvents).where(eq(evaluationEvents.companyId, companyId)));
@@ -207,7 +263,7 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
   });
 
   it("records a new snapshot per rewrite including a revert, and evidence.withdrawn with scope when a comment disappears (rule 13)", async () => {
-    const ingest = evaluationIngest(db, { rowBudget: 100 });
+    const ingest = evaluationIngest(db, { rowBudget: 100, withdrawalCheckIntervalMs: 0 });
     await db.update(issues).set({ description: "rewritten inside the ingest window", updatedAt: at(30) }).where(eq(issues.id, issueId));
     await db.delete(issueComments).where(eq(issueComments.id, commentId));
     const stats = await ingest.tick(companyId);
@@ -261,6 +317,18 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     await db.insert(activityLog).values({ companyId, actorType: "user", actorId: "local-board", action: "issue.updated", entityType: "issue", entityId: issueId, details: { status: "in_progress", _previous: { status: "todo" }, identifier: "EVL-1" }, createdAt: at(50) });
     await evaluationIngest(db, { rowBudget: 100 }).tick(companyId);
     expect(await cards.verify(companyId, ref, 1)).toMatchObject({ ok: true });
+  });
+
+  it("withdrawal detection runs on its own cadence, not every tick (Q6.2)", async () => {
+    const [late] = await db.select().from(issueComments).where(and(eq(issueComments.companyId, companyId), sql`${issueComments.body} LIKE '%tpm_merge_report%'`));
+    await db.delete(issueComments).where(eq(issueComments.id, late!.id));
+    const before = (await evaluationLedger(db).countByType(companyId))["evidence.withdrawn"] ?? 0;
+    const gated = await evaluationIngest(db, { rowBudget: 100 }).tick(companyId); // default cadence: last check was seconds ago
+    expect(gated.withdrawalChecked).toBe(false);
+    expect((await evaluationLedger(db).countByType(companyId))["evidence.withdrawn"] ?? 0).toBe(before);
+    const due = await evaluationIngest(db, { rowBudget: 100, withdrawalCheckIntervalMs: 0 }).tick(companyId);
+    expect(due.withdrawalChecked).toBe(true);
+    expect((await evaluationLedger(db).countByType(companyId))["evidence.withdrawn"] ?? 0).toBe(before + 1);
   });
 
   it("company deletion purges the ledger through the sanctioned path, and the setting does not leak", async () => {

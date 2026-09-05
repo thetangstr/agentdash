@@ -957,9 +957,9 @@ export async function startServer(): Promise<StartedServer> {
           const inserted = stats.reduce((n, s) => n + s.inserted, 0);
           const scanned = stats.reduce((n, s) => n + s.scanned, 0);
           const maxMs = stats.reduce((m, s) => Math.max(m, s.durationMs), 0);
-          if (inserted > 0 || maxMs > 10_000) {
-            logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs }, "evaluation_ingest: tick");
-          }
+          // Ingest lag (now minus the oldest event time inserted this tick) is the shadow run's health gauge.
+          const maxLagMs = stats.reduce<number | null>((m, s) => (s.maxLagMs == null ? m : Math.max(m ?? 0, s.maxLagMs)), null);
+          logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs, maxLagMs }, "evaluation_ingest: tick");
         })
         .catch((err) => {
           logger.error({ err }, "evaluation_ingest: scheduled tick failed");

@@ -1,29 +1,33 @@
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, evaluationIngestState } from "@paperclipai/db";
+import { conflict } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
-import { evaluationLedger, type EvaluationEventInput } from "./ledger.js";
+import { evaluationLedger, type LedgerDb } from "./ledger.js";
 import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName } from "./sources.js";
 
 /**
  * AgentDash: Company Evaluator — the ingest loop (spec §11).
  *
- * Reads each source after its cursor, under its own transaction with a
- * statement timeout, appends the resulting events (idempotent by dedupe key)
- * and advances the cursor. Runs on its own interval, never on the request path
- * and never on the heartbeat scheduler tick. One pass runs at a time per
- * instance (`seq` monotonicity relies on it). Backfill is the same tick run
- * to exhaustion, bounded.
+ * One tick for one company is one transaction: a per-company advisory lock
+ * serialises ticks across service instances (the scheduler and the operator
+ * route hold separate instances, possibly separate processes), a local
+ * statement timeout bounds every read, and the cursor advance commits together
+ * with the events it covers. Never on the request path of anything else,
+ * never on the heartbeat scheduler tick. Backfill is the same tick run to
+ * exhaustion, bounded.
  */
 
 export interface IngestOptions {
   /** Rows read per source per tick. */
   rowBudget?: number;
-  /** Postgres statement_timeout for source reads. */
+  /** Postgres statement_timeout for the tick's transaction. */
   statementTimeoutMs?: number;
   /** Only these sources (tests). */
   sources?: SourceName[];
   now?: () => Date;
+  /** Rule 13 withdrawal detection scans every known comment id, so it runs on this cadence, not every tick. */
+  withdrawalCheckIntervalMs?: number;
 }
 
 export interface SourceTickStats {
@@ -40,29 +44,36 @@ export interface CompanyTickStats {
   inserted: number;
   skipped: number;
   durationMs: number;
+  /** Now minus the oldest event time inserted this tick; null when nothing was inserted. */
+  maxLagMs: number | null;
+  /** Whether withdrawal detection ran this tick. */
+  withdrawalChecked: boolean;
   perSource: Record<string, SourceTickStats>;
 }
 
 const DEFAULT_ROW_BUDGET = 5000;
 const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
+const DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Operator-triggered backfill is bounded so a request cannot run for minutes. */
 export const MAX_BACKFILL_PASSES = 20;
+/** Advisory-lock namespace (two-int form: this, hashtext(companyId)). Spelled "EVL1". */
+export const INGEST_LOCK_NAMESPACE = 0x45564c31;
 
 export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
-  const ledger = evaluationLedger(db);
   const rowBudget = opts.rowBudget ?? DEFAULT_ROW_BUDGET;
   const statementTimeoutMs = Math.max(1000, Math.floor(opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS));
   const sources = opts.sources ?? (Object.keys(SOURCE_READERS) as SourceName[]);
   const now = opts.now ?? (() => new Date());
+  const withdrawalCheckIntervalMs = Math.max(0, opts.withdrawalCheckIntervalMs ?? DEFAULT_WITHDRAWAL_CHECK_INTERVAL_MS);
   let inFlight = false;
 
-  async function loadCursors(companyId: string): Promise<Record<string, Cursor>> {
-    const rows = await db.select().from(evaluationIngestState).where(eq(evaluationIngestState.companyId, companyId));
+  async function loadCursors(q: LedgerDb, companyId: string): Promise<Record<string, Cursor>> {
+    const rows = await q.select().from(evaluationIngestState).where(eq(evaluationIngestState.companyId, companyId));
     return Object.fromEntries(rows.map((r) => [r.source, (r.cursor ?? {}) as Cursor]));
   }
 
-  async function saveCursor(companyId: string, source: string, cursor: Cursor): Promise<void> {
-    await db
+  async function saveCursor(q: LedgerDb, companyId: string, source: string, cursor: Cursor): Promise<void> {
+    await q
       .insert(evaluationIngestState)
       .values({ companyId, source, cursor: cursor as Record<string, unknown>, updatedAt: now() })
       .onConflictDoUpdate({
@@ -71,52 +82,75 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
       });
   }
 
-  /** Every source read runs in its own transaction with a parameterised local statement timeout. */
-  async function withTimeout<T>(fn: (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>): Promise<T> {
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`select set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true)`);
-      return fn(tx);
-    });
+  function withdrawalDue(cursor: Cursor | undefined): boolean {
+    const last = cursor?.withdrawalCheckedAt ? Date.parse(cursor.withdrawalCheckedAt) : NaN;
+    return !Number.isFinite(last) || now().getTime() - last >= withdrawalCheckIntervalMs;
   }
 
   async function tickOnce(companyId: string): Promise<CompanyTickStats> {
     const started = Date.now();
-    const cursors = await loadCursors(companyId);
-    const perSource: Record<string, SourceTickStats> = {};
-    let scanned = 0;
-    let inserted = 0;
-    let skipped = 0;
-    for (const source of sources) {
-      const t0 = Date.now();
-      const result = await withTimeout((tx) => SOURCE_READERS[source](tx, companyId, cursors[source] ?? {}, rowBudget));
-      let events: EvaluationEventInput[] = result.events;
-      if (source === "issue_comments") {
-        // Rule 13: withdrawal detection rides on the comments pass; ids already
-        // recorded as withdrawn are excluded so the scan does not grow with history.
-        const known = await ledger.knownSources(companyId, "issue_comments", "evidence.withdrawn");
-        const withdrawn = await withTimeout((tx) => detectWithdrawnComments(tx, companyId, known, now()));
-        events = events.concat(withdrawn);
+    return db.transaction(async (tx) => {
+      const lock = await tx.execute(
+        sql`select pg_try_advisory_xact_lock(${INGEST_LOCK_NAMESPACE}::int, hashtext(${companyId})) as locked`,
+      );
+      // The driver returns the rows as an array-like list (node-postgres would wrap them in `rows`).
+      const lockRows = (Array.isArray(lock) ? lock : ((lock as { rows?: unknown[] }).rows ?? [])) as Array<{ locked?: boolean }>;
+      const locked = lockRows[0]?.locked === true;
+      if (!locked) throw conflict("evaluation_ingest: a pass is already running for this company");
+      await tx.execute(sql`select set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true)`);
+
+      const ledger = evaluationLedger(tx);
+      const cursors = await loadCursors(tx, companyId);
+      const perSource: Record<string, SourceTickStats> = {};
+      let scanned = 0;
+      let inserted = 0;
+      let skipped = 0;
+      let maxLagMs: number | null = null;
+      let withdrawalChecked = false;
+      for (const source of sources) {
+        const t0 = Date.now();
+        const result = await SOURCE_READERS[source](tx, companyId, cursors[source] ?? {}, rowBudget);
+        let events = result.events;
+        let nextCursor: Cursor = result.nextCursor;
+        let checkedNow = false;
+        if (source === "issue_comments") {
+          // Rule 13: withdrawal detection rides on the comments pass on its own cadence;
+          // ids already recorded as withdrawn are excluded so the scan does not grow with history.
+          if (withdrawalDue(cursors[source])) {
+            const known = await ledger.knownSources(companyId, "issue_comments", "evidence.withdrawn");
+            const at = now();
+            events = events.concat(await detectWithdrawnComments(tx, companyId, known, at));
+            nextCursor = { ...nextCursor, withdrawalCheckedAt: at.toISOString() };
+            checkedNow = true;
+            withdrawalChecked = true;
+          } else if (cursors[source]?.withdrawalCheckedAt) {
+            nextCursor = { ...nextCursor, withdrawalCheckedAt: cursors[source]!.withdrawalCheckedAt };
+          }
+        }
+        const appended = await ledger.append(events);
+        if (result.scanned > 0 || checkedNow) await saveCursor(tx, companyId, source, nextCursor);
+        if (appended.oldestInsertedEventTime) {
+          maxLagMs = Math.max(maxLagMs ?? 0, now().getTime() - appended.oldestInsertedEventTime.getTime());
+        }
+        perSource[source] = {
+          scanned: result.scanned,
+          produced: events.length,
+          inserted: appended.inserted,
+          skipped: appended.skipped,
+          durationMs: Date.now() - t0,
+        };
+        scanned += result.scanned;
+        inserted += appended.inserted;
+        skipped += appended.skipped;
       }
-      const appended = await ledger.append(events);
-      if (result.scanned > 0) await saveCursor(companyId, source, result.nextCursor);
-      perSource[source] = {
-        scanned: result.scanned,
-        produced: events.length,
-        inserted: appended.inserted,
-        skipped: appended.skipped,
-        durationMs: Date.now() - t0,
-      };
-      scanned += result.scanned;
-      inserted += appended.inserted;
-      skipped += appended.skipped;
-    }
-    return { companyId, scanned, inserted, skipped, durationMs: Date.now() - started, perSource };
+      return { companyId, scanned, inserted, skipped, durationMs: Date.now() - started, maxLagMs, withdrawalChecked, perSource };
+    });
   }
 
   return {
-    /** One ingest pass for one company. Serialised with every other pass on this instance. */
+    /** One ingest pass for one company. Serialised with every other pass on this company, on any instance. */
     async tick(companyId: string): Promise<CompanyTickStats> {
-      if (inFlight) throw new Error("evaluation_ingest: a pass is already running");
+      if (inFlight) throw conflict("evaluation_ingest: a pass is already running");
       inFlight = true;
       try {
         return await tickOnce(companyId);
@@ -139,7 +173,11 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
           try {
             out.push(await tickOnce(id));
           } catch (err) {
-            logger.error({ err, companyId: id }, "evaluation_ingest: company tick failed");
+            if (err instanceof Error && /already running/.test(err.message)) {
+              logger.warn({ companyId: id }, "evaluation_ingest: company locked by another pass; skipped");
+            } else {
+              logger.error({ err, companyId: id }, "evaluation_ingest: company tick failed");
+            }
           }
         }
         return out;
@@ -169,7 +207,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
     },
 
     async cursors(companyId: string) {
-      return loadCursors(companyId);
+      return loadCursors(db, companyId);
     },
 
     get running() {
