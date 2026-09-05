@@ -521,6 +521,41 @@ describe("AGE-91 revision — M3 board/instance refusals, M6 dedupe, M7 runId", 
     expect(reasons).toEqual(["BOARD_ACCESS_REQUIRED", "AGENT_CROSS_COMPANY"]);
   });
 
+  it("M6 (re-review): distinct entities are distinct acts — the window never collapses refusals on different records", async () => {
+    const actor = { actorType: "agent" as const, actorId: AGENT_ID, agentId: AGENT_ID, companyId: COMPANY_ID };
+    const base = { actor, companyId: COMPANY_ID, entityType: "issue", reasonCode: "NEUTRAL_VALIDATOR_VIOLATION", routePath: "service" };
+    await logAuthzRefusal(dbh.db as never, { ...base, entityId: "issue-A" });
+    await logAuthzRefusal(dbh.db as never, { ...base, entityId: "issue-B" });
+    await logAuthzRefusal(dbh.db as never, { ...base, entityId: "issue-A" }); // a retry of the first act
+    await flushAsync();
+    expect(dbh.activityRows.map((r) => r.entityId)).toEqual(["issue-A", "issue-B"]);
+  });
+
+  it("H1 (service path): an agent descriptor without its own company records nothing, even when the caller passes a company", async () => {
+    await logAuthzRefusal(dbh.db as never, {
+      actor: { actorType: "agent", actorId: AGENT_ID, agentId: AGENT_ID, companyId: null },
+      companyId: OTHER_COMPANY_ID,
+      entityType: "issue",
+      entityId: ISSUE_ID,
+      reasonCode: "NEUTRAL_VALIDATOR_VIOLATION",
+      routePath: "service",
+    });
+    await flushAsync();
+    expect(dbh.activityRows).toHaveLength(0);
+    // a user descriptor may fall back to the caller's scope: that is the user's own refusal context
+    await logAuthzRefusal(dbh.db as never, {
+      actor: { actorType: "user", actorId: "user-1", companyId: null },
+      companyId: COMPANY_ID,
+      entityType: "company",
+      entityId: COMPANY_ID,
+      reasonCode: "BOARD_ACCESS_REQUIRED",
+      routePath: "service",
+    });
+    await flushAsync();
+    expect(dbh.activityRows).toHaveLength(1);
+    expect(dbh.activityRows[0]!.companyId).toBe(COMPANY_ID);
+  });
+
   it("M7: a runId on the actor is never inserted (FK-safe refusal rows)", async () => {
     const req = agentReq({ runId: "99999999-9999-4999-8999-999999999999" });
     req.method = "PATCH";

@@ -155,7 +155,8 @@ export interface AuthzRefusalActorDescriptor {
   actorType: "agent" | "user";
   actorId: string;
   agentId?: string | null;
-  companyId?: string | null;
+  /** The actor's own company. Required so an agent's refusal can never fall back to a foreign scope (H1). */
+  companyId: string | null;
 }
 
 export interface AuthzRefusalInput {
@@ -179,7 +180,12 @@ const ROUTE_PATH_MAX_LENGTH = 200;
 const DEDUPE_WINDOW_MS = 60_000;
 const DEDUPE_MAX_ENTRIES = 1_000;
 
-/** actor+reasonCode+route -> window start. In-process only; restart resets it. */
+/**
+ * actor+reasonCode+route+entity -> window start. In-process only; restart
+ * resets it. The entity is part of the key so that distinct forbidden acts on
+ * distinct records are never collapsed: the window suppresses a retry loop
+ * hammering the same act, not breadth.
+ */
 const recentRefusals = new Map<string, number>();
 
 function dedupeKey(parts: {
@@ -187,8 +193,21 @@ function dedupeKey(parts: {
   actorId: string;
   reasonCode: string;
   routePath: string;
+  entityType: string;
+  entityId: string | null;
 }): string {
-  return `${parts.actorType}:${parts.actorId}:${parts.reasonCode}:${parts.routePath}`;
+  return `${parts.actorType}:${parts.actorId}:${parts.reasonCode}:${parts.routePath}:${parts.entityType}:${parts.entityId ?? ""}`;
+}
+
+/**
+ * The company a descriptor-attributed refusal is charged to. A user may fall
+ * back to the caller's scope (their own refusal context); an agent never does,
+ * so a service caller that omits the agent's company records nothing rather
+ * than charging a foreign company (H1 holds on the service path too).
+ */
+function descriptorCompanyId(actor: AuthzRefusalActorDescriptor, callerCompanyId: string | null): string | null {
+  if (actor.companyId) return actor.companyId;
+  return actor.actorType === "user" ? callerCompanyId ?? null : null;
 }
 
 function isDuplicateRefusal(key: string, now: number): boolean {
@@ -265,7 +284,7 @@ export async function logAuthzRefusal(
       actorType = input.actor.actorType;
       actorId = input.actor.actorId;
       agentId = input.actor.agentId ?? null;
-      actorCompanyId = input.actor.companyId ?? input.companyId ?? null;
+      actorCompanyId = descriptorCompanyId(input.actor, input.companyId);
       method = input.method ?? "SERVICE";
       routePath = (input.routePath ?? "service").slice(0, ROUTE_PATH_MAX_LENGTH);
     } else {
@@ -290,7 +309,7 @@ export async function logAuthzRefusal(
     actorType = input.actor.actorType;
     actorId = input.actor.actorId;
     agentId = input.actor.agentId ?? null;
-    actorCompanyId = input.actor.companyId ?? input.companyId ?? null;
+    actorCompanyId = descriptorCompanyId(input.actor, input.companyId);
     method = input.method ?? "SERVICE";
     routePath = (input.routePath ?? "service").slice(0, ROUTE_PATH_MAX_LENGTH);
   } else {
@@ -322,7 +341,19 @@ export async function logAuthzRefusal(
   }
 
   const now = Date.now();
-  if (isDuplicateRefusal(dedupeKey({ actorType, actorId, reasonCode: input.reasonCode, routePath }), now)) {
+  if (
+    isDuplicateRefusal(
+      dedupeKey({
+        actorType,
+        actorId,
+        reasonCode: input.reasonCode,
+        routePath,
+        entityType: input.entityType,
+        entityId: input.entityId,
+      }),
+      now,
+    )
+  ) {
     return;
   }
 

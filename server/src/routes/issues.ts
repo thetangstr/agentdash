@@ -638,18 +638,19 @@ export function issueRoutes(
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
         return true;
       }
-      // AGE-91: these are P6-class authority refusals (an agent attempting to
-      // mutate another agent's issue) — record them like the authz guards do.
-      // Fire-and-forget; the response below is untouched.
-      reportAuthzRefusal(req, {
-        companyId: issue.companyId,
-        entityType: "issue",
-        entityId: issue.id,
-        reasonCode:
-          issue.status === "in_progress"
-            ? "ISSUE_CHECKOUT_OTHER_AGENT"
-            : "ISSUE_MUTATION_OTHER_AGENT",
-      });
+      // AGE-91: an agent mutating another agent's issue is a P6-class authority
+      // refusal — record it like the authz guards do (fire-and-forget; the
+      // response below is untouched). The 409 on an in_progress issue is
+      // checkout contention between agents, a lock conflict rather than a
+      // denial of authority, and is deliberately not recorded as a refusal.
+      if (issue.status !== "in_progress") {
+        reportAuthzRefusal(req, {
+          companyId: issue.companyId,
+          entityType: "issue",
+          entityId: issue.id,
+          reasonCode: "ISSUE_MUTATION_OTHER_AGENT",
+        });
+      }
       if (issue.status === "in_progress") {
         res.status(409).json({
           error: "Issue is checked out by another agent",
