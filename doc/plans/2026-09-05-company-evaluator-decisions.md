@@ -553,3 +553,19 @@ Recorded here rather than in the spec, which is at its size limit.
   marker, so re-running changes nothing that has not changed. Triggered by
   `POST …/evaluation/scorecards/snapshot?reviewItems=true` or
   `POST …/evaluation/review-items` (evaluator principal or administrators).
+- **Shadow cadence.** `AGENTDASH_EVALUATION_SNAPSHOT_ENABLED=true` runs a pass
+  on its own interval (floor one hour, default one day): every open project of
+  every company gets a stored card and its review items; the fallback human for
+  unowned exceptions is the company's first active administrator; a locked or
+  failing milestone is skipped with a warning and caught up on the next pass.
+  Deterministic; no model call; off by default like ingest.
+- **The evaluator's own writes (§9.3, §9.4).** `POST …/evaluation/findings` —
+  an evidence note on an exception; `POST …/evaluation/corrections/:id/note` —
+  an evidence note on a human's correction; both require at least one citation
+  that is a ledger event of this company (an uncited note is refused, not
+  stored) and are appended under the company lock with the `evaluator` actor.
+  Humans: `POST …/evaluation/corrections` (any board member; the disputed event
+  must exist; a T0/T0 disagreement may cite its correlation id instead of new
+  evidence) and `POST …/evaluation/dispositions` (administrators: decide a
+  correction, attest a criterion, accept a contract exception). The
+  disposition is always the human's; the evaluator never decides.

@@ -27,8 +27,9 @@ const IMMEDIATE_SEVERITIES = new Set(["immediate"]);
 const MATERIAL_IMMEDIATE_IDS = new Set(["E2", "E12", "E13"]); // §9.2: when material (release / credential), immediate
 
 export interface ReviewItemSyncResult {
-  projectId: string;
-  labelId: string;
+  /** Null when the card carried no exceptions and nothing was created. */
+  projectId: string | null;
+  labelId: string | null;
   created: string[];
   updated: string[];
   unchanged: string[];
@@ -83,6 +84,8 @@ export function evaluationReviewItems(db: Db) {
      * administrator who ran the snapshot, or the company's founder).
      */
     async sync(companyId: string, ref: EvaluationMilestoneRef, card: ScoredCard, cardVersion: number, fallbackUserId: string | null): Promise<ReviewItemSyncResult> {
+      // nothing to write → nothing created, not even the project or the label
+      if (card.exceptions.length === 0) return { projectId: null, labelId: null, created: [], updated: [], unchanged: [], unrouted: [], unassignable: [] };
       const projectId = await reviewProject(companyId);
       const labelId = await reviewLabel(companyId);
       const result: ReviewItemSyncResult = { projectId, labelId, created: [], updated: [], unchanged: [], unrouted: [], unassignable: [] };
