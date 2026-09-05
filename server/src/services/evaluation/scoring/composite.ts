@@ -63,12 +63,14 @@ export function composite(
   // the largest share of effective weight any one metric supplies: a score must never be one metric's absence of records
   const concentration = wsum > 0 ? Math.max(...included.map((i) => (i.weight * i.coverage) / wsum)) : 0;
   const dominant = wsum > 0 ? included.reduce((best, i) => ((i.weight * i.coverage) / wsum > (best.weight * best.coverage) / wsum ? i : best), included[0]!) : null;
-  // every violated guard is reported; the first is the most specific one
+  // every violated guard is reported, the most specific first; with too few metrics the other two would be
+  // tautologies pointing at the wrong remedy, so they are only judged once the minimum is met
   const reasons: string[] = [];
   if (included.length < minIncluded) reasons.push(`fewer than ${minIncluded} metrics have evidence`);
-  if (included.length > 0 && concentration > COMPOSITE_MAX_CONCENTRATION && dominant) reasons.push(`${dominant.key} alone would supply ${Math.round(concentration * 100)}% of the score; no single metric may supply more than ${Math.round(COMPOSITE_MAX_CONCENTRATION * 100)}%`);
-  if (included.length > 0 && (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR)) reasons.push(`the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`);
-  const reason = reasons[0];
+  else {
+    if (concentration > COMPOSITE_MAX_CONCENTRATION && dominant) reasons.push(`${dominant.key} alone would supply ${Math.round(concentration * 100)}% of the score; no single metric may supply more than ${Math.round(COMPOSITE_MAX_CONCENTRATION * 100)}%`);
+    if (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR) reasons.push(`the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`);
+  }
   const guardOk = reasons.length === 0;
   let score: number | null = null;
   let confidence: EvaluationConfidenceTier | null = null;
@@ -84,7 +86,7 @@ export function composite(
     included: included.sort((a, b) => (a.key < b.key ? -1 : 1)),
     excluded: excluded.sort((a, b) => (a.key < b.key ? -1 : 1)),
     flags: [...flags].sort(),
-    guard: { minIncluded, coverageFloor: COMPOSITE_COVERAGE_FLOOR, maxConcentration: COMPOSITE_MAX_CONCENTRATION, concentration: Math.round(concentration * 1000) / 1000, satisfied: guardOk, ...(reason ? { reason, reasons } : {}) },
+    guard: { minIncluded, coverageFloor: COMPOSITE_COVERAGE_FLOOR, maxConcentration: COMPOSITE_MAX_CONCENTRATION, concentration: Math.round(concentration * 1000) / 1000, satisfied: guardOk, reasons, ...(reasons.length > 0 ? { reason: reasons[0]! } : {}) },
     formulaVersion: COMPOSITE_FORMULA_VERSION,
   };
 }

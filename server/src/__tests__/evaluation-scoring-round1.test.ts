@@ -578,8 +578,8 @@ describe("round 5 — verification findings", () => {
     expect(o3.notes.some((n) => n.includes("observable for 0% of delivered items"))).toBe(true);
     expect(card.outcomeComposite.score).toBeNull();
     expect(card.outcomeComposite.guard.satisfied).toBe(false);
-    expect(card.outcomeComposite.guard.reason).toMatch(/^O3 alone would supply \d+% of the score; no single metric may supply more than 70%$/);
-    expect(card.outcomeComposite.guard.reasons?.some((r) => r.startsWith("the included metrics rest on"))).toBe(true); // the floor fails here too, and both are reported
+    expect(card.outcomeComposite.guard.reason).toMatch(/^O3 alone would supply \d+% of the score; no single metric may supply more than 75%$/);
+    expect(card.outcomeComposite.guard.reasons.some((r) => r.startsWith("the included metrics rest on"))).toBe(true); // the floor fails here too, and both are reported
     expect(card.outcomeComposite.guard.maxConcentration).toBe(EVALUATION_COMPOSITE_MAX_CONCENTRATION);
     // with delivery evidence on every item, O3 observes all three terms again
     const delivered = score([...roster(), ...evidenced(I1), ...evidenced(I2)]);
@@ -590,7 +590,16 @@ describe("round 5 — verification findings", () => {
     const m = (key: string, coverage: number, value: number): MetricResult => ({ key: key as MetricResult["key"], name: key, unit: "u", value, n: 10, coverage, confidence: "high", headline: "", notes: [], breakdown: {}, detail: {}, lowerIsBetter: false, t: "T0" } as unknown as MetricResult);
     const balanced = composite("outcome", { O1: m("O1", 1, 0.5), O3: m("O3", 1, 0), O5: m("O5", 1, 0.5) }, []);
     expect(balanced.guard.satisfied).toBe(true);
+    expect(balanced.guard.reasons).toEqual([]); // always an array, so a renderer can iterate it blind
+    expect(balanced.guard.reason).toBeUndefined();
     expect(balanced.guard.concentration).toBeLessThanOrEqual(EVALUATION_COMPOSITE_MAX_CONCENTRATION);
+    // §5.3's two-metric minimum must stay reachable for every pair that includes O1: O1 + O5 at full coverage is 72.7%
+    const o1o5 = composite("outcome", { O1: m("O1", 1, 0.5), O5: m("O5", 1, 0.5) }, []);
+    expect(o1o5.guard.satisfied).toBe(true);
+    expect(o1o5.score).not.toBeNull();
+    // one included metric reports the missing evidence only — never the tautological 100% concentration
+    const lone = composite("outcome", { O5: m("O5", 1, 0.5) }, []);
+    expect(lone.guard.reasons).toEqual(["fewer than 2 metrics have evidence"]);
     // O3 at full coverage against O5 at 0.9: composite coverage 0.96 clears the floor, yet O3 carries 60% — allowed; at O5 0.4 it carries 77% — withheld
     const shared = composite("outcome", { O3: m("O3", 1, 0), O5: m("O5", 0.9, 0.5) }, []);
     expect(shared.coverage).toBeGreaterThanOrEqual(EVALUATION_COMPOSITE_COVERAGE_FLOOR);

@@ -221,8 +221,12 @@ export const EVALUATION_OPERATING_WEIGHTS: Partial<Record<EvaluationMetricKey, n
 export const EVALUATION_COMPOSITE_MIN_INCLUDED = { outcome: 2, operating: 3 } as const;
 /** A composite needs at least this share of its included weight resting on decidable records (rule 10 against continuous starvation). */
 export const EVALUATION_COMPOSITE_COVERAGE_FLOOR = 0.5;
-/** No single metric may supply more than this share of a composite's effective weight; otherwise the score is withheld and the metric named. */
-export const EVALUATION_COMPOSITE_MAX_CONCENTRATION = 0.7;
+/**
+ * No single metric may supply more than this share of a composite's effective weight; otherwise the score is
+ * withheld and the metric named. 0.75 keeps §5.3's two-metric minimum reachable for every pair that includes O1
+ * (O1 + O2 or O1 + O5 at full coverage is 72.7%); a metric standing in for a missing one (77%+) is still caught.
+ */
+export const EVALUATION_COMPOSITE_MAX_CONCENTRATION = 0.75;
 
 /** §7 tier boundaries on coverage. */
 export const EVALUATION_TIER_THRESHOLDS = { high: 0.8, medium: 0.5, low: 0.2 } as const;

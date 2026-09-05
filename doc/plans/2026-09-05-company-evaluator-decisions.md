@@ -497,3 +497,22 @@ Recorded here rather than in the spec, which is at its size limit.
   line, and E11 (activity drop) needs its five-week baseline before it can name
   the drop itself, so the first shadow milestone cannot detect that lever
   through E11 alone.
+- **Sixth verification (round 6): READY, ceiling moved to 0.75.** The reviewer
+  re-derived the shadow baseline by hand (O3 effective 0.133 against O5 0.03:
+  82% concentration, 47% coverage, score withheld) and confirmed both fixes
+  revert-sensitive. One design consequence surfaced: at a 70% ceiling, O1 + O2
+  and O1 + O5 at full coverage sit at 72.7% and would be withheld with complete
+  evidence on both, which quietly made the outcome minimum three metrics
+  whenever O1 is present — and the second shadow milestone is chosen precisely
+  because O1 will be measurable there. The ceiling is 0.75: every O1-bearing
+  pair stays reachable, and a metric standing in for a missing one (77% in the
+  unit pin, 82% on the baseline) is still caught. Guard shape fixed for the
+  Milestone 4 renderer: `guard.reasons` is always an array (empty when
+  satisfied) and `guard.reason` is the headline alias for its first entry; the
+  concentration and floor reasons are judged only once the minimum-included
+  check passes, so a lone metric never reports a tautological 100%. Recorded,
+  not changed: O3's two T0 terms are counted observable with no exposure
+  window, so a young milestone reads O3 = 0 by construction until items have
+  had time to attract a reopen or a blocker citation; the concentration guard
+  bounds what that can supply, and E9's seven-day horizon is the precedent if
+  an exposure normaliser is wanted later.
