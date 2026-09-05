@@ -19,7 +19,7 @@ describe("scoring — determinism and card shape", () => {
     const card = score(window);
     expect(cardHash(scoreMilestone(shuffle(window), ref, card.throughSeq, CO, { fallbackOpen: true }))).toBe(cardHash(card));
     expect(cardHash(scoreMilestone(window, ref, card.throughSeq - 1, CO, { fallbackOpen: true }))).not.toBe(cardHash(card));
-    expect(card.formulaVersion).toBe("m2-score/2");
+    expect(card.formulaVersion).toBe("m2-score/3");
     expect(card.state.open).toBe(true); // from the project.snapshot, not the fallback
     expect(card.contract.source).toBe("derived");
     expect(card.markers).toContain("contract derived by the evaluator — confidence capped at adequate");
@@ -398,7 +398,8 @@ describe("confidence tiers (spec §7) and composites (spec §5.3)", () => {
     expect(scaleTo100(m("O3", 0.25, "low", { lowerIsBetter: true }))).toBe(75);
     const guarded = composite("operating", { P1: m("P1", 1, "high"), P2: m("P2", 1, "high") }, []);
     expect(guarded.score).toBeNull();
-    expect(guarded.guard).toEqual({ minIncluded: 3, satisfied: false });
+    expect(guarded.guard).toMatchObject({ minIncluded: 3, satisfied: false, coverageFloor: 0.5 });
+    expect(guarded.guard.reason).toMatch(/fewer than 3 metrics/);
     const displayOnly = composite("operating", { P1: m("P1", 1, "high"), P2: m("P2", 1, "high"), P3: m("P3", 1, "low"), P7: m("P7", 5, "high", { displayOnly: true }) }, []);
     expect(displayOnly.score).toBe(100);
     expect(displayOnly.confidence).toBe("low");

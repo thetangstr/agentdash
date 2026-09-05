@@ -456,7 +456,14 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
   };
 }
 
-/** O5 Evidence hygiene: every required class present on each done item. */
+/**
+ * O5 Evidence hygiene. Each done item is judged over the required classes that
+ * are decidable for it: satisfied when every decidable required class is
+ * satisfied, failed when any is failed, undecidable when none is decidable.
+ * Coverage is the share of the engineering-default classes decidable per item,
+ * so an undecidable class and a waived class lower coverage alike — waiving a
+ * class (rule 16) can never raise the value or the composite weight.
+ */
 export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   const t = tally();
   const items = done(ctx);
@@ -466,22 +473,22 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
   let limitedItems = 0;
   let limitedReviewItems = 0;
   let sharedReviews = 0;
+  let coverageSum = 0;
   for (const it of items) {
     const ev = ctx.evidence.get(it.issueId);
     if (!ev) {
-      undecided(t, it.issueId, "no evidence computed");
+      undecided(t, it.issueId, "no evidence record was computed for this item");
       continue;
     }
     sharedReviews += ev.sharedAccountabilityReviews;
-    let failed = false;
-    let und: string | null = null;
-    let limited = false;
-    // Rule 16: items are judged on the classes the contract requires; a waived class is recorded per class and
-    // through the rule-16 cap, never by pretending it was measured. No required class at all: nothing is decidable.
     if (required.size === 0) {
       undecided(t, it.issueId, "the contract requires no evidence class");
       continue;
     }
+    let decidable = 0;
+    let failed = false;
+    let limited = false;
+    let firstUndecidable: string | null = null;
     for (const cls of EVALUATION_DEFAULT_REQUIRED_EVIDENCE) {
       const pc = (perClass[cls] ??= { satisfied: 0, failed: 0, undecidable: 0, waived: 0 });
       if (!required.has(cls)) {
@@ -489,49 +496,49 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
         continue;
       }
       const r = ev.classes[cls];
-      if (!r) {
+      if (!r || r.state === "undecidable") {
         pc.undecidable++;
-        und = und ?? `${cls}: not evaluated`;
+        firstUndecidable = firstUndecidable ?? `${cls}: ${r?.reason ?? "no evidence record was computed for this item"}`;
         continue;
       }
+      decidable++;
       for (const ref of r.refs) t.refs.add(ref);
       for (const tier of r.tiers) t.tiers.add(tier);
-      if (r.state === "satisfied") {
+      if (r.state === "failed") {
+        pc.failed++;
+        failed = true;
+      } else {
         pc.satisfied++;
         if (r.limited) {
           limited = true;
           limitedReviewItems++;
         }
-      } else if (r.state === "failed") {
-        pc.failed++;
-        failed = true;
-      } else {
-        pc.undecidable++;
-        und = und ?? `${cls}: ${r.reason}`;
       }
     }
-    if (failed) t.failed.push(it.issueId);
-    else if (und) undecided(t, it.issueId, und);
+    coverageSum += decidable / EVALUATION_DEFAULT_REQUIRED_EVIDENCE.length;
+    if (decidable === 0) undecided(t, it.issueId, firstUndecidable ?? "no required class is decidable for this item");
+    else if (failed) t.failed.push(it.issueId);
     else {
       t.satisfied.push(it.issueId);
       if (limited) limitedItems++;
     }
   }
   const n = items.length;
-  const decidable = t.satisfied.length + t.failed.length;
+  const decidableItems = t.satisfied.length + t.failed.length;
   const weak = weakContractCap(ctx);
-  const notes: string[] = ["value over the decidable items; coverage carries the undecidable ones"];
-  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: items are judged on the remaining classes; the waiver is a recorded contract exception`);
+  const notes: string[] = ["value over the items with at least one decidable required class; coverage is the share of the five default classes decidable per item"];
+  if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: items are judged on the remaining classes and the waived ones lower coverage like undecidable ones; the waiver is a recorded contract exception`);
   if (limitedReviewItems > 0) notes.push(`${words(limitedReviewItems, "item")} reviewed only within a concentrated reviewer pair: those reviews weigh as limited evidence`);
   if (weak) notes.push(weak.note);
   return {
     metric: build({
       ctx,
       key: "O5",
-      unit: "share of decidable done items with every required class",
+      unit: "share of decidable done items with every decidable required class satisfied",
       n,
-      value: decidable > 0 ? round(t.satisfied.length / decidable) : null,
+      value: decidableItems > 0 ? round(t.satisfied.length / decidableItems) : null,
       t,
+      coverage: n > 0 ? round(coverageSum / n) : 0, // rounded like every other coverage, so ten fifths are 0.2, not 0.1999…
       headline: headlineRatio(t, "done", "fully evidenced"),
       detail: { requiredEvidence: [...required].sort(), waived, perClass, sharedAccountabilityReviews: sharedReviews, limitedEvidenceItems: limitedItems, limitedReviewItems },
       notes,

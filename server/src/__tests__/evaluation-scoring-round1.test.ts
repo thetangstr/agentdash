@@ -473,10 +473,17 @@ describe("round 3 — verification findings", () => {
 
   it("MEDIUM 4: composites weight each metric by its coverage", () => {
     const m = (key: MetricResult["key"], value: number, coverage: number): MetricResult => ({ key, name: key, value, unit: "", n: 10, coverage, confidence: "low", confidenceLabel: "", breakdown: { satisfied: 0, failed: 0, undecidable: [] }, headline: "", formulaVersion: "t", evidenceRefs: [], evidenceRefCount: 0, tiers: ["T0"], lowerIsBetter: false, displayOnly: false, detail: {}, notes: [] });
-    const out = composite("outcome", { O1: m("O1", 1, 0.2), O5: m("O5", 0, 1) }, []);
-    // O1 = 100 at weight 0.4×0.2 = 0.08; O5 = 0 at weight 0.15×1 = 0.15 → 8/0.23 ≈ 34.8, not the unweighted 72.7
-    expect(out.score).toBe(34.8);
-    expect(out.included.map((i) => i.coverage)).toEqual([0.2, 1]);
+    // O1 = 100 at weight 0.4×0.2 = 0.08; O5 = 0 at weight 0.15×1 = 0.15 → the included weight rests on only 42% decidable records: withheld
+    const thin = composite("outcome", { O1: m("O1", 1, 0.2), O5: m("O5", 0, 1) }, []);
+    expect(thin.score).toBeNull();
+    expect(thin.coverage).toBe(0.418);
+    expect(thin.guard).toMatchObject({ satisfied: false, coverageFloor: 0.5 });
+    expect(thin.guard.reason).toMatch(/42% of the decidable records/);
+    expect(thin.included.map((i) => i.coverage)).toEqual([0.2, 1]);
+    // above the floor the weighting applies: O1 = 100 at 0.4×0.8 = 0.32, O5 = 0 at 0.15×1 = 0.15 → 32/0.47 ≈ 68.1, not the unweighted 72.7
+    const solid = composite("outcome", { O1: m("O1", 1, 0.8), O5: m("O5", 0, 1) }, []);
+    expect(solid.score).toBe(68.1);
+    expect(solid.coverage).toBe(0.855);
   });
 
   it("LOW 9 / 10: E11 and the metering E7 are dated by their last fact; acceptance by a real but non-accountable human does not lift the cap", () => {
@@ -496,5 +503,56 @@ describe("round 3 — verification findings", () => {
     const weak = declared(-1, [{ id: "k2", text: "feels done", source: "human" }]);
     const other = score([...roster(), weak, ev({ type: "evaluation.disposition", time: at(0), actor: ["user", "someone-else"], sourceTable: "evaluation", sourceId: "acc-o", payload: { kind: "contract_exception_accepted", contractEventId: weak.id } }), ...evidenced(I1)]);
     expect(other.outcome.O5!.confidence).toBe("low");
+  });
+});
+
+describe("round 4 — verification findings", () => {
+  /** The D4 reality: no GitHub adapter, no structured gates, no merge reports — ci_green and delivery_ref undecidable for every item. */
+  function sourcePoor(count: number, withDod: number): EvaluationEventRow[] {
+    const window: EvaluationEventRow[] = [...roster()];
+    for (let i = 0; i < count; i++) {
+      const id = `00000000-0000-4000-8000-0000000004${i.toString().padStart(2, "0")}`;
+      window.push(...item({ id, started: 1, done: 6, dod: i < withDod, dodSetAt: i < withDod ? 0 : undefined }), verdict(id, 4, R));
+    }
+    return window;
+  }
+
+  it("HIGH 1: on a source-poor deployment O5 is judged on the decidable required classes; waiving the undecidable ones changes neither value nor coverage", () => {
+    const byDefault = score(sourcePoor(10, 8));
+    expect(byDefault.outcome.O5!.value).toBe(0.8);
+    expect(byDefault.outcome.O5!.coverage).toBe(0.6); // 3 of 5 default classes decidable per item
+    expect(byDefault.outcome.O5!.breakdown).toMatchObject({ satisfied: 8, failed: 2 });
+    const waived = score([...sourcePoor(10, 8), declared(-1, [], ["dod_present", "neutral_verdict", "independent_review"])]);
+    expect(waived.outcome.O5!.value).toBe(0.8);
+    expect(waived.outcome.O5!.coverage).toBe(0.6); // waived classes lower coverage exactly like undecidable ones
+    expect(waived.outcome.O5!.confidence).toBe("low"); // and the waiver is a rule-16 exception until accepted
+    const defaultWeight = byDefault.outcomeComposite.included.find((i) => i.key === "O5")?.coverage ?? null;
+    const waivedWeight = waived.outcomeComposite.included.find((i) => i.key === "O5")?.coverage ?? null;
+    expect(waivedWeight).toBe(defaultWeight);
+  });
+
+  it("MEDIUM 4: a reviewer's own comment that carries an id and matches no review handoff still disqualifies, however close in time", () => {
+    const window = [
+      ...roster(),
+      ...item({ id: I1, started: 1, done: 8 }),
+      ev({ type: "issue.comment_added", time: at(5), actor: ["agent", R], issueId: I1, payload: { commentId: "directive", reopened: false } }),
+      handoff(I1, 5.03, R, "tester_to_reviewer", { issue: { id: I1 }, verdict: "pass", regression_gates: gates, labels_applied: [] }),
+      commentTwin(I1, 5.03, R),
+      verdict(I1, 6, R),
+    ];
+    expect(score(window).exceptions.some((e) => e.id === "E4")).toBe(true);
+  });
+
+  it("LOW 5 / 7: a DoD edit after the verdict is a later contribution; P6 is capped at limited evidence while refusals are unrecorded", () => {
+    const window = [...roster(), ...evidenced(I1), ev({ type: "issue.dod_set", time: at(7.2), actor: ["agent", R], issueId: I1, payload: { hasPrevious: true, criteriaCount: 2, previousCriteriaCount: 2, criteriaIds: ["c1", "c2"], previousCriteriaIds: ["c1", "c2"] } })];
+    const card = score(window);
+    expect(card.exceptions.some((e) => e.id === "E4" && e.note.includes("went on to contribute"))).toBe(true);
+    const p6 = card.actors.find((a) => a.actorId === A)!.metrics.P6!;
+    expect(p6.confidence).toBe("low");
+    expect(p6.notes.some((n) => n.includes("blind"))).toBe(true);
+  });
+
+  it("MEDIUM 2: the formula version moved with the arithmetic", () => {
+    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/3");
   });
 });

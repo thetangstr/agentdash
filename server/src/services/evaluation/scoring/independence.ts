@@ -80,8 +80,10 @@ export function contributors(it: ItemTimeline, until?: Date, opts: ContributorOp
   const reviewCommentIds = new Set(reviewHandoffs.filter((h) => h.commentId).map((h) => h.commentId!));
   const isReviewTwin = (c: { commentId: string | null; actorType: string; actorId: string | null; time: Date }) =>
     (!!c.commentId && reviewCommentIds.has(c.commentId)) ||
-    // fallback when a comment id is missing on either side: a review-class handoff by the same actor within the skew tolerance
-    reviewHandoffs.some((h) => h.actorType === c.actorType && h.actorId === c.actorId && Math.abs(h.time.getTime() - c.time.getTime()) <= TWIN_TOLERANCE_MS);
+    // fallback ONLY when an id is missing on either side: a review-class handoff by the same actor within the skew
+    // tolerance. A comment with its own id that matches no review handoff is a real comment, however close in time.
+    ((!c.commentId || reviewCommentIds.size === 0) &&
+      reviewHandoffs.some((h) => h.actorType === c.actorType && h.actorId === c.actorId && Math.abs(h.time.getTime() - c.time.getTime()) <= TWIN_TOLERANCE_MS));
   if (!opts.workOnly) {
     for (const c of within(it.comments)) {
       if (isReviewTwin(c)) continue; // the review's own activity twin

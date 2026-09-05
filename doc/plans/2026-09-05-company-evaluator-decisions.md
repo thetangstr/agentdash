@@ -453,3 +453,21 @@ Recorded here rather than in the spec, which is at its size limit.
   evidence rather than pretending a coverage number. The surface the twin skip
   creates is named: directive prose inside a review handoff is unscored, as all
   prose is.
+- **Fourth verification (round 4).** The O5 rewrite had reopened rule 16's
+  lever: an item counted as satisfied only when every required class was
+  decidable, so on a source-poor deployment the default contract scored 0 while
+  a waiver scored 0.8 at full composite weight. Now each item is judged over the
+  required classes decidable for it, and coverage is the share of the five
+  default classes decidable per item — an undecidable class and a waived class
+  lower it alike, so waiving is weight-neutral. Composites report their own
+  coverage (Σwᵢcᵢ / Σwᵢ) and are withheld below 0.5, so muting a failing metric
+  by making it undecidable cannot lift the score. The twin fallback fires only
+  when a comment id is missing on either side; a reviewer's comment that has its
+  own id and matches no review handoff is a real comment however close in time.
+  `FORMULA_VERSION` is `m2-score/3` (composites `composite/3`). Deliberate
+  narrowing recorded: the close-time independence check counts work-changing
+  acts only — runs, entering in_progress, taking the assignment, implementation
+  self-reports, DoD edits — and therefore not blocker edits or non-in_progress
+  status changes after a verdict, which §3 would count as writes; the check
+  exists to catch implementation performed after certifying, and those acts
+  still disqualify when they precede the review.

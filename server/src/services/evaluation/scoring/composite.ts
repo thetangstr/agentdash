@@ -8,7 +8,9 @@ import {
 import { minTier } from "./confidence.js";
 import type { CompositeResult, MetricResult } from "./types.js";
 
-export const COMPOSITE_FORMULA_VERSION = "composite/2";
+export const COMPOSITE_FORMULA_VERSION = "composite/3";
+/** A composite needs at least this much coverage across its included metrics, or it is withheld (rule 10 against continuous starvation). */
+export const COMPOSITE_COVERAGE_FLOOR = 0.5;
 
 /**
  * Spec §5.3: a renormalised weighted mean over included metrics, values scaled
@@ -52,22 +54,29 @@ export function composite(
   for (const key of Object.keys(metrics).sort() as EvaluationMetricKey[]) {
     if (!(key in weights) && metrics[key]) excluded.push({ key, reason: "shown, never scored" });
   }
-  const guardOk = included.length >= minIncluded;
+  const weightSum = included.reduce((s, i) => s + i.weight, 0);
+  const wsum = included.reduce((s, i) => s + i.weight * i.coverage, 0);
+  // how much of the included weight actually rests on decidable records
+  const compositeCoverage = included.length > 0 && weightSum > 0 ? Math.round((wsum / weightSum) * 1000) / 1000 : null;
+  let reason: string | undefined;
+  if (included.length < minIncluded) reason = `fewer than ${minIncluded} metrics have evidence`;
+  else if (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR) reason = `the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`;
+  const guardOk = reason === undefined;
   let score: number | null = null;
   let confidence: EvaluationConfidenceTier | null = null;
   if (guardOk) {
-    const wsum = included.reduce((s, i) => s + i.weight * i.coverage, 0);
-    score = wsum > 0 ? Math.round((included.reduce((s, i) => s + i.weight * i.coverage * i.scaled, 0) / wsum) * 10) / 10 : null;
+    score = Math.round((included.reduce((s, i) => s + i.weight * i.coverage * i.scaled, 0) / wsum) * 10) / 10;
     confidence = included.map((i) => i.confidence).reduce((a, b) => minTier(a, b));
   }
   return {
     kind,
     score,
     confidence,
+    coverage: compositeCoverage,
     included: included.sort((a, b) => (a.key < b.key ? -1 : 1)),
     excluded: excluded.sort((a, b) => (a.key < b.key ? -1 : 1)),
     flags: [...flags].sort(),
-    guard: { minIncluded, satisfied: guardOk },
+    guard: { minIncluded, coverageFloor: COMPOSITE_COVERAGE_FLOOR, satisfied: guardOk, ...(reason ? { reason } : {}) },
     formulaVersion: COMPOSITE_FORMULA_VERSION,
   };
 }
