@@ -417,7 +417,10 @@ describe("operating metrics", () => {
     const p6 = card.actors.find((a) => a.actorId === T)!.metrics.P6!;
     expect(p6.detail.rules).toEqual({ authz_refused: 1, transition_not_assigned: 1 });
     expect(p6.n).toBe(2);
-    expect(card.exceptions.filter((e) => e.id === "E3").length).toBe(2);
+    // three E3s: two for T, and one for the reviewer R closing an item it was not assigned to — spec P6 as written; the
+    // shadow run will show whether that rule needs a carve-out for the sanctioned review→done step
+    expect(card.exceptions.filter((e) => e.id === "E3").length).toBe(3);
+    expect(card.actors.find((a) => a.actorId === R)!.metrics.P6!.detail.rules).toEqual({ transition_not_assigned: 1 });
     expect(card.flags).toContain("E3 present");
   });
 

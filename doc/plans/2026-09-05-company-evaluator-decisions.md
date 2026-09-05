@@ -329,3 +329,41 @@ Recorded here rather than in the spec, which is at its size limit.
   review commits; a development database that applied an intermediate shape
   keeps it (`pnpm db:migrate` does not repair a journaled migration) and must be
   reset before running the final shape. Fresh databases and CI are unaffected.
+
+## Milestone 2 implementation notes (2026-09-05, scoring branch)
+
+- **Every fact a projection needs is in the window.** Roster snapshots
+  (`agent.snapshot`, `project.snapshot`, `goal.snapshot`) and label additions
+  enter the ledger; issue snapshots carry labels, title tokens, lifecycle
+  timestamps and lineage; DoD events carry criterion ids and text hashes. The
+  open flag is therefore a ledger fact once a roster snapshot exists; the live
+  row is only the fallback for a window without one. Schema version 2.
+- **Card = pure function.** `scoreMilestone(window, ref, throughSeq, companyId,
+  {fallbackOpen})` folds the ordered window into per-item timelines, resolves
+  the contract (declared, else derived with the engineering-default evidence set
+  and no criteria), evaluates evidence classes and criterion dispositions, then
+  O1–O5, P1–P9 per agent plus the company row, tiers, composites with guards,
+  and exceptions E1–E14 with roster routing. `FORMULA_VERSION = m2-score/1`.
+  The deterministic "now" is the latest event or ingest time in the window.
+- **Single writer preserved.** Snapshots (which append `evaluation.finding`
+  events) and contract declarations take the same per-company advisory lock as
+  ingest, so `seq` never gains a lower row after a cut.
+- **Derived contracts declare no criteria.** Criterion text is not in the
+  ledger, so O1 is Insufficient until a human declares a contract with checks —
+  the gap the spec says to measure, not assume. `human_attest` dispositions are
+  read from `evaluation.disposition` events; the route that writes them is M3.
+- **Known approximations, to be judged on the first shadow cards.** P6's
+  "agent transitioning an item it is not assigned to" fires on the sanctioned
+  review→done step by a reviewer or TPM and will be the noisiest rule; E5's
+  "valid action path" is approximated as any activity, pending question,
+  pending approval or human owner within 48 h; P4 judges assignments on the
+  definition of done because description presence is not in the ledger; P3's
+  only checkable claims today are payload timestamps (the GitHub adapter, D4,
+  adds the rest); O3's recovery-issue term and P5's `heal_attempts` are not
+  modelled; O2 populations are the milestone only (issues carry no target
+  date); a fully no-op PATCH still mints phantom facts (no `_previous` is
+  written when nothing changed).
+- **Tests.** 23 fixture-ledger unit cases (determinism, rules 4, 10–19, tiers
+  at 0.2/0.5/0.8, composites and guards, membership moves, each exception) plus
+  the Milestone 1 suites extended for roster events, contract routes and the
+  ledger-derived open flag.
