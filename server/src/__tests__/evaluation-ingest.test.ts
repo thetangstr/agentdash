@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import {
@@ -307,6 +308,39 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const after = await ledger.countByType(companyId);
     expect(after["issue.transition"]).toBe((before["issue.transition"] ?? 0) + 1);
     expect(after["issue.assignment_changed"]).toBe((before["issue.assignment_changed"] ?? 0) + 1);
+  });
+
+  it("the evaluator's own audit rows never enter the ledger (rules 9/12)", async () => {
+    const before = (await evaluationLedger(db).countByType(companyId))["activity.other"] ?? 0;
+    await db.insert(activityLog).values({ companyId, actorType: "user", actorId: "local-board", action: "evaluation.ingest_run", entityType: "company", entityId: companyId, details: { backfill: false }, createdAt: at(73) });
+    const stats = await evaluationIngest(db, { rowBudget: 100, sources: ["activity_log"] }).tick(companyId);
+    expect(stats.scanned).toBe(1);
+    expect((await evaluationLedger(db).countByType(companyId))["activity.other"] ?? 0).toBe(before);
+  });
+
+  it("a PATCH that echoes an unchanged assignee mints a transition but no assignment fact (round 2 verification)", async () => {
+    const ledger = evaluationLedger(db);
+    const before = await ledger.countByType(companyId);
+    await db.insert(activityLog).values({ companyId, actorType: "user", actorId: "local-board", action: "issue.updated", entityType: "issue", entityId: issueId, details: { status: "in_progress", assigneeAgentId: agentId, _previous: { status: "in_review" }, identifier: "EVL-1" }, createdAt: at(74) });
+    await evaluationIngest(db, { rowBudget: 100, sources: ["activity_log"] }).tick(companyId);
+    const after = await ledger.countByType(companyId);
+    expect(after["issue.transition"]).toBe((before["issue.transition"] ?? 0) + 1);
+    expect(after["issue.assignment_changed"] ?? 0).toBe(before["issue.assignment_changed"] ?? 0);
+  });
+
+  it("a goal milestone's contract must carry no project, matching membership", async () => {
+    const ledger = evaluationLedger(db);
+    const goalA = randomUUID();
+    const goalB = randomUUID();
+    const strayProject = randomUUID();
+    const base = { companyId, actorType: "user" as const, actorId: "local-board", sourceTable: "evaluation_contracts", eventType: "contract.declared" as const, eventTime: at(75), payload: {} };
+    await ledger.append([
+      { ...base, sourceId: randomUUID(), sourceVersion: "1", goalId: goalA, projectId: strayProject },
+      { ...base, sourceId: randomUUID(), sourceVersion: "1", goalId: goalB, projectId: null },
+    ]);
+    expect(await ledger.hasContract(companyId, { kind: "goal", id: goalA })).toBe(false);
+    expect(await ledger.hasContract(companyId, { kind: "goal", id: goalB })).toBe(true);
+    expect(await ledger.hasContract(companyId, { kind: "project", id: strayProject })).toBe(true);
   });
 
   it("refuses UPDATE and DELETE on the ledger unless the purge setting is on (spec §10.2)", async () => {

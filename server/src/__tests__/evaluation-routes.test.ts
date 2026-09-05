@@ -57,6 +57,7 @@ describe("evaluation routes", () => {
     tick.mockClear();
     backfill.mockClear();
     snapshot.mockClear();
+    verify.mockClear();
     logActivity.mockClear();
   });
 
@@ -92,6 +93,27 @@ describe("evaluation routes", () => {
     expect(snapshot).toHaveBeenCalledWith("company-1", { kind: "project", id: "22222222-2222-4222-8222-222222222222" });
     expect(logActivity).toHaveBeenCalledTimes(2);
     expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action).sort()).toEqual(["evaluation.ingest_run", "evaluation.scorecard_snapshot"]);
+  });
+
+  it("verify and replay materialise the company window: administrators only; plain card reads stay open", async () => {
+    const agent = await createApp(agentKey);
+    const q = "kind=project&id=22222222-2222-4222-8222-222222222222";
+    expect((await request(agent).get(`/api/companies/company-1/evaluation/scorecards?${q}`)).status).toBe(200);
+    expect((await request(agent).get(`/api/companies/company-1/evaluation/scorecards?${q}&verify=true`)).status).toBe(403);
+    expect((await request(agent).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(403);
+    expect(verify).not.toHaveBeenCalled();
+    const admin = await createApp(boardAdmin);
+    expect((await request(admin).get(`/api/companies/company-1/evaluation/scorecards?${q}&verify=true`)).status).toBe(200);
+    expect((await request(admin).get(`/api/companies/company-1/evaluation/replay?${q}`)).status).toBe(200);
+  });
+
+  it("a backfill cut short by the lock is audited as such", async () => {
+    backfill.mockResolvedValueOnce({ passes: 2, inserted: 5, scanned: 9, exhausted: false, lockedOut: true });
+    const app = await createApp(boardAdmin);
+    const run = await request(app).post("/api/companies/company-1/evaluation/ingest/run?backfill=true");
+    expect(run.status).toBe(200);
+    expect(run.body.lockedOut).toBe(true);
+    expect((logActivity.mock.calls[0]![1] as { details: Record<string, unknown> }).details).toMatchObject({ backfill: true, passes: 2, lockedOut: true, exhausted: false });
   });
 
   it("rejects a malformed snapshot body and an unknown event type filter is ignored", async () => {

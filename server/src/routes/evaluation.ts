@@ -90,9 +90,12 @@ export function evaluationRoutes(db: Db) {
       const q = refQuery.safeParse(req.query);
       if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
       const ref = evaluationMilestoneRefSchema.parse(q.data);
+      const wantVerify = req.query.verify === "true";
+      // `verify` replays the company window in memory (as the replay route does): administrators only.
+      // Plain card reads stay open to company members.
+      if (wantVerify) await assertCompanyAdministrator(access, req, companyId);
       const latest = await cards.latest(companyId, ref);
-      // `verify` is a consistency check, requested explicitly.
-      const verify = latest && req.query.verify === "true" ? await cards.verify(companyId, ref, latest.version) : null;
+      const verify = latest && wantVerify ? await cards.verify(companyId, ref, latest.version) : null;
       res.json({ latest, verify });
     } catch (err) {
       next(err);
@@ -106,8 +109,16 @@ export function evaluationRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       await assertCompanyAdministrator(access, req, companyId);
       const backfill = req.query.backfill === "true";
-      const result = backfill ? await ingest.backfill(companyId, MAX_BACKFILL_PASSES) : await ingest.tick(companyId);
+      let result: Awaited<ReturnType<typeof ingest.backfill>> | Awaited<ReturnType<typeof ingest.tick>>;
+      try {
+        result = backfill ? await ingest.backfill(companyId, MAX_BACKFILL_PASSES) : await ingest.tick(companyId);
+      } catch (err) {
+        // Another pass holds this company's lock: tell the operator when to come back.
+        if (err instanceof Error && /already running/.test(err.message)) res.set("Retry-After", "60");
+        throw err;
+      }
       const actor = getActorInfo(req);
+      const outcome = "lockedOut" in result ? { passes: result.passes, exhausted: result.exhausted, lockedOut: result.lockedOut } : {};
       await logActivity(db, {
         companyId,
         actorType: actor.actorType,
@@ -115,7 +126,7 @@ export function evaluationRoutes(db: Db) {
         action: "evaluation.ingest_run",
         entityType: "company",
         entityId: companyId,
-        details: { backfill, inserted: result.inserted, scanned: result.scanned },
+        details: { backfill, inserted: result.inserted, scanned: result.scanned, ...outcome },
       });
       res.json(result);
     } catch (err) {

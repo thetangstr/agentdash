@@ -113,18 +113,24 @@ export const LAG_REREAD_BUDGET = 1000;
  *   advance the cursor and are what `scanned` counts;
  * - lag re-read: rows at or before the cursor whose time is within the lag
  *   window — rows whose timestamp was assigned or backdated after the cursor
- *   passed, or split from their page by an equal timestamp. Dedupe makes the
- *   overlap free; they never move the cursor.
+ *   passed, or split from their page by an equal timestamp — read backwards
+ *   from the cursor so the bounded budget covers the rows nearest it. Dedupe
+ *   makes the overlap free; they never move the cursor.
  * Cursor times are the database's own `::text` rendering (microseconds), never
  * a JavaScript Date (milliseconds): otherwise rows created by `now()` sort
  * after their own cursor forever.
  */
+/** ORDER BY for a keyset read: forwards for progress, backwards from the cursor for the lag re-read. */
+export function ordered(direction: "asc" | "desc", timeCol: unknown, idCol: unknown) {
+  return direction === "asc" ? [asc(timeCol as never), asc(idCol as never)] : [desc(timeCol as never), desc(idCol as never)];
+}
+
 export async function keysetRead<Row extends { cursorTime: string }>(
   cursor: Cursor,
   limit: number,
   timeCol: unknown,
   idCol: unknown,
-  run: (predicate: SQL | undefined, take: number) => Promise<Row[]>,
+  run: (predicate: SQL | undefined, take: number, direction: "asc" | "desc") => Promise<Row[]>,
   idOf: (row: Row) => string,
 ): Promise<{ rows: Row[]; scanned: number; nextCursor: Cursor }> {
   const t = timeCol as never;
@@ -134,7 +140,7 @@ export async function keysetRead<Row extends { cursorTime: string }>(
     : cursor.id
       ? sql`(${t}, ${i}) > (${cursor.time}::timestamptz, ${cursor.id}::uuid)`
       : sql`${t} > ${cursor.time}::timestamptz`;
-  const progress = await run(progressPredicate, limit);
+  const progress = await run(progressPredicate, limit, "asc");
   const last = progress[progress.length - 1];
   const nextCursor: Cursor = last ? { time: last.cursorTime, id: idOf(last) } : { ...cursor };
   let rows = progress;
@@ -143,7 +149,8 @@ export async function keysetRead<Row extends { cursorTime: string }>(
       ? sql`(${t}, ${i}) <= (${cursor.time}::timestamptz, ${cursor.id}::uuid)`
       : sql`${t} <= ${cursor.time}::timestamptz`;
     const lagPredicate = sql`${t} > (${cursor.time}::timestamptz - make_interval(secs => ${CURSOR_LAG_SECONDS})) AND ${upper}`;
-    const lag = await run(lagPredicate, Math.min(limit, LAG_REREAD_BUDGET));
+    // Descending from the cursor: the budget is spent on the rows nearest the cursor, where a late or backdated row lands.
+    const lag = await run(lagPredicate, Math.min(limit, LAG_REREAD_BUDGET), "desc");
     const seen = new Set(progress.map(idOf));
     rows = progress.concat(lag.filter((r) => !seen.has(idOf(r))));
   }
@@ -262,12 +269,12 @@ function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<str
  * with or without `_previous`. Approval events inherit scope through issue_approvals.
  */
 export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, activityLog.createdAt, activityLog.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, activityLog.createdAt, activityLog.id, (predicate, take, direction) =>
     tx
       .select(withCursorTime(activityLog, activityLog.createdAt))
       .from(activityLog)
       .where(predicate ? and(eq(activityLog.companyId, companyId), predicate) : eq(activityLog.companyId, companyId))
-      .orderBy(asc(activityLog.createdAt), asc(activityLog.id))
+      .orderBy(...ordered(direction, activityLog.createdAt, activityLog.id))
       .limit(take),
     (r) => r.id,
   );
@@ -321,8 +328,11 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
             : typeof details.reopenedFrom === "string"
               ? details.reopenedFrom
               : null;
+      // The PATCH route echoes every submitted field into details but records only changed ones in _previous,
+      // so with _previous present an assignee key must be there to count as a change; emitters without
+      // _previous (recovery service) are judged on presence.
       const assignmentTouched =
-        "assigneeAgentId" in details || "assigneeUserId" in details || "assigneeAgentId" in previous || "assigneeUserId" in previous;
+        "_previous" in details ? "assigneeAgentId" in previous || "assigneeUserId" in previous : "assigneeAgentId" in details || "assigneeUserId" in details;
       const assignmentPayload = {
         ...issueRef,
         fromAgentId: previous.assigneeAgentId ?? null,
@@ -390,12 +400,12 @@ export async function readActivityLog(tx: Tx, companyId: string, cursor: Cursor,
 
 /** T0: terminal heartbeat runs → run.finished. sourceVersion = status + finish time, so a retried run is a new fact. */
 export async function readHeartbeatRuns(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, heartbeatRuns.updatedAt, heartbeatRuns.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, heartbeatRuns.updatedAt, heartbeatRuns.id, (predicate, take, direction) =>
     tx
       .select(withCursorTime(heartbeatRuns, heartbeatRuns.updatedAt))
       .from(heartbeatRuns)
       .where(and(eq(heartbeatRuns.companyId, companyId), inArray(heartbeatRuns.status, [...TERMINAL_RUN_STATUSES]), ...(predicate ? [predicate] : [])))
-      .orderBy(asc(heartbeatRuns.updatedAt), asc(heartbeatRuns.id))
+      .orderBy(...ordered(direction, heartbeatRuns.updatedAt, heartbeatRuns.id))
       .limit(take),
     (r) => r.id,
   );
@@ -450,12 +460,12 @@ function numberOrNull(v: unknown): number | null {
 
 /** T0: verdicts are insert-only → verdict.recorded. Justification prose (T3) is not copied; its length is. */
 export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, verdicts.createdAt, verdicts.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, verdicts.createdAt, verdicts.id, (predicate, take, direction) =>
     tx
       .select(withCursorTime(verdicts, verdicts.createdAt))
       .from(verdicts)
       .where(predicate ? and(eq(verdicts.companyId, companyId), predicate) : eq(verdicts.companyId, companyId))
-      .orderBy(asc(verdicts.createdAt), asc(verdicts.id))
+      .orderBy(...ordered(direction, verdicts.createdAt, verdicts.id))
       .limit(take),
     (r) => r.id,
   );
@@ -491,12 +501,12 @@ export async function readVerdicts(tx: Tx, companyId: string, cursor: Cursor, li
 
 /** T0: ask_user_questions and other interactions → interaction.changed, one event per status. */
 export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueThreadInteractions.updatedAt, issueThreadInteractions.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueThreadInteractions.updatedAt, issueThreadInteractions.id, (predicate, take, direction) =>
     tx
       .select(withCursorTime(issueThreadInteractions, issueThreadInteractions.updatedAt))
       .from(issueThreadInteractions)
       .where(predicate ? and(eq(issueThreadInteractions.companyId, companyId), predicate) : eq(issueThreadInteractions.companyId, companyId))
-      .orderBy(asc(issueThreadInteractions.updatedAt), asc(issueThreadInteractions.id))
+      .orderBy(...ordered(direction, issueThreadInteractions.updatedAt, issueThreadInteractions.id))
       .limit(take),
     (r) => r.id,
   );
@@ -533,12 +543,12 @@ export async function readInteractions(tx: Tx, companyId: string, cursor: Cursor
 
 /** T0: cost_events → cost.recorded (the one metering source; agent_runs is derived from it). */
 export async function readCostEvents(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, costEvents.createdAt, costEvents.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, costEvents.createdAt, costEvents.id, (predicate, take, direction) =>
     tx
       .select(withCursorTime(costEvents, costEvents.createdAt))
       .from(costEvents)
       .where(predicate ? and(eq(costEvents.companyId, companyId), predicate) : eq(costEvents.companyId, companyId))
-      .orderBy(asc(costEvents.createdAt), asc(costEvents.id))
+      .orderBy(...ordered(direction, costEvents.createdAt, costEvents.id))
       .limit(take),
     (r) => r.id,
   );
@@ -617,7 +627,7 @@ export function allowlistHandoffPayload(
  * author is the item's assignee, i.e. the payload's subject (rule 7).
  */
 export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueComments.createdAt, issueComments.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issueComments.createdAt, issueComments.id, (predicate, take, direction) =>
     tx
       .select({
         id: issueComments.id,
@@ -637,7 +647,7 @@ export async function readCommentHandoffs(tx: Tx, companyId: string, cursor: Cur
           ...(predicate ? [predicate] : []),
         ),
     )
-      .orderBy(asc(issueComments.createdAt), asc(issueComments.id))
+      .orderBy(...ordered(direction, issueComments.createdAt, issueComments.id))
       .limit(take),
     (r) => r.id,
   );
@@ -758,7 +768,7 @@ async function latestSnapshotHashes(tx: Tx, companyId: string, sourceTable: stri
  * hash and structural fields are stored.
  */
 export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Cursor, limit: number): Promise<SourceReadResult> {
-  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issues.updatedAt, issues.id, (predicate, take) =>
+  const { rows, scanned, nextCursor } = await keysetRead(cursor, limit, issues.updatedAt, issues.id, (predicate, take, direction) =>
     tx
       .select({
         id: issues.id,
@@ -778,7 +788,7 @@ export async function readIssueSnapshots(tx: Tx, companyId: string, cursor: Curs
       })
       .from(issues)
       .where(predicate ? and(eq(issues.companyId, companyId), predicate) : eq(issues.companyId, companyId))
-      .orderBy(asc(issues.updatedAt), asc(issues.id))
+      .orderBy(...ordered(direction, issues.updatedAt, issues.id))
       .limit(take),
     (r) => r.id,
   );

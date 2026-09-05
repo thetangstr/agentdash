@@ -8,7 +8,7 @@ import {
   hashCanonical,
   orderEvents,
 } from "../services/evaluation/ledger.js";
-import { allowlistHandoffPayload, extractHandoffPayloads } from "../services/evaluation/sources.js";
+import { allowlistHandoffPayload, extractHandoffPayloads, keysetRead } from "../services/evaluation/sources.js";
 import {
   cardHash,
   isRetrospective,
@@ -222,5 +222,39 @@ describe("retrospective detection (spec §4.6)", () => {
     const recent = row({ seq: 2, dedupeKey: "b", eventTime: new Date(t0.getTime() - 3600_000), ingestTime: t0, projectId: PROJECT });
     expect(isRetrospective([recent], [recent])).toBe(false);
     expect(isRetrospective([], [])).toBe(false);
+  });
+});
+
+describe("keysetRead (two-part cursor read)", () => {
+  type Row = { id: string; cursorTime: string };
+  it("reads progress forwards after the cursor, re-reads the lag window backwards from it, dedupes by row key, and advances the cursor from progress only", async () => {
+    const calls: Array<{ predicate: boolean; take: number; direction: string }> = [];
+    const run = async (predicate: unknown, take: number, direction: "asc" | "desc"): Promise<Row[]> => {
+      calls.push({ predicate: !!predicate, take, direction });
+      return direction === "asc" ? [{ id: "b", cursorTime: "t2" }, { id: "c", cursorTime: "t3" }] : [{ id: "b", cursorTime: "t2" }, { id: "a", cursorTime: "t1" }];
+    };
+    const r = await keysetRead({ time: "2026-09-05 10:00:00+00", id: "00000000-0000-4000-8000-000000000001" }, 2, {}, {}, run, (x) => x.id);
+    expect(calls).toEqual([
+      { predicate: true, take: 2, direction: "asc" },
+      { predicate: true, take: 2, direction: "desc" },
+    ]);
+    expect(r.rows.map((x) => x.id)).toEqual(["b", "c", "a"]); // lag row "b" already seen
+    expect(r.scanned).toBe(2);
+    expect(r.nextCursor).toEqual({ time: "t3", id: "c" });
+  });
+  it("the first read has no predicate and no lag query; an empty progress read leaves the cursor where it was", async () => {
+    const calls: string[] = [];
+    const empty = async (_p: unknown, _t: number, direction: "asc" | "desc"): Promise<Row[]> => {
+      calls.push(direction);
+      return [];
+    };
+    const first = await keysetRead({}, 10, {}, {}, empty, (x) => x.id);
+    expect(calls).toEqual(["asc"]);
+    expect(first.nextCursor).toEqual({});
+    calls.length = 0;
+    const later = await keysetRead({ time: "t9", id: "00000000-0000-4000-8000-000000000009" }, 10, {}, {}, empty, (x) => x.id);
+    expect(calls).toEqual(["asc", "desc"]);
+    expect(later.scanned).toBe(0);
+    expect(later.nextCursor).toEqual({ time: "t9", id: "00000000-0000-4000-8000-000000000009" });
   });
 });

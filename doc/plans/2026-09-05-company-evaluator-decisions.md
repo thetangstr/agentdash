@@ -314,3 +314,18 @@ Recorded here rather than in the spec, which is at its size limit.
   load. Accepted as notes: the integration test is order-coupled; a terminal run
   whose `finished_at` is filled in after its status would mint twice (no writer
   does this today); the comments prefilter matches any JSON with a `type` key.
+- **Verification of round 2 (same reviewer) and Theo's re-review (AGE-95, READY).**
+  Taken: `GET …/scorecards?verify=true` is administrator-only like the replay
+  route (plain card reads stay open to members); the lag re-read runs backwards
+  from the cursor so its bound covers the rows nearest it; a PATCH that echoes
+  an unchanged assignee mints no assignment fact (with `_previous` present the
+  assignee key must be there); the ingest-run audit row records `passes`,
+  `exhausted` and `lockedOut`, and a 409 carries `Retry-After`; `verify` skips
+  the live milestone read when the flag is pinned. Restated: the effective lock
+  hold is `statement_timeout × statements` (scope resolution walks up to eleven
+  queries per source, withdrawal detection chunks by 1000, appends chunk by 500),
+  every statement bounded, so a tick is bounded — not `× sources` as first
+  written. Operational note from Theo: migration 0127 was edited in place across
+  review commits; a development database that applied an intermediate shape
+  keeps it (`pnpm db:migrate` does not repair a journaled migration) and must be
+  reset before running the final shape. Fresh databases and CI are unaffected.

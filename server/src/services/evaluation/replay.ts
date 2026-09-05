@@ -144,8 +144,9 @@ export function evaluationReplay(db: Db) {
 
   return {
     /** Derive the §4.6 state flags from the milestone itself and the window. */
-    async state(companyId: string, ref: EvaluationMilestoneRef, window: EvaluationEventRow[]): Promise<MilestoneState> {
-      const [open, hasContract] = await Promise.all([milestoneOpen(companyId, ref), ledger.hasContract(companyId, ref)]);
+    async state(companyId: string, ref: EvaluationMilestoneRef, window: EvaluationEventRow[], pinnedOpen?: boolean): Promise<MilestoneState> {
+      // A pinned flag (verify) skips the live milestone read; `retrospective` is always derived from the window.
+      const [open, hasContract] = await Promise.all([pinnedOpen ?? milestoneOpen(companyId, ref), ledger.hasContract(companyId, ref)]);
       return { open, retrospective: isRetrospective(window, selectMilestoneEvents(window, ref)), hasContract };
     },
 
@@ -163,8 +164,7 @@ export function evaluationReplay(db: Db) {
     ): Promise<{ card: MilestoneCard; hash: string; state: MilestoneState; throughSeq: number }> {
       const cut = throughSeq ?? (await ledger.maxSeq(companyId));
       const window = await ledger.windowUpTo(companyId, cut);
-      const derived = await this.state(companyId, ref, window);
-      const state: MilestoneState = pinned ? { ...derived, open: pinned.open } : derived;
+      const state = await this.state(companyId, ref, window, pinned?.open);
       const card = projectMilestone(window, ref, cut, state);
       return { card, hash: cardHash(card), state, throughSeq: cut };
     },
