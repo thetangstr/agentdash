@@ -103,6 +103,8 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         companyId: issues.companyId,
         assigneeAgentId: issues.assigneeAgentId,
         assigneeUserId: issues.assigneeUserId,
+        // Included so setIssueDoD can record the prior DoD in dod_set activity.
+        definitionOfDone: issues.definitionOfDone,
       })
       .from(issues)
       .where(eq(issues.id, issueId))
@@ -120,6 +122,8 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         id: projects.id,
         companyId: projects.companyId,
         leadAgentId: projects.leadAgentId,
+        // Included so setProjectDoD can record the prior DoD in dod_set activity.
+        definitionOfDone: projects.definitionOfDone,
       })
       .from(projects)
       .where(eq(projects.id, projectId))
@@ -561,6 +565,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
     companyId: string,
     projectId: string,
     dod: DefinitionOfDone,
+    actor?: { actorType: "agent" | "user"; actorId: string; agentId: string | null },
   ): Promise<typeof projects.$inferSelect> {
     const parsed = definitionOfDoneSchema.safeParse(dod);
     if (!parsed.success) {
@@ -581,12 +586,20 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
 
     await logActivity(db, {
       companyId,
-      actorType: "system",
-      actorId: "verdicts_service",
+      // AgentDash: goals-eval-hitl — the evaluator needs to know WHO set a DoD
+      // (to detect narrowing after an item leaves backlog), so record the real
+      // request actor when the route provides one; programmatic callers without
+      // an actor fall back to the service identity.
+      actorType: actor?.actorType ?? "system",
+      actorId: actor?.actorId ?? "verdicts_service",
+      agentId: actor?.agentId ?? null,
       action: "dod_set",
       entityType: "project",
       entityId: projectId,
-      details: { definitionOfDone: parsed.data },
+      details: {
+        definitionOfDone: parsed.data,
+        _previous: project.definitionOfDone ?? null,
+      },
     });
 
     return updated[0]!;
@@ -596,6 +609,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
     companyId: string,
     issueId: string,
     dod: DefinitionOfDone,
+    actor?: { actorType: "agent" | "user"; actorId: string; agentId: string | null },
   ): Promise<typeof issues.$inferSelect> {
     const parsed = definitionOfDoneSchema.safeParse(dod);
     if (!parsed.success) {
@@ -616,12 +630,20 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
 
     await logActivity(db, {
       companyId,
-      actorType: "system",
-      actorId: "verdicts_service",
+      // AgentDash: goals-eval-hitl — the evaluator needs to know WHO set a DoD
+      // (to detect narrowing after an item leaves backlog), so record the real
+      // request actor when the route provides one; programmatic callers without
+      // an actor fall back to the service identity.
+      actorType: actor?.actorType ?? "system",
+      actorId: actor?.actorId ?? "verdicts_service",
+      agentId: actor?.agentId ?? null,
       action: "dod_set",
       entityType: "issue",
       entityId: issueId,
-      details: { definitionOfDone: parsed.data },
+      details: {
+        definitionOfDone: parsed.data,
+        _previous: issue.definitionOfDone ?? null,
+      },
     });
 
     return updated[0]!;

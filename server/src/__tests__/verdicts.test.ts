@@ -453,6 +453,30 @@ describe("verdictsService.setProjectDoD", () => {
     });
   });
 
+  it("AGE-92: records the request actor and _previous (null when none) on dod_set", async () => {
+    const { db, queueSelect } = makeDb();
+    // No prior DoD on the project.
+    queueSelect([
+      { id: PROJECT_ID, companyId: COMPANY_ID, leadAgentId: null, definitionOfDone: null },
+    ]);
+
+    const svc = verdictsService(db as any);
+    await svc.setProjectDoD(COMPANY_ID, PROJECT_ID, validDoD as any, {
+      actorType: "user",
+      actorId: "local-board",
+      agentId: null,
+    });
+
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity.mock.calls[0]![1]).toMatchObject({
+      action: "dod_set",
+      actorType: "user",
+      actorId: "local-board",
+      agentId: null,
+      details: { definitionOfDone: validDoD, _previous: null },
+    });
+  });
+
   it("rejects invalid DoD shape with code DOD_INVALID and does NOT write activity", async () => {
     const { db } = makeDb();
 
@@ -489,6 +513,94 @@ describe("verdictsService.setIssueDoD", () => {
       action: "dod_set",
       entityType: "issue",
       entityId: ISSUE_ID,
+    });
+  });
+
+  it("AGE-92: logs actorType user and _previous null on first set", async () => {
+    const { db, queueSelect } = makeDb();
+    // No prior DoD on the issue.
+    queueSelect([
+      {
+        id: ISSUE_ID,
+        companyId: COMPANY_ID,
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        definitionOfDone: null,
+      },
+    ]);
+
+    const svc = verdictsService(db as any);
+    await svc.setIssueDoD(COMPANY_ID, ISSUE_ID, validDoD as any, {
+      actorType: "user",
+      actorId: "local-board",
+      agentId: null,
+    });
+
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity.mock.calls[0]![1]).toMatchObject({
+      action: "dod_set",
+      actorType: "user",
+      actorId: "local-board",
+      agentId: null,
+      details: { definitionOfDone: validDoD, _previous: null },
+    });
+  });
+
+  it("AGE-92: replacing a DoD logs _previous equal to the first value", async () => {
+    const firstDoD = {
+      summary: "First bar",
+      criteria: [{ id: "c1", text: "Initial gate", done: false }],
+    };
+    const { db, queueSelect } = makeDb();
+    // The issue already carries the first DoD.
+    queueSelect([
+      {
+        id: ISSUE_ID,
+        companyId: COMPANY_ID,
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        definitionOfDone: firstDoD,
+      },
+    ]);
+
+    const svc = verdictsService(db as any);
+    await svc.setIssueDoD(COMPANY_ID, ISSUE_ID, validDoD as any, {
+      actorType: "agent",
+      actorId: ASSIGNEE_AGENT,
+      agentId: ASSIGNEE_AGENT,
+    });
+
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity.mock.calls[0]![1]).toMatchObject({
+      action: "dod_set",
+      actorType: "agent",
+      actorId: ASSIGNEE_AGENT,
+      agentId: ASSIGNEE_AGENT,
+      details: { definitionOfDone: validDoD, _previous: firstDoD },
+    });
+  });
+
+  it("AGE-92: no actor falls back to the verdicts_service system identity", async () => {
+    const { db, queueSelect } = makeDb();
+    queueSelect([
+      {
+        id: ISSUE_ID,
+        companyId: COMPANY_ID,
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        definitionOfDone: null,
+      },
+    ]);
+
+    const svc = verdictsService(db as any);
+    await svc.setIssueDoD(COMPANY_ID, ISSUE_ID, validDoD as any);
+
+    expect(mockLogActivity).toHaveBeenCalledTimes(1);
+    expect(mockLogActivity.mock.calls[0]![1]).toMatchObject({
+      action: "dod_set",
+      actorType: "system",
+      actorId: "verdicts_service",
+      agentId: null,
     });
   });
 
