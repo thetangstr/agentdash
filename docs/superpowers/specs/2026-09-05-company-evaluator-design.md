@@ -53,14 +53,14 @@ the work she leads; scoring humans (§14).
 | Goal | company/team/agent/task objective | `goals` (level, status `planned→active→achieved`, `ownerAgentId`, `parentId`, `metricDefinition`) |
 | Milestone | a bounded slice of a goal | a `projects` row (`targetDate`, structured `definitionOfDone`) linked to the goal via `project_goals`; a `team`/`agent` goal with no project acts as one (D3) |
 | Work item | unit of assignment and review | `issues` (status, priority, assignee agent/user, `definitionOfDone` jsonb, `goalId`, `projectId`, `parentId`, `startedAt`/`completedAt`/`cancelledAt`) |
-| Membership | which items a milestone scores | `issues.projectId = project`, plus descendants through `parentId` (any depth) that carry no other `projectId`; for a goal-as-milestone, `issues.goalId = goal` with null `projectId`. An item is scored in the milestone it belongs to when it reaches a terminal status, or at window end if still open; a move between projects is a ledger event, and the item is never counted twice. **Issues in the Evaluator project are excluded from every scored population** (rule 12). |
+| Membership | which items a milestone scores | `issues.projectId = project`, plus descendants through `parentId` (any depth) that carry no other `projectId`; for a goal-as-milestone, `issues.goalId = goal` with null `projectId`. An item is scored in the milestone it belongs to when it reaches a terminal status, or at window end if still open; a move between projects is a ledger event, and the item is never counted twice. **Review items (label `evaluator-review`) are excluded from every scored population** (rule 12). |
 | Accountable owner | the human answerable for an outcome | issue `assigneeUserId`; else the assignee agent's `accountableUserId` or active `agent_stewardships` user; project lead's accountable human; goal owner's |
 | Contributor | an actor with a **write** on the item | any actor that changed status, assignee, blockers, description or DoD; authored a comment; ran a heartbeat whose `contextSnapshot.issueId` is the item; authored a delivery ref or a self-report payload; recorded a verdict. Reads, read-state marks, label edits and mentions from other items are not writes. |
 | Evidence | a record supporting a claim | tiers T0–T3 (§6) |
 | Verdict | a reviewer's recorded judgement | `verdicts` (outcome, `rubricScores`, reviewer agent xor user) |
 | Exception | a rule-detected condition needing a human | §9 |
 | Intervention | a human acting inside ordinary agent flow | derived (§5.2 P1) |
-| Review item | the evaluator's request for a human decision | an issue in the Evaluator project, label `evaluator-review`, human assignee only (§9.2) |
+| Review item | the evaluator's request for a human decision | an issue in the **Evaluator review-items project** (separate from the build project), label `evaluator-review`, human assignee only (§9.2) |
 
 ## 4. The canonical evaluation contract (v1)
 
@@ -87,11 +87,20 @@ ledger event so it is append-only and replayable. Fields:
 5. **Outcome** — `outcomeTarget {metricKey, target, unit, source}|null`,
    `targetDate|null`, `downstreamRiskAcceptance` (risks knowingly accepted at
    close).
-6. **Window** — `windowStart`, `windowEnd|null`.
+6. **Window** — `windowStart`, `windowEnd|null`. An open milestone (both live
+   projects are `in_progress` with no target date) is scored *to now* and its
+   card carries the marker **open milestone — denominators still moving**; a
+   milestone scored from records that predate the evaluator carries **scored
+   retrospectively — confidence capped**, and every E1 it raises carries the same
+   marker.
 
 A contract is declared by the accountable human; when the evaluator derives one
-from existing records it is marked `source:"derived"` and every metric on that
-card is capped at Medium confidence. Changing a contract is a new event.
+from existing records it is marked `source:"derived"`, every metric on that card
+is capped at Medium confidence, and it **always uses the engineering-default
+`requiredEvidence` set** — a derived contract never drops a class, because which
+classes apply is the single biggest lever on O1/O5 and only a human may pull it
+(rule 16). Changing a contract is a new event. A criterion declared after an item
+reached a terminal status cannot judge that item (rule 17).
 
 ### 4.1 Required evidence classes
 
@@ -124,9 +133,13 @@ the founder (§10.4), never by itself.
 
 ## 5. Metrics
 
-Every metric reports `{value, unit, n, coverage, confidence, formulaVersion,
-evidenceRefs[]}`. Coverage = decidable population / population. Confidence is
-the tier from §7; at **Insufficient** no value is shown. Nothing is imputed.
+Every metric reports `{value, unit, n, coverage, confidence, breakdown,
+formulaVersion, evidenceRefs[]}` where `breakdown` is `{satisfied, failed,
+undecidable: [{reason, count}]}` and the card's headline prints it in words —
+"satisfied 12 of 36 done; 20 undecidable (no CI evidence source configured);
+4 failed" — never a bare percentage. Coverage = decidable population /
+population. Confidence is the tier from §7; at **Insufficient** no value is
+shown. Nothing is imputed.
 Metrics marked *by construction* are Insufficient until a named prerequisite
 lands, and the card says which.
 
@@ -174,7 +187,8 @@ agent's own `ask_user_questions` is not an intervention.
 **P2 Judgment.** Escalation precision: `escalated_to_human` verdicts and
 `request_board_approval`-class approvals later approved as raised / raised.
 Unanswered `ask_user_questions` past 48 h are charged to the company row, not
-the asking agent. Neutral-verdict rubric dimensions averaged with n.
+the asking agent, and reported with their median pending age (a count alone is
+uninterpretable). Neutral-verdict rubric dimensions averaged with n.
 
 **P3 Factual accuracy.** Population: **checkable claims** — structured
 self-report fields with a higher-tier counterpart (`regression_gate_result` vs
@@ -266,7 +280,9 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
   independent tiers for decisive facts; Medium 0.5–0.8 or single-tier or a
   `derived` contract; Low 0.2–0.5 or a T0/T0 disagreement (value shown with a
   warning); Insufficient < 0.2 or *by construction* (no value). There are no
-  per-metric floors; composites inherit the lowest included tier.
+  per-metric floors; composites inherit the lowest included tier. Cards display
+  the tiers as **strong / adequate / limited evidence / insufficient evidence**
+  — the tier describes how much the records show, not how good the work was.
 - **Backfill** ingests only records that exist with their original timestamps;
   periods without records are *unknown*.
 - **Deployment-mode caveat.** In `local_trusted` mode every human actor is the
@@ -303,8 +319,11 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
     Prerequisite (Milestone 1): `dod_set` activity must record the real actor and
     the previous value — today it logs `actorType:"system"` and the new value
     only (`server/src/services/verdicts.ts:617-625`).
-12. **Evaluator output never enters scored populations**: issues in the
-    Evaluator project are excluded from every metric for every actor.
+12. **Evaluator output never enters scored populations**: issues labelled
+    `evaluator-review` (the evaluator's review items and digests) are excluded
+    from every metric for every actor. The *build* project of the evaluator is
+    an ordinary project and may itself be a scored milestone (D3); the
+    evaluator agent's own findings never earn contributor credit there.
 13. **Mutation inside the ingest window is caught by content hashes.** Each
     ingest pass records a hash per source row; a changed hash with no matching
     `activity_log` entry is **E2**; a T2 payload that disappears (comment
@@ -319,10 +338,22 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
 16. **A weak contract is a recorded exception**: `requiredEvidence` below the
     engineering default, or criteria without checks, appear on the card with
     who declared them, and require the founder's recorded acceptance.
+17. **Contracts obey the retroactivity rule too**: a criterion whose declaration
+    `eventTime` follows an item's terminal transition cannot judge that item —
+    the item is *undecidable (criteria declared post hoc)*, never satisfied and
+    never failed. Retrospective scoring therefore measures evidence hygiene
+    (O5) more than acceptance (O1), and the card says which.
 
 ## 9. Exceptions, escalation and appeals
 
 ### 9.1 Catalogue
+
+**Routing vocabulary.** *Manager* means the agent's `reportsTo`; when that is
+null (today: Maya, CoS Reviewer) the exception routes to the accountable human.
+*Accountable owner* is derived per §3. On the live company every autonomous
+agent's `accountableUserId` is the same human, so accountable-owner routes
+collapse onto the founder; the digest rule in §9.2 is what makes that bearable,
+and it is deliberate.
 
 | id | condition | severity | routed to |
 |---|---|---|---|
@@ -343,11 +374,15 @@ metric's confidence drops one tier. Nothing is deleted or overwritten.
 ### 9.2 What an exception does, and the chatter ceiling
 
 Routine exceptions are **batched into one review item per milestone per routed
-human**, a digest listing every routine exception with its evidence — that item
-*is* the one routine message the mandate allows. Immediate exceptions (E3, E4,
+human** — a digest that is created on the first routine exception and **updated
+in place** as more accrue; that single item *is* the one routine message the
+mandate allows, and updates to it send no further message. The dashboard
+(Milestone 4) is the live surface, so a stale item is visible the day it goes
+stale without another ping; unbounded milestones therefore do not delay
+visibility, only the message. Immediate exceptions (E3, E4,
 and E2/E12/E13 touching a release or credential) each create one item at once.
-A review item is an issue in the Evaluator project, label `evaluator-review`,
-status `todo`, **assigned only to a human** (never to an agent, so no agent is
+A review item is an issue in the Evaluator review-items project, label
+`evaluator-review`, status `todo`, **assigned only to a human** (never to an agent, so no agent is
 woken or directed by the evaluator), linking the ledger events and card version.
 It never changes a source issue, its status, assignee, verdicts or approvals.
 Closing it is the human's act; the disposition is recorded as a ledger event.
@@ -372,9 +407,16 @@ event, the claimed fact and the evidence. The disputed event is never edited;
 replay applies corrections after it, and cards show *corrected from*. **The
 disposition is a human's**: the routed human's manager, or the founder when the
 correction concerns an evaluator finding about that manager's lane. The
-evaluator agent may attach an evidence note; it never decides. A correction
-undecided after one milestone is raised to the founder view automatically.
-Corrections filed by the scored actor are allowed and marked `selfFiled:true`.
+evaluator agent may attach an evidence note; it never decides. While a
+correction on a material exception is undecided, the card shows **disputed,
+unresolved**; a correction undecided after one milestone, and every rejected
+correction, is visible on the founder view automatically — no second filing.
+A correction against a T0/T0 disagreement may cite the disagreement's
+`correlationId` instead of new evidence, since no higher tier exists to cite.
+Corrections filed by the scored actor are allowed and marked `selfFiled:true`
+in drill-down provenance only, never on a headline. Until Milestone 4's
+surfaces exist, humans file corrections through the evaluation route (or the
+founder lane on their behalf); the shadow cards say so.
 
 ## 10. Independence and authority of the evaluator
 

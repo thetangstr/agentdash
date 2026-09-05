@@ -55,10 +55,21 @@ projects (linked to goals through `project_goals`), and no milestone entity.
 | B. Add a `milestones` table | migration, UI | new concept for people to maintain; unused tables already litter the schema |
 | C. Milestone = goal at level `task` | none | too fine; hundreds of cards |
 
-**Recommend A.** For the two shadow milestones the obvious candidates are the
-completed "MVL 1.0 Launch" (scored retrospectively from existing records, so its
-confidence will be capped by coverage) and the next project the founder names.
-**Founder to name the second milestone.**
+**Recommend A.** Both live projects are `in_progress` with null target dates,
+so "milestone = project" imports "milestone = whenever someone closes the
+project"; acceptable in shadow, and the card carries the *open milestone* marker
+(spec §4.6). For the two shadow milestones: the first is "MVL 1.0 Launch",
+scored retrospectively with confidence capped (most of its items will be
+*undecidable — criteria declared post hoc*, rule 17, so it measures evidence
+hygiene more than acceptance). For the second, Priya's review (AGE-86 F7)
+proposes **the Company Evaluator Stage 1 build project itself**, because it is
+the only work with written, bounded per-milestone acceptance (M0–M5), it is
+forward-looking so its contract is declared before the work, and it exercises
+the review-item exclusion (rule 12) for real; the alternative, "Design-Partner
+Learning & GTM Readiness", would be a second retrospective with the same nulls.
+Prerequisite either way: the Evaluator project and its goal currently have no
+lead and no owner — the contract declaration must set the founder as
+`accountableUserId` first (AGE-86 F9). **Founder to name the second milestone.**
 
 ## D4 — GitHub and CI evidence: how does it enter the ledger?
 
@@ -73,9 +84,14 @@ evidence classes) lives in GitHub. The control plane stores none of it.
 
 **Recommend A now, B when the founder approves a read-only GitHub token.** The
 design is written so B is an adapter that raises tiers, not a redesign. The
-recommendation to the founder is to approve B before Milestone 5, because
-"100 % of material claims trace to evidence" is hard to meet for delivery claims
-on T2 alone.
+concrete consequence of staying on A, verified by Priya against the live board
+(AGE-86 F1): the company holds 25 `pm_to_builder` payloads and **zero**
+`builder_to_ci`, `tester_to_reviewer`, `reviewer_to_tpm` or `tpm_merge_report`
+payloads, so `delivery_ref`, `ci_green` and `independent_review` are
+undecidable for all of MVL 1.0's history and its card will read *insufficient*
+for O1 and O5 until T1 evidence exists. The recommendation to the founder is
+to approve B before Milestone 5, because "100 % of material claims trace to
+evidence" cannot be met for delivery claims on T2 alone.
 
 ## D5 — Evaluator agent runtime and token budget
 
@@ -220,12 +236,17 @@ except where D11 and the two instrumentation prerequisites say otherwise:
   prompt limited to exception review, budget on the card. Adding the role
   touches the four agent prompt surfaces named in AGENTS.md (Milestone 3).
 
-## Baseline recorded at Milestone 0 (read-only, 2026-09-05)
+## Baseline recorded at Milestone 0 (read-only, as of 2026-09-05 18:35Z)
 
 Company Agent Runner: 80 issues (32 done, 10 cancelled, 15 backlog, 7 blocked,
-8 in review, 8 todo); definition of done set on 0; verdicts 0; approvals 0;
+8 in review, 8 todo); definition of done set on 0 — **the per-tenant DoD guard
+was never enabled, so nothing ever asked for one**; verdicts 0; approvals 0;
 142 runs (113 succeeded, 28 cancelled, 1 failed) with usage on 13; 2 cost events;
 2 goals, both without metric definitions; 5 `ask_user_questions` interactions
-pending unanswered; CoS Reviewer assigned as reviewer, never run. These numbers
-are the coverage floor the shadow run starts from, and the reason §7 of the spec
+pending unanswered (median age to be reported, not the count alone); CoS
+Reviewer assigned as reviewer, never run; deployment mode `local_trusted`. By
+the time Priya reviewed the same afternoon the counts were already 85 issues /
+36 done, 3 projects, 3 goals (the evaluator's own program) — which is why every
+baseline in the shadow run is pinned to an as-of timestamp. These numbers are
+the coverage floor the shadow run starts from, and the reason §7 of the spec
 refuses to show a score where evidence does not exist.
