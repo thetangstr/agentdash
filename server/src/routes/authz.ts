@@ -23,8 +23,12 @@ export function setAuthzRefusalDb(db: Db | null): void {
  * Fire-and-forget refusal record. Never throws, never awaits: the guard's
  * throw (and therefore the HTTP status and body) is untouched whether the
  * activity insert succeeds, fails, or is not wired up.
+ *
+ * `companyId` here is the TARGET the actor was refused on; `logAuthzRefusal`
+ * decides attribution (an agent's refusal is charged to the agent's OWN
+ * company and the target lands in details.targetCompanyId — review H1).
  */
-function reportAuthzRefusal(
+export function reportAuthzRefusal(
   req: Request,
   input: {
     companyId: string | null;
@@ -36,7 +40,13 @@ function reportAuthzRefusal(
   const db = _refusalDb;
   if (!db) return;
   try {
-    void Promise.resolve(logAuthzRefusal(db, { req, ...input })).catch(() => {
+    void Promise.resolve(
+      logAuthzRefusal(db, {
+        req,
+        ...input,
+        targetCompanyId: input.companyId ?? null,
+      }),
+    ).catch(() => {
       // logAuthzRefusal already swallows its own errors; this is belt and braces
       // so the fire-and-forget promise can never become an unhandled rejection.
     });

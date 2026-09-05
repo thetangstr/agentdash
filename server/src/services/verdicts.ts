@@ -172,13 +172,28 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
 
     const refusal = (): void => {
       try {
+        // M4: req may be the anonymous stand-in used by service-level callers
+        // (orchestrator, bridge). When the reviewer identity is known — and it
+        // always is when this guard fires — attribute the refusal to them.
+        const descriptor = req.actor.type === "none" ? actorForReviewer(input) : undefined;
         void Promise.resolve(
           logAuthzRefusal(db, {
             req,
+            actor: descriptor
+              ? {
+                  ...descriptor,
+                  agentId: input.reviewerAgentId ?? null,
+                  // Service scope: the verdict's company is the company the
+                  // refused reviewer belongs to (no foreign target exists).
+                  companyId: input.companyId,
+                }
+              : undefined,
             companyId: input.companyId,
             entityType: input.entityType,
             entityId: entityIdFor(input),
             reasonCode: "NEUTRAL_VALIDATOR_VIOLATION",
+            method: "POST",
+            routePath: "/api/companies/:companyId/verdicts",
           }),
         ).catch(() => {});
       } catch {

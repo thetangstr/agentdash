@@ -345,8 +345,9 @@ export async function createApp(
   app.use(llmRoutes(db));
 
   // AGE-91: give the synchronous authz assert helpers a process-wide db handle
-  // so refused writes can be recorded as authz.refused activity rows. Wired
-  // before any route mounts; `setAuthzRefusalDb(null)` in tests resets it.
+  // so refused writes can be recorded as authz.refused activity rows. Each
+  // createApp call replaces the previous handle (tests build many apps); to
+  // opt out of refusal logging entirely, setAuthzRefusalDb(null) after create.
   setAuthzRefusalDb(db);
 
   const hostServicesDisposers = new Map<string, () => void>();

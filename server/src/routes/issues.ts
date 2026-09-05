@@ -70,7 +70,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
-import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo, reportAuthzRefusal } from "./authz.js";
 import {
   WorkspaceFileError,
   contentTypeForWorkspaceFile,
@@ -638,6 +638,18 @@ export function issueRoutes(
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
         return true;
       }
+      // AGE-91: these are P6-class authority refusals (an agent attempting to
+      // mutate another agent's issue) — record them like the authz guards do.
+      // Fire-and-forget; the response below is untouched.
+      reportAuthzRefusal(req, {
+        companyId: issue.companyId,
+        entityType: "issue",
+        entityId: issue.id,
+        reasonCode:
+          issue.status === "in_progress"
+            ? "ISSUE_CHECKOUT_OTHER_AGENT"
+            : "ISSUE_MUTATION_OTHER_AGENT",
+      });
       if (issue.status === "in_progress") {
         res.status(409).json({
           error: "Issue is checked out by another agent",
