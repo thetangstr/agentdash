@@ -133,14 +133,21 @@ export function verdict(issueId: string, h: number, reviewer: string | null, out
 export function handoff(issueId: string, h: number, author: string, type: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}): EvaluationEventRow {
   return ev({ type: `handoff.${type}` as EvaluationEventType, time: at(h), actor: ["agent", author], issueId, sourceTable: "issue_comments", sourceId: `c-${issueId}-${h}`, payload: { commentId: `c-${issueId}-${h}`, handoffType: type, selfReported: false, claimedTimestamp: null, timestampClamped: true, timestampSuspicious: false, droppedKeys: [], payload, ...extra } });
 }
+
+/** The activity-log twin every posted comment has (`issue.comment_added` by the same actor, same comment id). */
+export function commentTwin(issueId: string, h: number, author: string): EvaluationEventRow {
+  return ev({ type: "issue.comment_added", time: new Date(at(h).getTime() + 1000), actor: ["agent", author], issueId, sourceTable: "activity_log", payload: { commentId: `c-${issueId}-${h}`, reopened: false } });
+}
 export const gates = { typecheck: "pass", test: "pass", build: "pass", pre_existing_failures: [] as string[] };
 /** A fully evidenced done item: DoD before start, independent passed verdict, passing gates, shipped merge report. */
 export function evidenced(id: string, base = 0): EvaluationEventRow[] {
   return [
     ...item({ id, created: base, started: base + 1, review: base + 5, done: base + 8, dod: true, dodSetAt: base }),
     handoff(id, base + 5, R, "tester_to_reviewer", { issue: { id }, verdict: "pass", regression_gates: gates, labels_applied: [] }),
+    commentTwin(id, base + 5, R), // production shape: the handoff comment's activity twin
     verdict(id, base + 6, R),
     handoff(id, base + 7, T, "tpm_merge_report", { issue: { id }, merge_result: "shipped", pr: { number: 42, base_branch: "main" } }),
+    commentTwin(id, base + 7, T),
   ];
 }
 

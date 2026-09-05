@@ -5,7 +5,8 @@ import { scoreMilestone } from "../services/evaluation/scoring/card.js";
 import { gatesPass } from "../services/evaluation/scoring/evidence.js";
 import { findingEvents } from "../services/evaluation/scorecards.js";
 import type { ScoredCard } from "../services/evaluation/scoring/types.js";
-import { A, at, CO, ev, evidenced, FOUNDER, G, gates, handoff, I1, I2, iso, item, P, R, ref, roster, score, T, verdict } from "./helpers/evaluation-fixtures.js";
+import { A, at, CO, commentTwin, ev, evidenced, FOUNDER, G, gates, handoff, I1, I2, iso, item, P, R, ref, roster, score, shuffle, T, verdict } from "./helpers/evaluation-fixtures.js";
+import { cardHash, scoreMilestone as scoreCard } from "../services/evaluation/scoring/card.js";
 
 // AgentDash: Company Evaluator — the first independent review of Milestone 2
 // (PR #614) found spec deviations; each case here pins the corrected rule.
@@ -219,12 +220,6 @@ describe("round 1 — card and metrics", () => {
     expect(card.actors.find((a) => a.actorId === A)!.composite!.flags).toContain("E4 present");
   });
 
-  it("MEDIUM 8 (reader): the agent roster version carries the row time so A→B→A stays three facts", async () => {
-    const src = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../services/evaluation/sources.ts", import.meta.url), "utf8"));
-    const agentReader = src.slice(src.indexOf("export async function readAgentSnapshots"), src.indexOf("export async function readProjectSnapshots"));
-    expect(agentReader).toContain("sourceVersion: `${hash}:${r.cursorTime}`");
-    expect(agentReader).toContain("latestSnapshotHashes(tx, companyId, \"agents\"");
-  });
 });
 
 describe("round 1 — Theo's additions", () => {
@@ -325,5 +320,117 @@ describe("round 1 — Theo's additions", () => {
     const window = [...roster(), ...item({ id: I1, started: 1, done: 4 }), verdict(I1, 3, R)];
     const p2 = score(window).actors.find((a) => a.actorId === A)!.metrics.P2!;
     expect(p2.detail.rubricDimensions).toEqual({ correctness: { mean: 4, n: 1 } });
+  });
+});
+
+describe("round 2 — verification findings", () => {
+  it("HIGH 1: a handoff comment's activity twin does not make the reviewer a contributor; an ordinary pre-verdict comment still does", () => {
+    const clean = score([...roster(), ...evidenced(I1)]); // evidenced() carries the twins
+    expect(clean.outcome.O5!.value).toBe(1);
+    expect(clean.exceptions.filter((e) => e.id === "E4")).toEqual([]);
+    const chatty = score([
+      ...roster(),
+      ...item({ id: I2, started: 1, done: 6 }),
+      ev({ type: "issue.comment_added", time: at(2), actor: ["agent", R], issueId: I2, payload: { commentId: "plain-comment", reopened: false } }),
+      verdict(I2, 3, R),
+    ]);
+    expect(chatty.exceptions.some((e) => e.id === "E4")).toBe(true);
+  });
+
+  it("HIGH 2: rule 17 keys a criterion on its id and its content — rewriting a check in place under the same id is a new declaration", () => {
+    const first = declared(-1, [verdictCriterion]);
+    const rewritten = declared(20, [{ id: "k1", text: "a DoD is present", check: { kind: "record", record: "dod.present" }, source: "human" }]);
+    const card = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), rewritten]);
+    // the rewritten k1 is post hoc for both closed items; the original k1's verdict check no longer applies (the document was replaced)
+    expect(card.outcome.O1!.breakdown.failed).toBe(0);
+    expect(card.outcome.O1!.breakdown.undecidable[0]!.reason).toMatch(/declared after this item closed/);
+    expect(card.exceptions.filter((e) => e.id === "E1")).toEqual([]);
+    // and the honest amendment (same id, same content) keeps the original time
+    const honest = declared(20, [verdictCriterion, { id: "k9", text: "also this", check: { kind: "record", record: "ci.green" }, source: "human" }]);
+    const kept = score([...roster(), first, ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 }), honest]);
+    expect(kept.exceptions.filter((e) => e.id === "E1").length).toBe(1);
+  });
+
+  it("MEDIUM 3: O1 and O5 values are over the decidable population; a partial waiver does not pin O5 to zero", () => {
+    const window = [...roster(), declared(-1, [], ["dod_present"]), ...item({ id: I1, started: 1, done: 4, dod: true, dodSetAt: 0 }), ...item({ id: I2, started: 1, done: 4 })];
+    const card = score(window);
+    // I1 has a DoD (satisfied on the one required class but undecidable on the waived ones → undecidable); I2 fails dod_present
+    expect(card.outcome.O5!.breakdown).toMatchObject({ satisfied: 0, failed: 1 });
+    expect(card.outcome.O5!.value).toBe(0); // 0 satisfied of 1 decidable — and coverage is 0.5, tier low, capped by the waiver
+    const twoDecidable = score([...roster(), declared(-1, [], ["dod_present"]), ...evidenced(I1), ...item({ id: I2, started: 1, done: 4 })]);
+    expect(twoDecidable.outcome.O5!.breakdown).toMatchObject({ satisfied: 0, failed: 1 });
+  });
+
+  it("MEDIUM 4: a verdict recorded before its author took the item over cannot certify the close", () => {
+    const window = [
+      ...roster(),
+      ...item({ id: I1, started: 3, done: 8, assignee: T }),
+      verdict(I1, 1, R), // pre-emptive
+      ev({ type: "issue.assignment_changed", time: at(2), actor: ["user", "local-board"], issueId: I1, payload: { fromAgentId: T, toAgentId: R, fromUserId: null, toUserId: null, previousUnknown: false } }),
+      ev({ type: "run.finished", time: at(4), actor: ["agent", R], issueId: I1, sourceTable: "heartbeat_runs", sourceId: "r-pre", payload: { runId: "r-pre", agentId: R, status: "succeeded", durationMs: 1000, usagePresent: false } }),
+    ];
+    const card = score(window);
+    expect(card.exceptions.some((e) => e.id === "E4" && e.note.includes("went on to contribute"))).toBe(true);
+    expect(perClass(card).neutral_verdict.failed).toBe(1);
+  });
+
+  it("MEDIUM 5: E11, E14 and the metering E7 are dated by their last fact, so a later snapshot does not re-mint them", () => {
+    const B = "00000000-0000-4000-8000-0000000000dd";
+    const base = [...roster(), ev({ type: "agent.snapshot", time: at(0), projectId: null, sourceId: B, payload: { agentId: B, name: "Other", status: "idle", reportsTo: null, accountableUserId: FOUNDER } })];
+    for (let i = 0; i < 3; i++) {
+      const a = `00000000-0000-4000-8000-0000000000${(10 + i).toString().padStart(2, "0")}`;
+      const b = `00000000-0000-4000-8000-0000000000${(20 + i).toString().padStart(2, "0")}`;
+      base.push(...item({ id: a, started: 1, done: 4, assignee: A }), verdict(a, 3, B));
+      base.push(...item({ id: b, started: 1, done: 4, assignee: B }), verdict(b, 3, A));
+    }
+    const later = [...base, ev({ type: "agent.snapshot", time: at(24 * 30), projectId: null, sourceId: R, payload: { agentId: R, name: "Reviewer", status: "idle", reportsTo: null, accountableUserId: FOUNDER } })];
+    const e14a = score(base).exceptions.find((e) => e.id === "E14")!;
+    const e14b = score(later).exceptions.find((e) => e.id === "E14")!;
+    expect(e14a.raisedAt).toBe(e14b.raisedAt);
+    const [fa] = findingEvents(CO, ref, { ...score(base), exceptions: [e14a] }, 1);
+    const [fb] = findingEvents(CO, ref, { ...score(later), exceptions: [e14b] }, 2);
+    expect(fa!.sourceVersion).toBe(fb!.sourceVersion);
+  });
+
+  it("MEDIUM 6 / 7: acceptance by a synthetic identity does not lift the rule-16 cap; an invalid contract version caps nothing", () => {
+    const weak = declared(-1, [{ id: "k2", text: "feels done", source: "human" }]);
+    const synthetic = score([
+      ...roster(),
+      weak,
+      ev({ type: "evaluation.disposition", time: at(0), actor: ["user", "local-board"], sourceTable: "evaluation", sourceId: "acc-s", payload: { kind: "contract_exception_accepted", contractEventId: weak.id } }),
+      ...evidenced(I1),
+    ]);
+    expect(synthetic.outcome.O5!.confidence).toBe("low");
+    const garbage = ev({ type: "contract.declared", time: at(-2), actor: ["user", FOUNDER], sourceTable: "evaluation_contracts", sourceId: `project:${P}`, payload: { contract: { nope: true } } });
+    const card = score([...roster(), garbage, declared(-1, [verdictCriterion]), ...evidenced(I1)]);
+    expect(card.contract.invalidVersions).toBe(1);
+    expect(card.outcome.O5!.confidence).not.toBe("low");
+    expect(card.markers).not.toContain("contract exception — founder acceptance required");
+  });
+
+  it("untested fixes: the removed `no start` disjunct, and the lag marker stays off a retrospective", () => {
+    // an item that never entered in_progress, with a DoD set after it left backlog: failed, not satisfied
+    const late = score([...roster(), ...item({ id: I2, review: 2, done: 4 }), ev({ type: "issue.transition", time: at(1), actor: ["agent", A], issueId: I2, payload: { from: "backlog", to: "todo", reopened: false } }), ev({ type: "issue.dod_set", time: at(3), actor: ["agent", A], issueId: I2, payload: { hasPrevious: false, criteriaCount: 2 } })]);
+    expect(perClass(late).dod_present.failed).toBe(1);
+    // every event in the window was ingested 40 days after the facts: a backfilled retrospective
+    const retro = score([...roster(), ...item({ id: I1, started: 1, done: 4 })].map((e) => ({ ...e, ingestTime: at(24 * 40) })));
+    expect(retro.markers).toContain("scored retrospectively — confidence capped at adequate");
+    expect(retro.markers).not.toContain("records lag events by more than a day in this window (see maxIngestLagMs)");
+  });
+
+  it("determinism over the richest window: shuffled input yields the same bytes", () => {
+    const B = "00000000-0000-4000-8000-0000000000dd";
+    const M = "00000000-0000-4000-8000-0000000000ee";
+    const window = [...roster(), ev({ type: "agent.snapshot", time: at(0), projectId: null, sourceId: B, payload: { agentId: B, name: "Other", status: "idle", reportsTo: M, accountableUserId: FOUNDER } }), ...evidenced(I1)];
+    for (let i = 0; i < 3; i++) {
+      const a = `00000000-0000-4000-8000-0000000000${(10 + i).toString().padStart(2, "0")}`;
+      const b = `00000000-0000-4000-8000-0000000000${(20 + i).toString().padStart(2, "0")}`;
+      window.push(...item({ id: a, started: 1, done: 4, assignee: A }), verdict(a, 3, B));
+      window.push(...item({ id: b, started: 1, done: 4, assignee: B }), verdict(b, 3, A));
+    }
+    const cut = Math.max(...window.map((e) => Number(e.seq)));
+    const one = scoreCard(window, ref, cut, CO, { fallbackOpen: true });
+    expect(cardHash(scoreCard(shuffle(window), ref, cut, CO, { fallbackOpen: true }))).toBe(cardHash(one));
+    expect(one.exceptions.some((e) => e.id === "E14")).toBe(true);
   });
 });

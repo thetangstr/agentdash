@@ -5,7 +5,7 @@ import {
   type EvaluationConfidenceTier,
   type EvaluationMetricKey,
 } from "@paperclipai/shared";
-import { minTier, rank } from "./confidence.js";
+import { minTier } from "./confidence.js";
 import type { CompositeResult, MetricResult } from "./types.js";
 
 export const COMPOSITE_FORMULA_VERSION = "composite/1";
@@ -74,8 +74,4 @@ export function scaleTo100(m: MetricResult): number {
   const v = m.value ?? 0;
   if (m.lowerIsBetter) return Math.round(Math.max(0, Math.min(1, 1 - v)) * 1000) / 10;
   return Math.round(Math.max(0, Math.min(1, v)) * 1000) / 10;
-}
-
-export function isIncludable(tier: EvaluationConfidenceTier): boolean {
-  return rank(tier) >= rank("low");
 }

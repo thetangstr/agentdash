@@ -415,3 +415,23 @@ Recorded here rather than in the spec, which is at its size limit.
   absent from the window, and a lag marker when records trail events by more
   than a day. The derived-contract exception now states that acceptance is
   insufficient by construction and names the one action that changes it.
+- **Second verification of the scoring branch (round 2).** Two more real
+  defects, both fixed: every posted comment has an `issue.comment_added` twin in
+  the activity log, so the review-class carve-out has to skip the twin of a
+  review handoff too (otherwise every MAW reviewer is a self-reviewer on real
+  data — the fixtures now carry the twin); and rule 17 keyed on a criterion's id
+  alone let a check be rewritten in place under the same id, so a criterion is
+  now its id and its content. Independence is judged twice: as of the review,
+  and as of the close with the terminal transition excluded, so a verdict
+  recorded before its author took the item over cannot certify the close. O1 and
+  O5 values are over the decidable population (§7: unknown is never passed and
+  never failed either); coverage carries the unknown. Findings that were dated by
+  the moving "now" (E11, E14, the metering E7) are dated by their last fact.
+  Acceptance of a contract exception must come from a real human — the
+  accountable one when named — never a synthetic identity. Schema-invalid contract
+  versions are shown but cap nothing. The lag marker stays off retrospectives.
+  P6's tier says when the refusal detector is blind. **For the founder to expect
+  on the first shadow card:** any agent that leaves an ordinary comment on an item
+  and later records its verdict is a self-reviewer under §3 — it will be the
+  largest source of immediate exceptions in the shadow run, by design; the
+  question for Milestone 5 is whether that rule should stand.

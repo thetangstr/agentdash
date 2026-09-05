@@ -456,6 +456,23 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect((await evaluationLedger(db).countByType(companyId))["evidence.withdrawn"] ?? 0).toBe(before + 1);
   });
 
+  it("an agent roster change A→B→A is three facts and the last one wins (round 2 verification, MEDIUM 8)", async () => {
+    const ingest = evaluationIngest(db, { rowBudget: 100, sources: ["agents"] });
+    const [other] = await db.insert(agents).values({ companyId, name: "Manager", role: "manager" }).returning();
+    await ingest.tick(companyId);
+    await db.update(agents).set({ reportsTo: other!.id, updatedAt: new Date() }).where(eq(agents.id, agentId));
+    await ingest.tick(companyId);
+    await db.update(agents).set({ reportsTo: null, updatedAt: new Date(Date.now() + 1000) }).where(eq(agents.id, agentId));
+    await ingest.tick(companyId);
+    // a touch that changes no fact mints nothing
+    await db.update(agents).set({ updatedAt: new Date(Date.now() + 2000) }).where(eq(agents.id, agentId));
+    expect((await ingest.tick(companyId)).inserted).toBe(0);
+    const rows = await db.select().from(evaluationEvents).where(and(eq(evaluationEvents.eventType, "agent.snapshot"), eq(evaluationEvents.sourceId, agentId)));
+    expect(rows.length).toBe(3);
+    const last = rows.sort((a, b) => Number(a.seq) - Number(b.seq))[2]!;
+    expect(last.payload.reportsTo).toBeNull();
+  });
+
   it("company deletion purges the ledger through the sanctioned path, and the setting does not leak", async () => {
     await evaluationIngest(db, { rowBudget: 100 }).tick(otherCompanyId);
     const [{ mid }] = await db.select({ mid: sql<number>`count(*)::int` }).from(evaluationEvents).where(eq(evaluationEvents.companyId, otherCompanyId));

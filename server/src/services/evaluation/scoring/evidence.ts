@@ -1,5 +1,5 @@
 import type { EvaluationContractV1, EvaluationEvidenceClass, EvaluationSourceTier } from "@paperclipai/shared";
-import { parseRecordCheck, type ResolvedContract } from "./contract.js";
+import { criterionKey, parseRecordCheck, type ResolvedContract } from "./contract.js";
 import { contributors, isSyntheticUser, reviewIndependence, type Independence } from "./independence.js";
 import {
   createdAt,
@@ -122,7 +122,8 @@ export function evidenceForItem(it: ItemTimeline, tl: Timeline, resolved: Resolv
   let concentratedCount = 0;
   let unattributed = 0;
   const classes: Partial<Record<EvaluationEvidenceClass, ClassResult>> = {};
-  const reviewCtx = (at: Date) => ({ entityType: "issue" as const, projectId: projectAt(it, at), goalId: snapshotAt(it, at)?.goalId ?? contract.goalId ?? null, at });
+  const closeAt = terminalAt(it)?.time ?? null;
+  const reviewCtx = (at: Date) => ({ entityType: "issue" as const, projectId: projectAt(it, at), goalId: snapshotAt(it, at)?.goalId ?? contract.goalId ?? null, at, closeAt });
   const inConcentratedPair = (reviewer: string | null, at: Date) =>
     !!reviewer &&
     [...contributors(it, at)]
@@ -323,7 +324,7 @@ export function criterionDispositions(it: ItemTimeline, tl: Timeline, resolved: 
   const out: CriterionDisposition[] = [];
   const terminal = terminalAt(it)?.time ?? null;
   for (const c of resolved.contract.acceptanceCriteria) {
-    const declaredAt = resolved.criterionDeclaredAt.get(c.id) ?? resolved.declaredAt;
+    const declaredAt = resolved.criterionDeclaredAt.get(criterionKey(c)) ?? resolved.declaredAt;
     if (declaredAt && terminal && declaredAt > terminal) {
       out.push({ criterionId: c.id, state: "undecidable", reason: "criteria were declared after this item closed, so they cannot judge it — declare criteria before work starts", refs: resolved.eventId ? [resolved.eventId] : [] });
       continue;

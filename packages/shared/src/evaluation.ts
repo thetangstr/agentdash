@@ -210,7 +210,11 @@ export const EVALUATION_METRIC_NAMES: Record<EvaluationMetricKey, string> = {
   P9: "Duplicate and rework rate",
 };
 
-/** §5.3 composite weights. Metrics absent here are shown, never scored. */
+/**
+ * §5.3 composite weights. Metrics absent here are shown, never scored. O4 keeps
+ * its weight but is display-only until goal measurements exist (nothing is
+ * imputed from a status), so the outcome composite renormalises over the rest.
+ */
 export const EVALUATION_OUTCOME_WEIGHTS: Partial<Record<EvaluationMetricKey, number>> = { O1: 0.4, O2: 0.15, O3: 0.2, O4: 0.1, O5: 0.15 };
 export const EVALUATION_OPERATING_WEIGHTS: Partial<Record<EvaluationMetricKey, number>> = { P1: 0.2, P2: 0.2, P3: 0.25, P4: 0.15, P9: 0.2 };
 /** §5.3 guards: minimum included metrics for a composite to exist. */
@@ -228,6 +232,7 @@ export type EvaluationExceptionSeverity = (typeof EVALUATION_EXCEPTION_SEVERITIE
 export const EVALUATION_EXCEPTION_ROUTES = ["accountable_owner", "manager", "both_managers", "founder_view"] as const;
 export type EvaluationExceptionRoute = (typeof EVALUATION_EXCEPTION_ROUTES)[number];
 
+/** `severity` is the default; the rules may raise it (E2 is material for delivery or authority claims, §9.1). */
 export const EVALUATION_EXCEPTIONS: Record<EvaluationExceptionId, { title: string; severity: EvaluationExceptionSeverity; routes: readonly EvaluationExceptionRoute[] }> = {
   E1: { title: "unsupported completion", severity: "material", routes: ["accountable_owner"] },
   E2: { title: "contradiction", severity: "routine", routes: ["both_managers"] },

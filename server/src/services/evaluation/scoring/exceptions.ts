@@ -103,12 +103,14 @@ export function e11EmissionDrop(ctx: ScoringContext, window: EvaluationEventRow[
   const asOf = ctx.tl.asOf.getTime();
   const perAgent = new Map<string, number[]>(); // 5 buckets: [last week, -1, -2, -3, -4]
   const firstSeen = new Map<string, number>();
+  const lastSeen = new Map<string, number>();
   for (const e of window) {
     if (e.actorType !== "agent" || !e.actorId) continue;
     if (e.eventType.startsWith("evaluation.") || e.eventType === "agent.snapshot") continue;
     const age = asOf - e.eventTime.getTime();
     const t = e.eventTime.getTime();
     firstSeen.set(e.actorId, Math.min(firstSeen.get(e.actorId) ?? t, t));
+    lastSeen.set(e.actorId, Math.max(lastSeen.get(e.actorId) ?? t, t));
     if (age < 0 || age >= 5 * WEEK) continue;
     const bucket = Math.floor(age / WEEK);
     const arr = perAgent.get(e.actorId) ?? [0, 0, 0, 0, 0];
@@ -121,7 +123,8 @@ export function e11EmissionDrop(ctx: ScoringContext, window: EvaluationEventRow[
     const baseline = (arr[1]! + arr[2]! + arr[3]! + arr[4]!) / 4;
     if (baseline < 4) continue; // too quiet to call a drop
     if (arr[0]! < 0.5 * baseline) {
-      out.push(exception(ctx, "E11", { kind: "agent", id: agentId, identifier: ctx.tl.agents.get(agentId)?.name ?? null }, ctx.tl.asOf, [], `${arr[0]} events in the last week against a four-week baseline of ${baseline.toFixed(1)} per week`, agentId));
+      // dated by the agent's last recorded activity, not by the moving now, so a standing drop is one fact
+      out.push(exception(ctx, "E11", { kind: "agent", id: agentId, identifier: ctx.tl.agents.get(agentId)?.name ?? null }, new Date(lastSeen.get(agentId) ?? asOf), [], `recorded activity in the last week fell below half the four-week baseline`, agentId));
     }
   }
   return out;
@@ -170,16 +173,22 @@ interface PairStat {
   ba: number;
   ta: number;
   tb: number;
+  /** The pair's last review of each other: the fact the exception is dated by. */
+  lastReview: Date;
 }
 
 function pairsAbove80(members: ItemTimeline[]): PairStat[] {
   const reviewsBy = new Map<string, Map<string, number>>(); // reviewer → reviewed contributor → count
   const total = new Map<string, number>();
-  const bump = (reviewer: string, reviewed: string) => {
+  const lastBetween = new Map<string, Date>(); // pair → last review time
+  const bump = (reviewer: string, reviewed: string, at: Date) => {
     const m = reviewsBy.get(reviewer) ?? new Map<string, number>();
     m.set(reviewed, (m.get(reviewed) ?? 0) + 1);
     reviewsBy.set(reviewer, m);
     total.set(reviewer, (total.get(reviewer) ?? 0) + 1);
+    const pair = [reviewer, reviewed].sort().join("|");
+    const prev = lastBetween.get(pair);
+    if (!prev || at > prev) lastBetween.set(pair, at);
   };
   for (const it of members) {
     const reviews: Array<{ reviewer: string; at: Date }> = [
@@ -188,7 +197,7 @@ function pairsAbove80(members: ItemTimeline[]): PairStat[] {
     ];
     for (const { reviewer, at } of reviews) {
       const cs = [...contributors(it, at)].filter((k) => k.startsWith("agent:")).map((k) => k.slice(6));
-      for (const c of cs) if (c !== reviewer) bump(reviewer, c);
+      for (const c of cs) if (c !== reviewer) bump(reviewer, c, at);
     }
   }
   const out: PairStat[] = [];
@@ -203,7 +212,7 @@ function pairsAbove80(members: ItemTimeline[]): PairStat[] {
       if (ab < 3 || ba < 3) continue;
       if (ab / ta > 0.8 || ba / tb > 0.8) {
         seen.add(pair);
-        out.push({ pair, a, b, ab, ba, ta, tb });
+        out.push({ pair, a, b, ab, ba, ta, tb, lastReview: lastBetween.get(pair)! });
       }
     }
   }
@@ -212,10 +221,10 @@ function pairsAbove80(members: ItemTimeline[]): PairStat[] {
 
 /** Rule 19 / E14: a pair whose reviews of each other exceed 80 % of either's reviews. */
 export function e14ReviewerConcentration(ctx: ScoringContext): ExceptionRecord[] {
-  return pairsAbove80(ctx.members).map(({ pair, a, b, ab, ba, ta, tb }) => {
+  return pairsAbove80(ctx.members).map(({ pair, a, b, ab, ba, ta, tb, lastReview }) => {
     const nameA = ctx.tl.agents.get(a)?.name ?? a;
     const nameB = ctx.tl.agents.get(b)?.name ?? b;
-    return exception(ctx, "E14", { kind: "pair", id: pair, identifier: `${nameA} ↔ ${nameB}` }, ctx.tl.asOf, [], `${ab} of ${ta} reviews by ${nameA} were of ${nameB}, and ${ba} of ${tb} the reverse; their reviews of each other weigh as limited evidence for independent review`, a, undefined, undefined, [b]);
+    return exception(ctx, "E14", { kind: "pair", id: pair, identifier: `${nameA} ↔ ${nameB}` }, lastReview, [], `${ab} of ${ta} reviews by ${nameA} were of ${nameB}, and ${ba} of ${tb} the reverse; their reviews of each other weigh as limited evidence for independent review`, a, undefined, undefined, [b]);
   });
 }
 

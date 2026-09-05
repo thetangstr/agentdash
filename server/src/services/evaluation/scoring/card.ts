@@ -175,7 +175,8 @@ export function scoreMilestone(window: EvaluationEventRow[], ref: EvaluationMile
   if (!tl.sources.authzRefused) missingSources.push("authority refusals: none recorded in this window");
   if (!tl.sources.rosterProjects && !tl.sources.rosterGoals) missingSources.push("roster: no project or goal snapshots in the window");
   if (missingSources.length > 0) markers.push(MARKER_MISSING_SOURCES);
-  if (tl.maxIngestLagMs > 24 * 60 * 60 * 1000) markers.push(MARKER_INGEST_LAG);
+  // a backfilled retrospective lags by construction; the marker is for live windows
+  if (!retrospective && tl.maxIngestLagMs > 24 * 60 * 60 * 1000) markers.push(MARKER_INGEST_LAG);
 
   // Milestone 1 digest for drill-down
   const byType: Record<string, number> = {};

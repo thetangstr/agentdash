@@ -5,7 +5,8 @@ import {
   type EvaluationContractV1,
   type EvaluationMilestoneRef,
 } from "@paperclipai/shared";
-import { INDEPENDENCE_RULE } from "./independence.js";
+import { hashCanonical } from "../ledger.js";
+import { INDEPENDENCE_RULE, isSyntheticUser } from "./independence.js";
 import { createdAt, latestGoal, latestProject, obj, str, type ItemTimeline, type Timeline } from "./timeline.js";
 import type { ContractSummary } from "./types.js";
 
@@ -48,14 +49,22 @@ export function resolveContract(tl: Timeline, ref: EvaluationMilestoneRef, membe
     if (parsed.data.milestoneRef.kind !== ref.kind || parsed.data.milestoneRef.id !== ref.id) continue;
     declared = { contract: parsed.data, eventId: e.id, at: e.eventTime, by: e.actorId };
     versionEventIds.push(e.id);
-    // a criterion keeps its first declaration time across amendments (rule 17 is per criterion)
-    for (const c of parsed.data.acceptanceCriteria) if (!criterionDeclaredAt.has(c.id)) criterionDeclaredAt.set(c.id, e.eventTime);
+    // a criterion keeps its first declaration time across amendments (rule 17 is per criterion) — a criterion is its
+    // id AND its content, so rewriting a check in place under the same id is a new declaration, not the old one
+    for (const c of parsed.data.acceptanceCriteria) {
+      const k = criterionKey(c);
+      if (!criterionDeclaredAt.has(k)) criterionDeclaredAt.set(k, e.eventTime);
+    }
   }
   if (declared) {
     const c = declared.contract;
+    // rule 16: acceptance is a real human's act — never a synthetic identity — and the accountable human's when one is named
     const accepted = tl.dispositions.some((d) => {
       const p = (d.payload ?? {}) as Record<string, unknown>;
-      return d.eventType === "evaluation.disposition" && str(p, "kind") === "contract_exception_accepted" && d.actorType === "user" && versionEventIds.includes(str(p, "contractEventId") ?? "");
+      if (d.eventType !== "evaluation.disposition" || str(p, "kind") !== "contract_exception_accepted" || d.actorType !== "user") return false;
+      if (isSyntheticUser(d.actorId)) return false;
+      if (c.accountableUserId && d.actorId !== c.accountableUserId) return false;
+      return versionEventIds.includes(str(p, "contractEventId") ?? "");
     });
     return {
       contract: c,
@@ -125,7 +134,7 @@ function summarise(c: EvaluationContractV1, source: "declared" | "derived", even
   if (source === "derived") {
     exceptions.push("contract derived by the evaluator from roster facts; no acceptance criteria could be derived, so acceptance (O1) is insufficient by construction and every other metric's confidence is capped at adequate — declare criteria with checks to make acceptance measurable");
   }
-  if (invalidVersions > 0) exceptions.push(`${invalidVersions} declared contract version(s) failed schema validation and were ignored`);
+  // schema-invalid versions are reported on the card but are not a rule-16 exception (they cap nothing)
   return {
     source,
     contractVersion: c.contractVersion,
@@ -141,7 +150,13 @@ function summarise(c: EvaluationContractV1, source: "declared" | "derived", even
     excludedReviewers: [...c.excludedReviewers],
     targetDate: c.targetDate,
     eventId,
+    invalidVersions,
   };
+}
+
+/** Rule 17 key: a criterion is its id and its content. */
+export function criterionKey(c: { id: string; text: string; check?: unknown }): string {
+  return `${c.id}:${hashCanonical({ text: c.text, check: c.check ?? null }).slice(0, 16)}`;
 }
 
 

@@ -1,5 +1,5 @@
 import type { EvaluationContractV1 } from "@paperclipai/shared";
-import { actorKey, assigneeAt, type ItemTimeline, type Timeline } from "./timeline.js";
+import { actorKey, assigneeAt, TERMINAL_STATUSES, type ItemTimeline, type Timeline } from "./timeline.js";
 
 /**
  * AgentDash: Company Evaluator — reviewer independence (`independence/v1`,
@@ -27,11 +27,24 @@ export function isSyntheticUser(userId: string | null | undefined): boolean {
  * otherwise every second verdict would be a self-review. PR authorship is T1
  * and absent until the GitHub adapter (D4) exists.
  *
- * Independence is judged as of the review: only writes at or before `until`
- * count, so a reviewer who closes the item after recording a verdict has not
- * reviewed their own work.
+ * Independence is judged twice: as of the review (only writes at or before
+ * `until` count, so a reviewer who closes the item after recording a verdict
+ * has not reviewed their own work) and as of the close with the terminal
+ * transition excluded (so a verdict recorded before its author took the item
+ * over cannot certify the close that author produced). A review-class comment
+ * has an `issue.comment_added` twin in the activity log; the twin is skipped
+ * too, or every reviewer would be a contributor.
  */
-export function contributors(it: ItemTimeline, until?: Date): Set<string> {
+export interface ContributorOptions {
+  /** Ignore the actor of the terminal transition (the close itself is not a contribution to the work). */
+  excludeTerminalTransition?: boolean;
+}
+
+export function contributors(it: ItemTimeline, until?: Date, opts: ContributorOptions = {}): Set<string> {
+  const cache = ((it as unknown as { __contributors?: Map<string, Set<string>> }).__contributors ??= new Map());
+  const cacheKey = `${until ? until.getTime() : "all"}:${opts.excludeTerminalTransition ? 1 : 0}`;
+  const hit = cache.get(cacheKey);
+  if (hit) return hit;
   const out = new Set<string>();
   const within = <T extends { time: Date }>(xs: T[]) => (until ? xs.filter((x) => x.time <= until) : xs);
   const snaps = within(it.snapshots).length > 0 ? within(it.snapshots) : it.snapshots.slice(0, 1);
@@ -46,7 +59,16 @@ export function contributors(it: ItemTimeline, until?: Date): Set<string> {
     if (a.fromUserId) out.add(actorKey("user", a.fromUserId));
     if (a.actorType === "agent" && a.actorId) out.add(actorKey("agent", a.actorId));
   }
-  for (const list of [it.transitions, it.blockers, it.dods, it.comments] as Array<Array<{ time: Date; actorType: string; actorId: string | null }>>) {
+  const reviewCommentIds = new Set(it.handoffs.filter((h) => h.type === "tester_to_reviewer" && h.commentId).map((h) => h.commentId!));
+  for (const c of within(it.comments)) {
+    if (c.commentId && reviewCommentIds.has(c.commentId)) continue; // the review's own activity twin
+    if (c.actorType === "agent" && c.actorId) out.add(actorKey("agent", c.actorId));
+  }
+  for (const t of within(it.transitions)) {
+    if (opts.excludeTerminalTransition && TERMINAL_STATUSES.has(t.to)) continue;
+    if (t.actorType === "agent" && t.actorId) out.add(actorKey("agent", t.actorId));
+  }
+  for (const list of [it.blockers, it.dods] as Array<Array<{ time: Date; actorType: string; actorId: string | null }>>) {
     for (const x of within(list)) if (x.actorType === "agent" && x.actorId) out.add(actorKey("agent", x.actorId));
   }
   for (const r of within(it.runs)) if (r.agentId) out.add(actorKey("agent", r.agentId));
@@ -58,16 +80,19 @@ export function contributors(it: ItemTimeline, until?: Date): Set<string> {
       out.add(creator);
     }
   }
+  cache.set(cacheKey, out);
   return out;
 }
 
 export type Independence =
   | { independent: true; sharedAccountability: boolean }
-  | { independent: false; reason: "self_review" | "synthetic" | "excluded" | "project_lead" | "goal_owner" | "no_actor"; sharedAccountability: boolean };
+  | { independent: false; reason: "self_review" | "later_contributor" | "synthetic" | "excluded" | "project_lead" | "goal_owner" | "no_actor"; sharedAccountability: boolean };
 
 export interface ReviewContext {
   /** What the review-class event is about. */
   entityType: "issue" | "project" | "goal";
+  /** The item's close, when it has one: independence must also hold then (terminal transition excluded). */
+  closeAt?: Date | null;
   /** The project the item belonged to at `at` (its lead is not independent for the project's own work). */
   projectId?: string | null;
   /** The goal the item closes (its owner is not independent for it). */
@@ -103,6 +128,10 @@ export function reviewIndependence(
     const then = assigneeAt(it, ctx.at);
     if ((then.agentId && actorKey("agent", then.agentId) === key) || (then.userId && actorKey("user", then.userId) === key)) {
       return { independent: false, reason: "self_review", sharedAccountability: shared };
+    }
+    // a review that precedes its author's contributions cannot certify the close those contributions produced
+    if (ctx.closeAt && ctx.closeAt > ctx.at && contributors(it, ctx.closeAt, { excludeTerminalTransition: true }).has(key)) {
+      return { independent: false, reason: "later_contributor", sharedAccountability: shared };
     }
   }
   if (ctx.projectId) {
@@ -152,6 +181,7 @@ export function routeFor(agentIds: string | null | Array<string | null>, tl: Tim
 /** Independence reasons in founder-readable words (Priya, AGE-97). */
 export const INDEPENDENCE_REASON_WORDS: Record<string, string> = {
   self_review: "the contributor reviewed their own work",
+  later_contributor: "the reviewer went on to contribute to the item before it closed",
   project_lead: "the project lead reviewed their own project's work",
   goal_owner: "the goal owner reviewed work closing their own goal",
   synthetic: "a synthetic identity decided",

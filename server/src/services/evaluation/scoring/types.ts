@@ -114,6 +114,8 @@ export interface ContractSummary {
   excludedReviewers: string[];
   targetDate: string | null;
   eventId: string | null;
+  /** Declared versions that failed schema validation and were ignored (shown, never a rule-16 exception). */
+  invalidVersions: number;
 }
 
 export interface ScoredCard extends Record<string, unknown> {

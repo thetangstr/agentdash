@@ -272,13 +272,15 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
     }
   }
   const n = items.length;
-  const value = n > 0 ? round(t.satisfied.length / n) : null;
+  // §7: unknown is never passed — and never failed either. The value is over the decidable population; coverage carries the rest.
+  const decidable = t.satisfied.length + t.failed.length;
+  const value = decidable > 0 ? round(t.satisfied.length / decidable) : null;
   const weak = weakContractCap(ctx);
   return {
     metric: build({
       ctx,
       key: "O1",
-      unit: "share of done items",
+      unit: "share of decidable done items",
       n,
       value,
       t,
@@ -512,8 +514,9 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
     }
   }
   const n = items.length;
+  const decidable = t.satisfied.length + t.failed.length;
   const weak = weakContractCap(ctx);
-  const notes: string[] = [];
+  const notes: string[] = ["value over the decidable items; coverage carries the undecidable ones"];
   if (waived.length > 0) notes.push(`contract waives ${waived.join(", ")}: counted as undecidable for every item`);
   if (limitedReviewItems > 0) notes.push(`${words(limitedReviewItems, "item")} reviewed only within a concentrated reviewer pair: those reviews weigh as limited evidence`);
   if (weak) notes.push(weak.note);
@@ -521,9 +524,9 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
     metric: build({
       ctx,
       key: "O5",
-      unit: "share of done items with every required class",
+      unit: "share of decidable done items with every required class",
       n,
-      value: n > 0 ? round(t.satisfied.length / n) : null,
+      value: decidable > 0 ? round(t.satisfied.length / decidable) : null,
       t,
       headline: headlineRatio(t, "done", "fully evidenced"),
       detail: { requiredEvidence: [...required].sort(), waived, perClass, sharedAccountabilityReviews: sharedReviews, limitedEvidenceItems: limitedItems, limitedReviewItems },
@@ -942,6 +945,8 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
       t,
       displayOnly: true,
       countMetric: true,
+      // the refusal detector is blind until the control plane records refusals: say so through the tier
+      coverage: ctx.tl.sources.authzRefused ? 1 : 0.5,
       headline: n === 0 ? "no violations detected" : `${words(n, "violation")} detected: ${Object.entries(rules).sort().map(([k, v]) => `${P6_RULE_WORDS[k] ?? k} ${v}`).join(", ")}`,
       detail: { rules, refusalsLogged: ctx.tl.sources.authzRefused },
       notes: ["a count, not a ratio: refused actions leave a record only where the control plane records refusals"],
@@ -1043,7 +1048,9 @@ export function p8Cost(ctx: ScoringContext, scope: ActorScope, o1SatisfiedForAge
   const n = runs.length;
   const meteringShare = n > 0 ? metered / n : 0;
   if (n >= 4 && meteringShare < 0.5) {
-    exceptions.push(exception(ctx, "E7", { kind: "agent", id: scope.agentId }, ctx.tl.asOf, runs.slice(0, 5).map((x) => x.r.eventId), `metering absent on ${Math.round((1 - meteringShare) * 100)}% of ${n} runs`, scope.agentId, "metering"));
+    const unmetered = runs.filter(({ r }) => !(r.runId && costByRun.has(r.runId)));
+    const lastUnmetered = unmetered.reduce((m, { r }) => (r.time > m ? r.time : m), unmetered[0]!.r.time);
+    exceptions.push(exception(ctx, "E7", { kind: "agent", id: scope.agentId }, lastUnmetered, unmetered.slice(-5).map((x) => x.r.eventId), `metering absent on most of this agent's runs`, scope.agentId, "metering"));
   }
   return {
     metric: build({
