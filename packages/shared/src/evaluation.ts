@@ -8,8 +8,13 @@ import { z } from "zod";
  * evaluation services and carry their own `formulaVersion`.
  */
 
-/** Schema version stamped on every ledger event. Bump when a payload shape changes. */
-export const EVALUATION_SCHEMA_VERSION = 1;
+/**
+ * Schema version stamped on every ledger event. Bump when a payload shape changes.
+ * 2 (Milestone 2): roster snapshots (agents, projects, goals), label additions,
+ * issue snapshots carry labels, title tokens and lifecycle timestamps, DoD
+ * events carry criterion ids and text hashes.
+ */
+export const EVALUATION_SCHEMA_VERSION = 2;
 
 /** Contract document version (spec §4). */
 export const EVALUATION_CONTRACT_VERSION = "v1";
@@ -42,6 +47,11 @@ export const EVALUATION_EVENT_TYPES = [
   "issue.dod_set",
   "issue.recovery_budget_exhausted",
   "issue.snapshot",
+  "issue.label_added",
+  // roster facts, so a card is a function of the ledger alone (replay agreement)
+  "agent.snapshot",
+  "project.snapshot",
+  "goal.snapshot",
   // runs
   "run.finished",
   // review / decisions
@@ -171,4 +181,66 @@ export const EVALUATION_CONFIDENCE_LABELS: Record<EvaluationConfidenceTier, stri
   medium: "adequate evidence",
   low: "limited evidence",
   insufficient: "insufficient evidence",
+};
+
+/** Rule 12: issues carrying this label are the evaluator's own output and leave every scored population. */
+export const EVALUATION_REVIEW_LABEL = "evaluator-review";
+
+/** Metric keys (spec §5). Outcome metrics score milestones; operating metrics score agents and the company row. */
+export const EVALUATION_OUTCOME_METRICS = ["O1", "O2", "O3", "O4", "O5"] as const;
+export type EvaluationOutcomeMetric = (typeof EVALUATION_OUTCOME_METRICS)[number];
+export const EVALUATION_OPERATING_METRICS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"] as const;
+export type EvaluationOperatingMetric = (typeof EVALUATION_OPERATING_METRICS)[number];
+export type EvaluationMetricKey = EvaluationOutcomeMetric | EvaluationOperatingMetric;
+
+export const EVALUATION_METRIC_NAMES: Record<EvaluationMetricKey, string> = {
+  O1: "Acceptance satisfied",
+  O2: "Deadline adherence",
+  O3: "Downstream risk index",
+  O4: "Goal progress",
+  O5: "Evidence hygiene",
+  P1: "Autonomy",
+  P2: "Judgment",
+  P3: "Factual accuracy",
+  P4: "Handoff quality",
+  P5: "Recovery",
+  P6: "Authority compliance",
+  P7: "Cycle time",
+  P8: "Token and cost efficiency",
+  P9: "Duplicate and rework rate",
+};
+
+/** §5.3 composite weights. Metrics absent here are shown, never scored. */
+export const EVALUATION_OUTCOME_WEIGHTS: Partial<Record<EvaluationMetricKey, number>> = { O1: 0.4, O2: 0.15, O3: 0.2, O4: 0.1, O5: 0.15 };
+export const EVALUATION_OPERATING_WEIGHTS: Partial<Record<EvaluationMetricKey, number>> = { P1: 0.2, P2: 0.2, P3: 0.25, P4: 0.15, P9: 0.2 };
+/** §5.3 guards: minimum included metrics for a composite to exist. */
+export const EVALUATION_COMPOSITE_MIN_INCLUDED = { outcome: 2, operating: 3 } as const;
+
+/** §7 tier boundaries on coverage. */
+export const EVALUATION_TIER_THRESHOLDS = { high: 0.8, medium: 0.5, low: 0.2 } as const;
+
+/** §9.1 exception catalogue. */
+export const EVALUATION_EXCEPTION_IDS = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14"] as const;
+export type EvaluationExceptionId = (typeof EVALUATION_EXCEPTION_IDS)[number];
+export const EVALUATION_EXCEPTION_SEVERITIES = ["routine", "material", "immediate"] as const;
+export type EvaluationExceptionSeverity = (typeof EVALUATION_EXCEPTION_SEVERITIES)[number];
+/** Routing vocabulary (§9.1): who a raised exception is addressed to. */
+export const EVALUATION_EXCEPTION_ROUTES = ["accountable_owner", "manager", "both_managers", "founder_view"] as const;
+export type EvaluationExceptionRoute = (typeof EVALUATION_EXCEPTION_ROUTES)[number];
+
+export const EVALUATION_EXCEPTIONS: Record<EvaluationExceptionId, { title: string; severity: EvaluationExceptionSeverity; routes: readonly EvaluationExceptionRoute[] }> = {
+  E1: { title: "unsupported completion", severity: "material", routes: ["accountable_owner"] },
+  E2: { title: "contradiction", severity: "routine", routes: ["both_managers"] },
+  E3: { title: "authority breach", severity: "immediate", routes: ["founder_view", "accountable_owner"] },
+  E4: { title: "self-review", severity: "immediate", routes: ["founder_view", "manager"] },
+  E5: { title: "stale work", severity: "routine", routes: ["accountable_owner"] },
+  E6: { title: "duplicate work", severity: "routine", routes: ["manager"] },
+  E7: { title: "cost anomaly", severity: "routine", routes: ["manager"] },
+  E8: { title: "excessive intervention", severity: "routine", routes: ["manager"] },
+  E9: { title: "unresolved downstream risk", severity: "material", routes: ["accountable_owner"] },
+  E10: { title: "missing DoD at start", severity: "routine", routes: ["manager"] },
+  E11: { title: "emission drop", severity: "routine", routes: ["manager"] },
+  E12: { title: "DoD narrowed", severity: "material", routes: ["accountable_owner", "founder_view"] },
+  E13: { title: "evidence withdrawn", severity: "material", routes: ["accountable_owner"] },
+  E14: { title: "reviewer concentration", severity: "routine", routes: ["both_managers"] },
 };

@@ -2,7 +2,10 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { evaluationScorecards } from "@paperclipai/db";
 import { EVALUATION_CONTRACT_VERSION, type EvaluationMilestoneRef } from "@paperclipai/shared";
+import { withCompanyLock } from "./ingest.js";
+import { evaluationLedger, hashCanonical, type EvaluationEventInput } from "./ledger.js";
 import { evaluationReplay, FORMULA_VERSION, MARKER_OPEN_MILESTONE } from "./replay.js";
+import type { ExceptionRecord, ScoredCard } from "./scoring/types.js";
 
 /**
  * AgentDash: Company Evaluator — stored projections (decision D6).
@@ -38,27 +41,36 @@ export function evaluationScorecardService(db: Db) {
       return rows[0] ?? null;
     },
 
-    /** Compute the current projection and store it as the next version. State flags are derived, never supplied. */
+    /**
+     * Compute the current projection, store it as the next version and record
+     * its exceptions as `evaluation.finding` events — under the company's
+     * evaluator lock, so the cut (`maxSeq`) is read while no ingest pass is
+     * mid-transaction and the findings' seqs follow it. State flags are
+     * derived, never supplied.
+     */
     async snapshot(companyId: string, ref: EvaluationMilestoneRef) {
-      const rows = await versions(companyId, ref);
-      const { card, hash, state, throughSeq } = await replay.replay(companyId, ref);
-      const version = (rows[0]?.version ?? 0) + 1;
-      const [row] = await db
-        .insert(evaluationScorecards)
-        .values({
-          companyId,
-          milestoneKind: ref.kind,
-          milestoneId: ref.id,
-          version,
-          contractVersion: state.hasContract ? EVALUATION_CONTRACT_VERSION : "none",
-          formulaVersion: FORMULA_VERSION,
-          throughSeq,
-          throughEventId: card.throughEventId,
-          card,
-          cardHash: hash,
-        })
-        .returning();
-      return row!;
+      return withCompanyLock(db, companyId, async (tx) => {
+        const rows = await versions(companyId, ref);
+        const { card, hash, state, throughSeq } = await replay.replay(companyId, ref);
+        const version = (rows[0]?.version ?? 0) + 1;
+        const [row] = await tx
+          .insert(evaluationScorecards)
+          .values({
+            companyId,
+            milestoneKind: ref.kind,
+            milestoneId: ref.id,
+            version,
+            contractVersion: state.hasContract ? EVALUATION_CONTRACT_VERSION : "none",
+            formulaVersion: FORMULA_VERSION,
+            throughSeq,
+            throughEventId: card.throughEventId,
+            card,
+            cardHash: hash,
+          })
+          .returning();
+        const findings = await evaluationLedger(tx).append(findingEvents(companyId, ref, card, version));
+        return { ...row!, findings: { inserted: findings.inserted, skipped: findings.skipped } };
+      });
     },
 
     /** Rebuild the stored version from its own window and compare hashes byte-for-byte. */
@@ -76,4 +88,31 @@ export function evaluationScorecardService(db: Db) {
       return { ok: hash === stored.cardHash, storedHash: stored.cardHash, replayHash: hash, version: stored.version, throughSeq: Number(stored.throughSeq), pinnedOpen };
     },
   };
+}
+
+/**
+ * Exceptions become ledger facts (rule 9: evaluator output is itself
+ * replayable and appealable). The version is a hash of the finding's content,
+ * so an unchanged exception on a later snapshot dedupes and a changed one is a
+ * new fact. Findings carry the evaluator actor and never enter scored
+ * populations (rule 12).
+ */
+export function findingEvents(companyId: string, ref: EvaluationMilestoneRef, card: ScoredCard, cardVersion: number): EvaluationEventInput[] {
+  return card.exceptions.map((e: ExceptionRecord) => {
+    const content = { id: e.id, severity: e.severity, subject: e.subject, routing: e.routing, note: e.note, evidenceRefs: e.evidenceRefs, raisedAt: e.raisedAt };
+    return {
+      companyId,
+      projectId: ref.kind === "project" ? ref.id : null,
+      goalId: ref.kind === "goal" ? ref.id : null,
+      actorType: "evaluator",
+      actorId: null,
+      sourceTable: "evaluation",
+      sourceId: e.key,
+      sourceVersion: hashCanonical(content).slice(0, 32),
+      eventType: "evaluation.finding",
+      eventTime: new Date(e.raisedAt),
+      payload: { ...content, title: e.title, routes: [...e.routes], markers: e.markers, milestoneRef: ref, cardVersion, formulaVersion: card.formulaVersion },
+      correlationId: `finding:${e.key}`,
+    };
+  });
 }

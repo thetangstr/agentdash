@@ -13,8 +13,10 @@ import {
   heartbeatRuns,
   issueApprovals,
   issueComments,
+  issueLabels,
   issueThreadInteractions,
   issues,
+  labels,
   projects,
   verdicts,
 } from "@paperclipai/db";
@@ -132,6 +134,10 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     await db.insert(costEvents).values({ companyId, agentId, issueId, projectId, heartbeatRunId: run!.id, provider: "zai", model: "glm", inputTokens: 1000, cachedInputTokens: 0, outputTokens: 200, costCents: 3, occurredAt: at(8), createdAt: at(8) });
     await db.insert(issueThreadInteractions).values({ companyId, issueId, kind: "ask_user_questions", status: "pending", createdByAgentId: agentId, payload: {}, createdAt: at(6), updatedAt: at(6) });
 
+    // A label on the child: label additions are their own events and ride on the next snapshot.
+    const [dup] = await db.insert(labels).values({ companyId, name: "duplicate", color: "#999" }).returning();
+    await db.insert(issueLabels).values({ companyId, issueId: childIssueId, labelId: dup!.id });
+
     // Another company's rows must never leak.
     const [otherIssue] = await db.insert(issues).values({ companyId: otherCompanyId, title: "Other", status: "todo", createdAt: at(0), updatedAt: at(0) }).returning();
     await db.insert(activityLog).values({ companyId: otherCompanyId, actorType: "user", actorId: "u", action: "issue.created", entityType: "issue", entityId: otherIssue!.id, details: {}, createdAt: at(0) });
@@ -161,6 +167,15 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(byType["interaction.changed"]).toBe(1);
     expect(byType["handoff.pm_to_builder"]).toBe(1);
     expect(byType["issue.snapshot"]).toBe(2); // parent + child
+    expect(byType["issue.label_added"]).toBe(1);
+    expect(byType["agent.snapshot"]).toBe(1); // roster facts live in the window (M2)
+    expect(byType["project.snapshot"]).toBe(2);
+    const [childSnap] = await db.select().from(evaluationEvents).where(and(eq(evaluationEvents.eventType, "issue.snapshot"), eq(evaluationEvents.sourceId, childIssueId)));
+    expect(childSnap!.payload.labels).toEqual(["duplicate"]);
+    expect(childSnap!.payload.titleTokens).toEqual(["child", "task"]);
+    expect(childSnap!.payload.inheritedProjectId).toBe(projectId);
+    const [dod] = await db.select().from(evaluationEvents).where(eq(evaluationEvents.eventType, "issue.dod_set"));
+    expect(dod!.payload.criteriaIds).toEqual(["c1"]);
     expect(await ledger.countByType(otherCompanyId)).toEqual({});
     const second = await ingest.tick(companyId);
     expect(second.inserted).toBe(0);
@@ -375,7 +390,7 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const v1 = await cards.snapshot(companyId, ref);
     expect(v1.version).toBe(1);
     expect(v1.contractVersion).toBe("none"); // no contract.declared event exists
-    expect((v1.card as { markers: string[] }).markers).toEqual([MARKER_OPEN_MILESTONE]); // project in_progress; derived, not supplied
+    expect((v1.card as { markers: string[] }).markers).toContain(MARKER_OPEN_MILESTONE); // project in_progress; derived, not supplied
     expect(await cards.verify(companyId, ref, 1)).toMatchObject({ ok: true });
     // An ordinary comment with a payload timestamp in 2020 arrives after the snapshot.
     await db.insert(issueComments).values({
@@ -400,8 +415,10 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const cards = evaluationScorecardService(db);
     const ref = { kind: "project" as const, id: emptyProjectId };
     const v1 = await cards.snapshot(companyId, ref);
-    expect((v1.card as { eventCount: number }).eventCount).toBe(0);
-    expect(v1.throughEventId).toBeNull();
+    // The milestone's own roster snapshot is its only event: no issue has ever belonged to it.
+    expect((v1.card as { eventCount: number }).eventCount).toBe(1);
+    expect((v1.card as { byType: Record<string, number> }).byType).toEqual({ "project.snapshot": 1 });
+    expect((v1.card as { issueIds: string[] }).issueIds).toEqual([]);
     await db.insert(activityLog).values({ companyId, actorType: "user", actorId: "local-board", action: "issue.updated", entityType: "issue", entityId: issueId, details: { status: "in_progress", _previous: { status: "todo" }, identifier: "EVL-1" }, createdAt: at(50) });
     await evaluationIngest(db, { rowBudget: 100 }).tick(companyId);
     expect(await cards.verify(companyId, ref, 1)).toMatchObject({ ok: true });
@@ -412,13 +429,19 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     const ref = { kind: "project" as const, id: projectId };
     const open = await cards.snapshot(companyId, ref);
     expect((open.card as { state: { open: boolean } }).state.open).toBe(true);
-    await db.update(projects).set({ status: "completed", updatedAt: at(80) }).where(eq(projects.id, projectId));
+    // the roster rows were inserted at wall-clock time, so the closing update must be later than that cursor
+    await db.update(projects).set({ status: "completed", updatedAt: new Date() }).where(eq(projects.id, projectId));
+    // The stored card still verifies: its window predates the closing snapshot, so its own roster fact says open.
+    expect(await cards.verify(companyId, ref, open.version)).toMatchObject({ ok: true, pinnedOpen: true });
+    // Milestone 2: the open flag is a ledger fact — the closing project.snapshot must be ingested to be seen.
+    await evaluationIngest(db, { rowBudget: 100, sources: ["projects"] }).tick(companyId);
     expect(await cards.verify(companyId, ref, open.version)).toMatchObject({ ok: true, pinnedOpen: true });
     const closed = await cards.snapshot(companyId, ref);
     expect((closed.card as { markers: string[] }).markers).not.toContain(MARKER_OPEN_MILESTONE);
     expect(closed.cardHash).not.toBe(open.cardHash);
     expect(await cards.verify(companyId, ref, closed.version)).toMatchObject({ ok: true, pinnedOpen: false });
-    await db.update(projects).set({ status: "in_progress", updatedAt: at(81) }).where(eq(projects.id, projectId));
+    await db.update(projects).set({ status: "in_progress", updatedAt: new Date(Date.now() + 1000) }).where(eq(projects.id, projectId));
+    await evaluationIngest(db, { rowBudget: 100, sources: ["projects"] }).tick(companyId);
   });
 
   it("withdrawal detection runs on its own cadence, not every tick (Q6.2)", async () => {
