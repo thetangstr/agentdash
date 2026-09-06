@@ -176,7 +176,7 @@ export const queryKeys = {
     overview: (companyId: string) => ["evaluation", companyId, "overview"] as const,
     latest: (companyId: string, kind: string, id: string, verify: boolean) => ["evaluation", companyId, "latest", kind, id, verify] as const,
     versions: (companyId: string, kind: string, id: string) => ["evaluation", companyId, "versions", kind, id] as const,
-    events: (companyId: string, type: string | null) => ["evaluation", companyId, "events", type ?? "all"] as const,
+    events: (companyId: string, type: string | null, scope: string | null = null) => ["evaluation", companyId, "events", type ?? "all", scope ?? "company"] as const,
     event: (companyId: string, eventId: string) => ["evaluation", companyId, "event", eventId] as const,
     replay: (companyId: string, kind: string, id: string) => ["evaluation", companyId, "replay", kind, id] as const,
   },

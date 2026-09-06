@@ -38,21 +38,30 @@ export function EvaluationFounder() {
       queryFn: () => evaluationApi.latest(companyId, m.ref),
     })),
   });
+  // newest first, so a truncated list loses the oldest decisions, never the ones waiting now
   const decisions = useQuery({
-    queryKey: queryKeys.evaluation.events(companyId, "evaluation.correction,evaluation.disposition"),
-    queryFn: () => evaluationApi.events(companyId, { type: "evaluation.correction,evaluation.disposition", limit: 1000 }),
+    queryKey: queryKeys.evaluation.events(companyId, "evaluation.correction,evaluation.disposition", "desc"),
+    queryFn: () => evaluationApi.events(companyId, { type: "evaluation.correction,evaluation.disposition", limit: 1000, order: "desc" }),
     enabled: !!selectedCompanyId,
   });
 
-  const pendingCorrections = useMemo(() => {
+  const { pendingCorrections, rejectedCorrections } = useMemo(() => {
     const events = decisions.data?.events ?? [];
-    const decided = new Set(
-      events
-        .filter((e) => e.eventType === "evaluation.disposition" && (e.payload as { kind?: string }).kind === "correction_decided")
-        .map((e) => String((e.payload as { correctionEventId?: string }).correctionEventId ?? "")),
-    );
-    return events.filter((e) => e.eventType === "evaluation.correction" && !decided.has(e.id));
+    const decided = new Map<string, string>();
+    for (const e of events) {
+      if (e.eventType !== "evaluation.disposition") continue;
+      const p = e.payload as { kind?: string; correctionEventId?: string; decision?: string };
+      if (p.kind === "correction_decided" && p.correctionEventId) decided.set(p.correctionEventId, p.decision ?? "decided");
+    }
+    const corrections = events.filter((e) => e.eventType === "evaluation.correction");
+    return {
+      pendingCorrections: corrections.filter((e) => !decided.has(e.id)),
+      // §9.4: every rejected correction stays visible here without a second filing
+      rejectedCorrections: corrections.filter((e) => decided.get(e.id) === "rejected"),
+    };
   }, [decisions.data]);
+  const cardsPending = cards.some((q) => q.isPending);
+  const cardsFailed = cards.filter((q) => q.isError).length;
 
   if (!selectedCompanyId) return <div className="text-sm text-muted-foreground">Select a company to view its evaluation.</div>;
   const error = overview.error ?? decisions.error;
@@ -86,7 +95,7 @@ export function EvaluationFounder() {
               ) : (
                 <ul className="space-y-2 text-sm">
                   {pendingCorrections.map((c) => {
-                    const p = c.payload as { disputedEventId?: string; claimedFact?: string; filedBy?: string };
+                    const p = c.payload as { disputedEventId?: string; claimedFact?: string };
                     return (
                       <li key={c.id} className="rounded border border-border-soft p-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -101,6 +110,31 @@ export function EvaluationFounder() {
               )}
             </CardContent>
           </Card>
+
+          {rejectedCorrections.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Rejected corrections</CardTitle>
+                <CardDescription>Corrections a manager or you rejected; they stay here without a second filing.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2 text-sm">
+                  {rejectedCorrections.map((c) => {
+                    const p = c.payload as { disputedEventId?: string; claimedFact?: string };
+                    return (
+                      <li key={c.id} className="rounded border border-border-soft p-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">Correction filed {fmtDate(c.eventTime)} — rejected</span>
+                          <EvidenceRefs refs={[c.id, ...(p.disputedEventId ? [p.disputedEventId] : [])]} onOpen={drawer.open} />
+                        </div>
+                        <p className="mt-1 text-muted-foreground">{p.claimedFact ?? "no claim recorded"}</p>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader>
@@ -135,7 +169,16 @@ export function EvaluationFounder() {
               <CardDescription>Immediate and material exceptions, and any routed to the founder view, across the latest cards.</CardDescription>
             </CardHeader>
             <CardContent>
-              <FounderExceptions cards={cards.map((q) => q.data?.latest?.card ?? null)} names={withCards.map((m) => m.name)} onOpen={drawer.open} />
+              {cardsPending ? (
+                <p className="text-sm text-muted-foreground" data-testid="founder-exceptions-loading">Loading the latest cards…</p>
+              ) : (
+                <>
+                  {cardsFailed > 0 ? (
+                    <p className="mb-2 text-sm text-destructive" data-testid="founder-exceptions-failed">{cardsFailed} of {withCards.length} cards could not be loaded; this list is incomplete.</p>
+                  ) : null}
+                  <FounderExceptions cards={cards.map((q) => q.data?.latest?.card ?? null)} refs={withCards.map((m) => `${m.ref.kind}:${m.ref.id}`)} names={withCards.map((m) => m.name)} onOpen={drawer.open} />
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -145,19 +188,19 @@ export function EvaluationFounder() {
   );
 }
 
-function FounderExceptions({ cards, names, onOpen }: { cards: Array<ScoredCard | null>; names: string[]; onOpen: (id: string) => void }) {
-  const rows: Array<{ milestone: string; e: ExceptionRecord }> = [];
+function FounderExceptions({ cards, refs, names, onOpen }: { cards: Array<ScoredCard | null>; refs: string[]; names: string[]; onOpen: (id: string) => void }) {
+  const rows: Array<{ milestone: string; refKey: string; e: ExceptionRecord }> = [];
   cards.forEach((card, i) => {
     for (const e of card?.exceptions ?? []) {
-      if (e.severity === "immediate" || e.severity === "material" || e.routing?.founderView) rows.push({ milestone: names[i] ?? "", e });
+      if (e.severity === "immediate" || e.severity === "material" || e.routing?.founderView) rows.push({ milestone: names[i] ?? "", refKey: refs[i] ?? String(i), e });
     }
   });
   rows.sort((a, b) => (a.e.severity === b.e.severity ? (a.e.raisedAt < b.e.raisedAt ? 1 : -1) : a.e.severity === "immediate" ? -1 : b.e.severity === "immediate" ? 1 : a.e.severity === "material" ? -1 : 1));
   if (rows.length === 0) return <p className="text-sm text-muted-foreground">None on the latest cards.</p>;
   return (
     <ul className="space-y-2 text-sm">
-      {rows.map(({ milestone, e }) => (
-        <li key={`${milestone}:${e.key}`} className="rounded border border-border-soft p-2">
+      {rows.map(({ milestone, refKey, e }) => (
+        <li key={`${refKey}:${e.key}`} className="rounded border border-border-soft p-2">
           <div className="flex flex-wrap items-center gap-2">
             <SeverityBadge severity={e.severity} />
             <span className="font-medium">{e.id} {e.title}</span>

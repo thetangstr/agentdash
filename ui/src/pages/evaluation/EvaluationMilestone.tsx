@@ -16,7 +16,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs } from "@/components/ui/tabs";
 import { PageTabBar } from "@/components/PageTabBar";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ConfidenceBadge, EventDrawer, EvidenceRefs, fmtDate, fmtPct, MarkerList, MetricsTable, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
+import { actorDisplayName, compositeDescription, ConfidenceBadge, EventDrawer, EvidenceRefs, fmtDate, fmtPct, MarkerList, MetricsTable, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
+import type { ScorecardVerifyResult } from "@/api/evaluation";
 
 /**
  * AgentDash: Company Evaluator — one milestone's card (Milestone 4 drill-down).
@@ -39,16 +40,19 @@ export function EvaluationMilestone() {
   const companyId = selectedCompanyId!;
   const ref = useMemo<EvaluationMilestoneRef | null>(() => (kind === "project" || kind === "goal") && id ? { kind, id } : null, [kind, id]);
   const activeTab: Tab = (TABS as readonly string[]).includes(tab ?? "") ? (tab as Tab) : "scorecard";
-  const [verifyRequested, setVerifyRequested] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ ok: boolean; reason?: string } | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [replayRequested, setReplayRequested] = useState(false);
   const [ledgerType, setLedgerType] = useState<string | null>(null);
 
   const latest = useQuery({
-    queryKey: queryKeys.evaluation.latest(companyId, ref?.kind ?? "", ref?.id ?? "", verifyRequested),
-    queryFn: () => evaluationApi.latest(companyId, ref!, verifyRequested),
+    queryKey: queryKeys.evaluation.latest(companyId, ref?.kind ?? "", ref?.id ?? "", false),
+    queryFn: () => evaluationApi.latest(companyId, ref!, false),
     enabled: !!selectedCompanyId && !!ref,
   });
   const card: ScoredCard | null = latest.data?.latest?.card ?? null;
+  // a card stored before the scoring engine (Milestone 1 digest) has no composite, metrics or exceptions to render
+  const scored = !!card && !!card.outcomeComposite && Array.isArray(card.actors) && Array.isArray(card.exceptions);
   const name = card?.milestoneName ?? `${ref?.kind ?? ""} ${ref?.id?.slice(0, 8) ?? ""}`;
 
   useEffect(() => {
@@ -71,17 +75,35 @@ export function EvaluationMilestone() {
     queryFn: () => issuesApi.list(companyId, { projectId: reviewProjectId! }),
     enabled: !!selectedCompanyId && !!reviewProjectId && activeTab === "review-items",
   });
+  // the rows tagged with this milestone, cut at the card's sequence, newest first — the drill-down behind the card's window
+  const throughSeq = card ? Number(card.throughSeq) : undefined;
   const ledger = useQuery({
-    queryKey: queryKeys.evaluation.events(companyId, ledgerType),
-    queryFn: () => evaluationApi.events(companyId, { type: ledgerType ?? undefined, limit: 500 }),
-    enabled: !!selectedCompanyId && activeTab === "ledger",
+    queryKey: queryKeys.evaluation.events(companyId, ledgerType, ref ? `${ref.kind}:${ref.id}:${throughSeq ?? "live"}` : null),
+    queryFn: () => evaluationApi.events(companyId, { type: ledgerType ?? undefined, limit: 500, ref: ref!, throughSeq, order: "desc" }),
+    enabled: !!selectedCompanyId && !!ref && activeTab === "ledger" && !!card,
   });
+  // administrator-only offers; the server gates the actions themselves, so a 403 here simply means "not an administrator"
+  const wantsAdminOffers = activeTab === "versions" || (!!latest.data && !latest.data.latest);
   const access = useQuery({
     queryKey: queryKeys.access.companyMembers(companyId),
     queryFn: () => accessApi.listMembers(companyId),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && wantsAdminOffers,
+    retry: false,
   });
   const isAdmin = access.data?.access.currentUserRole === "admin";
+  const runVerify = async () => {
+    if (!ref) return;
+    setVerifying(true);
+    try {
+      const r = await evaluationApi.latest(companyId, ref, true);
+      const v: ScorecardVerifyResult | null = r.verify;
+      setVerifyResult(v ? { ok: v.ok, reason: v.reason } : { ok: false, reason: "no stored card to verify" });
+    } catch (err) {
+      setVerifyResult({ ok: false, reason: err instanceof Error ? err.message : "verification failed" });
+    } finally {
+      setVerifying(false);
+    }
+  };
   const replay = useQuery({
     queryKey: queryKeys.evaluation.replay(companyId, ref?.kind ?? "", ref?.id ?? ""),
     queryFn: () => evaluationApi.replay(companyId, ref!),
@@ -135,9 +157,15 @@ export function EvaluationMilestone() {
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">No card stored for this milestone yet. Snapshots come from the shadow cadence or from an administrator.</p>
           {isAdmin ? (
-            <Button size="sm" onClick={() => snapshot.mutate()} disabled={snapshot.isPending}>{snapshot.isPending ? "Storing…" : "Store a snapshot now"}</Button>
+            <Button size="sm" onClick={() => snapshot.mutate()} disabled={snapshot.isPending}>{snapshot.isPending ? "Storing…" : "Store a card and raise its review items"}</Button>
           ) : null}
+          {isAdmin ? <p className="text-xs text-muted-foreground">Storing a card also creates or updates the evaluator's review items for humans — the one write this page offers, and only to administrators.</p> : null}
           {snapshot.error ? <p className="text-sm text-destructive">{snapshot.error instanceof Error ? snapshot.error.message : "Snapshot failed."}</p> : null}
+        </div>
+      ) : !scored ? (
+        <div className="space-y-2" data-testid="unscored-card">
+          <p className="text-sm text-muted-foreground">This card (implementation {card.formulaVersion}) predates the scoring engine: it is a ledger digest with no metrics, composite or exceptions to show. Store a new version to get a scored card.</p>
+          <p className="text-xs text-muted-foreground">{card.eventCount} events through sequence {card.throughSeq}.</p>
         </div>
       ) : activeTab === "scorecard" ? (
         <ScorecardTab card={card} onOpenEvent={drawer.open} />
@@ -179,11 +207,16 @@ export function EvaluationMilestone() {
             <select id="ledger-type" className="rounded border border-border-soft bg-background px-2 py-1 text-sm" value={ledgerType ?? ""} onChange={(e) => setLedgerType(e.target.value || null)}>
               <option value="">all types in the window</option>
               {Object.keys(card.byType ?? {}).sort().map((t) => (
-                <option key={t} value={t}>{t} ({card.byType[t]})</option>
+                <option key={t} value={t}>{t}</option>
               ))}
             </select>
-            <span className="text-xs text-muted-foreground">{card.eventCount} events in this card's window · through sequence {card.throughSeq}</span>
+            <span className="text-xs text-muted-foreground">
+              {ledger.data ? `${ledger.data.count} events tagged with this ${ref.kind} through sequence ${card.throughSeq}, newest first${ledger.data.count >= 500 ? " (first 500)" : ""}` : ""}
+            </span>
           </div>
+          <p className="text-xs text-muted-foreground">
+            The card's window counted {card.eventCount} events, including company-level records (roster snapshots, refusals, findings) that carry no milestone tag and are not listed here; the type list comes from the card's window.
+          </p>
           {ledger.isLoading ? (
             <p className="text-sm text-muted-foreground">Loading events…</p>
           ) : ledger.error ? (
@@ -210,17 +243,26 @@ export function EvaluationMilestone() {
       ) : (
         <div className="space-y-4">
           {isAdmin ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => setVerifyRequested(true)} disabled={latest.isFetching}>Verify latest against a replay</Button>
-              <Button size="sm" variant="outline" onClick={() => setReplayRequested(true)} disabled={replay.isFetching}>Replay now</Button>
-              <Button size="sm" onClick={() => snapshot.mutate()} disabled={snapshot.isPending}>{snapshot.isPending ? "Storing…" : "Store a new version"}</Button>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => void runVerify()} disabled={verifying}>{verifying ? "Verifying…" : "Verify latest against a replay"}</Button>
+                <Button size="sm" variant="outline" onClick={() => setReplayRequested(true)} disabled={replay.isFetching}>Replay now</Button>
+                <Button size="sm" onClick={() => snapshot.mutate()} disabled={snapshot.isPending}>{snapshot.isPending ? "Storing…" : "Store a new version and raise review items"}</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Storing a version also creates or updates the evaluator's review items for humans; it never touches reviewed work.</p>
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">Verification, replay and snapshots are administrator actions.</p>
           )}
-          {verifyRequested && latest.data?.verify ? (
+          {verifyResult ? (
             <p className="text-sm" data-testid="verify-result">
-              {latest.data.verify.ok ? "Replay agrees with the stored card byte for byte." : `Replay does not agree: ${latest.data.verify.reason ?? "hash mismatch"}.`}
+              {verifyResult.ok ? "Replay agrees with the stored card byte for byte." : `Replay does not agree: ${verifyResult.reason ?? "hash mismatch"}.`}
+            </p>
+          ) : null}
+          {snapshot.data ? (
+            <p className="text-sm" data-testid="snapshot-result">
+              Stored version {snapshot.data.stored.version}
+              {snapshot.data.reviewItems && !("error" in snapshot.data.reviewItems) ? `; review items: ${snapshot.data.reviewItems.created.length} created, ${snapshot.data.reviewItems.updated.length} updated, ${snapshot.data.reviewItems.closed.length} left closed` : ""}.
             </p>
           ) : null}
           {replay.data ? (
@@ -271,7 +313,7 @@ function ScorecardTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (i
         <Card>
           <CardHeader>
             <CardTitle>Outcome score</CardTitle>
-            <CardDescription>Coverage-weighted mean of the included outcome metrics, 0–100; withheld when a guard fails. Composite {c?.formulaVersion}.</CardDescription>
+            <CardDescription>{compositeDescription(c, "outcome")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex flex-wrap items-end gap-3">
@@ -288,7 +330,7 @@ function ScorecardTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (i
             ) : null}
             {c?.included?.length ? (
               <p className="text-xs text-muted-foreground">
-                Included: {c.included.map((i) => `${i.key} (weight ${i.weight}, coverage ${fmtPct(i.coverage)}, ${Math.round(i.scaled)})`).join("; ")}.
+                Included: {c.included.map((i) => `${i.key} (weight ${i.weight} × coverage ${fmtPct(i.coverage)} = ${Math.round(i.weight * i.coverage * 1000) / 1000}, value ${Math.round(i.scaled)})`).join("; ")}.
               </p>
             ) : null}
             {c?.excluded?.length ? (
@@ -347,7 +389,7 @@ function ScorecardTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (i
 }
 
 function OperatingTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (id: string) => void }) {
-  const agentsRows = card.actors.filter((a) => a.actorType === "agent").sort((a, b) => (a.name ?? a.actorKey).localeCompare(b.name ?? b.actorKey));
+  const agentsRows = card.actors.filter((a) => a.actorType === "agent").sort((a, b) => actorDisplayName(a).localeCompare(actorDisplayName(b)) || a.actorKey.localeCompare(b.actorKey));
   const companyRows = card.actors.filter((a) => a.actorType !== "agent");
   return (
     <div className="space-y-6">
@@ -375,7 +417,7 @@ function ActorCard({ row, onOpenEvent }: { row: ActorRow; onOpenEvent: (id: stri
     <Card data-testid={`actor-${row.actorKey}`}>
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-          <span>{row.name ?? row.actorKey}</span>
+          <span title={row.actorId ?? undefined}>{actorDisplayName(row)}</span>
           <span className="flex items-center gap-2">
             {c ? (
               <>
@@ -389,7 +431,8 @@ function ActorCard({ row, onOpenEvent }: { row: ActorRow; onOpenEvent: (id: stri
           </span>
         </CardTitle>
         <CardDescription>
-          {metrics.map((m) => `${m.key} ${m.headline}`).join(" · ")}
+          {c ? compositeDescription(c, "operating") : "No operating composite: fewer than three metrics have evidence for this row."}
+          {c?.included?.length ? ` Included: ${c.included.map((i) => `${i.key} (weight ${i.weight} × coverage ${fmtPct(i.coverage)}, value ${Math.round(i.scaled)})`).join("; ")}.` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent>

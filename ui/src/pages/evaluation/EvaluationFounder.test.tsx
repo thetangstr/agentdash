@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvaluationOverview, ScoredCard } from "@paperclipai/shared";
 import type React from "react";
-import { EvaluationOverviewPage as OverviewPage } from "./EvaluationOverview";
+import { EvaluationFounder } from "./EvaluationFounder";
 
 const overviewMock = vi.hoisted(() => vi.fn());
 const latestMock = vi.hoisted(() => vi.fn());
@@ -100,7 +100,9 @@ const card = {
   outcome: { O1: metric("O1", { name: "Acceptance satisfied" }), O5: metric("O5", { name: "Evidence hygiene", value: 0.6, coverage: 0.6, confidence: "medium" }) },
   outcomeComposite: composite(68.1),
   actors: [
-    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }) }, composite: { ...composite(55), kind: "operating" } },
+    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 0.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
+    { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
+    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
     { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
   ],
   exceptions: [
@@ -211,27 +213,40 @@ function render(path: string, element: React.ReactNode) {
   });
 }
 
-describe("EvaluationOverview", () => {
-  it("shows each milestone's latest card: score with confidence and coverage, the withheld reason in words, exceptions, interventions and cost", async () => {
-    render("/evaluation", <OverviewPage />);
+
+describe("EvaluationFounder", () => {
+  it("shows decisions waiting and rejected corrections from the ledger, material risk per card, and founder-view exceptions; loading and failures are said, never a false None", async () => {
+    eventsMock.mockResolvedValue({
+      events: [
+        { id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", seq: 50, companyId: "company-1", projectId: null, goalId: null, actorType: "user", actorId: "founder-1", sourceTable: "evaluation_corrections", sourceId: "x", sourceVersion: "v", eventType: "evaluation.correction", eventTime: "2026-09-05T13:00:00.000Z", ingestTime: "2026-09-05T13:00:00.000Z", payload: { disputedEventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", claimedFact: "the item was reviewed by Tester" }, correlationId: null },
+        { id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", seq: 48, companyId: "company-1", projectId: null, goalId: null, actorType: "user", actorId: "founder-1", sourceTable: "evaluation_corrections", sourceId: "y", sourceVersion: "v", eventType: "evaluation.correction", eventTime: "2026-09-04T13:00:00.000Z", ingestTime: "2026-09-04T13:00:00.000Z", payload: { disputedEventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", claimedFact: "this was a duplicate, not rework" }, correlationId: null },
+        { id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd1", seq: 49, companyId: "company-1", projectId: null, goalId: null, actorType: "user", actorId: "admin-1", sourceTable: "evaluation_dispositions", sourceId: "y", sourceVersion: "v", eventType: "evaluation.disposition", eventTime: "2026-09-04T15:00:00.000Z", ingestTime: "2026-09-04T15:00:00.000Z", payload: { kind: "correction_decided", correctionEventId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", decision: "rejected" }, correlationId: null },
+      ],
+      count: 3,
+      scope: null,
+    });
+    // the second milestone's card fails to load
+    latestMock.mockImplementation(async (_c: string, ref: { id: string }) => {
+      if (ref.id === OTHER) throw new Error("boom");
+      return { latest: { id: "s1", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 3, contractVersion: "derived/1", formulaVersion: "m2-score/5", throughSeq: 42, throughEventId: null, card, cardHash: "h".repeat(64), createdAt: "2026-09-05T12:00:00.000Z" }, verify: null };
+    });
+    render("/evaluation/founder", <EvaluationFounder />);
+    await flush();
     await flush();
     const text = container.textContent ?? "";
-    expect(overviewMock).toHaveBeenCalledWith("company-1");
+    expect(eventsMock).toHaveBeenCalledWith("company-1", expect.objectContaining({ order: "desc" }));
+    expect(text).toContain("Decisions waiting");
+    expect(text).toContain("the item was reviewed by Tester"); // pending: no disposition
+    expect(text).toContain("Rejected corrections");
+    expect(text).toContain("this was a duplicate, not rework"); // rejected stays visible without a second filing
+    expect(text).toContain("Material risk");
     expect(text).toContain("Launch");
-    expect(text).toContain("72"); // 72.4 rounded, never a decimal the reader has to interpret
-    expect(text).toContain("adequate evidence");
-    expect(text).toContain("coverage 68%");
-    expect(text).toContain("1 immediate · 0 material · 2 routine");
-    expect(text).toContain("$12.34");
-    expect(text).toContain("metered on 3 of 34 runs — the rest is unmetered, not free"); // a bare figure would misstate the milestone's cost
-    expect(text).toContain("on 50% of agent-owned items · synthetic human identities: interventions are countable, not attributable");
-    expect(text).toContain("withheld — O3 alone would supply 82% of the score");
-    expect(text).toContain("not on this card"); // interventions and cost absent on the baseline card are said, not zeroed
-    expect(text).toContain("Without a card yet");
-    expect(text).toContain("Revenue");
-    // the trend is drawn, and its title names every version
-    const svg = container.querySelector(`[data-testid="milestone-${MILESTONE}"] svg`);
-    expect(svg?.getAttribute("aria-label")).toContain("v2: withheld");
-    expect(container.querySelector(`[data-testid="milestone-${MILESTONE}"] a[href*="${MILESTONE}"]`)).not.toBeNull();
+    expect(text).toContain("72"); // the overview's latest score for Launch
+    expect(text).toContain("withheld — O3 alone would supply 82%"); // Baseline's withheld score, in words
+    expect(container.querySelector('[data-testid="founder-exceptions-failed"]')?.textContent).toContain("1 of 2 cards could not be loaded");
+    expect(text).toContain("E4 self-review"); // immediate exception from the card that did load
+    expect(text).not.toContain("None on the latest cards");
+    // nothing operating: no agent rows, no ranking
+    expect(text).not.toContain("Builder");
   });
 });

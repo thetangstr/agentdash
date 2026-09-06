@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
@@ -220,20 +220,34 @@ export function evaluationLedger(db: LedgerDb) {
     },
 
     /** Bounded read for drill-down and the events route (not for replay). */
+    /**
+     * Events of the company, oldest first by default. `projectId`/`goalId` narrow to the rows tagged with that
+     * scope (a drill-down list, not the membership rule the card uses); `throughSeq` cuts at a stored card's
+     * sequence; `order: "desc"` returns the newest rows first (still ordered newest first in the result).
+     */
     async list(
       companyId: string,
-      opts: { types?: EvaluationEventType[]; sinceEventTime?: Date; limit?: number } = {},
+      opts: { types?: EvaluationEventType[]; sinceEventTime?: Date; limit?: number; projectId?: string; goalId?: string; throughSeq?: number; order?: "asc" | "desc" } = {},
     ): Promise<EvaluationEventRow[]> {
       const conds = [eq(evaluationEvents.companyId, companyId)];
       if (opts.types && opts.types.length > 0) conds.push(inArray(evaluationEvents.eventType, opts.types));
       if (opts.sinceEventTime) conds.push(gte(evaluationEvents.eventTime, opts.sinceEventTime));
+      if (opts.projectId) conds.push(eq(evaluationEvents.projectId, opts.projectId));
+      if (opts.goalId) conds.push(eq(evaluationEvents.goalId, opts.goalId));
+      if (opts.throughSeq !== undefined) conds.push(lte(evaluationEvents.seq, Math.max(0, Math.floor(opts.throughSeq))));
+      const desc_ = opts.order === "desc";
       const rows = await db
         .select()
         .from(evaluationEvents)
         .where(and(...conds))
-        .orderBy(asc(evaluationEvents.eventTime), asc(evaluationEvents.ingestTime), asc(evaluationEvents.dedupeKey))
+        .orderBy(
+          desc_ ? desc(evaluationEvents.eventTime) : asc(evaluationEvents.eventTime),
+          desc_ ? desc(evaluationEvents.ingestTime) : asc(evaluationEvents.ingestTime),
+          desc_ ? desc(evaluationEvents.dedupeKey) : asc(evaluationEvents.dedupeKey),
+        )
         .limit(Math.min(opts.limit ?? 1000, 5000));
-      return orderEvents(rows);
+      const ordered = orderEvents(rows);
+      return desc_ ? ordered.reverse() : ordered;
     },
 
     async countByType(companyId: string): Promise<Record<string, number>> {

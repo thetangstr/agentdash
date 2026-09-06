@@ -35,7 +35,7 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
-import { EvaluationOverview } from "./pages/evaluation/EvaluationOverview";
+import { EvaluationOverviewPage } from "./pages/evaluation/EvaluationOverview";
 import { EvaluationFounder } from "./pages/evaluation/EvaluationFounder";
 import { EvaluationMilestone } from "./pages/evaluation/EvaluationMilestone";
 import { InstanceErrors } from "./pages/InstanceErrors";
@@ -171,7 +171,7 @@ function boardRoutes() {
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
-      <Route path="evaluation" element={<EvaluationOverview />} />
+      <Route path="evaluation" element={<EvaluationOverviewPage />} />
       <Route path="evaluation/founder" element={<EvaluationFounder />} />
       <Route path="evaluation/:kind/:id" element={<EvaluationMilestone />} />
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />

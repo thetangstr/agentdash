@@ -53,6 +53,11 @@ export function evaluationRoutes(db: Db) {
     limit: z.coerce.number().int().min(1).max(5000).optional(),
     type: z.string().optional(),
     since: z.string().datetime().optional(),
+    // drill-down scope: the rows tagged with a milestone, cut at a stored card's sequence, newest first
+    kind: z.enum(["project", "goal"]).optional(),
+    id: z.string().uuid().optional(),
+    throughSeq: z.coerce.number().int().min(0).optional(),
+    order: z.enum(["asc", "desc"]).optional(),
   });
   const refQuery = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() });
 
@@ -65,12 +70,17 @@ export function evaluationRoutes(db: Db) {
       const types = q.data.type
         ? q.data.type.split(",").filter((t): t is EvaluationEventType => (EVALUATION_EVENT_TYPES as readonly string[]).includes(t))
         : undefined;
+      if ((q.data.kind && !q.data.id) || (!q.data.kind && q.data.id)) throw badRequest("kind and id go together");
       const rows = await ledger.list(companyId, {
         types,
         sinceEventTime: q.data.since ? new Date(q.data.since) : undefined,
         limit: q.data.limit,
+        projectId: q.data.kind === "project" ? q.data.id : undefined,
+        goalId: q.data.kind === "goal" ? q.data.id : undefined,
+        throughSeq: q.data.throughSeq,
+        order: q.data.order,
       });
-      res.json({ events: rows, count: rows.length });
+      res.json({ events: rows, count: rows.length, scope: q.data.kind && q.data.id ? { kind: q.data.kind, id: q.data.id, throughSeq: q.data.throughSeq ?? null } : null });
     } catch (err) {
       next(err);
     }

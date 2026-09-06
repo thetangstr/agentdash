@@ -62,13 +62,20 @@ export const evaluationApi = {
     api.get<{ latest: StoredScorecard | null; verify: ScorecardVerifyResult | null }>(`/companies/${companyId}/evaluation/scorecards?${refQuery(ref)}${verify ? "&verify=true" : ""}`),
   versions: (companyId: string, ref: EvaluationMilestoneRef) =>
     api.get<{ versions: EvaluationScorecardVersionSummary[] }>(`/companies/${companyId}/evaluation/scorecards/versions?${refQuery(ref)}`),
-  events: (companyId: string, opts: { type?: string; since?: string; limit?: number } = {}) => {
+  /** Ledger events; with `ref` and `throughSeq`, the rows tagged with that milestone up to a stored card's cut. */
+  events: (companyId: string, opts: { type?: string; since?: string; limit?: number; ref?: EvaluationMilestoneRef; throughSeq?: number; order?: "asc" | "desc" } = {}) => {
     const q = new URLSearchParams();
     if (opts.type) q.set("type", opts.type);
     if (opts.since) q.set("since", opts.since);
     if (opts.limit) q.set("limit", String(opts.limit));
+    if (opts.ref) {
+      q.set("kind", opts.ref.kind);
+      q.set("id", opts.ref.id);
+    }
+    if (opts.throughSeq !== undefined) q.set("throughSeq", String(opts.throughSeq));
+    if (opts.order) q.set("order", opts.order);
     const qs = q.toString();
-    return api.get<{ events: EvaluationEventRow[]; count: number }>(`/companies/${companyId}/evaluation/events${qs ? `?${qs}` : ""}`);
+    return api.get<{ events: EvaluationEventRow[]; count: number; scope: { kind: string; id: string; throughSeq: number | null } | null }>(`/companies/${companyId}/evaluation/events${qs ? `?${qs}` : ""}`);
   },
   event: (companyId: string, eventId: string) => api.get<{ event: EvaluationEventRow }>(`/companies/${companyId}/evaluation/events/${encodeURIComponent(eventId)}`),
   /** Administrators only: rebuild the card from the ledger and compare with the stored one. */
@@ -76,5 +83,5 @@ export const evaluationApi = {
     api.get<{ card: ScoredCard; hash: string; state: { open: boolean; retrospective: boolean; hasContract: boolean }; throughSeq: number | string }>(`/companies/${companyId}/evaluation/replay?${refQuery(ref)}`),
   /** Administrators only: store the current projection as the next version. */
   snapshot: (companyId: string, ref: EvaluationMilestoneRef, reviewItems = false) =>
-    api.post<{ stored: StoredScorecard; verify: ScorecardVerifyResult | null }>(`/companies/${companyId}/evaluation/scorecards/snapshot${reviewItems ? "?reviewItems=true" : ""}`, { kind: ref.kind, id: ref.id }),
+    api.post<{ stored: StoredScorecard; verify: ScorecardVerifyResult | null; reviewItems: { created: string[]; updated: string[]; unchanged: string[]; closed: string[]; unrouted: string[] } | { error: string } | null }>(`/companies/${companyId}/evaluation/scorecards/snapshot${reviewItems ? "?reviewItems=true" : ""}`, { kind: ref.kind, id: ref.id }),
 };

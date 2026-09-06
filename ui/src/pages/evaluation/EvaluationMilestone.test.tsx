@@ -60,7 +60,7 @@ function metric(key: string, over: Record<string, unknown> = {}) {
     n: 4,
     coverage: 1,
     confidence: "high",
-    confidenceLabel: "strong evidence",
+    confidenceLabel: ({ high: "strong evidence", medium: "adequate evidence", low: "limited evidence", insufficient: "insufficient evidence" } as Record<string, string>)[String(over.confidence ?? "high")],
     breakdown: { satisfied: 3, failed: 1, undecidable: [] },
     headline: "satisfied 3 of 4 done; 1 failed",
     formulaVersion: "metrics/2",
@@ -100,8 +100,10 @@ const card = {
   outcome: { O1: metric("O1", { name: "Acceptance satisfied" }), O5: metric("O5", { name: "Evidence hygiene", value: 0.6, coverage: 0.6, confidence: "medium" }) },
   outcomeComposite: composite(68.1),
   actors: [
-    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }) }, composite: { ...composite(55), kind: "operating" } },
-    { actorKey: "company:c", actorType: "company", actorId: "company-1", name: "Company", metrics: {}, composite: null },
+    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 0.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
+    { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
+    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
+    { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
   ],
   exceptions: [
     { id: "E4", title: "self-review", severity: "immediate", routes: ["founder_view", "manager"], key: "E4:issue:x", subject: { kind: "issue", id: "x", identifier: "PAP-7" }, routing: { accountableUserId: "founder-1", managerAgentIds: [], founderView: true }, actorAgentId: "b", raisedAt: "2026-09-04T10:00:00.000Z", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"], note: "the contributor reviewed their own work", markers: [] },
@@ -140,8 +142,8 @@ const overview: EvaluationOverview = {
         exceptions: { total: 3, immediate: 1, material: 0, routine: 2 },
         markers: ["open milestone — denominators still moving"],
         missingSources: 1,
-        interventions: 2,
-        costCents: 1234,
+        interventions: { count: 2, coverage: 0.5, caveat: "synthetic human identities: interventions are countable, not attributable" },
+        cost: { cents: 1234, meteredRuns: 3, runs: 34 },
         trend: [{ version: 1, score: 60, storedAt: "2026-09-03T00:00:00.000Z" }, { version: 2, score: null, storedAt: "2026-09-04T00:00:00.000Z" }, { version: 3, score: 72.4, storedAt: "2026-09-05T12:00:00.000Z" }],
       },
     },
@@ -160,7 +162,7 @@ const overview: EvaluationOverview = {
         markers: [],
         missingSources: 3,
         interventions: null,
-        costCents: null,
+        cost: null,
         trend: [{ version: 1, score: null, storedAt: "2026-09-05T11:00:00.000Z" }],
       },
     },
@@ -219,7 +221,7 @@ describe("EvaluationMilestone", () => {
     expect(text).toContain("Launch");
     expect(text).toContain("68"); // outcome score
     expect(text).toContain("adequate evidence");
-    expect(text).toContain("O1 (weight 0.4, coverage 100%, 75)");
+    expect(text).toContain("O1 (weight 0.4 × coverage 100% = 0.4, value 75)");
     expect(text).toContain("O2 — insufficient evidence: no target date");
     expect(text).toContain("satisfied 3 of 4 done; 1 failed");
     expect(text).toContain("open milestone — denominators still moving");
@@ -238,15 +240,50 @@ describe("EvaluationMilestone", () => {
     expect(eventMock).toHaveBeenCalledWith("company-1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1");
   });
 
-  it("operating: agents by name with the not-a-ranking statement; the company row is separate", async () => {
+  it("operating: agents by name (never by score), each composite with its formula sentence and weights; a withheld one says why; the company row is named in words", async () => {
     render(`/evaluation/project/${MILESTONE}/operating`, <EvaluationMilestone />);
     await flush();
     const text = container.textContent ?? "";
     expect(container.querySelector('[data-testid="not-a-ranking"]')?.textContent).toContain("this is not a ranking");
-    expect(text).toContain("Builder");
+    const order = [...container.querySelectorAll('[data-testid^="actor-agent:"]')].map((el) => el.getAttribute("data-testid"));
+    expect(order).toEqual(["actor-agent:b", "actor-agent:t", "actor-agent:z"]); // Tester scores 91 and still comes after Builder: alphabetical, not by score
     expect(text).toContain("55");
+    expect(text).toContain("91");
+    expect(text).toContain("withheld — fewer than 3 metrics have evidence");
+    expect(text).toContain("Coverage-weighted mean of the included operating metrics");
+    expect(text).toContain("Composite composite/5");
+    expect(text).toContain("Included: O1 (weight 0.4 × coverage 100%, value 75)");
     expect(text).toContain("Owed by the company or the platform");
+    expect(text).toContain("Company and platform"); // the server sends no name for the company row
+    expect(text).not.toContain("company:c");
     expect(text).toContain("no operating score");
+    // a display-only metric keeps its value beside a not-scored badge, and its detail is shown on demand
+    const show = [...container.querySelectorAll('[data-testid="actor-agent:b"] button')].find((b) => /Show \d+ metrics/.test(b.textContent ?? "")) as HTMLButtonElement;
+    await act(async () => { show.click(); });
+    expect(container.textContent).toContain("0.5 cents per O1-satisfied item");
+    expect(container.textContent).toContain("not scored");
+    const p8 = container.querySelector('[data-testid="metric-P8"]') as HTMLButtonElement;
+    await act(async () => { p8.click(); });
+    expect(container.querySelector('[data-testid="detail-P8"]')?.textContent).toContain("median run cents");
+  });
+
+  it("ledger: the events listed are the rows tagged with this milestone through the card's cut, newest first — never the whole company", async () => {
+    eventsMock.mockResolvedValue({ events: [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1", seq: 40, companyId: "company-1", projectId: MILESTONE, goalId: null, actorType: "agent", actorId: "b", sourceTable: "issues", sourceId: "x", sourceVersion: "v", eventType: "issue.created", eventTime: "2026-09-02T00:00:00.000Z", ingestTime: "2026-09-02T00:00:01.000Z", payload: {}, correlationId: null }], count: 1, scope: { kind: "project", id: MILESTONE, throughSeq: 42 } });
+    render(`/evaluation/project/${MILESTONE}/ledger`, <EvaluationMilestone />);
+    await flush();
+    expect(eventsMock).toHaveBeenCalledWith("company-1", expect.objectContaining({ ref: { kind: "project", id: MILESTONE }, throughSeq: 42, order: "desc" }));
+    const text = container.textContent ?? "";
+    expect(text).toContain("1 events tagged with this project through sequence 42, newest first");
+    expect(text).toContain("company-level records");
+    expect(text).not.toContain("40 events in this card's window");
+  });
+
+  it("a card stored before the scoring engine is said to be one, and no tab pretends to score it", async () => {
+    latestMock.mockResolvedValue({ latest: { id: "s0", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 1, contractVersion: "none", formulaVersion: "m1-digest/3", throughSeq: 9, throughEventId: null, card: { formulaVersion: "m1-digest/3", milestoneRef: { kind: "project", id: MILESTONE }, milestoneName: "Launch", throughSeq: 9, eventCount: 9, byType: {}, actors: ["agent:b"], markers: [], state: { open: true, retrospective: false } }, cardHash: "h".repeat(64), createdAt: "2026-09-01T00:00:00.000Z" }, verify: null });
+    render(`/evaluation/project/${MILESTONE}/exceptions`, <EvaluationMilestone />);
+    await flush();
+    expect(container.querySelector('[data-testid="unscored-card"]')?.textContent).toContain("predates the scoring engine");
+    expect(container.textContent).not.toMatch(/\b(68|72|91)\b/);
   });
 
   it("exceptions: grouped by severity with subject, note, routes and the events behind each", async () => {
@@ -260,13 +297,24 @@ describe("EvaluationMilestone", () => {
     expect(container.querySelector('[data-testid="exception-E4:issue:x"] button[title^="aaaaaaaa"]')).not.toBeNull();
   });
 
-  it("without a stored card the page says so and offers an administrator a snapshot, never a number", async () => {
+  it("without a stored card the page says so and offers an administrator a snapshot that names its side effect, never a number", async () => {
     latestMock.mockResolvedValue({ latest: null, verify: null });
     render(`/evaluation/project/${MILESTONE}`, <EvaluationMilestone />);
     await flush();
     const text = container.textContent ?? "";
     expect(text).toContain("No card stored for this milestone yet");
-    expect(text).toContain("Store a snapshot now");
+    expect(text).toContain("Store a card and raise its review items");
+    expect(text).toContain("the one write this page offers");
     expect(text).not.toMatch(/\b(68|72)\b/);
+  });
+
+  it("scorecard: a withheld outcome composite is the words for why, and the included weights show the coverage multiplication", async () => {
+    latestMock.mockResolvedValue({ latest: { id: "s2", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 2, contractVersion: "derived/1", formulaVersion: "m2-score/5", throughSeq: 41, throughEventId: null, card: { ...card, outcomeComposite: composite(null, ["O3 alone would supply 82% of the score; no single metric may supply more than 75%", "the included metrics rest on 47% of the decidable records; at least 50% is needed"]) }, cardHash: "h".repeat(64), createdAt: "2026-09-05T00:00:00.000Z" }, verify: null });
+    render(`/evaluation/project/${MILESTONE}`, <EvaluationMilestone />);
+    await flush();
+    const text = container.textContent ?? "";
+    expect(text).toContain("withheld — O3 alone would supply 82% of the score");
+    expect(container.querySelector('[data-testid="guard-reasons"]')?.textContent).toContain("at least 50% is needed");
+    expect(text).not.toMatch(/Outcome score\s*\d/);
   });
 });

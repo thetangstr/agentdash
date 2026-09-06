@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { EvaluationConfidenceTier, EvaluationExceptionSeverity, EvaluationMetricKey, MetricResult } from "@paperclipai/shared";
-import { EVALUATION_METRIC_FORMULAS } from "@paperclipai/shared";
+import type { ActorRow, CompositeResult, EvaluationConfidenceTier, EvaluationExceptionSeverity, EvaluationMetricKey, MetricResult } from "@paperclipai/shared";
+import { EVALUATION_CONFIDENCE_LABELS, EVALUATION_METRIC_FORMULAS } from "@paperclipai/shared";
 import { evaluationApi } from "@/api/evaluation";
 import { queryKeys } from "@/lib/queryKeys";
 import { Badge } from "@/components/ui/badge";
@@ -14,17 +14,22 @@ import { cn } from "@/lib/utils";
  * it; nothing is shown at the Insufficient tier except the words that say so.
  */
 
-export const CONFIDENCE_WORDS: Record<EvaluationConfidenceTier, string> = {
-  high: "strong evidence",
-  medium: "adequate evidence",
-  low: "limited evidence",
-  insufficient: "insufficient evidence",
-};
-
-export function ConfidenceBadge({ tier }: { tier: EvaluationConfidenceTier | null | undefined }) {
+/** The §7 words for a tier, from the shared constant the server uses; a metric's own `confidenceLabel` wins when given. */
+export function ConfidenceBadge({ tier, label }: { tier: EvaluationConfidenceTier | null | undefined; label?: string | null }) {
   if (!tier) return <Badge variant="ghost">no evidence yet</Badge>;
   const variant = tier === "high" ? "default" : tier === "medium" ? "secondary" : tier === "low" ? "outline" : "destructive";
-  return <Badge variant={variant}>{CONFIDENCE_WORDS[tier]}</Badge>;
+  return <Badge variant={variant}>{label ?? EVALUATION_CONFIDENCE_LABELS[tier]}</Badge>;
+}
+
+/** Actor rows carry a name only for agents on the roster; the company row and an unrostered agent get words, never an id. */
+export function actorDisplayName(row: Pick<ActorRow, "actorType" | "name">): string {
+  if (row.name) return row.name;
+  return row.actorType === "agent" ? "an agent not on the roster" : "Company and platform";
+}
+
+/** The one sentence every composite shares, with the implementation version that produced the number. */
+export function compositeDescription(c: CompositeResult | null | undefined, kind: "outcome" | "operating"): string {
+  return `Coverage-weighted mean of the included ${kind} metrics, 0–100 (each metric's weight times its coverage, divided by the sum of those products); withheld when a guard fails. Composite ${c?.formulaVersion ?? "—"}.`;
 }
 
 export function SeverityBadge({ severity }: { severity: EvaluationExceptionSeverity }) {
@@ -46,10 +51,19 @@ export function fmtDate(iso: string | Date | null | undefined): string {
   const d = iso instanceof Date ? iso : new Date(iso);
   return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
 }
+/** Metrics whose value is a share in 0–1 (§5): rendered as a percentage. Everything else renders as the value with its unit. */
+const SHARE_METRICS = new Set<string>(["O1", "O2", "O5", "P1", "P2", "P3", "P4", "P9"]);
 export function fmtValue(m: MetricResult): string {
   if (m.value == null) return "—";
-  if (/share|rate|adherence|satisfied|hygiene|autonomy|precision|accuracy|quality/i.test(m.unit) && m.value >= 0 && m.value <= 1) return fmtPct(m.value);
+  if ((SHARE_METRICS.has(m.key) || m.unit.startsWith("share")) && m.value >= 0 && m.value <= 1) return fmtPct(m.value);
   return `${Math.round(m.value * 100) / 100} ${m.unit}`.trim();
+}
+
+/** Primitive entries of a metric's detail (medians, counts, caveats); nested objects are left to the ledger. */
+export function detailEntries(detail: Record<string, unknown> | undefined): Array<[string, string]> {
+  return Object.entries(detail ?? {})
+    .filter(([, v]) => v === null || ["string", "number", "boolean"].includes(typeof v))
+    .map(([k, v]) => [k.replace(/([A-Z])/g, " $1").toLowerCase(), v === null ? "none" : typeof v === "number" ? String(Math.round(v * 100) / 100) : String(v)]);
 }
 
 /** A score, or the words for why it is withheld. */
@@ -177,8 +191,12 @@ export function MetricRow({ metric, onOpenEvent }: { metric: MetricResult; onOpe
           <span className="font-medium">{metric.name}</span>
           <span className="block text-xs text-muted-foreground">{metric.headline}</span>
         </span>
-        <span className="tabular-nums">{metric.displayOnly ? <span className="text-xs text-muted-foreground">shown, not scored</span> : fmtValue(metric)}</span>
-        <span><ConfidenceBadge tier={metric.confidence} /></span>
+        <span className="tabular-nums">
+          {fmtValue(metric)}
+          {metric.lowerIsBetter && metric.value != null ? <span className="block text-[11px] text-muted-foreground">lower is better</span> : null}
+          {metric.displayOnly ? <Badge variant="ghost" className="mt-0.5">not scored</Badge> : null}
+        </span>
+        <span><ConfidenceBadge tier={metric.confidence} label={metric.confidenceLabel} /></span>
         <span className="text-xs text-muted-foreground tabular-nums" title="share of the population that was decidable">{fmtPct(metric.coverage)}</span>
       </button>
       {open ? (
@@ -202,6 +220,16 @@ export function MetricRow({ metric, onOpenEvent }: { metric: MetricResult; onOpe
                 <li key={n}>{n}</li>
               ))}
             </ul>
+          ) : null}
+          {detailEntries(metric.detail).length > 0 ? (
+            <dl className="grid grid-cols-[minmax(120px,max-content)_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground" data-testid={`detail-${metric.key}`}>
+              {detailEntries(metric.detail).map(([k, v]) => (
+                <div key={k} className="contents">
+                  <dt>{k}</dt>
+                  <dd className="text-text-primary">{v}</dd>
+                </div>
+              ))}
+            </dl>
           ) : null}
           <EvidenceRefs refs={metric.evidenceRefs ?? []} count={metric.evidenceRefCount} onOpen={onOpenEvent} />
         </div>

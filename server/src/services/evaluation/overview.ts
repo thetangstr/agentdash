@@ -30,18 +30,45 @@ function numberAt(detail: Record<string, unknown> | undefined, key: string): num
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** Sum a per-actor metric detail number across the card's agent rows; null when no row carries the metric. */
-function sumDetail(card: ScoredCard, metric: "P1" | "P8", key: string): number | null {
-  let sum = 0;
+/** P1 across the card's actors: the raw count, the population-weighted coverage, and the card's own caveat. */
+function interventionsOf(card: ScoredCard): EvaluationMilestoneSummary["latest"] extends infer L ? (L extends { interventions: infer I } ? I : never) : never {
+  let count = 0;
+  let population = 0;
+  let decidable = 0;
+  let caveat: string | null = null;
   let seen = false;
   for (const a of card.actors ?? []) {
-    const n = numberAt(a.metrics?.[metric]?.detail, key);
-    if (n !== null) {
-      sum += n;
-      seen = true;
-    }
+    const m = a.metrics?.P1;
+    if (!m) continue;
+    const n = numberAt(m.detail, "interventions");
+    if (n === null) continue;
+    seen = true;
+    count += n;
+    population += m.n ?? 0;
+    decidable += (m.n ?? 0) * (m.coverage ?? 0);
+    const c = m.detail?.caveat;
+    if (caveat === null && typeof c === "string" && c.length > 0) caveat = c;
   }
-  return seen ? sum : null;
+  if (!seen) return null;
+  return { count, coverage: population > 0 ? Math.round((decidable / population) * 1000) / 1000 : null, caveat };
+}
+
+/** P8 across the card's actors: metered cents and how many of the runs were metered at all. */
+function costOf(card: ScoredCard): EvaluationMilestoneSummary["latest"] extends infer L ? (L extends { cost: infer C } ? C : never) : never {
+  let cents = 0;
+  let metered = 0;
+  let runs = 0;
+  let seen = false;
+  for (const a of card.actors ?? []) {
+    const d = a.metrics?.P8?.detail;
+    const total = numberAt(d, "totalCents");
+    if (total === null) continue;
+    seen = true;
+    cents += total;
+    metered += numberAt(d, "metered") ?? 0;
+    runs += numberAt(d, "runs") ?? 0;
+  }
+  return seen ? { cents, meteredRuns: metered, runs } : null;
 }
 
 export function versionSummary(row: StoredCardRow): EvaluationScorecardVersionSummary {
@@ -79,8 +106,8 @@ export function milestoneSummary(ref: EvaluationMilestoneRef, name: string, stat
       exceptions: { total: card.exceptionsTotal ?? exceptions.length, immediate: count("immediate"), material: count("material"), routine: count("routine") },
       markers: card.markers ?? [],
       missingSources: (card.missingSources ?? []).length,
-      interventions: sumDetail(card, "P1", "interventions"),
-      costCents: sumDetail(card, "P8", "totalCents"),
+      interventions: interventionsOf(card),
+      cost: costOf(card),
       trend: sorted.slice(-12).map((r) => ({ version: r.version, score: (r.card as ScoredCard).outcomeComposite?.score ?? null, storedAt: r.createdAt.toISOString() })),
     },
   };

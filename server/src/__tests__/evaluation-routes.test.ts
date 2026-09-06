@@ -325,4 +325,16 @@ describe("evaluation routes", () => {
     expect(found.body.event.eventType).toBe("evaluation.correction");
     expect((await request(agent).get("/api/companies/company-1/evaluation/events/abc")).status).toBe(404);
   });
+
+  it("the events list takes a milestone scope, a sequence cut and an order for the drill-down; kind without id is refused", async () => {
+    const agent = await createApp(agentKey);
+    ledgerList.mockClear();
+    const scoped = await request(agent).get("/api/companies/company-1/evaluation/events?kind=project&id=22222222-2222-4222-8222-222222222222&throughSeq=42&order=desc&type=issue.created");
+    expect(scoped.status).toBe(200);
+    expect(scoped.body.scope).toEqual({ kind: "project", id: "22222222-2222-4222-8222-222222222222", throughSeq: 42 });
+    expect(ledgerList).toHaveBeenCalledWith("company-1", expect.objectContaining({ projectId: "22222222-2222-4222-8222-222222222222", goalId: undefined, throughSeq: 42, order: "desc", types: ["issue.created"] }));
+    expect((await request(agent).get("/api/companies/company-1/evaluation/events?kind=project")).status).toBe(400);
+    const plain = await request(agent).get("/api/companies/company-1/evaluation/events");
+    expect(plain.body.scope).toBeNull();
+  });
 });
