@@ -58,6 +58,13 @@ export function EvaluationMilestone() {
   useEffect(() => {
     setBreadcrumbs([{ label: selectedCompany?.name ?? "Company", href: "/dashboard" }, { label: "Evaluation", href: "/evaluation" }, { label: name }]);
   }, [selectedCompany?.name, setBreadcrumbs, name]);
+  // results of one milestone's verify or snapshot never show on another
+  useEffect(() => {
+    setVerifyResult(null);
+    setReplayRequested(false);
+    snapshot.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref?.kind, ref?.id]);
 
   const versions = useQuery({
     queryKey: queryKeys.evaluation.versions(companyId, ref?.kind ?? "", ref?.id ?? ""),
@@ -83,7 +90,7 @@ export function EvaluationMilestone() {
     enabled: !!selectedCompanyId && !!ref && activeTab === "ledger" && !!card,
   });
   // administrator-only offers; the server gates the actions themselves, so a 403 here simply means "not an administrator"
-  const wantsAdminOffers = activeTab === "versions" || (!!latest.data && !latest.data.latest);
+  const wantsAdminOffers = activeTab === "versions" || (!!latest.data && !latest.data.latest) || (!!card && !scored);
   const access = useQuery({
     queryKey: queryKeys.access.companyMembers(companyId),
     queryFn: () => accessApi.listMembers(companyId),
@@ -164,8 +171,17 @@ export function EvaluationMilestone() {
         </div>
       ) : !scored ? (
         <div className="space-y-2" data-testid="unscored-card">
-          <p className="text-sm text-muted-foreground">This card (implementation {card.formulaVersion}) predates the scoring engine: it is a ledger digest with no metrics, composite or exceptions to show. Store a new version to get a scored card.</p>
+          <p className="text-sm text-muted-foreground">This card (implementation {card.formulaVersion}) predates the scoring engine: it is a ledger digest with no metrics, composite or exceptions to show. A new version scores it.</p>
           <p className="text-xs text-muted-foreground">{card.eventCount} events through sequence {card.throughSeq}.</p>
+          {isAdmin ? (
+            <>
+              <Button size="sm" onClick={() => snapshot.mutate()} disabled={snapshot.isPending}>{snapshot.isPending ? "Storing…" : "Store a new version and raise review items"}</Button>
+              <p className="text-xs text-muted-foreground">Storing a version also creates or updates the evaluator's review items for humans; it never touches reviewed work.</p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">An administrator can store a new version.</p>
+          )}
+          {snapshot.error ? <p className="text-sm text-destructive">{snapshot.error instanceof Error ? snapshot.error.message : "Snapshot failed."}</p> : null}
         </div>
       ) : activeTab === "scorecard" ? (
         <ScorecardTab card={card} onOpenEvent={drawer.open} />
@@ -211,7 +227,7 @@ export function EvaluationMilestone() {
               ))}
             </select>
             <span className="text-xs text-muted-foreground">
-              {ledger.data ? `${ledger.data.count} events tagged with this ${ref.kind} through sequence ${card.throughSeq}, newest first${ledger.data.count >= 500 ? " (first 500)" : ""}` : ""}
+              {ledger.data ? `${ledger.data.count} ${ledger.data.count === 1 ? "event" : "events"} tagged with this ${ref.kind} through sequence ${card.throughSeq}, newest first${ledger.data.count >= 500 ? " (first 500)" : ""}` : ""}
             </span>
           </div>
           <p className="text-xs text-muted-foreground">

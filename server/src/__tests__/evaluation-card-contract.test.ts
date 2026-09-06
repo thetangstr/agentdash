@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { A, at, ev, evidenced, I1, I2, roster, score, T } from "./helpers/evaluation-fixtures.js";
+import { at, ev, evidenced, I1, I2, roster, score, T } from "./helpers/evaluation-fixtures.js";
 
 // AgentDash: Company Evaluator — the card contract between the scoring engine
 // and the Milestone 4 surfaces. The UI renders `ui/src/pages/evaluation/
@@ -24,9 +24,8 @@ describe("card contract fixture", () => {
       ev({ type: "issue.comment_added", time: at(13), actor: ["user", "founder-1"], issueId: I2, payload: { commentId: "human-1", reopened: true } }),
     ];
     const card = JSON.parse(JSON.stringify(score(window)));
-    if (process.env.EVALUATION_CARD_FIXTURE_WRITE === "1" || !existsSync(FIXTURE)) {
-      writeFileSync(FIXTURE, `${JSON.stringify(card, null, 2)}\n`);
-    }
+    // only a deliberate regeneration writes; a missing fixture fails here rather than being silently recreated
+    if (process.env.EVALUATION_CARD_FIXTURE_WRITE === "1") writeFileSync(FIXTURE, `${JSON.stringify(card, null, 2)}\n`);
     const committed = JSON.parse(readFileSync(FIXTURE, "utf8"));
     expect(card).toEqual(committed);
     // the shape the surfaces rely on
@@ -37,6 +36,5 @@ describe("card contract fixture", () => {
       expect(typeof m.evidenceRefCount).toBe("number");
       expect(typeof m.confidenceLabel).toBe("string");
     }
-    void A;
   });
 });

@@ -30,11 +30,12 @@ function numberAt(detail: Record<string, unknown> | undefined, key: string): num
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** P1 across the card's actors: the raw count, the population-weighted coverage, and the card's own caveat. */
-function interventionsOf(card: ScoredCard): EvaluationMilestoneSummary["latest"] extends infer L ? (L extends { interventions: infer I } ? I : never) : never {
+type LatestSummary = NonNullable<EvaluationMilestoneSummary["latest"]>;
+
+/** P1 across the card's actors: the raw count, the population it was counted over, and the card's own caveat. */
+function interventionsOf(card: ScoredCard): LatestSummary["interventions"] {
   let count = 0;
   let population = 0;
-  let decidable = 0;
   let caveat: string | null = null;
   let seen = false;
   for (const a of card.actors ?? []) {
@@ -45,16 +46,15 @@ function interventionsOf(card: ScoredCard): EvaluationMilestoneSummary["latest"]
     seen = true;
     count += n;
     population += m.n ?? 0;
-    decidable += (m.n ?? 0) * (m.coverage ?? 0);
     const c = m.detail?.caveat;
     if (caveat === null && typeof c === "string" && c.length > 0) caveat = c;
   }
   if (!seen) return null;
-  return { count, coverage: population > 0 ? Math.round((decidable / population) * 1000) / 1000 : null, caveat };
+  return { count, population, caveat };
 }
 
 /** P8 across the card's actors: metered cents and how many of the runs were metered at all. */
-function costOf(card: ScoredCard): EvaluationMilestoneSummary["latest"] extends infer L ? (L extends { cost: infer C } ? C : never) : never {
+function costOf(card: ScoredCard): LatestSummary["cost"] {
   let cents = 0;
   let metered = 0;
   let runs = 0;

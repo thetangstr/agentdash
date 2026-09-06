@@ -142,7 +142,7 @@ const overview: EvaluationOverview = {
         exceptions: { total: 3, immediate: 1, material: 0, routine: 2 },
         markers: ["open milestone — denominators still moving"],
         missingSources: 1,
-        interventions: { count: 2, coverage: 0.5, caveat: "synthetic human identities: interventions are countable, not attributable" },
+        interventions: { count: 2, population: 4, caveat: "synthetic human identities: interventions are countable, not attributable" },
         cost: { cents: 1234, meteredRuns: 3, runs: 34 },
         trend: [{ version: 1, score: 60, storedAt: "2026-09-03T00:00:00.000Z" }, { version: 2, score: null, storedAt: "2026-09-04T00:00:00.000Z" }, { version: 3, score: 72.4, storedAt: "2026-09-05T12:00:00.000Z" }],
       },

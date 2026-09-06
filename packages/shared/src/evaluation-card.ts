@@ -202,11 +202,11 @@ export interface EvaluationMilestoneSummary {
     markers: string[];
     missingSources: number;
     /**
-     * P1's raw intervention count summed across actors, with the share of P1's population that was decidable
-     * and the card's own caveat (for example that synthetic identities make interventions countable, not
-     * attributable). Null when no actor row carries P1.
+     * P1's raw intervention count summed across actors, the population it was counted over (agent-owned items
+     * that reached review or done) and the card's own caveat (for example that synthetic identities make
+     * interventions countable, not attributable). Null when no actor row carries P1.
      */
-    interventions: { count: number; coverage: number | null; caveat: string | null } | null;
+    interventions: { count: number; population: number; caveat: string | null } | null;
     /** P8's metered cost summed across actors, with how many of the runs were metered. Null when no actor row carries P8. */
     cost: { cents: number; meteredRuns: number; runs: number } | null;
     /** Outcome score per stored version, oldest first, for the trend. */

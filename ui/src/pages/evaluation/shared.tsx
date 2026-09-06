@@ -51,8 +51,8 @@ export function fmtDate(iso: string | Date | null | undefined): string {
   const d = iso instanceof Date ? iso : new Date(iso);
   return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
 }
-/** Metrics whose value is a share in 0–1 (§5): rendered as a percentage. Everything else renders as the value with its unit. */
-const SHARE_METRICS = new Set<string>(["O1", "O2", "O5", "P1", "P2", "P3", "P4", "P9"]);
+/** Metrics whose value is a share in 0–1 (§5): rendered as a percentage. Indexes (O3, P9: events per delivered item, lower is better) and everything else render as the value with its unit. */
+const SHARE_METRICS = new Set<string>(["O1", "O2", "O5", "P1", "P2", "P3", "P4"]);
 export function fmtValue(m: MetricResult): string {
   if (m.value == null) return "—";
   if ((SHARE_METRICS.has(m.key) || m.unit.startsWith("share")) && m.value >= 0 && m.value <= 1) return fmtPct(m.value);

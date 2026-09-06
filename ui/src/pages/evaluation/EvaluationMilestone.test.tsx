@@ -102,7 +102,7 @@ const card = {
   actors: [
     { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 0.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
     { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
-    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
+    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }), P9: metric("P9", { name: "Duplicate and rework rate", unit: "duplicates and rework per delivered item", value: 0.4, lowerIsBetter: true }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
     { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
   ],
   exceptions: [
@@ -142,7 +142,7 @@ const overview: EvaluationOverview = {
         exceptions: { total: 3, immediate: 1, material: 0, routine: 2 },
         markers: ["open milestone — denominators still moving"],
         missingSources: 1,
-        interventions: { count: 2, coverage: 0.5, caveat: "synthetic human identities: interventions are countable, not attributable" },
+        interventions: { count: 2, population: 4, caveat: "synthetic human identities: interventions are countable, not attributable" },
         cost: { cents: 1234, meteredRuns: 3, runs: 34 },
         trend: [{ version: 1, score: 60, storedAt: "2026-09-03T00:00:00.000Z" }, { version: 2, score: null, storedAt: "2026-09-04T00:00:00.000Z" }, { version: 3, score: 72.4, storedAt: "2026-09-05T12:00:00.000Z" }],
       },
@@ -265,6 +265,13 @@ describe("EvaluationMilestone", () => {
     const p8 = container.querySelector('[data-testid="metric-P8"]') as HTMLButtonElement;
     await act(async () => { p8.click(); });
     expect(container.querySelector('[data-testid="detail-P8"]')?.textContent).toContain("median run cents");
+    // P9 is an index, never a percentage, and says lower is better
+    const showZ = [...container.querySelectorAll('[data-testid="actor-agent:z"] button')].find((b) => /Show \d+ metrics/.test(b.textContent ?? "")) as HTMLButtonElement;
+    await act(async () => { showZ.click(); });
+    const p9 = container.querySelector('[data-testid="metric-P9"]')?.textContent ?? "";
+    expect(p9).toContain("0.4 duplicates and rework per delivered item");
+    expect(p9).toContain("lower is better");
+    expect(p9).not.toContain("40%");
   });
 
   it("ledger: the events listed are the rows tagged with this milestone through the card's cut, newest first — never the whole company", async () => {
@@ -273,7 +280,7 @@ describe("EvaluationMilestone", () => {
     await flush();
     expect(eventsMock).toHaveBeenCalledWith("company-1", expect.objectContaining({ ref: { kind: "project", id: MILESTONE }, throughSeq: 42, order: "desc" }));
     const text = container.textContent ?? "";
-    expect(text).toContain("1 events tagged with this project through sequence 42, newest first");
+    expect(text).toContain("1 event tagged with this project through sequence 42, newest first");
     expect(text).toContain("company-level records");
     expect(text).not.toContain("40 events in this card's window");
   });
@@ -283,6 +290,7 @@ describe("EvaluationMilestone", () => {
     render(`/evaluation/project/${MILESTONE}/exceptions`, <EvaluationMilestone />);
     await flush();
     expect(container.querySelector('[data-testid="unscored-card"]')?.textContent).toContain("predates the scoring engine");
+    expect(container.textContent).toContain("Store a new version and raise review items"); // the way out is offered where the message is
     expect(container.textContent).not.toMatch(/\b(68|72|91)\b/);
   });
 

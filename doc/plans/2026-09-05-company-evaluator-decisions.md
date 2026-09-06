@@ -708,3 +708,17 @@ Recorded here rather than in the spec, which is at its size limit.
   the card shows them; there is no chart dependency (a small inline SVG draws
   the trend). A Playwright flow over a live server is the remaining acceptance
   step and is listed on the pull request.
+- **Milestone 4 review round 2 (independent reviewer): dispositions.** P9 is an
+  index (duplicates and rework per delivered item, lower is better), not a
+  share, and renders as a value with its unit like O3; the dashboard's
+  intervention count is shown over the population it was counted on (P1 has
+  no undecidable path, so its coverage is one by construction and says
+  nothing); a card that predates the scoring engine still offers an
+  administrator the new version it needs; the contract fixture is regenerated
+  only on an explicit flag, never recreated when missing. Recorded, on §7: a
+  display-only metric (P5–P8) keeps its value at the insufficient tier in the
+  stored card — the engine chose in Milestone 2 to keep the figure with the
+  words "insufficient evidence" beside it because the number is a fact
+  (metered cents, hours to recovery) rather than a score — and the drill-down
+  now renders exactly that; §7's "no value at Insufficient" applies to scored
+  metrics, whose value is null at that tier.

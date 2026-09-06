@@ -140,7 +140,7 @@ const overview: EvaluationOverview = {
         exceptions: { total: 3, immediate: 1, material: 0, routine: 2 },
         markers: ["open milestone — denominators still moving"],
         missingSources: 1,
-        interventions: { count: 2, coverage: 0.5, caveat: "synthetic human identities: interventions are countable, not attributable" },
+        interventions: { count: 2, population: 4, caveat: "synthetic human identities: interventions are countable, not attributable" },
         cost: { cents: 1234, meteredRuns: 3, runs: 34 },
         trend: [{ version: 1, score: 60, storedAt: "2026-09-03T00:00:00.000Z" }, { version: 2, score: null, storedAt: "2026-09-04T00:00:00.000Z" }, { version: 3, score: 72.4, storedAt: "2026-09-05T12:00:00.000Z" }],
       },
@@ -224,7 +224,7 @@ describe("EvaluationOverview", () => {
     expect(text).toContain("1 immediate · 0 material · 2 routine");
     expect(text).toContain("$12.34");
     expect(text).toContain("metered on 3 of 34 runs — the rest is unmetered, not free"); // a bare figure would misstate the milestone's cost
-    expect(text).toContain("on 50% of agent-owned items · synthetic human identities: interventions are countable, not attributable");
+    expect(text).toContain("across 4 agent-owned items that reached review or done · synthetic human identities: interventions are countable, not attributable");
     expect(text).toContain("withheld — O3 alone would supply 82% of the score");
     expect(text).toContain("not on this card"); // interventions and cost absent on the baseline card are said, not zeroed
     expect(text).toContain("Without a card yet");

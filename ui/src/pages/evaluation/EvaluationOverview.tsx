@@ -135,7 +135,7 @@ function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary
                 <>
                   {latest.interventions.count}
                   <span className="block text-xs text-muted-foreground">
-                    {latest.interventions.coverage != null ? `on ${fmtPct(latest.interventions.coverage)} of agent-owned items` : "coverage unknown"}
+                    across {latest.interventions.population} agent-owned {latest.interventions.population === 1 ? "item" : "items"} that reached review or done
                     {latest.interventions.caveat ? ` · ${latest.interventions.caveat}` : ""}
                   </span>
                 </>
