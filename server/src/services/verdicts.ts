@@ -1,5 +1,6 @@
 // AgentDash: goals-eval-hitl
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import type { Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
   goals,
@@ -20,11 +21,21 @@ import {
   type VerdictEntityType,
 } from "@paperclipai/shared";
 import { badRequest, conflict, notFound, unprocessable } from "../errors.js";
-import { logActivity } from "./activity-log.js";
+import { logActivity, logAuthzRefusal } from "./activity-log.js";
 import type { approvalService } from "./approvals.js";
 import type { issueApprovalService } from "./issue-approvals.js";
 
 export type VerdictRow = typeof verdicts.$inferSelect;
+
+/**
+ * AGE-91: stand-in request for service-level `create` callers that have no
+ * HTTP context. Its actor is `none`, which `logAuthzRefusal` treats as
+ * "unauthenticated" and skips — so internal refusals stay unlogged, exactly
+ * as the issue specifies for anonymous requests.
+ */
+function anonymousRequest(): Request {
+  return { method: "POST", url: "", originalUrl: "", actor: { type: "none" } } as unknown as Request;
+}
 
 /**
  * Runtime "loop closed" outcomes (`passed` | `failed`). Used by the coverage
@@ -152,8 +163,48 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
     return row;
   }
 
-  async function assertNeutralValidator(input: CreateVerdictInput): Promise<void> {
+  /**
+   * AGE-91: a refused self-review leaves a record. The guard still throws the
+   * exact same 409 — the log is written before the throw, best-effort, so a
+   * logging failure can never change the response.
+   */
+  async function assertNeutralValidator(
+    input: CreateVerdictInput,
+    req: Request,
+  ): Promise<void> {
     const NEUTRAL_VIOLATION_MSG = "reviewer must not be the assignee";
+
+    const refusal = (): void => {
+      try {
+        // M4: req may be the anonymous stand-in used by service-level callers
+        // (orchestrator, bridge). When the reviewer identity is known — and it
+        // always is when this guard fires — attribute the refusal to them.
+        const descriptor = req.actor.type === "none" ? actorForReviewer(input) : undefined;
+        void Promise.resolve(
+          logAuthzRefusal(db, {
+            req,
+            actor: descriptor
+              ? {
+                  ...descriptor,
+                  agentId: input.reviewerAgentId ?? null,
+                  // Service scope: the verdict's company is the company the
+                  // refused reviewer belongs to (no foreign target exists).
+                  companyId: input.companyId,
+                }
+              : undefined,
+            companyId: input.companyId,
+            entityType: input.entityType,
+            entityId: entityIdFor(input),
+            reasonCode: "NEUTRAL_VALIDATOR_VIOLATION",
+            method: "POST",
+            routePath: "/api/companies/:companyId/verdicts",
+          }),
+        ).catch(() => {});
+      } catch {
+        // Best-effort: a missing/stubbed logger or a failed insert must never
+        // change the thrown 409.
+      }
+    };
 
     if (input.entityType === "issue") {
       const issue = await loadIssue(input.companyId, input.issueId!);
@@ -162,6 +213,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         issue.assigneeAgentId &&
         input.reviewerAgentId === issue.assigneeAgentId
       ) {
+        refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       if (
@@ -169,6 +221,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         issue.assigneeUserId &&
         input.reviewerUserId === issue.assigneeUserId
       ) {
+        refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -181,6 +234,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         project.leadAgentId &&
         input.reviewerAgentId === project.leadAgentId
       ) {
+        refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -193,6 +247,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
         goal.ownerAgentId &&
         input.reviewerAgentId === goal.ownerAgentId
       ) {
+        refusal();
         throw conflict(NEUTRAL_VIOLATION_MSG, { code: "NEUTRAL_VALIDATOR_VIOLATION" });
       }
       return;
@@ -213,7 +268,18 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
     throw err;
   }
 
-  async function create(input: CreateVerdictInput): Promise<VerdictRow> {
+  /**
+   * AGE-91: optional per-call HTTP context. When the caller (the verdict
+   * routes) passes the current request, a refused self-review is recorded as
+   * an `authz.refused` activity row attributed to the authenticated actor.
+   * Service-level callers (orchestrators, bridges) omit it and behave exactly
+   * as before — no request, no refusal row, response unchanged either way.
+   */
+  async function create(
+    input: CreateVerdictInput,
+    httpContext?: { req: Request },
+  ): Promise<VerdictRow> {
+    const req: Request = httpContext?.req ?? anonymousRequest();
     const parsed = createVerdictInputSchema.safeParse(input);
     if (!parsed.success) {
       throw badRequest("Invalid verdict input", {
@@ -223,7 +289,7 @@ export function verdictsService(db: Db, deps?: VerdictsServiceDeps) {
     }
     const data = parsed.data;
 
-    await assertNeutralValidator(data);
+    await assertNeutralValidator(data, req);
 
     const actor = actorForReviewer(data);
 

@@ -70,7 +70,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { conflict, forbidden, HttpError, notFound, unauthorized } from "../errors.js";
-import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCanSetCompanyDirection, assertBoard, assertCompanyAccess, getActorInfo, reportAuthzRefusal } from "./authz.js";
 import {
   WorkspaceFileError,
   contentTypeForWorkspaceFile,
@@ -637,6 +637,19 @@ export function issueRoutes(
     if (issue.assigneeAgentId !== actorAgentId) {
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
         return true;
+      }
+      // AGE-91: an agent mutating another agent's issue is a P6-class authority
+      // refusal — record it like the authz guards do (fire-and-forget; the
+      // response below is untouched). The 409 on an in_progress issue is
+      // checkout contention between agents, a lock conflict rather than a
+      // denial of authority, and is deliberately not recorded as a refusal.
+      if (issue.status !== "in_progress") {
+        reportAuthzRefusal(req, {
+          companyId: issue.companyId,
+          entityType: "issue",
+          entityId: issue.id,
+          reasonCode: "ISSUE_MUTATION_OTHER_AGENT",
+        });
       }
       if (issue.status === "in_progress") {
         res.status(409).json({
