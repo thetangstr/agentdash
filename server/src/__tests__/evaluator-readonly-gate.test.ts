@@ -170,7 +170,12 @@ describeEmbeddedPostgres("evaluator read-only gate (embedded postgres)", () => {
     expect(readViaHeader.body.actor.readOnly).toBe(true);
     // a query string on an allowlisted route is still allowlisted; a trailing slash too
     expect((await asEvaluator(request(app).post(`/api/companies/${companyId}/evaluation/findings?x=1`).send({}))).status).toBe(200);
-    expect(reached).toEqual(["get-issues", "post-findings"]);
+    // HEAD and OPTIONS pass the gate as safe methods; nothing that mutates is reachable through them (Express answers
+    // OPTIONS itself and routes HEAD to GET) — pinned so a later `router.all` or OPTIONS handler would show up here
+    expect((await asEvaluator(request(app).options(`/api/companies/${companyId}/issues`))).status).toBeLessThan(400);
+    expect((await asEvaluator(request(app).head(`/api/companies/${companyId}/issues`))).status).toBe(200);
+    expect(reached.filter((r) => r.startsWith("post-") || r.startsWith("patch-") || r.startsWith("delete-"))).toEqual(["post-findings"]);
+    expect(reached).toEqual(["get-issues", "post-findings", "get-issues"]);
   });
 
   it("changes nothing for an ordinary agent key", async () => {
