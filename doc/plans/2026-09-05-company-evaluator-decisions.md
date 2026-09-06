@@ -744,3 +744,33 @@ Recorded here rather than in the spec, which is at its size limit.
   a stored card contains — a number, a string, a field — moves every version
   pin in the same commit, so `verify` reports "formula changed" rather than a
   false replay disagreement.
+
+## Decision D12 — the evaluator's accountable human (founder, 2026-09-06)
+
+**Decided: the evaluator agent's accountable human is the administrator who
+provisions it**, not the founder as §10.1 first wrote. Consequence: unrouted
+exceptions (no accountable owner on the item and no contract owner) go to that
+administrator's digest; the founder view still carries every immediate,
+material and founder-routed exception regardless of who is accountable. Rule
+recorded so the earlier "awaits founder confirmation" notes in this record are
+closed. Re-provisioning by a different administrator changes the accountable
+human on the agent row and is audited as `evaluation.principal_provisioned`.
+
+## Milestone 5 preparation (2026-09-06)
+
+- Humans record the shadow run as dispositions (administrators only, ledger
+  facts): `exception_reviewed` (a verdict, confirmed or false positive, on one
+  exception key of a milestone), `exception_missed` (an exception the
+  evaluator did not raise, with severity and description) and `shadow_note`
+  (rescue, missing telemetry, disagreement, cost, other). The latest verdict per
+  exception key counts.
+- `GET …/evaluation/shadow-report?refs=project:<id>,goal:<id>&costCapCents=`
+  (administrators) measures every graduation criterion from stored cards and
+  the ledger: material claims traced, authority mutations (zero by the gate,
+  with the refusal count shown), replay agreement over every stored version
+  (older-formula versions excluded and counted), precision and recall from the
+  reviews, the chatter ceiling from review items, evaluator cost against a cap
+  the founder supplies, and rescues per milestone. A criterion that cannot be
+  measured yet says so. The evaluator's runs are not tagged by milestone, so
+  cost is per company.
+- The runbook for the shadow run is `doc/plans/2026-09-06-company-evaluator-m5-shadow-run.md`.

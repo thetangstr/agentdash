@@ -7,6 +7,8 @@ import {
   evaluationMilestoneRefSchema,
   EVALUATOR_AGENT_ROLE,
   isUuidLike,
+  EVALUATION_SHADOW_NOTE_TOPICS,
+  type EvaluationMilestoneRef,
 } from "@paperclipai/shared";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
@@ -16,6 +18,7 @@ import { accessService } from "../services/access.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
 import { evaluationOverview } from "../services/evaluation/overview.js";
+import { evaluationShadowReport } from "../services/evaluation/shadow-report.js";
 import { agentService } from "../services/agents.js";
 import { projectService } from "../services/projects.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
@@ -37,6 +40,7 @@ export function evaluationRoutes(db: Db) {
   const router = Router();
   const ledger = evaluationLedger(db);
   const overview = evaluationOverview(db);
+  const shadowReport = evaluationShadowReport(db);
   const replay = evaluationReplay(db);
   const cards = evaluationScorecardService(db);
   const ingest = evaluationIngest(db);
@@ -568,24 +572,35 @@ export function evaluationRoutes(db: Db) {
           z.object({ kind: z.literal("correction_decided"), correctionEventId: z.string().uuid(), decision: z.enum(["accepted", "rejected"]), note: noteSchema.optional() }),
           z.object({ kind: z.literal("criterion_attest"), criterionId: z.string().min(1), issueId: z.string().uuid().optional(), result: z.enum(["satisfied", "unsatisfied"]), evidenceRefs: evidenceRefsSchema, milestoneRef: evaluationMilestoneRefSchema }),
           z.object({ kind: z.literal("contract_exception_accepted"), contractEventId: z.string().uuid(), note: noteSchema.optional() }),
+          // Milestone 5 shadow-run records (humans only): a verdict on a raised exception, an exception the evaluator missed, a note on the run
+          z.object({ kind: z.literal("exception_reviewed"), milestoneRef: evaluationMilestoneRefSchema, exceptionKey: z.string().min(1).max(300), verdict: z.enum(["confirmed", "false_positive"]), reason: noteSchema.optional(), evidenceRefs: z.array(z.string().uuid()).max(50).default([]) }),
+          z.object({ kind: z.literal("exception_missed"), milestoneRef: evaluationMilestoneRefSchema, title: z.string().min(1).max(200), severity: z.enum(["immediate", "material", "routine"]), description: noteSchema, evidenceRefs: z.array(z.string().uuid()).max(50).default([]) }),
+          z.object({ kind: z.literal("shadow_note"), milestoneRef: evaluationMilestoneRefSchema, topic: z.enum(EVALUATION_SHADOW_NOTE_TOPICS), text: noteSchema }),
         ])
         .safeParse(req.body);
       if (!body.success) throw badRequest("Invalid disposition", { issues: body.error.issues });
       const d = body.data;
-      const referenced = d.kind === "correction_decided" ? [d.correctionEventId] : d.kind === "contract_exception_accepted" ? [d.contractEventId] : d.evidenceRefs;
+      const referenced = d.kind === "correction_decided" ? [d.correctionEventId] : d.kind === "contract_exception_accepted" ? [d.contractEventId] : d.kind === "shadow_note" ? [] : d.evidenceRefs;
       const exists = await ledger.existing(companyId, referenced);
       const missing = referenced.filter((r) => !exists.has(r));
       if (missing.length > 0) throw notFound(`Referenced ledger events not found in this company: ${missing.join(", ")}`);
       const actor = getActorInfo(req);
       const now = new Date();
-      const sourceId = d.kind === "correction_decided" ? d.correctionEventId : d.kind === "contract_exception_accepted" ? d.contractEventId : `${d.criterionId}:${d.issueId ?? "milestone"}`;
+      const sourceId =
+        d.kind === "correction_decided" ? d.correctionEventId
+        : d.kind === "contract_exception_accepted" ? d.contractEventId
+        : d.kind === "criterion_attest" ? `${d.criterionId}:${d.issueId ?? "milestone"}`
+        : d.kind === "exception_reviewed" ? `review:${d.exceptionKey}`
+        : d.kind === "exception_missed" ? `missed:${d.milestoneRef.kind}:${d.milestoneRef.id}:${hashCanonical({ title: d.title, description: d.description }).slice(0, 16)}`
+        : `note:${d.topic}:${hashCanonical({ text: d.text, ref: d.milestoneRef }).slice(0, 16)}`;
+      const scoped = d.kind === "criterion_attest" || d.kind === "exception_reviewed" || d.kind === "exception_missed" || d.kind === "shadow_note" ? d.milestoneRef : null;
       const content: Record<string, unknown> = { ...d, decidedBy: actor.actorId };
       const result = await withCompanyLock(db, companyId, (tx) =>
         evaluationLedger(tx).append([
           {
             companyId,
-            projectId: d.kind === "criterion_attest" && d.milestoneRef.kind === "project" ? d.milestoneRef.id : null,
-            goalId: d.kind === "criterion_attest" && d.milestoneRef.kind === "goal" ? d.milestoneRef.id : null,
+            projectId: scoped?.kind === "project" ? scoped.id : null,
+            goalId: scoped?.kind === "goal" ? scoped.id : null,
             actorType: "user",
             actorId: actor.actorId,
             sourceTable: "evaluation_dispositions",
@@ -600,6 +615,28 @@ export function evaluationRoutes(db: Db) {
       );
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.disposition_recorded", entityType: "company", entityId: companyId, details: { kind: d.kind, sourceId, inserted: result.inserted } });
       res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "recorded", next: "the disposition is a ledger fact; the next card reflects it" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Milestone 5: the shadow-run report — every graduation criterion measured from the ledger. Administrators only (replays every stored version). */
+  router.get("/companies/:companyId/evaluation/shadow-report", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      await assertCompanyAdministrator(access, req, companyId);
+      const q = z.object({ refs: z.string().min(1), costCapCents: z.coerce.number().int().min(0).optional() }).safeParse(req.query);
+      if (!q.success) throw badRequest("refs (project:<id>,goal:<id>) is required", { issues: q.error.issues });
+      const refs: EvaluationMilestoneRef[] = [];
+      for (const part of q.data.refs.split(",")) {
+        const [kind, id] = part.split(":");
+        const parsed = evaluationMilestoneRefSchema.safeParse({ kind, id });
+        if (!parsed.success) throw badRequest(`Bad milestone reference: ${part}`);
+        refs.push(parsed.data);
+      }
+      if (refs.length === 0 || refs.length > 6) throw badRequest("Name between one and six milestones");
+      res.json(await shadowReport.get(companyId, refs, { costCapCents: q.data.costCapCents }));
     } catch (err) {
       next(err);
     }

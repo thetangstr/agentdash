@@ -240,3 +240,38 @@ export interface EvaluationScorecardVersionSummary {
   outcome: { score: number | null; confidence: EvaluationConfidenceTier | null };
   exceptionsTotal: number;
 }
+
+/** Milestone 5: what a human records about the shadow run, as dispositions (administrators only). */
+export const EVALUATION_SHADOW_NOTE_TOPICS = ["rescue", "missing_telemetry", "disagreement", "cost", "other"] as const;
+export type EvaluationShadowNoteTopic = (typeof EVALUATION_SHADOW_NOTE_TOPICS)[number];
+
+export type EvaluationGraduationStatus = "met" | "not_met" | "not_measurable";
+
+export interface EvaluationGraduationItem {
+  key: "material_claims_traced" | "no_authority_mutation" | "replay_agreement" | "precision_recall" | "chatter_ceiling" | "cost_reported" | "no_rescues";
+  criterion: string;
+  status: EvaluationGraduationStatus;
+  measured: string;
+  note: string;
+}
+
+export interface EvaluationShadowMilestoneReport {
+  ref: EvaluationMilestoneRef;
+  name: string;
+  status: string | null;
+  versions: number;
+  replay: { agree: number; disagree: number; formulaChanged: number; agreementRate: number | null };
+  exceptions: { total: number; immediate: number; material: number; routine: number; materialClaims: number; materialClaimsTraced: number };
+  reviews: { confirmed: number; falsePositive: number; missed: number; precision: number | null; recall: number | null; reviewedKeys: string[] };
+  messages: { digests: number; digestsPerHuman: Record<string, number>; immediateItems: number; immediateSeverities: Record<string, number> };
+  notes: Record<EvaluationShadowNoteTopic, string[]>;
+}
+
+export interface EvaluationShadowReport {
+  companyId: string;
+  generatedAt: string;
+  milestones: EvaluationShadowMilestoneReport[];
+  corrections: { pending: number; accepted: number; rejected: number; evaluatorNotes: number };
+  evaluator: { provisioned: boolean; agentId: string | null; runs: number; costCents: number; refusedRequests: number; findingsAuthored: number };
+  graduation: EvaluationGraduationItem[];
+}
