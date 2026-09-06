@@ -60,22 +60,6 @@ export type BridgeEgress = "loopback" | "direct";
  * to authenticate without a key in the environment. The worker warns about this at startup, but
  * a steward who never scrolls back just watches tasks fail.
  */
-const EGRESS_OPTIONS: ReadonlyArray<{ value: BridgeEgress; title: string; body: string }> = [
-  {
-    value: "loopback",
-    title: "Deny outbound (stronger)",
-    body:
-      "Localhost only. Reaching the Anthropic API needs an allowlisting proxy already running " +
-      "on this machine; without one, every task fails.",
-  },
-  {
-    value: "direct",
-    title: "Allow outbound 443 (weaker)",
-    body:
-      "The sandbox reaches api.anthropic.com directly and nothing inspects that traffic. Works " +
-      "with no extra setup.",
-  },
-];
 
 export function buildBridgeRunCommand(origin: string, egress: BridgeEgress): string {
   return [
@@ -97,7 +81,6 @@ export function ConnectYourMachine({
   const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [egress, setEgress] = useState<BridgeEgress | null>(null);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const defaultLabel =
@@ -136,7 +119,7 @@ export function ConnectYourMachine({
   const endpoints: BridgeEndpoint[] = endpointsQuery.data?.endpoints ?? [];
   const live = endpoints.filter((endpoint) => endpoint.enrolledAt !== null);
 
-  const command = egress ? buildBridgeRunCommand(origin, egress) : null;
+  const inboxInit = `${BRIDGE_CLI_BIN} bridge inbox-init ~/agentdash-inbox --server ${origin}`;
 
   const saveToken = token
     ? `mkdir -p ~/.agentdash && printf %s '${token}' > ~/.agentdash/bridge-token && chmod 600 ~/.agentdash/bridge-token`
@@ -243,77 +226,45 @@ export function ConnectYourMachine({
           </div>
 
           <div>
-            <h3 className="text-xs font-semibold">2. Choose what this machine may reach</h3>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Each task runs in a sandbox. This picks how much of the network that sandbox may
-              reach. There is no default — it is your decision, not ours.
-            </p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {EGRESS_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setEgress(option.value)}
-                  aria-pressed={egress === option.value}
-                  className={`rounded-md border px-3 py-2 text-left text-xs ${
-                    egress === option.value
-                      ? "border-foreground bg-muted"
-                      : "border-border hover:bg-muted/40"
-                  }`}
-                >
-                  <span className="font-medium">{option.title}</span>
-                  <span className="mt-1 block text-muted-foreground">{option.body}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-semibold">3. Leave this running</h3>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!command}
-                onClick={() => command && copy("command", command)}
-              >
+              <h3 className="text-xs font-semibold">2. Create your inbox</h3>
+              <Button variant="outline" size="sm" onClick={() => copy("command", inboxInit)}>
                 {copyLabel("command")}
               </Button>
             </div>
-            {command ? (
-              <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-                <code>{command}</code>
-              </pre>
-            ) : (
-              <p className="mt-1.5 rounded-md border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
-                Choose an option above and the command appears here.
-              </p>
-            )}
+            <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
+              <code>{inboxInit}</code>
+            </pre>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              <span className="font-medium">Use a real key.</span> Replace <code>sk-ant-…</code>{" "}
-              with an Anthropic API key. The sandbox cannot read a desktop <code>claude</code>{" "}
-              login, so without a key in the environment every task fails to authenticate.
+              This makes a small folder of its own. It is not your code project, so nothing here can
+              interrupt what you are working on.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-xs font-semibold">3. Open a session in that folder</h3>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Start Claude Code there. Anything waiting on you appears as you open it: decisions
+              first, then agents that stopped, then work that finished. Nothing waiting means you
+              see nothing — silence is the normal state.
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              It waits for questions and does nothing else. This machine can only be{" "}
-              <span className="font-medium">asked things</span> — nothing here lets an agent change
-              anything on it.
+              <span className="font-medium">It uses the Claude Code you already signed in to.</span>{" "}
+              There is no key to paste and nothing to leave running.
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              <span className="font-medium">Where the command comes from.</span> <code>{BRIDGE_CLI_BIN}</code>{" "}
-              is the AgentDash CLI that ships with this server (macOS only; it needs Node 20 or newer).
-              Your administrator installs it from the same release the server runs — there is no
-              separate download, and nothing named <code>agentdash</code> on npm is ours. To keep the
-              bridge open, run the command in a terminal you leave open, or wrap it in a login item or
-              a <code>launchd</code> agent so it starts when you sign in. When it stops, this page shows
-              the machine as last seen at the moment it went quiet.
+              <span className="font-medium">Where the command comes from.</span>{" "}
+              <code>{BRIDGE_CLI_BIN}</code> is the AgentDash CLI that ships with this server (macOS
+              only; it needs Node 20 or newer). Your administrator installs it from the same release
+              the server runs — there is no separate download, and nothing named{" "}
+              <code>agentdash</code> on npm is ours.
             </p>
           </div>
         </div>
       )}
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Not sure what this allows, or it will not start?{" "}
+        Not sure what this allows, or nothing is showing up?{" "}
         <Link className="underline" to="/my-agent/connect-machine">
           Read how connecting a machine works
         </Link>
