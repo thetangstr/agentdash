@@ -85,7 +85,7 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     expect(rows.filter((r) => r.title.startsWith("Evaluator — immediate:")).every((r) => r.priority === "high")).toBe(true);
     expect(rows.filter((r) => r.title.startsWith("Evaluator digest")).every((r) => r.priority === "medium")).toBe(true);
     // every item says how to dispute, and names the workspace the route needs
-    expect(rows.every((r) => r.description!.includes(`/api/companies/${companyId}/evaluation/corrections`) && r.description!.includes(`Workspace id: ${companyId}.`))).toBe(true);
+    expect(rows.every((r) => r.description!.includes(`/api/companies/${companyId}/evaluation/corrections`) && r.description!.includes(`Workspace id: \`${companyId}\`.`))).toBe(true);
     expect(rows.every((r) => !/routed human decides/.test(r.description!))).toBe(true);
     const [label] = await db.select().from(labels).where(and(eq(labels.companyId, companyId), eq(labels.name, EVALUATION_REVIEW_LABEL)));
     const labelled = await db.select().from(issueLabels).where(eq(issueLabels.labelId, label!.id));

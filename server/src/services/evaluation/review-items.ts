@@ -53,7 +53,7 @@ const sameKeys = (a: string[], b: string[]) => a.length === b.length && a.every(
 function disputeFooter(companyId: string): string {
   return [
     `**To dispute a finding:** \`POST /api/companies/${companyId}/evaluation/corrections\` with body \`{ "disputedEventId": "<an event id cited above>", "claimedFact": "<what you believe is true>", "evidenceRefs": ["<optional ledger event ids>"] }\`. You receive an \`eventId\`; keep it. A manager or the founder decides; an administrator records the decision with \`POST /api/companies/${companyId}/evaluation/dispositions\` (\`kind: "correction_decided"\`). Until the Milestone 4 screen exists this route is the only way to file, and your administrator can file on your behalf.`,
-    `Workspace id: ${companyId}.`,
+    `Workspace id: \`${companyId}\`.`,
   ].join("\n");
 }
 export const REVIEW_PROJECT_DESCRIPTION = "Review items raised by the Company Evaluator. Assigned only to humans; closing one is the human's act.";
