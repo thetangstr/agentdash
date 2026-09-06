@@ -106,6 +106,7 @@ describe("a real scored card renders on every tab", () => {
     const p2Value = p2Row.querySelector(".tabular-nums")?.textContent ?? "";
     expect(p2Value).toContain(`${companyRow.metrics.P2!.value} questions unanswered past 48 h`);
     expect(p2Value).not.toMatch(/%/); // a count, never a percentage — the coverage column is the only percent on the row
+    expect(p2Value).not.toMatch(/\b1 questions\b/); // a count of one is singular
     // and every metric on every row declares its kind
     for (const a of card.actors) for (const m of Object.values(a.metrics)) expect(m?.valueKind, `${a.actorKey} ${m?.key}`).toBeTruthy();
   });

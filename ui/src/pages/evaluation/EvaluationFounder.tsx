@@ -9,7 +9,7 @@ import { useCompany } from "@/context/CompanyContext";
 import { queryKeys } from "@/lib/queryKeys";
 import { Link } from "@/lib/router";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConfidenceBadge, EventDrawer, EvidenceRefs, fmtDate, MarkerList, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
+import { ConfidenceBadge, EventDrawer, EvidenceRefs, fmtDate, MarkerList, routeWords, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
 
 /**
  * AgentDash: Company Evaluator — founder view (mandate, Milestone 4 item 3):
@@ -146,11 +146,20 @@ export function EvaluationFounder() {
                 <p className="text-sm text-muted-foreground">No cards stored yet.</p>
               ) : (
                 <ul className="space-y-3">
-                  {withCards.map((m) => (
-                    <li key={`${m.ref.kind}:${m.ref.id}`} className="flex flex-wrap items-start justify-between gap-3 border-b border-border-soft pb-3 last:border-b-0 last:pb-0">
+                  {[...withCards]
+                    // a withheld score is the highest-attention case: it comes first
+                    .map((m, i) => ({ m, i }))
+                    .sort((a, b) => Number(b.m.latest!.outcome.score == null) - Number(a.m.latest!.outcome.score == null) || a.i - b.i)
+                    .map(({ m, i }) => (
+                    <li key={`${m.ref.kind}:${m.ref.id}`} className="flex flex-wrap items-start justify-between gap-3 border-b border-border-soft pb-3 last:border-b-0 last:pb-0" data-testid={`risk-${m.ref.id}`}>
                       <div>
                         <Link to={`/evaluation/${m.ref.kind}/${m.ref.id}`} className="font-medium hover:underline">{m.name}</Link>
                         <div className="mt-1"><MarkerList markers={m.latest!.markers} /></div>
+                        {(cards[i]?.data?.latest?.card?.contract?.exceptions ?? []).length > 0 ? (
+                          <p className="mt-1 text-xs" data-testid={`acceptance-${m.ref.id}`}>
+                            <span className="font-medium">Your acceptance is required:</span> {cards[i]!.data!.latest!.card.contract.exceptions.join("; ")}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="text-right">
                         <ScoreValue score={m.latest!.outcome.score} reason={m.latest!.outcome.reason} className="text-2xl" />
@@ -203,10 +212,11 @@ function FounderExceptions({ cards, refs, names, onOpen }: { cards: Array<Scored
         <li key={`${refKey}:${e.key}`} className="rounded border border-border-soft p-2">
           <div className="flex flex-wrap items-center gap-2">
             <SeverityBadge severity={e.severity} />
-            <span className="font-medium">{e.id} {e.title}</span>
+            <span className="font-medium">{e.title}</span>
             <span className="text-muted-foreground">· {milestone} · {e.subject.identifier ?? e.subject.kind}</span>
           </div>
           <p className="mt-1 text-muted-foreground">{e.note}</p>
+          <p className="mt-1 text-xs text-muted-foreground">routed to: {routeWords(e.routes, "founder")}</p>
           <div className="mt-1"><EvidenceRefs refs={e.evidenceRefs} onOpen={onOpen} /></div>
         </li>
       ))}

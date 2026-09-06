@@ -155,7 +155,7 @@ const overview: EvaluationOverview = {
         storedAt: "2026-09-05T11:00:00.000Z",
         formulaVersion: "m2-score/5",
         throughSeq: 40,
-        outcome: { score: null, confidence: null, coverage: 0.47, reason: "O3 alone would supply 82% of the score; no single metric may supply more than 75%" },
+        outcome: { score: null, confidence: null, coverage: 0.47, reason: "Downstream risk index alone would supply 82% of the score; no single metric may supply more than 75%" },
         operatingActors: 0,
         exceptions: { total: 0, immediate: 0, material: 0, routine: 0 },
         markers: [],
@@ -219,6 +219,8 @@ describe("EvaluationOverview", () => {
     const text = container.textContent ?? "";
     expect(overviewMock).toHaveBeenCalledWith("company-1");
     expect(text).toContain("Launch");
+    expect(text).toContain("The evaluator's read-only reviewer is set up.");
+    expect(text).not.toContain("implementation m2-score"); // engine versions live on the versions tab, not the dashboard
     expect(text).toContain("72"); // 72.4 rounded, never a decimal the reader has to interpret
     expect(text).toContain("adequate evidence");
     expect(text).toContain("coverage 68%");
@@ -226,7 +228,7 @@ describe("EvaluationOverview", () => {
     expect(text).toContain("$12.34");
     expect(text).toContain("metered on 3 of 34 runs — the rest is unmetered, not free"); // a bare figure would misstate the milestone's cost
     expect(text).toContain("across 4 agent-owned items that reached review or done · synthetic human identities: interventions are countable, not attributable");
-    expect(text).toContain("withheld — O3 alone would supply 82% of the score");
+    expect(text).toContain("withheld — Downstream risk index alone would supply 82% of the score");
     expect(text).toContain("not on this card"); // interventions and cost absent on the baseline card are said, not zeroed
     expect(text).toContain("Without a card yet");
     expect(text).toContain("Revenue");

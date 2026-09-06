@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { ActorRow, CompositeResult, EvaluationConfidenceTier, EvaluationExceptionSeverity, EvaluationMetricKey, MetricResult } from "@paperclipai/shared";
-import { EVALUATION_CONFIDENCE_LABELS, EVALUATION_METRIC_FORMULAS } from "@paperclipai/shared";
+import { EVALUATION_CONFIDENCE_LABELS, EVALUATION_METRIC_FORMULAS, EVALUATION_METRIC_NAMES } from "@paperclipai/shared";
 import { evaluationApi } from "@/api/evaluation";
 import { queryKeys } from "@/lib/queryKeys";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,36 @@ export function compositeDescription(c: CompositeResult | null | undefined, kind
   return `Coverage-weighted mean of the included ${kind} metrics, 0–100 (each metric's weight times its coverage, divided by the sum of those products); withheld when a guard fails. Composite ${c?.formulaVersion ?? "—"}.`;
 }
 
+/** A metric's name for prose; keys stay in the Key column where they are the lookup. */
+export function metricName(key: EvaluationMetricKey): string {
+  return EVALUATION_METRIC_NAMES[key] ?? key;
+}
+
+/** What a composite included and left out, in names. */
+export function includedLine(c: CompositeResult): string {
+  return c.included.map((i) => `${metricName(i.key)} (weight ${i.weight} × coverage ${fmtPct(i.coverage)} = ${Math.round(i.weight * i.coverage * 1000) / 1000}, value ${Math.round(i.scaled)})`).join("; ");
+}
+export function excludedLine(c: CompositeResult): string {
+  return c.excluded.map((x) => `${metricName(x.key)} — ${x.reason}`).join("; ");
+}
+
+/** Exception routes in words (spec §9.1), from the reader's seat. */
+export function routeWords(routes: readonly string[], seat: "founder" | "milestone"): string {
+  const word = (r: string) => {
+    switch (r) {
+      case "founder_view":
+        return seat === "founder" ? "your view" : "the founder's view";
+      case "accountable_owner":
+        return "the accountable owner";
+      case "manager":
+        return "the manager";
+      default:
+        return r.replace(/_/g, " ");
+    }
+  };
+  return [...new Set(routes.map(word))].join(", ");
+}
+
 export function SeverityBadge({ severity }: { severity: EvaluationExceptionSeverity }) {
   const variant = severity === "immediate" ? "destructive" : severity === "material" ? "default" : "secondary";
   return <Badge variant={variant}>{severity}</Badge>;
@@ -57,8 +87,12 @@ export function fmtValue(m: MetricResult): string {
   switch (m.valueKind) {
     case "share":
       return fmtPct(m.value);
-    case "count":
-      return `${Math.round(m.value)} ${m.unit}`.trim();
+    case "count": {
+      const n = Math.round(m.value);
+      // the unit is the plural noun phrase; one of them drops the first word's plural s
+      const unit = n === 1 ? m.unit.replace(/^(\w+?)s\b/, "$1") : m.unit;
+      return `${n} ${unit}`.trim();
+    }
     case "currency":
       return `$${(m.value / 100).toFixed(2)} ${m.unit.replace(/^cents\s+/, "")}`.trim();
     case "status":
@@ -131,7 +165,7 @@ export function EvidenceRefs({ refs, count, onOpen, max = 6 }: { refs: string[];
     <span className="inline-flex flex-wrap items-center gap-1">
       <span className="text-xs text-muted-foreground">{total} {total === 1 ? "event" : "events"}:</span>
       {shown.map((id) => (
-        <button key={id} type="button" onClick={() => onOpen(id)} className="rounded border border-border-soft px-1.5 py-0.5 font-mono text-[11px] hover:bg-surface-sunken" title={id}>
+        <button key={id} type="button" onClick={() => onOpen(id)} className="rounded border border-border-soft px-1.5 py-0.5 font-mono text-[11px] hover:bg-surface-sunken" title={id} aria-label={`open event ${id.slice(0, 8)}`}>
           {id.slice(0, 8)}
         </button>
       ))}

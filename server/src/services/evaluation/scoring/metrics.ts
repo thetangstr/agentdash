@@ -455,7 +455,7 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
       ctx,
       key: "O4",
       valueKind: "status",
-      unit: "goal status",
+      unit: goal.status ?? "goal status", // a status-kind value renders its unit, so the unit is the state itself
       n: 1,
       value: goal.status === "achieved" ? 1 : goal.status === "cancelled" ? 0 : null,
       t,
@@ -1098,7 +1098,7 @@ export function p8Cost(ctx: ScoringContext, scope: ActorScope, o1SatisfiedForAge
       ctx,
       key: "P8",
       valueKind: "currency",
-      unit: "cents per O1-satisfied item",
+      unit: "cents per accepted item",
       n,
       value: o1SatisfiedForAgent != null && o1SatisfiedForAgent > 0 && metered > 0 ? round(totalCents / o1SatisfiedForAgent, 1) : null,
       t,

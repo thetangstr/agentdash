@@ -16,7 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs } from "@/components/ui/tabs";
 import { PageTabBar } from "@/components/PageTabBar";
 import { StatusBadge } from "@/components/StatusBadge";
-import { actorDisplayName, compositeDescription, ConfidenceBadge, EventDrawer, EvidenceRefs, fmtDate, fmtPct, MarkerList, MetricsTable, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
+import { actorDisplayName, compositeDescription, ConfidenceBadge, EventDrawer, EvidenceRefs, excludedLine, fmtDate, fmtPct, includedLine, MarkerList, metricName, MetricsTable, routeWords, ScoreValue, SeverityBadge, useEventDrawer } from "./shared";
 import type { ScorecardVerifyResult } from "@/api/evaluation";
 
 /**
@@ -135,7 +135,7 @@ export function EvaluationMilestone() {
           <Gauge className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">{name}</h1>
           <Badge variant="ghost">{ref.kind}</Badge>
-          {latest.data?.latest ? <Badge variant="outline">card v{latest.data.latest.version} · {latest.data.latest.formulaVersion}</Badge> : null}
+          {latest.data?.latest ? <Badge variant="outline">card v{latest.data.latest.version}</Badge> : null}
         </div>
         {card ? <MarkerList markers={card.markers} /> : null}
       </div>
@@ -294,7 +294,7 @@ export function EvaluationMilestone() {
           ) : (
             <table className="w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                <tr><th className="py-1.5">Version</th><th>Stored</th><th>Outcome</th><th>Confidence</th><th>Exceptions</th><th>Implementation</th><th>Contract</th><th>Through</th><th>Hash</th></tr>
+                <tr><th className="py-1.5">Version</th><th>Stored</th><th>Outcome</th><th>Confidence</th><th>Exceptions</th><th>Card engine</th><th>Contract</th><th>Through</th><th>Hash</th></tr>
               </thead>
               <tbody>
                 {[...(versions.data?.versions ?? [])].reverse().map((v) => (
@@ -345,12 +345,10 @@ function ScorecardTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (i
               </ul>
             ) : null}
             {c?.included?.length ? (
-              <p className="text-xs text-muted-foreground">
-                Included: {c.included.map((i) => `${i.key} (weight ${i.weight} × coverage ${fmtPct(i.coverage)} = ${Math.round(i.weight * i.coverage * 1000) / 1000}, value ${Math.round(i.scaled)})`).join("; ")}.
-              </p>
+              <p className="text-xs text-muted-foreground">Included: {includedLine(c)}.</p>
             ) : null}
             {c?.excluded?.length ? (
-              <p className="text-xs text-muted-foreground">Excluded: {c.excluded.map((x) => `${x.key} — ${x.reason}`).join("; ")}.</p>
+              <p className="text-xs text-muted-foreground">Excluded: {excludedLine(c)}.</p>
             ) : null}
             {c?.flags?.length ? <p className="text-xs text-destructive">Flags: {c.flags.join("; ")}.</p> : null}
           </CardContent>
@@ -398,7 +396,7 @@ function ScorecardTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (i
         <MetricsTable metrics={metrics} onOpenEvent={onOpenEvent} />
       </div>
       {card.excludedMetrics.length > 0 ? (
-        <p className="text-xs text-muted-foreground">Not in any composite: {card.excludedMetrics.map((x) => `${x.key} (${x.scope}) — ${x.reason}`).join("; ")}.</p>
+        <p className="text-xs text-muted-foreground">Not in any composite: {card.excludedMetrics.map((x) => `${metricName(x.key)} (${x.scope}) — ${x.reason}`).join("; ")}.</p>
       ) : null}
     </div>
   );
@@ -448,7 +446,7 @@ function ActorCard({ row, onOpenEvent }: { row: ActorRow; onOpenEvent: (id: stri
         </CardTitle>
         <CardDescription>
           {c ? compositeDescription(c, "operating") : "No operating composite: fewer than three metrics have evidence for this row."}
-          {c?.included?.length ? ` Included: ${c.included.map((i) => `${i.key} (weight ${i.weight} × coverage ${fmtPct(i.coverage)}, value ${Math.round(i.scaled)})`).join("; ")}.` : ""}
+          {c?.included?.length ? ` Included: ${includedLine(c)}.` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -456,7 +454,7 @@ function ActorCard({ row, onOpenEvent }: { row: ActorRow; onOpenEvent: (id: stri
         {open ? (
           <div className="mt-3 space-y-2">
             {c?.guard?.reasons?.length ? <p className="text-xs text-muted-foreground">Score withheld: {c.guard.reasons.join("; ")}.</p> : null}
-            {c?.excluded?.length ? <p className="text-xs text-muted-foreground">Excluded: {c.excluded.map((x) => `${x.key} — ${x.reason}`).join("; ")}.</p> : null}
+            {c?.excluded?.length ? <p className="text-xs text-muted-foreground">Excluded: {excludedLine(c)}.</p> : null}
             <MetricsTable metrics={metrics} onOpenEvent={onOpenEvent} />
           </div>
         ) : null}
@@ -487,7 +485,7 @@ function ExceptionsTab({ card, onOpenEvent }: { card: ScoredCard; onOpenEvent: (
                   </div>
                   <p className="mt-1">{e.note}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                    <span>routes: {e.routes.join(", ")}</span>
+                    <span>routed to: {routeWords(e.routes, "milestone")}</span>
                     {e.markers.length > 0 ? <span>{e.markers.join("; ")}</span> : null}
                   </div>
                   <div className="mt-1"><EvidenceRefs refs={e.evidenceRefs} onOpen={onOpenEvent} /></div>

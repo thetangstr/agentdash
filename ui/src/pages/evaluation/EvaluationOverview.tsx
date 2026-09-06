@@ -50,7 +50,7 @@ export function EvaluationOverviewPage() {
         </p>
         {data ? (
           <p className="text-xs text-muted-foreground">
-            {data.principal.provisioned ? "Evaluator principal provisioned." : "No evaluator principal provisioned yet; cards come from administrators."} Ledger at sequence {data.ledger.maxSeq}.{" "}
+            {data.principal.provisioned ? "The evaluator's read-only reviewer is set up." : "No evaluator reviewer set up yet; cards come from administrators."} Ledger at sequence {data.ledger.maxSeq}.{" "}
             <Link to="/evaluation/founder" className="underline underline-offset-2">Founder view</Link>
           </p>
         ) : null}
@@ -101,7 +101,7 @@ function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary
           <Link to={`/evaluation/${m.ref.kind}/${m.ref.id}`} className="hover:underline">{m.name}</Link>
           <Badge variant="ghost">{m.ref.kind}{m.status ? ` · ${m.status.replace(/_/g, " ")}` : ""}</Badge>
         </CardTitle>
-        <CardDescription>Card v{latest.version} stored {fmtDate(latest.storedAt)} · implementation {latest.formulaVersion}</CardDescription>
+        <CardDescription>Card v{latest.version} stored {fmtDate(latest.storedAt)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-end justify-between gap-4">

@@ -96,12 +96,12 @@ const card = {
   throughEventId: null,
   asOf: "2026-09-05T12:00:00.000Z",
   markers: ["open milestone — denominators still moving"],
-  contract: { source: "derived", contractVersion: "derived/1", declaredAt: null, declaredBy: null, accountableUserId: "founder-1", leadAgentId: null, requiredEvidence: ["dod_present", "neutral_verdict"], criteriaCount: 0, measurableCriteria: 0, exceptions: [], founderLocks: [], excludedReviewers: [], targetDate: null, eventId: null, invalidVersions: 0 },
+  contract: { source: "derived", contractVersion: "derived/1", declaredAt: null, declaredBy: null, accountableUserId: "founder-1", leadAgentId: null, requiredEvidence: ["dod_present", "neutral_verdict"], criteriaCount: 0, measurableCriteria: 0, exceptions: ["contract derived by the evaluator from roster facts; no acceptance criteria could be derived — founder acceptance required"], founderLocks: [], excludedReviewers: [], targetDate: null, eventId: null, invalidVersions: 0 },
   membership: { items: 4, done: 3, cancelled: 0, open: 1, excludedEvaluatorItems: 0, movedIn: 0, movedOut: 0 },
   outcome: { O1: metric("O1", { name: "Acceptance satisfied" }), O5: metric("O5", { name: "Evidence hygiene", value: 0.6, coverage: 0.6, confidence: "medium" }) },
   outcomeComposite: composite(68.1),
   actors: [
-    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 45.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
+    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per accepted item", value: 45.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
     { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
     { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
     { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
@@ -157,7 +157,7 @@ const overview: EvaluationOverview = {
         storedAt: "2026-09-05T11:00:00.000Z",
         formulaVersion: "m2-score/5",
         throughSeq: 40,
-        outcome: { score: null, confidence: null, coverage: 0.47, reason: "O3 alone would supply 82% of the score; no single metric may supply more than 75%" },
+        outcome: { score: null, confidence: null, coverage: 0.47, reason: "Downstream risk index alone would supply 82% of the score; no single metric may supply more than 75%" },
         operatingActors: 0,
         exceptions: { total: 0, immediate: 0, material: 0, routine: 0 },
         markers: [],
@@ -243,10 +243,16 @@ describe("EvaluationFounder", () => {
     expect(text).toContain("Material risk");
     expect(text).toContain("Launch");
     expect(text).toContain("72"); // the overview's latest score for Launch
-    expect(text).toContain("withheld — O3 alone would supply 82%"); // Baseline's withheld score, in words
+    expect(text).toContain("withheld — Downstream risk index alone would supply 82%"); // Baseline's withheld score, in words
     expect(container.querySelector('[data-testid="founder-exceptions-failed"]')?.textContent).toContain("1 of 2 cards could not be loaded");
-    expect(text).toContain("E4 self-review"); // immediate exception from the card that did load
+    expect(text).toContain("self-review"); // immediate exception from the card that did load
+    expect(text).not.toContain("E4 self-review"); // the catalogue id belongs on the drill-down, severity carries the urgency here
+    expect(text).toContain("routed to: your view, the manager");
+    // a withheld score is the highest-attention case and comes first under Material risk
+    const risks = [...container.querySelectorAll('[data-testid^="risk-"]')].map((el) => el.getAttribute("data-testid"));
+    expect(risks[0]).toBe(`risk-${OTHER}`);
     expect(text).not.toContain("None on the latest cards");
+    expect(container.querySelector(`[data-testid="acceptance-${MILESTONE}"]`)?.textContent).toContain("Your acceptance is required: contract derived by the evaluator");
     // nothing operating: no agent rows, no ranking
     expect(text).not.toContain("Builder");
   });

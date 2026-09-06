@@ -578,7 +578,7 @@ describe("round 5 — verification findings", () => {
     expect(o3.notes.some((n) => n.includes("observable for 0% of delivered items"))).toBe(true);
     expect(card.outcomeComposite.score).toBeNull();
     expect(card.outcomeComposite.guard.satisfied).toBe(false);
-    expect(card.outcomeComposite.guard.reason).toMatch(/^O3 alone would supply \d+% of the score; no single metric may supply more than 75%$/);
+    expect(card.outcomeComposite.guard.reason).toMatch(/^Downstream risk index alone would supply \d+% of the score; no single metric may supply more than 75%$/);
     expect(card.outcomeComposite.guard.reasons.some((r) => r.startsWith("the included metrics rest on"))).toBe(true); // the floor fails here too, and both are reported
     expect(card.outcomeComposite.guard.maxConcentration).toBe(EVALUATION_COMPOSITE_MAX_CONCENTRATION);
     // with delivery evidence on every item, O3 observes all three terms again
@@ -607,7 +607,7 @@ describe("round 5 — verification findings", () => {
     const lopsided = composite("outcome", { O3: m("O3", 1, 0), O5: m("O5", 0.4, 0.5) }, []);
     expect(lopsided.coverage).toBeGreaterThanOrEqual(EVALUATION_COMPOSITE_COVERAGE_FLOOR); // the floor alone would let it through
     expect(lopsided.guard.satisfied).toBe(false);
-    expect(lopsided.guard.reasons).toEqual([expect.stringMatching(/^O3 alone would supply 77%/)]);
+    expect(lopsided.guard.reasons).toEqual([expect.stringMatching(/^Downstream risk index alone would supply 77%/)]);
     expect(lopsided.score).toBeNull();
   });
 

@@ -1,4 +1,5 @@
 import {
+  EVALUATION_METRIC_NAMES,
   EVALUATION_COMPOSITE_COVERAGE_FLOOR,
   EVALUATION_COMPOSITE_MAX_CONCENTRATION,
   EVALUATION_COMPOSITE_MIN_INCLUDED,
@@ -68,7 +69,7 @@ export function composite(
   const reasons: string[] = [];
   if (included.length < minIncluded) reasons.push(`fewer than ${minIncluded} metrics have evidence`);
   else {
-    if (concentration > COMPOSITE_MAX_CONCENTRATION && dominant) reasons.push(`${dominant.key} alone would supply ${Math.round(concentration * 100)}% of the score; no single metric may supply more than ${Math.round(COMPOSITE_MAX_CONCENTRATION * 100)}%`);
+    if (concentration > COMPOSITE_MAX_CONCENTRATION && dominant) reasons.push(`${EVALUATION_METRIC_NAMES[dominant.key]} alone would supply ${Math.round(concentration * 100)}% of the score; no single metric may supply more than ${Math.round(COMPOSITE_MAX_CONCENTRATION * 100)}%`);
     if (compositeCoverage === null || compositeCoverage < COMPOSITE_COVERAGE_FLOOR) reasons.push(`the included metrics rest on ${compositeCoverage === null ? "no" : `${Math.round(compositeCoverage * 100)}% of the`} decidable records; at least ${Math.round(COMPOSITE_COVERAGE_FLOOR * 100)}% is needed`);
   }
   const guardOk = reasons.length === 0;
