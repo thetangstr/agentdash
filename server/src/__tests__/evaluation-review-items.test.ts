@@ -81,16 +81,22 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     const [project] = await db.select().from(projects).where(and(eq(projects.companyId, companyId), eq(projects.name, EVALUATION_REVIEW_PROJECT_NAME)));
     expect(project).toBeDefined();
     expect(rows.every((r) => r.projectId === project!.id && r.status === "todo" && r.assigneeAgentId === null && r.assigneeUserId !== null)).toBe(true);
+    // urgency lives in the title and the priority: immediate items are high, digests medium
+    expect(rows.filter((r) => r.title.startsWith("Evaluator — immediate:")).every((r) => r.priority === "high")).toBe(true);
+    expect(rows.filter((r) => r.title.startsWith("Evaluator digest")).every((r) => r.priority === "medium")).toBe(true);
+    // every item says how to dispute, and names the workspace the route needs
+    expect(rows.every((r) => r.description!.includes(`/api/companies/${companyId}/evaluation/corrections`) && r.description!.includes(`Workspace id: ${companyId}.`))).toBe(true);
+    expect(rows.every((r) => !/routed human decides/.test(r.description!))).toBe(true);
     const [label] = await db.select().from(labels).where(and(eq(labels.companyId, companyId), eq(labels.name, EVALUATION_REVIEW_LABEL)));
     const labelled = await db.select().from(issueLabels).where(eq(issueLabels.labelId, label!.id));
     expect(labelled.length).toBe(4);
     const titles = rows.map((r) => r.title).sort();
     expect(titles.filter((t) => t.startsWith("Evaluator digest")).length).toBe(2);
-    expect(titles.some((t) => t.startsWith("Evaluator: self-review"))).toBe(true);
-    expect(rows.find((r) => r.title.startsWith("Evaluator: self-review"))!.assigneeUserId).toBe(FOUNDER); // falls back to the contract's accountable human
+    expect(titles.some((t) => t.startsWith("Evaluator — immediate: E4 self-review"))).toBe(true);
+    expect(rows.find((r) => r.title.startsWith("Evaluator — immediate: E4 self-review"))!.assigneeUserId).toBe(FOUNDER); // falls back to the contract's accountable human
     expect(rows.find((r) => r.description?.includes("E6"))!.assigneeUserId).toBe(STEWARD);
     // founder-facing text: paragraphs are separated, no section numbers, no formula key
-    const immediate = rows.find((r) => r.title.startsWith("Evaluator: self-review"))!;
+    const immediate = rows.find((r) => r.title.startsWith("Evaluator — immediate: E4 self-review"))!;
     expect(immediate.description).toContain("\n\nnote\n\nSubject:");
     expect(immediate.description).not.toMatch(/§|m2-score/);
     expect(rows.find((r) => r.title.startsWith("Evaluator digest"))!.description).not.toMatch(/§|m2-score/);
@@ -112,12 +118,21 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     expect(digest.description).toContain("E10 missing DoD at start — 1");
     expect(digest.description).toContain("card v2");
     expect(digest.status).toBe("todo");
+    // the in-place update says what changed, and marks the new entries
+    expect(digest.description).toContain("**Card v2 — 2 findings (was v1, 1).** New entries are marked ▸new.");
+    expect(digest.description).toContain("Changed in v2: +1 E10 missing DoD at start.");
+    expect(digest.description).toContain("- ▸new EVL-9: note");
+    expect(digest.description).toContain("- EVL-1: note"); // the earlier finding is not marked
+    // the same card again reproduces the same body: unchanged, not a fresh delta
+    const again = await svc.sync(companyId, ref(), card([exc({ id: "E5", key: "E5:issue:a", title: "stale work" }), exc({ id: "E10", key: "E10:issue:z", title: "missing DoD at start", subject: { kind: "issue", id: "z", identifier: "EVL-9" } })]), 2, null);
+    expect(again.updated).toEqual([]);
+    expect(again.unchanged).toContain(digest.id);
   });
 
   it("a closed item stays closed: the same key is neither recreated nor reopened, and a key with an underscore matches only itself", async () => {
     const svc = evaluationReviewItems(db);
     const rows = await db.select().from(issues).where(eq(issues.companyId, companyId));
-    const immediate = rows.find((r) => r.title.startsWith("Evaluator: self-review"))!;
+    const immediate = rows.find((r) => r.title.startsWith("Evaluator — immediate: E4 self-review"))!;
     await db.update(issues).set({ status: "done" }).where(eq(issues.id, immediate.id));
     const again = await svc.sync(companyId, ref(), card([exc({ id: "E4", key: "E4:issue:c", title: "self-review", severity: "immediate" })]), 5, null);
     expect(again.created).toEqual([]);
@@ -149,8 +164,16 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     const routed = await svc.sync(companyId, ref(), noHuman, 3, FOUNDER);
     // an agent subject with no identifier is named, never shown as a raw id
     const digest = (await db.select().from(issues).where(eq(issues.assigneeUserId, FOUNDER))).find((r) => r.title.startsWith("Evaluator digest"))!;
-    expect(digest.description).toContain("- an agent: note");
+    expect(digest.description).toContain("an agent: note");
     expect(digest.description).not.toContain("- q:");
+    // a card without a milestone name takes the project's own name, never the raw id
+    const unnamed = { ...card([exc({ id: "E4", key: "E4:issue:n", title: "self-review", severity: "immediate", subject: { kind: "issue", id: "n", identifier: "EVL-31" } })]), milestoneName: undefined } as unknown as ScoredCard;
+    const named = await svc.sync(companyId, ref(), unnamed, 4, null);
+    expect(named.created.length).toBe(1);
+    const item = (await db.select().from(issues).where(eq(issues.id, named.created[0]!)))[0]!;
+    expect(item.title).toBe("Evaluator — immediate: E4 self-review — EVL-31");
+    expect(item.description).toContain("on **Launch**");
+    expect(item.description).not.toContain(milestoneId);
     // the founder's digest for this milestone already exists from the first case: it is updated in place, never duplicated
     expect(routed.unrouted).toEqual([]);
     expect(routed.created).toEqual([]);

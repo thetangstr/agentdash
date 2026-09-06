@@ -402,7 +402,7 @@ export function evaluationRoutes(db: Db) {
       );
       const actor = getActorInfo(req);
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.finding_noted", entityType: "company", entityId: companyId, details: { exceptionKey: body.data.exceptionKey, inserted: result.inserted, citations: body.data.evidenceRefs.length } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null });
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "noted", next: "the note is attached to the exception on the card; a human reads it there — nothing is decided by a note" });
     } catch (err) {
       next(err);
     }
@@ -444,7 +444,7 @@ export function evaluationRoutes(db: Db) {
         ]),
       );
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.correction_filed", entityType: "company", entityId: companyId, details: { disputedEventId: body.data.disputedEventId, inserted: result.inserted } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null });
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "pending_decision", next: `a manager or the founder decides; an administrator records the decision with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided, correctionEventId = this eventId)` });
     } catch (err) {
       next(err);
     }
@@ -484,7 +484,7 @@ export function evaluationRoutes(db: Db) {
       );
       const actor = getActorInfo(req);
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.correction_noted", entityType: "company", entityId: companyId, details: { correctionEventId, inserted: result.inserted } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null });
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "noted", next: `the correction stays pending; a manager or the founder decides and an administrator records it with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided)` });
     } catch (err) {
       next(err);
     }
@@ -536,7 +536,7 @@ export function evaluationRoutes(db: Db) {
         ]),
       );
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.disposition_recorded", entityType: "company", entityId: companyId, details: { kind: d.kind, sourceId, inserted: result.inserted } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null });
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "recorded", next: "the disposition is a ledger fact; the next card reflects it" });
     } catch (err) {
       next(err);
     }

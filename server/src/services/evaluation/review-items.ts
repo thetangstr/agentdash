@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issues, labels, projects } from "@paperclipai/db";
+import { goals, issues, labels, projects } from "@paperclipai/db";
 import { EVALUATION_REVIEW_LABEL, EVALUATION_REVIEW_PROJECT_NAME, type EvaluationMilestoneRef } from "@paperclipai/shared";
 import { logger } from "../../middleware/logger.js";
 import { issueService } from "../issues.js";
@@ -25,6 +25,36 @@ import type { ExceptionRecord, ScoredCard } from "./scoring/types.js";
 
 const MARKER = (key: string) => `<!-- evaluator-key: ${key} -->`;
 const CLOSED_STATUSES = new Set(["done", "cancelled"]);
+
+/** What a digest knew when it was last written, so the next write can say what changed (and rewrite nothing when nothing did). */
+interface DigestState {
+  v: number;
+  total: number;
+  prevV: number | null;
+  prevTotal: number | null;
+  keys: string[];
+  added: string[];
+}
+const STATE = (st: DigestState) => `<!-- evaluator-state: ${JSON.stringify(st)} -->`;
+function parseState(description: string | null | undefined): DigestState | null {
+  const m = /<!-- evaluator-state: (\{.*?\}) -->/.exec(description ?? "");
+  if (!m) return null;
+  try {
+    const st = JSON.parse(m[1]!) as DigestState;
+    return Array.isArray(st.keys) && typeof st.v === "number" ? st : null;
+  } catch {
+    return null;
+  }
+}
+const sameKeys = (a: string[], b: string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
+
+/** How a human disputes a finding from the board alone (spec §9.4 asks the shadow cards to say so until the Milestone 4 screen exists). */
+function disputeFooter(companyId: string): string {
+  return [
+    `**To dispute a finding:** \`POST /api/companies/${companyId}/evaluation/corrections\` with body \`{ "disputedEventId": "<an event id cited above>", "claimedFact": "<what you believe is true>", "evidenceRefs": ["<optional ledger event ids>"] }\`. You receive an \`eventId\`; keep it. A manager or the founder decides; an administrator records the decision with \`POST /api/companies/${companyId}/evaluation/dispositions\` (\`kind: "correction_decided"\`). Until the Milestone 4 screen exists this route is the only way to file, and your administrator can file on your behalf.`,
+    `Workspace id: ${companyId}.`,
+  ].join("\n");
+}
 export const REVIEW_PROJECT_DESCRIPTION = "Review items raised by the Company Evaluator. Assigned only to humans; closing one is the human's act.";
 
 /** LIKE metacharacters in a key (qualifiers carry `_`) must match literally. */
@@ -80,6 +110,16 @@ export function evaluationReviewItems(db: Db) {
     });
   }
 
+  /** The milestone's display name from its own record — a title is never a raw id. */
+  async function milestoneDisplayName(companyId: string, ref: EvaluationMilestoneRef): Promise<string> {
+    if (ref.kind === "project") {
+      const row = await db.select({ name: projects.name }).from(projects).where(and(eq(projects.companyId, companyId), eq(projects.id, ref.id))).then((rows) => rows[0] ?? null);
+      return row?.name ?? "this project";
+    }
+    const row = await db.select({ title: goals.title }).from(goals).where(and(eq(goals.companyId, companyId), eq(goals.id, ref.id))).then((rows) => rows[0] ?? null);
+    return row?.title ?? "this goal";
+  }
+
   /** The item carrying this key in the review project, whatever its status (a closed one must be found so it is never recreated). */
   async function itemByKey(companyId: string, projectId: string, key: string) {
     const pattern = `%${likeEscape(MARKER(key))}%`;
@@ -102,7 +142,7 @@ export function evaluationReviewItems(db: Db) {
       if (card.exceptions.length === 0) return { projectId: null, labelId: null, created: [], updated: [], unchanged: [], closed: [], unrouted: [], unassignable: [] };
       const { projectId, labelId } = await ensureProjectAndLabel(companyId);
       const result: ReviewItemSyncResult = { projectId, labelId, created: [], updated: [], unchanged: [], closed: [], unrouted: [], unassignable: [] };
-      const milestoneName = card.milestoneName ?? `${ref.kind} ${ref.id}`;
+      const milestoneName = card.milestoneName ?? (await milestoneDisplayName(companyId, ref));
       const humanFor = (e: ExceptionRecord) => e.routing.accountableUserId ?? card.contract.accountableUserId ?? fallbackUserId;
 
       const digests = new Map<string, ExceptionRecord[]>();
@@ -118,15 +158,15 @@ export function evaluationReviewItems(db: Db) {
         else digests.set(human, [...(digests.get(human) ?? []), e]);
       }
 
-      const upsert = async (key: string, title: string, description: string, assigneeUserId: string) => {
-        const body = `${description}\n\n${MARKER(key)}`;
+      const upsert = async (key: string, title: string, priority: "high" | "medium", assigneeUserId: string, render: (existing: { description: string | null } | null) => string) => {
         const existing = await itemByKey(companyId, projectId, key);
-        if (existing) {
+        if (existing && CLOSED_STATUSES.has(existing.status)) {
           // the human closed it: that decision stands — no recreation, no reopening, no message
-          if (CLOSED_STATUSES.has(existing.status)) {
-            result.closed.push(existing.id);
-            return;
-          }
+          result.closed.push(existing.id);
+          return;
+        }
+        const body = `${render(existing)}\n\n${MARKER(key)}`;
+        if (existing) {
           if ((existing.description ?? "") === body) {
             result.unchanged.push(existing.id);
             return;
@@ -141,7 +181,7 @@ export function evaluationReviewItems(db: Db) {
             title,
             description: body,
             status: "todo",
-            priority: "medium",
+            priority,
             projectId,
             assigneeUserId,
             assigneeAgentId: null,
@@ -160,11 +200,20 @@ export function evaluationReviewItems(db: Db) {
 
       for (const [human, list] of [...digests.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
         const key = `digest:${ref.kind}:${ref.id}:${human}`;
-        await upsert(key, `Evaluator digest — ${milestoneName}`, renderDigest(milestoneName, list, card, cardVersion), human);
+        await upsert(key, `Evaluator digest — ${milestoneName}`, "medium", human, (existing) => {
+          const prev = parseState(existing?.description);
+          const keys = list.map((e) => e.key).sort();
+          // the same card and the same findings reproduce the same body byte for byte; anything else says what changed
+          const state: DigestState =
+            prev && prev.v === cardVersion && sameKeys(prev.keys, keys)
+              ? prev
+              : { v: cardVersion, total: keys.length, prevV: prev?.v ?? null, prevTotal: prev?.total ?? null, keys, added: prev ? keys.filter((k) => !prev.keys.includes(k)) : [] };
+          return `${renderDigest(milestoneName, list, card, state, companyId)}\n${STATE(state)}`;
+        });
       }
       for (const e of immediates.sort((a, b) => (a.key < b.key ? -1 : 1))) {
         const human = humanFor(e)!;
-        await upsert(`immediate:${e.key}`, `Evaluator: ${e.title} — ${subjectLabel(e, card, milestoneName)}`, renderImmediate(milestoneName, e, card, cardVersion), human);
+        await upsert(`immediate:${e.key}`, `Evaluator — immediate: ${e.id} ${e.title} — ${subjectLabel(e, card, milestoneName)}`, "high", human, () => renderImmediate(milestoneName, e, card, cardVersion, companyId));
       }
       if (result.unrouted.length > 0) logger.warn({ companyId, count: result.unrouted.length }, "evaluation_review_items: exceptions with no human to route to");
       if (result.unassignable.length > 0) logger.warn({ companyId, count: result.unassignable.length }, "evaluation_review_items: routed humans are not active company members");
@@ -193,16 +242,28 @@ function subjectLabel(e: ExceptionRecord, card: ScoredCard, milestoneName: strin
   }
 }
 
-function renderDigest(milestoneName: string, list: ExceptionRecord[], card: ScoredCard, cardVersion: number): string {
+function renderDigest(milestoneName: string, list: ExceptionRecord[], card: ScoredCard, state: DigestState, companyId: string): string {
   const byId = new Map<string, ExceptionRecord[]>();
   for (const e of list) byId.set(e.id, [...(byId.get(e.id) ?? []), e]);
+  const added = new Set(state.added);
   const lines: string[] = [];
-  lines.push(`Routine exceptions the Company Evaluator raised on **${milestoneName}** (card v${cardVersion}). This item is updated in place as exceptions accrue; closing it is your act and is recorded.`);
+  lines.push(`**Card v${state.v} — ${words(state.total, "finding")}${state.prevV !== null ? ` (was v${state.prevV}, ${state.prevTotal ?? 0})` : ""}.**${added.size > 0 ? " New entries are marked ▸new." : ""}`);
   lines.push("");
+  lines.push(`The Company Evaluator reviewed **${milestoneName}** (card v${state.v}) and raised the routine findings below. The evaluator changed nothing and blocked nothing; no agent was assigned and no one else was notified. Your decision per finding: accept it (close this item) or dispute it (file a correction — how at the bottom).`);
+  lines.push("");
+  if (state.prevV !== null) {
+    const delta = [...byId.entries()]
+      .map(([id, group]) => [id, group[0]!.title, group.filter((e) => added.has(e.key)).length] as const)
+      .filter(([, , n]) => n > 0)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([id, title, n]) => `+${n} ${id} ${title}`);
+    lines.push(`Changed in v${state.v}: ${delta.length > 0 ? delta.join(", ") : "no new findings"}.`);
+    lines.push("");
+  }
   for (const [id, group] of [...byId.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
     lines.push(`### ${id} ${group[0]!.title} — ${group.length}`);
     for (const e of group.slice(0, 30)) {
-      lines.push(`- ${subjectLabel(e, card, milestoneName)}: ${e.note}${e.evidenceRefs.length > 0 ? ` (events ${e.evidenceRefs.slice(0, 5).join(", ")}${e.evidenceRefs.length > 5 ? ", …" : ""})` : ""}`);
+      lines.push(`- ${added.has(e.key) ? "▸new " : ""}${subjectLabel(e, card, milestoneName)}: ${e.note}${e.evidenceRefs.length > 0 ? ` (events ${e.evidenceRefs.slice(0, 5).join(", ")}${e.evidenceRefs.length > 5 ? ", …" : ""})` : ""}`);
     }
     if (group.length > 30) lines.push(`- … ${group.length - 30} more in the card`);
     lines.push("");
@@ -211,11 +272,17 @@ function renderDigest(milestoneName: string, list: ExceptionRecord[], card: Scor
     lines.push(`Card markers: ${card.markers.join("; ")}`);
     lines.push("");
   }
-  lines.push("The evaluator never changes reviewed work. Dispute a finding with a correction; the routed human decides.");
+  lines.push("Closing this item is your decision; it will not be re-raised for the same findings. The evaluator never changes reviewed work.");
+  lines.push("");
+  lines.push(disputeFooter(companyId));
   return lines.join("\n");
 }
 
-function renderImmediate(milestoneName: string, e: ExceptionRecord, card: ScoredCard, cardVersion: number): string {
+function words(n: number, singular: string, plural = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+function renderImmediate(milestoneName: string, e: ExceptionRecord, card: ScoredCard, cardVersion: number, companyId: string): string {
   const lines = [
     `**${e.id} ${e.title}** (${e.severity}) on **${milestoneName}** — card v${cardVersion}.`,
     "",
@@ -226,6 +293,6 @@ function renderImmediate(milestoneName: string, e: ExceptionRecord, card: Scored
     e.evidenceRefs.length > 0 ? `Evidence: events ${e.evidenceRefs.slice(0, 20).join(", ")}${e.evidenceRefs.length > 20 ? ", …" : ""}` : "Evidence: none cited",
   ];
   if (e.markers.length > 0) lines.push(`Markers: ${e.markers.join("; ")}`);
-  lines.push("", "The evaluator never changes reviewed work. Dispute this finding with a correction; the routed human decides.");
+  lines.push("", "The evaluator changed nothing and blocked nothing — Stage 1 only records. To accept, close this item. To dispute, file a correction (how below); a manager or the founder decides.", "", disputeFooter(companyId));
   return lines.join("\n");
 }
