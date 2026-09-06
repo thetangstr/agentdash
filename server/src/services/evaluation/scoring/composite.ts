@@ -11,7 +11,7 @@ import {
 import { minTier } from "./confidence.js";
 import type { CompositeResult, MetricResult } from "./types.js";
 
-export const COMPOSITE_FORMULA_VERSION = "composite/5";
+export const COMPOSITE_FORMULA_VERSION = "composite/6";
 export const COMPOSITE_COVERAGE_FLOOR = EVALUATION_COMPOSITE_COVERAGE_FLOOR;
 export const COMPOSITE_MAX_CONCENTRATION = EVALUATION_COMPOSITE_MAX_CONCENTRATION;
 

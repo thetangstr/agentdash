@@ -733,3 +733,14 @@ Recorded here rather than in the spec, which is at its size limit.
   so `METRICS_FORMULA_VERSION` is `metrics/3` and `FORMULA_VERSION`
   `m2-score/6`; the contract fixture was regenerated and its test now asserts
   the company row's rendering on the real card.
+- **Milestone 4 wording pass (Priya, AGE-102) and the version rule, again.** The
+  product review's list moved founder prose to metric names, plain words and
+  routes in words, put acceptance requests on the founder view, and changed
+  four stored-card strings (O4's unit is the goal's state, P8's unit, the
+  concentration reason, the lag marker). Card bytes changed, so the pins moved
+  with them: `FORMULA_VERSION` `m2-score/7`, `METRICS_FORMULA_VERSION`
+  `metrics/4`, `COMPOSITE_FORMULA_VERSION` `composite/6`. The rule, restated
+  because it has now been missed three times in one build: any change to what
+  a stored card contains — a number, a string, a field — moves every version
+  pin in the same commit, so `verify` reports "formula changed" rather than a
+  false replay disagreement.

@@ -48,7 +48,7 @@ import type { ExceptionRecord, MetricBreakdown, MetricResult, UndecidableReason 
  * rule raised. Nothing is imputed; no volume is ever rewarded (rule 1).
  */
 
-export const METRICS_FORMULA_VERSION = "metrics/3";
+export const METRICS_FORMULA_VERSION = "metrics/4";
 const MAX_REFS = 200;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;

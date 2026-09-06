@@ -103,7 +103,7 @@ const card = {
   actors: [
     { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per accepted item", value: 45.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
     { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
-    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }), P9: metric("P9", { name: "Duplicate and rework rate", unit: "duplicates and rework per delivered item", value: 0.4, lowerIsBetter: true }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
+    { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }), P9: metric("P9", { name: "Duplicate and rework rate", unit: "duplicates and rework per delivered item", value: 0.4, lowerIsBetter: true }), P6: metric("P6", { name: "Authority compliance", unit: "detected violations", value: 1, displayOnly: true }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
     { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
   ],
   exceptions: [
@@ -274,6 +274,9 @@ describe("EvaluationMilestone", () => {
     expect(p9).toContain("0.4 duplicates and rework per delivered item");
     expect(p9).toContain("lower is better");
     expect(p9).not.toContain("40%");
+    // a count of one is singular whether the noun leads or trails the unit
+    expect(container.querySelector('[data-testid="metric-P6"]')?.textContent).toContain("1 detected violation");
+    expect(container.querySelector('[data-testid="metric-P6"]')?.textContent).not.toContain("1 detected violations");
   });
 
   it("ledger: the events listed are the rows tagged with this milestone through the card's cut, newest first — never the whole company", async () => {

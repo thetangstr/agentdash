@@ -19,7 +19,7 @@ describe("scoring — determinism and card shape", () => {
     const card = score(window);
     expect(cardHash(scoreMilestone(shuffle(window), ref, card.throughSeq, CO, { fallbackOpen: true }))).toBe(cardHash(card));
     expect(cardHash(scoreMilestone(window, ref, card.throughSeq - 1, CO, { fallbackOpen: true }))).not.toBe(cardHash(card));
-    expect(card.formulaVersion).toBe("m2-score/6");
+    expect(card.formulaVersion).toBe("m2-score/7");
     expect(card.state.open).toBe(true); // from the project.snapshot, not the fallback
     expect(card.contract.source).toBe("derived");
     expect(card.markers).toContain("contract derived by the evaluator — confidence capped at adequate");

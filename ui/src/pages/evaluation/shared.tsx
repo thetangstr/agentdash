@@ -89,8 +89,9 @@ export function fmtValue(m: MetricResult): string {
       return fmtPct(m.value);
     case "count": {
       const n = Math.round(m.value);
-      // the unit is the plural noun phrase; one of them drops the first word's plural s
-      const unit = n === 1 ? m.unit.replace(/^(\w+?)s\b/, "$1") : m.unit;
+      // the unit is a noun phrase whose plural noun may lead ("questions unanswered past 48 h") or trail
+      // ("detected violations"); one of them drops the s from the first word that carries it
+      const unit = n === 1 ? m.unit.replace(/\b(\w+?)s\b/, "$1") : m.unit;
       return `${n} ${unit}`.trim();
     }
     case "currency":
