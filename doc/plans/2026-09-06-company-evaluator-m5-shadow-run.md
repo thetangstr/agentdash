@@ -36,9 +36,10 @@ execos-local runs the local-only branch `ota/integration-mkthink` of the
 checkout `/Volumes/mac_studio_ssd/Projects/agentdash-ota-integration` and must
 not be detached to main. A merge candidate is prepared:
 
-- branch `ota/integration-mkthink+main-20260906` (worktree
-  `.claude/worktrees/ota-merge` of the mac_studio clone; same repository as the
-  ota checkout), one merge commit bringing `origin/main` at `aa35d1b82`
+- branch `ota/integration-mkthink+main-20260906` in the repository the ota
+  checkout belongs to (`/Users/Kailor/agentdash`; its worktree directory
+  `.claude/worktrees/ota-merge` merely sits under the mac_studio tree), one
+  merge commit bringing `origin/main` at `aa35d1b82`
   (v2026.904.0 plus evaluator Milestones 1–4 and follow-ups) into the ota
   branch, upstream-preferred on twelve conflicts: migration journal 0124–0127,
   `agent_api_keys.principal_kind`, codex command fallback in the adapter
@@ -49,6 +50,12 @@ not be detached to main. A merge candidate is prepared:
 - verified there: `pnpm -r typecheck` clean; hermes execute, bridge command
   name, evaluator gate, evaluation routes and card-contract suites 43/43; the
   full server suite run is recorded in the M5 status when it finishes.
+
+**Before the run:** the records and the report in §5 and §6 land with the
+Milestone 5 preparation pull request. Once it is merged, the merge candidate is
+refreshed from `origin/main` again (same procedure, fewer conflicts) so the
+instance carries them; a §3 deploy from the candidate as first prepared would
+answer §5 with "Invalid disposition" and §6 with 404.
 
 Steps (each reversible):
 
@@ -64,7 +71,8 @@ Steps (each reversible):
    ~/.execos/agentdash-local/agentdash-home -i execos-local --no-repair`, from
    a login zsh). Migrations 0124–0127 apply on start (four, forward-only).
 4. Confirm `GET /api/health` and that `GET /api/companies/ff60936e…/evaluation/overview`
-   answers (empty milestones list with `principal.provisioned: false`).
+   answers with every project and goal of the company listed, each with
+   `latest: null`, and `principal.provisioned: false`.
 
 Rollback: `git reset --hard 209017cc` in the ota checkout, restore the backup,
 restart.
@@ -125,18 +133,25 @@ Per milestone, at each stored version that a human reviews:
 
 ## 6. Reading the report
 
-`GET …/evaluation/shadow-report?refs=project:<id>,project:<id>&costCapCents=<cap>`
-(administrator). Per milestone: versions and replay agreement, exceptions by
-severity with the share of material claims that cite events, verdict counts
-with precision and recall, review-item messages per human, and the notes by
-topic. Company-wide: corrections pending, accepted, rejected; evaluator runs,
-cost, refused requests and findings authored. Then the seven graduation
-criteria, each `met`, `not_met` or `not_measurable` with the measured words.
+`GET …/evaluation/shadow-report?refs=project:<id>,project:<id>&costCapCents=<cap>&verifyLimit=<n>`
+(administrator; the same milestone may not be named twice). Per milestone:
+stored versions and how many were replayed (newest first, twenty by default)
+with agree, disagree and older-formula counts; exceptions raised over the whole
+run with the share of material ones that cite events, and the latest card's
+split; verdict counts on material and immediate exceptions with precision and
+recall, plus routine reviews, unknown keys and the reasons given for false
+positives; review-item digests per human and immediate items; the notes by
+topic. Company-wide: corrections pending, accepted, rejected and evaluator
+notes; evaluator runs, metered cost events and cost; what the evaluator did
+with its authority (refused attempts, writes outside its allowlist, whether it
+is scored on any card, whether its review project was named as a milestone);
+queries that reached the read cap. Then the seven graduation criteria, each
+`met`, `not_met` or `not_measurable` with the measured words.
 
 Rules of reading: a `not_measurable` is not a pass; older-formula versions are
-excluded from replay agreement and counted; cost is per company because the
-evaluator's runs carry no milestone tag; the cap is the founder's to set and is
-passed on the query.
+counted, not compared; cost is per company because the evaluator's runs carry
+no milestone tag, and an evaluator that never ran, or ran unmetered, cannot pass
+the cost criterion; the cap is the founder's to set and is passed on the query.
 
 ## 7. End of the run
 

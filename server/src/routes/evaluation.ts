@@ -340,6 +340,10 @@ export function evaluationRoutes(db: Db) {
           (await projectsTx.create(companyId, { name: EVALUATION_REVIEW_PROJECT_NAME, description: REVIEW_PROJECT_DESCRIPTION, status: "in_progress" }));
         let agent = (await agentsTx.list(companyId)).find((a) => a.role === EVALUATOR_AGENT_ROLE && a.status !== "terminated") ?? null;
         let created = false;
+        // D12: the provisioning administrator is the accountable human; re-provisioning by another administrator moves it
+        if (agent && actor.actorType === "user" && agent.accountableUserId !== actor.actorId) {
+          agent = (await agentsTx.update(agent.id, { accountableUserId: actor.actorId })) ?? agent;
+        }
         if (!agent) {
           agent = await agentsTx.create(companyId, {
             name: "Evaluator",
@@ -584,6 +588,11 @@ export function evaluationRoutes(db: Db) {
       const exists = await ledger.existing(companyId, referenced);
       const missing = referenced.filter((r) => !exists.has(r));
       if (missing.length > 0) throw notFound(`Referenced ledger events not found in this company: ${missing.join(", ")}`);
+      // a verdict is about an exception the evaluator actually raised on that milestone
+      if (d.kind === "exception_reviewed") {
+        const raised = await ledger.findBySourceId(companyId, "evaluation", d.exceptionKey, d.milestoneRef);
+        if (!raised) throw notFound("No exception with that key was raised on this milestone");
+      }
       const actor = getActorInfo(req);
       const now = new Date();
       const sourceId =
@@ -626,17 +635,21 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       await assertCompanyAdministrator(access, req, companyId);
-      const q = z.object({ refs: z.string().min(1), costCapCents: z.coerce.number().int().min(0).optional() }).safeParse(req.query);
+      const q = z.object({ refs: z.string().min(1), costCapCents: z.coerce.number().int().min(0).optional(), verifyLimit: z.coerce.number().int().min(1).max(200).optional() }).safeParse(req.query);
       if (!q.success) throw badRequest("refs (project:<id>,goal:<id>) is required", { issues: q.error.issues });
       const refs: EvaluationMilestoneRef[] = [];
+      const seen = new Set<string>();
       for (const part of q.data.refs.split(",")) {
         const [kind, id] = part.split(":");
         const parsed = evaluationMilestoneRefSchema.safeParse({ kind, id });
         if (!parsed.success) throw badRequest(`Bad milestone reference: ${part}`);
+        const key = `${parsed.data.kind}:${parsed.data.id}`;
+        if (seen.has(key)) throw badRequest(`Milestone named twice: ${part}`);
+        seen.add(key);
         refs.push(parsed.data);
       }
       if (refs.length === 0 || refs.length > 6) throw badRequest("Name between one and six milestones");
-      res.json(await shadowReport.get(companyId, refs, { costCapCents: q.data.costCapCents }));
+      res.json(await shadowReport.get(companyId, refs, { costCapCents: q.data.costCapCents, verifyLimit: q.data.verifyLimit }));
     } catch (err) {
       next(err);
     }

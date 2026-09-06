@@ -272,6 +272,15 @@ export function evaluationLedger(db: LedgerDb) {
       return (rows[0] as EvaluationEventRow | undefined) ?? null;
     },
 
+    /** Whether any event with this source table and id exists for the milestone (a finding's source id is its exception key). */
+    async findBySourceId(companyId: string, sourceTable: string, sourceId: string, ref?: { kind: "project" | "goal"; id: string }): Promise<EvaluationEventRow | null> {
+      const conds = [eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable), eq(evaluationEvents.sourceId, sourceId)];
+      if (ref?.kind === "project") conds.push(eq(evaluationEvents.projectId, ref.id));
+      if (ref?.kind === "goal") conds.push(eq(evaluationEvents.goalId, ref.id));
+      const rows = await db.select().from(evaluationEvents).where(and(...conds)).limit(1);
+      return (rows[0] as EvaluationEventRow | undefined) ?? null;
+    },
+
     /** One event by id within the company, or null; a non-uuid id is simply absent. */
     async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
       if (!isUuidLike(id)) return null; // a uuid column: a malformed id is absent, never a cast error

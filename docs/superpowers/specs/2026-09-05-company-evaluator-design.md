@@ -462,7 +462,9 @@ founder lane on their behalf); the shadow cards say so.
 ## 10. Independence and authority of the evaluator
 
 ### 10.1 Identity
-Role `evaluator`, `reportsTo` null, accountable human = the founder. Outside
+Role `evaluator`, `reportsTo` null, accountable human = the administrator who
+provisions the principal (decision D12, 2026-09-06, superseding "the founder"
+here; see the decisions record). Outside
 Maya's chain by founder decision — a recorded, scoped exception to
 `doc/DELIVERY-AND-REVIEW.md` (D2). Independence from the chain is a routing
 rule plus the ledger's immutability, not a claim that no one can touch a review

@@ -748,13 +748,16 @@ Recorded here rather than in the spec, which is at its size limit.
 ## Decision D12 — the evaluator's accountable human (founder, 2026-09-06)
 
 **Decided: the evaluator agent's accountable human is the administrator who
-provisions it**, not the founder as §10.1 first wrote. Consequence: unrouted
-exceptions (no accountable owner on the item and no contract owner) go to that
-administrator's digest; the founder view still carries every immediate,
+provisions it**, not the founder as §10.1 first wrote (the spec now points
+here). Consequence, as implemented: unrouted exceptions (no accountable owner
+on the item and no contract owner) go to that administrator's digest when they
+are still an active member, otherwise to the first active administrator, never
+to an arbitrary member; the founder view still carries every immediate,
 material and founder-routed exception regardless of who is accountable. Rule
 recorded so the earlier "awaits founder confirmation" notes in this record are
-closed. Re-provisioning by a different administrator changes the accountable
-human on the agent row and is audited as `evaluation.principal_provisioned`.
+closed. Re-provisioning by a different administrator moves the accountable
+human to them on the agent row and is audited as
+`evaluation.principal_provisioned`.
 
 ## Milestone 5 preparation (2026-09-06)
 
@@ -764,13 +767,19 @@ human on the agent row and is audited as `evaluation.principal_provisioned`.
   evaluator did not raise, with severity and description) and `shadow_note`
   (rescue, missing telemetry, disagreement, cost, other). The latest verdict per
   exception key counts.
-- `GET …/evaluation/shadow-report?refs=project:<id>,goal:<id>&costCapCents=`
+- `GET …/evaluation/shadow-report?refs=project:<id>,goal:<id>&costCapCents=&verifyLimit=`
   (administrators) measures every graduation criterion from stored cards and
-  the ledger: material claims traced, authority mutations (zero by the gate,
-  with the refusal count shown), replay agreement over every stored version
-  (older-formula versions excluded and counted), precision and recall from the
-  reviews, the chatter ceiling from review items, evaluator cost against a cap
-  the founder supplies, and rescues per milestone. A criterion that cannot be
-  measured yet says so. The evaluator's runs are not tagged by milestone, so
-  cost is per company.
+  the ledger, with the measurement kept pure and unit-tested: material claims
+  traced over every finding of the run; authority judged on writes that reached
+  a route outside the allowlist, on the evaluator appearing as a scored actor,
+  and on its review project being named as a milestone (refusals are shown but
+  prove nothing); replay agreement over the replayed versions with
+  older-formula versions counted, not compared; precision and recall over
+  material and immediate exceptions only, with routine reviews, unknown keys
+  and false-positive reasons beside; the chatter ceiling from review items,
+  not measurable on an empty run; evaluator cost not measurable when the
+  evaluator never ran or ran unmetered; rescues per distinct closed milestone.
+  A verdict may only name an exception the evaluator raised on that milestone.
+  Company-wide counts are aggregates; any list that reaches its read cap is
+  named under `truncated`.
 - The runbook for the shadow run is `doc/plans/2026-09-06-company-evaluator-m5-shadow-run.md`.

@@ -96,25 +96,27 @@ describeEmbeddedPostgres("evaluation snapshot cadence (embedded postgres)", () =
     }]);
     const report = await evaluationShadowReport(db).get(companyId, [{ kind: "project", id: openId }]);
     expect(report.evaluator.provisioned).toBe(true);
-    expect(report.evaluator.refusedRequests).toBe(0);
+    expect(report.authority).toMatchObject({ refusedAttempts: 0, writesOutsideAllowlist: 0, scoredAsActorOn: [], reviewProjectNamedAsMilestone: false });
+    expect(report.truncated).toEqual([]);
     const m = report.milestones[0]!;
     expect(m.name).toBe("Open");
-    expect(m.versions).toBe(1);
-    expect(m.replay).toMatchObject({ agree: 1, disagree: 0, formulaChanged: 0, agreementRate: 1 });
-    expect(m.exceptions.total).toBe(0);
+    expect(m.replay).toEqual({ versions: 1, verified: 1, agree: 1, disagree: 0, formulaChanged: 0, agreementRate: 1 });
+    expect(m.exceptions).toMatchObject({ raised: 0, materialRaised: 0, latest: { total: 0 } });
     expect(m.reviews).toMatchObject({ confirmed: 0, falsePositive: 0, missed: 0, precision: null, recall: null });
     expect(m.notes.rescue).toEqual(["founder merged by hand"]);
     const by = Object.fromEntries(report.graduation.map((g) => [g.key, g]));
     expect(by.replay_agreement!.status).toBe("met");
     expect(by.no_authority_mutation!.status).toBe("met");
-    expect(by.material_claims_traced!.status).toBe("not_measurable"); // no material claims on an empty milestone
+    expect(by.material_claims_traced!.status).toBe("not_measurable"); // nothing raised on an empty milestone
     expect(by.precision_recall!.status).toBe("not_measurable");
-    expect(by.precision_recall!.measured).toContain("no exception reviews recorded yet");
-    expect(by.chatter_ceiling!.status).toBe("met");
-    expect(by.cost_reported!.status).toBe("not_measurable"); // no cap supplied
+    expect(by.chatter_ceiling!.status).toBe("not_measurable"); // no exception and no review item: nothing to measure, not a pass
+    expect(by.cost_reported!).toMatchObject({ status: "not_measurable", measured: expect.stringContaining("has not run") }); // never a pass on zero runs
     expect(by.no_rescues!.status).toBe("not_measurable"); // one milestone named, still open
     expect(by.no_rescues!.measured).toContain("rescues recorded: 1");
-    const capped = await evaluationShadowReport(db).get(companyId, [{ kind: "project", id: openId }], { costCapCents: 100 });
-    expect(Object.fromEntries(capped.graduation.map((g) => [g.key, g.status])).cost_reported).toBe("met"); // no evaluator runs yet: $0.00 against $1.00
+    // the review project named as a milestone is caught, and a cap does not make an unexercised evaluator pass
+    const reviewProjectId = (await evaluationOverview(db).get(companyId)).reviewProjectId!;
+    const hostile = await evaluationShadowReport(db).get(companyId, [{ kind: "project", id: openId }, { kind: "project", id: reviewProjectId }], { costCapCents: 100 });
+    expect(hostile.authority.reviewProjectNamedAsMilestone).toBe(true);
+    expect(Object.fromEntries(hostile.graduation.map((g) => [g.key, g.status]))).toMatchObject({ no_authority_mutation: "not_met", cost_reported: "not_measurable" });
   });
 });
