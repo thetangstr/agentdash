@@ -64,7 +64,7 @@ function likeEscape(s: string): string {
 }
 
 /** Creating the review project and label is serialised per company (blocking advisory lock) so two syncs cannot race into two projects. */
-async function withReviewItemsLock<T>(db: Db, companyId: string, fn: (tx: Db) => Promise<T>): Promise<T> {
+export async function withReviewItemsLock<T>(db: Db, companyId: string, fn: (tx: Db) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`evaluation_review_items:${companyId}`}, 0))`);
     return fn(tx as unknown as Db);
@@ -274,7 +274,7 @@ function renderDigest(milestoneName: string, list: ExceptionRecord[], card: Scor
     lines.push(`Card markers: ${card.markers.join("; ")}`);
     lines.push("");
   }
-  lines.push("Closing this item is your decision; it will not be re-raised for the same findings. The evaluator never changes reviewed work.");
+  lines.push("Closing this item is your decision; it will not be re-raised for the same findings. The evaluator never changes reviewed work. This description is rewritten from the card on every pass, so add your notes as comments rather than edits.");
   lines.push("");
   lines.push(disputeFooter(companyId));
   return lines.join("\n");

@@ -646,3 +646,28 @@ Recorded here rather than in the spec, which is at its size limit.
   once on the first sync after deployment (new wording and footer) and show a
   delta header from the update after that; the code refuses to invent a
   history it never recorded.
+
+- **Milestone 3 technical review (Theo, AGE-99, READY) — dispositions.** Taken:
+  provisioning finds-or-creates the evaluator agent and the review project under
+  the company's review-items lock, so two calls or a call racing the first
+  cadence sync cannot create duplicates (finding 1); the evaluator's note on a
+  correction is its own event type, `evaluation.evaluator_note`, so no consumer
+  can mistake it for a human decision (finding 7); the review-items route no
+  longer accepts a version it ignored (finding 8); the gate has adversarial
+  tests for encoded segments, double slashes, case, query strings and the
+  evaluator key on the other header (finding 10); a digest's closing line tells
+  the reader that the description is rewritten from the card and notes belong
+  in comments (finding 4). Recorded, not changed: rotating the key with
+  `rotateKey: true` invalidates the live key without a confirmation — that is
+  the intended recovery path and the token is returned once (finding 2); every
+  material E2, E12 and E13 is immediate, a deliberate compression of §9.2's
+  "touching a release or credential" because no field carries that distinction
+  (finding 3); a change of accountable owner opens a new digest for the new
+  human while the old one stays as the old human's record (finding 5); the
+  cadence excludes the review project by name because the project has no other
+  durable mark, and scoring excludes it by label regardless (finding 6); the
+  gate records the concrete normalised path rather than a route pattern because
+  it runs before routing, when no pattern exists — ids in that path are the
+  evaluator's own request targets, not another company's data (finding 9);
+  cadence edge cases (fallback routing, lock collision catch-up, interval floor)
+  remain untested (finding 11).
