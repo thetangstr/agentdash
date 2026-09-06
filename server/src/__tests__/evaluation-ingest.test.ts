@@ -358,6 +358,17 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(await ledger.hasContract(companyId, { kind: "project", id: strayProject })).toBe(true);
   });
 
+  it("a malformed event id is absent, never a uuid cast error: `get` returns null and `existing` reports it missing (M3 review)", async () => {
+    const ledger = evaluationLedger(db);
+    const [real] = await ledger.list(companyId, { limit: 1 });
+    expect(real).toBeDefined();
+    expect(await ledger.get(companyId, "abc")).toBeNull();
+    expect(await ledger.get(companyId, "00000000-0000-0000-0000-000000000000")).toBeNull(); // valid for Postgres, not a real id
+    expect((await ledger.get(companyId, real!.id))?.id).toBe(real!.id);
+    expect(await ledger.existing(companyId, ["abc", "not-a-ledger-event", real!.id])).toEqual(new Set([real!.id]));
+    expect(await ledger.existing(companyId, ["abc"])).toEqual(new Set());
+  });
+
   it("refuses UPDATE and DELETE on the ledger unless the purge setting is on (spec §10.2)", async () => {
     await rejectsAppendOnly(db.update(evaluationEvents).set({ actorId: "tampered" }).where(eq(evaluationEvents.companyId, companyId)));
     await rejectsAppendOnly(db.delete(evaluationEvents).where(eq(evaluationEvents.companyId, companyId)));

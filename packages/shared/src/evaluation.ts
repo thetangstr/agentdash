@@ -257,3 +257,36 @@ export const EVALUATION_EXCEPTIONS: Record<EvaluationExceptionId, { title: strin
   E13: { title: "evidence withdrawn", severity: "material", routes: ["accountable_owner"] },
   E14: { title: "reviewer concentration", severity: "routine", routes: ["both_managers"] },
 };
+/** D11: the kind of principal an agent API key mints. `evaluator` keys are read-only (spec §10.2). */
+export const EVALUATION_PRINCIPAL_KINDS = ["agent", "evaluator"] as const;
+export type EvaluationPrincipalKind = (typeof EVALUATION_PRINCIPAL_KINDS)[number];
+
+/**
+ * Spec §10.2: the only non-safe requests a read-only (evaluator) principal may
+ * make. Each route enforces its own constraints (findings are ledger inserts;
+ * review items land only in the evaluator project, labelled, `todo`, assigned
+ * to a human; correction notes attach evidence, never decide). Snapshots are
+ * taken by the cadence or an administrator, never by the principal. Everything
+ * else — issues, verdicts, approvals, agents, keys, releases — is refused
+ * before any router sees it.
+ */
+export const EVALUATOR_WRITE_ROUTE_PATTERNS: readonly RegExp[] = [
+  /^\/api\/companies\/[^/]+\/evaluation\/findings$/,
+  /^\/api\/companies\/[^/]+\/evaluation\/review-items$/,
+  /^\/api\/companies\/[^/]+\/evaluation\/corrections\/[^/]+\/note$/,
+];
+
+export const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** The reason code the read-only gate records on refusals; scoring excludes these from P6. */
+export const EVALUATOR_READ_ONLY_REASON = "EVALUATOR_READ_ONLY";
+
+export function isEvaluatorWriteAllowed(method: string, path: string): boolean {
+  if (SAFE_HTTP_METHODS.has(method.toUpperCase())) return true;
+  const clean = path.split("?")[0]!.replace(/\/+$/, "");
+  return EVALUATOR_WRITE_ROUTE_PATTERNS.some((re) => re.test(clean));
+}
+
+/** §10.1: the evaluator agent's role; §9.2: the project its review items land in. */
+export const EVALUATOR_AGENT_ROLE = "evaluator";
+export const EVALUATION_REVIEW_PROJECT_NAME = "Evaluator review items";

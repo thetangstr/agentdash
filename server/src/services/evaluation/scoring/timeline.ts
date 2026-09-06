@@ -416,7 +416,8 @@ export function buildTimeline(window: EvaluationEventRow[]): Timeline {
         continue;
       }
       case "authz.refused":
-        tl.sources.authzRefused = true;
+        // the read-only gate's own refusals are no evidence that the company records authority refusals
+        if (str(p, "reasonCode") !== "EVALUATOR_READ_ONLY") tl.sources.authzRefused = true;
         tl.authzRefused.push({ ...ref(e), payload: p, issueId });
         if (issueId) touch(item(tl, issueId, identifier), e);
         continue;

@@ -3,7 +3,7 @@ import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from 
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
-import {
+import { isUuidLike,
   EVALUATION_SCHEMA_VERSION,
   EVALUATION_SKEW_TOLERANCE_MS,
   type EvaluationActorType,
@@ -243,6 +243,38 @@ export function evaluationLedger(db: LedgerDb) {
         .where(eq(evaluationEvents.companyId, companyId))
         .groupBy(evaluationEvents.eventType);
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
+    },
+
+    /** The event an append with this source identity deduplicated against (rule 6), or null. */
+    async findBySource(companyId: string, sourceTable: string, sourceId: string, sourceVersion: string): Promise<EvaluationEventRow | null> {
+      const rows = await db
+        .select()
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable), eq(evaluationEvents.sourceId, sourceId), eq(evaluationEvents.sourceVersion, sourceVersion)))
+        .limit(1);
+      return (rows[0] as EvaluationEventRow | undefined) ?? null;
+    },
+
+    /** One event by id within the company, or null; a non-uuid id is simply absent. */
+    async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
+      if (!isUuidLike(id)) return null; // a uuid column: a malformed id is absent, never a cast error
+      const rows = await db
+        .select()
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.id, id)))
+        .limit(1);
+      return (rows[0] as EvaluationEventRow | undefined) ?? null;
+    },
+
+    /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3); non-uuid ids are reported missing. */
+    async existing(companyId: string, ids: string[]): Promise<Set<string>> {
+      const wanted = [...new Set(ids)].filter((x) => isUuidLike(x)); // malformed ids are reported missing, never a cast error
+      if (wanted.length === 0) return new Set();
+      const rows = await db
+        .select({ id: evaluationEvents.id })
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), inArray(evaluationEvents.id, wanted.slice(0, 500))));
+      return new Set(rows.map((r) => r.id));
     },
 
     /** Whether a contract has been declared for a milestone (a `contract.declared` event in scope). */

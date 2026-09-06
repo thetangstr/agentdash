@@ -4,11 +4,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import { isUuidLike, type DeploymentMode } from "@paperclipai/shared";
+import { EVALUATOR_AGENT_ROLE, EVALUATOR_READ_ONLY_REASON, isEvaluatorWriteAllowed, isUuidLike, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { bridgeService } from "../services/bridge.js";
+import { logActivity } from "../services/activity-log.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -68,7 +69,7 @@ interface ActorMiddlewareOptions {
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
   const bridge = bridgeService(db);
-  return async (req, _res, next) => {
+  return async (req, res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
         ? {
@@ -201,6 +202,31 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       }
     }
 
+    // AgentDash (Company Evaluator, D11 / spec §10.2): read-only is a property
+    // of the principal — the evaluator agent — not of one credential. Every
+    // credential that resolves to that agent (an evaluator key, an ordinary key
+    // minted on it, a heartbeat-issued local JWT) mints a read-only actor, and a
+    // read-only actor's non-safe request is refused here, before any router,
+    // unless its path is on the evaluator write allowlist. The refusal is
+    // recorded as `authz.refused` (fire-and-forget; the response never waits).
+    const refuseIfReadOnly = (companyId: string, agentId: string): boolean => {
+      if (!req.actor.readOnly || isEvaluatorWriteAllowed(req.method, normalizedPath(req))) return false;
+      void logActivity(db, {
+        companyId,
+        actorType: "agent",
+        actorId: agentId,
+        agentId,
+        action: "authz.refused",
+        entityType: "agent",
+        entityId: agentId,
+        details: { method: req.method, routePath: normalizedPath(req), reasonCode: EVALUATOR_READ_ONLY_REASON },
+      }).catch((err) => {
+        logger.warn({ err }, "authz.refused record failed (evaluator read-only gate)");
+      });
+      res.status(403).json({ error: "This principal is read-only", code: EVALUATOR_READ_ONLY_REASON });
+      return true;
+    };
+
     const tokenHash = hashToken(token);
     const key = await db
       .select()
@@ -231,6 +257,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
+      const jwtPrincipalKind = agentRecord.role === EVALUATOR_AGENT_ROLE ? "evaluator" : "agent";
       req.actor = {
         type: "agent",
         agentId: claims.sub,
@@ -238,7 +265,10 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         keyId: undefined,
         runId: runIdHeader || normalizeRunId(claims.run_id),
         source: "agent_jwt",
+        principalKind: jwtPrincipalKind,
+        readOnly: jwtPrincipalKind === "evaluator",
       };
+      if (refuseIfReadOnly(claims.company_id, claims.sub)) return;
       next();
       return;
     }
@@ -259,6 +289,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
+    const principalKind = key.principalKind === "evaluator" || agentRecord.role === EVALUATOR_AGENT_ROLE ? "evaluator" : "agent";
     req.actor = {
       type: "agent",
       agentId: key.agentId,
@@ -266,7 +297,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       keyId: key.id,
       runId: runIdHeader || undefined,
       source: "agent_key",
+      principalKind,
+      readOnly: principalKind === "evaluator",
     };
+
+    if (refuseIfReadOnly(key.companyId, key.agentId)) return;
 
     next();
   };

@@ -524,3 +524,94 @@ Recorded here rather than in the spec, which is at its size limit.
   within sixty seconds in process, so a retry storm on one forbidden act counts
   once per minute per server instance and P6 is a floor on violating requests,
   not a count of them; distinct acts on distinct items are never collapsed.
+
+## Milestone 3 implementation notes (2026-09-06, principal branch)
+
+- **Read-only is a mechanism (D11, §10.2).** `agent_api_keys.principal_kind =
+  "evaluator"` mints an actor with `readOnly: true`; the actor middleware refuses
+  every non-safe request from it with 403 `EVALUATOR_READ_ONLY` unless the path
+  is on the evaluator write allowlist (findings, review-items,
+  scorecards/snapshot, corrections/:id/note), and records the refusal as an
+  `authz.refused` activity row. Scoring excludes rows with that reason code from
+  P6: the gate doing its job is not a company breach. Ordinary agent keys are
+  untouched (tests prove both).
+- **Provisioning.** `POST /companies/:companyId/evaluation/principal`
+  (administrators): one agent with role `evaluator`, `reportsTo: null`,
+  accountable to the provisioning administrator, one read-only key whose token is
+  returned exactly once; idempotent, `rotateKey` revokes the previous evaluator
+  keys; also creates the "Evaluator review items" project. The evaluator role
+  gets its own instruction bundle (`onboarding-assets/evaluator/AGENTS.md`):
+  exception review only, citation rule, budget, what it never does.
+- **Review items (§9.2) are deterministic server code**, not the agent: one
+  digest per milestone per routed human (created on the first routine
+  exception, updated in place — an update sends no message), one item per
+  immediate exception (E3, E4, material E2/E12/E13); always in the review-items
+  project, labelled `evaluator-review`, `todo`, assigned to a human — the routed
+  accountable owner, else the contract's accountable human, else the
+  administrator who ran the snapshot; exceptions with no human anywhere are
+  reported as unrouted, never assigned to an agent. Items carry their key in a
+  marker, so re-running changes nothing that has not changed. Triggered by
+  `POST …/evaluation/scorecards/snapshot?reviewItems=true` or
+  `POST …/evaluation/review-items` (evaluator principal or administrators).
+- **Shadow cadence.** `AGENTDASH_EVALUATION_SNAPSHOT_ENABLED=true` runs a pass
+  on its own interval (floor one hour, default one day): every open project of
+  every company gets a stored card and its review items; the fallback human for
+  unowned exceptions is the company's first active administrator; a locked or
+  failing milestone is skipped with a warning and caught up on the next pass.
+  Deterministic; no model call; off by default like ingest.
+- **The evaluator's own writes (§9.3, §9.4).** `POST …/evaluation/findings` —
+  an evidence note on an exception; `POST …/evaluation/corrections/:id/note` —
+  an evidence note on a human's correction; both require at least one citation
+  that is a ledger event of this company (an uncited note is refused, not
+  stored) and are appended under the company lock with the `evaluator` actor.
+  Humans: `POST …/evaluation/corrections` (any board member; the disputed event
+  must exist; a T0/T0 disagreement may cite its correlation id instead of new
+  evidence) and `POST …/evaluation/dispositions` (administrators: decide a
+  correction, attest a criterion, accept a contract exception). The
+  disposition is always the human's; the evaluator never decides.
+
+
+- **Milestone 3 review round 1 (independent reviewer, REQUEST CHANGES → fixed).**
+  Two blockers. Read-only had been a property of the evaluator's API key, so an
+  ordinary key minted on the evaluator agent or the local JWT the heartbeat
+  issues to any dispatched agent would have carried full agent authority; the
+  gate now derives the principal from the agent's role as well as the key's
+  kind and runs for both credential paths, so every credential that resolves to
+  the evaluator agent is read-only. A closed review item was invisible to the
+  idempotency lookup and would have been recreated on the next pass — an
+  unbounded loop for a hostile key holder; the lookup now finds the item in any
+  status and a closed one is left closed, reported as `closed`, never reopened
+  or recreated. Also fixed: the evaluator's own refusals no longer open an
+  operating row for it or count as evidence that the company records authority
+  refusals; `scorecards/snapshot` left the evaluator allowlist (the route was
+  administrator-only anyway — snapshots belong to the cadence and
+  administrators, the principal creates review items); an unchanged card adds
+  no version; the cadence visits only companies that provisioned an evaluator
+  principal, snapshots projects only, and routes unowned exceptions to an
+  administrator or records them unrouted, never to an arbitrary member;
+  immediate items keep their paragraph breaks; founder prose carries no section
+  numbers, formula keys or raw ids (agent subjects are named); the review
+  project and label are created under a per-company advisory lock; the key
+  marker lookup escapes LIKE metacharacters; correction notes look up the
+  correction by id and type; the optional call on key revocation and the cast
+  on the evaluator agent's insert are gone. Prompt surfaces (`default/AGENTS.md`
+  and the proposal-based creator) now tell agents never to pick up, act on or
+  comment on `evaluator-review` items, so the drift check passes without a
+  bypass. Recorded deviation kept: the evaluator agent's accountable human is
+  the provisioning administrator, not the founder as §10.1 writes — the founder
+  should confirm, since it decides who receives unrouted exceptions.
+
+- **Milestone 3 review round 2 (READY; hardening taken).** The reviewer verified
+  every round-1 fix against code and tests and confirmed no deadlock between the
+  review-items lock and the ingest lock, and that a reused snapshot cannot skip
+  findings (insert and append share one transaction). Taken from the round: a
+  malformed event id in a citation or a correction path is a 400 or 404 the
+  evaluator can learn from, never a uuid cast error — citations are validated
+  as uuids and the ledger treats a non-uuid id as absent; the evaluator agent's
+  role cannot be changed (the read-only gate, the cadence and provisioning all
+  key on it, so the role string `evaluator` is the principal's identity and
+  must not be renamed); the review-items route and the cadence now count closed
+  items, so a human closing an immediate item is visible as a number, while the
+  exception itself stays on the card and in the ledger. Not taken: two unnamed
+  agent subjects in one digest render alike (cosmetic; the note carries the
+  detail).

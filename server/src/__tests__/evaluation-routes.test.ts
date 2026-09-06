@@ -19,13 +19,20 @@ vi.mock("../services/evaluation/ingest.js", () => ({
   evaluationIngest: () => ({ tick, backfill, cursors: vi.fn().mockResolvedValue({}), running: false }),
   withCompanyLock: (_db: unknown, _companyId: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
 }));
+const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
+const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")));
+const findBySource = vi.fn(async () => ({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", eventType: "evaluation.correction" }));
+const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction" } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created" } : null));
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
   evaluationLedger: () => ({
-    list: vi.fn().mockResolvedValue([{ id: "e1" }]),
+    list: ledgerList,
     countByType: vi.fn().mockResolvedValue({ "issue.created": 1 }),
     maxSeq: vi.fn().mockResolvedValue(7),
     append,
+    existing,
+    get: ledgerGet,
+    findBySource,
   }),
 }));
 vi.mock("../services/evaluation/replay.js", () => ({
@@ -35,6 +42,16 @@ vi.mock("../services/evaluation/scorecards.js", () => ({
   evaluationScorecardService: () => ({ latest: vi.fn().mockResolvedValue(null), snapshot, verify }),
 }));
 vi.mock("../services/access.js", () => ({ accessService: () => ({ getMembership: vi.fn().mockResolvedValue(null), listMemberships: vi.fn().mockResolvedValue([]) }) }));
+const agentsList = vi.fn().mockResolvedValue([]);
+const agentCreate = vi.fn().mockResolvedValue({ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" });
+const createApiKey = vi.fn().mockResolvedValue({ id: "key-1", token: "tok-once" });
+const revokeKeysOfKind = vi.fn().mockResolvedValue(1);
+vi.mock("../services/agents.js", () => ({ agentService: () => ({ list: agentsList, create: agentCreate, createApiKey, revokeKeysOfKind }) }));
+const projectsList = vi.fn().mockResolvedValue([]);
+const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
+vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
+const reviewSync = vi.fn().mockResolvedValue({ projectId: "proj-eval", labelId: "lbl", created: ["i1"], updated: [], unchanged: [], unrouted: [], closed: [] });
+vi.mock("../services/evaluation/review-items.js", () => ({ REVIEW_PROJECT_DESCRIPTION: "Review items raised by the Company Evaluator.", evaluationReviewItems: () => ({ sync: reviewSync }) }));
 vi.mock("../services/activity-log.js", () => ({ logActivity }));
 
 async function createApp(actor: Record<string, unknown>) {
@@ -58,7 +75,15 @@ const agentKey = { type: "agent", agentId: "agent-1", companyId: "company-1", co
 
 describe("evaluation routes", () => {
   afterEach(() => {
+    existing.mockClear();
+    ledgerList.mockClear();
+    reviewSync.mockClear();
     append.mockClear();
+    agentsList.mockClear();
+    agentCreate.mockClear();
+    createApiKey.mockClear();
+    revokeKeysOfKind.mockClear();
+    projectCreate.mockClear();
     tick.mockClear();
     backfill.mockClear();
     snapshot.mockClear();
@@ -159,6 +184,114 @@ describe("evaluation routes", () => {
     expect(events[0]).toMatchObject({ eventType: "contract.declared", sourceTable: "evaluation_contracts", sourceId: "project:22222222-2222-4222-8222-222222222222", projectId: "22222222-2222-4222-8222-222222222222", actorType: "user" });
     expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.contract_declared"]);
     expect((await request(admin).get(`/api/companies/${CID}/evaluation/contracts?kind=project&id=22222222-2222-4222-8222-222222222222`)).status).toBe(200);
+  });
+
+  it("provisions the evaluator principal once: administrators only, no manager, read-only key returned once, review project created", async () => {
+    const agent = await createApp(agentKey);
+    expect((await request(agent).post("/api/companies/company-1/evaluation/principal").send({})).status).toBe(403);
+    expect(agentCreate).not.toHaveBeenCalled();
+    const admin = await createApp(boardAdmin);
+    const first = await request(admin).post("/api/companies/company-1/evaluation/principal").send({});
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({ created: true, projectId: "proj-eval", key: { id: "key-1", token: "tok-once" }, agent: { role: "evaluator", reportsTo: null } });
+    expect(agentCreate.mock.calls[0]![1]).toMatchObject({ role: "evaluator", reportsTo: null, accountableUserId: "user-1" });
+    expect(createApiKey).toHaveBeenCalledWith("agent-eval", "evaluator (read-only)", { source: "manual", createdByUserId: "user-1" }, "evaluator");
+    expect(projectCreate).toHaveBeenCalledTimes(1);
+    // second call: idempotent, no token
+    agentsList.mockResolvedValueOnce([{ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" }]);
+    projectsList.mockResolvedValueOnce([{ id: "proj-eval", name: "Evaluator review items" }]);
+    const second = await request(admin).post("/api/companies/company-1/evaluation/principal").send({});
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ created: false, key: null });
+    expect(agentCreate).toHaveBeenCalledTimes(1);
+    expect(projectCreate).toHaveBeenCalledTimes(1);
+    // rotation revokes the old evaluator keys and mints one new
+    agentsList.mockResolvedValueOnce([{ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" }]);
+    projectsList.mockResolvedValueOnce([{ id: "proj-eval", name: "Evaluator review items" }]);
+    const rotated = await request(admin).post("/api/companies/company-1/evaluation/principal").send({ rotateKey: true });
+    expect(rotated.status).toBe(200);
+    expect(rotated.body.key).toEqual({ id: "key-1", token: "tok-once" });
+    expect(revokeKeysOfKind).toHaveBeenCalledWith("agent-eval", "evaluator");
+    expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.principal_provisioned", "evaluation.principal_provisioned", "evaluation.principal_provisioned"]);
+  });
+
+  it("review items: the evaluator principal and administrators may sync them from the latest stored card; an ordinary agent may not", async () => {
+    const q = { kind: "project", id: "22222222-2222-4222-8222-222222222222" };
+    const agent = await createApp(agentKey);
+    expect((await request(agent).post("/api/companies/company-1/evaluation/review-items").send(q)).status).toBe(403);
+    expect(reviewSync).not.toHaveBeenCalled();
+    const evaluator = await createApp({ ...agentKey, principalKind: "evaluator", readOnly: true });
+    const noCard = await request(evaluator).post("/api/companies/company-1/evaluation/review-items").send(q);
+    expect(noCard.status).toBe(404); // the mocked service has no stored card
+    expect(reviewSync).not.toHaveBeenCalled();
+    const admin = await createApp(boardAdmin);
+    const snap = await request(admin).post("/api/companies/company-1/evaluation/scorecards/snapshot?reviewItems=true").send(q);
+    expect(snap.status).toBe(201);
+    expect(reviewSync).toHaveBeenCalledTimes(1);
+    expect(reviewSync.mock.calls[0]![4]).toBe("user-1"); // the administrator is the fallback human
+    expect(snap.body.reviewItems).toMatchObject({ created: ["i1"] });
+  });
+
+  it("evaluator notes cite ledger events or are refused; the evaluator principal and administrators may write them, ordinary agents may not", async () => {
+    const evaluator = await createApp({ ...agentKey, principalKind: "evaluator", readOnly: true });
+    const uncited = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: ["not-a-ledger-event"] });
+    expect(uncited.status).toBe(400);
+    expect(append).not.toHaveBeenCalled();
+    const noRefs = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: [] });
+    expect(noRefs.status).toBe(400);
+    const ok = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"] });
+    expect(ok.status).toBe(201);
+    const [events] = append.mock.calls[0]! as [Array<Record<string, unknown>>];
+    expect(events[0]).toMatchObject({ eventType: "evaluation.finding", actorType: "evaluator", actorId: "agent-1", sourceTable: "evaluator_notes", sourceId: "E5:issue:x" });
+    expect((events[0]!.payload as { evidenceRefs: string[] }).evidenceRefs).toEqual(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"]);
+    const agent = await createApp(agentKey);
+    expect((await request(agent).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "k", note: "n", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(403);
+    expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.finding_noted"]);
+  });
+
+  it("humans file corrections against existing ledger events; the evaluator may only attach a cited note; a human decides", async () => {
+    const evaluator = await createApp({ ...agentKey, principalKind: "evaluator", readOnly: true });
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed" })).status).toBe(403);
+    const admin = await createApp(boardAdmin);
+    const missing = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed" });
+    expect(missing.status).toBe(404); // the mocked ledger knows only ev-* ids
+    existing.mockResolvedValueOnce(new Set(["22222222-2222-4222-8222-222222222222"]));
+    const filed = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed", evidenceRefs: [] });
+    expect(filed.status).toBe(201);
+    expect((append.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.correction", actorType: "user", actorId: "user-1" });
+    expect(filed.body).toMatchObject({ status: "pending_decision" });
+    expect(filed.body.next).toContain("correctionEventId = this eventId");
+    // evaluator note on the correction: the correction must exist (by id and type) and the note must cite
+    const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/cccccccc-cccc-4ccc-8ccc-ccccccccccc1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] });
+    expect(note.status).toBe(201);
+    expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "evaluator", sourceId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" });
+    ledgerList.mockResolvedValueOnce([]);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-9/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/dddddddd-dddd-4ddd-8ddd-ddddddddddd1/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404); // an event of another type is not a correction
+    // a malformed id is a 4xx the evaluator can learn from, never a uuid cast error
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/abc/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E4:issue:x", note: "cites nothing real", evidenceRefs: ["not-a-ledger-event"] })).status).toBe(400);
+    // the disposition is the human's: the evaluator is refused, the administrator decides
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "correction_decided", correctionEventId: "33333333-3333-4333-8333-333333333333", decision: "accepted" })).status).toBe(403);
+    existing.mockResolvedValueOnce(new Set(["33333333-3333-4333-8333-333333333333"]));
+    const decided = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "correction_decided", correctionEventId: "33333333-3333-4333-8333-333333333333", decision: "accepted", note: "agreed" });
+    expect(decided.status).toBe(201);
+    expect((append.mock.calls[2]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "user", sourceTable: "evaluation_dispositions" });
+    expect(((append.mock.calls[2]![0] as Array<Record<string, unknown>>)[0]!.payload as { kind: string; decision: string; decidedBy: string })).toMatchObject({ kind: "correction_decided", decision: "accepted", decidedBy: "user-1" });
+    // accepting a contract exception and attesting a criterion follow the same shape
+    existing.mockResolvedValueOnce(new Set(["44444444-4444-4444-8444-444444444444"]));
+    expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "contract_exception_accepted", contractEventId: "44444444-4444-4444-8444-444444444444" })).status).toBe(201);
+    const attest = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "criterion_attest", criterionId: "k1", result: "satisfied", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"], milestoneRef: { kind: "project", id: "22222222-2222-4222-8222-222222222222" } });
+    expect(attest.status).toBe(201);
+    expect((append.mock.calls[4]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ projectId: "22222222-2222-4222-8222-222222222222", sourceId: "k1:milestone" });
+    expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "nope" })).status).toBe(400);
+    // re-filing the identical correction is a 200 whose eventId is the existing correction, and the guidance says so
+    append.mockResolvedValueOnce({ inserted: 0, skipped: 1, insertedIds: [], oldestInsertedEventTime: null });
+    existing.mockResolvedValueOnce(new Set(["22222222-2222-4222-8222-222222222222"]));
+    const refiled = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed", evidenceRefs: [] });
+    expect(refiled.status).toBe(200);
+    expect(refiled.body.eventId).toBe("cccccccc-cccc-4ccc-8ccc-ccccccccccc1");
+    expect(refiled.body.next).toContain("an identical correction was already filed");
   });
 
   it("rejects a malformed snapshot body and an unknown event type filter is ignored", async () => {

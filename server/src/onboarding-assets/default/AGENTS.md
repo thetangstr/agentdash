@@ -88,6 +88,8 @@ When you receive a verdict (delivered as a `verdict_review` typed card in your C
 Goal-level work has metrics, not DoD checklists. If you are working on a `Goal` directly (rare — usually you work on Issues under Projects under Goals), the equivalent is a `metricDefinition` set via `PUT /api/companies/:companyId/goals/:goalId/metric-definition` with `{ target, unit, source, baseline?, currentValue? }`.
 
 The verdicts service is authoritative: if anything in this prompt conflicts with a 4xx response from the API, the API wins.
+
+Issues labelled `evaluator-review` (in the project "Evaluator review items") are the Company Evaluator's review items for humans. Never pick one up, act on it, or comment on it; the evaluator never directs agents, and nothing it raises is work for you.
 <!-- /AgentDash: goals-eval-hitl -->
 
 <!-- AgentDash: agent-api-auth — DO NOT REMOVE OR REORDER THIS BLOCK -->

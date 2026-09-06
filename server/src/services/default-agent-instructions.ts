@@ -19,6 +19,10 @@ import fs from "node:fs/promises";
 // comes from permission grants, not from a title.
 const DEFAULT_AGENT_BUNDLE_FILES = {
   default: ["AGENTS.md", "HEARTBEAT.md", "SOUL.md", "TOOLS.md"],
+  // AgentDash (Company Evaluator, spec §10): the one role with its own mandate —
+  // a read-only principal invoked only for exception review. Its bundle is the
+  // mandate alone; it inherits none of the worker's execution contract.
+  evaluator: ["AGENTS.md"],
 } as const;
 
 type DefaultAgentBundleRole = keyof typeof DEFAULT_AGENT_BUNDLE_FILES;
@@ -38,6 +42,6 @@ export async function loadDefaultAgentInstructionsBundle(role: DefaultAgentBundl
   return Object.fromEntries(entries);
 }
 
-export function resolveDefaultAgentInstructionsBundleRole(_role: string): DefaultAgentBundleRole {
-  return "default";
+export function resolveDefaultAgentInstructionsBundleRole(role: string): DefaultAgentBundleRole {
+  return role === "evaluator" ? "evaluator" : "default";
 }
