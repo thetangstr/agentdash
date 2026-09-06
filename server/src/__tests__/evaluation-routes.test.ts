@@ -21,6 +21,7 @@ vi.mock("../services/evaluation/ingest.js", () => ({
 }));
 const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
 const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")));
+const findBySource = vi.fn(async () => ({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", eventType: "evaluation.correction" }));
 const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction" } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created" } : null));
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
@@ -31,6 +32,7 @@ vi.mock("../services/evaluation/ledger.js", () => ({
     append,
     existing,
     get: ledgerGet,
+    findBySource,
   }),
 }));
 vi.mock("../services/evaluation/replay.js", () => ({
@@ -257,6 +259,8 @@ describe("evaluation routes", () => {
     const filed = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed", evidenceRefs: [] });
     expect(filed.status).toBe(201);
     expect((append.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.correction", actorType: "user", actorId: "user-1" });
+    expect(filed.body).toMatchObject({ status: "pending_decision" });
+    expect(filed.body.next).toContain("correctionEventId = this eventId");
     // evaluator note on the correction: the correction must exist (by id and type) and the note must cite
     const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/cccccccc-cccc-4ccc-8ccc-ccccccccccc1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] });
     expect(note.status).toBe(201);
@@ -281,6 +285,13 @@ describe("evaluation routes", () => {
     expect(attest.status).toBe(201);
     expect((append.mock.calls[4]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ projectId: "22222222-2222-4222-8222-222222222222", sourceId: "k1:milestone" });
     expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "nope" })).status).toBe(400);
+    // re-filing the identical correction is a 200 whose eventId is the existing correction, and the guidance says so
+    append.mockResolvedValueOnce({ inserted: 0, skipped: 1, insertedIds: [], oldestInsertedEventTime: null });
+    existing.mockResolvedValueOnce(new Set(["22222222-2222-4222-8222-222222222222"]));
+    const refiled = await request(admin).post("/api/companies/company-1/evaluation/corrections").send({ disputedEventId: "22222222-2222-4222-8222-222222222222", claimedFact: "it was reviewed", evidenceRefs: [] });
+    expect(refiled.status).toBe(200);
+    expect(refiled.body.eventId).toBe("cccccccc-cccc-4ccc-8ccc-ccccccccccc1");
+    expect(refiled.body.next).toContain("an identical correction was already filed");
   });
 
   it("rejects a malformed snapshot body and an unknown event type filter is ignored", async () => {

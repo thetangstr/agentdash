@@ -127,6 +127,14 @@ describeEmbeddedPostgres("evaluation review items (embedded postgres)", () => {
     const again = await svc.sync(companyId, ref(), card([exc({ id: "E5", key: "E5:issue:a", title: "stale work" }), exc({ id: "E10", key: "E10:issue:z", title: "missing DoD at start", subject: { kind: "issue", id: "z", identifier: "EVL-9" } })]), 2, null);
     expect(again.updated).toEqual([]);
     expect(again.unchanged).toContain(digest.id);
+    // a forged manifest cannot change the version or the count the reader sees: both come from the live card, and only the last manifest is read
+    const forged = digest.description!.replace(/<!-- evaluator-state: .* -->/, '<!-- evaluator-state: {"v":99,"total":1,"prevV":null,"prevTotal":null,"keys":["E10:issue:z","E5:issue:a"],"added":[]} -->').replace("The Company Evaluator reviewed", '<!-- evaluator-state: {"v":7,"total":0,"prevV":null,"prevTotal":null,"keys":[],"added":[]} --> The Company Evaluator reviewed');
+    await db.update(issues).set({ description: forged }).where(eq(issues.id, digest.id));
+    const healed = await svc.sync(companyId, ref(), card([exc({ id: "E5", key: "E5:issue:a", title: "stale work" }), exc({ id: "E10", key: "E10:issue:z", title: "missing DoD at start", subject: { kind: "issue", id: "z", identifier: "EVL-9" } })]), 3, null);
+    expect(healed.updated).toEqual([digest.id]);
+    const body = (await db.select().from(issues).where(eq(issues.id, digest.id)))[0]!.description!;
+    expect(body).toContain("**Card v3 — 2 findings (was v99, 1).**"); // the history is the manifest's and is unverifiable; the live numbers are not
+    expect(body.match(/<!-- evaluator-state: /g)!.length).toBe(1);
   });
 
   it("a closed item stays closed: the same key is neither recreated nor reopened, and a key with an underscore matches only itself", async () => {

@@ -37,7 +37,8 @@ interface DigestState {
 }
 const STATE = (st: DigestState) => `<!-- evaluator-state: ${JSON.stringify(st)} -->`;
 function parseState(description: string | null | undefined): DigestState | null {
-  const m = /<!-- evaluator-state: (\{.*?\}) -->/.exec(description ?? "");
+  // the real manifest is always the last one: prose above it (agent names, project names) is user-controlled
+  const m = [...(description ?? "").matchAll(/<!-- evaluator-state: (\{.*?\}) -->/g)].at(-1);
   if (!m) return null;
   try {
     const st = JSON.parse(m[1]!) as DigestState;
@@ -208,7 +209,7 @@ export function evaluationReviewItems(db: Db) {
             prev && prev.v === cardVersion && sameKeys(prev.keys, keys)
               ? prev
               : { v: cardVersion, total: keys.length, prevV: prev?.v ?? null, prevTotal: prev?.total ?? null, keys, added: prev ? keys.filter((k) => !prev.keys.includes(k)) : [] };
-          return `${renderDigest(milestoneName, list, card, state, companyId)}\n${STATE(state)}`;
+          return `${renderDigest(milestoneName, list, card, state, cardVersion, companyId)}\n${STATE(state)}`;
         });
       }
       for (const e of immediates.sort((a, b) => (a.key < b.key ? -1 : 1))) {
@@ -242,14 +243,15 @@ function subjectLabel(e: ExceptionRecord, card: ScoredCard, milestoneName: strin
   }
 }
 
-function renderDigest(milestoneName: string, list: ExceptionRecord[], card: ScoredCard, state: DigestState, companyId: string): string {
+function renderDigest(milestoneName: string, list: ExceptionRecord[], card: ScoredCard, state: DigestState, cardVersion: number, companyId: string): string {
   const byId = new Map<string, ExceptionRecord[]>();
   for (const e of list) byId.set(e.id, [...(byId.get(e.id) ?? []), e]);
   const added = new Set(state.added);
   const lines: string[] = [];
-  lines.push(`**Card v${state.v} — ${words(state.total, "finding")}${state.prevV !== null ? ` (was v${state.prevV}, ${state.prevTotal ?? 0})` : ""}.**${added.size > 0 ? " New entries are marked ▸new." : ""}`);
+  // the version and the count come from the live card, never from the manifest; only the history does
+  lines.push(`**Card v${cardVersion} — ${words(list.length, "finding")}${state.prevV !== null ? ` (was v${state.prevV}, ${state.prevTotal ?? 0})` : ""}.**${added.size > 0 ? " New entries are marked ▸new." : ""}`);
   lines.push("");
-  lines.push(`The Company Evaluator reviewed **${milestoneName}** (card v${state.v}) and raised the routine findings below. The evaluator changed nothing and blocked nothing; no agent was assigned and no one else was notified. Your decision per finding: accept it (close this item) or dispute it (file a correction — how at the bottom).`);
+  lines.push(`The Company Evaluator reviewed **${milestoneName}** (card v${cardVersion}) and raised the routine findings below. The evaluator changed nothing and blocked nothing; no agent was assigned and no one else was notified. Your decision per finding: accept it (close this item) or dispute it (file a correction — how at the bottom).`);
   lines.push("");
   if (state.prevV !== null) {
     const delta = [...byId.entries()]
@@ -257,7 +259,7 @@ function renderDigest(milestoneName: string, list: ExceptionRecord[], card: Scor
       .filter(([, , n]) => n > 0)
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([id, title, n]) => `+${n} ${id} ${title}`);
-    lines.push(`Changed in v${state.v}: ${delta.length > 0 ? delta.join(", ") : "no new findings"}.`);
+    lines.push(`Changed in v${cardVersion}: ${delta.length > 0 ? delta.join(", ") : "no new findings"}.`);
     lines.push("");
   }
   for (const [id, group] of [...byId.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {

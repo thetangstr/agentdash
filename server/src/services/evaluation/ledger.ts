@@ -245,6 +245,16 @@ export function evaluationLedger(db: LedgerDb) {
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
     },
 
+    /** The event an append with this source identity deduplicated against (rule 6), or null. */
+    async findBySource(companyId: string, sourceTable: string, sourceId: string, sourceVersion: string): Promise<EvaluationEventRow | null> {
+      const rows = await db
+        .select()
+        .from(evaluationEvents)
+        .where(and(eq(evaluationEvents.companyId, companyId), eq(evaluationEvents.sourceTable, sourceTable), eq(evaluationEvents.sourceId, sourceId), eq(evaluationEvents.sourceVersion, sourceVersion)))
+        .limit(1);
+      return (rows[0] as EvaluationEventRow | undefined) ?? null;
+    },
+
     /** One event by id within the company, or null; a non-uuid id is simply absent. */
     async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
       if (!isUuidLike(id)) return null; // a uuid column: a malformed id is absent, never a cast error

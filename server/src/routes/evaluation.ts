@@ -382,6 +382,7 @@ export function evaluationRoutes(db: Db) {
       const who = writerActor(req);
       const now = new Date();
       const content = { kind: "evaluator_note", exceptionKey: body.data.exceptionKey, note: body.data.note, evidenceRefs: [...body.data.evidenceRefs].sort() };
+      const sourceVersion = hashCanonical(content).slice(0, 32);
       const result = await withCompanyLock(db, companyId, (tx) =>
         evaluationLedger(tx).append([
           {
@@ -392,7 +393,7 @@ export function evaluationRoutes(db: Db) {
             actorId: who.actorId,
             sourceTable: "evaluator_notes",
             sourceId: body.data.exceptionKey,
-            sourceVersion: hashCanonical(content).slice(0, 32),
+            sourceVersion,
             eventType: "evaluation.finding",
             eventTime: now,
             payload: content,
@@ -402,7 +403,9 @@ export function evaluationRoutes(db: Db) {
       );
       const actor = getActorInfo(req);
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.finding_noted", entityType: "company", entityId: companyId, details: { exceptionKey: body.data.exceptionKey, inserted: result.inserted, citations: body.data.evidenceRefs.length } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "noted", next: "the note is attached to the exception on the card; a human reads it there — nothing is decided by a note" });
+      // the id of the event, whether this call inserted it or an identical one was already there (dedupe by source identity)
+      const eventId = result.insertedIds[0] ?? (await ledger.findBySource(companyId, "evaluator_notes", body.data.exceptionKey, sourceVersion))?.id ?? null;
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId, status: "noted", next: "the note is attached to the exception on the card; a human reads it there — nothing is decided by a note" });
     } catch (err) {
       next(err);
     }
@@ -427,6 +430,7 @@ export function evaluationRoutes(db: Db) {
       const actor = getActorInfo(req);
       const now = new Date();
       const content = { disputedEventId: body.data.disputedEventId, claimedFact: body.data.claimedFact, evidenceRefs: [...body.data.evidenceRefs].sort(), correlationId: body.data.correlationId ?? null, filedBy: actor.actorId };
+      const sourceVersion = hashCanonical(content).slice(0, 32);
       const result = await withCompanyLock(db, companyId, (tx) =>
         evaluationLedger(tx).append([
           {
@@ -435,7 +439,7 @@ export function evaluationRoutes(db: Db) {
             actorId: actor.actorId,
             sourceTable: "evaluation_corrections",
             sourceId: body.data.disputedEventId,
-            sourceVersion: hashCanonical(content).slice(0, 32),
+            sourceVersion,
             eventType: "evaluation.correction",
             eventTime: now,
             payload: content,
@@ -444,7 +448,9 @@ export function evaluationRoutes(db: Db) {
         ]),
       );
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.correction_filed", entityType: "company", entityId: companyId, details: { disputedEventId: body.data.disputedEventId, inserted: result.inserted } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "pending_decision", next: `a manager or the founder decides; an administrator records the decision with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided, correctionEventId = this eventId)` });
+      // the id of the event, whether this call inserted it or an identical one was already there (dedupe by source identity)
+      const eventId = result.insertedIds[0] ?? (await ledger.findBySource(companyId, "evaluation_corrections", body.data.disputedEventId, sourceVersion))?.id ?? null;
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId, status: "pending_decision", next: `${result.inserted === 0 ? "an identical correction was already filed; eventId above is that correction. " : ""}a manager or the founder decides; an administrator records the decision with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided, correctionEventId = this eventId)` });
     } catch (err) {
       next(err);
     }
@@ -466,6 +472,7 @@ export function evaluationRoutes(db: Db) {
       const who = writerActor(req);
       const now = new Date();
       const content = { kind: "evaluator_note", correctionEventId, note: body.data.note, evidenceRefs: [...body.data.evidenceRefs].sort() };
+      const sourceVersion = hashCanonical(content).slice(0, 32);
       const result = await withCompanyLock(db, companyId, (tx) =>
         evaluationLedger(tx).append([
           {
@@ -474,7 +481,7 @@ export function evaluationRoutes(db: Db) {
             actorId: who.actorId,
             sourceTable: "evaluator_notes",
             sourceId: correctionEventId,
-            sourceVersion: hashCanonical(content).slice(0, 32),
+            sourceVersion,
             eventType: "evaluation.disposition",
             eventTime: now,
             payload: content,
@@ -484,7 +491,9 @@ export function evaluationRoutes(db: Db) {
       );
       const actor = getActorInfo(req);
       await logActivity(db, { companyId, actorType: actor.actorType, actorId: actor.actorId, action: "evaluation.correction_noted", entityType: "company", entityId: companyId, details: { correctionEventId, inserted: result.inserted } });
-      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null, status: "noted", next: `the correction stays pending; a manager or the founder decides and an administrator records it with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided)` });
+      // the id of the event, whether this call inserted it or an identical one was already there (dedupe by source identity)
+      const eventId = result.insertedIds[0] ?? (await ledger.findBySource(companyId, "evaluator_notes", correctionEventId, sourceVersion))?.id ?? null;
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId, status: "noted", next: `the correction stays pending; a manager or the founder decides and an administrator records it with POST /api/companies/${companyId}/evaluation/dispositions (kind correction_decided)` });
     } catch (err) {
       next(err);
     }
