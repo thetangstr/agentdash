@@ -51,7 +51,11 @@ const projectsList = vi.fn().mockResolvedValue([]);
 const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
 vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
 const reviewSync = vi.fn().mockResolvedValue({ projectId: "proj-eval", labelId: "lbl", created: ["i1"], updated: [], unchanged: [], unrouted: [], closed: [] });
-vi.mock("../services/evaluation/review-items.js", () => ({ REVIEW_PROJECT_DESCRIPTION: "Review items raised by the Company Evaluator.", evaluationReviewItems: () => ({ sync: reviewSync }) }));
+vi.mock("../services/evaluation/review-items.js", () => ({
+  REVIEW_PROJECT_DESCRIPTION: "Review items raised by the Company Evaluator.",
+  evaluationReviewItems: () => ({ sync: reviewSync }),
+  withReviewItemsLock: async (_db: unknown, _companyId: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
+}));
 vi.mock("../services/activity-log.js", () => ({ logActivity }));
 
 async function createApp(actor: Record<string, unknown>) {
@@ -264,7 +268,7 @@ describe("evaluation routes", () => {
     // evaluator note on the correction: the correction must exist (by id and type) and the note must cite
     const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/cccccccc-cccc-4ccc-8ccc-ccccccccccc1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] });
     expect(note.status).toBe(201);
-    expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "evaluator", sourceId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" });
+    expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.evaluator_note", actorType: "evaluator", sourceId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" }); // its own type: never mistaken for a human decision
     ledgerList.mockResolvedValueOnce([]);
     expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-9/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404);
     expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/dddddddd-dddd-4ddd-8ddd-ddddddddddd1/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404); // an event of another type is not a correction

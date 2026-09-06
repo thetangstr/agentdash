@@ -18,7 +18,7 @@ import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.j
 import { agentService } from "../services/agents.js";
 import { projectService } from "../services/projects.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
-import { REVIEW_PROJECT_DESCRIPTION, evaluationReviewItems } from "../services/evaluation/review-items.js";
+import { REVIEW_PROJECT_DESCRIPTION, evaluationReviewItems, withReviewItemsLock } from "../services/evaluation/review-items.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
 
@@ -276,25 +276,30 @@ export function evaluationRoutes(db: Db) {
       if (!body.success) throw badRequest("Invalid body", { issues: body.error.issues });
       const actor = getActorInfo(req);
       const agentsSvc = agentService(db);
-      const projectsSvc = projectService(db);
 
-      const project =
-        (await projectsSvc.list(companyId)).find((p) => p.name === EVALUATION_REVIEW_PROJECT_NAME) ??
-        (await projectsSvc.create(companyId, { name: EVALUATION_REVIEW_PROJECT_NAME, description: REVIEW_PROJECT_DESCRIPTION, status: "in_progress" }));
-
-      let agent = (await agentsSvc.list(companyId)).find((a) => a.role === EVALUATOR_AGENT_ROLE && a.status !== "terminated") ?? null;
-      let created = false;
-      if (!agent) {
-        agent = await agentsSvc.create(companyId, {
-          name: "Evaluator",
-          title: "Company Evaluator",
-          role: EVALUATOR_AGENT_ROLE,
-          reportsTo: null,
-          accountableUserId: actor.actorType === "user" ? actor.actorId : null,
-          capabilities: "Reads the evaluation ledger and cards; reviews exceptions; never directs agents or changes reviewed work.",
-        });
-        created = true;
-      }
+      // find-or-create under the company's review-items lock, so two provisioning calls (or a call racing the
+      // first cadence sync) cannot create two evaluator agents or two review projects
+      const { project, agent, created } = await withReviewItemsLock(db, companyId, async (tx) => {
+        const projectsTx = projectService(tx);
+        const agentsTx = agentService(tx);
+        const project =
+          (await projectsTx.list(companyId)).find((p) => p.name === EVALUATION_REVIEW_PROJECT_NAME) ??
+          (await projectsTx.create(companyId, { name: EVALUATION_REVIEW_PROJECT_NAME, description: REVIEW_PROJECT_DESCRIPTION, status: "in_progress" }));
+        let agent = (await agentsTx.list(companyId)).find((a) => a.role === EVALUATOR_AGENT_ROLE && a.status !== "terminated") ?? null;
+        let created = false;
+        if (!agent) {
+          agent = await agentsTx.create(companyId, {
+            name: "Evaluator",
+            title: "Company Evaluator",
+            role: EVALUATOR_AGENT_ROLE,
+            reportsTo: null,
+            accountableUserId: actor.actorType === "user" ? actor.actorId : null,
+            capabilities: "Reads the evaluation ledger and cards; reviews exceptions; never directs agents or changes reviewed work.",
+          });
+          created = true;
+        }
+        return { project, agent, created };
+      });
       let key: { id: string; token: string } | null = null;
       if (created || body.data.rotateKey) {
         if (!created) await agentsSvc.revokeKeysOfKind(agent.id, "evaluator");
@@ -328,7 +333,7 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       await assertEvaluatorOrAdministrator(req, companyId);
-      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid(), version: z.number().int().positive().optional() }).safeParse(req.body);
+      const body = z.object({ kind: z.enum(["project", "goal"]), id: z.string().uuid() }).safeParse(req.body);
       if (!body.success) throw badRequest("kind, id required", { issues: body.error.issues });
       const ref = evaluationMilestoneRefSchema.parse({ kind: body.data.kind, id: body.data.id });
       const latest = await cards.latest(companyId, ref);
@@ -482,7 +487,7 @@ export function evaluationRoutes(db: Db) {
             sourceTable: "evaluator_notes",
             sourceId: correctionEventId,
             sourceVersion,
-            eventType: "evaluation.disposition",
+            eventType: "evaluation.evaluator_note",
             eventTime: now,
             payload: content,
             correlationId: `correction:${correctionEventId}`,

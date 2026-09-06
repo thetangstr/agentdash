@@ -75,6 +75,7 @@ export const EVALUATION_EVENT_TYPES = [
   "evaluation.finding",
   "evaluation.correction",
   "evaluation.disposition",
+  "evaluation.evaluator_note",
   // catch-all
   "activity.other",
 ] as const;

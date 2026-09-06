@@ -147,6 +147,32 @@ describeEmbeddedPostgres("evaluator read-only gate (embedded postgres)", () => {
     await agentService(db).update(evaluatorId, { title: "Company Evaluator" });
   });
 
+  it("every spelling of a non-allowlisted route fails closed: encoded segments, double slashes, case, query strings, and the evaluator key on the x-agent-key header", async () => {
+    reached.length = 0;
+    const attempts: Array<[string, request.Test]> = [
+      ["encoded", request(app).post(`/api/companies/${companyId}/%69ssues`).send({ title: "x" })],
+      ["double-slash", request(app).post(`/api/companies//${companyId}/issues`).send({ title: "x" })],
+      ["uppercase", request(app).post(`/API/companies/${companyId}/issues`).send({ title: "x" })],
+      ["query", request(app).post(`/api/companies/${companyId}/issues?x=1`).send({ title: "x" })],
+      ["trailing-slash", request(app).post(`/api/companies/${companyId}/issues/`).send({ title: "x" })],
+      ["allowlisted-but-encoded", request(app).post(`/api/companies/${companyId}/evaluation/%66indings`).send({})],
+    ];
+    for (const [label, req] of attempts) {
+      const res = await asEvaluator(req);
+      expect(res.status, label).toBe(403);
+      expect(res.body.code, label).toBe("EVALUATOR_READ_ONLY");
+    }
+    // the same key on the other header is the same principal
+    const viaHeader = await request(app).post(`/api/companies/${companyId}/verdicts`).set("x-agent-key", evaluatorToken).send({});
+    expect(viaHeader.status).toBe(403);
+    const readViaHeader = await request(app).get(`/api/companies/${companyId}/issues`).set("x-agent-key", evaluatorToken);
+    expect(readViaHeader.status).toBe(200);
+    expect(readViaHeader.body.actor.readOnly).toBe(true);
+    // a query string on an allowlisted route is still allowlisted; a trailing slash too
+    expect((await asEvaluator(request(app).post(`/api/companies/${companyId}/evaluation/findings?x=1`).send({}))).status).toBe(200);
+    expect(reached).toEqual(["get-issues", "post-findings"]);
+  });
+
   it("changes nothing for an ordinary agent key", async () => {
     reached.length = 0;
     const res = await asWorker(request(app).post(`/api/companies/${companyId}/issues`).send({ title: "x" }));
