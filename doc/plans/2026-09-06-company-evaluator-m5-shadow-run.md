@@ -37,9 +37,9 @@ checkout `/Volumes/mac_studio_ssd/Projects/agentdash-ota-integration` and must
 not be detached to main. A merge candidate is prepared:
 
 - branch `ota/integration-mkthink+main-20260906` in the repository the ota
-  checkout belongs to (`/Users/Kailor/agentdash`; its worktree directory
-  `.claude/worktrees/ota-merge` merely sits under the mac_studio tree), one
-  merge commit bringing `origin/main` at `aa35d1b82`
+  checkout belongs to (the primary AgentDash clone in the founder's home
+  directory; its worktree directory `.claude/worktrees/ota-merge` merely sits
+  under the mac_studio tree), one merge commit bringing `origin/main` at `aa35d1b82`
   (v2026.904.0 plus evaluator Milestones 1–4 and follow-ups) into the ota
   branch, upstream-preferred on twelve conflicts: migration journal 0124–0127,
   `agent_api_keys.principal_kind`, codex command fallback in the adapter
