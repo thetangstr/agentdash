@@ -35,6 +35,9 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanyHealth } from "./pages/CompanyHealth";
+import { EvaluationOverview } from "./pages/evaluation/EvaluationOverview";
+import { EvaluationFounder } from "./pages/evaluation/EvaluationFounder";
+import { EvaluationMilestone } from "./pages/evaluation/EvaluationMilestone";
 import { InstanceErrors } from "./pages/InstanceErrors";
 import { CompanySkills } from "./pages/CompanySkills";
 import { CompanyExport } from "./pages/CompanyExport";
@@ -168,6 +171,10 @@ function boardRoutes() {
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
       <Route path="costs" element={<Costs />} />
+      <Route path="evaluation" element={<EvaluationOverview />} />
+      <Route path="evaluation/founder" element={<EvaluationFounder />} />
+      <Route path="evaluation/:kind/:id" element={<EvaluationMilestone />} />
+      <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
       <Route path="my-agent/connect-machine" element={<ConnectYourMachineGuide />} />

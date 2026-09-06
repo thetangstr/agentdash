@@ -671,3 +671,40 @@ Recorded here rather than in the spec, which is at its size limit.
   evaluator's own request targets, not another company's data (finding 9);
   cadence edge cases (fallback routing, lock collision catch-up, interval floor)
   remain untested (finding 11).
+## Milestone 4 implementation notes (2026-09-06, dashboard branch)
+
+- **Surfaces render what the server stored; nothing is recomputed in the
+  browser.** The card's result shapes moved to `packages/shared`
+  (`evaluation-card.ts`) so the UI types are the server's types. Three new
+  read routes, open to company members: `GET …/evaluation/overview` (every
+  project and goal with what its latest card says, the review-items project id,
+  whether a principal is provisioned, the ledger's max sequence),
+  `GET …/evaluation/scorecards/versions` (every stored version without bodies),
+  `GET …/evaluation/events/:id` (one ledger event, the drill-down target).
+- **Every number links to its formula and its events.** Each metric row opens to
+  the §5 sentence for its key (`EVALUATION_METRIC_FORMULAS`), the implementation
+  version that produced it, its breakdown with undecidable reasons, its notes,
+  and the cited event ids; every id opens the event itself in a drawer.
+  Composites show their guard reasons, included weights and coverages, and
+  excluded metrics with reasons. A withheld score is the words for why, never a
+  number.
+- **No unnormalised ranking.** The operating tab lists agents by name with a
+  statement that the scores are coverage-weighted means shown with confidence
+  and are not a ranking; the overview orders milestones by card recency then
+  name; the company row is separate. Trend is the outcome score per stored
+  version as an inline line with gaps where a version was withheld.
+- **Founder view** (`/evaluation/founder`) carries only decisions waiting
+  (corrections with no `correction_decided` disposition), material risk (score,
+  confidence, markers per milestone) and the immediate, material or
+  founder-routed exceptions from the latest cards. No operating rows.
+- **Administrator actions on the versions tab** — verify the latest card
+  against a replay, replay now, store a new version — are the page's only
+  writes and are gated server-side; the page merely offers them to
+  administrators. Review items are the issues in the evaluator's project,
+  listed through the ordinary issues API.
+- **Recorded, not built:** intervention count and metered cost on the overview
+  are sums of P1 and P8 details across the card's actors and read "not on this
+  card" when the metrics are absent; goal health is the goal's status and O4 as
+  the card shows them; there is no chart dependency (a small inline SVG draws
+  the trend). A Playwright flow over a live server is the remaining acceptance
+  step and is listed on the pull request.
