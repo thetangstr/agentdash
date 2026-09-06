@@ -358,6 +358,26 @@ describeEmbeddedPostgres("evaluation ingest + ledger (embedded postgres)", () =>
     expect(await ledger.hasContract(companyId, { kind: "project", id: strayProject })).toBe(true);
   });
 
+  it("the ledger list can be scoped to a project, cut at a sequence and ordered newest first (Milestone 4 drill-down)", async () => {
+    const ledger = evaluationLedger(db);
+    const all = await ledger.list(companyId, { limit: 5000 });
+    expect(all.length).toBeGreaterThan(2);
+    const tagged = all.filter((e) => e.projectId);
+    expect(tagged.length).toBeGreaterThan(0);
+    const projectId = tagged[0]!.projectId!;
+    const scoped = await ledger.list(companyId, { projectId, limit: 5000 });
+    expect(scoped.length).toBe(all.filter((e) => e.projectId === projectId).length);
+    expect(scoped.every((e) => e.projectId === projectId)).toBe(true);
+    const cutAt = Number(all[Math.floor(all.length / 2)]!.seq);
+    const cut = await ledger.list(companyId, { throughSeq: cutAt, limit: 5000 });
+    expect(cut.every((e) => Number(e.seq) <= cutAt)).toBe(true);
+    expect(cut.length).toBe(all.filter((e) => Number(e.seq) <= cutAt).length);
+    const newest = await ledger.list(companyId, { order: "desc", limit: 3 });
+    expect(newest.length).toBe(3);
+    // the same total order as the ascending list (rule 5: tolerance bucket, ingest time, dedupe key), reversed
+    expect(newest.map((e) => e.id)).toEqual(all.slice(-3).reverse().map((e) => e.id));
+  });
+
   it("a malformed event id is absent, never a uuid cast error: `get` returns null and `existing` reports it missing (M3 review)", async () => {
     const ledger = evaluationLedger(db);
     const [real] = await ledger.list(companyId, { limit: 1 });

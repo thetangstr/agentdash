@@ -671,3 +671,76 @@ Recorded here rather than in the spec, which is at its size limit.
   evaluator's own request targets, not another company's data (finding 9);
   cadence edge cases (fallback routing, lock collision catch-up, interval floor)
   remain untested (finding 11).
+## Milestone 4 implementation notes (2026-09-06, dashboard branch)
+
+- **Surfaces render what the server stored; nothing is recomputed in the
+  browser.** The card's result shapes moved to `packages/shared`
+  (`evaluation-card.ts`) so the UI types are the server's types. Three new
+  read routes, open to company members: `GET …/evaluation/overview` (every
+  project and goal with what its latest card says, the review-items project id,
+  whether a principal is provisioned, the ledger's max sequence),
+  `GET …/evaluation/scorecards/versions` (every stored version without bodies),
+  `GET …/evaluation/events/:id` (one ledger event, the drill-down target).
+- **Every number links to its formula and its events.** Each metric row opens to
+  the §5 sentence for its key (`EVALUATION_METRIC_FORMULAS`), the implementation
+  version that produced it, its breakdown with undecidable reasons, its notes,
+  and the cited event ids; every id opens the event itself in a drawer.
+  Composites show their guard reasons, included weights and coverages, and
+  excluded metrics with reasons. A withheld score is the words for why, never a
+  number.
+- **No unnormalised ranking.** The operating tab lists agents by name with a
+  statement that the scores are coverage-weighted means shown with confidence
+  and are not a ranking; the overview orders milestones by card recency then
+  name; the company row is separate. Trend is the outcome score per stored
+  version as an inline line with gaps where a version was withheld.
+- **Founder view** (`/evaluation/founder`) carries only decisions waiting
+  (corrections with no `correction_decided` disposition), material risk (score,
+  confidence, markers per milestone) and the immediate, material or
+  founder-routed exceptions from the latest cards. No operating rows.
+- **Administrator actions on the versions tab** — verify the latest card
+  against a replay, replay now, store a new version — are the page's only
+  writes and are gated server-side; the page merely offers them to
+  administrators. Review items are the issues in the evaluator's project,
+  listed through the ordinary issues API.
+- **Recorded, not built:** intervention count and metered cost on the overview
+  are sums of P1 and P8 details across the card's actors and read "not on this
+  card" when the metrics are absent; goal health is the goal's status and O4 as
+  the card shows them; there is no chart dependency (a small inline SVG draws
+  the trend). A Playwright flow over a live server is the remaining acceptance
+  step and is listed on the pull request.
+- **Milestone 4 review round 2 (independent reviewer): dispositions.** P9 is an
+  index (duplicates and rework per delivered item, lower is better), not a
+  share, and renders as a value with its unit like O3; the dashboard's
+  intervention count is shown over the population it was counted on (P1 has
+  no undecidable path, so its coverage is one by construction and says
+  nothing); a card that predates the scoring engine still offers an
+  administrator the new version it needs; the contract fixture is regenerated
+  only on an explicit flag, never recreated when missing. Recorded, on §7: a
+  display-only metric (P5–P8) keeps its value at the insufficient tier in the
+  stored card — the engine chose in Milestone 2 to keep the figure with the
+  words "insufficient evidence" beside it because the number is a fact
+  (metered cents, hours to recovery) rather than a score — and the drill-down
+  now renders exactly that; §7's "no value at Insufficient" applies to scored
+  metrics, whose value is null at that tier.
+- **Milestone 4 review round 3: the value's kind is the engine's to say.** Three
+  rounds found the browser inferring a metric's unit from its key or unit text,
+  each time wrong for one metric (P9 an index, the company row's P2 a count
+  under an agent key). `MetricResult` now carries `valueKind` — share, index,
+  count, duration, currency or status — set where the metric is built, and the
+  surfaces render on it and nothing else; the company row's metrics carry
+  their own names ("Questions owed by the company", "Platform failures")
+  instead of the agent names their keys would give. The card's bytes changed,
+  so `METRICS_FORMULA_VERSION` is `metrics/3` and `FORMULA_VERSION`
+  `m2-score/6`; the contract fixture was regenerated and its test now asserts
+  the company row's rendering on the real card.
+- **Milestone 4 wording pass (Priya, AGE-102) and the version rule, again.** The
+  product review's list moved founder prose to metric names, plain words and
+  routes in words, put acceptance requests on the founder view, and changed
+  four stored-card strings (O4's unit is the goal's state, P8's unit, the
+  concentration reason, the lag marker). Card bytes changed, so the pins moved
+  with them: `FORMULA_VERSION` `m2-score/7`, `METRICS_FORMULA_VERSION`
+  `metrics/4`, `COMPOSITE_FORMULA_VERSION` `composite/6`. The rule, restated
+  because it has now been missed three times in one build: any change to what
+  a stored card contains — a number, a string, a field — moves every version
+  pin in the same commit, so `verify` reports "formula changed" rather than a
+  false replay disagreement.

@@ -1,0 +1,1995 @@
+{
+  "formulaVersion": "m2-score/7",
+  "milestoneRef": {
+    "kind": "project",
+    "id": "00000000-0000-4000-8000-0000000000a1"
+  },
+  "milestoneName": "Launch",
+  "throughSeq": 33,
+  "throughEventId": "e24",
+  "asOf": "2026-08-02T04:01:00.000Z",
+  "markers": [
+    "open milestone — denominators still moving",
+    "contract derived by the evaluator — confidence capped at adequate",
+    "partial records — some sources are absent from this window (see missing sources)"
+  ],
+  "contract": {
+    "source": "derived",
+    "contractVersion": "v1",
+    "declaredAt": null,
+    "declaredBy": null,
+    "accountableUserId": null,
+    "leadAgentId": null,
+    "requiredEvidence": [
+      "dod_present",
+      "neutral_verdict",
+      "delivery_ref",
+      "ci_green",
+      "independent_review"
+    ],
+    "criteriaCount": 0,
+    "measurableCriteria": 0,
+    "exceptions": [
+      "contract derived by the evaluator from roster facts; no acceptance criteria could be derived, so acceptance (O1) is insufficient by construction and every other metric's confidence is capped at adequate — declare criteria with checks to make acceptance measurable"
+    ],
+    "founderLocks": [],
+    "excludedReviewers": [],
+    "targetDate": null,
+    "eventId": null,
+    "invalidVersions": 0
+  },
+  "membership": {
+    "items": 2,
+    "done": 2,
+    "cancelled": 0,
+    "open": 0,
+    "excludedEvaluatorItems": 0,
+    "movedIn": 0,
+    "movedOut": 0
+  },
+  "outcome": {
+    "O1": {
+      "key": "O1",
+      "name": "Acceptance satisfied",
+      "valueKind": "share",
+      "value": null,
+      "unit": "share of decidable done items",
+      "n": 2,
+      "coverage": 0,
+      "confidence": "insufficient",
+      "confidenceLabel": "insufficient evidence",
+      "breakdown": {
+        "satisfied": 0,
+        "failed": 0,
+        "undecidable": [
+          {
+            "reason": "no acceptance criteria declared — contract derived",
+            "count": 2
+          }
+        ]
+      },
+      "headline": "insufficient evidence — satisfied 0 of 2 done; 2 undecidable (no acceptance criteria declared — contract derived)",
+      "formulaVersion": "metrics/4",
+      "evidenceRefs": [],
+      "evidenceRefCount": 0,
+      "tiers": [],
+      "lowerIsBetter": false,
+      "displayOnly": false,
+      "detail": {},
+      "notes": [
+        "no criterion carries a check, so acceptance cannot be decided; the gap is the measurement",
+        "coverage 0% below 20%"
+      ]
+    },
+    "O2": {
+      "key": "O2",
+      "name": "Deadline adherence",
+      "valueKind": "share",
+      "value": null,
+      "unit": "share closed on time",
+      "n": 0,
+      "coverage": 0,
+      "confidence": "insufficient",
+      "confidenceLabel": "insufficient evidence",
+      "breakdown": {
+        "satisfied": 0,
+        "failed": 0,
+        "undecidable": []
+      },
+      "headline": "insufficient evidence — no target date on the milestone or its contract",
+      "formulaVersion": "metrics/4",
+      "evidenceRefs": [],
+      "evidenceRefCount": 0,
+      "tiers": [],
+      "lowerIsBetter": false,
+      "displayOnly": false,
+      "detail": {},
+      "notes": [
+        "set projects.targetDate or the contract's targetDate to measure",
+        "empty population"
+      ]
+    },
+    "O3": {
+      "key": "O3",
+      "name": "Downstream risk index",
+      "valueKind": "index",
+      "value": 0,
+      "unit": "consequences per delivered item",
+      "n": 2,
+      "coverage": 1,
+      "confidence": "medium",
+      "confidenceLabel": "adequate evidence",
+      "breakdown": {
+        "satisfied": 2,
+        "failed": 0,
+        "undecidable": []
+      },
+      "headline": "0 consequences across 2 delivered items: 0 reopened, 0 cited as blockers, 0 reverted",
+      "formulaVersion": "metrics/4",
+      "evidenceRefs": [],
+      "evidenceRefCount": 0,
+      "tiers": [
+        "T0"
+      ],
+      "lowerIsBetter": true,
+      "displayOnly": false,
+      "detail": {
+        "reopens": 0,
+        "blockersCiting": 0,
+        "revertTerm": {
+          "reverts": 0,
+          "coverage": 1,
+          "note": "counted only where T2 delivery evidence exists"
+        },
+        "incidentTerm": "insufficient by construction: server_errors carries no company, agent, run or release link (F6)",
+        "recoveryIssueTerm": "not modelled: no record links a recovery issue to the item it recovers"
+      },
+      "notes": [
+        "index, lower is better; consequences are T0 facts (reopen, blocker citing the item) plus T2-conditional reverts",
+        "coverage is the mean of the three terms' observability; the revert term is observable for 100% of delivered items",
+        "coverage 100% from a single source tier"
+      ]
+    },
+    "O4": {
+      "key": "O4",
+      "name": "Goal progress",
+      "valueKind": "status",
+      "value": null,
+      "unit": "active",
+      "n": 1,
+      "coverage": 0,
+      "confidence": "insufficient",
+      "confidenceLabel": "insufficient evidence",
+      "breakdown": {
+        "satisfied": 0,
+        "failed": 0,
+        "undecidable": [
+          {
+            "reason": "goal still active: progress not measurable without an outcome target and measurements",
+            "count": 1
+          }
+        ]
+      },
+      "headline": "insufficient evidence — goal Ship is active — status only",
+      "formulaVersion": "metrics/4",
+      "evidenceRefs": [
+        "e5"
+      ],
+      "evidenceRefCount": 1,
+      "tiers": [
+        "T0"
+      ],
+      "lowerIsBetter": false,
+      "displayOnly": true,
+      "detail": {
+        "goalId": "00000000-0000-4000-8000-0000000000b1",
+        "status": "active",
+        "outcomeTarget": null,
+        "statusTransitions": [
+          {
+            "at": "2026-08-01T10:00:00.000Z",
+            "status": "active"
+          }
+        ]
+      },
+      "notes": [
+        "shown, not scored: status only until goal measurements exist",
+        "coverage 0% below 20%"
+      ]
+    },
+    "O5": {
+      "key": "O5",
+      "name": "Evidence hygiene",
+      "valueKind": "share",
+      "value": 1,
+      "unit": "share of decidable done items with every decidable required class satisfied",
+      "n": 2,
+      "coverage": 1,
+      "confidence": "medium",
+      "confidenceLabel": "adequate evidence",
+      "breakdown": {
+        "satisfied": 2,
+        "failed": 0,
+        "undecidable": []
+      },
+      "headline": "fully evidenced 2 of 2 done",
+      "formulaVersion": "metrics/4",
+      "evidenceRefs": [
+        "e12",
+        "e14",
+        "e15",
+        "e17",
+        "e21",
+        "e25",
+        "e27",
+        "e28",
+        "e30",
+        "e8"
+      ],
+      "evidenceRefCount": 10,
+      "tiers": [
+        "T0",
+        "T2"
+      ],
+      "lowerIsBetter": false,
+      "displayOnly": false,
+      "detail": {
+        "requiredEvidence": [
+          "ci_green",
+          "delivery_ref",
+          "dod_present",
+          "independent_review",
+          "neutral_verdict"
+        ],
+        "waived": [],
+        "perClass": {
+          "dod_present": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": 0,
+            "waived": 0
+          },
+          "neutral_verdict": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": 0,
+            "waived": 0
+          },
+          "delivery_ref": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": 0,
+            "waived": 0
+          },
+          "ci_green": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": 0,
+            "waived": 0
+          },
+          "independent_review": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": 0,
+            "waived": 0
+          }
+        },
+        "sharedAccountabilityReviews": 4,
+        "limitedEvidenceItems": 0,
+        "limitedReviewItems": 0
+      },
+      "notes": [
+        "value over the items with at least one decidable required class; coverage is the share of the five default classes decidable per item",
+        "coverage 100% with 2 independent source tiers",
+        "contract derived by the evaluator, not declared: capped at adequate"
+      ]
+    }
+  },
+  "outcomeComposite": {
+    "kind": "outcome",
+    "score": 100,
+    "confidence": "medium",
+    "coverage": 1,
+    "included": [
+      {
+        "key": "O3",
+        "weight": 0.2,
+        "coverage": 1,
+        "scaled": 100,
+        "confidence": "medium"
+      },
+      {
+        "key": "O5",
+        "weight": 0.15,
+        "coverage": 1,
+        "scaled": 100,
+        "confidence": "medium"
+      }
+    ],
+    "excluded": [
+      {
+        "key": "O1",
+        "reason": "insufficient evidence: no criterion carries a check, so acceptance cannot be decided; the gap is the measurement"
+      },
+      {
+        "key": "O2",
+        "reason": "insufficient evidence: set projects.targetDate or the contract's targetDate to measure"
+      },
+      {
+        "key": "O4",
+        "reason": "shown, never scored"
+      }
+    ],
+    "flags": [
+      "E3 present"
+    ],
+    "guard": {
+      "minIncluded": 2,
+      "coverageFloor": 0.5,
+      "maxConcentration": 0.75,
+      "concentration": 0.571,
+      "satisfied": true,
+      "reasons": []
+    },
+    "formulaVersion": "composite/6"
+  },
+  "actors": [
+    {
+      "actorKey": "agent:00000000-0000-4000-8000-0000000000aa",
+      "actorType": "agent",
+      "actorId": "00000000-0000-4000-8000-0000000000aa",
+      "name": "Builder",
+      "metrics": {
+        "P1": {
+          "key": "P1",
+          "name": "Autonomy",
+          "valueKind": "share",
+          "value": 0.5,
+          "unit": "share of items with zero interventions",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 1,
+            "failed": 1,
+            "undecidable": []
+          },
+          "headline": "1 of 2 items reached review or done with no human intervention; 1 intervention in all",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e33"
+          ],
+          "evidenceRefCount": 1,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "interventions": 1,
+            "perItem": {
+              "00000000-0000-4000-8000-000000000101": 0,
+              "00000000-0000-4000-8000-000000000102": 1
+            },
+            "perItemCount": 2,
+            "caveat": null
+          },
+          "notes": [
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P2": {
+          "key": "P2",
+          "name": "Judgment",
+          "valueKind": "share",
+          "value": null,
+          "unit": "escalation precision",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no escalations raised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "raised": 0,
+            "approved": 0,
+            "rubricDimensions": {
+              "correctness": {
+                "mean": 4,
+                "n": 2
+              }
+            }
+          },
+          "notes": [
+            "value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent",
+            "empty population"
+          ]
+        },
+        "P3": {
+          "key": "P3",
+          "name": "Factual accuracy",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of checkable claims not contradicted",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "checkable": 0,
+            "contradicted": 0,
+            "counterpartsMissing": [
+              "regression_gates vs CI (needs the GitHub adapter, D4)",
+              "merge_result vs PR state (D4)",
+              "run status claims (no structured run self-report field)"
+            ]
+          },
+          "notes": [
+            "only payload timestamps have a higher-tier counterpart today (the comment's arrival)",
+            "empty population"
+          ]
+        },
+        "P4": {
+          "key": "P4",
+          "name": "Handoff quality",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of well-formed handoffs",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no handoffs by this agent",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "failures": {},
+            "note": "description presence is not in the ledger; assignments are judged on the definition of done"
+          },
+          "notes": [
+            "empty population"
+          ]
+        },
+        "P5": {
+          "key": "P5",
+          "name": "Recovery",
+          "valueKind": "duration",
+          "value": null,
+          "unit": "hours to a valid action path",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "failedRuns": 0,
+            "medianHours": null,
+            "p90Hours": null,
+            "autoRecovered": 0,
+            "explicitRecovery": 0,
+            "humanEscalation": 0,
+            "unresolved": 0,
+            "recoveryBudgetExhausted": 0,
+            "retriesPerSuccess": null
+          },
+          "notes": [
+            "shown, not scored, until its populations are stable (§5.3)",
+            "empty population"
+          ]
+        },
+        "P6": {
+          "key": "P6",
+          "name": "Authority compliance",
+          "valueKind": "count",
+          "value": 0,
+          "unit": "detected violations",
+          "n": 0,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "no violations detected",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "rules": {},
+            "refusalsLogged": true
+          },
+          "notes": [
+            "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P7": {
+          "key": "P7",
+          "name": "Cycle time",
+          "valueKind": "duration",
+          "value": 8,
+          "unit": "hours (median total)",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e19",
+            "e20",
+            "e21",
+            "e6",
+            "e7",
+            "e8"
+          ],
+          "evidenceRefCount": 6,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "phases": {
+              "queue": {
+                "n": 2,
+                "medianHours": 1,
+                "p90Hours": 1
+              },
+              "work": {
+                "n": 2,
+                "medianHours": 4,
+                "p90Hours": 4
+              },
+              "review": {
+                "n": 2,
+                "medianHours": 3,
+                "p90Hours": 3
+              },
+              "total": {
+                "n": 2,
+                "medianHours": 8,
+                "p90Hours": 8
+              }
+            },
+            "bySize": {},
+            "sizeCoverage": 0
+          },
+          "notes": [
+            "shown, never scored; an unbucketed median is not a normalised one",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P8": {
+          "key": "P8",
+          "name": "Token and cost efficiency",
+          "valueKind": "currency",
+          "value": null,
+          "unit": "cents per accepted item",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "runs": 0,
+            "metered": 0,
+            "totalCents": 0,
+            "medianRunCents": null,
+            "anomalies": 0,
+            "selfReportedTokens": 0,
+            "costPerSatisfiedItem": null
+          },
+          "notes": [
+            "shown, never scored; agent_runs is derived from cost_events and is not a second source; the metering-absent exception needs at least four runs",
+            "empty population"
+          ]
+        },
+        "P9": {
+          "key": "P9",
+          "name": "Duplicate and rework rate",
+          "valueKind": "index",
+          "value": 0,
+          "unit": "duplicates and rework per delivered item",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "0 duplicates and 0 rework events across 2 delivered items",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [
+            "T0",
+            "T2"
+          ],
+          "lowerIsBetter": true,
+          "displayOnly": false,
+          "detail": {
+            "duplicates": 0,
+            "rework": 0,
+            "successorLinks": []
+          },
+          "notes": [
+            "coverage 100% with 2 independent source tiers",
+            "contract derived by the evaluator, not declared: capped at adequate"
+          ]
+        }
+      },
+      "composite": {
+        "kind": "operating",
+        "score": null,
+        "confidence": null,
+        "coverage": 1,
+        "included": [
+          {
+            "key": "P1",
+            "weight": 0.2,
+            "coverage": 1,
+            "scaled": 50,
+            "confidence": "medium"
+          },
+          {
+            "key": "P9",
+            "weight": 0.2,
+            "coverage": 1,
+            "scaled": 100,
+            "confidence": "medium"
+          }
+        ],
+        "excluded": [
+          {
+            "key": "P2",
+            "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+          },
+          {
+            "key": "P3",
+            "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+          },
+          {
+            "key": "P4",
+            "reason": "insufficient evidence: empty population"
+          },
+          {
+            "key": "P5",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P6",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P7",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P8",
+            "reason": "shown, never scored"
+          }
+        ],
+        "flags": [],
+        "guard": {
+          "minIncluded": 3,
+          "coverageFloor": 0.5,
+          "maxConcentration": 0.75,
+          "concentration": 0.5,
+          "satisfied": false,
+          "reasons": [
+            "fewer than 3 metrics have evidence"
+          ],
+          "reason": "fewer than 3 metrics have evidence"
+        },
+        "formulaVersion": "composite/6"
+      }
+    },
+    {
+      "actorKey": "agent:00000000-0000-4000-8000-0000000000bb",
+      "actorType": "agent",
+      "actorId": "00000000-0000-4000-8000-0000000000bb",
+      "name": "Reviewer",
+      "metrics": {
+        "P1": {
+          "key": "P1",
+          "name": "Autonomy",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of items with zero interventions",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no agent-owned items reached review or done",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "interventions": 0,
+            "perItem": {},
+            "perItemCount": 0,
+            "caveat": null
+          },
+          "notes": [
+            "empty population"
+          ]
+        },
+        "P2": {
+          "key": "P2",
+          "name": "Judgment",
+          "valueKind": "share",
+          "value": null,
+          "unit": "escalation precision",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no escalations raised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "raised": 0,
+            "approved": 0,
+            "rubricDimensions": {}
+          },
+          "notes": [
+            "value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent",
+            "empty population"
+          ]
+        },
+        "P3": {
+          "key": "P3",
+          "name": "Factual accuracy",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of checkable claims not contradicted",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "checkable": 0,
+            "contradicted": 0,
+            "counterpartsMissing": [
+              "regression_gates vs CI (needs the GitHub adapter, D4)",
+              "merge_result vs PR state (D4)",
+              "run status claims (no structured run self-report field)"
+            ]
+          },
+          "notes": [
+            "only payload timestamps have a higher-tier counterpart today (the comment's arrival)",
+            "empty population"
+          ]
+        },
+        "P4": {
+          "key": "P4",
+          "name": "Handoff quality",
+          "valueKind": "share",
+          "value": 1,
+          "unit": "share of well-formed handoffs",
+          "n": 4,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 4,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "4 of 4 handoffs well-formed",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e12",
+            "e15",
+            "e25",
+            "e28"
+          ],
+          "evidenceRefCount": 4,
+          "tiers": [
+            "T2"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "failures": {},
+            "note": "description presence is not in the ledger; assignments are judged on the definition of done"
+          },
+          "notes": [
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P5": {
+          "key": "P5",
+          "name": "Recovery",
+          "valueKind": "duration",
+          "value": null,
+          "unit": "hours to a valid action path",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "failedRuns": 0,
+            "medianHours": null,
+            "p90Hours": null,
+            "autoRecovered": 0,
+            "explicitRecovery": 0,
+            "humanEscalation": 0,
+            "unresolved": 0,
+            "recoveryBudgetExhausted": 0,
+            "retriesPerSuccess": null
+          },
+          "notes": [
+            "shown, not scored, until its populations are stable (§5.3)",
+            "empty population"
+          ]
+        },
+        "P6": {
+          "key": "P6",
+          "name": "Authority compliance",
+          "valueKind": "count",
+          "value": 2,
+          "unit": "detected violations",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 2,
+            "undecidable": []
+          },
+          "headline": "2 violations detected: transition of an unassigned item 2",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e11",
+            "e24"
+          ],
+          "evidenceRefCount": 2,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "rules": {
+              "transition_not_assigned": 2
+            },
+            "refusalsLogged": true
+          },
+          "notes": [
+            "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P7": {
+          "key": "P7",
+          "name": "Cycle time",
+          "valueKind": "duration",
+          "value": 8,
+          "unit": "hours (median total)",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e19",
+            "e20",
+            "e21",
+            "e6",
+            "e7",
+            "e8"
+          ],
+          "evidenceRefCount": 6,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "phases": {
+              "queue": {
+                "n": 2,
+                "medianHours": 1,
+                "p90Hours": 1
+              },
+              "work": {
+                "n": 2,
+                "medianHours": 4,
+                "p90Hours": 4
+              },
+              "review": {
+                "n": 2,
+                "medianHours": 3,
+                "p90Hours": 3
+              },
+              "total": {
+                "n": 2,
+                "medianHours": 8,
+                "p90Hours": 8
+              }
+            },
+            "bySize": {},
+            "sizeCoverage": 0
+          },
+          "notes": [
+            "shown, never scored; an unbucketed median is not a normalised one",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P8": {
+          "key": "P8",
+          "name": "Token and cost efficiency",
+          "valueKind": "currency",
+          "value": null,
+          "unit": "cents per accepted item",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "runs": 0,
+            "metered": 0,
+            "totalCents": 0,
+            "medianRunCents": null,
+            "anomalies": 0,
+            "selfReportedTokens": 0,
+            "costPerSatisfiedItem": null
+          },
+          "notes": [
+            "shown, never scored; agent_runs is derived from cost_events and is not a second source; the metering-absent exception needs at least four runs",
+            "empty population"
+          ]
+        },
+        "P9": {
+          "key": "P9",
+          "name": "Duplicate and rework rate",
+          "valueKind": "index",
+          "value": 0,
+          "unit": "duplicates and rework per delivered item",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "0 duplicates and 0 rework events across 2 delivered items",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [
+            "T0",
+            "T2"
+          ],
+          "lowerIsBetter": true,
+          "displayOnly": false,
+          "detail": {
+            "duplicates": 0,
+            "rework": 0,
+            "successorLinks": []
+          },
+          "notes": [
+            "coverage 100% with 2 independent source tiers",
+            "contract derived by the evaluator, not declared: capped at adequate"
+          ]
+        }
+      },
+      "composite": {
+        "kind": "operating",
+        "score": null,
+        "confidence": null,
+        "coverage": 1,
+        "included": [
+          {
+            "key": "P4",
+            "weight": 0.15,
+            "coverage": 1,
+            "scaled": 100,
+            "confidence": "medium"
+          },
+          {
+            "key": "P9",
+            "weight": 0.2,
+            "coverage": 1,
+            "scaled": 100,
+            "confidence": "medium"
+          }
+        ],
+        "excluded": [
+          {
+            "key": "P1",
+            "reason": "insufficient evidence: empty population"
+          },
+          {
+            "key": "P2",
+            "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+          },
+          {
+            "key": "P3",
+            "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+          },
+          {
+            "key": "P5",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P6",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P7",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P8",
+            "reason": "shown, never scored"
+          }
+        ],
+        "flags": [
+          "E3 present"
+        ],
+        "guard": {
+          "minIncluded": 3,
+          "coverageFloor": 0.5,
+          "maxConcentration": 0.75,
+          "concentration": 0.571,
+          "satisfied": false,
+          "reasons": [
+            "fewer than 3 metrics have evidence"
+          ],
+          "reason": "fewer than 3 metrics have evidence"
+        },
+        "formulaVersion": "composite/6"
+      }
+    },
+    {
+      "actorKey": "agent:00000000-0000-4000-8000-0000000000cc",
+      "actorType": "agent",
+      "actorId": "00000000-0000-4000-8000-0000000000cc",
+      "name": "TPM",
+      "metrics": {
+        "P1": {
+          "key": "P1",
+          "name": "Autonomy",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of items with zero interventions",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no agent-owned items reached review or done",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "interventions": 0,
+            "perItem": {},
+            "perItemCount": 0,
+            "caveat": null
+          },
+          "notes": [
+            "empty population"
+          ]
+        },
+        "P2": {
+          "key": "P2",
+          "name": "Judgment",
+          "valueKind": "share",
+          "value": null,
+          "unit": "escalation precision",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no escalations raised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "raised": 0,
+            "approved": 0,
+            "rubricDimensions": {
+              "correctness": {
+                "mean": 4,
+                "n": 2
+              }
+            }
+          },
+          "notes": [
+            "value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent",
+            "empty population"
+          ]
+        },
+        "P3": {
+          "key": "P3",
+          "name": "Factual accuracy",
+          "valueKind": "share",
+          "value": null,
+          "unit": "share of checkable claims not contradicted",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "checkable": 0,
+            "contradicted": 0,
+            "counterpartsMissing": [
+              "regression_gates vs CI (needs the GitHub adapter, D4)",
+              "merge_result vs PR state (D4)",
+              "run status claims (no structured run self-report field)"
+            ]
+          },
+          "notes": [
+            "only payload timestamps have a higher-tier counterpart today (the comment's arrival)",
+            "empty population"
+          ]
+        },
+        "P4": {
+          "key": "P4",
+          "name": "Handoff quality",
+          "valueKind": "share",
+          "value": 1,
+          "unit": "share of well-formed handoffs",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "2 of 2 handoffs well-formed",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e17",
+            "e30"
+          ],
+          "evidenceRefCount": 2,
+          "tiers": [
+            "T2"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": false,
+          "detail": {
+            "failures": {},
+            "note": "description presence is not in the ledger; assignments are judged on the definition of done"
+          },
+          "notes": [
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P5": {
+          "key": "P5",
+          "name": "Recovery",
+          "valueKind": "duration",
+          "value": null,
+          "unit": "hours to a valid action path",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "failedRuns": 0,
+            "medianHours": null,
+            "p90Hours": null,
+            "autoRecovered": 0,
+            "explicitRecovery": 0,
+            "humanEscalation": 0,
+            "unresolved": 0,
+            "recoveryBudgetExhausted": 0,
+            "retriesPerSuccess": null
+          },
+          "notes": [
+            "shown, not scored, until its populations are stable (§5.3)",
+            "empty population"
+          ]
+        },
+        "P6": {
+          "key": "P6",
+          "name": "Authority compliance",
+          "valueKind": "count",
+          "value": 1,
+          "unit": "detected violations",
+          "n": 1,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 1,
+            "undecidable": []
+          },
+          "headline": "1 violation detected: refused request 1",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e32"
+          ],
+          "evidenceRefCount": 1,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "rules": {
+              "authz_refused": 1
+            },
+            "refusalsLogged": true
+          },
+          "notes": [
+            "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P7": {
+          "key": "P7",
+          "name": "Cycle time",
+          "valueKind": "duration",
+          "value": 8,
+          "unit": "hours (median total)",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e19",
+            "e20",
+            "e21",
+            "e6",
+            "e7",
+            "e8"
+          ],
+          "evidenceRefCount": 6,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "phases": {
+              "queue": {
+                "n": 2,
+                "medianHours": 1,
+                "p90Hours": 1
+              },
+              "work": {
+                "n": 2,
+                "medianHours": 4,
+                "p90Hours": 4
+              },
+              "review": {
+                "n": 2,
+                "medianHours": 3,
+                "p90Hours": 3
+              },
+              "total": {
+                "n": 2,
+                "medianHours": 8,
+                "p90Hours": 8
+              }
+            },
+            "bySize": {},
+            "sizeCoverage": 0
+          },
+          "notes": [
+            "shown, never scored; an unbucketed median is not a normalised one",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P8": {
+          "key": "P8",
+          "name": "Token and cost efficiency",
+          "valueKind": "currency",
+          "value": null,
+          "unit": "cents per accepted item",
+          "n": 0,
+          "coverage": 0,
+          "confidence": "insufficient",
+          "confidenceLabel": "insufficient evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "insufficient evidence — no runs",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "runs": 0,
+            "metered": 0,
+            "totalCents": 0,
+            "medianRunCents": null,
+            "anomalies": 0,
+            "selfReportedTokens": 0,
+            "costPerSatisfiedItem": null
+          },
+          "notes": [
+            "shown, never scored; agent_runs is derived from cost_events and is not a second source; the metering-absent exception needs at least four runs",
+            "empty population"
+          ]
+        },
+        "P9": {
+          "key": "P9",
+          "name": "Duplicate and rework rate",
+          "valueKind": "index",
+          "value": 0,
+          "unit": "duplicates and rework per delivered item",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "0 duplicates and 0 rework events across 2 delivered items",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [
+            "T0",
+            "T2"
+          ],
+          "lowerIsBetter": true,
+          "displayOnly": false,
+          "detail": {
+            "duplicates": 0,
+            "rework": 0,
+            "successorLinks": []
+          },
+          "notes": [
+            "coverage 100% with 2 independent source tiers",
+            "contract derived by the evaluator, not declared: capped at adequate"
+          ]
+        }
+      },
+      "composite": {
+        "kind": "operating",
+        "score": null,
+        "confidence": null,
+        "coverage": 1,
+        "included": [
+          {
+            "key": "P4",
+            "weight": 0.15,
+            "coverage": 1,
+            "scaled": 100,
+            "confidence": "medium"
+          },
+          {
+            "key": "P9",
+            "weight": 0.2,
+            "coverage": 1,
+            "scaled": 100,
+            "confidence": "medium"
+          }
+        ],
+        "excluded": [
+          {
+            "key": "P1",
+            "reason": "insufficient evidence: empty population"
+          },
+          {
+            "key": "P2",
+            "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+          },
+          {
+            "key": "P3",
+            "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+          },
+          {
+            "key": "P5",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P6",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P7",
+            "reason": "shown, never scored"
+          },
+          {
+            "key": "P8",
+            "reason": "shown, never scored"
+          }
+        ],
+        "flags": [
+          "E3 present"
+        ],
+        "guard": {
+          "minIncluded": 3,
+          "coverageFloor": 0.5,
+          "maxConcentration": 0.75,
+          "concentration": 0.571,
+          "satisfied": false,
+          "reasons": [
+            "fewer than 3 metrics have evidence"
+          ],
+          "reason": "fewer than 3 metrics have evidence"
+        },
+        "formulaVersion": "composite/6"
+      }
+    },
+    {
+      "actorKey": "company:00000000-0000-4000-8000-00000000c0c0",
+      "actorType": "company",
+      "actorId": "00000000-0000-4000-8000-00000000c0c0",
+      "name": null,
+      "metrics": {
+        "P2": {
+          "key": "P2",
+          "name": "Questions owed by the company",
+          "valueKind": "count",
+          "value": 0,
+          "unit": "questions unanswered past 48 h",
+          "n": 0,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "no pending questions",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "pending": 0,
+            "past48h": 0,
+            "medianAgeHours": null
+          },
+          "notes": [
+            "charged to the company, not the asking agent",
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P5": {
+          "key": "P5",
+          "name": "Platform failures",
+          "valueKind": "count",
+          "value": 0,
+          "unit": "platform failures",
+          "n": 0,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 0,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "0 zero-turn hangs, 0 recovery budgets exhausted",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [],
+          "evidenceRefCount": 0,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "zeroTurnHangs": 0,
+            "recoveryBudgetExhausted": 0
+          },
+          "notes": [
+            "coverage 100% from a single source tier"
+          ]
+        },
+        "P7": {
+          "key": "P7",
+          "name": "Cycle time",
+          "valueKind": "duration",
+          "value": 8,
+          "unit": "hours (median total)",
+          "n": 2,
+          "coverage": 1,
+          "confidence": "medium",
+          "confidenceLabel": "adequate evidence",
+          "breakdown": {
+            "satisfied": 2,
+            "failed": 0,
+            "undecidable": []
+          },
+          "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
+          "formulaVersion": "metrics/4",
+          "evidenceRefs": [
+            "e19",
+            "e20",
+            "e21",
+            "e6",
+            "e7",
+            "e8"
+          ],
+          "evidenceRefCount": 6,
+          "tiers": [
+            "T0"
+          ],
+          "lowerIsBetter": false,
+          "displayOnly": true,
+          "detail": {
+            "phases": {
+              "queue": {
+                "n": 2,
+                "medianHours": 1,
+                "p90Hours": 1
+              },
+              "work": {
+                "n": 2,
+                "medianHours": 4,
+                "p90Hours": 4
+              },
+              "review": {
+                "n": 2,
+                "medianHours": 3,
+                "p90Hours": 3
+              },
+              "total": {
+                "n": 2,
+                "medianHours": 8,
+                "p90Hours": 8
+              }
+            },
+            "bySize": {},
+            "sizeCoverage": 0
+          },
+          "notes": [
+            "shown, never scored; an unbucketed median is not a normalised one",
+            "coverage 100% from a single source tier"
+          ]
+        }
+      },
+      "composite": null
+    }
+  ],
+  "exceptions": [
+    {
+      "id": "E3",
+      "title": "authority breach",
+      "severity": "immediate",
+      "actorAgentId": "00000000-0000-4000-8000-0000000000bb",
+      "routes": [
+        "founder_view",
+        "accountable_owner"
+      ],
+      "key": "E3:issue:00000000-0000-4000-8000-000000000101:e11",
+      "subject": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000101",
+        "identifier": "EVL-01"
+      },
+      "routing": {
+        "accountableUserId": "founder-1",
+        "managerAgentIds": [],
+        "founderView": true
+      },
+      "raisedAt": "2026-08-01T18:00:00.000Z",
+      "evidenceRefs": [
+        "e11"
+      ],
+      "note": "transition of an unassigned item: moved in_review→done on an item assigned to another agent",
+      "markers": []
+    },
+    {
+      "id": "E3",
+      "title": "authority breach",
+      "severity": "immediate",
+      "actorAgentId": "00000000-0000-4000-8000-0000000000cc",
+      "routes": [
+        "founder_view",
+        "accountable_owner"
+      ],
+      "key": "E3:issue:00000000-0000-4000-8000-000000000101:e32",
+      "subject": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000101",
+        "identifier": "EVL-01"
+      },
+      "routing": {
+        "accountableUserId": "founder-1",
+        "managerAgentIds": [],
+        "founderView": true
+      },
+      "raisedAt": "2026-08-01T22:00:00.000Z",
+      "evidenceRefs": [
+        "e32"
+      ],
+      "note": "refused request: refused POST /api/companies/:companyId/verdicts (NEUTRAL_VALIDATOR_VIOLATION)",
+      "markers": []
+    },
+    {
+      "id": "E3",
+      "title": "authority breach",
+      "severity": "immediate",
+      "actorAgentId": "00000000-0000-4000-8000-0000000000bb",
+      "routes": [
+        "founder_view",
+        "accountable_owner"
+      ],
+      "key": "E3:issue:00000000-0000-4000-8000-000000000102:e24",
+      "subject": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000102",
+        "identifier": "EVL-02"
+      },
+      "routing": {
+        "accountableUserId": "founder-1",
+        "managerAgentIds": [],
+        "founderView": true
+      },
+      "raisedAt": "2026-08-02T04:00:00.000Z",
+      "evidenceRefs": [
+        "e24"
+      ],
+      "note": "transition of an unassigned item: moved in_review→done on an item assigned to another agent",
+      "markers": []
+    }
+  ],
+  "exceptionsTotal": 3,
+  "exceptionCounts": {
+    "E3": 3
+  },
+  "flags": [
+    "E3 present"
+  ],
+  "excludedMetrics": [
+    {
+      "key": "O1",
+      "scope": "milestone",
+      "reason": "insufficient evidence: no criterion carries a check, so acceptance cannot be decided; the gap is the measurement"
+    },
+    {
+      "key": "O2",
+      "scope": "milestone",
+      "reason": "insufficient evidence: set projects.targetDate or the contract's targetDate to measure"
+    },
+    {
+      "key": "O4",
+      "scope": "milestone",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P2",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+    },
+    {
+      "key": "P3",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+    },
+    {
+      "key": "P4",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "insufficient evidence: empty population"
+    },
+    {
+      "key": "P5",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P6",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P7",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P8",
+      "scope": "agent:00000000-0000-4000-8000-0000000000aa",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P1",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "insufficient evidence: empty population"
+    },
+    {
+      "key": "P2",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+    },
+    {
+      "key": "P3",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+    },
+    {
+      "key": "P5",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P6",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P7",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P8",
+      "scope": "agent:00000000-0000-4000-8000-0000000000bb",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P1",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "insufficient evidence: empty population"
+    },
+    {
+      "key": "P2",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "insufficient evidence: value = approved / decided (undecided escalations are undecidable, not failures); unanswered questions are charged to the company row, not the asking agent"
+    },
+    {
+      "key": "P3",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "insufficient evidence: only payload timestamps have a higher-tier counterpart today (the comment's arrival)"
+    },
+    {
+      "key": "P5",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P6",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P7",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "shown, never scored"
+    },
+    {
+      "key": "P8",
+      "scope": "agent:00000000-0000-4000-8000-0000000000cc",
+      "reason": "shown, never scored"
+    }
+  ],
+  "missingSources": [
+    "cost: no cost events"
+  ],
+  "maxIngestLagMs": 60000,
+  "eventCount": 29,
+  "byType": {
+    "authz.refused": 1,
+    "handoff.reviewer_to_tpm": 2,
+    "handoff.tester_to_reviewer": 2,
+    "handoff.tpm_merge_report": 2,
+    "issue.comment_added": 7,
+    "issue.created": 2,
+    "issue.dod_set": 2,
+    "issue.snapshot": 2,
+    "issue.transition": 6,
+    "project.snapshot": 1,
+    "verdict.recorded": 2
+  },
+  "byActorType": {
+    "agent": 21,
+    "system": 3,
+    "user": 5
+  },
+  "bySource": {
+    "activity_log": 7,
+    "issue": 11,
+    "issue_comments": 6,
+    "issues": 2,
+    "project": 1,
+    "verdicts": 2
+  },
+  "issueIds": [
+    "00000000-0000-4000-8000-000000000101",
+    "00000000-0000-4000-8000-000000000102"
+  ],
+  "issueCount": 2,
+  "actorKeys": [
+    "agent:00000000-0000-4000-8000-0000000000aa",
+    "agent:00000000-0000-4000-8000-0000000000bb",
+    "agent:00000000-0000-4000-8000-0000000000cc",
+    "user:founder-1",
+    "user:local-board"
+  ],
+  "firstEventTime": "2026-08-01T10:00:00.000Z",
+  "lastEventTime": "2026-08-02T04:00:00.000Z",
+  "state": {
+    "open": true,
+    "retrospective": false
+  }
+}

@@ -1279,6 +1279,7 @@ export * from "./types/interview.js";
 export * from "./deep-interview.js";
 // AgentDash: Company Evaluator (Stage 1 shadow) vocabulary and contract schema
 export * from "./evaluation.js";
+export * from "./evaluation-card.js";
 
 // AgentDash: goals-eval-hitl
 // Note: VerdictOutcome, VerdictEntityType already re-exported from ./constants.js above.

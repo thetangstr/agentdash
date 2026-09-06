@@ -45,7 +45,7 @@ import type { ActorRow, ExceptionRecord, MetricResult, ScoredCard } from "./type
  * `FORMULA_VERSION` changes whenever any formula, rule, ordering or card shape
  * changes; `verify` refuses to compare across versions.
  */
-export const FORMULA_VERSION = "m2-score/5";
+export const FORMULA_VERSION = "m2-score/7";
 /** The card keeps this many exceptions (immediate and material first); the count is always exact. */
 const MAX_CARD_EXCEPTIONS = 500;
 

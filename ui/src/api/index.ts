@@ -13,6 +13,7 @@ export { mandatesApi } from "./mandates";
 export { costsApi } from "./costs";
 export { activityApi } from "./activity";
 export { dashboardApi } from "./dashboard";
+export { evaluationApi } from "./evaluation";
 export { heartbeatsApi } from "./heartbeats";
 export { instanceSettingsApi } from "./instanceSettings";
 export { sidebarBadgesApi } from "./sidebarBadges";

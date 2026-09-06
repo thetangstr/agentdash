@@ -6,7 +6,7 @@ export const MARKER_RETROSPECTIVE = "scored retrospectively — confidence cappe
 export const MARKER_DERIVED_CONTRACT = "contract derived by the evaluator — confidence capped at adequate";
 export const MARKER_MISSING_SOURCES = "partial records — some sources are absent from this window (see missing sources)";
 /** Set when the window's ingest lag exceeds a day: the blind window is material. */
-export const MARKER_INGEST_LAG = "records lag events by more than a day in this window (see maxIngestLagMs)";
+export const MARKER_INGEST_LAG = "records lag events by more than a day in this window (see the ingest lag on the scorecard)";
 export const MARKER_SYNTHETIC_HUMANS = "synthetic human identities — interventions counted, not attributed";
 export const MARKER_CONTRACT_EXCEPTION = "contract exception — founder acceptance required";
 
