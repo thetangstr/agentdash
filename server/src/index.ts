@@ -37,7 +37,6 @@ import {
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
 import { evaluationIngest } from "./services/evaluation/ingest.js";
-import { evaluationSnapshotCadence } from "./services/evaluation/schedule.js";
 import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
@@ -957,6 +956,9 @@ export async function startServer(): Promise<StartedServer> {
   })();
   let evaluationSnapshotHandle: ReturnType<typeof setInterval> | null = null;
   if (evaluationSnapshotEnabled) {
+    // Loaded only when enabled: the cadence pulls in the issue and project services, which nothing else on the
+    // startup path needs, and partial database mocks in startup tests never see them.
+    const { evaluationSnapshotCadence } = await import("./services/evaluation/schedule.js");
     const cadence = evaluationSnapshotCadence(db);
     logger.info({ intervalMs: evaluationSnapshotIntervalMs }, "evaluation_snapshot: schedule enabled");
     evaluationSnapshotHandle = setInterval(() => {
