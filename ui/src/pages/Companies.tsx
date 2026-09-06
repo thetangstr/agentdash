@@ -109,6 +109,14 @@ export function Companies() {
           const companyStats = stats?.[company.id];
           const agentCount = companyStats?.agentCount ?? 0;
           const issueCount = companyStats?.issueCount ?? 0;
+          // "Succeeded" only means the process exited zero. This is the share
+          // of those runs that left nothing behind — no comment, no activity.
+          // Shown as a ratio because the absolute number means little and the
+          // ratio is the whole signal.
+          const runsSucceeded = companyStats?.runsSucceeded ?? 0;
+          const runsWithoutEvidence = companyStats?.runsSucceededWithoutEvidence ?? 0;
+          const wastedPct =
+            runsSucceeded > 0 ? Math.round((runsWithoutEvidence / runsSucceeded) * 100) : 0;
           const budgetPct =
             company.budgetMonthlyCents > 0
               ? Math.round(
@@ -244,6 +252,17 @@ export function Companies() {
                     {issueCount} {issueCount === 1 ? "issue" : "issues"}
                   </span>
                 </div>
+                {runsSucceeded > 0 ? (
+                  <div
+                    className="flex items-center gap-1.5 tabular-nums"
+                    title={`${runsWithoutEvidence} of ${runsSucceeded} successful runs left no comment and no activity behind. "Succeeded" means the process exited zero, not that work happened.`}
+                  >
+                    <CircleDot className="h-3.5 w-3.5" />
+                    <span className={wastedPct >= 25 ? "text-destructive" : undefined}>
+                      {wastedPct}% of runs left nothing
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-1.5 tabular-nums">
                   <DollarSign className="h-3.5 w-3.5" />
                   <span>

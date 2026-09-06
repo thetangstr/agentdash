@@ -45,7 +45,7 @@ export function verdictRoutes(db: Db) {
           issues: parsed.error.issues,
         });
       }
-      const verdict = await svc.create(parsed.data);
+      const verdict = await svc.create(parsed.data, { req });
       res.status(201).json(verdict);
     } catch (err) {
       next(err);

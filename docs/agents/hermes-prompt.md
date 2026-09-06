@@ -79,7 +79,7 @@ If your commit message references more than one issue number, split it into sepa
 
 **Never do this:** Use regex or sed to modify files inside `node_modules/`.
 
-**Correct pattern:** Use `pnpm patch <pkg>` (produces a versioned diff under `patches/`), or open a PR upstream. Existing patches follow `patches/hermes-paperclip-adapter+0.3.0.patch` (PR #222).
+**Correct pattern:** Use `pnpm patch <pkg>` (produces a versioned diff under `patches/`), or open a PR upstream. Existing patches follow `patches/hermes-paperclip-adapter@0.3.0.patch` (PR #222).
 
 ### Directive 5 — MAW pipeline enforcement
 

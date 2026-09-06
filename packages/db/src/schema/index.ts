@@ -143,3 +143,18 @@ export {
 export { serverErrors } from "./server_errors.js";
 // A5 (2026-08-16): access list for restricted projects.
 export { projectAccess } from "./project_access.js";
+// AgentDash-MK: the durable steward inbox — an ordered, per-steward,
+// incrementally-readable log, plus the position each of a person's machines
+// has caught up to.
+export {
+  stewardInboxCursors,
+  stewardInboxEvents,
+  stewardInboxSequences,
+} from "./steward_inbox.js";
+// AgentDash-MK: a proposed action read back to a person, waiting on their
+// confirmation. Same single-use, endpoint-bound shape as a decision handle.
+export { stewardInboxActionHandles } from "./steward_inbox_actions.js";
+// AgentDash: Company Evaluator (Stage 1 shadow) — append-only ledger, stored projections, ingest cursors
+export { evaluationEvents } from "./evaluation_events.js";
+export { evaluationScorecards } from "./evaluation_scorecards.js";
+export { evaluationIngestState } from "./evaluation_ingest_state.js";

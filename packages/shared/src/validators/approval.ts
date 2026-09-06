@@ -11,7 +11,16 @@ export const createApprovalSchema = z.object({
 
 export type CreateApproval = z.infer<typeof createApprovalSchema>;
 
-export const APPROVAL_DECISION_CHANNELS = ["web", "telegram", "teams", "whatsapp"] as const;
+// `bridge_inbox` is a decision taken from a steward inbox on the person's own
+// machine. It is its own channel rather than "web" because the audit record
+// should not claim a laptop decision came from the board.
+export const APPROVAL_DECISION_CHANNELS = [
+  "web",
+  "telegram",
+  "teams",
+  "whatsapp",
+  "bridge_inbox",
+] as const;
 export type ApprovalDecisionChannel = (typeof APPROVAL_DECISION_CHANNELS)[number];
 
 /**

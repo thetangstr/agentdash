@@ -15,6 +15,7 @@ import {
   instanceSettings,
   issueComments,
   issueInboxArchives,
+  issueReadStates,
   issueRelations,
   issues,
   projectWorkspaces,
@@ -77,6 +78,8 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
@@ -1307,6 +1310,8 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
@@ -1737,6 +1742,8 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
@@ -2075,6 +2082,8 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
@@ -2455,6 +2464,8 @@ describeEmbeddedPostgres("issueService.findMentionedProjectIds", () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(executionWorkspaces);
@@ -2535,6 +2546,8 @@ describeEmbeddedPostgres("issueService.clearExecutionRunIfTerminal", () => {
     await db.delete(issueComments);
     await db.delete(issueRelations);
     await db.delete(issueInboxArchives);
+    // FK to issues; must go before the issues delete or teardown fails.
+    await db.delete(issueReadStates);
     await db.delete(activityLog);
     await db.delete(issues);
     await db.delete(heartbeatRuns);

@@ -4341,6 +4341,42 @@ export function accessRoutes(
     }
   );
 
+  /**
+   * The human roster, readable by anything with access to this company --
+   * agents included.
+   *
+   * `/members` below needs `users:manage_permissions`, and rightly so: it
+   * carries permission grants and removal affordances. But it was also the only
+   * way to find out who works here, so an agent asked to do something involving
+   * a person BY NAME could not resolve that name at all. What agents did
+   * instead was guess an email, miss, and report the person as not being a
+   * member -- a permission denial rendered as a fact about the world, which a
+   * human then acted on. One such run told an administrator to go invite
+   * somebody who was already an administrator.
+   *
+   * This returns identity only: who is here, and whether they are active.
+   * Reading the roster confers no authority. Assigning a steward, changing
+   * permissions and removing people are all still board-only and unchanged. So
+   * the narrow read is safe to grant, and it removes the reason to guess.
+   *
+   * Deliberately NOT returning `grants`: an agent needs to resolve a person,
+   * not to audit them.
+   */
+  router.get("/companies/:companyId/people", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const members = await loadCompanyMemberRecords(db, companyId);
+    res.json({
+      people: members.map((member) => ({
+        userId: member.principalId,
+        name: member.user?.name ?? null,
+        email: member.user?.email ?? null,
+        status: member.status,
+        membershipRole: member.membershipRole,
+      })),
+    });
+  });
+
   router.get("/companies/:companyId/members", async (req, res) => {
     const companyId = req.params.companyId as string;
     await assertCompanyPermission(req, companyId, "users:manage_permissions");

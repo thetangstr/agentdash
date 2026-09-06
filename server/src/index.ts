@@ -36,6 +36,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { runHealerService } from "./services/run-healer/service.js";
+import { evaluationIngest } from "./services/evaluation/ingest.js";
 import { applyAgentSandboxSettings } from "./services/agent-sandbox-config.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
@@ -934,6 +935,63 @@ export async function startServer(): Promise<StartedServer> {
     runHealerHandle.unref?.();
   }
   
+  // AgentDash: Company Evaluator (Stage 1 shadow) — ingest on its own interval,
+  // off by default. Reads control-plane rows into the append-only ledger; never
+  // on the heartbeat scheduler tick and never on the request path (spec §11).
+  const evaluationIngestEnabled = process.env.AGENTDASH_EVALUATION_INGEST_ENABLED === "true";
+  const evaluationIngestIntervalMs = (() => {
+    const parsed = Number(process.env.AGENTDASH_EVALUATION_INGEST_INTERVAL_MS);
+    const floor = 60 * 1000;
+    return Number.isFinite(parsed) && parsed >= floor ? parsed : 5 * 60 * 1000;
+  })();
+  let evaluationIngestHandle: ReturnType<typeof setInterval> | null = null;
+  // AgentDash (Company Evaluator, Milestone 3): the shadow-mode snapshot cadence — store a card for every
+  // open project and bring review items up to date. Off unless AGENTDASH_EVALUATION_SNAPSHOT_ENABLED=true;
+  // interval floor one hour, default one day. Deterministic; no model call.
+  const evaluationSnapshotEnabled = process.env.AGENTDASH_EVALUATION_SNAPSHOT_ENABLED === "true";
+  const evaluationSnapshotIntervalMs = (() => {
+    const parsed = Number(process.env.AGENTDASH_EVALUATION_SNAPSHOT_INTERVAL_MS);
+    const floor = 60 * 60 * 1000;
+    return Number.isFinite(parsed) && parsed >= floor ? parsed : 24 * 60 * 60 * 1000;
+  })();
+  let evaluationSnapshotHandle: ReturnType<typeof setInterval> | null = null;
+  if (evaluationSnapshotEnabled) {
+    // Loaded only when enabled: the cadence pulls in the issue and project services, which nothing else on the
+    // startup path needs, and partial database mocks in startup tests never see them.
+    const { evaluationSnapshotCadence } = await import("./services/evaluation/schedule.js");
+    const cadence = evaluationSnapshotCadence(db);
+    logger.info({ intervalMs: evaluationSnapshotIntervalMs }, "evaluation_snapshot: schedule enabled");
+    evaluationSnapshotHandle = setInterval(() => {
+      void cadence
+        .run()
+        .then((r) => logger.info({ companies: r.companies, milestones: r.milestones, cards: r.cards, reviewItemsCreated: r.reviewItemsCreated, reviewItemsUpdated: r.reviewItemsUpdated, failures: r.failures.length }, "evaluation_snapshot: pass"))
+        .catch((err) => logger.error({ err }, "evaluation_snapshot: pass failed"));
+    }, evaluationSnapshotIntervalMs);
+    evaluationSnapshotHandle.unref?.();
+  }
+  if (!evaluationIngestEnabled) {
+    logger.info({ reason: "AGENTDASH_EVALUATION_INGEST_ENABLED!=true" }, "evaluation_ingest: schedule skipped");
+  } else {
+    const ingest = evaluationIngest(db);
+    logger.info({ intervalMs: evaluationIngestIntervalMs }, "evaluation_ingest: schedule enabled");
+    evaluationIngestHandle = setInterval(() => {
+      void ingest
+        .tickAll()
+        .then((stats) => {
+          const inserted = stats.reduce((n, s) => n + s.inserted, 0);
+          const scanned = stats.reduce((n, s) => n + s.scanned, 0);
+          const maxMs = stats.reduce((m, s) => Math.max(m, s.durationMs), 0);
+          // Ingest lag (now minus the oldest event time inserted this tick) is the shadow run's health gauge.
+          const maxLagMs = stats.reduce<number | null>((m, s) => (s.maxLagMs == null ? m : Math.max(m ?? 0, s.maxLagMs)), null);
+          logger.info({ companies: stats.length, scanned, inserted, maxDurationMs: maxMs, maxLagMs }, "evaluation_ingest: tick");
+        })
+        .catch((err) => {
+          logger.error({ err }, "evaluation_ingest: scheduled tick failed");
+        });
+    }, evaluationIngestIntervalMs);
+    evaluationIngestHandle.unref?.();
+  }
+
   // O4/O6 (2026-08-16): the health checks run on a clock, not only when
   // polled — a stale backup or a filling disk emits a signal within the half
   // hour instead of waiting for someone to look.
@@ -1345,6 +1403,11 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "failed to clear heartbeatDigest interval");
         }
       }
+
+      // AgentDash: Company Evaluator — stop the ingest interval on shutdown.
+
+      if (evaluationIngestHandle) clearInterval(evaluationIngestHandle);
+      if (evaluationSnapshotHandle) clearInterval(evaluationSnapshotHandle);
 
       if (runHealerHandle) {
         try {

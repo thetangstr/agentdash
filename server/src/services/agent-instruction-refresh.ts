@@ -40,7 +40,7 @@ export interface RefreshResult {
   refreshed: boolean;
   blocksUpdated: string[];
   blocksAdded: string[];
-  /** Blocks present in bundle but no longer in source — left alone, audit-only. */
+  /** Generated blocks present in bundle but no longer in source — now removed. */
   blocksRemoved: string[];
   /** True when the agent had no bundle and the default managed bundle was created. */
   backfilled?: boolean;
@@ -178,8 +178,39 @@ interface DiffResult {
   nextContent: string;
 }
 
-function diffAndApply(sourceContent: string, bundleContent: string): DiffResult {
-  const sourceBlocks = parseBlocks(sourceContent);
+/**
+ * Generated blocks this agent should not carry.
+ *
+ * Some generated blocks describe a capability or a plan tier an agent does not
+ * have. Dropping them from the shared source would change the mandate of every
+ * agent on the instance, which is a different and much larger decision — so
+ * suppression is per-agent and opt-in, and an agent with no list behaves exactly
+ * as it does today.
+ *
+ * This is deliberately a list of GENERATED slugs and nothing else. It cannot
+ * reach steward-authored prose, which lives outside the markers, and it cannot
+ * reach a block the source does not define.
+ */
+export function readSuppressedBlocks(adapterConfig: unknown): Set<string> {
+  if (!adapterConfig || typeof adapterConfig !== "object" || Array.isArray(adapterConfig)) {
+    return new Set();
+  }
+  const raw = (adapterConfig as Record<string, unknown>).instructionsSuppressedBlocks;
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((v): v is string => typeof v === "string" && v.length > 0));
+}
+
+function diffAndApply(
+  sourceContent: string,
+  bundleContent: string,
+  suppressed: Set<string> = new Set(),
+): DiffResult {
+  const allSourceBlocks = parseBlocks(sourceContent);
+  // A suppressed block is treated exactly as though the source never carried
+  // it: never added, and removed if the bundle still has it.
+  const sourceBlocks = new Map(
+    [...allSourceBlocks].filter(([slug]) => !suppressed.has(slug)),
+  );
   const bundleBlocks = parseBlocks(bundleContent);
 
   const blocksUpdated: string[] = [];
@@ -204,15 +235,41 @@ function diffAndApply(sourceContent: string, bundleContent: string): DiffResult 
     }
   }
 
-  for (const slug of bundleBlocks.keys()) {
-    if (!sourceBlocks.has(slug)) blocksRemoved.push(slug);
+  // Generated blocks the source no longer carries are now REMOVED, not just
+  // reported.
+  //
+  // This was audit-only ("leaving them in place"), which meant the generated
+  // default could never get smaller in practice: dropping a block from
+  // `onboarding-assets/default/AGENTS.md` left it in every existing agent's
+  // bundle for ever, so a mandate could only ever grow. Agents ended up
+  // carrying pages of connector material for providers this instance has never
+  // had a connection to.
+  //
+  // Removal is scoped to the `AgentDash:` namespace, which is generated content
+  // and ours to withdraw. A steward's own prose lives OUTSIDE these markers and
+  // is never matched here, agent-specific text between blocks is untouched, and
+  // no file other than AGENTS.md is read or written — so this cannot take away
+  // anything a human authored.
+  const removals: BlockSpan[] = [];
+  for (const [slug, bundleSpan] of bundleBlocks) {
+    if (sourceBlocks.has(slug)) continue;
+    blocksRemoved.push(slug);
+    removals.push(bundleSpan);
   }
 
-  // Apply replacements highest-startIndex first to keep earlier offsets valid.
-  replacements.sort((a, b) => b.span.startIndex - a.span.startIndex);
-  for (const { span, replacement } of replacements) {
+  // Apply edits highest-startIndex first so earlier offsets stay valid.
+  const edits: Array<{ span: BlockSpan; replacement: string }> = [
+    ...replacements.map(({ span, replacement }) => ({ span, replacement })),
+    ...removals.map((span) => ({ span, replacement: "" })),
+  ].sort((a, b) => b.span.startIndex - a.span.startIndex);
+
+  for (const { span, replacement } of edits) {
     next = next.slice(0, span.startIndex) + replacement + next.slice(span.endIndex);
   }
+
+  // A removal leaves the blank lines that surrounded the block. Collapse runs of
+  // three or more so a bundle does not accumulate a gap per dropped block.
+  if (removals.length > 0) next = next.replace(/\n{3,}/g, "\n\n");
 
   // Append new blocks at the end (current sources put AgentDash blocks at
   // the tail; appending matches that convention).
@@ -364,24 +421,31 @@ export function agentInstructionRefreshService(deps: AgentInstructionRefreshDeps
 
     // Hot-path optimization: byte-compare source vs bundle. If they're equal
     // there can't be drift. Cheap.
-    if (bundleContent === sourceContent) return done(noop);
+    //
+    // Skipped when this agent suppresses blocks: an identical bundle is exactly
+    // the case where a newly-added suppression still has to be applied.
+    const suppressedForFastPath = readSuppressedBlocks(agent.adapterConfig);
+    if (bundleContent === sourceContent && suppressedForFastPath.size === 0) return done(noop);
 
-    const diff = diffAndApply(sourceContent, bundleContent);
+    const diff = diffAndApply(sourceContent, bundleContent, readSuppressedBlocks(agent.adapterConfig));
 
-    // Warn (don't act) on bundle blocks that the source no longer carries.
     if (diff.blocksRemoved.length > 0) {
-      logger.warn(
+      logger.info(
         {
           agentId: agent.id,
           companyId: agent.companyId,
           archetype,
           blocksRemoved: diff.blocksRemoved,
         },
-        "agent bundle has AgentDash blocks no longer present in source; leaving them in place",
+        "agent bundle carried generated blocks no longer present in source; removing them",
       );
     }
 
-    if (diff.blocksUpdated.length === 0 && diff.blocksAdded.length === 0) {
+    if (
+      diff.blocksUpdated.length === 0
+      && diff.blocksAdded.length === 0
+      && diff.blocksRemoved.length === 0
+    ) {
       return done({
         refreshed: false,
         blocksUpdated: [],

@@ -13,6 +13,8 @@ import { deliverableReviewService } from "../services/deliverable-review.js";
 import { workflowRecommendationService } from "../services/workflow-recommendations.js";
 import { approvalAuthorityService } from "../services/approval-authority.js";
 import { approvalCardDeliveryService } from "../services/approval-card-delivery.js";
+import { approvalDecisionEffectsService } from "../services/approval-decision-effects.js";
+import { stewardInboxService } from "../services/steward-inbox.js";
 import { bridgeService } from "../services/bridge.js";
 import { connectorSendExecutionService } from "../services/connector-send-execution.js";
 import { accessService } from "../services/access.js";
@@ -74,6 +76,10 @@ export function approvalRoutes(
   const router = Router();
   const svc = approvalService(db);
   const cardDelivery = approvalCardDeliveryService(db);
+  // AgentDash-MK: the durable steward inbox. Recorded on the same branches
+  // that already log the lifecycle, so an inbox item exists for exactly the
+  // transitions a human is told about elsewhere.
+  const stewardInbox = stewardInboxService(db);
   const bridge = bridgeService(db);
   // AgentDash-MK Slice E: content the inbound filter held is released or
   // discarded here, on the same branches that settle a gated bridge task. The
@@ -94,6 +100,12 @@ export function approvalRoutes(
     autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
   });
   const issueApprovalsSvc = issueApprovalService(db);
+  // Every post-decision side effect, shared so a second decision surface can
+  // exist without reproducing the list. See the note in that service.
+  const decisionEffects = approvalDecisionEffectsService(db, {
+    pluginWorkerManager: options.pluginWorkerManager,
+    autoDispatchQueuedRuns: options.autoDispatchQueuedRuns,
+  });
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -302,6 +314,8 @@ export function approvalRoutes(
       details: { type: approval.type, issueIds: uniqueIssueIds },
     });
 
+    await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
+
     // Push the card to the deciding steward's paired channels. Awaited rather
     // than fired and forgotten so a test can observe it and so the request does
     // not outlive its own side effects — the service swallows every failure
@@ -349,156 +363,10 @@ export function approvalRoutes(
     if (!resolution) return;
     const { approval, applied } = resolution;
 
-    if (applied) {
-      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
-      const linkedIssueIds = linkedIssues.map((issue) => issue.id);
-      const primaryIssueId = linkedIssueIds[0] ?? null;
-
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
-        action: "approval.approved",
-        entityType: "approval",
-        entityId: approval.id,
-        details: {
-          type: approval.type,
-          requestedByAgentId: approval.requestedByAgentId,
-          linkedIssueIds,
-        },
-      });
-
-      if (approval.type === "mandate_violation" && approval.requestedByAgentId) {
-        try {
-          await agentService(db).resume(approval.requestedByAgentId);
-        } catch {
-          /* already resumed/terminated — non-fatal */
-        }
-      }
-
-      if (approval.requestedByAgentId) {
-        try {
-          const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "approval_approved",
-            payload: {
-              approvalId: approval.id,
-              approvalStatus: approval.status,
-              issueId: primaryIssueId,
-              issueIds: linkedIssueIds,
-            },
-            requestedByActorType: "user",
-            requestedByActorId: req.actor.userId ?? "board",
-            contextSnapshot: {
-              source: "approval.approved",
-              approvalId: approval.id,
-              approvalStatus: approval.status,
-              issueId: primaryIssueId,
-              issueIds: linkedIssueIds,
-              taskId: primaryIssueId,
-              wakeReason: "approval_approved",
-            },
-          });
-
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: req.actor.userId ?? "board",
-            action: "approval.requester_wakeup_queued",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              requesterAgentId: approval.requestedByAgentId,
-              wakeRunId: wakeRun?.id ?? null,
-              linkedIssueIds,
-            },
-          });
-        } catch (err) {
-          logger.warn(
-            {
-              err,
-              approvalId: approval.id,
-              requestedByAgentId: approval.requestedByAgentId,
-            },
-            "failed to queue requester wakeup after approval",
-          );
-          await logActivity(db, {
-            companyId: approval.companyId,
-            actorType: "user",
-            actorId: req.actor.userId ?? "board",
-            action: "approval.requester_wakeup_failed",
-            entityType: "approval",
-            entityId: approval.id,
-            details: {
-              requesterAgentId: approval.requestedByAgentId,
-              linkedIssueIds,
-              error: err instanceof Error ? err.message : String(err),
-            },
-          });
-        }
-      }
-    }
-
-    // AgentDash-MK: an approved bridge `act` task becomes visible to polling.
-    // Until this runs the task is `awaiting_approval` and no endpoint can see
-    // it, which is what keeps the bridge from having a private path to action.
-    if (applied) {
-      // Logged rather than thrown: the decision is already committed, so a 500
-      // here would tell the client their approval failed when it did not. But
-      // this is NOT best-effort the way a notification is — a release that
-      // fails strands the task invisibly, so it is an error-level event, not a
-      // warning to scroll past.
-      try {
-        await bridge.releaseApprovedTask(approval.id);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "bridge task release failed after approval; task may be stranded",
-        );
-      }
-      // Released still framed: the decision was that this content may travel,
-      // not that it stopped being untrusted.
-      try {
-        await facts.releaseHeldFactAnswer(approval.id);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "held fact answer release failed after approval; the fact may be stranded",
-        );
-      }
-      // AgentDash-MK: one seat of a deliverable's two-approver sign-off. The
-      // first approval opens the second seat; the second ships. Error-level
-      // rather than best-effort: a failure here strands a run that two people
-      // believe they approved.
-      try {
-        await deliverableReview.advanceDeliverableApproval(approval.id);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "deliverable approval advance failed; the run may be stranded mid-approval",
-        );
-      }
-      // AgentDash-MK: a recommendation the pipeline owner agreed with. This
-      // records the agreement and stops — there is no branch anywhere that
-      // acts on one, which is the whole of what "advisory" means here.
-      try {
-        await recommendations.settleRecommendationApproval(approval.id);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "recommendation settlement failed; it may stay open after being decided",
-        );
-      }
-    }
-
-    if (applied && approval.type === "connector_send") {
-      // Executed here rather than inside the approval service, so the service
-      // stays the decision boundary and nothing else. Awaited so the response
-      // does not outlive its own side effect; the executor swallows every
-      // failure internally, so an unreachable provider cannot fail this call.
-      await connectorSend.executeForApproval(approval.id);
-    }
+    await decisionEffects.afterApprove(approval, applied, {
+      actorUserId: req.actor.userId ?? "board",
+      decisionNote: req.body.decisionNote ?? null,
+    });
 
     res.json(approvalResponse(approval));
   });
@@ -525,59 +393,10 @@ export function approvalRoutes(
       decisionMeta(decisionContext),
     );
 
-    if (applied) {
-      await logActivity(db, {
-        companyId: approval.companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
-        action: "approval.rejected",
-        entityType: "approval",
-        entityId: approval.id,
-        details: { type: approval.type },
-      });
-      // A rejected bridge task terminates carrying the steward's reason, so the
-      // requesting agent can read WHY rather than watch a request vanish.
-      try {
-        await bridge.declineRejectedTask(approval.id, req.body.decisionNote ?? null);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "bridge task decline failed after rejection; task may be stranded",
-        );
-      }
-      // A refused release destroys the content and declines the fact, flagged.
-      // Left held it would be a figure nobody can ever obtain and nobody can
-      // see is outstanding.
-      try {
-        await facts.discardHeldFactAnswer(approval.id, req.body.decisionNote ?? null);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "held fact answer discard failed after rejection; the fact may be stranded",
-        );
-      }
-      // AgentDash-MK: a refused deliverable goes back to collection with its
-      // verdict cleared, not to the second approver and not to the bin. A
-      // weekly artifact that is wrong on Tuesday should still ship on Wednesday.
-      try {
-        await deliverableReview.failDeliverableApproval(approval.id, req.body.decisionNote ?? null);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "deliverable rejection handling failed; the run may be stranded awaiting approval",
-        );
-      }
-      // A declined recommendation. It comes back only if the condition gets
-      // worse, never merely because the tick came round again.
-      try {
-        await recommendations.settleRecommendationApproval(approval.id);
-      } catch (err) {
-        logger.error(
-          { err, approvalId: approval.id },
-          "recommendation settlement failed; it may stay open after being declined",
-        );
-      }
-    }
+    await decisionEffects.afterReject(approval, applied, {
+      actorUserId: req.actor.userId ?? "board",
+      decisionNote: req.body.decisionNote ?? null,
+    });
 
     res.json(approvalResponse(approval));
   });
@@ -635,6 +454,8 @@ export function approvalRoutes(
           requestedByAgentId: approval.requestedByAgentId,
         },
       });
+
+      await stewardInbox.recordApprovalEvent(approval.id, "approval.resolved");
       // An override is still a decision, so a bridge task must follow it. Left
       // out, an overridden approval would strand its task forever.
       try {
@@ -742,6 +563,8 @@ export function approvalRoutes(
       entityId: approval.id,
       details: { type: approval.type },
     });
+
+    await stewardInbox.recordApprovalEvent(approval.id, "approval.opened");
 
     // A resubmit advances the revision, which kills every card already sent.
     // Without a fresh one the steward is left holding buttons that now fail

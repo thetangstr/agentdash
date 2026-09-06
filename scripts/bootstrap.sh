@@ -61,7 +61,7 @@ if [ -e "$TARGET_DIR" ]; then
   echo "agentdash bootstrap: $TARGET_DIR already cloned — pulling latest…"
   git -C "$TARGET_DIR" pull --ff-only
 else
-  echo "agentdash bootstrap: cloning into $TARGET_DIR…"
+  echo "agentdash bootstrap: cloning into ${TARGET_DIR}…"
   git clone "$REPO_URL" "$TARGET_DIR"
 fi
 

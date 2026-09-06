@@ -32,6 +32,8 @@ import { execute as executeGeminiLocal } from "@paperclipai/adapter-gemini-local
 import { execute as executeOpenClawGateway } from "@paperclipai/adapter-openclaw-gateway/server";
 import { execute as executeOpenCodeLocal } from "@paperclipai/adapter-opencode-local/server";
 import { execute as executePiLocal } from "@paperclipai/adapter-pi-local/server";
+import { getServerAdapter } from "../adapters/registry.js";
+import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -425,6 +427,79 @@ async function runOpenClawGateway(): Promise<string> {
  * that is the set the guard test enumerates from disk. Adding an adapter
  * package without adding a row here fails the guard.
  */
+/**
+ * `hermes_local` is a BUILTIN, not a package, and that is why directives went
+ * missing on it for so long.
+ *
+ * The coverage guard below reads `packages/adapters/` off disk, so an adapter
+ * defined in `server/src/adapters/registry.ts` was never in the set it checked.
+ * The Hermes package never rendered `paperclipAgentDirectives`, so a steward
+ * could push directives, see them stored and reported as pushed, and have them
+ * reach nothing — on the one adapter the first design-partner instance actually
+ * runs. It is fixed (AGE-2), and this drives the registry's adapter rather than
+ * a package export so the fix cannot regress unnoticed.
+ *
+ * Two details are load-bearing. The prompt goes out as argv — Hermes is spawned
+ * as `hermes chat -q "<prompt>"` — so the shared child-capture harness reads it.
+ * And `authToken` must be set: the registry only takes the branch that renders
+ * directives for an authenticated run, so a context without one would pass
+ * while proving nothing.
+ */
+async function runHermesLocalBuiltin(): Promise<string> {
+  const adapter = getServerAdapter("hermes_local");
+  if (!adapter) throw new Error("hermes_local is not registered");
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agentdash-directives-hermes-"));
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  const commandPath = path.join(root, "hermes");
+  const capturePath = path.join(root, "capture.json");
+  await writeCapturingCommand(commandPath, capturePath, ["session_id: hermes-1", "ok"]);
+
+  const previousHome = process.env.HOME;
+  process.env.HOME = root;
+  try {
+    // The command has to live on `agent.adapterConfig`, not only on `ctx.config`:
+    // the registry's authenticated branch rebuilds the adapter config from
+    // `agent.adapterConfig` and hands that to the runtime, so anything set only
+    // on `ctx.config` is discarded before the child is spawned.
+    const base = baseContext({
+      adapterType: "hermes_local",
+      config: { hermesCommand: commandPath, cwd: workspace },
+    });
+    await adapter.execute({
+      ...base,
+      agent: { ...base.agent, adapterConfig: { hermesCommand: commandPath, cwd: workspace } },
+      authToken: "test-agent-token",
+    } as never);
+    return await readEmittedPrompt(capturePath);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Builtin adapter types that carry a prompt, keyed by adapter type rather than
+ * package directory because they have no package directory.
+ */
+const BUILTIN_DIRECTIVE_COVERAGE: Record<string, () => Promise<string>> = {
+  hermes_local: runHermesLocalBuiltin,
+};
+
+/**
+ * Builtin types with no prompt surface at all, so there is nowhere to put a
+ * directive. Recorded rather than omitted: an absence that is written down can
+ * be re-examined, and the assertion below checks the claim is still true rather
+ * than trusting this list.
+ *
+ * The consequence is worth stating even though it is not a test failure: an
+ * agent on `process` or `http` cannot receive its steward's directives at all.
+ * That is a property of choosing those adapters, not a gap in this file.
+ */
+const BUILTIN_NO_PROMPT_SURFACE = new Set(["process", "http"]);
+
 const DIRECTIVE_COVERAGE: Record<string, () => Promise<string>> = {
   "acpx-local": runAcpxLocal,
   "claude-local": () =>
@@ -532,6 +607,54 @@ describe("agentdash-mk harness directives reach every adapter's emitted prompt",
       expectDirectivesInEmittedPrompt(emitted, adapterDir);
     }, 30_000);
   }
+
+  for (const [adapterType, run] of Object.entries(BUILTIN_DIRECTIVE_COVERAGE)) {
+    it(`${adapterType} (builtin) emits pushed directives into the prompt it hands its runtime`, async () => {
+      const emitted = await run();
+      expect(emitted.length, `${adapterType} emitted nothing`).toBeGreaterThan(0);
+      expectDirectivesInEmittedPrompt(emitted, adapterType);
+    }, 30_000);
+  }
+
+  // The blind spot that let AGE-2 happen: the guard below read
+  // `packages/adapters/` and the registry serves builtins too, so an adapter
+  // could exist, be the one a customer runs, and never be checked.
+  //
+  // The authority is now the registry's own type list. Every builtin must be
+  // either behaviourally covered above or recorded as having no prompt surface —
+  // and the recorded claim is verified, not trusted.
+  it("fails when a builtin adapter type is neither covered nor recorded as prompt-less", async () => {
+    const packageTypes = new Set(
+      Object.keys(DIRECTIVE_COVERAGE).map((dir) => dir.replace(/-/g, "_")),
+    );
+    // `cursor` is the registry's type for the `cursor-local` package directory.
+    packageTypes.add("cursor");
+
+    const unaccounted = [...BUILTIN_ADAPTER_TYPES]
+      .filter((type) => !packageTypes.has(type))
+      .filter((type) => !(type in BUILTIN_DIRECTIVE_COVERAGE))
+      .filter((type) => !BUILTIN_NO_PROMPT_SURFACE.has(type))
+      .sort();
+
+    expect(
+      unaccounted,
+      "a builtin adapter type is not directive-covered and not recorded as prompt-less; "
+        + "add it to BUILTIN_DIRECTIVE_COVERAGE or justify it in BUILTIN_NO_PROMPT_SURFACE",
+    ).toEqual([]);
+  });
+
+  it("verifies the prompt-less claim instead of trusting it", async () => {
+    for (const type of BUILTIN_NO_PROMPT_SURFACE) {
+      const executePath = path.join(REPO_ROOT, "server", "src", "adapters", type, "execute.ts");
+      const source = await fs.readFile(executePath, "utf8");
+      // If one of these grows a prompt it must start carrying directives, and
+      // this is where that becomes visible.
+      expect(
+        source,
+        `${type} now builds a prompt, so it must render directives and move to BUILTIN_DIRECTIVE_COVERAGE`,
+      ).not.toMatch(/promptTemplate|paperclipTaskMarkdown/);
+    }
+  });
 
   // A3. The gap this closes is not "an adapter is wrong" but "an adapter was
   // added and nobody noticed the directives stopped applying to it". A silent

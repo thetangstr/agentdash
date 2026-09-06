@@ -879,6 +879,7 @@ export function projectRoutes(db: Db) {
           companyId,
           projectId,
           parsed.data,
+          getActorInfo(req),
         );
         res.json(updated);
       } catch (err) {

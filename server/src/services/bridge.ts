@@ -13,6 +13,7 @@ import { isUniqueViolation } from "../lib/pg-error.js";
 import { logger } from "../middleware/logger.js";
 import { agentGovernanceService } from "./agent-governance.js";
 import { logActivity } from "./activity-log.js";
+import { STEWARD_INBOX_CAPABILITY } from "./steward-inbox.js";
 import { classifyInboundContent } from "./inbound-filter.js";
 import { elapsedMsBetween, workflowEventsService } from "./workflow-events.js";
 
@@ -95,7 +96,15 @@ export type BridgeTaskClass = (typeof BRIDGE_TASK_CLASSES)[number];
  * endpoint that declares something we do not understand is one we cannot reason
  * about when deciding what to send it.
  */
-export const BRIDGE_CAPABILITIES = ["bridge:read", "bridge:act"] as const;
+export const BRIDGE_CAPABILITIES = [
+  "bridge:read",
+  "bridge:act",
+  // Reading the owner's steward inbox. Deliberately its own capability:
+  // a machine agents may ask questions of is not therefore a machine that
+  // should receive that person's whole inbox, and no endpoint enrolled
+  // before this existed has it.
+  STEWARD_INBOX_CAPABILITY,
+] as const;
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");

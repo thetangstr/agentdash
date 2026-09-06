@@ -166,11 +166,20 @@ export const queryKeys = {
     experimentalSettings: ["instance", "experimental-settings"] as const,
   },
   health: ["health"] as const,
+  otaStatus: ["ota", "status"] as const,
   secrets: {
     list: (companyId: string) => ["secrets", companyId] as const,
     providers: (companyId: string) => ["secret-providers", companyId] as const,
   },
   dashboard: (companyId: string) => ["dashboard", companyId] as const,
+  evaluation: {
+    overview: (companyId: string) => ["evaluation", companyId, "overview"] as const,
+    latest: (companyId: string, kind: string, id: string, verify: boolean) => ["evaluation", companyId, "latest", kind, id, verify] as const,
+    versions: (companyId: string, kind: string, id: string) => ["evaluation", companyId, "versions", kind, id] as const,
+    events: (companyId: string, type: string | null, scope: string | null = null) => ["evaluation", companyId, "events", type ?? "all", scope ?? "company"] as const,
+    event: (companyId: string, eventId: string) => ["evaluation", companyId, "event", eventId] as const,
+    replay: (companyId: string, kind: string, id: string) => ["evaluation", companyId, "replay", kind, id] as const,
+  },
   userProfile: (companyId: string, userSlug: string) =>
     ["user-profile", companyId, userSlug] as const,
   sidebarBadges: (companyId: string) => ["sidebar-badges", companyId] as const,

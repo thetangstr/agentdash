@@ -26,7 +26,18 @@ export const defaultCreateValues: CreateConfigValues = {
   worktreeParentDir: "",
   runtimeServicesJson: "",
   maxTurnsPerRun: 1000,
-  heartbeatEnabled: false,
+  // An agent you deliberately created should run.
+  //
+  // This defaulted to false, so the Run Policy toggle silently pre-answered
+  // "no" and every agent was born asleep — five of six on one instance, months
+  // after creation, including the company's primary agent. Nothing anywhere
+  // said so; the only symptom was an agent that never did anything.
+  //
+  // Off is still one click away and is now a visible decision rather than the
+  // absence of one. Agents provisioned automatically for a new member stay off
+  // until their person connects a harness, which is handled where that happens,
+  // not here.
+  heartbeatEnabled: true,
   /**
    * 30 minutes, not 5 (changed 2026-08-16 by owner decision).
    *

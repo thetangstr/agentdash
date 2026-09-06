@@ -360,6 +360,24 @@ describeEmbeddedPostgres("agent autonomy and accountability", () => {
       expect(response.status).toBe(201);
     });
 
+    it("refuses `steward` on the agent PATCH instead of silently dropping it", async () => {
+      const company = await createCompany(db);
+      const userId = await createMember(db, company.id);
+      const agent = await createAgent(db, company.id);
+      const app = await createApp(db, makeBoardActor(company.id, userId));
+
+      const response = await requestApp(app, (baseUrl) =>
+        request(baseUrl).patch(`/api/agents/${agent.id}`).send({ steward: userId }),
+      );
+
+      // A 200 here is the whole bug: `steward` is not on `updateAgentSchema`,
+      // so zod stripped it and the caller was told a pairing had happened that
+      // never did. One agent read that success, saw `steward: null` on the next
+      // GET, and filed a backend bug that did not exist.
+      expect(response.status).toBe(422);
+      expect(response.body.error).toMatch(/agent-stewardships/);
+    });
+
     it("guards the key path on the kind, not on the caller", () => {
       expect(() => assertAgentMayHoldKey({ name: "Scribe", autonomy: "stewarded" })).not.toThrow();
       expect(() => assertAgentMayHoldKey({ name: "Scribe", autonomy: "autonomous" })).toThrow(

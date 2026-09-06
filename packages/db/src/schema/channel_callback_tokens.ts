@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, integer, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { bridgeEndpoints } from "./bridge_endpoints.js";
 import { companies } from "./companies.js";
 import { approvals } from "./approvals.js";
 import { humanChannelBindings } from "./human_channel_bindings.js";
@@ -21,6 +22,15 @@ export const channelCallbackTokens = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     approvalId: uuid("approval_id").notNull().references(() => approvals.id),
     bindingId: uuid("binding_id").references(() => humanChannelBindings.id),
+    /**
+     * Set for a steward-inbox token instead of `bindingId`: the inbox is
+     * delivered to an enrolled machine, not to a chat channel. Bound so a
+     * token that leaks to another of the person's endpoints is inert there,
+     * rather than merely being re-checked for authority at redemption.
+     */
+    bridgeEndpointId: uuid("bridge_endpoint_id").references(() => bridgeEndpoints.id, {
+      onDelete: "cascade",
+    }),
     /** Revision the card was rendered against; a later revision is stale. */
     approvalRevision: integer("approval_revision").notNull(),
     decision: text("decision").notNull(),

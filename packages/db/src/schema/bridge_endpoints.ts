@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 /**
@@ -43,6 +43,16 @@ export const bridgeEndpoints = pgTable(
     capabilities: jsonb("capabilities").$type<string[]>().notNull().default([]),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true }),
     approvedByUserId: text("approved_by_user_id"),
+    /**
+     * How often this machine should deliver, in minutes. Null means the
+     * default.
+     *
+     * Server-side rather than in the local schedule on purpose: the person
+     * changes it by saying so in their inbox, it survives the machine being
+     * set up again, and the schedule itself can stay at one fixed interval and
+     * simply be told whether this run is due.
+     */
+    checkIntervalMinutes: integer("check_interval_minutes"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedByUserId: text("revoked_by_user_id"),

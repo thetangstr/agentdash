@@ -162,10 +162,8 @@ export function ConnectYourHarness({
     <section className="rounded-lg border border-border bg-card p-4">
       <h2 className="text-sm font-semibold">Work with {agentName} from your own terminal</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Whatever coding agent you already use — Claude Code, Codex, something else — can connect to{" "}
-        {agentName}. Create a short code, send it to whoever needs it, and they run one command on
-        their own machine. {agentName} then shows up there with its own work, its mandate, and the
-        ability to answer colleagues waiting on it.
+        Create a code, then send whoever needs it the one command below. They run it on their own
+        machine and {agentName} appears in their terminal, with its work and its mandate.
       </p>
 
       <div className="mt-3">
@@ -192,26 +190,28 @@ export function ConnectYourHarness({
           </>
         ) : (
           <>
-            <div className="mt-1.5 flex items-center gap-3">
-              <code className="font-mono text-2xl font-semibold tracking-[0.2em]">{code}</code>
-              <Button variant="outline" size="sm" onClick={() => copy("code", code)}>
-                {copyLabel("code")}
-              </Button>
-            </div>
-            <p className={`mt-1 text-xs ${codeExpired ? "text-destructive" : "text-muted-foreground"}`}>
-              {codeExpired
-                ? "This code has expired. Create another."
-                : `Works once, and expires in ${Math.floor(secondsLeft / 60)}m ${String(secondsLeft % 60).padStart(2, "0")}s.`}
-            </p>
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <span className="text-xs font-medium">They run this:</span>
-              <Button variant="outline" size="sm" onClick={() => copy("command", connectCommand)}>
+            {/*
+              Exactly one thing to copy.
+
+              The code carried its own Copy button beside the command's, so a
+              flow that needs a single copy offered two — and the code alone is
+              not runnable. The command already contains it. The code stays
+              visible to read aloud or check against; only the command copies.
+            */}
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-medium">Send them this command:</span>
+              <Button size="sm" onClick={() => copy("command", connectCommand)}>
                 {copyLabel("command", "Copy command")}
               </Button>
             </div>
             <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-background p-2.5 text-xs">
               <code>{connectCommand}</code>
             </pre>
+            <p className={`mt-1.5 text-xs ${codeExpired ? "text-destructive" : "text-muted-foreground"}`}>
+              {codeExpired
+                ? `Code ${code} has expired — create another.`
+                : `Code ${code} · works once, expires in ${Math.floor(secondsLeft / 60)}m ${String(secondsLeft % 60).padStart(2, "0")}s. No key changes hands.`}
+            </p>
             <Button
               className="mt-2"
               variant="ghost"

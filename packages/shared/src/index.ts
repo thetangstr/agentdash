@@ -1277,6 +1277,9 @@ export * from "./types/interview.js";
 // (DI_SCOPES re-exported here so server-side code can import without crossing
 // the db-package boundary at the type level — see plan Phase B condition #5)
 export * from "./deep-interview.js";
+// AgentDash: Company Evaluator (Stage 1 shadow) vocabulary and contract schema
+export * from "./evaluation.js";
+export * from "./evaluation-card.js";
 
 // AgentDash: goals-eval-hitl
 // Note: VerdictOutcome, VerdictEntityType already re-exported from ./constants.js above.
@@ -1324,3 +1327,28 @@ export {
   type ClassifyActionInput,
   type ClassifyActionResult,
 } from "./agent-destructive-classifier.js";
+
+export {
+  OTA_STATE_SCHEMA_VERSION,
+  OTA_CHANNELS,
+  OTA_DEPLOYMENT_MODES,
+  OTA_COMPATIBILITY_VERDICTS,
+  OTA_APPROVAL_STATUSES,
+  OTA_RECEIPT_OUTCOMES,
+  type OtaChannel,
+  type OtaDeploymentMode,
+  type OtaRelease,
+  type OtaInstalledRelease,
+  type OtaCompatibilityVerdict,
+  type OtaMigrationSummary,
+  type OtaCompatibility,
+  type OtaDiffSummary,
+  type OtaRollbackPlan,
+  type OtaApprovalStatus,
+  type OtaApproval,
+  type OtaUpdateStatus,
+  type OtaDeploymentState,
+  type OtaReceiptOutcome,
+  type OtaReceiptCheck,
+  type OtaReceipt,
+} from "./types/ota.js";

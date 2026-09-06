@@ -1,6 +1,6 @@
 # Capability-based navigation — replacing productProfile hardcoding
 
-**Status: DESIGN ONLY. Implementation-ready, not implemented.** Branch `ota/integration-mkthink`.
+**Status: DESIGN ONLY. Implementation-ready, not implemented.**
 Date: 2026-09-01. Companion design: `company-governance-mode.md` (also pending review).
 
 ---

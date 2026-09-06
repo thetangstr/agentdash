@@ -1,4 +1,5 @@
 import express, { Router, type Request as ExpressRequest } from "express";
+import { setAuthzRefusalDb } from "./routes/authz.js";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -71,6 +72,7 @@ import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { issueReportRoutes } from "./routes/issue-reports.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { otaRoutes } from "./routes/ota.js";
 import { serverErrorRoutes } from "./routes/server-errors.js";
 import {
   instanceDatabaseBackupRoutes,
@@ -110,6 +112,7 @@ import { slackConnectorRoutes } from "./routes/slack-connector.js";
 import { gmailRoutes } from "./routes/gmail.js";
 // AgentDash: goals-eval-hitl
 import { verdictRoutes } from "./routes/verdicts.js";
+import { evaluationRoutes } from "./routes/evaluation.js";
 import { featureFlagRoutes } from "./routes/feature-flags.js";
 import { HttpError } from "./errors.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -342,6 +345,12 @@ export async function createApp(
   }
   app.use(llmRoutes(db));
 
+  // AGE-91: give the synchronous authz assert helpers a process-wide db handle
+  // so refused writes can be recorded as authz.refused activity rows. Each
+  // createApp call replaces the previous handle (tests build many apps); to
+  // opt out of refusal logging entirely, setAuthzRefusalDb(null) after create.
+  setAuthzRefusalDb(db);
+
   const hostServicesDisposers = new Map<string, () => void>();
   const workerManager = opts.pluginWorkerManager ?? createPluginWorkerManager();
 
@@ -450,6 +459,7 @@ export async function createApp(
     issueReportRoutes(db),
   );
   api.use(instanceSettingsRoutes(db));
+  api.use(otaRoutes(db));
   // O2: read the local error sink (instance-admin only).
   api.use(serverErrorRoutes(db));
   api.use("/conversations", conversationRoutes(db));
@@ -494,12 +504,14 @@ export async function createApp(
   api.use(whatsappConnectorRoutes(db));
   api.use(hubspotConnectorRoutes(db));
   api.use(sharepointConnectorRoutes(db));
-  api.use(bridgeRoutes(db));
+  api.use(bridgeRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(teamsConnectorRoutes(db));
   // AgentDash: Gmail Connector (AGE-109)
   api.use(gmailRoutes(db));
   // AgentDash: goals-eval-hitl
   api.use(verdictRoutes(db));
+  // AgentDash: Company Evaluator (Stage 1 shadow)
+  api.use(evaluationRoutes(db));
   api.use(featureFlagRoutes(db));
   // AgentDash: billing — always mount so /api/billing/status responds with
   // sensible defaults in dev. When Stripe is configured (STRIPE_SECRET_KEY set)

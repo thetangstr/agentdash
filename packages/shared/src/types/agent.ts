@@ -86,6 +86,27 @@ export interface AgentSteward {
   since: Date;
 }
 
+/**
+ * Run-derived health. `succeeded` counts processes that exited zero, which is a
+ * weaker claim than "work happened" — `succeededWithoutEvidence` is how many of
+ * those left no comment and no activity behind. `neverRan` is its own state
+ * because an agent that has not started is neither healthy nor failing.
+ */
+export interface AgentRunHealth {
+  total: number;
+  succeeded: number;
+  failed: number;
+  succeededWithoutEvidence: number;
+  neverRan: boolean;
+  last: {
+    status: string;
+    error: string | null;
+    errorCode: string | null;
+    finishedAt: string | Date | null;
+    leftEvidence: boolean;
+  } | null;
+}
+
 export interface Agent {
   id: string;
   companyId: string;
@@ -143,6 +164,12 @@ export interface Agent {
    * rather than implying the agent is autonomous.
    */
   accountable?: AgentAccountableParty | null;
+  /**
+   * What this agent's runs actually show — the only signal here derived after
+   * the fact rather than claimed before it. Absent on list responses; present
+   * on the detail view.
+   */
+  runHealth?: AgentRunHealth | null;
 }
 
 /**

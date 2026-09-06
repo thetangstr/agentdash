@@ -1,5 +1,5 @@
 diff --git a/dist/server/execute.js b/dist/server/execute.js
-index e96d5c9c0d175a06c668406ba57ac8f5ba750901..ffd90b49c2b5940223ac4dc07a2ec1ac8e132bfe 100644
+index e96d5c9c0d175a06c668406ba57ac8f5ba750901..bbecad669ef4b195395c98a5efd0b73ebcf00186 100644
 --- a/dist/server/execute.js
 +++ b/dist/server/execute.js
 @@ -18,7 +18,7 @@
@@ -20,7 +20,41 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..ffd90b49c2b5940223ac4dc07a2ec1ac
      const timeoutSec = cfgNumber(config.timeoutSec) || DEFAULT_TIMEOUT_SEC;
      const graceSec = cfgNumber(config.graceSec) || DEFAULT_GRACE_SEC;
      const maxTurns = cfgNumber(config.maxTurnsPerRun);
-@@ -350,7 +350,8 @@ export async function execute(ctx) {
+@@ -342,7 +342,32 @@ export async function execute(ctx) {
+         Object.assign(env, userEnv);
+     }
+     // ── Resolve working directory ──────────────────────────────────────────
+-    const cwd = cfgString(config.cwd) || cfgString(ctx.config?.workspaceDir) || ".";
++    // AgentDash patch: honour the workspace the runtime already resolved.
++    //
++    // Upstream fell straight through to ".", which is the AgentDash server's own
++    // cwd — the checkout it is running from. A coding agent started there does
++    // its work in the live serving checkout: it blocks deploys (the updater
++    // refuses a dirty tree), it can leave the running instance on modified code,
++    // and the work is one `git checkout` from being erased. Observed for real on
++    // 2026-08-20, where ~626 lines of an agent's feature work had to be rescued
++    // off the serving checkout before a deploy could proceed.
++    //
++    // `context.paperclipWorkspace.cwd` is what the runtime computed for this run
++    // — a project worktree when the issue has one, otherwise the agent's own
++    // home. The codex and claude adapters already prefer it; this brings hermes
++    // in line, including the same carve-out: an explicitly configured cwd beats
++    // the generic agent-home fallback, because an operator who named a directory
++    // meant it.
++    const workspaceContext = (ctx.context && typeof ctx.context === "object"
++        && typeof ctx.context.paperclipWorkspace === "object"
++        && ctx.context.paperclipWorkspace)
++        ? ctx.context.paperclipWorkspace
++        : {};
++    const configuredCwd = cfgString(config.cwd);
++    const useConfiguredInsteadOfAgentHome = cfgString(workspaceContext.source) === "agent_home"
++        && configuredCwd.length > 0;
++    const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : cfgString(workspaceContext.cwd);
++    const cwd = effectiveWorkspaceCwd || configuredCwd || cfgString(ctx.config?.workspaceDir) || ".";
+     try {
+         await ensureAbsoluteDirectory(cwd);
+     }
+@@ -350,7 +375,8 @@ export async function execute(ctx) {
          // Non-fatal
      }
      // ── Log start ──────────────────────────────────────────────────────────
@@ -30,7 +64,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..ffd90b49c2b5940223ac4dc07a2ec1ac
      if (prevSessionId) {
          await ctx.onLog("stdout", `[hermes] Resuming session: ${prevSessionId}\n`);
      }
-@@ -396,7 +397,7 @@ export async function execute(ctx) {
+@@ -396,7 +422,7 @@ export async function execute(ctx) {
          signal: result.signal,
          timedOut: result.timedOut,
          provider: resolvedProvider,
@@ -40,7 +74,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..ffd90b49c2b5940223ac4dc07a2ec1ac
      if (parsed.errorMessage) {
          executionResult.errorMessage = parsed.errorMessage;
 diff --git a/dist/server/test.js b/dist/server/test.js
-index d440427d7df7703dfd469675a2cadfca413e2df1..09929514ff65a55ab5588314092f8a185a02e2b6 100644
+index d440427d7df7703dfd469675a2cadfca413e2df1..38f8b39aa4c2511dc82267cb3d0efdf8c2434e25 100644
 --- a/dist/server/test.js
 +++ b/dist/server/test.js
 @@ -12,6 +12,18 @@ const execFileAsync = promisify(execFile);

@@ -1,12 +1,13 @@
 import { Router } from "express";
 import type { Request } from "express";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies } from "@paperclipai/db";
 import { badRequest, forbidden } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 import { accessService } from "../services/access.js";
 import { agentGovernanceService } from "../services/agent-governance.js";
+import { summarizeApprovalRisk } from "../services/approval-risk.js";
 import { issueApprovalService } from "../services/issue-approvals.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { requireProductProfile } from "../services/companies.js";
@@ -22,26 +23,6 @@ export function agentdashMkInboxRoutes(db: Db) {
   const issueApprovals = issueApprovalService(db);
   const governance = agentGovernanceService(db);
 
-  /**
-   * Coarse risk band derived from the approval type and payload. Enough for the
-   * decision surface to order attention; it is not an authorization input.
-   */
-  function summarizeRisk(type: string, payload: unknown): { level: "high" | "medium" | "low"; reason: string } {
-    const record = (payload ?? {}) as Record<string, unknown>;
-    if (type === "hire_agent") {
-      return { level: "high", reason: "Creates or changes an agent" };
-    }
-    if (type === "budget_override_required") {
-      return { level: "high", reason: "Raises a spend limit" };
-    }
-    if (type === "mandate_violation") {
-      return { level: "high", reason: "Mandate violation" };
-    }
-    if (typeof record.destructive === "boolean" && record.destructive) {
-      return { level: "high", reason: "Destructive action" };
-    }
-    return { level: "medium", reason: "Governed action" };
-  }
 
   /** Who currently holds decision authority, and the minimum the ceiling demands. */
   async function resolveEffectiveAuthority(companyId: string, agentId: string) {
@@ -115,7 +96,20 @@ export function agentdashMkInboxRoutes(db: Db) {
           // scope condition below is what keeps the result the caller's own —
           // the two are deliberately separate so widening one can never widen
           // the other.
-          ...(options.includeResolved ? [] : [inArray(approvals.status, OPEN_APPROVAL_STATUSES)]),
+          // Open means decidable, which is a question of status AND time.
+          //
+          // This filtered on status alone, and nothing anywhere marks a lapsed
+          // approval as expired -- `expiresAt` is consulted in exactly one
+          // place, at connector-send time. So an approval past its expiry sat
+          // in the inbox as actionable for ever, and deciding it did nothing.
+          // That is the same "cannot reach zero" failure the read-state rule
+          // caused, arriving by a different road.
+          ...(options.includeResolved
+            ? []
+            : [
+                inArray(approvals.status, OPEN_APPROVAL_STATUSES),
+                or(isNull(approvals.expiresAt), gt(approvals.expiresAt, new Date()))!,
+              ]),
           ...(scopeCondition ? [scopeCondition] : []),
         ),
       )
@@ -153,7 +147,7 @@ export function agentdashMkInboxRoutes(db: Db) {
           title: issue.title,
           status: issue.status,
         })),
-        risk: summarizeRisk(approval.type, approval.payload),
+        risk: summarizeApprovalRisk(approval.type, approval.payload),
         effectiveAuthority: approval.requestedByAgentId
           ? authorityByAgent.get(approval.requestedByAgentId) ?? {
               steward: null,

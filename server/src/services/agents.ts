@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, desc, eq, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -18,7 +18,7 @@ import {
   issues,
   issueComments,
 } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
@@ -346,6 +346,11 @@ export function agentService(db: Db) {
       data.status !== "terminated"
     ) {
       throw conflict("Pending approval agents cannot be activated directly");
+    }
+    // AgentDash (Company Evaluator, D11): the evaluator's role is the principal's identity — the read-only gate,
+    // the cadence and provisioning all key on it — so it cannot be re-roled into an ordinary agent.
+    if (existing.role === EVALUATOR_AGENT_ROLE && data.role !== undefined && data.role !== EVALUATOR_AGENT_ROLE) {
+      throw conflict("The evaluator agent's role is its identity and cannot be changed; terminate it and provision again instead");
     }
 
     if (data.reportsTo !== undefined) {
@@ -680,6 +685,16 @@ export function agentService(db: Db) {
     // AgentDash (AGE-24): every minted key records what minted it and, when a
     // person or agent did, who. Callers that omit provenance are recorded as a
     // person creating one by hand.
+    /** AgentDash (Company Evaluator, D11): revoke every live key of one principal kind on an agent (key rotation). */
+    revokeKeysOfKind: async (id: string, principalKind: "agent" | "evaluator") => {
+      const rows = await db
+        .update(agentApiKeys)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(agentApiKeys.agentId, id), eq(agentApiKeys.principalKind, principalKind), isNull(agentApiKeys.revokedAt)))
+        .returning({ id: agentApiKeys.id });
+      return rows.length;
+    },
+
     createApiKey: async (
       id: string,
       name: string,
@@ -688,6 +703,8 @@ export function agentService(db: Db) {
         createdByUserId?: string | null;
         createdByAgentId?: string | null;
       },
+      /** AgentDash (Company Evaluator, D11): `evaluator` mints a read-only principal. */
+      principalKind?: "agent" | "evaluator",
     ) => {
       const existing = await getById(id);
       if (!existing) throw notFound("Agent not found");
@@ -710,6 +727,7 @@ export function agentService(db: Db) {
           source: provenance?.source ?? "manual",
           createdByUserId: provenance?.createdByUserId ?? null,
           createdByAgentId: provenance?.createdByAgentId ?? null,
+          principalKind: principalKind ?? null,
         })
         .returning()
         .then((rows) => rows[0]);

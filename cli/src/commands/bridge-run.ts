@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import type { Command } from "commander";
+import { registerBridgeInboxCommands } from "./bridge-inbox.js";
 import pc from "picocolors";
 import {
   assertSandboxSupported,
@@ -36,6 +37,13 @@ const SERVER_MISSING_MESSAGE =
   "Refusing to start: no server URL.\n" +
   "Set AGENTDASH_BRIDGE_SERVER in the environment, or pass --server <url>.";
 
+/** Shared with `bridge inbox`, for the same reason `resolveToken` is. */
+export function resolveServer(opts: { server?: string }, env: NodeJS.ProcessEnv): string {
+  const serverUrl = (opts.server ?? env.AGENTDASH_BRIDGE_SERVER ?? "").trim();
+  if (!serverUrl) throw new Error(SERVER_MISSING_MESSAGE);
+  return serverUrl.replace(/\/+$/, "");
+}
+
 export interface BridgeRunOptions {
   server?: string;
   tokenFile?: string;
@@ -60,7 +68,13 @@ export interface BridgeRunDeps {
   stopSignal?: AbortSignal;
 }
 
-function resolveToken(opts: BridgeRunOptions, env: NodeJS.ProcessEnv, warn: (line: string) => void): string {
+/**
+ * Exported so `bridge inbox` resolves a credential exactly as `bridge run`
+ * does. Two copies would drift on the details that matter here -- the
+ * permissions warning, the empty-file refusal, and the deliberate refusal to
+ * accept a token in argv where `ps` can read it.
+ */
+export function resolveToken(opts: { tokenFile?: string }, env: NodeJS.ProcessEnv, warn: (line: string) => void): string {
   if (opts.tokenFile) {
     let contents: string;
     try {
@@ -183,10 +197,20 @@ export async function bridgeRun(opts: BridgeRunOptions, deps: BridgeRunDeps = {}
    */
   if (!process.env.ANTHROPIC_API_KEY) {
     log(
-      "[bridge] no ANTHROPIC_API_KEY in this environment. The sandbox denies the home\n" +
-        "         directory, so the agent cannot read a desktop login and every task will\n" +
-        "         fail to authenticate. Set ANTHROPIC_API_KEY before starting this worker;\n" +
-        "         `claude /login` cannot help, because it writes where the sandbox denies.",
+      "[bridge] this sandboxed worker has no credential of its own, and it cannot use\n" +
+        "         yours: it denies the home directory, so your Claude Code login is out of\n" +
+        "         reach. Every task will fail to authenticate.\n" +
+        "\n" +
+        "         If you want to use your existing Claude subscription, this is the wrong\n" +
+        "         command. Connect AgentDash to the Claude Code you are already signed into\n" +
+        "         and work from your inbox there:\n" +
+        "\n" +
+        "           paperclipai bridge inbox-init ~/agentdash-inbox --server <url> \\\n" +
+        "             --token-file ~/.agentdash/bridge-token\n" +
+        "\n" +
+        "         Use this command only for an unattended worker with a key of its own, and\n" +
+        "         then set ANTHROPIC_API_KEY before starting it. `claude /login` cannot help\n" +
+        "         either way, because it writes where this sandbox denies.",
     );
   }
 
@@ -218,6 +242,8 @@ export function registerBridgeCommands(program: Command): Command {
   const bridge = program
     .command("bridge")
     .description("AgentDash-MK local bridge — run agent tasks on this machine, sandboxed");
+
+  registerBridgeInboxCommands(bridge);
 
   bridge
     .command("run")

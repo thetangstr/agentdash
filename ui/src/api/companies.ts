@@ -11,7 +11,17 @@ import type {
 } from "@paperclipai/shared";
 import { api } from "./client";
 
-export type CompanyStats = Record<string, { agentCount: number; issueCount: number }>;
+export type CompanyStats = Record<
+  string,
+  {
+    agentCount: number;
+    issueCount: number;
+    /** Runs that exited zero. Not the same claim as "work happened". */
+    runsSucceeded: number;
+    /** Of those, the ones that left no comment and no activity behind. */
+    runsSucceededWithoutEvidence: number;
+  }
+>;
 
 export const companiesApi = {
   list: () => api.get<Company[]>("/companies"),

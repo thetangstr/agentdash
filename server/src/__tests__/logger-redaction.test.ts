@@ -49,9 +49,25 @@ describe("log redaction", () => {
 
   it("still redacts the authorization header", () => {
     const line = logLineWith({
-      req: { headers: { authorization: "Bearer sk-live-something" } },
+      req: { headers: { authorization: "Bearer ***" } },
     });
     const req = line.req as { headers: Record<string, unknown> };
     expect(req.headers.authorization).toBe("[Redacted]");
+  });
+
+  it("redacts the session cookie header", () => {
+    const line = logLineWith({
+      req: {
+        headers: {
+          cookie:
+            "authjs.session-token=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..FAKE_JWE_PAYLOAD",
+          host: "127.0.0.1:3199",
+        },
+      },
+    });
+    const req = line.req as { headers: Record<string, unknown> };
+    expect(req.headers.cookie).toBe("[Redacted]");
+    // Non-credential headers stay diagnosable.
+    expect(req.headers.host).toBe("127.0.0.1:3199");
   });
 });

@@ -471,6 +471,28 @@ function touchedByUserCondition(companyId: string, userId: string) {
     (
       ${issues.createdByUserId} = ${userId}
       OR ${issues.assigneeUserId} = ${userId}
+      /*
+       * Reading is not really participating, and this clause knows it — but it
+       * stays for now, deliberately.
+       *
+       * Counting a read-state row as participation means opening an issue once
+       * enrols you in it permanently. It falls hardest on whoever reads the
+       * most: an administrator browsing the board acquires an inbox of other
+       * people's agents' work, none of it waiting on them, with no way to reach
+       * zero except archiving each item by hand.
+       *
+       * Removing it was tried and reverted, because this table is doing two
+       * jobs. The routines service places a coalesced routine issue into the
+       * MANUAL RUNNER's inbox by writing a read-state row, and that is genuine
+       * participation — the person asked for the run. Dropping the clause took
+       * that feature out with the browsing case (routines-service.test.ts
+       * covers it).
+       *
+       * The fix is to give "deliberately placed in your inbox" its own signal
+       * rather than overloading "I looked at this", which is a schema change
+       * and belongs in its own commit. Until then the noisy inbox stays, because
+       * a quiet inbox that silently drops routine runs is the worse failure.
+       */
       OR EXISTS (
         SELECT 1
         FROM ${issueReadStates}
