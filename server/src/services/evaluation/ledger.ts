@@ -3,7 +3,7 @@ import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notExists, sql } from 
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { evaluationEvents } from "@paperclipai/db";
-import {
+import { isUuidLike,
   EVALUATION_SCHEMA_VERSION,
   EVALUATION_SKEW_TOLERANCE_MS,
   type EvaluationActorType,
@@ -248,7 +248,7 @@ export function evaluationLedger(db: LedgerDb) {
     /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3). */
     /** One event by id within the company, or null. */
     async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
-      if (typeof id !== "string" || id.length === 0) return null;
+      if (!isUuidLike(id)) return null; // a uuid column: a malformed id is absent, never a cast error
       const rows = await db
         .select()
         .from(evaluationEvents)
@@ -258,7 +258,7 @@ export function evaluationLedger(db: LedgerDb) {
     },
 
     async existing(companyId: string, ids: string[]): Promise<Set<string>> {
-      const wanted = [...new Set(ids)].filter((x) => typeof x === "string" && x.length > 0);
+      const wanted = [...new Set(ids)].filter((x) => isUuidLike(x)); // malformed ids are reported missing, never a cast error
       if (wanted.length === 0) return new Set();
       const rows = await db
         .select({ id: evaluationEvents.id })

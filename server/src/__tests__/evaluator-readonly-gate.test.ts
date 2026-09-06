@@ -7,6 +7,7 @@ import { activityLog, agentApiKeys, agents, companies, createDb } from "@papercl
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { actorMiddleware } from "../middleware/auth.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
+import { agentService } from "../services/agents.js";
 
 // AgentDash: Company Evaluator — Milestone 3, decision D11 / spec §10.2.
 // The evaluator's prohibition is a property of the system: an API key whose
@@ -137,6 +138,13 @@ describeEmbeddedPostgres("evaluator read-only gate (embedded postgres)", () => {
     await new Promise((r) => setTimeout(r, 200));
     const rows = await db.select().from(activityLog).where(and(eq(activityLog.companyId, companyId), eq(activityLog.action, "authz.refused")));
     expect(rows.some((r) => (r.details as { routePath: string }).routePath === "/api/issues/00000000-0000-4000-8000-000000000003" && r.actorId === evaluatorId)).toBe(true);
+  });
+
+  it("the evaluator agent cannot be re-roled into an ordinary agent", async () => {
+    await expect(agentService(db).update(evaluatorId, { role: "engineer" })).rejects.toMatchObject({ status: 409 });
+    expect((await db.select().from(agents).where(eq(agents.id, evaluatorId)))[0]!.role).toBe("evaluator");
+    // renaming or retitling it is fine
+    await agentService(db).update(evaluatorId, { title: "Company Evaluator" });
   });
 
   it("changes nothing for an ordinary agent key", async () => {

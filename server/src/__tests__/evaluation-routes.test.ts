@@ -20,8 +20,8 @@ vi.mock("../services/evaluation/ingest.js", () => ({
   withCompanyLock: (_db: unknown, _companyId: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
 }));
 const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
-const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id.startsWith("ev-"))));
-const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "corr-1" ? { id, eventType: "evaluation.correction" } : id === "not-a-correction" ? { id, eventType: "issue.created" } : null));
+const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")));
+const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction" } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created" } : null));
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
   evaluationLedger: () => ({
@@ -48,7 +48,7 @@ vi.mock("../services/agents.js", () => ({ agentService: () => ({ list: agentsLis
 const projectsList = vi.fn().mockResolvedValue([]);
 const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
 vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
-const reviewSync = vi.fn().mockResolvedValue({ projectId: "proj-eval", labelId: "lbl", created: ["i1"], updated: [], unchanged: [], unrouted: [] });
+const reviewSync = vi.fn().mockResolvedValue({ projectId: "proj-eval", labelId: "lbl", created: ["i1"], updated: [], unchanged: [], unrouted: [], closed: [] });
 vi.mock("../services/evaluation/review-items.js", () => ({ REVIEW_PROJECT_DESCRIPTION: "Review items raised by the Company Evaluator.", evaluationReviewItems: () => ({ sync: reviewSync }) }));
 vi.mock("../services/activity-log.js", () => ({ logActivity }));
 
@@ -237,13 +237,13 @@ describe("evaluation routes", () => {
     expect(append).not.toHaveBeenCalled();
     const noRefs = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: [] });
     expect(noRefs.status).toBe(400);
-    const ok = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: ["ev-1", "ev-2"] });
+    const ok = await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E5:issue:x", note: "stale for a week", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"] });
     expect(ok.status).toBe(201);
     const [events] = append.mock.calls[0]! as [Array<Record<string, unknown>>];
     expect(events[0]).toMatchObject({ eventType: "evaluation.finding", actorType: "evaluator", actorId: "agent-1", sourceTable: "evaluator_notes", sourceId: "E5:issue:x" });
-    expect((events[0]!.payload as { evidenceRefs: string[] }).evidenceRefs).toEqual(["ev-1", "ev-2"]);
+    expect((events[0]!.payload as { evidenceRefs: string[] }).evidenceRefs).toEqual(["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"]);
     const agent = await createApp(agentKey);
-    expect((await request(agent).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "k", note: "n", evidenceRefs: ["ev-1"] })).status).toBe(403);
+    expect((await request(agent).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "k", note: "n", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(403);
     expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.finding_noted"]);
   });
 
@@ -258,12 +258,15 @@ describe("evaluation routes", () => {
     expect(filed.status).toBe(201);
     expect((append.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.correction", actorType: "user", actorId: "user-1" });
     // evaluator note on the correction: the correction must exist (by id and type) and the note must cite
-    const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["ev-1"] });
+    const note = await request(evaluator).post("/api/companies/company-1/evaluation/corrections/cccccccc-cccc-4ccc-8ccc-ccccccccccc1/note").send({ note: "the verdict at ev-1 was by the assignee", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] });
     expect(note.status).toBe(201);
-    expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "evaluator", sourceId: "corr-1" });
+    expect((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", actorType: "evaluator", sourceId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" });
     ledgerList.mockResolvedValueOnce([]);
-    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-9/note").send({ note: "x", evidenceRefs: ["ev-1"] })).status).toBe(404);
-    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/not-a-correction/note").send({ note: "x", evidenceRefs: ["ev-1"] })).status).toBe(404); // an event of another type is not a correction
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/corr-9/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/dddddddd-dddd-4ddd-8ddd-ddddddddddd1/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404); // an event of another type is not a correction
+    // a malformed id is a 4xx the evaluator can learn from, never a uuid cast error
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/corrections/abc/note").send({ note: "x", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"] })).status).toBe(404);
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/findings").send({ exceptionKey: "E4:issue:x", note: "cites nothing real", evidenceRefs: ["not-a-ledger-event"] })).status).toBe(400);
     // the disposition is the human's: the evaluator is refused, the administrator decides
     expect((await request(evaluator).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "correction_decided", correctionEventId: "33333333-3333-4333-8333-333333333333", decision: "accepted" })).status).toBe(403);
     existing.mockResolvedValueOnce(new Set(["33333333-3333-4333-8333-333333333333"]));
@@ -274,7 +277,7 @@ describe("evaluation routes", () => {
     // accepting a contract exception and attesting a criterion follow the same shape
     existing.mockResolvedValueOnce(new Set(["44444444-4444-4444-8444-444444444444"]));
     expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "contract_exception_accepted", contractEventId: "44444444-4444-4444-8444-444444444444" })).status).toBe(201);
-    const attest = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "criterion_attest", criterionId: "k1", result: "satisfied", evidenceRefs: ["ev-3"], milestoneRef: { kind: "project", id: "22222222-2222-4222-8222-222222222222" } });
+    const attest = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "criterion_attest", criterionId: "k1", result: "satisfied", evidenceRefs: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3"], milestoneRef: { kind: "project", id: "22222222-2222-4222-8222-222222222222" } });
     expect(attest.status).toBe(201);
     expect((append.mock.calls[4]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ projectId: "22222222-2222-4222-8222-222222222222", sourceId: "k1:milestone" });
     expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "nope" })).status).toBe(400);

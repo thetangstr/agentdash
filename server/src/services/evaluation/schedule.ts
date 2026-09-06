@@ -31,6 +31,8 @@ export interface SnapshotCadenceResult {
   cards: number;
   reviewItemsCreated: number;
   reviewItemsUpdated: number;
+  /** Items a human has closed and the cadence therefore left alone (never recreated). */
+  reviewItemsClosed: number;
   failures: Array<{ companyId: string; milestoneId: string | null; error: string }>;
 }
 
@@ -59,7 +61,7 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
   return {
     /** One pass over the open projects of every provisioned company. */
     async run(): Promise<SnapshotCadenceResult> {
-      const result: SnapshotCadenceResult = { companies: 0, milestones: 0, cards: 0, reviewItemsCreated: 0, reviewItemsUpdated: 0, failures: [] };
+      const result: SnapshotCadenceResult = { companies: 0, milestones: 0, cards: 0, reviewItemsCreated: 0, reviewItemsUpdated: 0, reviewItemsClosed: 0, failures: [] };
       for (const companyId of await provisionedCompanies()) {
         result.companies++;
         let open: Array<{ id: string }> = [];
@@ -85,6 +87,7 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
               const synced = await reviewItems.sync(companyId, ref, stored.card as ScoredCard, stored.version, fallback);
               result.reviewItemsCreated += synced.created.length;
               result.reviewItemsUpdated += synced.updated.length;
+              result.reviewItemsClosed += synced.closed.length;
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

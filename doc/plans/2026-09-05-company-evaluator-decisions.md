@@ -600,3 +600,18 @@ Recorded here rather than in the spec, which is at its size limit.
   bypass. Recorded deviation kept: the evaluator agent's accountable human is
   the provisioning administrator, not the founder as §10.1 writes — the founder
   should confirm, since it decides who receives unrouted exceptions.
+
+- **Milestone 3 review round 2 (READY; hardening taken).** The reviewer verified
+  every round-1 fix against code and tests and confirmed no deadlock between the
+  review-items lock and the ingest lock, and that a reused snapshot cannot skip
+  findings (insert and append share one transaction). Taken from the round: a
+  malformed event id in a citation or a correction path is a 400 or 404 the
+  evaluator can learn from, never a uuid cast error — citations are validated
+  as uuids and the ledger treats a non-uuid id as absent; the evaluator agent's
+  role cannot be changed (the read-only gate, the cadence and provisioning all
+  key on it, so the role string `evaluator` is the principal's identity and
+  must not be renamed); the review-items route and the cadence now count closed
+  items, so a human closing an immediate item is visible as a number, while the
+  exception itself stays on the card and in the ledger. Not taken: two unnamed
+  agent subjects in one digest render alike (cosmetic; the note carries the
+  detail).

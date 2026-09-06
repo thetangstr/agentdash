@@ -18,7 +18,7 @@ import {
   issues,
   issueComments,
 } from "@paperclipai/db";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, EVALUATOR_AGENT_ROLE, isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import type { AgentApiKeySource } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
@@ -346,6 +346,11 @@ export function agentService(db: Db) {
       data.status !== "terminated"
     ) {
       throw conflict("Pending approval agents cannot be activated directly");
+    }
+    // AgentDash (Company Evaluator, D11): the evaluator's role is the principal's identity — the read-only gate,
+    // the cadence and provisioning all key on it — so it cannot be re-roled into an ordinary agent.
+    if (existing.role === EVALUATOR_AGENT_ROLE && data.role !== undefined && data.role !== EVALUATOR_AGENT_ROLE) {
+      throw conflict("The evaluator agent's role is its identity and cannot be changed; terminate it and provision again instead");
     }
 
     if (data.reportsTo !== undefined) {

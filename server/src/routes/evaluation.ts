@@ -6,6 +6,7 @@ import {
   type EvaluationEventType,
   evaluationMilestoneRefSchema,
   EVALUATOR_AGENT_ROLE,
+  isUuidLike,
 } from "@paperclipai/shared";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
@@ -250,7 +251,7 @@ export function evaluationRoutes(db: Db) {
         action: "evaluation.scorecard_snapshot",
         entityType: ref.kind,
         entityId: ref.id,
-        details: { version: stored.version, throughSeq: Number(stored.throughSeq), cardHash: stored.cardHash, reviewItems: reviewItemsResult && !("error" in reviewItemsResult) ? { created: reviewItemsResult.created.length, updated: reviewItemsResult.updated.length, unrouted: reviewItemsResult.unrouted.length } : reviewItemsResult },
+        details: { version: stored.version, throughSeq: Number(stored.throughSeq), cardHash: stored.cardHash, reviewItems: reviewItemsResult && !("error" in reviewItemsResult) ? { created: reviewItemsResult.created.length, updated: reviewItemsResult.updated.length, unrouted: reviewItemsResult.unrouted.length, closed: reviewItemsResult.closed.length } : reviewItemsResult },
       });
       res.status(201).json({ stored, verify, reviewItems: reviewItemsResult });
     } catch (err) {
@@ -341,7 +342,7 @@ export function evaluationRoutes(db: Db) {
         action: "evaluation.review_items_synced",
         entityType: ref.kind,
         entityId: ref.id,
-        details: { cardVersion: latest.version, created: result.created.length, updated: result.updated.length, unchanged: result.unchanged.length, unrouted: result.unrouted.length },
+        details: { cardVersion: latest.version, created: result.created.length, updated: result.updated.length, unchanged: result.unchanged.length, unrouted: result.unrouted.length, closed: result.closed.length },
       });
       res.json({ cardVersion: latest.version, ...result });
     } catch (err) {
@@ -349,7 +350,8 @@ export function evaluationRoutes(db: Db) {
     }
   });
 
-  const evidenceRefsSchema = z.array(z.string().min(1)).min(1).max(50);
+  // citations are ledger event ids: anything else is a 400 the evaluator can learn from, never a uuid cast error
+  const evidenceRefsSchema = z.array(z.string().uuid()).min(1).max(50);
   const noteSchema = z.string().min(1).max(4000);
 
   /** §9.3: every evaluator statement cites ledger events; uncited notes are refused, not stored. */
@@ -415,7 +417,7 @@ export function evaluationRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       if (req.actor.type !== "board") throw forbidden("Corrections are filed by humans");
-      const body = z.object({ disputedEventId: z.string().uuid(), claimedFact: noteSchema, evidenceRefs: z.array(z.string().min(1)).max(50).default([]), correlationId: z.string().max(200).optional() }).safeParse(req.body);
+      const body = z.object({ disputedEventId: z.string().uuid(), claimedFact: noteSchema, evidenceRefs: z.array(z.string().uuid()).max(50).default([]), correlationId: z.string().max(200).optional() }).safeParse(req.body);
       if (!body.success) throw badRequest("disputedEventId and claimedFact are required", { issues: body.error.issues });
       const exists = await ledger.existing(companyId, [body.data.disputedEventId, ...body.data.evidenceRefs]);
       if (!exists.has(body.data.disputedEventId)) throw notFound("Disputed event not found in this company's ledger");
@@ -457,6 +459,7 @@ export function evaluationRoutes(db: Db) {
       await assertEvaluatorOrAdministrator(req, companyId);
       const body = z.object({ note: noteSchema, evidenceRefs: evidenceRefsSchema }).safeParse(req.body);
       if (!body.success) throw badRequest("note and at least one evidenceRef are required", { issues: body.error.issues });
+      if (!isUuidLike(correctionEventId)) throw notFound("Correction not found");
       const correction = await ledger.get(companyId, correctionEventId);
       if (!correction || correction.eventType !== "evaluation.correction") throw notFound("Correction not found");
       await requireCitations(companyId, body.data.evidenceRefs);
