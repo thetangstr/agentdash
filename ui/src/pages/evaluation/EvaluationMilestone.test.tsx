@@ -55,6 +55,7 @@ function metric(key: string, over: Record<string, unknown> = {}) {
   return {
     key,
     name: key,
+    valueKind: ({ O1: "share", O2: "share", O3: "index", O4: "status", O5: "share", P1: "share", P2: "share", P3: "share", P4: "share", P5: "duration", P6: "count", P7: "duration", P8: "currency", P9: "index" } as Record<string, string>)[key],
     value: 0.75,
     unit: "share satisfied",
     n: 4,
@@ -100,7 +101,7 @@ const card = {
   outcome: { O1: metric("O1", { name: "Acceptance satisfied" }), O5: metric("O5", { name: "Evidence hygiene", value: 0.6, coverage: 0.6, confidence: "medium" }) },
   outcomeComposite: composite(68.1),
   actors: [
-    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 0.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
+    { actorKey: "agent:b", actorType: "agent", actorId: "b", name: "Builder", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 2 } }), P8: metric("P8", { name: "Token and cost efficiency", unit: "cents per O1-satisfied item", value: 45.5, displayOnly: true, detail: { runs: 34, metered: 3, totalCents: 1234, medianRunCents: 400 } }) }, composite: { ...composite(55), kind: "operating" } },
     { actorKey: "agent:t", actorType: "agent", actorId: "t", name: "Tester", metrics: { P1: metric("P1", { name: "Autonomy", unit: "share of items with zero interventions", detail: { interventions: 0 } }) }, composite: { ...composite(91), kind: "operating" } },
     { actorKey: "agent:z", actorType: "agent", actorId: "z", name: "Zed", metrics: { P1: metric("P1", { name: "Autonomy" }), P9: metric("P9", { name: "Duplicate and rework rate", unit: "duplicates and rework per delivered item", value: 0.4, lowerIsBetter: true }) }, composite: { ...composite(null, ["fewer than 3 metrics have evidence"]), kind: "operating" } },
     { actorKey: "company:c", actorType: "company", actorId: "company-1", name: null, metrics: {}, composite: null },
@@ -260,7 +261,7 @@ describe("EvaluationMilestone", () => {
     // a display-only metric keeps its value beside a not-scored badge, and its detail is shown on demand
     const show = [...container.querySelectorAll('[data-testid="actor-agent:b"] button')].find((b) => /Show \d+ metrics/.test(b.textContent ?? "")) as HTMLButtonElement;
     await act(async () => { show.click(); });
-    expect(container.textContent).toContain("0.5 cents per O1-satisfied item");
+    expect(container.textContent).toContain("$0.46 per O1-satisfied item"); // currency renders in dollars, never as a percentage
     expect(container.textContent).toContain("not scored");
     const p8 = container.querySelector('[data-testid="metric-P8"]') as HTMLButtonElement;
     await act(async () => { p8.click(); });

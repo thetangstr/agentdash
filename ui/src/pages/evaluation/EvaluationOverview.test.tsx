@@ -55,6 +55,7 @@ function metric(key: string, over: Record<string, unknown> = {}) {
   return {
     key,
     name: key,
+    valueKind: ({ O1: "share", O2: "share", O3: "index", O4: "status", O5: "share", P1: "share", P2: "share", P3: "share", P4: "share", P5: "duration", P6: "count", P7: "duration", P8: "currency", P9: "index" } as Record<string, string>)[key],
     value: 0.75,
     unit: "share satisfied",
     n: 4,

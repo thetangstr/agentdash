@@ -51,12 +51,23 @@ export function fmtDate(iso: string | Date | null | undefined): string {
   const d = iso instanceof Date ? iso : new Date(iso);
   return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
 }
-/** Metrics whose value is a share in 0–1 (§5): rendered as a percentage. Indexes (O3, P9: events per delivered item, lower is better) and everything else render as the value with its unit. */
-const SHARE_METRICS = new Set<string>(["O1", "O2", "O5", "P1", "P2", "P3", "P4"]);
+/** Rendered from the kind the engine declared — never inferred from the key or the unit text. A card without a kind renders value and unit. */
 export function fmtValue(m: MetricResult): string {
   if (m.value == null) return "—";
-  if ((SHARE_METRICS.has(m.key) || m.unit.startsWith("share")) && m.value >= 0 && m.value <= 1) return fmtPct(m.value);
-  return `${Math.round(m.value * 100) / 100} ${m.unit}`.trim();
+  switch (m.valueKind) {
+    case "share":
+      return fmtPct(m.value);
+    case "count":
+      return `${Math.round(m.value)} ${m.unit}`.trim();
+    case "currency":
+      return `$${(m.value / 100).toFixed(2)} ${m.unit.replace(/^cents\s+/, "")}`.trim();
+    case "status":
+      return m.unit;
+    case "duration":
+    case "index":
+    default:
+      return `${Math.round(m.value * 100) / 100} ${m.unit}`.trim();
+  }
 }
 
 /** Primitive entries of a metric's detail (medians, counts, caveats); nested objects are left to the ledger. */

@@ -722,3 +722,14 @@ Recorded here rather than in the spec, which is at its size limit.
   (metered cents, hours to recovery) rather than a score — and the drill-down
   now renders exactly that; §7's "no value at Insufficient" applies to scored
   metrics, whose value is null at that tier.
+- **Milestone 4 review round 3: the value's kind is the engine's to say.** Three
+  rounds found the browser inferring a metric's unit from its key or unit text,
+  each time wrong for one metric (P9 an index, the company row's P2 a count
+  under an agent key). `MetricResult` now carries `valueKind` — share, index,
+  count, duration, currency or status — set where the metric is built, and the
+  surfaces render on it and nothing else; the company row's metrics carry
+  their own names ("Questions owed by the company", "Platform failures")
+  instead of the agent names their keys would give. The card's bytes changed,
+  so `METRICS_FORMULA_VERSION` is `metrics/3` and `FORMULA_VERSION`
+  `m2-score/6`; the contract fixture was regenerated and its test now asserts
+  the company row's rendering on the real card.

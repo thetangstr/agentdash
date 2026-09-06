@@ -9,6 +9,7 @@ import {
   type EvaluationMetricKey,
   type EvaluationMilestoneRef,
   type EvaluationSourceTier,
+  type EvaluationMetricValueKind,
 } from "@paperclipai/shared";
 import { labelFor, tierFor, minTier } from "./confidence.js";
 import type { ResolvedContract } from "./contract.js";
@@ -47,7 +48,7 @@ import type { ExceptionRecord, MetricBreakdown, MetricResult, UndecidableReason 
  * rule raised. Nothing is imputed; no volume is ever rewarded (rule 1).
  */
 
-export const METRICS_FORMULA_VERSION = "metrics/2";
+export const METRICS_FORMULA_VERSION = "metrics/3";
 const MAX_REFS = 200;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -118,6 +119,10 @@ function headlineRatio(t: Tally, popWord: string, okWord = "satisfied"): string 
 }
 
 interface Build {
+  /** What the value is; decided here so no surface infers it from the unit text. */
+  valueKind: EvaluationMetricValueKind;
+  /** Overrides the key's default name (the company row reuses agent keys for different metrics). */
+  name?: string;
   key: EvaluationMetricKey;
   unit: string;
   n: number;
@@ -161,7 +166,8 @@ function build(b: Build): MetricResult {
   const shown = tier !== "insufficient" && !b.displayOnly ? b.value : b.displayOnly ? b.value : null;
   return {
     key: b.key,
-    name: EVALUATION_METRIC_NAMES[b.key],
+    name: b.name ?? EVALUATION_METRIC_NAMES[b.key],
+    valueKind: b.valueKind,
     value: tier === "insufficient" ? null : shown,
     unit: b.unit,
     n: b.n,
@@ -280,6 +286,7 @@ export function o1Acceptance(ctx: ScoringContext): MetricOutput {
     metric: build({
       ctx,
       key: "O1",
+      valueKind: "share",
       unit: "share of decidable done items",
       n,
       value,
@@ -300,7 +307,7 @@ export function o2Deadline(ctx: ScoringContext): MetricOutput {
   const target = ctx.resolved.contract.targetDate ?? project?.targetDate ?? null;
   if (!target) {
     return {
-      metric: build({ ctx, key: "O2", unit: "share closed on time", n: 0, value: null, t, headline: "no target date on the milestone or its contract", notes: ["set projects.targetDate or the contract's targetDate to measure"] }),
+      metric: build({ ctx, key: "O2", valueKind: "share", unit: "share closed on time", n: 0, value: null, t, headline: "no target date on the milestone or its contract", notes: ["set projects.targetDate or the contract's targetDate to measure"] }),
       exceptions: [],
     };
   }
@@ -320,7 +327,7 @@ export function o2Deadline(ctx: ScoringContext): MetricOutput {
     t.failed.push(id);
   }
   return {
-    metric: build({ ctx, key: "O2", unit: "share closed on time", n: 1, value: t.satisfied.length, t, headline: closedAt ? `closed ${closedAt <= due ? "on or before" : "after"} its target date of ${target}` : ctx.tl.asOf <= due ? `open, due ${target}` : `open past its target date of ${target}`, detail: { targetDate: target, closedAt: closedAt?.toISOString() ?? null } }),
+    metric: build({ ctx, key: "O2", valueKind: "share", unit: "share closed on time", n: 1, value: t.satisfied.length, t, headline: closedAt ? `closed ${closedAt <= due ? "on or before" : "after"} its target date of ${target}` : ctx.tl.asOf <= due ? `open, due ${target}` : `open past its target date of ${target}`, detail: { targetDate: target, closedAt: closedAt?.toISOString() ?? null } }),
     exceptions: [],
   };
 }
@@ -404,6 +411,7 @@ export function o3DownstreamRisk(ctx: ScoringContext): MetricOutput {
     metric: build({
       ctx,
       key: "O3",
+      valueKind: "index",
       unit: "consequences per delivered item",
       n,
       value,
@@ -430,7 +438,7 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
   const goalId = ctx.resolved.contract.goalId;
   const goal = goalId ? latestGoal(ctx.tl, goalId) : null;
   if (!goalId || !goal) {
-    return { metric: build({ ctx, key: "O4", unit: "goal progress", n: 0, value: null, t, headline: goalId ? "goal has no roster snapshot in the window" : "milestone is linked to no goal" }), exceptions: [] };
+    return { metric: build({ ctx, key: "O4", valueKind: "status", unit: "goal progress", n: 0, value: null, t, headline: goalId ? "goal has no roster snapshot in the window" : "milestone is linked to no goal" }), exceptions: [] };
   }
   t.refs.add(goal.eventId);
   t.tiers.add("T0");
@@ -446,6 +454,7 @@ export function o4GoalProgress(ctx: ScoringContext): MetricOutput {
     metric: build({
       ctx,
       key: "O4",
+      valueKind: "status",
       unit: "goal status",
       n: 1,
       value: goal.status === "achieved" ? 1 : goal.status === "cancelled" ? 0 : null,
@@ -538,6 +547,7 @@ export function o5EvidenceHygiene(ctx: ScoringContext): MetricOutput {
     metric: build({
       ctx,
       key: "O5",
+      valueKind: "share",
       unit: "share of decidable done items with every decidable required class satisfied",
       n,
       value: decidableItems > 0 ? round(t.satisfied.length / decidableItems) : null,
@@ -660,6 +670,7 @@ export function p1Autonomy(ctx: ScoringContext, scope: ActorScope): MetricOutput
     metric: build({
       ctx,
       key: "P1",
+      valueKind: "share",
       unit: "share of items with zero interventions",
       n,
       value: n > 0 ? round(t.satisfied.length / n) : null,
@@ -731,6 +742,7 @@ export function p2Judgment(ctx: ScoringContext, scope: ActorScope): MetricOutput
     metric: build({
       ctx,
       key: "P2",
+      valueKind: "share",
       unit: "escalation precision",
       n,
       value: n > 0 && t.satisfied.length + t.failed.length > 0 ? round(approved / (t.satisfied.length + t.failed.length)) : null,
@@ -771,6 +783,7 @@ export function p3FactualAccuracy(ctx: ScoringContext, scope: ActorScope): Metri
     metric: build({
       ctx,
       key: "P3",
+      valueKind: "share",
       unit: "share of checkable claims not contradicted",
       n,
       value: n > 0 ? round(1 - contradicted / n) : null,
@@ -838,6 +851,7 @@ export function p4HandoffQuality(ctx: ScoringContext, scope: ActorScope): Metric
     metric: build({
       ctx,
       key: "P4",
+      valueKind: "share",
       unit: "share of well-formed handoffs",
       n,
       value: n > 0 ? round(t.satisfied.length / n) : null,
@@ -892,6 +906,7 @@ export function p5Recovery(ctx: ScoringContext, scope: ActorScope): MetricOutput
     metric: build({
       ctx,
       key: "P5",
+      valueKind: "duration",
       unit: "hours to a valid action path",
       n,
       value: median(recoveryMs) != null ? round(median(recoveryMs)! / HOUR, 2) : null,
@@ -960,6 +975,7 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
     metric: build({
       ctx,
       key: "P6",
+      valueKind: "count",
       unit: "detected violations",
       n,
       value: n,
@@ -1021,6 +1037,7 @@ export function p7CycleTime(ctx: ScoringContext, scope: ActorScope | null): Metr
     metric: build({
       ctx,
       key: "P7",
+      valueKind: "duration",
       unit: "hours (median total)",
       n,
       value: median(phases.total) != null ? round(median(phases.total)! / HOUR, 1) : null,
@@ -1080,6 +1097,7 @@ export function p8Cost(ctx: ScoringContext, scope: ActorScope, o1SatisfiedForAge
     metric: build({
       ctx,
       key: "P8",
+      valueKind: "currency",
       unit: "cents per O1-satisfied item",
       n,
       value: o1SatisfiedForAgent != null && o1SatisfiedForAgent > 0 && metered > 0 ? round(totalCents / o1SatisfiedForAgent, 1) : null,
@@ -1185,6 +1203,7 @@ export function p9DuplicateRework(ctx: ScoringContext, scope: ActorScope, succes
     metric: build({
       ctx,
       key: "P9",
+      valueKind: "index",
       unit: "duplicates and rework per delivered item",
       n,
       value: n > 0 ? round((duplicates + rework) / n) : null,
@@ -1218,6 +1237,8 @@ export function companyRow(ctx: ScoringContext): { unansweredQuestions: MetricRe
   const unanswered = build({
     ctx,
     key: "P2",
+    valueKind: "count",
+    name: "Questions owed by the company",
     unit: "questions unanswered past 48 h",
     n,
     value: t.failed.length,
@@ -1249,6 +1270,8 @@ export function companyRow(ctx: ScoringContext): { unansweredQuestions: MetricRe
   const platform = build({
     ctx,
     key: "P5",
+    valueKind: "count",
+    name: "Platform failures",
     unit: "platform failures",
     n: t2.failed.length,
     value: t2.failed.length,

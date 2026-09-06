@@ -28,9 +28,16 @@ export interface MetricBreakdown {
   undecidable: UndecidableReason[];
 }
 
+/** What a metric's value is, decided by the engine so no surface has to infer it from the unit text. */
+export const EVALUATION_METRIC_VALUE_KINDS = ["share", "index", "count", "duration", "currency", "status"] as const;
+export type EvaluationMetricValueKind = (typeof EVALUATION_METRIC_VALUE_KINDS)[number];
+
 export interface MetricResult {
   key: EvaluationMetricKey;
+  /** The metric's name; the company row's metrics carry their own names even though they reuse agent keys. */
   name: string;
+  /** share: 0–1 rendered as a percentage; index: events per item; count: an integer; duration: hours; currency: cents; status: words only. */
+  valueKind: EvaluationMetricValueKind;
   /** Null at the Insufficient tier (no value is shown). */
   value: number | null;
   unit: string;

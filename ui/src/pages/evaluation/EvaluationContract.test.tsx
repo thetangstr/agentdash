@@ -97,6 +97,17 @@ describe("a real scored card renders on every tab", () => {
     for (const a of card.actors) expect(container.querySelector(`[data-testid="actor-${a.actorKey}"]`), a.actorKey).not.toBeNull();
     expect(container.textContent).not.toMatch(/company:[0-9a-f-]{8}/);
     expect(container.textContent).toContain("Company and platform");
+    // the company row reuses agent keys for different metrics: its P2 is a count with its own name, never a percentage
+    const companyRow = card.actors.find((a) => a.actorType === "company")!;
+    const show = [...container.querySelectorAll(`[data-testid="actor-${companyRow.actorKey}"] button`)].find((b) => /Show \d+ metrics/.test(b.textContent ?? "")) as HTMLButtonElement;
+    await act(async () => { show.click(); });
+    const p2Row = container.querySelector(`[data-testid="actor-${companyRow.actorKey}"] [data-testid="metric-P2"]`)!;
+    expect(p2Row.textContent).toContain("Questions owed by the company");
+    const p2Value = p2Row.querySelector(".tabular-nums")?.textContent ?? "";
+    expect(p2Value).toContain(`${companyRow.metrics.P2!.value} questions unanswered past 48 h`);
+    expect(p2Value).not.toMatch(/%/); // a count, never a percentage — the coverage column is the only percent on the row
+    // and every metric on every row declares its kind
+    for (const a of card.actors) for (const m of Object.values(a.metrics)) expect(m?.valueKind, `${a.actorKey} ${m?.key}`).toBeTruthy();
   });
 
   it("exceptions: every exception the card carries renders under its severity", async () => {

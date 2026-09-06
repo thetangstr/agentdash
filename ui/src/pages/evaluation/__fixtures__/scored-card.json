@@ -1,5 +1,5 @@
 {
-  "formulaVersion": "m2-score/5",
+  "formulaVersion": "m2-score/6",
   "milestoneRef": {
     "kind": "project",
     "id": "00000000-0000-4000-8000-0000000000a1"
@@ -51,6 +51,7 @@
     "O1": {
       "key": "O1",
       "name": "Acceptance satisfied",
+      "valueKind": "share",
       "value": null,
       "unit": "share of decidable done items",
       "n": 2,
@@ -68,7 +69,7 @@
         ]
       },
       "headline": "insufficient evidence — satisfied 0 of 2 done; 2 undecidable (no acceptance criteria declared — contract derived)",
-      "formulaVersion": "metrics/2",
+      "formulaVersion": "metrics/3",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [],
@@ -83,6 +84,7 @@
     "O2": {
       "key": "O2",
       "name": "Deadline adherence",
+      "valueKind": "share",
       "value": null,
       "unit": "share closed on time",
       "n": 0,
@@ -95,7 +97,7 @@
         "undecidable": []
       },
       "headline": "insufficient evidence — no target date on the milestone or its contract",
-      "formulaVersion": "metrics/2",
+      "formulaVersion": "metrics/3",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [],
@@ -110,6 +112,7 @@
     "O3": {
       "key": "O3",
       "name": "Downstream risk index",
+      "valueKind": "index",
       "value": 0,
       "unit": "consequences per delivered item",
       "n": 2,
@@ -122,7 +125,7 @@
         "undecidable": []
       },
       "headline": "0 consequences across 2 delivered items: 0 reopened, 0 cited as blockers, 0 reverted",
-      "formulaVersion": "metrics/2",
+      "formulaVersion": "metrics/3",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [
@@ -150,6 +153,7 @@
     "O4": {
       "key": "O4",
       "name": "Goal progress",
+      "valueKind": "status",
       "value": null,
       "unit": "goal status",
       "n": 1,
@@ -167,7 +171,7 @@
         ]
       },
       "headline": "insufficient evidence — goal Ship is active — status only",
-      "formulaVersion": "metrics/2",
+      "formulaVersion": "metrics/3",
       "evidenceRefs": [
         "e5"
       ],
@@ -196,6 +200,7 @@
     "O5": {
       "key": "O5",
       "name": "Evidence hygiene",
+      "valueKind": "share",
       "value": 1,
       "unit": "share of decidable done items with every decidable required class satisfied",
       "n": 2,
@@ -208,7 +213,7 @@
         "undecidable": []
       },
       "headline": "fully evidenced 2 of 2 done",
-      "formulaVersion": "metrics/2",
+      "formulaVersion": "metrics/3",
       "evidenceRefs": [
         "e12",
         "e14",
@@ -338,6 +343,7 @@
         "P1": {
           "key": "P1",
           "name": "Autonomy",
+          "valueKind": "share",
           "value": 0.5,
           "unit": "share of items with zero interventions",
           "n": 2,
@@ -350,7 +356,7 @@
             "undecidable": []
           },
           "headline": "1 of 2 items reached review or done with no human intervention; 1 intervention in all",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e33"
           ],
@@ -376,6 +382,7 @@
         "P2": {
           "key": "P2",
           "name": "Judgment",
+          "valueKind": "share",
           "value": null,
           "unit": "escalation precision",
           "n": 0,
@@ -388,7 +395,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -412,6 +419,7 @@
         "P3": {
           "key": "P3",
           "name": "Factual accuracy",
+          "valueKind": "share",
           "value": null,
           "unit": "share of checkable claims not contradicted",
           "n": 0,
@@ -424,7 +432,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -447,6 +455,7 @@
         "P4": {
           "key": "P4",
           "name": "Handoff quality",
+          "valueKind": "share",
           "value": null,
           "unit": "share of well-formed handoffs",
           "n": 0,
@@ -459,7 +468,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no handoffs by this agent",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -476,6 +485,7 @@
         "P5": {
           "key": "P5",
           "name": "Recovery",
+          "valueKind": "duration",
           "value": null,
           "unit": "hours to a valid action path",
           "n": 0,
@@ -488,7 +498,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -513,6 +523,7 @@
         "P6": {
           "key": "P6",
           "name": "Authority compliance",
+          "valueKind": "count",
           "value": 0,
           "unit": "detected violations",
           "n": 0,
@@ -525,7 +536,7 @@
             "undecidable": []
           },
           "headline": "no violations detected",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -543,6 +554,7 @@
         "P7": {
           "key": "P7",
           "name": "Cycle time",
+          "valueKind": "duration",
           "value": 8,
           "unit": "hours (median total)",
           "n": 2,
@@ -555,7 +567,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -604,6 +616,7 @@
         "P8": {
           "key": "P8",
           "name": "Token and cost efficiency",
+          "valueKind": "currency",
           "value": null,
           "unit": "cents per O1-satisfied item",
           "n": 0,
@@ -616,7 +629,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -639,6 +652,7 @@
         "P9": {
           "key": "P9",
           "name": "Duplicate and rework rate",
+          "valueKind": "index",
           "value": 0,
           "unit": "duplicates and rework per delivered item",
           "n": 2,
@@ -651,7 +665,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -746,6 +760,7 @@
         "P1": {
           "key": "P1",
           "name": "Autonomy",
+          "valueKind": "share",
           "value": null,
           "unit": "share of items with zero interventions",
           "n": 0,
@@ -758,7 +773,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no agent-owned items reached review or done",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -777,6 +792,7 @@
         "P2": {
           "key": "P2",
           "name": "Judgment",
+          "valueKind": "share",
           "value": null,
           "unit": "escalation precision",
           "n": 0,
@@ -789,7 +805,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -808,6 +824,7 @@
         "P3": {
           "key": "P3",
           "name": "Factual accuracy",
+          "valueKind": "share",
           "value": null,
           "unit": "share of checkable claims not contradicted",
           "n": 0,
@@ -820,7 +837,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -843,6 +860,7 @@
         "P4": {
           "key": "P4",
           "name": "Handoff quality",
+          "valueKind": "share",
           "value": 1,
           "unit": "share of well-formed handoffs",
           "n": 4,
@@ -855,7 +873,7 @@
             "undecidable": []
           },
           "headline": "4 of 4 handoffs well-formed",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e12",
             "e15",
@@ -879,6 +897,7 @@
         "P5": {
           "key": "P5",
           "name": "Recovery",
+          "valueKind": "duration",
           "value": null,
           "unit": "hours to a valid action path",
           "n": 0,
@@ -891,7 +910,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -916,6 +935,7 @@
         "P6": {
           "key": "P6",
           "name": "Authority compliance",
+          "valueKind": "count",
           "value": 2,
           "unit": "detected violations",
           "n": 2,
@@ -928,7 +948,7 @@
             "undecidable": []
           },
           "headline": "2 violations detected: transition of an unassigned item 2",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e11",
             "e24"
@@ -953,6 +973,7 @@
         "P7": {
           "key": "P7",
           "name": "Cycle time",
+          "valueKind": "duration",
           "value": 8,
           "unit": "hours (median total)",
           "n": 2,
@@ -965,7 +986,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -1014,6 +1035,7 @@
         "P8": {
           "key": "P8",
           "name": "Token and cost efficiency",
+          "valueKind": "currency",
           "value": null,
           "unit": "cents per O1-satisfied item",
           "n": 0,
@@ -1026,7 +1048,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1049,6 +1071,7 @@
         "P9": {
           "key": "P9",
           "name": "Duplicate and rework rate",
+          "valueKind": "index",
           "value": 0,
           "unit": "duplicates and rework per delivered item",
           "n": 2,
@@ -1061,7 +1084,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1158,6 +1181,7 @@
         "P1": {
           "key": "P1",
           "name": "Autonomy",
+          "valueKind": "share",
           "value": null,
           "unit": "share of items with zero interventions",
           "n": 0,
@@ -1170,7 +1194,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no agent-owned items reached review or done",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1189,6 +1213,7 @@
         "P2": {
           "key": "P2",
           "name": "Judgment",
+          "valueKind": "share",
           "value": null,
           "unit": "escalation precision",
           "n": 0,
@@ -1201,7 +1226,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1225,6 +1250,7 @@
         "P3": {
           "key": "P3",
           "name": "Factual accuracy",
+          "valueKind": "share",
           "value": null,
           "unit": "share of checkable claims not contradicted",
           "n": 0,
@@ -1237,7 +1263,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1260,6 +1286,7 @@
         "P4": {
           "key": "P4",
           "name": "Handoff quality",
+          "valueKind": "share",
           "value": 1,
           "unit": "share of well-formed handoffs",
           "n": 2,
@@ -1272,7 +1299,7 @@
             "undecidable": []
           },
           "headline": "2 of 2 handoffs well-formed",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e17",
             "e30"
@@ -1294,6 +1321,7 @@
         "P5": {
           "key": "P5",
           "name": "Recovery",
+          "valueKind": "duration",
           "value": null,
           "unit": "hours to a valid action path",
           "n": 0,
@@ -1306,7 +1334,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1331,6 +1359,7 @@
         "P6": {
           "key": "P6",
           "name": "Authority compliance",
+          "valueKind": "count",
           "value": 1,
           "unit": "detected violations",
           "n": 1,
@@ -1343,7 +1372,7 @@
             "undecidable": []
           },
           "headline": "1 violation detected: refused request 1",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e32"
           ],
@@ -1367,6 +1396,7 @@
         "P7": {
           "key": "P7",
           "name": "Cycle time",
+          "valueKind": "duration",
           "value": 8,
           "unit": "hours (median total)",
           "n": 2,
@@ -1379,7 +1409,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -1428,6 +1458,7 @@
         "P8": {
           "key": "P8",
           "name": "Token and cost efficiency",
+          "valueKind": "currency",
           "value": null,
           "unit": "cents per O1-satisfied item",
           "n": 0,
@@ -1440,7 +1471,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1463,6 +1494,7 @@
         "P9": {
           "key": "P9",
           "name": "Duplicate and rework rate",
+          "valueKind": "index",
           "value": 0,
           "unit": "duplicates and rework per delivered item",
           "n": 2,
@@ -1475,7 +1507,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1571,7 +1603,8 @@
       "metrics": {
         "P2": {
           "key": "P2",
-          "name": "Judgment",
+          "name": "Questions owed by the company",
+          "valueKind": "count",
           "value": 0,
           "unit": "questions unanswered past 48 h",
           "n": 0,
@@ -1584,7 +1617,7 @@
             "undecidable": []
           },
           "headline": "no pending questions",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1602,7 +1635,8 @@
         },
         "P5": {
           "key": "P5",
-          "name": "Recovery",
+          "name": "Platform failures",
+          "valueKind": "count",
           "value": 0,
           "unit": "platform failures",
           "n": 0,
@@ -1615,7 +1649,7 @@
             "undecidable": []
           },
           "headline": "0 zero-turn hangs, 0 recovery budgets exhausted",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1634,6 +1668,7 @@
         "P7": {
           "key": "P7",
           "name": "Cycle time",
+          "valueKind": "duration",
           "value": 8,
           "unit": "hours (median total)",
           "n": 2,
@@ -1646,7 +1681,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/2",
+          "formulaVersion": "metrics/3",
           "evidenceRefs": [
             "e19",
             "e20",
