@@ -245,8 +245,7 @@ export function evaluationLedger(db: LedgerDb) {
       return Object.fromEntries(rows.map((r) => [r.eventType, r.n]));
     },
 
-    /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3). */
-    /** One event by id within the company, or null. */
+    /** One event by id within the company, or null; a non-uuid id is simply absent. */
     async get(companyId: string, id: string): Promise<EvaluationEventRow | null> {
       if (!isUuidLike(id)) return null; // a uuid column: a malformed id is absent, never a cast error
       const rows = await db
@@ -257,6 +256,7 @@ export function evaluationLedger(db: LedgerDb) {
       return (rows[0] as EvaluationEventRow | undefined) ?? null;
     },
 
+    /** Which of these event ids exist in this company's ledger (citations must point at real facts, §9.3); non-uuid ids are reported missing. */
     async existing(companyId: string, ids: string[]): Promise<Set<string>> {
       const wanted = [...new Set(ids)].filter((x) => isUuidLike(x)); // malformed ids are reported missing, never a cast error
       if (wanted.length === 0) return new Set();
