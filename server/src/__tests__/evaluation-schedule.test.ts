@@ -4,6 +4,8 @@ import { agents, companies, companyMemberships, createDb, evaluationScorecards, 
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { evaluationSnapshotCadence } from "../services/evaluation/schedule.js";
 import { evaluationOverview } from "../services/evaluation/overview.js";
+import { evaluationShadowReport } from "../services/evaluation/shadow-report.js";
+import { evaluationLedger } from "../services/evaluation/ledger.js";
 
 // AgentDash: Company Evaluator — Milestone 3 shadow cadence: every open project of
 // every company that provisioned an evaluator principal gets a stored card and
@@ -74,5 +76,47 @@ describeEmbeddedPostgres("evaluation snapshot cadence (embedded postgres)", () =
     const versions = await evaluationOverview(db).versions(companyId, { kind: "project", id: openId });
     expect(versions.map((v) => v.version)).toEqual([1]);
     expect(versions[0]!.cardHash).toHaveLength(64);
+  });
+
+  it("the shadow report measures each graduation criterion from stored cards and human dispositions, and says what it cannot measure", async () => {
+    // a human records a rescue on the open milestone (as the dispositions route would)
+    await evaluationLedger(db).append([{
+      companyId,
+      projectId: openId,
+      goalId: null,
+      actorType: "user",
+      actorId: "admin-1",
+      sourceTable: "evaluation_dispositions",
+      sourceId: "note:rescue:test",
+      sourceVersion: "v1",
+      eventType: "evaluation.disposition",
+      eventTime: new Date(),
+      payload: { kind: "shadow_note", milestoneRef: { kind: "project", id: openId }, topic: "rescue", text: "founder merged by hand", decidedBy: "admin-1" },
+      correlationId: null,
+    }]);
+    const report = await evaluationShadowReport(db).get(companyId, [{ kind: "project", id: openId }]);
+    expect(report.evaluator.provisioned).toBe(true);
+    expect(report.authority).toMatchObject({ refusedAttempts: 0, writesOutsideAllowlist: 0, scoredAsActorOn: [], reviewProjectNamedAsMilestone: false });
+    expect(report.truncated).toEqual([]);
+    const m = report.milestones[0]!;
+    expect(m.name).toBe("Open");
+    expect(m.replay).toEqual({ versions: 1, verified: 1, agree: 1, disagree: 0, formulaChanged: 0, agreementRate: 1 });
+    expect(m.exceptions).toMatchObject({ raised: 0, materialRaised: 0, latest: { total: 0 } });
+    expect(m.reviews).toMatchObject({ confirmed: 0, falsePositive: 0, missed: 0, precision: null, recall: null });
+    expect(m.notes.rescue).toEqual(["founder merged by hand"]);
+    const by = Object.fromEntries(report.graduation.map((g) => [g.key, g]));
+    expect(by.replay_agreement!.status).toBe("met");
+    expect(by.no_authority_mutation!.status).toBe("met");
+    expect(by.material_claims_traced!.status).toBe("not_measurable"); // nothing raised on an empty milestone
+    expect(by.precision_recall!.status).toBe("not_measurable");
+    expect(by.chatter_ceiling!.status).toBe("not_measurable"); // no exception and no review item: nothing to measure, not a pass
+    expect(by.cost_reported!).toMatchObject({ status: "not_measurable", measured: expect.stringContaining("has not run") }); // never a pass on zero runs
+    expect(by.no_rescues!.status).toBe("not_measurable"); // one milestone named, still open
+    expect(by.no_rescues!.measured).toContain("rescues recorded: 1");
+    // the review project named as a milestone is caught, and a cap does not make an unexercised evaluator pass
+    const reviewProjectId = (await evaluationOverview(db).get(companyId)).reviewProjectId!;
+    const hostile = await evaluationShadowReport(db).get(companyId, [{ kind: "project", id: openId }, { kind: "project", id: reviewProjectId }], { costCapCents: 100 });
+    expect(hostile.authority.reviewProjectNamedAsMilestone).toBe(true);
+    expect(Object.fromEntries(hostile.graduation.map((g) => [g.key, g.status]))).toMatchObject({ no_authority_mutation: "not_met", cost_reported: "not_measurable" });
   });
 });

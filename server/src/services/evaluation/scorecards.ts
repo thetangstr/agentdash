@@ -80,15 +80,16 @@ export function evaluationScorecardService(db: Db) {
     async verify(companyId: string, ref: EvaluationMilestoneRef, version?: number) {
       const rows = await versions(companyId, ref);
       const stored = version == null ? rows[0] : rows.find((r) => r.version === version);
-      if (!stored) return { ok: false as const, reason: "no stored card" };
+      if (!stored) return { ok: false as const, status: "missing" as const, reason: "no stored card" };
       if (stored.formulaVersion !== FORMULA_VERSION) {
-        return { ok: false as const, reason: `formula changed (${stored.formulaVersion} → ${FORMULA_VERSION})`, version: stored.version };
+        return { ok: false as const, status: "formula_changed" as const, reason: `formula changed (${stored.formulaVersion} → ${FORMULA_VERSION})`, version: stored.version };
       }
       const storedCard = stored.card as { state?: { open?: boolean }; markers?: string[] };
       const pinnedOpen =
         typeof storedCard.state?.open === "boolean" ? storedCard.state.open : (storedCard.markers ?? []).includes(MARKER_OPEN_MILESTONE);
       const { hash } = await replay.replay(companyId, ref, Number(stored.throughSeq), { open: pinnedOpen });
-      return { ok: hash === stored.cardHash, storedHash: stored.cardHash, replayHash: hash, version: stored.version, throughSeq: Number(stored.throughSeq), pinnedOpen };
+      const ok = hash === stored.cardHash;
+      return { ok, status: ok ? ("agree" as const) : ("disagree" as const), storedHash: stored.cardHash, replayHash: hash, version: stored.version, throughSeq: Number(stored.throughSeq), pinnedOpen };
     },
   };
 }

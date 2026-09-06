@@ -240,3 +240,60 @@ export interface EvaluationScorecardVersionSummary {
   outcome: { score: number | null; confidence: EvaluationConfidenceTier | null };
   exceptionsTotal: number;
 }
+
+/** Milestone 5: what a human records about the shadow run, as dispositions (administrators only). */
+export const EVALUATION_SHADOW_NOTE_TOPICS = ["rescue", "missing_telemetry", "disagreement", "cost", "other"] as const;
+export type EvaluationShadowNoteTopic = (typeof EVALUATION_SHADOW_NOTE_TOPICS)[number];
+
+export type EvaluationGraduationStatus = "met" | "not_met" | "not_measurable";
+
+export interface EvaluationGraduationItem {
+  key: "material_claims_traced" | "no_authority_mutation" | "replay_agreement" | "precision_recall" | "chatter_ceiling" | "cost_reported" | "no_rescues";
+  criterion: string;
+  status: EvaluationGraduationStatus;
+  measured: string;
+  note: string;
+}
+
+export interface EvaluationShadowMilestoneReport {
+  ref: EvaluationMilestoneRef;
+  name: string;
+  status: string | null;
+  /** Stored versions, how many were replayed, and how they compared; versions stored under another formula are counted, not compared. */
+  replay: { versions: number; verified: number; agree: number; disagree: number; formulaChanged: number; agreementRate: number | null };
+  /** Exceptions over the whole run (every finding the milestone ever raised, one per key) and on the latest card. */
+  exceptions: {
+    raised: number;
+    materialRaised: number;
+    materialTraced: number;
+    latest: { total: number; immediate: number; material: number; routine: number };
+  };
+  /** Human verdicts on material or immediate exceptions only; routine reviews and unknown keys are reported beside, never in the ratios. */
+  reviews: {
+    confirmed: number;
+    falsePositive: number;
+    missed: number;
+    precision: number | null;
+    recall: number | null;
+    reviewedMaterialKeys: string[];
+    routineReviews: number;
+    unknownKeys: string[];
+    disagreements: Array<{ key: string; reason: string }>;
+  };
+  /** Review items for this milestone: digests (one per routed human is the ceiling) and immediate items matched to any finding of the run. */
+  messages: { digests: number; digestsPerHuman: Record<string, number>; immediateItems: number; immediateSeverities: Record<string, number> };
+  notes: Record<EvaluationShadowNoteTopic, string[]>;
+}
+
+export interface EvaluationShadowReport {
+  companyId: string;
+  generatedAt: string;
+  milestones: EvaluationShadowMilestoneReport[];
+  corrections: { pending: number; accepted: number; rejected: number; evaluatorNotes: number };
+  evaluator: { provisioned: boolean; agentId: string | null; runs: number; costEvents: number; costCents: number; findingsAuthored: number };
+  /** What the evaluator did with its authority: refusals are attempts the gate blocked; writes outside its allowlist would be the breach. */
+  authority: { refusedAttempts: number; writesOutsideAllowlist: number; writeActions: Record<string, number>; scoredAsActorOn: string[]; reviewProjectNamedAsMilestone: boolean };
+  /** Queries that reached the read cap; a count below is a floor when its query is listed here. */
+  truncated: string[];
+  graduation: EvaluationGraduationItem[];
+}
