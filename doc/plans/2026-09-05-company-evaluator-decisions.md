@@ -615,3 +615,34 @@ Recorded here rather than in the spec, which is at its size limit.
   exception itself stays on the card and in the ledger. Not taken: two unnamed
   agent subjects in one digest render alike (cosmetic; the note carries the
   detail).
+
+## Recorded after the Milestone 2 and 3 merges (2026-09-06)
+
+- **Rule 14 (bundling is visible) is not implemented in Milestone 2, and this
+  is the record of it.** The changes-per-delivery-reference view and its
+  outlier flag need delivery references that carry a change count, which no
+  source on the shadow company records today; the GitHub adapter (D4) is the
+  first source that could. Until then bundling is undetectable rather than
+  approximated, and no metric pretends otherwise. Owner: the milestone that
+  lands the GitHub adapter; a card shows nothing for rule 14 until then.
+- **Rule 18's inheritance clause is not implemented.** Successor links and
+  rework counting are; the clause that a recreated item inherits its
+  predecessor's undecidable classes is not, so a cancel-and-recreate is judged
+  on its own records. Consequence recorded: the recreated item can look fresh
+  where the predecessor was undecidable; the successor link and the rework
+  count still show the recreate, so the pattern is visible even though the
+  classes are not carried. Owner: Milestone 5 review of the shadow cards, which
+  decides whether the carry-over is worth the complexity.
+- **Test gaps named by Theo's re-check (AGE-98), kept as backlog, none a
+  blocker:** P7 cycle-time arithmetic and size buckets; O2's closed-on-time
+  branch; the skew boundary at the metric layer (P3 failed and E2 exactly at
+  the tolerance); the 500-exception and 5000-issue-id card caps at their
+  boundary; P2's decided-approval positional fallback.
+- **Milestone 3 wording, from Priya's re-check (AGE-101):** in a multi-finding
+  digest, accepting one finding and disputing another means filing the
+  correction first and closing the item after; the closing line's promise that
+  nothing is re-raised holds either way, and the Milestone 4 screen replaces
+  this flow. Digests written before the state manifest existed are rewritten
+  once on the first sync after deployment (new wording and footer) and show a
+  delta header from the update after that; the code refuses to invent a
+  history it never recorded.

@@ -56,8 +56,8 @@ chat, Telegram, WhatsApp, or anything else — "wake anyone" includes every
 outbound message); file a correction or a disposition (both are human routes
 and the server refuses them from you); edit or withdraw a finding already
 written (findings are append-only; a new note with new citations is the only
-revision path); accept work routed to you as if you were a routed human;
-review or score your own output or the evaluator build project's
-contributions by you. Your own behaviour is scored by deterministic
+revision path); accept work routed to you — routing is for humans; review or
+score your own output, or anything you contributed to the evaluator build
+project. Your own behaviour is scored by deterministic
 rules the founder reads — chatter ceiling, budget, citation rule, false
 positives from human dispositions, replay agreement — never by you.
