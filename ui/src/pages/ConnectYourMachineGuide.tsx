@@ -1,11 +1,5 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "../components/ui/button";
-import {
-  BRIDGE_CLI_BIN,
-  buildBridgeRunCommand,
-  type BridgeEgress,
-} from "../components/agent/ConnectYourMachine";
+import { BRIDGE_CLI_BIN } from "../components/agent/ConnectYourMachine";
 
 /**
  * AgentDash-MK: the steward-facing explanation of the machine bridge.
@@ -69,22 +63,6 @@ function Code({ children }: { children: React.ReactNode }) {
 
 export default function ConnectYourMachineGuide() {
   const origin = typeof window !== "undefined" ? window.location.origin : ORIGIN_FALLBACK;
-  const [egress, setEgress] = useState<BridgeEgress>("direct");
-  const [copied, setCopied] = useState(false);
-  const command = buildBridgeRunCommand(origin, egress);
-
-  const copy = async () => {
-    try {
-      // Matches the enrollment card: no Clipboard API over plain HTTP, so this
-      // can legitimately fail and has to say so rather than looking like it
-      // worked.
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-4 p-4">
       <header>
@@ -171,14 +149,14 @@ export default function ConnectYourMachineGuide() {
             permissions.
           </li>
           <li>
-            <span className="font-medium">Choose what the sandbox may reach.</span> There is no
-            default and the tool will not start without it. See below.
+            <span className="font-medium">Create your inbox workspace.</span> One command, below.
+            It is where you open the session that reads your inbox.
           </li>
           <li>
-            <span className="font-medium">Leave it running.</span> In a terminal you keep open, or
-            wrapped in a login item or a <Code>launchd</Code> agent so it starts when you sign in.
-            When it stops, the enrolment card shows your machine as last seen at the moment it went
-            quiet — so “enrolled but never started” is distinguishable from “connected”.
+            <span className="font-medium">Open a session there.</span> Nothing needs to be left
+            running in a terminal. If your machine is enrolled but you have never opened the
+            session, the enrolment card shows it as never seen — which is how “set up” is
+            distinguishable from “in use”.
           </li>
         </ol>
       </Section>
@@ -210,62 +188,117 @@ export default function ConnectYourMachineGuide() {
         </p>
       </Section>
 
-      <Section id="containment" title="The one decision only you can make">
+      <Section id="directing" title="Directing work from the same conversation">
         <p>
-          Each question runs in a sandbox. This picks how much of the network that sandbox may
-          reach, and the tool deliberately refuses to choose for you.
+          As well as answering what is waiting, you can hand work out — in ordinary words, in the
+          same session.
         </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {(
-            [
-              {
-                value: "direct" as const,
-                title: "Allow outbound 443",
-                body: "The sandbox reaches the Anthropic API directly and nothing inspects that traffic. Weaker, and works with no extra setup.",
-              },
-              {
-                value: "loopback" as const,
-                title: "Deny outbound",
-                body: "Localhost only. Stronger, but reaching the Anthropic API then needs an allowlisting proxy already running on your machine — without one, every question fails.",
-              },
-            ] as const
-          ).map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => {
-                setEgress(option.value);
-                setCopied(false);
-              }}
-              aria-pressed={egress === option.value}
-              className={`rounded-md border px-3 py-2 text-left text-xs ${
-                egress === option.value
-                  ? "border-foreground bg-muted"
-                  : "border-border hover:bg-muted/40"
-              }`}
-            >
-              <span className="font-medium">{option.title}</span>
-              <span className="mt-1 block text-muted-foreground">{option.body}</span>
-            </button>
-          ))}
-        </div>
-        <div>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-xs font-semibold">
-              The command for that choice
-            </h3>
-            <Button variant="outline" size="sm" onClick={copy}>
-              {copied ? "Copied" : "Copy"}
-            </Button>
-          </div>
-          <pre className="mt-1.5 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-            <code>{command}</code>
+        <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+          <code>Have Casper draft the site visit agenda and Emilia review the figures.</code>
+        </pre>
+        <p>
+          <span className="font-medium">Nothing is sent until you confirm.</span> It first reads
+          back what it understood, with the agents it matched:
+        </p>
+        <div className="rounded-md border border-border bg-muted/30 p-3">
+          <p className="text-xs font-medium">You should see</p>
+          <pre className="overflow-x-auto rounded-md border border-border bg-background/60 p-3 text-xs leading-relaxed" style={{ marginTop: "0.5rem" }}>
+            <code>{`Casper — draft the site visit agenda
+Emilia — review the figures
+
+Confirm and I will assign both.`}</code>
           </pre>
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Replace <Code>sk-ant-…</Code> with a real key. Your administrator can tell you where{" "}
-            <Code>{BRIDGE_CLI_BIN}</Code> is installed on this machine.
+        </div>
+        <p>
+          Say yes and both become real, assigned work, recorded as assigned by you. The
+          confirmation is good once: if you ask again, it answers{" "}
+          <Code>That confirmation is no longer valid. Ask again.</Code> rather than assigning the
+          same thing twice.
+        </p>
+        <h3 className="mt-2">What it refuses, on purpose</h3>
+        <ul className="flex list-disc flex-col gap-2 pl-5">
+          <li>
+            <span className="font-medium">A name it cannot place.</span> It asks instead of
+            guessing, and offers near matches when it has them. A wrong name confidently assigned to
+            the wrong agent is worse than a question.
+          </li>
+          <li>
+            <span className="font-medium">More than ten at once.</span> You get{" "}
+            <Code>ask for at most 10 at a time</Code>. Long lists are split so a failure partway
+            through cannot leave you unsure what landed.
+          </li>
+          <li>
+            <span className="font-medium">Work you are not permitted to assign.</span> Your
+            permission is checked at the moment you confirm, not when you asked — so authority that
+            changed in between is honoured.
+          </li>
+          <li>
+            <span className="font-medium">A confirmation older than about fifteen minutes,</span> or
+            one from a different machine. Ask again and you get a fresh read-back.
+          </li>
+        </ul>
+        <div className="mt-3 rounded-md border border-amber-600/30 bg-amber-500/10 p-3">
+          <p className="text-sm font-medium">If only part of a list is assigned</p>
+          <p>
+            A list is not all-or-nothing. If one item fails, the reply names exactly which landed
+            and which did not, so you can ask again for the remainder. It will not tell you
+            everything worked when it did not.
           </p>
         </div>
+      </Section>
+
+      <Section id="cadence" title="How often it checks — and what is not built yet">
+        <p>
+          You can store a checking preference from the conversation — every 30 or 60 minutes are
+          the only two values it accepts:
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+          <code>Check every 30 minutes instead.</code>
+        </pre>
+        <div className="rounded-md border border-amber-600/30 bg-amber-500/10 p-3">
+          <p className="text-sm font-medium">The preference is stored. Nothing acts on it yet.</p>
+          <p>
+            This is worth being plain about, because it is easy to assume otherwise. The setting is
+            saved against this machine and will apply once scheduled checking exists — but that
+            scheduler is <span className="font-medium">not built</span>. Today your inbox is read
+            when you open the session or ask for it, and at no other time.
+          </p>
+          <p>
+            The product says the same thing back to you, so you do not have to remember it:{" "}
+            <Code>
+              Preference stored. It takes effect once inbox scheduling is active — nothing reads the
+              interval yet.
+            </Code>
+          </p>
+        </div>
+      </Section>
+
+      <Section id="verify" title="Checking it actually works">
+        <p>
+          Do this once after setup, and any time something seems off. Each step tells you which
+          part is healthy.
+        </p>
+        <ol className="flex list-decimal flex-col gap-3 pl-5">
+          <li>
+            <span className="font-medium">The connection.</span> Run the inbox command. Either your
+            inbox or <Code>nothing waiting on you</Code> means the machine, its credential and the
+            server are all fine.
+          </li>
+          <li>
+            <span className="font-medium">The session.</span> Open a session in the inbox workspace.
+            If what is waiting appears at the start, the session hook is wired correctly.
+          </li>
+          <li>
+            <span className="font-medium">The tools.</span> Ask <Code>what is in my inbox?</Code> in
+            that session. A reply means the tools are registered; “no such tool” means the
+            connection step did not take.
+          </li>
+          <li>
+            <span className="font-medium">The write path.</span> Ask it to assign yourself something
+            harmless and confirm. If the read-back appears and the work shows up in AgentDash, the
+            whole loop is proven.
+          </li>
+        </ol>
       </Section>
 
       <Section id="limits" title="What it will never do">
@@ -285,8 +318,9 @@ export default function ConnectYourMachineGuide() {
           </li>
           <li>
             <span className="font-medium">The credential is not an API key.</span> The token on your
-            machine reaches only the bridge's own routes. It cannot read issues, list agents, or
-            decide approvals in general — a decision you make is authorised by a separate handle
+            machine reaches only the bridge's own routes. It can look up the names of agents in
+            your company, so a name you type resolves to the right one. It cannot read issues, and
+            it decides nothing on its own — a decision you make is authorised by a separate handle
             that is good for exactly one approval, at one revision, once.
           </li>
           <li>
@@ -298,7 +332,7 @@ export default function ConnectYourMachineGuide() {
         </ul>
       </Section>
 
-      <Section id="troubleshooting" title="If it does not start">
+      <Section id="troubleshooting" title="If something goes wrong">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[34rem] border-collapse text-left text-xs">
             <thead>
@@ -310,54 +344,39 @@ export default function ConnectYourMachineGuide() {
             </thead>
             <tbody className="align-top">
               <tr className="border-b">
-                <td className="py-2 pr-3">
-                  <Code>unknown command 'bridge'</Code>
-                </td>
-                <td className="py-2 pr-3">
-                  You are running a copy from npm, which predates this feature.
-                </td>
+                <td className="py-2 pr-3"><Code>unknown command 'bridge'</Code></td>
+                <td className="py-2 pr-3">You are running a copy from npm, which predates this feature.</td>
                 <td className="py-2">Get the tool from your administrator instead.</td>
               </tr>
               <tr className="border-b">
-                <td className="py-2 pr-3">
-                  <Code>Refusing to start: --egress is required</Code>
-                </td>
-                <td className="py-2 pr-3">No containment posture was chosen.</td>
-                <td className="py-2">Use the command above, which includes one.</td>
+                <td className="py-2 pr-3"><Code>AgentDash inbox unavailable: 403</Code></td>
+                <td className="py-2 pr-3">The token is missing, wrong, or the enrolment was revoked.</td>
+                <td className="py-2">Enrol the machine again from the card in AgentDash.</td>
               </tr>
               <tr className="border-b">
-                <td className="py-2 pr-3">
-                  <Code>403 Bridge endpoint authentication required</Code>
-                </td>
-                <td className="py-2 pr-3">
-                  The token is missing, wrong, or the enrolment was revoked.
-                </td>
-                <td className="py-2">Check the token file, then enrol the machine again.</td>
+                <td className="py-2 pr-3"><Code>AgentDash inbox unreachable</Code></td>
+                <td className="py-2 pr-3">The address is wrong, or the server cannot be reached from here.</td>
+                <td className="py-2">Check the address you enrolled against, then try again.</td>
               </tr>
               <tr className="border-b">
-                <td className="py-2 pr-3">Connects, then every question fails</td>
-                <td className="py-2 pr-3">
-                  No <Code>ANTHROPIC_API_KEY</Code> in the environment.
-                </td>
-                <td className="py-2">
-                  Set a real key. A desktop <Code>claude</Code> login cannot be used.
-                </td>
+                <td className="py-2 pr-3"><Code>AgentDash inbox: nothing waiting on you.</Code></td>
+                <td className="py-2 pr-3">Nothing needs you. This is the normal state, not a fault.</td>
+                <td className="py-2">Nothing. Silence means no one is blocked on you.</td>
               </tr>
               <tr className="border-b">
-                <td className="py-2 pr-3">Every question fails on <Code>loopback</Code></td>
-                <td className="py-2 pr-3">
-                  Nothing can reach the Anthropic API without a local allowlisting proxy.
-                </td>
-                <td className="py-2">
-                  Run a proxy, or switch to allowing outbound 443.
-                </td>
+                <td className="py-2 pr-3"><Code>This action is no longer valid. Sync again.</Code></td>
+                <td className="py-2 pr-3">It was decided elsewhere, or it changed after you read it.</td>
+                <td className="py-2">Read the inbox again and decide against the current version.</td>
+              </tr>
+              <tr className="border-b">
+                <td className="py-2 pr-3"><Code>You do not have permission to assign work.</Code></td>
+                <td className="py-2 pr-3">Your account cannot assign work in this company.</td>
+                <td className="py-2">Ask someone who can, or have your access changed.</td>
               </tr>
               <tr>
-                <td className="py-2 pr-3">Card says “enrolled but never started”</td>
-                <td className="py-2 pr-3">
-                  The token was minted but the program has never run.
-                </td>
-                <td className="py-2">Start it, and keep the terminal open.</td>
+                <td className="py-2 pr-3">The session opens but says nothing</td>
+                <td className="py-2 pr-3">The session is not in the directory that carries the inbox.</td>
+                <td className="py-2">Open it in the directory setup created, not your code project.</td>
               </tr>
             </tbody>
           </table>

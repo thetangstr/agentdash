@@ -12,17 +12,46 @@ import { buildBridgeRunCommand } from "../components/agent/ConnectYourMachine";
  * shared builder, never restate its output.
  */
 describe("connect-your-machine guide", () => {
-  const guide = readFileSync(new URL("./ConnectYourMachineGuide.tsx", import.meta.url), "utf8");
+  // Collapse whitespace: JSX wraps prose across source lines, so a sentence the
+  // customer reads as one line is not one line here. Matching the raw file made
+  // these assertions pass or fail on where the formatter happened to break.
+  const guide = readFileSync(
+    new URL("./ConnectYourMachineGuide.tsx", import.meta.url),
+    "utf8",
+  ).replace(/\s+/g, " ");
 
-  it("renders the shared command builder instead of quoting a command", () => {
-    expect(guide).toContain("buildBridgeRunCommand");
+  /**
+   * The guide must not hand a customer the sandboxed worker command.
+   *
+   * That path runs `claude` inside a sandbox which denies the home directory,
+   * so it cannot see their Claude Code login and demands an API key of its own.
+   * The supported path uses their existing subscription through a session they
+   * open. The page used to teach both, with a network-posture picker in the
+   * middle of the setup steps, which sent people down the one that cannot work.
+   */
+  it("teaches the inbox path and not the sandboxed worker", () => {
+    expect(guide, "the worker command must not appear in customer setup").not.toContain(
+      "buildBridgeRunCommand",
+    );
+    expect(guide, "no network-posture picker belongs in this flow").not.toMatch(/egress/i);
+    expect(guide, "the inbox workspace is the setup step").toContain("bridge inbox-init");
+  });
 
-    // No hand-written invocation anywhere in the page, in any spelling.
-    const handWritten = guide.match(/["`][^"`\n]*bridge run[^"`\n]*["`]/g) ?? [];
-    expect(
-      handWritten,
-      "the guide must render buildBridgeRunCommand, not restate the command",
-    ).toHaveLength(0);
+  /**
+   * Cadence can be stored but nothing reads it yet. Saying so is the difference
+   * between a documented limitation and a customer waiting for checks that
+   * never come.
+   */
+  it("states the cadence limitation rather than implying scheduling works", () => {
+    expect(guide).toMatch(/nothing reads the interval yet/i);
+    expect(guide).toMatch(/not built/i);
+  });
+
+  /** Directing work is confirmation-gated; the guide has to say so. */
+  it("documents the confirmation boundary on directing work", () => {
+    expect(guide).toMatch(/Nothing is sent until you confirm/i);
+    expect(guide).toMatch(/at most 10 at a time/i);
+    expect(guide).toMatch(/checked at the moment you confirm/i);
   });
 
   it("names the binary from the same constant the enrollment card uses", () => {
@@ -46,9 +75,12 @@ describe("connect-your-machine guide", () => {
    * longer there.
    */
   it("stays consistent with what the builder actually emits", () => {
+    // The builder still exists for the unattended worker; the guide simply no
+    // longer teaches it, so the page must not mention its API-key requirement.
     const command = buildBridgeRunCommand("https://example.test", "direct");
     expect(command).toContain("ANTHROPIC_API_KEY");
-    expect(command).toContain("--egress direct");
-    expect(guide).toMatch(/ANTHROPIC_API_KEY/);
+    expect(guide, "an API key has no place in the subscription path").not.toMatch(
+      /ANTHROPIC_API_KEY/,
+    );
   });
 });
