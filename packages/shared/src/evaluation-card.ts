@@ -189,7 +189,7 @@ export const EVALUATION_METRIC_FORMULAS: Record<EvaluationMetricKey, string> = {
   P6: "Detected authority violations shown as a count with the rule that fired (self-review, founder-lock, transition of an unassigned item, merge without gates, refused request); never a ratio.",
   P7: "Queue, work, review and total time per item as medians and 90th percentiles, bucketed by size only where a size signal exists; shown, never scored.",
   P8: "Metered cost per accepted item, tokens per run and cost anomalies above three times the actor's median; self-reported usage is marked; shown, never scored.",
-  P9: "Duplicates (label, origin fingerprint or near-identical title within 15 minutes) plus rework (reopens, revision verdicts, repeated fix attempts) divided by delivered items.",
+  P9: "Duplicates (label, origin fingerprint or near-identical title within 15 minutes) plus rework (reopens, revision verdicts, repeated fix attempts) divided by delivered items; an index, lower is better.",
 };
 
 /** One row of the Milestone 4 overview: a milestone and what its latest stored card says. */

@@ -236,5 +236,17 @@ describe("EvaluationOverview", () => {
     const svg = container.querySelector(`[data-testid="milestone-${MILESTONE}"] svg`);
     expect(svg?.getAttribute("aria-label")).toContain("v2: withheld");
     expect(container.querySelector(`[data-testid="milestone-${MILESTONE}"] a[href*="${MILESTONE}"]`)).not.toBeNull();
+    // the two summed figures name their formula and lead to the rows that cite events
+    const tiles = [...container.querySelectorAll(`[data-testid="milestone-${MILESTONE}"] dt a`)];
+    expect(tiles.map((a) => a.textContent)).toEqual(["Interventions", "Metered cost"]);
+    expect(tiles.every((a) => a.getAttribute("href")?.endsWith(`/${MILESTONE}/operating`) && /Summed across the agents' rows/.test(a.getAttribute("title") ?? ""))).toBe(true);
+  });
+
+  it("when the card carries fewer exceptions than its total, the severity split says what it was counted over", async () => {
+    overviewMock.mockResolvedValue({ ...overview, milestones: [{ ...overview.milestones[0]!, latest: { ...overview.milestones[0]!.latest!, exceptions: { total: 712, immediate: 3, material: 40, routine: 457 } } }] });
+    render("/evaluation", <OverviewPage />);
+    await flush();
+    expect(container.textContent).toContain("712");
+    expect(container.textContent).toContain("3 immediate · 40 material · 457 routine (split counted over the first 500 on the card)");
   });
 });

@@ -10,6 +10,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { Link } from "@/lib/router";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EVALUATION_METRIC_FORMULAS } from "@paperclipai/shared";
 import { ConfidenceBadge, fmtCents, fmtDate, fmtPct, MarkerList, ScoreValue, Sparkline } from "./shared";
 
 /**
@@ -94,6 +95,9 @@ export function EvaluationOverviewPage() {
 function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary }) {
   const latest = m.latest!;
   const ex = latest.exceptions;
+  // the card carries at most 500 exceptions (immediate and material first); the split is counted over those, the total is exact
+  const splitCapped = ex.total > ex.immediate + ex.material + ex.routine;
+  const operatingHref = `/evaluation/${m.ref.kind}/${m.ref.id}/operating`;
   return (
     <Card data-testid={`milestone-${m.ref.id}`}>
       <CardHeader>
@@ -123,11 +127,16 @@ function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary
             <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Exceptions</dt>
             <dd className="tabular-nums">
               {ex.total}
-              <span className="block text-xs text-muted-foreground">{ex.immediate} immediate · {ex.material} material · {ex.routine} routine</span>
+              <span className="block text-xs text-muted-foreground">
+                {ex.immediate} immediate · {ex.material} material · {ex.routine} routine
+                {splitCapped ? ` (split counted over the first ${ex.immediate + ex.material + ex.routine} on the card)` : ""}
+              </span>
             </dd>
           </div>
           <div>
-            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Interventions</dt>
+            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Link to={operatingHref} className="underline decoration-dotted underline-offset-2" title={`Autonomy: ${EVALUATION_METRIC_FORMULAS.P1} Summed across the agents' rows on the operating tab, where each row cites its events.`}>Interventions</Link>
+            </dt>
             <dd className="tabular-nums">
               {latest.interventions == null ? (
                 <span className="text-xs text-muted-foreground">not on this card</span>
@@ -143,7 +152,9 @@ function MilestoneCard({ milestone: m }: { milestone: EvaluationMilestoneSummary
             </dd>
           </div>
           <div>
-            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Metered cost</dt>
+            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Link to={operatingHref} className="underline decoration-dotted underline-offset-2" title={`Token and cost efficiency: ${EVALUATION_METRIC_FORMULAS.P8} Summed across the agents' rows on the operating tab, where each row cites its events.`}>Metered cost</Link>
+            </dt>
             <dd className="tabular-nums">
               {latest.cost == null ? (
                 <span className="text-xs text-muted-foreground">not on this card</span>
