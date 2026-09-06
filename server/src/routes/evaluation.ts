@@ -15,6 +15,7 @@ import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
 import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
 import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
+import { evaluationOverview } from "../services/evaluation/overview.js";
 import { agentService } from "../services/agents.js";
 import { projectService } from "../services/projects.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
@@ -35,6 +36,7 @@ import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from ".
 export function evaluationRoutes(db: Db) {
   const router = Router();
   const ledger = evaluationLedger(db);
+  const overview = evaluationOverview(db);
   const replay = evaluationReplay(db);
   const cards = evaluationScorecardService(db);
   const ingest = evaluationIngest(db);
@@ -69,6 +71,43 @@ export function evaluationRoutes(db: Db) {
         limit: q.data.limit,
       });
       res.json({ events: rows, count: rows.length });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** One event by id, for the drill-down from a number or an exception to the fact behind it. Company members. */
+  router.get("/companies/:companyId/evaluation/events/:eventId", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const event = await ledger.get(companyId, req.params.eventId as string);
+      if (!event) throw notFound("Event not found");
+      res.json({ event });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Milestone 4 overview: every milestone with what its latest stored card says. Company members. */
+  router.get("/companies/:companyId/evaluation/overview", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      res.json(await overview.get(companyId));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Every stored version of one milestone card, oldest first, without the bodies. Company members. */
+  router.get("/companies/:companyId/evaluation/scorecards/versions", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const q = refQuery.safeParse(req.query);
+      if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
+      res.json({ versions: await overview.versions(companyId, evaluationMilestoneRefSchema.parse(q.data)) });
     } catch (err) {
       next(err);
     }

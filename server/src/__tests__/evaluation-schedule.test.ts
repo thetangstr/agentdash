@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { agents, companies, companyMemberships, createDb, evaluationScorecards, issues, projects } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { evaluationSnapshotCadence } from "../services/evaluation/schedule.js";
+import { evaluationOverview } from "../services/evaluation/overview.js";
 
 // AgentDash: Company Evaluator — Milestone 3 shadow cadence: every open project of
 // every company that provisioned an evaluator principal gets a stored card and
@@ -55,5 +56,23 @@ describeEmbeddedPostgres("evaluation snapshot cadence (embedded postgres)", () =
     await db.insert(projects).values({ companyId, name: "Evaluator review items", status: "in_progress" });
     const third = await cadence.run();
     expect(third).toMatchObject({ milestones: 1, cards: 1 });
+  });
+
+  it("the overview lists every milestone with what its latest card says, never the review-items project, and knows the principal", async () => {
+    const overview = await evaluationOverview(db).get(companyId);
+    expect(overview.principal.provisioned).toBe(true);
+    expect(overview.reviewProjectId).not.toBeNull();
+    const names = overview.milestones.map((m) => m.name);
+    expect(names).toContain("Open");
+    expect(names).toContain("Closed"); // a closed project keeps its cards visible
+    expect(names).not.toContain("Evaluator review items");
+    const open = overview.milestones.find((m) => m.name === "Open")!;
+    expect(open.latest?.version).toBe(1); // one version: the unchanged card added none
+    expect(open.latest?.trend.length).toBe(1);
+    expect(open.latest?.exceptions.total).toBe(0);
+    expect(overview.milestones.find((m) => m.name === "Closed")!.latest).toBeNull();
+    const versions = await evaluationOverview(db).versions(companyId, { kind: "project", id: openId });
+    expect(versions.map((v) => v.version)).toEqual([1]);
+    expect(versions[0]!.cardHash).toHaveLength(64);
   });
 });

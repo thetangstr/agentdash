@@ -35,6 +35,9 @@ vi.mock("../services/evaluation/ledger.js", () => ({
     findBySource,
   }),
 }));
+const overviewGet = vi.fn().mockResolvedValue({ milestones: [{ ref: { kind: "project", id: "22222222-2222-4222-8222-222222222222" }, name: "Launch", status: "in_progress", latest: null }], reviewProjectId: null, principal: { provisioned: false, agentId: null }, ledger: { maxSeq: 7 } });
+const overviewVersions = vi.fn().mockResolvedValue([{ version: 1, storedAt: "2026-09-01T00:00:00.000Z", formulaVersion: "m2-score/5", contractVersion: "none", throughSeq: 7, cardHash: "h", outcome: { score: null, confidence: null }, exceptionsTotal: 0 }]);
+vi.mock("../services/evaluation/overview.js", () => ({ evaluationOverview: () => ({ get: overviewGet, versions: overviewVersions }) }));
 vi.mock("../services/evaluation/replay.js", () => ({
   evaluationReplay: () => ({ replay: vi.fn().mockResolvedValue({ card: {}, hash: "h", state: { open: true, retrospective: false, hasContract: false }, throughSeq: 7 }) }),
 }));
@@ -304,5 +307,22 @@ describe("evaluation routes", () => {
     expect(bad.status).toBe(400);
     const filtered = await request(app).get("/api/companies/company-1/evaluation/events?type=not.a.type,issue.created");
     expect(filtered.status).toBe(200);
+  });
+
+  it("Milestone 4 reads are open to company members and scoped to the company: overview, versions, one event", async () => {
+    const agent = await createApp(agentKey);
+    const overview = await request(agent).get("/api/companies/company-1/evaluation/overview");
+    expect(overview.status).toBe(200);
+    expect(overview.body.milestones[0].name).toBe("Launch");
+    expect(overviewGet).toHaveBeenCalledWith("company-1");
+    expect((await request(agent).get("/api/companies/company-2/evaluation/overview")).status).toBeGreaterThanOrEqual(403);
+    const versions = await request(agent).get("/api/companies/company-1/evaluation/scorecards/versions?kind=project&id=22222222-2222-4222-8222-222222222222");
+    expect(versions.status).toBe(200);
+    expect(versions.body.versions[0].version).toBe(1);
+    expect((await request(agent).get("/api/companies/company-1/evaluation/scorecards/versions?kind=sprint&id=x")).status).toBe(400);
+    const found = await request(agent).get("/api/companies/company-1/evaluation/events/cccccccc-cccc-4ccc-8ccc-ccccccccccc1");
+    expect(found.status).toBe(200);
+    expect(found.body.event.eventType).toBe("evaluation.correction");
+    expect((await request(agent).get("/api/companies/company-1/evaluation/events/abc")).status).toBe(404);
   });
 });
