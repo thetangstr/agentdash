@@ -40,11 +40,18 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
   const cards = evaluationScorecardService(db);
   const reviewItems = evaluationReviewItems(db);
 
-  async function firstAdministrator(companyId: string): Promise<string | null> {
+  /** D12: unrouted exceptions go to the evaluator's accountable human (the provisioning administrator) when that person is an active member; otherwise to the first active administrator; never to an arbitrary member. */
+  async function fallbackHuman(companyId: string): Promise<string | null> {
     const rows = await db
       .select({ principalId: companyMemberships.principalId, role: companyMemberships.membershipRole })
       .from(companyMemberships)
       .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, "user"), eq(companyMemberships.status, "active")));
+    const evaluator = await db
+      .select({ accountableUserId: agents.accountableUserId })
+      .from(agents)
+      .where(and(eq(agents.companyId, companyId), eq(agents.role, EVALUATOR_AGENT_ROLE), ne(agents.status, "terminated")))
+      .then((r) => r[0] ?? null);
+    if (evaluator?.accountableUserId && rows.some((r) => r.principalId === evaluator.accountableUserId)) return evaluator.accountableUserId;
     const admins = rows.filter((r) => r.role === "admin" || r.role === "owner").map((r) => r.principalId).sort();
     return admins[0] ?? null;
   }
@@ -72,7 +79,7 @@ export function evaluationSnapshotCadence(db: Db, opts: SnapshotCadenceOptions =
             .select({ id: projects.id })
             .from(projects)
             .where(and(eq(projects.companyId, companyId), inArray(projects.status, ["in_progress", "planned"]), ne(projects.name, EVALUATION_REVIEW_PROJECT_NAME)));
-          fallback = opts.reviewItems === false ? null : await firstAdministrator(companyId);
+          fallback = opts.reviewItems === false ? null : await fallbackHuman(companyId);
         } catch (err) {
           result.failures.push({ companyId, milestoneId: null, error: err instanceof Error ? err.message : String(err) });
           continue;

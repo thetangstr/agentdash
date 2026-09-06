@@ -22,6 +22,7 @@ vi.mock("../services/evaluation/ingest.js", () => ({
 const ledgerList = vi.fn().mockResolvedValue([{ id: "e1" }]);
 const existing = vi.fn(async (_companyId: string, ids: string[]) => new Set(ids.filter((id) => id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2" || id === "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")));
 const findBySource = vi.fn(async () => ({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", eventType: "evaluation.correction" }));
+const findBySourceId = vi.fn(async (_c: string, table: string, id: string) => (table === "evaluation" && id === "E4:issue:x" ? { id: "f1", sourceId: id } : null));
 const ledgerGet = vi.fn(async (_companyId: string, id: string) => (id === "cccccccc-cccc-4ccc-8ccc-ccccccccccc1" ? { id, eventType: "evaluation.correction" } : id === "dddddddd-dddd-4ddd-8ddd-ddddddddddd1" ? { id, eventType: "issue.created" } : null));
 vi.mock("../services/evaluation/ledger.js", () => ({
   hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
@@ -33,11 +34,14 @@ vi.mock("../services/evaluation/ledger.js", () => ({
     existing,
     get: ledgerGet,
     findBySource,
+    findBySourceId,
   }),
 }));
 const overviewGet = vi.fn().mockResolvedValue({ milestones: [{ ref: { kind: "project", id: "22222222-2222-4222-8222-222222222222" }, name: "Launch", status: "in_progress", latest: null }], reviewProjectId: null, principal: { provisioned: false, agentId: null }, ledger: { maxSeq: 7 } });
 const overviewVersions = vi.fn().mockResolvedValue([{ version: 1, storedAt: "2026-09-01T00:00:00.000Z", formulaVersion: "m2-score/5", contractVersion: "none", throughSeq: 7, cardHash: "h", outcome: { score: null, confidence: null }, exceptionsTotal: 0 }]);
 vi.mock("../services/evaluation/overview.js", () => ({ evaluationOverview: () => ({ get: overviewGet, versions: overviewVersions }) }));
+const shadowGet = vi.fn().mockResolvedValue({ companyId: "company-1", generatedAt: "2026-09-06T00:00:00.000Z", milestones: [], corrections: { pending: 0, accepted: 0, rejected: 0, evaluatorNotes: 0 }, evaluator: { provisioned: false, agentId: null, runs: 0, costEvents: 0, costCents: 0, findingsAuthored: 0 }, authority: { refusedAttempts: 0, writesOutsideAllowlist: 0, writeActions: {}, scoredAsActorOn: [], reviewProjectNamedAsMilestone: false }, truncated: [], graduation: [] });
+vi.mock("../services/evaluation/shadow-report.js", () => ({ evaluationShadowReport: () => ({ get: shadowGet }) }));
 vi.mock("../services/evaluation/replay.js", () => ({
   evaluationReplay: () => ({ replay: vi.fn().mockResolvedValue({ card: {}, hash: "h", state: { open: true, retrospective: false, hasContract: false }, throughSeq: 7 }) }),
 }));
@@ -49,7 +53,8 @@ const agentsList = vi.fn().mockResolvedValue([]);
 const agentCreate = vi.fn().mockResolvedValue({ id: "agent-eval", name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle" });
 const createApiKey = vi.fn().mockResolvedValue({ id: "key-1", token: "tok-once" });
 const revokeKeysOfKind = vi.fn().mockResolvedValue(1);
-vi.mock("../services/agents.js", () => ({ agentService: () => ({ list: agentsList, create: agentCreate, createApiKey, revokeKeysOfKind }) }));
+const agentUpdate = vi.fn(async (id: string, patch: Record<string, unknown>) => ({ id, name: "Evaluator", role: "evaluator", reportsTo: null, status: "idle", accountableUserId: null, ...patch }));
+vi.mock("../services/agents.js", () => ({ agentService: () => ({ list: agentsList, create: agentCreate, createApiKey, revokeKeysOfKind, update: agentUpdate }) }));
 const projectsList = vi.fn().mockResolvedValue([]);
 const projectCreate = vi.fn().mockResolvedValue({ id: "proj-eval", name: "Evaluator review items" });
 vi.mock("../services/projects.js", () => ({ projectService: () => ({ list: projectsList, create: projectCreate }) }));
@@ -336,5 +341,34 @@ describe("evaluation routes", () => {
     expect((await request(agent).get("/api/companies/company-1/evaluation/events?kind=project")).status).toBe(400);
     const plain = await request(agent).get("/api/companies/company-1/evaluation/events");
     expect(plain.body.scope).toBeNull();
+  });
+
+  it("Milestone 5: humans record exception verdicts, misses and shadow notes as dispositions; the shadow report is administrator-only and parses its milestone references", async () => {
+    const admin = await createApp(boardAdmin);
+    const evaluator = await createApp({ ...agentKey, principalKind: "evaluator", readOnly: true });
+    const ref = { kind: "project", id: "22222222-2222-4222-8222-222222222222" };
+    append.mockClear();
+    const reviewed = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "exception_reviewed", milestoneRef: ref, exceptionKey: "E4:issue:x", verdict: "false_positive", reason: "the reviewer joined after the verdict" });
+    expect(reviewed.status).toBe(201);
+    expect(findBySourceId).toHaveBeenCalledWith("company-1", "evaluation", "E4:issue:x", { kind: "project", id: ref.id });
+    // a verdict on an exception the evaluator never raised is refused, so a typo cannot move precision
+    expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "exception_reviewed", milestoneRef: ref, exceptionKey: "E4:issue:never", verdict: "confirmed" })).status).toBe(404);
+    expect((append.mock.calls[0]![0] as Array<Record<string, unknown>>)[0]).toMatchObject({ eventType: "evaluation.disposition", projectId: ref.id, sourceId: "review:E4:issue:x", actorType: "user" });
+    const missed = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "exception_missed", milestoneRef: ref, title: "release without notes", severity: "material", description: "v1 shipped with no release notes; nothing was raised" });
+    expect(missed.status).toBe(201);
+    expect(String((append.mock.calls[1]![0] as Array<Record<string, unknown>>)[0]!.sourceId)).toMatch(/^missed:project:22222222/);
+    const note = await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "shadow_note", milestoneRef: ref, topic: "rescue", text: "founder unblocked the release branch by hand" });
+    expect(note.status).toBe(201);
+    expect((await request(admin).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "shadow_note", milestoneRef: ref, topic: "vibes", text: "x" })).status).toBe(400);
+    // the evaluator cannot file any of them
+    expect((await request(evaluator).post("/api/companies/company-1/evaluation/dispositions").send({ kind: "exception_reviewed", milestoneRef: ref, exceptionKey: "E4:issue:x", verdict: "confirmed" })).status).toBe(403);
+    // the report
+    expect((await request(evaluator).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222")).status).toBe(403);
+    const report = await request(admin).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222,goal:33333333-3333-4333-8333-333333333333&costCapCents=5000&verifyLimit=5");
+    expect(report.status).toBe(200);
+    expect(shadowGet).toHaveBeenCalledWith("company-1", [{ kind: "project", id: "22222222-2222-4222-8222-222222222222" }, { kind: "goal", id: "33333333-3333-4333-8333-333333333333" }], { costCapCents: 5000, verifyLimit: 5 });
+    expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report?refs=project:22222222-2222-4222-8222-222222222222,project:22222222-2222-4222-8222-222222222222")).status).toBe(400); // the same milestone twice is not two milestones
+    expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report?refs=sprint:x")).status).toBe(400);
+    expect((await request(admin).get("/api/companies/company-1/evaluation/shadow-report")).status).toBe(400);
   });
 });
