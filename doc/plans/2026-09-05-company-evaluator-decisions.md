@@ -329,3 +329,198 @@ Recorded here rather than in the spec, which is at its size limit.
   review commits; a development database that applied an intermediate shape
   keeps it (`pnpm db:migrate` does not repair a journaled migration) and must be
   reset before running the final shape. Fresh databases and CI are unaffected.
+
+## Milestone 2 implementation notes (2026-09-05, scoring branch)
+
+- **Every fact a projection needs is in the window.** Roster snapshots
+  (`agent.snapshot`, `project.snapshot`, `goal.snapshot`) and label additions
+  enter the ledger; issue snapshots carry labels, title tokens, lifecycle
+  timestamps and lineage; DoD events carry criterion ids and text hashes. The
+  open flag is therefore a ledger fact once a roster snapshot exists; the live
+  row is only the fallback for a window without one. Schema version 2.
+- **Card = pure function.** `scoreMilestone(window, ref, throughSeq, companyId,
+  {fallbackOpen})` folds the ordered window into per-item timelines, resolves
+  the contract (declared, else derived with the engineering-default evidence set
+  and no criteria), evaluates evidence classes and criterion dispositions, then
+  O1–O5, P1–P9 per agent plus the company row, tiers, composites with guards,
+  and exceptions E1–E14 with roster routing. `FORMULA_VERSION = m2-score/1`.
+  The deterministic "now" is the latest event or ingest time in the window.
+- **Single writer preserved.** Snapshots (which append `evaluation.finding`
+  events) and contract declarations take the same per-company advisory lock as
+  ingest, so `seq` never gains a lower row after a cut.
+- **Derived contracts declare no criteria.** Criterion text is not in the
+  ledger, so O1 is Insufficient until a human declares a contract with checks —
+  the gap the spec says to measure, not assume. `human_attest` dispositions are
+  read from `evaluation.disposition` events; the route that writes them is M3.
+- **Known approximations, to be judged on the first shadow cards.** P6's
+  "agent transitioning an item it is not assigned to" fires on the sanctioned
+  review→done step by a reviewer or TPM and will be the noisiest rule; E5's
+  "valid action path" is approximated as any activity, pending question,
+  pending approval or human owner within 48 h; P4 judges assignments on the
+  definition of done because description presence is not in the ledger; P3's
+  only checkable claims today are payload timestamps (the GitHub adapter, D4,
+  adds the rest); O3's recovery-issue term and P5's `heal_attempts` are not
+  modelled; O2 populations are the milestone only (issues carry no target
+  date); a fully no-op PATCH still mints phantom facts (no `_previous` is
+  written when nothing changed).
+- **Tests.** 23 fixture-ledger unit cases (determinism, rules 4, 10–19, tiers
+  at 0.2/0.5/0.8, composites and guards, membership moves, each exception) plus
+  the Milestone 1 suites extended for roster events, contract routes and the
+  ledger-derived open flag; a second file pins every correction from the first
+  independent review (below).
+- **First independent review (round 1).** Three findings were real spec
+  deviations and are fixed: the §4.2 project-lead and goal-owner checks were
+  unreachable for issue reviews (now applied to every review-class event from
+  the item's project and goal at review time); a declared contract that dropped
+  evidence classes scored O5 as 100 (waived classes are now undecidable for every
+  item, so waiving lowers coverage, and a rule-16 exception without a recorded
+  founder acceptance — an `evaluation.disposition` of kind
+  `contract_exception_accepted` naming the contract event — caps O1/O5 at
+  limited evidence); rule 17 was applied per contract document (now per
+  criterion: each criterion keeps its earliest declaration time across
+  amendments). Also fixed: a narrowed DoD fails `dod_present`; a synthetic
+  decider leaves `independent_review` undecidable (rule 15); rule-19 pair reviews
+  weigh as limited evidence and cap O5 when they are the only review; the
+  evaluator's own findings no longer inflate the blind window or the digest;
+  `agent.snapshot` versions carry the row time; O4 is shown, never scored, until
+  an outcome target is measurable (nothing imputed); count metrics render zero
+  as a value; O2 falls back to the project's target date; E2 is material for
+  delivery claims; snapshots read on the lock's own connection; evaluator
+  review items cannot become successors or blocker citations (rule 12);
+  findings hash their identity, not their phrasing; an unattributed review is
+  neither credit nor violation; `ci_green` requires `pre_existing_failures`
+  named; per-agent composites carry E3/E4 flags raised anywhere about that
+  agent; the card caps exceptions at 500 and issue ids at 5000 with exact
+  counts. `FORMULA_VERSION` is `m2-score/2`. Accepted as notes: P2's value is
+  approved over decided (undecided escalations are undecidable, not failures);
+  roster names and titles are stored while issue titles are tokenised; O2's due
+  instant is UTC end of day; the per-agent metric block is O(agents × members)
+  and O3/P9 scans are quadratic in members — fine for the shadow companies,
+  to move into SQL with the replay aggregation before real load.
+- **Theo's technical review (AGE-96) and Priya's product review (AGE-97).**
+  Contributors now follow §3 in full — anyone who changed status, assignee,
+  blockers or the DoD, authored a comment or a non-review self-report, ran a
+  heartbeat on the item, or was ever its assignee. One reading is recorded:
+  review-class acts (verdicts, tester handoffs, approval decisions) are the acts
+  independence judges, so they do not by themselves make their author a
+  contributor; otherwise every second verdict on an item would be a self-review.
+  P2 links an escalation to its decision through the approval id; E9 covers
+  blocker citations still standing and reverts not re-shipped within seven days,
+  not only reopens; E14 routes both actors' managers. The card's prose follows
+  Priya's rules: no rule or section numbers in founder-facing strings (they live
+  in this record and in drill-down), no parentheses or semicolons inside an
+  undecidable reason (headlines join reasons with "; "), remedies inside
+  undecidable reasons, dollars not cents, enum keys rendered as words, markers
+  that name their cap, and two new markers — partial records when any source is
+  absent from the window, and a lag marker when records trail events by more
+  than a day. The derived-contract exception now states that acceptance is
+  insufficient by construction and names the one action that changes it.
+- **Second verification of the scoring branch (round 2).** Two more real
+  defects, both fixed: every posted comment has an `issue.comment_added` twin in
+  the activity log, so the review-class carve-out has to skip the twin of a
+  review handoff too (otherwise every MAW reviewer is a self-reviewer on real
+  data — the fixtures now carry the twin); and rule 17 keyed on a criterion's id
+  alone let a check be rewritten in place under the same id, so a criterion is
+  now its id and its content. Independence is judged twice: as of the review,
+  and as of the close with the terminal transition excluded, so a verdict
+  recorded before its author took the item over cannot certify the close. O1 and
+  O5 values are over the decidable population (§7: unknown is never passed and
+  never failed either); coverage carries the unknown. Findings that were dated by
+  the moving "now" (E11, E14, the metering E7) are dated by their last fact.
+  Acceptance of a contract exception must come from a real human — the
+  accountable one when named — never a synthetic identity. Schema-invalid contract
+  versions are shown but cap nothing. The lag marker stays off retrospectives.
+  P6's tier says when the refusal detector is blind. **For the founder to expect
+  on the first shadow card:** any agent that leaves an ordinary comment on an item
+  and later records its verdict is a self-reviewer under §3 — it will be the
+  largest source of immediate exceptions in the shadow run, by design; the
+  question for Milestone 5 is whether that rule should stand.
+- **Third verification (round 3).** The review-class set is both reviewer
+  handoffs (`tester_to_reviewer`, `reviewer_to_tpm`) — a reviewer handing its
+  review down the chain is not a contribution — and their comment twins,
+  matched by comment id or, when an id is missing, by the same actor within the
+  skew tolerance. A criterion's rule-17 key is its id and its check; its text
+  is prose and may be reworded without becoming a new declaration. The
+  close-time independence check counts work-changing acts only (runs, entering
+  in_progress, taking the assignment, implementation self-reports, DoD edits),
+  so a reviewer's "thanks" after its verdict changes nothing while a run after
+  it does. Under a partial waiver, items are judged on the classes the contract
+  requires and the waiver is carried by the rule-16 cap and the per-class
+  record; a contract that requires no class decides nothing. Composites weight
+  each metric by its coverage, so a value over a fifth of the items does not
+  count like one over all of them; O3 and P9 keep population denominators
+  because they are indices. The refusal detector's blindness caps P6 at limited
+  evidence rather than pretending a coverage number. The surface the twin skip
+  creates is named: directive prose inside a review handoff is unscored, as all
+  prose is.
+- **Fourth verification (round 4).** The O5 rewrite had reopened rule 16's
+  lever: an item counted as satisfied only when every required class was
+  decidable, so on a source-poor deployment the default contract scored 0 while
+  a waiver scored 0.8 at full composite weight. Now each item is judged over the
+  required classes decidable for it, and coverage is the share of the five
+  default classes decidable per item — an undecidable class and a waived class
+  lower it alike, so waiving is weight-neutral. Composites report their own
+  coverage (Σwᵢcᵢ / Σwᵢ) and are withheld below 0.5, so muting a failing metric
+  by making it undecidable cannot lift the score. The twin fallback fires only
+  when a comment id is missing on either side; a reviewer's comment that has its
+  own id and matches no review handoff is a real comment however close in time.
+  `FORMULA_VERSION` is `m2-score/3` (composites `composite/3`). Deliberate
+  narrowing recorded: the close-time independence check counts work-changing
+  acts only — runs, entering in_progress, taking the assignment, implementation
+  self-reports, DoD edits — and therefore not blocker edits or non-in_progress
+  status changes after a verdict, which §3 would count as writes; the check
+  exists to catch implementation performed after certifying, and those acts
+  still disqualify when they precede the review.
+- **Fifth verification (round 5).** The coverage floor made one defect
+  consequential: O3 reported coverage 1.0 whatever the records held, so on the
+  first shadow company — done items, no criteria, no verdicts, no delivery
+  references — the outcome composite was computable and read about 77, supplied
+  entirely by "no consequences recorded". Two changes close it. O3's coverage is
+  now the mean of its three terms' observability: the two T0 terms are always
+  observable, the revert term only for items with a delivery reference, so the
+  shadow company shows 0.667 and the note says for what share the revert term
+  could be seen. Composites gained a concentration guard beside the floor: no
+  single metric may supply more than 70% of the effective weight (Σwᵢcᵢ), and a
+  withheld composite names the metric and its share; every violated guard is
+  listed, the most specific first. Independently, any handoff type had counted
+  as a review source, so a company that only records PM briefs saw
+  independent_review fail instead of stay undecidable; presence is now judged
+  on review-class handoffs (tester_to_reviewer, reviewer_to_tpm) alone, and the
+  undecidable reason carries the remedy. The composite floor and the
+  concentration ceiling live in `packages/shared` beside the minimum-included
+  counts. `FORMULA_VERSION` is `m2-score/4` (composites `composite/4`, metrics
+  `metrics/2`). Two notes for operators: an accepted waiver lifts O5's
+  confidence cap but restores no weight, because the records still do not
+  exist; and a deployment that stops emitting structured regression gates turns
+  ci_green failures into undecidables, which lowers O5's coverage rather than
+  raising its value — the composite floor and the concentration guard hold that
+  line, and E11 (activity drop) needs its five-week baseline before it can name
+  the drop itself, so the first shadow milestone cannot detect that lever
+  through E11 alone.
+- **Sixth verification (round 6): READY, ceiling moved to 0.75.** The reviewer
+  re-derived the shadow baseline by hand (O3 effective 0.133 against O5 0.03:
+  82% concentration, 47% coverage, score withheld) and confirmed both fixes
+  revert-sensitive. One design consequence surfaced: at a 70% ceiling, O1 + O2
+  and O1 + O5 at full coverage sit at 72.7% and would be withheld with complete
+  evidence on both, which quietly made the outcome minimum three metrics
+  whenever O1 is present — and the second shadow milestone is chosen precisely
+  because O1 will be measurable there. The ceiling is 0.75: every O1-bearing
+  pair stays reachable, and a metric standing in for a missing one (77% in the
+  unit pin, 82% on the baseline) is still caught. Guard shape fixed for the
+  Milestone 4 renderer: `guard.reasons` is always an array (empty when
+  satisfied) and `guard.reason` is the headline alias for its first entry; the
+  concentration and floor reasons are judged only once the minimum-included
+  check passes, so a lone metric never reports a tautological 100%. Recorded,
+  not changed: O3's two T0 terms are counted observable with no exposure
+  window, so a young milestone reads O3 = 0 by construction until items have
+  had time to attract a reopen or a blocker citation; the concentration guard
+  bounds what that can supply, and E9's seven-day horizon is the precedent if
+  an exposure normaliser is wanted later.
+  Commit 7 changed the card's bytes (`guard.reasons` on every satisfied
+  composite, the ceiling in `guard.maxConcentration`) and its substance (a
+  72.7% pair now scores), so `FORMULA_VERSION` is `m2-score/5` and composites
+  `composite/5`; metrics stay `metrics/2`. Known approximation recorded for P6:
+  the AGE-91 refusal log deduplicates the same actor, reason, route and entity
+  within sixty seconds in process, so a retry storm on one forbidden act counts
+  once per minute per server instance and P6 is a floor on violating requests,
+  not a count of them; distinct acts on distinct items are never collapsed.

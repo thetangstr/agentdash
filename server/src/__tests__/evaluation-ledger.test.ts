@@ -180,12 +180,12 @@ describe("milestone projection (spec §3 membership, §11 window and determinism
     expect(c1.eventCount).toBe(3);
     expect(c1.byType).toEqual({ "issue.transition": 2, "run.finished": 1 });
     expect(c1.issueIds).toEqual(["i1", "i2", "i4"]);
-    expect(c1.markers).toEqual([MARKER_OPEN_MILESTONE]);
+    expect(c1.markers).toContain(MARKER_OPEN_MILESTONE);
     expect(c1.throughSeq).toBe(4);
     // e1, e2, e4 share one tolerance bucket and one ingest time → ordered by dedupe key; last is e4.
     expect(c1.throughEventId).toBe("e4");
-    const c3 = projectMilestone(events, ref, 4, { open: false, retrospective: true });
-    expect(c3.markers).toEqual([MARKER_RETROSPECTIVE]);
+    const c3 = projectMilestone(events, ref, 4, { open: false });
+    expect(c3.markers).not.toContain(MARKER_OPEN_MILESTONE); // retrospective is derived from the window, never supplied
     expect(cardHash(c3)).not.toBe(cardHash(c1));
   });
 
@@ -206,11 +206,14 @@ describe("milestone projection (spec §3 membership, §11 window and determinism
     expect(cardHash(projectMilestone(more, ref, 5, state))).not.toBe(cardHash(before));
   });
 
-  it("projects an empty milestone deterministically at any cut (A3)", () => {
+  it("projects an empty milestone deterministically at any cut (A3)", async () => {
     const empty = projectMilestone(events, { kind: "project", id: GOAL }, 4, state);
     expect(empty.eventCount).toBe(0);
+    expect(empty.membership.items).toBe(0);
     expect(empty.throughEventId).toBeNull();
-    expect(cardHash(empty)).toBe(cardHash(projectMilestone([], { kind: "project", id: GOAL }, 4, state)));
+    // the same window in any input order yields the same bytes; the card is a function of the whole company window (asOf, sources), not only of the milestone's events
+    expect(cardHash(projectMilestone([...events].reverse(), { kind: "project", id: GOAL }, 4, state))).toBe(cardHash(empty));
+    expect(cardHash(projectMilestone(events, { kind: "project", id: GOAL }, 3, state))).not.toBe(cardHash(empty));
   });
 });
 

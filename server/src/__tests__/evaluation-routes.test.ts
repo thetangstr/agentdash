@@ -13,15 +13,19 @@ const snapshot = vi.fn().mockResolvedValue({ version: 1, throughSeq: 7, cardHash
 const verify = vi.fn().mockResolvedValue({ ok: true });
 const logActivity = vi.fn().mockResolvedValue(undefined);
 
+const append = vi.fn().mockResolvedValue({ inserted: 1, skipped: 0, insertedIds: ["e9"], oldestInsertedEventTime: null });
 vi.mock("../services/evaluation/ingest.js", () => ({
   MAX_BACKFILL_PASSES: 20,
   evaluationIngest: () => ({ tick, backfill, cursors: vi.fn().mockResolvedValue({}), running: false }),
+  withCompanyLock: (_db: unknown, _companyId: string, fn: (tx: unknown) => Promise<unknown>) => fn({}),
 }));
 vi.mock("../services/evaluation/ledger.js", () => ({
+  hashCanonical: (v: unknown) => `h:${JSON.stringify(v).length}`,
   evaluationLedger: () => ({
     list: vi.fn().mockResolvedValue([{ id: "e1" }]),
     countByType: vi.fn().mockResolvedValue({ "issue.created": 1 }),
     maxSeq: vi.fn().mockResolvedValue(7),
+    append,
   }),
 }));
 vi.mock("../services/evaluation/replay.js", () => ({
@@ -54,6 +58,7 @@ const agentKey = { type: "agent", agentId: "agent-1", companyId: "company-1", co
 
 describe("evaluation routes", () => {
   afterEach(() => {
+    append.mockClear();
     tick.mockClear();
     backfill.mockClear();
     snapshot.mockClear();
@@ -114,6 +119,46 @@ describe("evaluation routes", () => {
     expect(run.status).toBe(200);
     expect(run.body.lockedOut).toBe(true);
     expect((logActivity.mock.calls[0]![1] as { details: Record<string, unknown> }).details).toMatchObject({ backfill: true, passes: 2, lockedOut: true, exhausted: false });
+  });
+
+  it("a contract is declared by an administrator only, must be a valid v1 declared contract for this company, and is audited", async () => {
+    const CID = "11111111-1111-4111-8111-111111111111";
+    const contract = {
+      contractVersion: "v1",
+      companyId: CID,
+      goalId: null,
+      parentGoalId: null,
+      milestoneRef: { kind: "project", id: "22222222-2222-4222-8222-222222222222" },
+      accountableUserId: "user-1",
+      leadAgentId: null,
+      acceptanceCriteria: [{ id: "c1", text: "verdict passed", check: { kind: "record", record: "verdict.passed" }, source: "human" }],
+      definitionOfDone: null,
+      requiredEvidence: ["dod_present", "neutral_verdict", "delivery_ref", "ci_green", "independent_review"],
+      independenceRule: "independence/v1",
+      excludedReviewers: [],
+      founderLocks: [],
+      outcomeTarget: null,
+      targetDate: null,
+      downstreamRiskAcceptance: null,
+      windowStart: "2026-09-01T00:00:00.000Z",
+      windowEnd: null,
+      source: "declared",
+    };
+    const agent = await createApp({ ...agentKey, companyId: CID, companyIds: [CID] });
+    expect((await request(agent).post(`/api/companies/${CID}/evaluation/contracts`).send(contract)).status).toBe(403);
+    expect(append).not.toHaveBeenCalled();
+    const admin = await createApp({ ...boardAdmin, companyIds: [CID] });
+    expect((await request(admin).post(`/api/companies/${CID}/evaluation/contracts`).send({ ...contract, companyId: "33333333-3333-4333-8333-333333333333" })).status).toBe(400);
+    expect((await request(admin).post(`/api/companies/${CID}/evaluation/contracts`).send({ ...contract, source: "derived" })).status).toBe(400);
+    expect((await request(admin).post(`/api/companies/${CID}/evaluation/contracts`).send({ nope: true })).status).toBe(400);
+    expect(append).not.toHaveBeenCalled();
+    const ok = await request(admin).post(`/api/companies/${CID}/evaluation/contracts`).send(contract);
+    expect(ok.status).toBe(201);
+    expect(ok.body).toMatchObject({ inserted: 1, eventId: "e9" });
+    const [events] = append.mock.calls[0]! as [Array<Record<string, unknown>>];
+    expect(events[0]).toMatchObject({ eventType: "contract.declared", sourceTable: "evaluation_contracts", sourceId: "project:22222222-2222-4222-8222-222222222222", projectId: "22222222-2222-4222-8222-222222222222", actorType: "user" });
+    expect(logActivity.mock.calls.map((c) => (c[1] as { action: string }).action)).toEqual(["evaluation.contract_declared"]);
+    expect((await request(admin).get(`/api/companies/${CID}/evaluation/contracts?kind=project&id=22222222-2222-4222-8222-222222222222`)).status).toBe(200);
   });
 
   it("rejects a malformed snapshot body and an unknown event type filter is ignored", async () => {

@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { EVALUATION_EVENT_TYPES, evaluationMilestoneRefSchema, type EvaluationEventType } from "@paperclipai/shared";
+import { EVALUATION_EVENT_TYPES, evaluationContractV1Schema, evaluationMilestoneRefSchema, type EvaluationEventType } from "@paperclipai/shared";
 import { badRequest } from "../errors.js";
 import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
-import { evaluationIngest, MAX_BACKFILL_PASSES } from "../services/evaluation/ingest.js";
-import { evaluationLedger } from "../services/evaluation/ledger.js";
+import { evaluationIngest, MAX_BACKFILL_PASSES, withCompanyLock } from "../services/evaluation/ingest.js";
+import { evaluationLedger, hashCanonical } from "../services/evaluation/ledger.js";
 import { evaluationReplay } from "../services/evaluation/replay.js";
 import { evaluationScorecardService } from "../services/evaluation/scorecards.js";
 import { assertCompanyAccess, assertCompanyAdministrator, getActorInfo } from "./authz.js";
@@ -129,6 +129,77 @@ export function evaluationRoutes(db: Db) {
         details: { backfill, inserted: result.inserted, scanned: result.scanned, ...outcome },
       });
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** The latest declared contract for a milestone (spec §4), read from the ledger. */
+  router.get("/companies/:companyId/evaluation/contracts", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const q = refQuery.safeParse(req.query);
+      if (!q.success) throw badRequest("kind (project|goal) and id are required", { issues: q.error.issues });
+      const ref = evaluationMilestoneRefSchema.parse(q.data);
+      const events = await ledger.list(companyId, { types: ["contract.declared"], limit: 5000 });
+      const contractOf = (e: { payload?: unknown }) => (e.payload as { contract?: { milestoneRef?: { kind?: string; id?: string } } } | undefined)?.contract ?? null;
+      const mine = events.filter((e) => {
+        const c = contractOf(e);
+        return c?.milestoneRef?.kind === ref.kind && c?.milestoneRef?.id === ref.id;
+      });
+      const latest = mine[mine.length - 1] ?? null;
+      res.json({ contract: latest ? contractOf(latest) : null, eventId: latest?.id ?? null, declaredAt: latest?.eventTime ?? null, declaredBy: latest?.actorId ?? null, versions: mine.length });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * The accountable human declares a milestone contract (spec §4). Administrators
+   * only; the body is the v1 schema; the event is appended under the company's
+   * evaluator lock and audited. A weak contract (rule 16) is accepted and shown
+   * on the card as a contract exception — it is not refused here.
+   */
+  router.post("/companies/:companyId/evaluation/contracts", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      await assertCompanyAdministrator(access, req, companyId);
+      const parsed = evaluationContractV1Schema.safeParse(req.body);
+      if (!parsed.success) throw badRequest("Invalid contract", { issues: parsed.error.issues });
+      const contract = parsed.data;
+      if (contract.companyId !== companyId) throw badRequest("contract.companyId must match the route");
+      if (contract.source !== "declared") throw badRequest("only declared contracts may be posted; derived contracts are the evaluator's own");
+      const actor = getActorInfo(req);
+      const now = new Date();
+      const result = await withCompanyLock(db, companyId, (tx) =>
+        evaluationLedger(tx).append([
+          {
+            companyId,
+            projectId: contract.milestoneRef.kind === "project" ? contract.milestoneRef.id : null,
+            goalId: contract.milestoneRef.kind === "goal" ? contract.milestoneRef.id : contract.goalId,
+            actorType: actor.actorType === "agent" ? "agent" : "user",
+            actorId: actor.actorId,
+            sourceTable: "evaluation_contracts",
+            sourceId: `${contract.milestoneRef.kind}:${contract.milestoneRef.id}`,
+            sourceVersion: hashCanonical(contract).slice(0, 32),
+            eventType: "contract.declared",
+            eventTime: now,
+            payload: { contract, companyId },
+          },
+        ]),
+      );
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        action: "evaluation.contract_declared",
+        entityType: contract.milestoneRef.kind,
+        entityId: contract.milestoneRef.id,
+        details: { inserted: result.inserted, criteria: contract.acceptanceCriteria.length, requiredEvidence: contract.requiredEvidence },
+      });
+      res.status(result.inserted > 0 ? 201 : 200).json({ inserted: result.inserted, skipped: result.skipped, eventId: result.insertedIds[0] ?? null });
     } catch (err) {
       next(err);
     }

@@ -4,7 +4,7 @@ import { companies, evaluationIngestState } from "@paperclipai/db";
 import { conflict } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
 import { evaluationLedger, type LedgerDb } from "./ledger.js";
-import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName } from "./sources.js";
+import { detectWithdrawnComments, SOURCE_READERS, type Cursor, type SourceName, type Tx } from "./sources.js";
 
 /**
  * AgentDash: Company Evaluator — the ingest loop (spec §11).
@@ -59,6 +59,23 @@ export const MAX_BACKFILL_PASSES = 20;
 /** Advisory-lock key prefix; the key is the 64-bit `hashtextextended` of prefix + companyId (collisions negligible). */
 export const INGEST_LOCK_PREFIX = "evaluation_ingest:";
 
+/**
+ * Run `fn` in a transaction holding the company's evaluator lock, or refuse
+ * with 409. Everything that appends to the ledger — ingest ticks, snapshots
+ * (findings) and contract declarations — takes this lock, so `seq` keeps a
+ * single writer per company and a stored card's window never gains a row
+ * that committed later with a lower seq.
+ */
+export async function withCompanyLock<T>(db: Db, companyId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => {
+    const lock = await tx.execute(sql`select pg_try_advisory_xact_lock(hashtextextended(${INGEST_LOCK_PREFIX + companyId}, 0)) as locked`);
+    // The driver returns the rows as an array-like list (node-postgres would wrap them in `rows`).
+    const lockRows = (Array.isArray(lock) ? lock : ((lock as { rows?: unknown[] }).rows ?? [])) as Array<{ locked?: boolean }>;
+    if (lockRows[0]?.locked !== true) throw conflict("evaluation_ingest: a pass is already running for this company");
+    return fn(tx);
+  });
+}
+
 export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
   const rowBudget = opts.rowBudget ?? DEFAULT_ROW_BUDGET;
   const statementTimeoutMs = Math.max(1000, Math.floor(opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS));
@@ -89,14 +106,7 @@ export function evaluationIngest(db: Db, opts: IngestOptions = {}) {
 
   async function tickOnce(companyId: string): Promise<CompanyTickStats> {
     const started = Date.now();
-    return db.transaction(async (tx) => {
-      const lock = await tx.execute(
-        sql`select pg_try_advisory_xact_lock(hashtextextended(${INGEST_LOCK_PREFIX + companyId}, 0)) as locked`,
-      );
-      // The driver returns the rows as an array-like list (node-postgres would wrap them in `rows`).
-      const lockRows = (Array.isArray(lock) ? lock : ((lock as { rows?: unknown[] }).rows ?? [])) as Array<{ locked?: boolean }>;
-      const locked = lockRows[0]?.locked === true;
-      if (!locked) throw conflict("evaluation_ingest: a pass is already running for this company");
+    return withCompanyLock(db, companyId, async (tx) => {
       await tx.execute(sql`select set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true)`);
 
       const ledger = evaluationLedger(tx);
