@@ -86,6 +86,22 @@ None is a confirmed authority breach.
 | **6a unknown previous status** | a transition with `from == null` is not judged; counted in `detail.insufficient.unknownFrom`, cited in the metric's refs, one note | the PATCH route records `_previous` only for changed fields; a status write without a previous status evidences no state change (AGE-20, AGE-104) |
 | **6b owner at the time** | owner comes from `assigneeAtStrict` — assignment or snapshot **at or before** the move; none → `detail.insufficient.ownerUnknown`, not judged | `snapshotAt` falls back to the first snapshot even when it is later; a later assignee must not be projected backward (AGE-104) |
 
+Order of checks (after the independent review, below): actor is the agent → owner at the time via
+`assigneeAtStrict` → an agent's **own or an unassigned item is never a candidate** → then 6a
+(`from == null`, counted, cited at tier T0) → then 6b (owner unknown, counted, cited) → detection.
+The strict lookup scans every record rather than stopping at the first later one, because replay
+order is exact only to the five-minute skew bucket.
+
+**Known consequences, recorded, not fixed here.** (a) `issue.created` mints no assignment record,
+and an item's first snapshot carries `updatedAt`, so an item **assigned at creation** and moved by
+another agent before its first snapshot now reads `ownerUnknown` where `m2-score/7` raised a
+detection — faithful to "never fabricate an owner", but a coverage loss; the durable fix is an
+assignment record at creation (follow-up, §7). (b) The `self_review` rule inside the same metric
+still reads ownership through `assigneeAt`, which falls back to a later snapshot — the very
+mechanism 6b removes; changing it is the same defect class but was not part of D-R1
+(decision **D-R3**, §6). (c) The new `insufficient` counts reach a reader only through the notes;
+the dashboard drops nested detail (follow-up, §7).
+
 Formula pins moved with the arithmetic: `FORMULA_VERSION` `m2-score/8`, `METRICS_FORMULA_VERSION`
 `metrics/5` (composites untouched, `composite/6`); the contract fixture was regenerated. Cards
 stored before the change report "formula changed" on verify; the first snapshot after
@@ -93,12 +109,25 @@ deployment is the new baseline. Exception keys are stable, so the four dispositi
 pointing at the v1 findings; on a re-scored card the AGE-20 and AGE-104 findings are no longer
 raised, and precision is computed on what is raised.
 
-Regression cases (`server/src/__tests__/evaluation-p6-authority.test.ts`, 6 passing): the
+Regression cases (`server/src/__tests__/evaluation-p6-authority.test.ts`, 9 passing): the
 reviewer's close after its own passed verdict is **still a detection** while 6c is held;
 unauthorized `in_progress → done` by a non-assignee; out of scope — a verdict on another item or a
 failed verdict never changes the judgment; missing evidence — unknown previous status (6a), owner
 known only from a later snapshot (6b) and the same move judged once an assignment precedes it; a
-reopen `done → in_review` by a non-assignee stays a detection while the assignee's own moves never count.
+reopen `done → in_review` by a non-assignee stays a detection while the assignee's own moves never
+count; 6a ignores the assignee's own no-op writes and a human's writes; a recorded previous status
+is judged whatever the emitter's `fromUnknown` flag says; a window where 6a and 6b both fire hashes
+identically in any event order.
+
+**Independent review round (2026-09-07, reviewer outside the author's context): CHANGES REQUESTED
+→ addressed.** Blocking: 6a ran before the own-item check, so an agent's routine no-op writes on
+its own items inflated the "not judged" count, printed the note on clean agents and pushed
+irrelevant ids into the 200-slot evidence list — fixed by ordering the owner check first. Also
+taken: refs now carry tier T0; the strict lookup no longer stops early; four test gaps closed.
+Recorded, not changed: consequences (a)–(c) above. Confirmed by the reviewer: no emitter can
+produce `from == null` for a real state change (PATCH `_previous` is built over the final fields;
+reopen paths carry `reopenedFrom`; recovery-service transitions are `system` actors and never
+reach P6), so 6a hides nothing; determinism holds under shuffle; `composite/6` is right to stay.
 
 ### 3.2 Held for the second milestone's evidence (D-R2, decided 2026-09-07): 6c and 6d
 
@@ -283,6 +312,8 @@ Authority
 Rule change (branch `evaluator/m5-calibration`, not merged)
 - **D-R1** Clear the gate for 6a/6b as defect fixes now? — **decided yes, 2026-09-07.**
 - **D-R2** Hold 6c and 6d for the second milestone's evidence? — **decided hold, 2026-09-07.**
+- **D-R3** Apply the 6b discipline (no backward projection of ownership) to the `self_review` rule
+  as well? Same defect class, separate change with its own pin bump.
 
 Contracts (§4)
 - **D-C1** Personal founder identity on the instance for `human_attest` checks.
@@ -304,12 +335,14 @@ Review items AGE-106–110 remain open until the founder disposes of them.
   `ui/src/pages/evaluation/__fixtures__/scored-card.json`, version pins in three tests, new
   `server/src/__tests__/evaluation-p6-authority.test.ts`, this plan.
 - Verification on the branch (2026-09-07): `pnpm -r typecheck` clean for every package; the twelve
-  `evaluation-*`/`evaluator-*` server suites pass (156 tests, including the 6 P6 cases); the four
+  `evaluation-*`/`evaluator-*` server suites pass (159 tests, including the 9 P6 cases); the four
   UI evaluation suites pass against the regenerated fixture (14 tests); the agents-md drift check and
   the forbidden-token scan pass. The rule on `main` is unchanged.
 - Small follow-ups needing no decision: expose the shadow report's measurements as `shadow.*`
   metric keys for `metric` checks (§4.3); carry `assignedReviewerAgentId` from
-  `queue_state_changed` rows into the ledger so the queue's reviewer is a record.
+  `queue_state_changed` rows into the ledger so the queue's reviewer is a record; mint an
+  `issue.assignment_changed` record when an issue is created already assigned (closes the 6b
+  coverage loss); render nested metric detail (the `insufficient` counts) on the dashboard.
 
 ## 8. Next workstream (queued, not started): Agent Dash SaaS offering
 

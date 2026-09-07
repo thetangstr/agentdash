@@ -955,21 +955,24 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
     }
     for (const tr of it.transitions) {
       if (tr.actorType !== "agent" || tr.actorId !== scope.agentId) continue;
+      // Rule 6b: the owner must come from a record at or before the move; a later snapshot says nothing about then.
+      const owner = assigneeAtStrict(it, new Date(tr.time.getTime() - 1));
+      // An agent's own or an unassigned item is never a candidate — whatever it wrote there is not this rule's business.
+      if (owner && (!owner.agentId || owner.agentId === scope.agentId)) continue;
       // Rule 6a: a status write whose previous status is unknown recorded no state change (the PATCH route writes
       // `_previous` only for the fields that changed) — insufficient evidence of a transition, never a violation.
       if (tr.from == null) {
         insufficient.unknownFrom.push(tr.eventId);
         t.refs.add(tr.eventId);
+        t.tiers.add("T0");
         continue;
       }
-      // Rule 6b: the owner must come from a record at or before the move; a later snapshot says nothing about then.
-      const owner = assigneeAtStrict(it, new Date(tr.time.getTime() - 1));
       if (owner === undefined) {
         insufficient.ownerUnknown.push(tr.eventId);
         t.refs.add(tr.eventId);
+        t.tiers.add("T0");
         continue;
       }
-      if (!owner.agentId || owner.agentId === scope.agentId) continue;
       // The sanctioned review→done close by the verdict writer (rule 6c) and recorded authority grants (6d) are held
       // for the second milestone's evidence (D-R2, 2026-09-07): every cross-assignee move with evidence stays a detection.
       hit("transition_not_assigned", it, tr.time, tr.eventId, `moved ${tr.from}→${tr.to} on an item assigned to another agent`);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ScoredCard } from "../services/evaluation/scoring/types.js";
-import { A, at, ev, I1, I2, item, P, R, roster, score, T, verdict } from "./helpers/evaluation-fixtures.js";
+import { cardHash } from "../services/evaluation/scoring/card.js";
+import { A, at, ev, I1, I2, item, P, R, roster, score, shuffle, T, verdict } from "./helpers/evaluation-fixtures.js";
 
 // AgentDash: Company Evaluator — P6 "transition of an item you are not assigned to" (rules 6a–6c).
 // Regression cases from the first shadow cards (doc/plans/2026-09-07-company-evaluator-authority-calibration.md):
@@ -70,5 +71,37 @@ describe("P6 authority — transitions by a non-assignee", () => {
     // two E3s on the item: R's unverdicted close from item()'s default actor, and T's reopen
     expect(p6(card, R).detail.rules).toEqual({ transition_not_assigned: 1 });
     expect(e3On(card, I1).map((e) => e.actorAgentId).sort()).toEqual([R, T].sort());
+  });
+
+  it("6a counts only cross-assignee candidates: the assignee's own no-op writes and a human's writes are not counted or cited", () => {
+    const own = score([...roster(), ...item({ id: I1, started: 1, review: 3 }), move(I1, 4, A, null, "in_review"), move(I1, 4.5, A, null, "in_review")]);
+    expect(p6(own, A).detail.insufficient).toEqual({ unknownFrom: 0, ownerUnknown: 0 });
+    expect(p6(own, A).evidenceRefs).toEqual([]);
+    expect(p6(own, A).notes.some((n) => n.includes("no recorded previous status"))).toBe(false);
+    const human = score([...roster(), ...item({ id: I1, started: 1, review: 3 }), ev({ type: "issue.transition", time: at(4), actor: ["user", "local-board"], issueId: I1, payload: { from: null, to: "in_review", reopened: false, fromUnknown: true } })]);
+    for (const actor of human.actors) expect(actor.metrics.P6?.detail.insufficient ?? { unknownFrom: 0, ownerUnknown: 0 }).toEqual({ unknownFrom: 0, ownerUnknown: 0 });
+  });
+
+  it("a recorded previous status is judged normally whatever the emitter's fromUnknown flag says", () => {
+    const card = score([...roster(), ...item({ id: I1, started: 1 }), ev({ type: "issue.transition", time: at(2), actor: ["agent", T], issueId: I1, payload: { from: "in_progress", to: "done", reopened: false, fromUnknown: true } })]);
+    expect(p6(card, T).detail.rules).toEqual({ transition_not_assigned: 1 });
+    expect(p6(card, T).detail.insufficient).toEqual({ unknownFrom: 0, ownerUnknown: 0 });
+  });
+
+  it("determinism: a window where 6a and 6b both fire hashes identically in any event order", () => {
+    const window = [
+      ...roster(),
+      ...item({ id: I1, started: 1, review: 3 }),
+      move(I1, 4, T, null, "in_review"),
+      ev({ type: "issue.created", time: at(0), actor: ["user", "local-board"], issueId: I2 }),
+      move(I2, 1, T, "todo", "in_progress"),
+      ev({ type: "issue.snapshot", time: at(2), issueId: I2, sourceTable: "issues", payload: { status: "in_progress", projectId: P, inheritedProjectId: null, goalId: null, assigneeAgentId: A, assigneeUserId: null, labels: [], titleTokens: ["y"], dodCriteria: 0, createdAt: at(0).toISOString(), startedAt: at(1).toISOString(), completedAt: null, cancelledAt: null } }),
+    ];
+    const a = score(window);
+    expect(p6(a, T).detail.insufficient).toEqual({ unknownFrom: 1, ownerUnknown: 1 });
+    expect(p6(a, T).evidenceRefs).toHaveLength(2);
+    expect(p6(a, T).tiers).toEqual(["T0"]);
+    expect(cardHash(score(shuffle(window)))).toBe(cardHash(a));
+    expect(cardHash(score(shuffle(shuffle(window))))).toBe(cardHash(a));
   });
 });

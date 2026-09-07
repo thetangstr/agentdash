@@ -691,16 +691,11 @@ export function assigneeAt(it: ItemTimeline, time: Date): { agentId: string | nu
  * whoever the item was later found assigned to (P6 rule 6b).
  */
 export function assigneeAtStrict(it: ItemTimeline, time: Date): { agentId: string | null; userId: string | null } | undefined {
+  // Full scans: replay order is exact only to the skew bucket, so a later record may precede an earlier one.
   let a: Assignment | null = null;
-  for (const x of it.assignments) {
-    if (x.time <= time) a = x;
-    else break;
-  }
+  for (const x of it.assignments) if (x.time <= time && (!a || x.time >= a.time)) a = x;
   let s: Snapshot | null = null;
-  for (const x of it.snapshots) {
-    if (x.time <= time) s = x;
-    else break;
-  }
+  for (const x of it.snapshots) if (x.time <= time && (!s || x.time >= s.time)) s = x;
   if (!a && !s) return undefined;
   if (a && (!s || a.time >= s.time)) return { agentId: a.toAgentId, userId: a.toUserId };
   return { agentId: s!.assigneeAgentId, userId: s!.assigneeUserId };
