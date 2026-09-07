@@ -39,6 +39,9 @@ export function BreadcrumbProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (breadcrumbs.length === 0) {
+      // AgentDash: marketing pages (ui/src/marketing) set their own title via
+      // useDocumentMeta; the provider mounts above them and would overwrite it.
+      if (document.querySelector(".mkt-root")) return;
       document.title = "AgentDash";
     } else {
       const parts = [...breadcrumbs].reverse().map((b) => b.label);

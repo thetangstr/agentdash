@@ -5,24 +5,19 @@ import { queryKeys } from "../../lib/queryKeys";
 import { healthApi } from "../../api/health";
 import { MarketingShell } from "../MarketingShell";
 import { Hero } from "../sections/Hero";
-import { LayeredDescent } from "../sections/LayeredDescent";
-import { CapabilitiesGrid } from "../sections/CapabilitiesGrid";
-import { HowItWorks } from "../sections/HowItWorks";
+import { StoryBeats } from "../sections/StoryBeats";
+import { DemoSection } from "../sections/DemoSection";
+import { Capabilities } from "../sections/Capabilities";
+import { HowYouGetIt } from "../sections/HowYouGetIt";
 import { ConsultingBand } from "../sections/ConsultingBand";
 import { FinalCTA } from "../sections/FinalCTA";
-import { SectionContainer } from "../components/SectionContainer";
-import { LogoStrip } from "../components/LogoStrip";
-import { QuoteBlock } from "../components/QuoteBlock";
-
-const PLACEHOLDER_LOGOS = [
-  { name: "Logo 1" },
-  { name: "Logo 2" },
-  { name: "Logo 3" },
-  { name: "Logo 4" },
-  { name: "Logo 5" },
-];
+import { useDocumentMeta } from "../hooks/useDocumentMeta";
 
 export function Landing() {
+  useDocumentMeta(
+    "AgentDash · A Chief of Staff agent that answers to you",
+    "Hire a Chief of Staff agent stewarded by you, direct it from Claude Code or Codex, and let it work with the rest of your agent workforce. Self-hosted and open source.",
+  );
   const [searchParams] = useSearchParams();
   // ?preview=1 skips the logged-in redirect so the marketing landing is
   // viewable locally even in local_trusted mode (where the user is implicitly
@@ -45,21 +40,18 @@ export function Landing() {
   const loggedIn = !isAuthenticatedMode || Boolean(sessionQuery.data);
   if (!previewMode && loggedIn) return <Navigate to="/companies" replace />;
 
+  return <LandingContent />;
+}
+
+/** The page itself, separated so tests can render it without the auth gate. */
+export function LandingContent() {
   return (
     <MarketingShell>
       <Hero />
-      <SectionContainer>
-        <LogoStrip items={PLACEHOLDER_LOGOS} />
-      </SectionContainer>
-      <SectionContainer background="cream-2">
-        <QuoteBlock
-          quote="The first week our agents shipped, we caught up on six months of backlog. By month two, the board stopped asking how we'd staff the new initiative."
-          attribution="— Placeholder: replace with a real operator quote"
-        />
-      </SectionContainer>
-      <LayeredDescent />
-      <CapabilitiesGrid />
-      <HowItWorks />
+      <StoryBeats />
+      <DemoSection />
+      <Capabilities />
+      <HowYouGetIt />
       <ConsultingBand />
       <FinalCTA />
     </MarketingShell>

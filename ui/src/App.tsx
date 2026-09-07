@@ -82,6 +82,7 @@ import { MemberOnboardingPage } from "./pages/MemberOnboarding";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
 import { Landing as MarketingLanding } from "./marketing/pages/Landing";
+import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { useCompany } from "./context/CompanyContext";
@@ -367,6 +368,7 @@ export function App() {
             cream/light surface isn't fighting the dashboard's html.dark theme.
             Landing redirects logged-in users to /companies on its own. */}
         <Route path="/" element={<MarketingLanding />} />
+        <Route path="demo" element={<MarketingDemo />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
         <Route path="assess" element={<AssessPage />} />
@@ -472,7 +474,17 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
-      <ServerUnreachableOverlay />
+      <ProductOnlyOverlay />
     </>
   );
+}
+
+// AgentDash: the public marketing surface does not depend on the API, so a
+// server outage must not blur the homepage with the dashboard's
+// "Connection Lost" overlay. Marketing routes render MarketingShell.
+const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp"]);
+function ProductOnlyOverlay() {
+  const location = useLocation();
+  if (MARKETING_PATHS.has(location.pathname.replace(/\/+$/, "") || "/")) return null;
+  return <ServerUnreachableOverlay />;
 }

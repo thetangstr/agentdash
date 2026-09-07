@@ -45,6 +45,7 @@
     "@paperclipai/adapter-utils": "workspace:*",
     "@paperclipai/shared": "workspace:*",
     "@radix-ui/react-slot": "^1.2.4",
+    "@remotion/player": "4.0.522",
     "@tailwindcss/typography": "^0.5.19",
     "@tanstack/react-query": "^5.90.21",
     "class-variance-authority": "^0.7.1",
@@ -61,6 +62,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.15.0",
     "remark-gfm": "^4.0.1",
+    "remotion": "4.0.522",
     "tailwind-merge": "^3.4.1"
   },
   "devDependencies": {
