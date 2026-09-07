@@ -272,7 +272,7 @@ export function AdapterManager() {
     ]);
   }, [selectedCompany?.name, setBreadcrumbs]);
 
-  const { data: adapters, isLoading } = useQuery({
+  const { data: adapters, isLoading, error } = useQuery({
     queryKey: queryKeys.adapters.all,
     queryFn: () => adaptersApi.list(),
   });
@@ -389,6 +389,22 @@ export function AdapterManager() {
     }));
 
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading adapters...</div>;
+
+  // A failed list must not read as an empty one.
+  //
+  // Every section below derives from `adapters`, and the only guard was
+  // `isLoading` — which goes false the moment the request fails while `data`
+  // stays undefined. The page then stated "No external adapters installed"
+  // and, worse, "No built-in adapters found", which can never legitimately be
+  // true: built-ins ship with the server. Someone could reinstall or
+  // reconfigure off that.
+  if (error)
+    return (
+      <div className="p-4 text-sm text-destructive" role="alert">
+        {error instanceof Error ? error.message : "Could not load adapters."} This is not the same
+        as none being installed — reload to check again.
+      </div>
+    );
 
   const isMutating = installMutation.isPending || removeMutation.isPending || toggleMutation.isPending || overrideMutation.isPending || reloadMutation.isPending || reinstallMutation.isPending;
 
