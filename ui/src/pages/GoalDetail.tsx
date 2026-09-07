@@ -94,13 +94,17 @@ export function GoalDetail() {
   const direction = useCapability(resolvedCompanyId, "direction:set");
   const canEditGoal = direction.allowed && !direction.isLoading;
 
-  const { data: allGoals } = useQuery({
+  // Both of these lists feed an empty-state message, so both need their
+  // failures captured. The `if (error)` guard below covers the single goal, not
+  // these — so a failed list rendered "No sub-goals." or "No linked projects."
+  // as though the answer were known.
+  const { data: allGoals, error: allGoalsError } = useQuery({
     queryKey: queryKeys.goals.list(resolvedCompanyId!),
     queryFn: () => goalsApi.list(resolvedCompanyId!),
     enabled: !!resolvedCompanyId
   });
 
-  const { data: allProjects } = useQuery({
+  const { data: allProjects, error: allProjectsError } = useQuery({
     queryKey: queryKeys.projects.list(resolvedCompanyId!),
     queryFn: () => projectsApi.list(resolvedCompanyId!),
     enabled: !!resolvedCompanyId
@@ -294,7 +298,12 @@ export function GoalDetail() {
               Sub Goal
             </Button>
           </div>
-          {childGoals.length === 0 ? (
+          {allGoalsError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {allGoalsError instanceof Error ? allGoalsError.message : "Could not load goals."}{" "}
+              This is not the same as having no sub-goals — reload to check again.
+            </p>
+          ) : childGoals.length === 0 ? (
             <p className="text-sm text-muted-foreground">No sub-goals.</p>
           ) : (
             <GoalTree goals={childGoals} goalLink={(g) => `/goals/${g.id}`} />
@@ -302,7 +311,14 @@ export function GoalDetail() {
         </TabsContent>
 
         <TabsContent value="projects" className="mt-4">
-          {linkedProjects.length === 0 ? (
+          {allProjectsError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {allProjectsError instanceof Error
+                ? allProjectsError.message
+                : "Could not load projects."}{" "}
+              This is not the same as none being linked — reload to check again.
+            </p>
+          ) : linkedProjects.length === 0 ? (
             <p className="text-sm text-muted-foreground">No linked projects.</p>
           ) : (
             <div className="border border-border">
