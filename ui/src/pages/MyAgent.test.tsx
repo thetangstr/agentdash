@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockStewardshipsApi = vi.hoisted(() => ({
   getMyAgent: vi.fn(),
   getMyInbox: vi.fn(),
+  myFactRequests: vi.fn(),
+  answerFactRequest: vi.fn(),
 }));
 
 const mockHumanChannelsApi = vi.hoisted(() => ({
@@ -100,6 +102,7 @@ describe("MyAgent", () => {
       expiresAt: "2026-07-30T12:00:00.000Z",
     });
     mockHumanChannelsApi.revoke.mockResolvedValue({ binding: { id: "binding-1", revokedAt: "2026-07-30T00:00:00.000Z" } });
+    mockStewardshipsApi.myFactRequests.mockResolvedValue({ factRequests: [] });
     mockIssuesApi.list.mockResolvedValue([]);
     mockActivityApi.list.mockResolvedValue([]);
     mockGovernanceApi.get.mockResolvedValue({
@@ -271,6 +274,77 @@ describe("MyAgent", () => {
     await render();
 
     expect(container.textContent).toContain("Casper is working on 2 things. Nothing needs you.");
+  });
+
+  /**
+   * A fact request blocks the agent just as an approval does — it is a question
+   * only this person can answer. The sentence counted approvals alone, so a
+   * steward with a waiting question was told nothing needed them.
+   */
+  it("counts waiting questions as well as decisions", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockIssuesApi.list.mockResolvedValue([
+      { id: "i-1", identifier: "MK-1", title: "Draft the deck", status: "in_progress" },
+    ]);
+    mockStewardshipsApi.getMyInbox.mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval-1",
+          type: "connector_send",
+          status: "pending",
+          revision: 1,
+          payload: {},
+          createdAt: new Date().toISOString(),
+          decidedAt: null,
+          requestingAgent: { id: "agent-1", name: "Casper", role: "marketing" },
+        },
+      ],
+    });
+    mockStewardshipsApi.myFactRequests.mockResolvedValue({
+      factRequests: [
+        {
+          id: "fact-1",
+          factKey: "q3_headcount",
+          question: "How many people are on the project?",
+          pipelineId: "p-1",
+          runId: "r-1",
+          status: "open",
+        },
+      ],
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("needs you on 2");
+  });
+
+  /** A question on its own still needs the steward, with no approval pending. */
+  it("counts a waiting question when no decision is pending", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.getMyInbox.mockResolvedValue({ items: [] });
+    mockStewardshipsApi.myFactRequests.mockResolvedValue({
+      factRequests: [
+        {
+          id: "fact-1",
+          factKey: "q3_headcount",
+          question: "How many people are on the project?",
+          pipelineId: "p-1",
+          runId: "r-1",
+          status: "open",
+        },
+      ],
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("needs you on 1");
+    expect(container.textContent).not.toContain("Nothing needs you");
   });
 
   it("says nothing needs you rather than rendering an empty decisions panel", async () => {

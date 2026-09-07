@@ -101,6 +101,16 @@ export default function MyAgent() {
     enabled: !!selectedCompanyId && isProfileCompany,
   });
 
+  // Same key as QuestionsForYou, so this shares that request rather than
+  // issuing a second one. Counted unfiltered, exactly as that panel renders
+  // them — a count that disagreed with the list beneath it would be worse than
+  // either number alone. The route returns open rows only.
+  const factRequests = useQuery({
+    queryKey: ["me", "fact-requests", selectedCompanyId ?? ""],
+    queryFn: () => stewardshipsApi.myFactRequests(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isProfileCompany,
+  });
+
   const activity = useQuery({
     queryKey: queryKeys.myAgent.activity(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => activityApi.list(selectedCompanyId!, { agentId: agentId!, limit: 10 }),
@@ -151,6 +161,11 @@ export default function MyAgent() {
   const items = inbox.data?.items ?? [];
   const work = currentWork.data ?? [];
   const events = activity.data ?? [];
+  // Both kinds of blocking count: an approval is a decision to permit an
+  // action, a fact request is a question only this person can answer. To a
+  // steward reading one sentence, both are simply something that needs them.
+  const questionCount = (factRequests.data?.factRequests ?? []).length;
+  const needsCount = items.length + questionCount;
   // getMyAgent returns only the caller's own stewardship, so its userId is the
   // viewer — which is what lets the activity feed say "You" truthfully.
   const viewerUserId = myAgent.data?.stewardship?.userId ?? null;
@@ -175,7 +190,7 @@ export default function MyAgent() {
           My Agent
         </h1>
         <p className="text-xl font-semibold leading-snug text-foreground">
-          {statusSentence(agent.name, work.length, items.length)}
+          {statusSentence(agent.name, work.length, needsCount)}
         </p>
         <p className="text-xs text-muted-foreground">
           {agent.name} · {agent.role} · {agent.status}
