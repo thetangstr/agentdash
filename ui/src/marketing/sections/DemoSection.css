@@ -1,0 +1,13 @@
+.mkt-demo-section__intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: end;
+  margin-bottom: 40px;
+}
+.mkt-demo-section__intro .mkt-display-section { margin-top: 16px; max-width: 16ch; }
+.mkt-demo-section__intro p { color: var(--mkt-ink-soft); margin: 0; max-width: 50ch; font-size: 17px; }
+.mkt-demo-section__more { margin: 24px 0 0; color: var(--mkt-ink-soft); font-size: 15px; }
+@media (max-width: 860px) {
+  .mkt-demo-section__intro { grid-template-columns: 1fr; gap: 16px; margin-bottom: 28px; }
+}

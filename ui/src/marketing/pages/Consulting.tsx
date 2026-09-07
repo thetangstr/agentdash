@@ -2,17 +2,23 @@ import { MarketingShell } from "../MarketingShell";
 import { SectionContainer } from "../components/SectionContainer";
 import { Eyebrow } from "../components/Eyebrow";
 import { ConsultingPhases } from "../sections/ConsultingPhases";
-import { ResearchBriefs } from "../sections/ResearchBriefs";
 import { ReadinessBand } from "../sections/ReadinessBand";
 import { EngagementCards } from "../sections/EngagementCards";
+import { CONTACT_EMAIL, CTA } from "../content/site";
+import { Button } from "../components/Button";
+import { useDocumentMeta } from "../hooks/useDocumentMeta";
 
 export function Consulting() {
+  useDocumentMeta(
+    "AgentDash consulting",
+    "We install stewarded AI workforces inside companies: diagnose, design, deploy, operate.",
+  );
   return (
     <MarketingShell>
       <SectionContainer>
         <Eyebrow>Consulting practice</Eyebrow>
         <h1 className="mkt-display-page" style={{ marginTop: 16, marginBottom: 32, maxWidth: "18ch" }}>
-          We install AI workforces inside enterprises.
+          We install AI workforces inside companies.
         </h1>
         <div style={{ display: "grid", gap: 24, maxWidth: "60ch", color: "var(--mkt-ink-soft)" }}>
           <p className="mkt-body-lg">
@@ -23,19 +29,21 @@ export function Consulting() {
             We run a structured deployment, not a slideware engagement. We sit with
             your team, ship agents into production within the first quarter, and stay
             through the first quarter of operation so the workforce becomes
-            something the team owns — not a project we have to babysit.
+            something the team owns, not a project we have to babysit.
           </p>
         </div>
       </SectionContainer>
       <ConsultingPhases />
-      <ResearchBriefs />
       <ReadinessBand />
       <EngagementCards />
       <SectionContainer>
-        <h2 className="mkt-display-section" style={{ textAlign: "center" }}>Tell us what you're trying to build.</h2>
-        <p style={{ textAlign: "center", marginTop: 24 }}>
-          <a href="mailto:consulting@agentdash.com">consulting@agentdash.com</a>
-        </p>
+        <div style={{ textAlign: "center", display: "grid", gap: 24, justifyItems: "center" }}>
+          <h2 className="mkt-display-section">Tell us what you're trying to build.</h2>
+          <Button href={CTA.walkthrough.href}>{CTA.walkthrough.label}</Button>
+          <p style={{ margin: 0, color: "var(--mkt-ink-soft)" }}>
+            or write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
+          </p>
+        </div>
       </SectionContainer>
     </MarketingShell>
   );
