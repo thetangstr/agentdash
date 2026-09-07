@@ -4,6 +4,24 @@ const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
 
+/**
+ * How long until a deadline, or null once it has passed.
+ *
+ * `timeAgo` only counts backwards, so an approval's `expiresAt` had nowhere to
+ * be rendered and was shown nowhere at all — a decision could lapse with the
+ * steward never having seen a clock. Null rather than a negative duration keeps
+ * the two cases distinct at the call site: "expires in 4h" and "expired" are
+ * different sentences, not the same one with a sign flip.
+ */
+export function timeUntil(date: Date | string): string | null {
+  const seconds = Math.round((new Date(date).getTime() - Date.now()) / 1000);
+  if (seconds <= 0) return null;
+  if (seconds < MINUTE) return "under a minute";
+  if (seconds < HOUR) return `${Math.floor(seconds / MINUTE)}m`;
+  if (seconds < DAY) return `${Math.floor(seconds / HOUR)}h`;
+  return `${Math.floor(seconds / DAY)}d`;
+}
+
 export function timeAgo(date: Date | string): string {
   const now = Date.now();
   const then = new Date(date).getTime();
