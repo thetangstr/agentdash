@@ -548,9 +548,6 @@
             "insufficient": {
               "unknownFrom": 0,
               "ownerUnknown": 0
-            },
-            "authorized": {
-              "verdictClose": 0
             }
           },
           "notes": [
@@ -943,41 +940,41 @@
           "key": "P6",
           "name": "Authority compliance",
           "valueKind": "count",
-          "value": 0,
+          "value": 2,
           "unit": "detected violations",
-          "n": 0,
+          "n": 2,
           "coverage": 1,
           "confidence": "medium",
           "confidenceLabel": "adequate evidence",
           "breakdown": {
             "satisfied": 0,
-            "failed": 0,
+            "failed": 2,
             "undecidable": []
           },
-          "headline": "no violations detected",
+          "headline": "2 violations detected: transition of an unassigned item 2",
           "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e11",
             "e24"
           ],
           "evidenceRefCount": 2,
-          "tiers": [],
+          "tiers": [
+            "T0"
+          ],
           "lowerIsBetter": false,
           "displayOnly": true,
           "detail": {
-            "rules": {},
+            "rules": {
+              "transition_not_assigned": 2
+            },
             "refusalsLogged": true,
             "insufficient": {
               "unknownFrom": 0,
               "ownerUnknown": 0
-            },
-            "authorized": {
-              "verdictClose": 2
             }
           },
           "notes": [
             "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
-            "2 closes by the reviewer after its own passed verdict: the sanctioned review step",
             "coverage 100% from a single source tier"
           ]
         },
@@ -1166,7 +1163,9 @@
             "reason": "shown, never scored"
           }
         ],
-        "flags": [],
+        "flags": [
+          "E3 present"
+        ],
         "guard": {
           "minIncluded": 3,
           "coverageFloor": 0.5,
@@ -1399,9 +1398,6 @@
             "insufficient": {
               "unknownFrom": 0,
               "ownerUnknown": 0
-            },
-            "authorized": {
-              "verdictClose": 0
             }
           },
           "notes": [
@@ -1752,6 +1748,33 @@
       "id": "E3",
       "title": "authority breach",
       "severity": "immediate",
+      "actorAgentId": "00000000-0000-4000-8000-0000000000bb",
+      "routes": [
+        "founder_view",
+        "accountable_owner"
+      ],
+      "key": "E3:issue:00000000-0000-4000-8000-000000000101:e11",
+      "subject": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000101",
+        "identifier": "EVL-01"
+      },
+      "routing": {
+        "accountableUserId": "founder-1",
+        "managerAgentIds": [],
+        "founderView": true
+      },
+      "raisedAt": "2026-08-01T18:00:00.000Z",
+      "evidenceRefs": [
+        "e11"
+      ],
+      "note": "transition of an unassigned item: moved in_review→done on an item assigned to another agent",
+      "markers": []
+    },
+    {
+      "id": "E3",
+      "title": "authority breach",
+      "severity": "immediate",
       "actorAgentId": "00000000-0000-4000-8000-0000000000cc",
       "routes": [
         "founder_view",
@@ -1774,11 +1797,38 @@
       ],
       "note": "refused request: refused POST /api/companies/:companyId/verdicts (NEUTRAL_VALIDATOR_VIOLATION)",
       "markers": []
+    },
+    {
+      "id": "E3",
+      "title": "authority breach",
+      "severity": "immediate",
+      "actorAgentId": "00000000-0000-4000-8000-0000000000bb",
+      "routes": [
+        "founder_view",
+        "accountable_owner"
+      ],
+      "key": "E3:issue:00000000-0000-4000-8000-000000000102:e24",
+      "subject": {
+        "kind": "issue",
+        "id": "00000000-0000-4000-8000-000000000102",
+        "identifier": "EVL-02"
+      },
+      "routing": {
+        "accountableUserId": "founder-1",
+        "managerAgentIds": [],
+        "founderView": true
+      },
+      "raisedAt": "2026-08-02T04:00:00.000Z",
+      "evidenceRefs": [
+        "e24"
+      ],
+      "note": "transition of an unassigned item: moved in_review→done on an item assigned to another agent",
+      "markers": []
     }
   ],
-  "exceptionsTotal": 1,
+  "exceptionsTotal": 3,
   "exceptionCounts": {
-    "E3": 1
+    "E3": 3
   },
   "flags": [
     "E3 present"

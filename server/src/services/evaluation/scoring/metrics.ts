@@ -933,9 +933,8 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
   const t = tally();
   const exceptions: ExceptionRecord[] = [];
   const rules: Record<string, number> = {};
-  /** Moves the rule could not judge (6a/6b) and moves it judged sanctioned (6c): shown, never counted as violations. */
+  /** Moves the rule could not judge (6a/6b): shown with their event ids, never counted as violations. */
   const insufficient = { unknownFrom: [] as string[], ownerUnknown: [] as string[] };
-  const authorized = { verdictClose: [] as string[] };
   const hit = (rule: string, it: ItemTimeline | null, time: Date, ref: string, note: string) => {
     rules[rule] = (rules[rule] ?? 0) + 1;
     t.failed.push(ref);
@@ -971,13 +970,8 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
         continue;
       }
       if (!owner.agentId || owner.agentId === scope.agentId) continue;
-      // Rule 6c: the neutral validator closing in_review→done after its own passed verdict on the item is the sanctioned
-      // step of the verdict workflow (default AGENTS.md), not a breach. Any other verdict, item or move stays a detection.
-      if (tr.from === "in_review" && tr.to === "done" && it.verdicts.some((v) => v.outcome === "passed" && v.reviewerAgentId === scope.agentId && v.time <= tr.time)) {
-        authorized.verdictClose.push(tr.eventId);
-        t.refs.add(tr.eventId);
-        continue;
-      }
+      // The sanctioned review→done close by the verdict writer (rule 6c) and recorded authority grants (6d) are held
+      // for the second milestone's evidence (D-R2, 2026-09-07): every cross-assignee move with evidence stays a detection.
       hit("transition_not_assigned", it, tr.time, tr.eventId, `moved ${tr.from}→${tr.to} on an item assigned to another agent`);
     }
     for (const h of it.handoffs) {
@@ -1013,14 +1007,12 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
         rules,
         refusalsLogged: ctx.tl.sources.authzRefused,
         insufficient: { unknownFrom: insufficient.unknownFrom.length, ownerUnknown: insufficient.ownerUnknown.length },
-        authorized: { verdictClose: authorized.verdictClose.length },
       },
       notes: [
         "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
         ...(ctx.tl.sources.authzRefused ? [] : ["refused requests are not recorded in this window: the detector is blind to them"]),
         ...(insufficient.unknownFrom.length > 0 ? [`${words(insufficient.unknownFrom.length, "status write")} with no recorded previous status: no state change is evidenced, so not judged`] : []),
         ...(insufficient.ownerUnknown.length > 0 ? [`${words(insufficient.ownerUnknown.length, "move")} on an item whose owner at the time is not on record: not judged`] : []),
-        ...(authorized.verdictClose.length > 0 ? [`${words(authorized.verdictClose.length, "close")} by the reviewer after its own passed verdict: the sanctioned review step`] : []),
       ],
     }),
     exceptions,

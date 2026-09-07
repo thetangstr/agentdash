@@ -79,13 +79,12 @@ None is a confirmed authority breach.
 
 ## 3. Rule-change proposal (P6 "transition of an item you are not assigned to")
 
-### 3.1 Implemented on the branch, behind the gate (not merged)
+### 3.1 Implemented (6a/6b) — gate cleared by the founder on 2026-09-07 (D-R1)
 
 | Rule | Change | Why |
 |---|---|---|
 | **6a unknown previous status** | a transition with `from == null` is not judged; counted in `detail.insufficient.unknownFrom`, cited in the metric's refs, one note | the PATCH route records `_previous` only for changed fields; a status write without a previous status evidences no state change (AGE-20, AGE-104) |
 | **6b owner at the time** | owner comes from `assigneeAtStrict` — assignment or snapshot **at or before** the move; none → `detail.insufficient.ownerUnknown`, not judged | `snapshotAt` falls back to the first snapshot even when it is later; a later assignee must not be projected backward (AGE-104) |
-| **6c sanctioned close** | `in_review → done` by an agent that recorded a **passed** verdict on that item at or before the move is `detail.authorized.verdictClose`, not a violation | the verdict workflow's own step; any other verdict, item or move stays a detection |
 
 Formula pins moved with the arithmetic: `FORMULA_VERSION` `m2-score/8`, `METRICS_FORMULA_VERSION`
 `metrics/5` (composites untouched, `composite/6`); the contract fixture was regenerated. Cards
@@ -94,14 +93,22 @@ deployment is the new baseline. Exception keys are stable, so the four dispositi
 pointing at the v1 findings; on a re-scored card the AGE-20 and AGE-104 findings are no longer
 raised, and precision is computed on what is raised.
 
-Regression cases (`server/src/__tests__/evaluation-p6-authority.test.ts`, 7 passing):
-authorized cross-assignee close after own passed verdict (6c); unauthorized `in_progress → done`
-by a non-assignee without verdict; out of scope — verdict on another item, failed verdict, a move
-that is not `in_review → done`; missing evidence — unknown previous status (6a), owner known only
-from a later snapshot (6b) and the same move judged once an assignment precedes it; a reopen
-`done → in_review` by a non-assignee stays a detection while the assignee's own moves never count.
+Regression cases (`server/src/__tests__/evaluation-p6-authority.test.ts`, 6 passing): the
+reviewer's close after its own passed verdict is **still a detection** while 6c is held;
+unauthorized `in_progress → done` by a non-assignee; out of scope — a verdict on another item or a
+failed verdict never changes the judgment; missing evidence — unknown previous status (6a), owner
+known only from a later snapshot (6b) and the same move judged once an assignment precedes it; a
+reopen `done → in_review` by a non-assignee stays a detection while the assignee's own moves never count.
 
-### 3.2 Proposed, not implemented: recorded authority grants (6d)
+### 3.2 Held for the second milestone's evidence (D-R2, decided 2026-09-07): 6c and 6d
+
+**6c sanctioned close (held).** `in_review → done` by an agent that recorded a passed verdict on
+that item at or before the move would be recorded as `authorized.verdictClose`, not a violation —
+the verdict workflow's own step. It was implemented and tested on this branch, then removed under
+D-R2; the test file keeps the case asserting today's behaviour so the carve-out is a deliberate
+future change, not drift. It changes nothing on the live cards (zero verdicts).
+
+**6d recorded authority grants (held, design only).**
 
 The two real moves (AGE-3, AGE-14) were authorized by prose the founder wrote minutes earlier.
 The spec is right that prose neither credits nor penalises; the fix is to give authority a
@@ -121,10 +128,10 @@ MVL items, any status, evidence `comment_with_evidence`, valid for the run (03:3
 standing; AGE-46 → Maya, active 1.0 items, "set status at handoff", evidence `comment_with_evidence`;
 AGE-38 → Priya, the enumerated backlog, `→ done` with `pr_reference`, plus classification.
 
-### 3.3 The gate, and what clears it
+### 3.3 The gate — decided 2026-09-07
 
-The decisions record says P6's approximations are "to be judged on the first shadow cards" and
-that no rule changes before the second milestone's evidence is in. Assessment against that gate:
+Founder decision: **D-R1 yes — 6a/6b clear the gate as defect fixes; D-R2 hold — 6c and 6d wait
+for the second milestone's evidence.** The assessment that led there:
 
 - **6a and 6b are measurement defects, not calibration.** They mint state changes that never
   occurred and attribute ownership from the future — the ledger rule "label historical gaps as
@@ -134,7 +141,9 @@ that no rule changes before the second milestone's evidence is in. Assessment ag
   founder lifts the gate for it (D-R2). It changes nothing on the current cards (zero verdicts).
 - **6d needs a design decision** (D-A1/D-A2) before code; it waits for the gate regardless.
 
-Nothing in §3 is merged. The branch and its tests are the reviewable artefact.
+6a/6b land through the normal lane (independent review, CI green, squash merge). The instance
+running the shadow evaluator picks the change up only when the founder orders a restart; the
+first snapshot after that is the `m2-score/8` baseline.
 
 ## 4. Draft evaluation contracts (spec §4, `evaluation_contract/v1`)
 
@@ -272,8 +281,8 @@ Authority
   need a handoff record each time?
 
 Rule change (branch `evaluator/m5-calibration`, not merged)
-- **D-R1** Clear the gate for 6a/6b as defect fixes now? (Recommendation: yes.)
-- **D-R2** Hold 6c and 6d for the second milestone's evidence? (Recommendation: yes.)
+- **D-R1** Clear the gate for 6a/6b as defect fixes now? — **decided yes, 2026-09-07.**
+- **D-R2** Hold 6c and 6d for the second milestone's evidence? — **decided hold, 2026-09-07.**
 
 Contracts (§4)
 - **D-C1** Personal founder identity on the instance for `human_attest` checks.
@@ -290,12 +299,12 @@ Review items AGE-106–110 remain open until the founder disposes of them.
 
 ## 7. Validation and what is on the branch
 
-- `server/src/services/evaluation/scoring/metrics.ts` (P6 rules 6a–6c, `metrics/5`),
+- `server/src/services/evaluation/scoring/metrics.ts` (P6 rules 6a/6b, `metrics/5`),
   `scoring/timeline.ts` (`assigneeAtStrict`), `scoring/card.ts` (`m2-score/8`), regenerated
   `ui/src/pages/evaluation/__fixtures__/scored-card.json`, version pins in three tests, new
   `server/src/__tests__/evaluation-p6-authority.test.ts`, this plan.
 - Verification on the branch (2026-09-07): `pnpm -r typecheck` clean for every package; the twelve
-  `evaluation-*`/`evaluator-*` server suites pass (157 tests, including the 7 new P6 cases); the four
+  `evaluation-*`/`evaluator-*` server suites pass (156 tests, including the 6 P6 cases); the four
   UI evaluation suites pass against the regenerated fixture (14 tests); the agents-md drift check and
   the forbidden-token scan pass. The rule on `main` is unchanged.
 - Small follow-ups needing no decision: expose the shadow report's measurements as `shadow.*`
