@@ -186,7 +186,15 @@ export function IssueDocumentsSection({
     queryFn: () => issuesApi.listDocuments(issue.id),
   });
 
-  const { data: activeDocumentRevisions, isFetching: isFetchingDocumentRevisions } = useQuery({
+  // `isFetching` alone cannot gate the empty state: it goes false the moment
+  // the request fails while `data` stays undefined, so the menu fell through to
+  // "No revisions yet" and told someone a document had no history when it may
+  // well have had one they could restore.
+  const {
+    data: activeDocumentRevisions,
+    isFetching: isFetchingDocumentRevisions,
+    error: documentRevisionsError,
+  } = useQuery({
     queryKey: revisionMenuOpenKey
       ? queryKeys.issues.documentRevisions(issue.id, revisionMenuOpenKey)
       : ["issues", "document-revisions", issue.id, "__idle__"],
@@ -855,6 +863,10 @@ export function IssueDocumentsSection({
                         <DropdownMenuLabel>Revision history</DropdownMenuLabel>
                         {revisionMenuOpenKey === doc.key && isFetchingDocumentRevisions && rawRevisionHistory.length === 0 ? (
                           <DropdownMenuItem disabled>Loading revisions...</DropdownMenuItem>
+                        ) : documentRevisionsError && rawRevisionHistory.length === 0 ? (
+                          <DropdownMenuItem disabled>
+                            Could not load revisions — reload to check again
+                          </DropdownMenuItem>
                         ) : revisionHistory.length > 0 ? (
                           <DropdownMenuRadioGroup value={selectedRevisionId ?? currentRevision.id ?? ""}>
                             {revisionHistory.map((revision) => {
