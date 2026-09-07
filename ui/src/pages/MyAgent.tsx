@@ -163,11 +163,20 @@ export default function MyAgent() {
 
   return (
     <div className="flex flex-col gap-4 p-6">
+      {/* The h1 names the page, not the status.
+       *
+       * The status sentence is the loudest thing here, but loudness is the
+       * stylesheet's job — making it the h1 left "My Agent" as a styled <p>,
+       * so the page had no heading naming it. That broke heading navigation
+       * and made this state inconsistent with the four guard states above,
+       * which all render <h1>My Agent</h1>. */}
       <header className="flex flex-col gap-1">
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">My Agent</p>
-        <h1 className="text-xl font-semibold leading-snug">
-          {statusSentence(agent.name, work.length, items.length)}
+        <h1 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          My Agent
         </h1>
+        <p className="text-xl font-semibold leading-snug text-foreground">
+          {statusSentence(agent.name, work.length, items.length)}
+        </p>
         <p className="text-xs text-muted-foreground">
           {agent.name} · {agent.role} · {agent.status}
         </p>

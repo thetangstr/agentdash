@@ -234,6 +234,26 @@ describe("MyAgent", () => {
   });
 
   /**
+   * Guards the page's heading, which an e2e test also relies on. The status
+   * sentence is the loudest element, but making it the h1 left the page with no
+   * heading naming it — breaking heading navigation and diverging from the four
+   * guard states, which all render <h1>My Agent</h1>. Prominence belongs to the
+   * stylesheet.
+   */
+  it("names the page in its heading, whatever the status sentence says", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+
+    await render();
+
+    const headings = Array.from(container.querySelectorAll("h1")).map((h) => h.textContent?.trim());
+    expect(headings).toContain("My Agent");
+    expect(headings.some((text) => text?.includes("Nothing needs you"))).toBe(false);
+  });
+
+  /**
    * The lead. A steward should be able to answer "do I need to do anything?"
    * from one sentence, before reading any panel.
    */
