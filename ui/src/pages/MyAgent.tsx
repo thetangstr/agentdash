@@ -33,14 +33,28 @@ import { timeAgo } from "../lib/timeAgo";
  * what an agent may do should be deliberate and found on purpose.
  */
 
-/** One sentence answering "do I need to do anything?" before any panel loads. */
-function statusSentence(name: string, workCount: number, needsCount: number): string {
-  const doing =
-    workCount === 0
+/**
+ * One sentence answering "do I need to do anything?" before any panel loads.
+ *
+ * `known` is not decoration. Every one of these counts came from
+ * `query.data?.x ?? []`, which reads a failed request as an empty one — so with
+ * the inbox and fact requests both returning 500 this sentence said "Nothing
+ * needs you" while knowing nothing at all. An all-clear a steward cannot trust
+ * is worse than no sentence, because they will stop reading the page.
+ */
+function statusSentence(
+  name: string,
+  work: { count: number; known: boolean },
+  needs: { count: number; known: boolean },
+): string {
+  const doing = !work.known
+    ? `${name} is here, but its work could not be loaded`
+    : work.count === 0
       ? `${name} has nothing assigned`
-      : `${name} is working on ${workCount} thing${workCount === 1 ? "" : "s"}`;
-  if (needsCount === 0) return `${doing}. Nothing needs you.`;
-  return `${doing} and needs you on ${needsCount}.`;
+      : `${name} is working on ${work.count} thing${work.count === 1 ? "" : "s"}`;
+  if (!needs.known) return `${doing}. Whether anything needs you could not be checked.`;
+  if (needs.count === 0) return `${doing}. Nothing needs you.`;
+  return `${doing} and needs you on ${needs.count}.`;
 }
 
 function Fold({
@@ -166,6 +180,10 @@ export default function MyAgent() {
   // steward reading one sentence, both are simply something that needs them.
   const questionCount = (factRequests.data?.factRequests ?? []).length;
   const needsCount = items.length + questionCount;
+  // Either failure makes the total unknowable, so neither may be reported as
+  // zero. `myAgent` has its own error branch above; these did not.
+  const needsKnown = !inbox.error && !factRequests.error;
+  const workKnown = !currentWork.error;
   // getMyAgent returns only the caller's own stewardship, so its userId is the
   // viewer — which is what lets the activity feed say "You" truthfully.
   const viewerUserId = myAgent.data?.stewardship?.userId ?? null;
@@ -190,11 +208,23 @@ export default function MyAgent() {
           My Agent
         </h1>
         <p className="text-xl font-semibold leading-snug text-foreground">
-          {statusSentence(agent.name, work.length, needsCount)}
+          {statusSentence(
+            agent.name,
+            { count: work.length, known: workKnown },
+            { count: needsCount, known: needsKnown },
+          )}
         </p>
         <p className="text-xs text-muted-foreground">
           {agent.name} · {agent.role} · {agent.status}
         </p>
+        {needsKnown ? null : (
+          <p className="text-xs text-destructive" role="alert">
+            {(inbox.error instanceof Error ? inbox.error.message : null) ??
+              (factRequests.error instanceof Error ? factRequests.error.message : null) ??
+              "Could not load what is waiting on you."}{" "}
+            Reload to try again.
+          </p>
+        )}
       </header>
 
       <DecisionsNeedingYou

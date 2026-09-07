@@ -281,6 +281,76 @@ describe("MyAgent", () => {
    * only this person can answer. The sentence counted approvals alone, so a
    * steward with a waiting question was told nothing needed them.
    */
+  /**
+   * The defect this suite never caught, because `myFactRequests` was unmocked
+   * and every read was `query.data?.x ?? []`: with both requests failing, the
+   * page reported a calm all-clear. An untrustworthy all-clear is worse than
+   * no sentence, because a steward who is misled once stops reading the page.
+   */
+  it("does not claim nothing needs you when it could not find out", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.getMyInbox.mockRejectedValue(new Error("inbox unavailable"));
+    mockStewardshipsApi.myFactRequests.mockRejectedValue(new Error("questions unavailable"));
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Nothing needs you");
+    expect(text).toContain("Whether anything needs you could not be checked");
+    // And says why, rather than leaving the reader to guess.
+    expect(text).toMatch(/inbox unavailable|questions unavailable/);
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
+  /** One failing half is enough to make the total unknowable. */
+  it("treats a single failed source as unknown, not as zero", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.getMyInbox.mockResolvedValue({ items: [] });
+    mockStewardshipsApi.myFactRequests.mockRejectedValue(new Error("questions unavailable"));
+
+    await render();
+
+    expect(container.textContent).not.toContain("Nothing needs you");
+    expect(container.textContent).toContain("could not be checked");
+  });
+
+  /**
+   * The other half of the same fix, in the panel itself: it used to render
+   * "Nothing is waiting on you" for a failed query, and now hides entirely when
+   * genuinely empty because the opening sentence already says so once.
+   */
+  it("never says nothing is waiting when the questions failed to load", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.myFactRequests.mockRejectedValue(new Error("questions unavailable"));
+
+    await render();
+
+    expect(container.textContent).not.toContain("Nothing is waiting on you");
+    expect(container.textContent).toContain("not the same as nothing waiting");
+  });
+
+  it("hides the questions panel when there are genuinely none", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockStewardshipsApi.myFactRequests.mockResolvedValue({ factRequests: [] });
+
+    await render();
+
+    expect(container.textContent).not.toContain("Questions for you");
+    expect(container.textContent).toContain("Nothing needs you.");
+  });
+
   it("counts waiting questions as well as decisions", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
