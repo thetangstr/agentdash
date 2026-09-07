@@ -1,5 +1,5 @@
 {
-  "formulaVersion": "m2-score/7",
+  "formulaVersion": "m2-score/8",
   "milestoneRef": {
     "kind": "project",
     "id": "00000000-0000-4000-8000-0000000000a1"
@@ -69,7 +69,7 @@
         ]
       },
       "headline": "insufficient evidence — satisfied 0 of 2 done; 2 undecidable (no acceptance criteria declared — contract derived)",
-      "formulaVersion": "metrics/4",
+      "formulaVersion": "metrics/5",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [],
@@ -97,7 +97,7 @@
         "undecidable": []
       },
       "headline": "insufficient evidence — no target date on the milestone or its contract",
-      "formulaVersion": "metrics/4",
+      "formulaVersion": "metrics/5",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [],
@@ -125,7 +125,7 @@
         "undecidable": []
       },
       "headline": "0 consequences across 2 delivered items: 0 reopened, 0 cited as blockers, 0 reverted",
-      "formulaVersion": "metrics/4",
+      "formulaVersion": "metrics/5",
       "evidenceRefs": [],
       "evidenceRefCount": 0,
       "tiers": [
@@ -171,7 +171,7 @@
         ]
       },
       "headline": "insufficient evidence — goal Ship is active — status only",
-      "formulaVersion": "metrics/4",
+      "formulaVersion": "metrics/5",
       "evidenceRefs": [
         "e5"
       ],
@@ -213,7 +213,7 @@
         "undecidable": []
       },
       "headline": "fully evidenced 2 of 2 done",
-      "formulaVersion": "metrics/4",
+      "formulaVersion": "metrics/5",
       "evidenceRefs": [
         "e12",
         "e14",
@@ -356,7 +356,7 @@
             "undecidable": []
           },
           "headline": "1 of 2 items reached review or done with no human intervention; 1 intervention in all",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e33"
           ],
@@ -395,7 +395,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -432,7 +432,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -468,7 +468,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no handoffs by this agent",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -498,7 +498,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -536,7 +536,7 @@
             "undecidable": []
           },
           "headline": "no violations detected",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -544,7 +544,11 @@
           "displayOnly": true,
           "detail": {
             "rules": {},
-            "refusalsLogged": true
+            "refusalsLogged": true,
+            "insufficient": {
+              "unknownFrom": 0,
+              "ownerUnknown": 0
+            }
           },
           "notes": [
             "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
@@ -567,7 +571,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -629,7 +633,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -665,7 +669,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -773,7 +777,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no agent-owned items reached review or done",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -805,7 +809,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -837,7 +841,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -873,7 +877,7 @@
             "undecidable": []
           },
           "headline": "4 of 4 handoffs well-formed",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e12",
             "e15",
@@ -910,7 +914,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -948,7 +952,7 @@
             "undecidable": []
           },
           "headline": "2 violations detected: transition of an unassigned item 2",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e11",
             "e24"
@@ -963,7 +967,11 @@
             "rules": {
               "transition_not_assigned": 2
             },
-            "refusalsLogged": true
+            "refusalsLogged": true,
+            "insufficient": {
+              "unknownFrom": 0,
+              "ownerUnknown": 0
+            }
           },
           "notes": [
             "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
@@ -986,7 +994,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -1048,7 +1056,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1084,7 +1092,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1194,7 +1202,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no agent-owned items reached review or done",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1226,7 +1234,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no escalations raised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1263,7 +1271,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no checkable claims: prose is neither credited nor penalised",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1299,7 +1307,7 @@
             "undecidable": []
           },
           "headline": "2 of 2 handoffs well-formed",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e17",
             "e30"
@@ -1334,7 +1342,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no failed, timed-out or cancelled runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1372,7 +1380,7 @@
             "undecidable": []
           },
           "headline": "1 violation detected: refused request 1",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e32"
           ],
@@ -1386,7 +1394,11 @@
             "rules": {
               "authz_refused": 1
             },
-            "refusalsLogged": true
+            "refusalsLogged": true,
+            "insufficient": {
+              "unknownFrom": 0,
+              "ownerUnknown": 0
+            }
           },
           "notes": [
             "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
@@ -1409,7 +1421,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e19",
             "e20",
@@ -1471,7 +1483,7 @@
             "undecidable": []
           },
           "headline": "insufficient evidence — no runs",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1507,7 +1519,7 @@
             "undecidable": []
           },
           "headline": "0 duplicates and 0 rework events across 2 delivered items",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1617,7 +1629,7 @@
             "undecidable": []
           },
           "headline": "no pending questions",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [],
@@ -1649,7 +1661,7 @@
             "undecidable": []
           },
           "headline": "0 zero-turn hangs, 0 recovery budgets exhausted",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [],
           "evidenceRefCount": 0,
           "tiers": [
@@ -1681,7 +1693,7 @@
             "undecidable": []
           },
           "headline": "median 8 h created→done over 2 items (p90 8 h); size known for 0 of 2",
-          "formulaVersion": "metrics/4",
+          "formulaVersion": "metrics/5",
           "evidenceRefs": [
             "e19",
             "e20",

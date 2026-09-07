@@ -16,7 +16,7 @@ import type { ResolvedContract } from "./contract.js";
 import { gatesPass, type CriterionDisposition, type ItemEvidence } from "./evidence.js";
 import { INDEPENDENCE_REASON_WORDS, routeFor } from "./independence.js";
 import {
-  assigneeAt,
+  assigneeAt, assigneeAtStrict,
   createdAt,
   doneAt,
   firstInReviewAt,
@@ -48,7 +48,7 @@ import type { ExceptionRecord, MetricBreakdown, MetricResult, UndecidableReason 
  * rule raised. Nothing is imputed; no volume is ever rewarded (rule 1).
  */
 
-export const METRICS_FORMULA_VERSION = "metrics/4";
+export const METRICS_FORMULA_VERSION = "metrics/5";
 const MAX_REFS = 200;
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -933,6 +933,8 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
   const t = tally();
   const exceptions: ExceptionRecord[] = [];
   const rules: Record<string, number> = {};
+  /** Moves the rule could not judge (6a/6b): shown with their event ids, never counted as violations. */
+  const insufficient = { unknownFrom: [] as string[], ownerUnknown: [] as string[] };
   const hit = (rule: string, it: ItemTimeline | null, time: Date, ref: string, note: string) => {
     rules[rule] = (rules[rule] ?? 0) + 1;
     t.failed.push(ref);
@@ -953,8 +955,27 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
     }
     for (const tr of it.transitions) {
       if (tr.actorType !== "agent" || tr.actorId !== scope.agentId) continue;
-      const owner = assigneeAt(it, new Date(tr.time.getTime() - 1)).agentId;
-      if (owner && owner !== scope.agentId) hit("transition_not_assigned", it, tr.time, tr.eventId, `moved ${tr.from ?? "?"}→${tr.to} on an item assigned to another agent`);
+      // Rule 6b: the owner must come from a record at or before the move; a later snapshot says nothing about then.
+      const owner = assigneeAtStrict(it, new Date(tr.time.getTime() - 1));
+      // An agent's own or an unassigned item is never a candidate — whatever it wrote there is not this rule's business.
+      if (owner && (!owner.agentId || owner.agentId === scope.agentId)) continue;
+      // Rule 6a: a status write whose previous status is unknown recorded no state change (the PATCH route writes
+      // `_previous` only for the fields that changed) — insufficient evidence of a transition, never a violation.
+      if (tr.from == null) {
+        insufficient.unknownFrom.push(tr.eventId);
+        t.refs.add(tr.eventId);
+        t.tiers.add("T0");
+        continue;
+      }
+      if (owner === undefined) {
+        insufficient.ownerUnknown.push(tr.eventId);
+        t.refs.add(tr.eventId);
+        t.tiers.add("T0");
+        continue;
+      }
+      // The sanctioned review→done close by the verdict writer (rule 6c) and recorded authority grants (6d) are held
+      // for the second milestone's evidence (D-R2, 2026-09-07): every cross-assignee move with evidence stays a detection.
+      hit("transition_not_assigned", it, tr.time, tr.eventId, `moved ${tr.from}→${tr.to} on an item assigned to another agent`);
     }
     for (const h of it.handoffs) {
       if (h.type !== "tpm_merge_report" || h.actorType !== "agent" || h.actorId !== scope.agentId || str(h.payload, "merge_result") !== "shipped") continue;
@@ -985,10 +1006,16 @@ export function p6Authority(ctx: ScoringContext, scope: ActorScope): MetricOutpu
       // the refusal detector is blind until the control plane records refusals: say so through the tier
       cap: ctx.tl.sources.authzRefused ? undefined : "low",
       headline: n === 0 ? "no violations detected" : `${words(n, "violation")} detected: ${Object.entries(rules).sort().map(([k, v]) => `${P6_RULE_WORDS[k] ?? k} ${v}`).join(", ")}`,
-      detail: { rules, refusalsLogged: ctx.tl.sources.authzRefused },
+      detail: {
+        rules,
+        refusalsLogged: ctx.tl.sources.authzRefused,
+        insufficient: { unknownFrom: insufficient.unknownFrom.length, ownerUnknown: insufficient.ownerUnknown.length },
+      },
       notes: [
         "a count, not a ratio: refused actions leave a record only where the control plane records refusals",
         ...(ctx.tl.sources.authzRefused ? [] : ["refused requests are not recorded in this window: the detector is blind to them"]),
+        ...(insufficient.unknownFrom.length > 0 ? [`${words(insufficient.unknownFrom.length, "status write")} with no recorded previous status: no state change is evidenced, so not judged`] : []),
+        ...(insufficient.ownerUnknown.length > 0 ? [`${words(insufficient.ownerUnknown.length, "move")} on an item whose owner at the time is not on record: not judged`] : []),
       ],
     }),
     exceptions,
