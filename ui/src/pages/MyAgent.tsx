@@ -1,20 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { activityApi } from "../api/activity";
-import { bridgeApi } from "../api/bridge";
 import { agentGovernanceApi } from "../api/agent-governance";
 import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
 import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
-import { ConnectYourMachine } from "../components/agent/ConnectYourMachine";
+import { ConnectInClaudeOrCodex } from "../components/agent/ConnectInClaudeOrCodex";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
-import { MyChannels } from "../components/agent/MyChannels";
-import { HubspotConnectionPanel } from "../components/agent/HubspotConnectionPanel";
 import { useCompany } from "../context/CompanyContext";
 import { describeActivity } from "../lib/agent-activity-copy";
+import { describeAuthority } from "../lib/agent-authority-copy";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
 
@@ -32,6 +30,16 @@ import { timeAgo } from "../lib/timeAgo";
  * competing with a page used every day. Governance is folded because changing
  * what an agent may do should be deliberate and found on purpose.
  */
+
+/** `chief_of_staff` is a database value, not a job title a person reads. */
+function humanRole(role: string | null | undefined): string {
+  if (!role) return "no role set";
+  return role
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 /**
  * One sentence answering "do I need to do anything?" before any panel loads.
@@ -105,14 +113,6 @@ export default function MyAgent() {
     queryKey: queryKeys.myAgent.currentWork(selectedCompanyId ?? "", agentId ?? ""),
     queryFn: () => issuesApi.list(selectedCompanyId!, { assigneeAgentId: agentId! }),
     enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
-  });
-
-  // Same query key as ConnectYourMachine, so React Query serves both from one
-  // request rather than asking twice.
-  const endpoints = useQuery({
-    queryKey: ["bridge", "me", "endpoints", selectedCompanyId ?? ""],
-    queryFn: () => bridgeApi.listMyEndpoints(selectedCompanyId!),
-    enabled: !!selectedCompanyId && isProfileCompany,
   });
 
   // Same key as QuestionsForYou, so this shares that request rather than
@@ -190,9 +190,7 @@ export default function MyAgent() {
   // `enrolledAt` is null until an enrolment is approved, so a pending request
   // is deliberately not "connected" — the fold would otherwise claim a machine
   // could reach you before it can.
-  const machineConnected = (endpoints.data?.endpoints ?? []).some(
-    (endpoint) => endpoint.enrolledAt !== null,
-  );
+  const authorityLines = describeAuthority(governance.data?.policy?.effectivePolicy);
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -215,7 +213,7 @@ export default function MyAgent() {
           )}
         </p>
         <p className="text-xs text-muted-foreground">
-          {agent.name} · {agent.role} · {agent.status}
+          {agent.name} · {humanRole(agent.role)} · {agent.status}
         </p>
         {needsKnown ? null : (
           <p className="text-xs text-destructive" role="alert">
@@ -239,6 +237,15 @@ export default function MyAgent() {
           as its own component because its no-dismiss, no-pre-filled-draft rules
           are deliberate, but placed here so both kinds of blocking sit together. */}
       <QuestionsForYou companyId={selectedCompanyId!} agentName={agent.name} />
+
+      {/* Connecting is the point of this page for a first-time steward, so it
+          is a visible section rather than a disclosure — and it lives here
+          rather than on a page of its own. */}
+      <ConnectInClaudeOrCodex
+        companyId={selectedCompanyId!}
+        agentName={agent.name}
+        origin={window.location.origin}
+      />
 
       <section aria-labelledby="my-agent-work-heading" className="rounded-lg border">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
@@ -311,27 +318,36 @@ export default function MyAgent() {
         )}
       </section>
 
-      <Fold
-        summary={
-          machineConnected
-            ? `This machine is connected — ${agent.name} can reach you here`
-            : `Connect ${agent.name} to you — this machine, your harness, and messages`
-        }
-        tone={machineConnected ? "done" : "plain"}
-      >
-        <ConnectYourHarness
-          agentId={agent.id}
-          agentName={agent.name}
-          companyId={selectedCompanyId!}
-        />
-        <ConnectYourMachine companyId={selectedCompanyId!} agentName={agent.name} />
-        {/* Channels hang off the agent, so they only make sense once one is
-            assigned — and the unassigned state deliberately offers no controls. */}
-        {agentId && selectedCompanyId && <MyChannels companyId={selectedCompanyId} />}
-        {agentId && selectedCompanyId && <HubspotConnectionPanel companyId={selectedCompanyId} />}
-      </Fold>
+      {/* What the agent may do, in sentences. The mandate file and the request
+          editor are the instruments for changing it; this is the answer to
+          "what is it allowed to do", which is what a steward actually asks. */}
+      <section aria-labelledby="my-agent-authority-heading" className="rounded-lg border">
+        <div className="border-b px-4 py-2.5">
+          <h2 id="my-agent-authority-heading" className="text-sm font-semibold">
+            What {agent.name} may do
+          </h2>
+        </div>
+        {governance.error ? (
+          <p className="px-4 py-3 text-xs text-destructive" role="alert">
+            {governance.error instanceof Error
+              ? governance.error.message
+              : "Could not load what this agent is allowed to do."}{" "}
+            This is not the same as it having no limits.
+          </p>
+        ) : authorityLines.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            {governance.isLoading ? "Loading…" : "No limits have been recorded yet."}
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1.5 px-4 py-3 text-sm text-muted-foreground">
+            {authorityLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-      <Fold summary={`How ${agent.name} works — what it may do without asking`}>
+      <Fold summary={`Change what ${agent.name} may do, or edit its mandate`}>
         {governance.data ? (
           // On this page the viewer is, by construction, the agent's own
           // steward (getMyAgent returns only the caller's stewarded agent), so
@@ -343,14 +359,19 @@ export default function MyAgent() {
             policy={governance.data.policy}
             canEdit={!!myAgent.data?.stewardship}
           />
-        ) : governance.error ? (
-          <p className="text-sm text-destructive" role="alert">
-            {governance.error instanceof Error
-              ? governance.error.message
-              : "Failed to load authority"}
-          </p>
         ) : null}
         <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
+      </Fold>
+
+      {/* Running the agent's own work on a machine is a different job from
+          reading its inbox, and it is the technical one. Folded, and named for
+          what it is. */}
+      <Fold summary="Run this agent's work on a machine (for whoever operates it)">
+        <ConnectYourHarness
+          agentId={agent.id}
+          agentName={agent.name}
+          companyId={selectedCompanyId!}
+        />
       </Fold>
     </div>
   );

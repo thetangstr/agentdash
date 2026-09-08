@@ -89,7 +89,6 @@ import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
-import ConnectYourMachineGuide from "./pages/ConnectYourMachineGuide";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
@@ -178,7 +177,10 @@ function boardRoutes() {
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
-      <Route path="my-agent/connect-machine" element={<ConnectYourMachineGuide />} />
+      {/* The guide is now a section on My Agent itself. The deep link is kept
+          so existing bookmarks and the older release notes still land somewhere
+          useful, but there is no second copy of the content to drift. */}
+      <Route path="my-agent/connect-machine" element={<Navigate to="../my-agent" replace />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/company" element={<CompanyInbox />} />

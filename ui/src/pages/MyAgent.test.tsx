@@ -514,12 +514,13 @@ describe("MyAgent", () => {
   });
 
   /**
-   * The redesign IS the ordering, so it needs a guard. Previously four setup
-   * forms sat above every piece of live information and the decisions panel was
-   * eighth. A future edit that reorders the JSX would otherwise regress this
-   * silently, since every individual panel would still render.
+   * The ordering IS the design. Anything urgent comes first — and renders
+   * nothing when nothing is waiting, which makes connecting the first thing a
+   * steward sees on a quiet page. Connecting is a visible section now, not a
+   * disclosure: folding it hid the only route to a working connection behind a
+   * click nobody had a reason to make.
    */
-  it("puts what needs you above setup and governance", async () => {
+  it("puts what needs you first, then connecting, then the live sections", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
       agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
@@ -543,17 +544,18 @@ describe("MyAgent", () => {
 
     const text = container.textContent ?? "";
     const needs = text.indexOf("Needs you");
+    const connect = text.indexOf("Talk to Casper from Claude Code or Codex");
     const doing = text.indexOf("What Casper is doing");
-    const happened = text.indexOf("What just happened");
-    const governance = text.indexOf("How Casper works");
+    const may = text.indexOf("What Casper may do");
 
     expect(needs).toBeGreaterThan(-1);
-    expect(needs).toBeLessThan(doing);
-    expect(doing).toBeLessThan(happened);
-    expect(happened).toBeLessThan(governance);
+    expect(connect).toBeGreaterThan(-1);
+    expect(needs).toBeLessThan(connect);
+    expect(connect).toBeLessThan(doing);
+    expect(doing).toBeLessThan(may);
   });
 
-  it("keeps setup and governance behind a fold rather than in the flow", async () => {
+  it("folds the editing surfaces but never the connection itself", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
       agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
@@ -564,131 +566,36 @@ describe("MyAgent", () => {
     const summaries = Array.from(container.querySelectorAll("details > summary")).map(
       (node) => node.textContent ?? "",
     );
-    expect(summaries.some((text) => text.includes("How Casper works"))).toBe(true);
-    expect(summaries.some((text) => /Connect|connected/.test(text))).toBe(true);
+    expect(summaries.some((t) => /Change what Casper may do/.test(t))).toBe(true);
+    expect(summaries.some((t) => /Run this agent's work on a machine/.test(t))).toBe(true);
+    expect(summaries.some((t) => /Claude Code or Codex/.test(t))).toBe(false);
+    expect(container.querySelector('[aria-labelledby="connect-heading"]')).not.toBeNull();
   });
 
-  it("offers a telegram pairing link and never mints one until asked", async () => {
+  /** The dead integrations are gone: none is configured on any instance. */
+  it("offers no telegram, whatsapp, teams or hubspot connection", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
     });
 
     await render();
 
-    expect(container.textContent).toContain("Telegram");
-    // Minting spends the user's one outstanding challenge and invalidates any
-    // link they already opened. It must be an explicit act, never a page load.
-    expect(mockHumanChannelsApi.startPairing).not.toHaveBeenCalled();
-
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    );
-    expect(connect, "no Connect Telegram control was rendered").toBeTruthy();
-
-    await act(async () => {
-      connect!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    for (let i = 0; i < 10; i += 1) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
-
-    expect(mockHumanChannelsApi.startPairing).toHaveBeenCalledWith("company-1", "telegram");
-    const link = Array.from(container.querySelectorAll("a")).find((anchor) =>
-      anchor.getAttribute("href")?.startsWith("https://t.me/"),
-    );
-    expect(link, "the minted deep link was not shown to the user").toBeTruthy();
+    expect(container.textContent ?? "").not.toMatch(/Telegram|WhatsApp|Microsoft Teams|HubSpot/i);
   });
 
-  it("shows an already-connected channel instead of offering to pair again", async () => {
+
+  /** A database value is not a job title. */
+  it("shows the role as words, not as an enum", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHumanChannelsApi.listMine.mockResolvedValue({
-      bindings: [
-        {
-          id: "binding-1",
-          provider: "telegram",
-          externalUserId: "1",
-          verifiedAt: "2026-07-29T00:00:00.000Z",
-          revokedAt: null,
-        },
-      ],
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "chief_of_staff", status: "idle" },
     });
 
     await render();
 
-    expect(container.textContent).toContain("Connected");
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    );
-    expect(connect, "offered to pair a channel that is already connected").toBeFalsy();
+    expect(container.textContent).toContain("Chief Of Staff");
+    expect(container.textContent).not.toContain("chief_of_staff");
   });
 
-  it("surfaces a pairing refusal instead of failing silently", async () => {
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHumanChannelsApi.startPairing.mockRejectedValue(
-      new Error("Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset"),
-    );
-
-    await render();
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    )!;
-    await act(async () => {
-      connect.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    for (let i = 0; i < 10; i += 1) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
-
-    // The owner ceiling and the missing-config case both surface here. A button
-    // that quietly does nothing reads as a broken page.
-    expect(container.textContent).toContain("TELEGRAM_BOT_USERNAME");
-  });
-
-  it("states that HubSpot writes attribute to the app, not the person", async () => {
-    // The owner accepted this tradeoff; accepting it is not hiding it. Someone
-    // pasting a key deserves to know what their name will not be attached to.
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-
-    await render();
-
-    expect(container.textContent).toContain("attributed to the app, not to you");
-    // And that a write is never unilateral.
-    expect(container.textContent).toContain("cannot write on its own");
-  });
-
-  it("never renders the stored HubSpot token", async () => {
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHubspotApi.get.mockResolvedValue({
-      connection: {
-        id: "conn-1",
-        hubId: "12345",
-        scopes: ["crm.objects.contacts.read"],
-        status: "active",
-        createdAt: "2026-07-30T00:00:00.000Z",
-        updatedAt: "2026-07-30T00:00:00.000Z",
-      },
-    });
-
-    await render();
-
-    expect(container.textContent).toContain("12345");
-    expect(container.textContent).not.toContain("pat-");
-  });
 });
