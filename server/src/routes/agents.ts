@@ -91,6 +91,14 @@ import {
   refreshAdapterModels,
   requireServerAdapter,
 } from "../adapters/index.js";
+import { resolveAgentRuntimeModelSync } from "../services/agent-runtime-model.js";
+// AGE-1: the same flag the hermes adapter's execute path reads. When on, a run
+// invokes the agent's own managed profile, so the profile config — not the
+// host default — is what serves. Kept as a local read rather than reaching
+// into the adapters module so the reporting path has no adapter coupling.
+function hermesManagedProfilesReportingEnabled(): boolean {
+  return process.env.AGENTDASH_HERMES_MANAGED_PROFILES === "true";
+}
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
@@ -346,12 +354,61 @@ export function agentRoutes(
     });
   }
 
+  /**
+   * AGE-1: the preflight check that reports the resolved serving model for a
+   * specific agent. Uses the same resolution as agent detail so the surfaces
+   * cannot disagree; "unknown" is reported explicitly when nothing resolves.
+   */
+  async function buildResolvedModelCheck(
+    adapterType: string,
+    adapterConfig: Record<string, unknown>,
+    agentId: string,
+  ): Promise<AdapterEnvironmentCheck> {
+    const resolved = await resolveAgentRuntimeModelSync(
+      {
+        adapterType,
+        adapterConfig,
+        agentId,
+        hermesManagedProfilesEnabled: hermesManagedProfilesReportingEnabled(),
+      },
+      {
+        detectHostModel: async () => {
+          try {
+            const detected = await detectAdapterModel(adapterType);
+            return detected ? { model: detected.model, provider: detected.provider } : null;
+          } catch {
+            return null;
+          }
+        },
+      },
+    );
+    const sourceLabels: Record<string, string> = {
+      agent_adapter_config: "set on this agent in AgentDash",
+      agent_hermes_profile: "inherited from the agent's managed hermes profile",
+      hermes_host_default: resolved.model
+        ? "inherited from the hermes host default (~/.hermes/config.yaml)"
+        : "not determinable before the run",
+    };
+    return {
+      code: "agent_resolved_model",
+      level: "info",
+      message: resolved.model
+        ? `Resolved model that will serve this agent: ${resolved.model} (provider: ${resolved.provider}, ${sourceLabels[resolved.source] ?? resolved.source})`
+        : `Model unknown — no explicit model is set and no hermes default could be read. The agent's own configuration will decide at run time.`,
+      hint: resolved.model
+        ? undefined
+        : "Set a model explicitly on this agent to make the serving model deterministic and reported.",
+    };
+  }
+
   async function runRequiredHarnessPreflight(input: {
     companyId: string;
     adapterType: string;
     adapterConfig: Record<string, unknown>;
     defaultEnvironmentId: string | null | undefined;
     failureMessage?: string;
+    /** AGE-1: agent context, when the preflight is for a specific agent. */
+    agentId?: string | null;
   }): Promise<AdapterEnvironmentTestResult> {
     const adapter = requireServerAdapter(input.adapterType);
     const { config: runtimeAdapterConfig } = await secretsSvc.resolveAdapterConfigForRuntime(
@@ -377,6 +434,21 @@ export function agentRoutes(
       }),
       fallbackChecks,
     );
+
+    // AGE-1: state which model will serve this agent, in the preflight's own
+    // output. The adapter's built-in model check only reports an explicit
+    // adapterConfig.model or a non-answer ("configured default") — it never
+    // says WHICH default. This check is computed the same way agent detail
+    // resolves it, so the two surfaces can never disagree, and neither ever
+    // falls back to the instance adapter preset (/api/health.adapterPreset),
+    // which is instance state, not agent state. Info-level by design: this is
+    // a report, not a gate.
+    if (input.agentId) {
+      result.checks = [
+        ...result.checks,
+        await buildResolvedModelCheck(input.adapterType, input.adapterConfig, input.agentId),
+      ];
+    }
 
     if (result.status !== "pass") {
       throw unprocessable(
@@ -613,7 +685,45 @@ export function agentRoutes(
       access: accessState,
       // Derived from runs, not from stored claims. See buildAgentRunHealth.
       runHealth,
+      // AGE-1: the model/provider that will serve this agent's next run,
+      // resolved the way dispatch resolves it — or an explicit unknown. Never
+      // the instance adapter preset, which is instance state, not agent state.
+      resolvedRuntime: await resolveAgentRuntimeModelForDetail(agent),
     };
+  }
+
+  /**
+   * AGE-1: resolve the agent's runtime model for reporting. Resolution reads
+   * the FULL adapterConfig even on restricted views: redaction empties
+   * adapterConfig to hide env secrets and prompt templates, but the model name
+   * is not a secret, and resolving from the emptied object would misreport an
+   * explicitly-configured agent as inheriting the host default — exactly the
+   * confidently-wrong answer AGE-1 exists to eliminate.
+   */
+  async function resolveAgentRuntimeModelForDetail(
+    agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
+  ) {
+    return resolveAgentRuntimeModelSync(
+      {
+        adapterType: agent.adapterType,
+        adapterConfig: (agent.adapterConfig ?? null) as Record<string, unknown> | null,
+        agentId: agent.id,
+        hermesManagedProfilesEnabled: hermesManagedProfilesReportingEnabled(),
+      },
+      {
+        // The adapter's own detection reads ~/.hermes/config.yaml — the same
+        // file the hermes CLI falls back to. Routed through the seam so tests
+        // can pin the resolution without a real hermes home.
+        detectHostModel: async () => {
+          try {
+            const detected = await detectAdapterModel(agent.adapterType);
+            return detected ? { model: detected.model, provider: detected.provider } : null;
+          } catch {
+            return null;
+          }
+        },
+      },
+    );
   }
 
   async function applyDefaultAgentTaskAssignGrant(
@@ -2236,6 +2346,7 @@ export function agentRoutes(
       adapterType: agent.adapterType,
       adapterConfig,
       defaultEnvironmentId: agent.defaultEnvironmentId,
+      agentId: agent.id,
       failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
     });
     const metadata = withHarnessPreflightMetadata(

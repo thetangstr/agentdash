@@ -1421,11 +1421,17 @@ function ModelDropdown({
       >
         <PopoverTrigger asChild>
           <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-accent/50 transition-colors w-full justify-between">
-            <span className={cn(!value && "text-muted-foreground")}>
+            <span className={cn(!value && !detectedModel && "text-muted-foreground")}>
               {selected
                 ? selected.label
                 : value
-                  || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model")}
+                  || (allowDefault
+                    // AGE-1: "Default" alone answers nothing. If the host's
+                    // own config exposes a default model, say which one the
+                    // empty selection inherits; otherwise say unknown.
+                    ? (defaultLabel
+                      ?? (detectedModel ? `Default (inherits host model ${detectedModel})` : "Default (host model unknown)"))
+                    : required ? "Select model (required)" : "Select model")}
             </span>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>

@@ -1431,6 +1431,68 @@ function AgentOverview({
       {/* Latest Run */}
       <LatestRunCard runs={runs} agentId={agentRouteId} />
 
+      {/* Runtime model (AGE-1): state which model will serve the next run,
+          or say explicitly that it is unknown — never a bare "Default". The
+          value comes from the server's resolvedRuntime, resolved the same way
+          dispatch resolves it, so it cannot quietly disagree with what a run
+          actually loads. */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">Runtime model</h3>
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <SummaryRow label="Model">
+            {(() => {
+              const resolved = agent.resolvedRuntime ?? null;
+              if (resolved?.model) {
+                return (
+                  <span className="font-mono text-xs">{resolved.model}</span>
+                );
+              }
+              return (
+                <span className="text-xs text-muted-foreground">Unknown</span>
+              );
+            })()}
+          </SummaryRow>
+          <SummaryRow label="Provider">
+            {(() => {
+              const resolved = agent.resolvedRuntime ?? null;
+              const label = resolved?.provider ?? "unknown";
+              return (
+                <span className="font-mono text-xs">
+                  {label}
+                  {label === "auto" && (
+                    <span className="text-muted-foreground font-sans"> — hermes picks at run time</span>
+                  )}
+                </span>
+              );
+            })()}
+          </SummaryRow>
+          <SummaryRow label="Source">
+            {(() => {
+              const resolved = agent.resolvedRuntime ?? null;
+              if (!resolved) {
+                return (
+                  <span className="text-xs text-muted-foreground">
+                    Not reported by this server build
+                  </span>
+                );
+              }
+              const labels: Record<string, string> = {
+                agent_adapter_config: "Set on this agent in AgentDash",
+                agent_hermes_profile: "Inherited from the agent's managed hermes profile",
+                hermes_host_default: resolved.model
+                  ? "Inherited from the hermes host default (~/.hermes/config.yaml)"
+                  : "Not determinable before the run",
+              };
+              return (
+                <span className="text-xs text-muted-foreground">
+                  {labels[resolved.source] ?? resolved.source}
+                </span>
+              );
+            })()}
+          </SummaryRow>
+        </div>
+      </div>
+
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ChartCard title="Run Activity" subtitle="Last 14 days">
