@@ -247,30 +247,118 @@ Confirm and I will assign both.`}</code>
         </div>
       </Section>
 
-      <Section id="cadence" title="How often it checks — and what is not built yet">
+      <Section id="cadence" title="Checking on a schedule — set up in your own tool">
         <p>
-          You can store a checking preference from the conversation — every 30 or 60 minutes are
-          the only two values it accepts:
+          AgentDash does not run a timer. There is no scheduler here, and none is planned — the
+          repeating check is a job you create in the tool you already work in, and it calls the same
+          connection you set up above. That keeps one dedicated conversation for AgentDash and
+          leaves your other work untouched.
         </p>
-        <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
-          <code>Check every 30 minutes instead.</code>
-        </pre>
+
         <div className="rounded-md border border-amber-600/30 bg-amber-500/10 p-3">
-          <p className="text-sm font-medium">The preference is stored. Nothing acts on it yet.</p>
-          <p>
-            This is worth being plain about, because it is easy to assume otherwise. The setting is
-            saved against this machine and will apply once scheduled checking exists — but that
-            scheduler is <span className="font-medium">not built</span>. Today your inbox is read
-            when you open the session or ask for it, and at no other time.
+          <p className="text-sm font-medium">
+            Read this first: scheduled checking cannot decide anything for you yet.
           </p>
           <p>
-            The product says the same thing back to you, so you do not have to remember it:{" "}
-            <Code>
-              Preference stored. It takes effect once inbox scheduling is active — nothing reads the
-              interval yet.
-            </Code>
+            A scheduled check can <span className="font-medium">read</span> your inbox today, using
+            the command you already have. <span className="font-medium">Approving or declining</span>{" "}
+            from that conversation needs AgentDash&rsquo;s tool add-on, and this instance does not
+            currently publish one — the download answers{" "}
+            <Code>MCP client package is not built on this instance</Code>. Until an administrator
+            builds and publishes it, use the schedule to be told, and decide in AgentDash itself.
           </p>
         </div>
+
+        <h3 className="text-sm font-semibold">Claude Code</h3>
+        <p>
+          Open your inbox folder, start a session, and leave it open. In that session, ask for a
+          repeating check:
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed">
+          <code>Every 30 minutes, run `{BRIDGE_CLI_BIN} bridge inbox --ack --quiet-when-empty` and
+show me anything it prints.</code>
+        </pre>
+        <p className="text-muted-foreground">
+          It fires into <span className="font-medium">this same conversation</span> between your
+          turns, so there is one thread and no new windows. Four limits worth knowing before you
+          rely on it:
+        </p>
+        <ul className="flex list-disc flex-col gap-1.5 pl-5 text-muted-foreground">
+          <li>
+            <span className="font-medium">It lives with the conversation.</span> Start a fresh
+            conversation and the schedule is gone. It also expires seven days after you create it,
+            so this is a weekly re-arm, not a set-and-forget.
+          </li>
+          <li>
+            <span className="font-medium">Claude has to be running and idle.</span> Nothing fires
+            while the app is closed, and a check due while Claude is mid-task is skipped rather than
+            run late.
+          </li>
+          <li>
+            <span className="font-medium">Thirty minutes is approximate.</span> Sub-hourly schedules
+            are deliberately offset by up to half the interval, so a 30-minute check can arrive
+            about fifteen minutes later than you expect. The offset is stable, not adjustable.
+          </li>
+          <li>
+            <span className="font-medium">Sleep and wake are not documented.</span> Whether a check
+            missed while your laptop slept fires late, is merged into one, or is dropped is not
+            stated anywhere we can point to. Treat the on-open catch-up below as the thing you rely
+            on, not the timer.
+          </li>
+        </ul>
+        <p className="text-muted-foreground">
+          Two other Claude surfaces schedule work but do not fit this shape, and it is worth knowing
+          why so you do not go looking. Desktop scheduled tasks survive restarts and can reach a
+          local connection, but each run opens a <span className="font-medium">new</span> session —
+          so you get a schedule, not one pinned conversation. Cloud routines run without your laptop
+          at all, but they run in a sandbox that cannot see a connection on your own machine, and
+          their shortest interval is an hour.
+        </p>
+
+        <h3 className="text-sm font-semibold">Codex</h3>
+        <p>
+          The Codex command line has no scheduling of its own — OpenAI documents that plainly, and
+          nothing in AgentDash can add it. Scheduling lives in the ChatGPT app instead, and the two
+          places behave very differently:
+        </p>
+        <ul className="flex list-disc flex-col gap-1.5 pl-5 text-muted-foreground">
+          <li>
+            <span className="font-medium">The ChatGPT desktop app</span> runs a task on your own
+            machine and can keep it in the same chat, at intervals of minutes. Of everything on this
+            page, that is the closest fit to one pinned conversation that checks on a timer.
+          </li>
+          <li>
+            <span className="font-medium">ChatGPT on the web</span> runs the same kind of task in the
+            cloud, and it does not read the configuration on your machine — so it cannot reach your
+            connection at all. A task set up there will not see your inbox.
+          </li>
+        </ul>
+        <p className="text-muted-foreground">
+          Three things about the desktop route we have not been able to confirm, and would rather say
+          so than let you find out: whether an unattended task loads the connection settings from
+          your Codex configuration, whether its sandbox permits the call at all, and what happens to
+          a run missed while the machine slept or the app was closed. None of that is written down.
+          Try it with a check you can afford to miss before you depend on it.
+        </p>
+
+        <h3 className="text-sm font-semibold">What you can rely on either way</h3>
+        <p className="text-muted-foreground">
+          Opening or resuming a session in your inbox folder always catches you up — that is the hook
+          the setup installed, and it does not depend on any schedule. If you set no timer at all,
+          you still see everything waiting the next time you sit down. A check with nothing new
+          prints nothing, so an idle schedule stays quiet.
+        </p>
+        <p className="text-muted-foreground">
+          Two things a repeating check will do that are worth expecting. An approval that is still
+          open gets mentioned again at every check until it is decided, because each check reports
+          what is outstanding rather than only what changed. And a large backlog comes through a page
+          at a time, so the first few checks after a long absence may each show you more.
+        </p>
+        <p className="text-muted-foreground">
+          You may also see AgentDash offer to store a checking interval for you. It records the
+          number and nothing reads it — the schedule that matters is the one you set up here, in your
+          own tool.
+        </p>
       </Section>
 
       <Section id="verify" title="Checking it actually works">
