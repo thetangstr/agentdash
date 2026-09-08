@@ -98,6 +98,35 @@ function issueLine(item: { identifier: string | null; title: string; agentName: 
   return `  - ${ref}${item.title}${who}`;
 }
 
+/**
+ * Approvals on this page that the digest does not list.
+ *
+ * The digest is a projection over CURRENT state, not a replay of the page, so
+ * the two can disagree: an approval whose `approval.opened` event is on this
+ * page but which has since been decided appears in `events` and in no digest
+ * section. `--ack` advances the cursor to the highest seq on the page
+ * regardless, so that approval was acknowledged having never been rendered and
+ * cannot come back.
+ *
+ * Counting them by ref, rather than differencing the two lengths, is the only
+ * arithmetic that means anything here: `blockers` and `completions` are derived
+ * from issues rather than from this page's events, so a length comparison is
+ * not a like-for-like subtraction.
+ */
+export function unseenApprovalCount(response: InboxSyncResponse): number {
+  const digest = response.digest;
+  if (!digest) return 0;
+  const shown = new Set(digest.approvals.items.map((item) => item.approvalId));
+  const onPage = new Set(
+    response.events
+      .filter((event) => event.refType === "approval" && typeof event.refId === "string")
+      .map((event) => event.refId as string),
+  );
+  let unseen = 0;
+  for (const ref of onPage) if (!shown.has(ref)) unseen += 1;
+  return unseen;
+}
+
 /** The plain-text rendering a SessionStart hook feeds straight into a session. */
 export function renderInbox(response: InboxSyncResponse, now: number): string {
   const digest = response.digest;
@@ -111,6 +140,12 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
   const nothing =
     digest.approvals.total === 0 && digest.blockers.total === 0 && digest.completions.total === 0;
   if (nothing) {
+    // Still name uncovered events: `--ack` advances the cursor over the whole
+    // fetched page, so anything unmentioned here is buried permanently.
+    const other = unseenApprovalCount(response);
+    if (other > 0) {
+      return `AgentDash inbox: nothing waiting on you. ${other} other update(s) already dealt with.`;
+    }
     return "AgentDash inbox: nothing waiting on you.";
   }
 
@@ -147,6 +182,10 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     lines.push("");
   }
 
+  const other = unseenApprovalCount(response);
+  if (other > 0) {
+    lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
+  }
   lines.push(
     "Decide with the inbox_decide tool. Details are in AgentDash — nothing above carries the evidence.",
   );

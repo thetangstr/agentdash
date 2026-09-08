@@ -38,13 +38,44 @@ describe("connect-your-machine guide", () => {
   });
 
   /**
-   * Cadence can be stored but nothing reads it yet. Saying so is the difference
-   * between a documented limitation and a customer waiting for checks that
-   * never come.
+   * The cadence section used to say a scheduler was coming and the stored
+   * preference would start working. That is not the design: the repeating check
+   * is the operator's own harness job, and AgentDash runs no timer. These pin
+   * the corrected doctrine, per-harness, including the parts we could not
+   * verify — an unverified limit stated plainly is the point, not a gap.
    */
-  it("states the cadence limitation rather than implying scheduling works", () => {
-    expect(guide).toMatch(/nothing reads the interval yet/i);
-    expect(guide).toMatch(/not built/i);
+  it("teaches native scheduling in the operator's own tool, not an AgentDash timer", () => {
+    expect(guide).toMatch(/AgentDash does not run a timer/i);
+    expect(guide).toMatch(/Claude Code/);
+    expect(guide).toMatch(/Codex/);
+    // No promise that a scheduler is on its way.
+    expect(guide).not.toMatch(/scheduler is\s+<span className="font-medium">not built/i);
+    expect(guide).not.toMatch(/once scheduled checking exists/i);
+  });
+
+  it("states that a scheduled check cannot decide yet, and why", () => {
+    expect(guide).toMatch(/cannot decide anything for you yet/i);
+    expect(guide).toMatch(/MCP client package is not built on this instance/);
+  });
+
+  it("keeps the per-harness limits that make this honest", () => {
+    // Claude Code: session-scoped, expires, jittered, sleep undocumented.
+    expect(guide).toMatch(/seven days/i);
+    expect(guide).toMatch(/running and idle/i);
+    expect(guide).toMatch(/half the interval/i);
+    expect(guide).toMatch(/Sleep and wake are not documented/i);
+    // Codex: CLI has none; web cannot reach a local connection.
+    expect(guide).toMatch(/command line has no scheduling/i);
+    expect(guide).toMatch(/does not read the configuration on your machine/i);
+  });
+
+  it("does not claim the harnesses behave alike", () => {
+    expect(guide).toMatch(/behave very differently/i);
+  });
+
+  /** The stored interval must not be described as doing anything. */
+  it("says the stored interval is read by nothing", () => {
+    expect(guide).toMatch(/records the number and nothing reads it/i);
   });
 
   /** Directing work is confirmation-gated; the guide has to say so. */
