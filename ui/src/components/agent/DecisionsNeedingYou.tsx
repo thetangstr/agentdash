@@ -5,7 +5,7 @@ import { approvalsApi } from "../../api/approvals";
 import type { InboxItem } from "../../api/stewardships";
 import { Button } from "../ui/button";
 import { queryKeys } from "../../lib/queryKeys";
-import { timeAgo, timeUntil } from "../../lib/timeAgo";
+import { timeSince, timeUntil } from "../../lib/timeAgo";
 
 /**
  * The decisions an agent is stopped on, and the buttons to make them.
@@ -150,7 +150,7 @@ export function DecisionsNeedingYou({
                 ) : null}
                 {item.createdAt ? (
                   <span className="rounded-full border border-border px-1.5 py-0.5 text-muted-foreground">
-                    waiting {timeAgo(item.createdAt)}
+                    waiting {timeSince(item.createdAt)}
                   </span>
                 ) : null}
                 {expired ? (
