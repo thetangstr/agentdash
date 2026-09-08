@@ -32,13 +32,28 @@ import { timeAgo } from "../lib/timeAgo";
  * what an agent may do should be deliberate and found on purpose.
  */
 
-/** `chief_of_staff` is a database value, not a job title a person reads. */
+/**
+ * `chief_of_staff` is a database value, not a job title a person reads.
+ *
+ * Naive title-casing gets two things wrong and both look careless on a page
+ * about somebody's own agent: it writes the commonest role in this product as
+ * "Ceo", and it capitalises the joining words, giving "Chief Of Staff". So
+ * acronyms stay whole and small words stay small unless they lead.
+ */
+const ROLE_ACRONYMS = new Set(["ceo", "cto", "coo", "cfo", "cio", "cmo", "cpo", "hr", "it", "qa", "pm", "vp"]);
+const ROLE_MINOR_WORDS = new Set(["of", "the", "and", "for", "to", "a", "an"]);
+
 function humanRole(role: string | null | undefined): string {
   if (!role) return "no role set";
   return role
     .split(/[_\s]+/)
     .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (ROLE_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (index > 0 && ROLE_MINOR_WORDS.has(lower)) return lower;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
     .join(" ");
 }
 

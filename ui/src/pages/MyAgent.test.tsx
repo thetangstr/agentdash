@@ -727,8 +727,23 @@ describe("MyAgent", () => {
 
     await render();
 
-    expect(container.textContent).toContain("Chief Of Staff");
+    expect(container.textContent).toContain("Chief of Staff");
     expect(container.textContent).not.toContain("chief_of_staff");
+    // Not "Chief Of Staff": title-casing the joining word looks careless.
+    expect(container.textContent).not.toContain("Chief Of Staff");
+  });
+
+  /** The commonest role in this product must not render as "Ceo". */
+  it("keeps an acronym role whole", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "CEO Agent", role: "ceo", status: "idle" },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("CEO");
+    expect(container.textContent).not.toContain("Ceo");
   });
 
 });
