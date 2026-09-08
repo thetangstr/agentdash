@@ -32,6 +32,9 @@ const mockHubspotApi = vi.hoisted(() => ({
 }));
 
 const mockIssuesApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockHeartbeatsApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockAgentsApi = vi.hoisted(() => ({ createConnectCode: vi.fn(), createKey: vi.fn() }));
+const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -50,6 +53,9 @@ vi.mock("../api/agent-governance", () => ({ agentGovernanceApi: mockGovernanceAp
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/approvals", () => ({ approvalsApi: mockApprovalsApi }));
 vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
+vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
+vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -105,6 +111,17 @@ describe("MyAgent", () => {
     mockStewardshipsApi.myFactRequests.mockResolvedValue({ factRequests: [] });
     mockIssuesApi.list.mockResolvedValue([]);
     mockActivityApi.list.mockResolvedValue([]);
+    // Healthy by default: the newest run succeeded, so no agent is "in trouble"
+    // unless a test says so.
+    mockHeartbeatsApi.list.mockResolvedValue([
+      { status: "succeeded", error: null, errorCode: null, finishedAt: new Date().toISOString() },
+    ]);
+    mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "https://mk.example:3112" });
+    mockAgentsApi.createConnectCode.mockResolvedValue({
+      code: "KVTX-8F02",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      expiresInSeconds: 600,
+    });
     mockGovernanceApi.get.mockResolvedValue({
       policy: {
         id: "policy-1",
@@ -514,12 +531,13 @@ describe("MyAgent", () => {
   });
 
   /**
-   * The redesign IS the ordering, so it needs a guard. Previously four setup
-   * forms sat above every piece of live information and the decisions panel was
-   * eighth. A future edit that reorders the JSX would otherwise regress this
-   * silently, since every individual panel would still render.
+   * The ordering IS the design. Anything urgent comes first — and renders
+   * nothing when nothing is waiting, which makes connecting the first thing a
+   * steward sees on a quiet page. Connecting is a visible section now, not a
+   * disclosure: folding it hid the only route to a working connection behind a
+   * click nobody had a reason to make.
    */
-  it("puts what needs you above setup and governance", async () => {
+  it("puts what needs you first, then connecting, then the live sections", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
       agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
@@ -543,17 +561,29 @@ describe("MyAgent", () => {
 
     const text = container.textContent ?? "";
     const needs = text.indexOf("Needs you");
+    const connect = text.indexOf("Work with Casper from your own terminal");
     const doing = text.indexOf("What Casper is doing");
-    const happened = text.indexOf("What just happened");
-    const governance = text.indexOf("How Casper works");
+    const may = text.indexOf("What Casper may do");
 
     expect(needs).toBeGreaterThan(-1);
-    expect(needs).toBeLessThan(doing);
-    expect(doing).toBeLessThan(happened);
-    expect(happened).toBeLessThan(governance);
+    expect(connect).toBeGreaterThan(-1);
+    expect(needs).toBeLessThan(connect);
+    expect(connect).toBeLessThan(doing);
+    expect(doing).toBeLessThan(may);
   });
 
-  it("keeps setup and governance behind a fold rather than in the flow", async () => {
+  /**
+   * Editing what an agent may do should be deliberate and found on purpose, so
+   * it folds. Connecting must not: folding it hid the only route to a working
+   * connection behind a click nobody had a reason to make.
+   *
+   * The old "Run this agent's work on a machine (for whoever operates it)" fold
+   * is deliberately gone. It held the connect-code flow — the one that actually
+   * works — behind a summary line addressed to technicians, while the visible
+   * card above it documented the bridge-token route that returns 403 for every
+   * key this UI mints. There is now one connection section and it is visible.
+   */
+  it("folds the editing surfaces but never the connection itself", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
       agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
@@ -564,131 +594,156 @@ describe("MyAgent", () => {
     const summaries = Array.from(container.querySelectorAll("details > summary")).map(
       (node) => node.textContent ?? "",
     );
-    expect(summaries.some((text) => text.includes("How Casper works"))).toBe(true);
-    expect(summaries.some((text) => /Connect|connected/.test(text))).toBe(true);
+    expect(summaries.some((t) => /Change what Casper may do/.test(t))).toBe(true);
+    expect(summaries.some((t) => /for whoever operates it/.test(t))).toBe(false);
+    expect(summaries.some((t) => /terminal|Claude Code|Codex/.test(t))).toBe(false);
+    expect(container.querySelector('[aria-labelledby="connect-terminal-heading"]')).not.toBeNull();
   });
 
-  it("offers a telegram pairing link and never mints one until asked", async () => {
+  /** Two ways to connect, one of which 403s, is worse than one that works. */
+  it("offers exactly one way to connect", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
     });
 
     await render();
 
-    expect(container.textContent).toContain("Telegram");
-    // Minting spends the user's one outstanding challenge and invalidates any
-    // link they already opened. It must be an explicit act, never a page load.
-    expect(mockHumanChannelsApi.startPairing).not.toHaveBeenCalled();
-
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    );
-    expect(connect, "no Connect Telegram control was rendered").toBeTruthy();
-
-    await act(async () => {
-      connect!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    for (let i = 0; i < 10; i += 1) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
-
-    expect(mockHumanChannelsApi.startPairing).toHaveBeenCalledWith("company-1", "telegram");
-    const link = Array.from(container.querySelectorAll("a")).find((anchor) =>
-      anchor.getAttribute("href")?.startsWith("https://t.me/"),
-    );
-    expect(link, "the minted deep link was not shown to the user").toBeTruthy();
+    const text = container.textContent ?? "";
+    expect(text).toContain("Create a connect code");
+    // The bridge-token flow told people to write a file by hand and install a
+    // session hook, and its keys cannot reach the inbox routes at all.
+    expect(text).not.toMatch(/bridge-token|inbox-init|paperclipai bridge/);
   });
 
-  it("shows an already-connected channel instead of offering to pair again", async () => {
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHumanChannelsApi.listMine.mockResolvedValue({
-      bindings: [
-        {
-          id: "binding-1",
-          provider: "telegram",
-          externalUserId: "1",
-          verifiedAt: "2026-07-29T00:00:00.000Z",
-          revokedAt: null,
-        },
-      ],
-    });
-
-    await render();
-
-    expect(container.textContent).toContain("Connected");
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    );
-    expect(connect, "offered to pair a channel that is already connected").toBeFalsy();
-  });
-
-  it("surfaces a pairing refusal instead of failing silently", async () => {
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHumanChannelsApi.startPairing.mockRejectedValue(
-      new Error("Telegram pairing is not configured: TELEGRAM_BOT_USERNAME is unset"),
-    );
-
-    await render();
-    const connect = Array.from(container.querySelectorAll("button")).find((button) =>
-      /connect telegram/i.test(button.textContent ?? ""),
-    )!;
-    await act(async () => {
-      connect.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    for (let i = 0; i < 10; i += 1) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
-
-    // The owner ceiling and the missing-config case both surface here. A button
-    // that quietly does nothing reads as a broken page.
-    expect(container.textContent).toContain("TELEGRAM_BOT_USERNAME");
-  });
-
-  it("states that HubSpot writes attribute to the app, not the person", async () => {
-    // The owner accepted this tradeoff; accepting it is not hiding it. Someone
-    // pasting a key deserves to know what their name will not be attached to.
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-
-    await render();
-
-    expect(container.textContent).toContain("attributed to the app, not to you");
-    // And that a write is never unilateral.
-    expect(container.textContent).toContain("cannot write on its own");
-  });
-
-  it("never renders the stored HubSpot token", async () => {
-    mockStewardshipsApi.getMyAgent.mockResolvedValue({
-      stewardship: { id: "s-1" },
-      agent: { id: "agent-1", name: "Marketing Agent", role: "marketing", status: "idle" },
-    });
-    mockHubspotApi.get.mockResolvedValue({
-      connection: {
-        id: "conn-1",
-        hubId: "12345",
-        scopes: ["crm.objects.contacts.read"],
-        status: "active",
-        createdAt: "2026-07-30T00:00:00.000Z",
-        updatedAt: "2026-07-30T00:00:00.000Z",
+  /**
+   * The near-miss this page now prevents, in the reporter's own words: "HAL's
+   * dashboard shows only the recovery-budget wrapper, and you have to click
+   * into the run to find the cause. I nearly reported the wrong root cause off
+   * HAL's dashboard alone."
+   */
+  describe("when the agent has stopped", () => {
+    const HAL_RUNS = [
+      {
+        status: "cancelled",
+        errorCode: "task_recovery_budget_exhausted",
+        error: "Automatic recovery budget exhausted (attempts): attempts=1/1, turns=0/12",
+        finishedAt: new Date().toISOString(),
       },
+      {
+        status: "failed",
+        errorCode: "adapter_failed",
+        error: "Process adapter missing command",
+        finishedAt: new Date().toISOString(),
+      },
+    ];
+
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "error" },
+      });
+      mockHeartbeatsApi.list.mockResolvedValue(HAL_RUNS);
+    });
+
+    it("shows the real error, not the recovery marker sitting on top of it", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Process adapter missing command");
+      // The wrapper may be explained, but it must never be the stated cause.
+      expect(text).not.toContain("attempts=1/1");
+    });
+
+    it("says a recovery marker was read past, so nobody has to know it exists", async () => {
+      await render();
+
+      expect(container.textContent ?? "").toMatch(/recovery tried, gave up/i);
+    });
+
+    it("does not claim the agent is working while it is stopped", async () => {
+      mockIssuesApi.list.mockResolvedValue([
+        { id: "i-1", title: "A", status: "in_progress", identifier: "MKT-1", updatedAt: null },
+        { id: "i-2", title: "B", status: "in_progress", identifier: "MKT-2", updatedAt: null },
+      ]);
+
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).not.toMatch(/Casper is working on 2 things/);
+      expect(text).toMatch(/Casper stopped/);
+    });
+
+    it("puts the reason above everything else on the page", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Process adapter missing command")).toBeLessThan(
+        text.indexOf("Work with Casper from your own terminal"),
+      );
+    });
+  });
+
+  /** An agent that is working is not in trouble, whatever its history holds. */
+  it("shows no failure banner when the newest run succeeded", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockHeartbeatsApi.list.mockResolvedValue([
+      { status: "succeeded", error: null, errorCode: null, finishedAt: new Date().toISOString() },
+      {
+        status: "failed",
+        errorCode: "adapter_failed",
+        error: "an old, already-fixed fault",
+        finishedAt: new Date().toISOString(),
+      },
+    ]);
+
+    await render();
+
+    expect(container.textContent ?? "").not.toContain("already-fixed");
+  });
+
+  /** The dead integrations are gone: none is configured on any instance. */
+  it("offers no telegram, whatsapp, teams or hubspot connection", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
     });
 
     await render();
 
-    expect(container.textContent).toContain("12345");
-    expect(container.textContent).not.toContain("pat-");
+    expect(container.textContent ?? "").not.toMatch(/Telegram|WhatsApp|Microsoft Teams|HubSpot/i);
   });
+
+
+  /** A database value is not a job title. */
+  it("shows the role as words, not as an enum", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "chief_of_staff", status: "idle" },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("Chief of Staff");
+    expect(container.textContent).not.toContain("chief_of_staff");
+    // Not "Chief Of Staff": title-casing the joining word looks careless.
+    expect(container.textContent).not.toContain("Chief Of Staff");
+  });
+
+  /** The commonest role in this product must not render as "Ceo". */
+  it("keeps an acronym role whole", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "CEO Agent", role: "ceo", status: "idle" },
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("CEO");
+    expect(container.textContent).not.toContain("Ceo");
+  });
+
 });

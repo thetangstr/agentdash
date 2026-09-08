@@ -29,6 +29,22 @@ export interface BridgeEndpoint {
  */
 export const BRIDGE_READ = "bridge:read";
 
+/**
+ * Reading your own steward inbox from your own machine.
+ *
+ * Requested here because without it the documented flow cannot work at all.
+ * `stewardInboxService` refuses `/api/bridge/inbox/*` for any endpoint that did
+ * not declare it, and this call asked for `bridge:read` alone — so every key
+ * the UI has ever minted gets 403 from the hook `inbox-init` installs. In
+ * production all seven enrolled endpoints are in that state and
+ * `steward_inbox_events` has never been read.
+ *
+ * This is not a widening of what a machine may do: the inbox is the signed-in
+ * person's own, the endpoint is one they enrolled and can revoke, and `act`
+ * remains unrequested.
+ */
+export const BRIDGE_INBOX = "bridge:inbox";
+
 export const bridgeApi = {
   listMyEndpoints: (companyId: string) =>
     api.get<{ endpoints: BridgeEndpoint[] }>(`/companies/${companyId}/me/bridge/endpoints`),
@@ -37,7 +53,7 @@ export const bridgeApi = {
   requestEnrollment: (companyId: string, label: string) =>
     api.post<{ enrollmentId: string; pendingApproval: true }>(
       `/companies/${companyId}/me/bridge/endpoints`,
-      { label, capabilities: [BRIDGE_READ] },
+      { label, capabilities: [BRIDGE_READ, BRIDGE_INBOX] },
     ),
 
   /**
