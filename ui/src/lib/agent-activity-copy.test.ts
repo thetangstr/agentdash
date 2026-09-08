@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeActivity, describeActor } from "./agent-activity-copy";
-import { timeUntil } from "./timeAgo";
+import { timeAgo, timeSince, timeUntil } from "./timeAgo";
 
 const base = { actorType: "agent" as const, actorId: "agent-1", details: null };
 
@@ -78,5 +78,38 @@ describe("timeUntil", () => {
   /** Null, not a negative duration — "expired" is a different sentence. */
   it("returns null once the deadline has passed", () => {
     expect(timeUntil(new Date(Date.now() - 1000))).toBeNull();
+  });
+});
+
+describe("timeSince", () => {
+  /**
+   * The defect this exists for, caught by looking at the rendered page rather
+   * than asserting on substrings: the waiting chip composed its label from
+   * `timeAgo`, which already ends in "ago", so it read "waiting 2d ago".
+   */
+  it("returns a bare duration that a caller can put words around", () => {
+    const twoDays = new Date(Date.now() - 2 * 86400 * 1000);
+    expect(timeSince(twoDays)).toBe("2d");
+    expect(`waiting ${timeSince(twoDays)}`).toBe("waiting 2d");
+    expect(timeSince(twoDays)).not.toMatch(/ago/);
+  });
+
+  it("still reads as a phrase for something that just arrived", () => {
+    expect(`waiting ${timeSince(new Date())}`).toBe("waiting under a minute");
+  });
+
+  it("covers minutes and hours", () => {
+    expect(timeSince(new Date(Date.now() - 20 * 60 * 1000))).toBe("20m");
+    expect(timeSince(new Date(Date.now() - 5 * 3600 * 1000))).toBe("5h");
+  });
+
+  /** A clock skew must not produce a negative duration. */
+  it("clamps a future timestamp instead of counting backwards", () => {
+    expect(timeSince(new Date(Date.now() + 60_000))).toBe("under a minute");
+  });
+
+  /** timeAgo is unchanged and still the right tool for a standalone label. */
+  it("leaves timeAgo alone for labels that stand on their own", () => {
+    expect(timeAgo(new Date(Date.now() - 2 * 86400 * 1000))).toBe("2d ago");
   });
 });

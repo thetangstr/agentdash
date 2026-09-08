@@ -22,6 +22,22 @@ export function timeUntil(date: Date | string): string | null {
   return `${Math.floor(seconds / DAY)}d`;
 }
 
+/**
+ * How long something has been waiting, as a bare duration.
+ *
+ * The counterpart to `timeUntil`, and the reason it exists: composing a label
+ * from `timeAgo` produced "waiting 2d ago", because `timeAgo` already ends in
+ * "ago". Its output is a complete phrase and does not compose. This returns
+ * just the duration, so a caller can put its own words around it.
+ */
+export function timeSince(date: Date | string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(date).getTime()) / 1000));
+  if (seconds < MINUTE) return "under a minute";
+  if (seconds < HOUR) return `${Math.floor(seconds / MINUTE)}m`;
+  if (seconds < DAY) return `${Math.floor(seconds / HOUR)}h`;
+  return `${Math.floor(seconds / DAY)}d`;
+}
+
 export function timeAgo(date: Date | string): string {
   const now = Date.now();
   const then = new Date(date).getTime();

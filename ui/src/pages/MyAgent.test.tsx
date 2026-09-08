@@ -463,7 +463,11 @@ describe("MyAgent", () => {
     expect(container.textContent).toContain("Casper wants to send something outside the company");
     expect(container.textContent).toContain("This leaves the company and cannot be taken back.");
     expect(container.textContent).toContain("expires in 4h");
-    expect(container.textContent).toContain("waiting 2d ago");
+    // "waiting 2d", not "waiting 2d ago" — this assertion previously locked in
+    // the doubled "ago", because it was written from the code rather than from
+    // looking at what the page rendered.
+    expect(container.textContent).toContain("waiting 2d");
+    expect(container.textContent).not.toContain("waiting 2d ago");
     expect(container.textContent).toContain("high risk");
     // The issue is named, not just numbered.
     expect(container.textContent).toContain("Reconcile vendor invoices");
