@@ -111,6 +111,7 @@ import {
   type AgentRuntimeState,
   type LiveEvent,
   type WorkspaceOperation,
+  type AgentResolvedRuntime,
 } from "@paperclipai/shared";
 import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
@@ -3091,6 +3092,13 @@ export function AgentSkillsTab({
                 <span className="text-muted-foreground">Adapter</span>
                 <span className="font-medium">{adapterLabels[agent.adapterType] ?? agent.adapterType}</span>
               </div>
+              {/* AGE-1: the Model row states what will serve the next run, with
+                  provenance — a bare "Default" told the reader nothing, and a
+                  confidently wrong answer would be worse than "unknown". */}
+              <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
+                <span className="text-muted-foreground">Model (next run)</span>
+                <ResolvedRuntimeLabel resolved={agent.resolvedRuntime ?? null} />
+              </div>
               <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
                 <span className="text-muted-foreground">Skills applied</span>
                 <span>{skillApplicationLabel}</span>
@@ -4553,5 +4561,34 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
         </div>
       )}
     </div>
+  );
+}
+
+// AGE-1: truthful Model rendering. `Default` is never shown bare — the row
+// states which layer the value came from (explicit config, the agent's hermes
+// profile, or the hermes host default), and shows "unknown" when nothing is
+// readable rather than pretending a default exists.
+function ResolvedRuntimeLabel({ resolved }: { resolved: AgentResolvedRuntime | null }) {
+  if (!resolved || !resolved.model) {
+    return (
+      <span className="font-medium text-muted-foreground" title="No explicit model and no readable hermes default">
+        unknown
+      </span>
+    );
+  }
+  const sourceLabel =
+    resolved.source === "adapter_config"
+      ? "set on this agent"
+      : resolved.source === "agent_profile"
+        ? "inherited from this agent's hermes profile"
+        : resolved.source === "hermes_host_default"
+          ? "host default (hermes config)"
+          : null;
+  return (
+    <span className="font-medium text-right" title={sourceLabel ?? undefined}>
+      {resolved.provider && resolved.provider !== "auto" ? `${resolved.provider}/` : ""}
+      {resolved.model}
+      {sourceLabel ? <span className="ml-1.5 text-xs font-normal text-muted-foreground">({sourceLabel})</span> : null}
+    </span>
   );
 }

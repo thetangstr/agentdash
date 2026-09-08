@@ -123,6 +123,10 @@ import {
   withAgentHarnessPreflightMetadata,
 } from "../services/agent-harness-preflight-readiness.js";
 import { adapterSupportsInstructionsBundle, resolveInstructionsPathKey } from "../adapters/instructions-bundle-support.js";
+import {
+  resolveAgentRuntimeModel,
+  type AgentResolvedRuntime,
+} from "../services/agent-runtime-model.js";
 
 const RUN_LOG_DEFAULT_LIMIT_BYTES = 256_000;
 const RUN_LOG_MAX_LIMIT_BYTES = 1024 * 1024;
@@ -326,6 +330,38 @@ export function agentRoutes(
         ? "warn"
         : result.status;
     return { ...result, checks, status };
+  }
+
+  // AgentDash (AGE-1): harness preflight must state the AGENT's resolved model,
+  // never the instance-level adapter preset (`/api/health.adapterPreset` is
+  // instance state, not agent state). The adapter's own checkModel only knows
+  // the explicit config; this appends an authoritative info check resolved the
+  // same way heartbeat resolves it, so an explicit unknown beats a wrong answer.
+  async function withAgentResolvedModelCheck(
+    agent: {
+      id: string;
+      adapterType: string;
+      adapterConfig: Record<string, unknown> | null | undefined;
+      runtimeConfig?: Record<string, unknown> | null;
+    },
+    result: AdapterEnvironmentTestResult,
+  ): Promise<AdapterEnvironmentTestResult> {
+    if (agent.adapterType !== "hermes_local") return result;
+    const resolved = await resolveAgentRuntimeModel({
+      adapterType: agent.adapterType,
+      adapterConfig: agent.adapterConfig ?? {},
+      agentId: agent.id,
+      runtimeConfig: agent.runtimeConfig ?? {},
+    });
+    const message = resolved.model
+      ? `Resolved model for next run: ${resolved.model} (provider: ${resolved.provider ?? "unknown"}, source: ${resolved.source})`
+      : `Resolved model for next run: unknown (no explicit model and no readable hermes default; source: ${resolved.source})`;
+    const check: AdapterEnvironmentCheck = {
+      code: "agent_resolved_model",
+      level: "info",
+      message,
+    };
+    return { ...result, checks: [...result.checks, check] };
   }
 
   function withHarnessPreflightMetadata(
@@ -591,12 +627,29 @@ export function agentRoutes(
     agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>,
     options?: { restricted?: boolean },
   ) {
-    const [chainOfCommand, accessState, steward, accountableFor, runHealth] = await Promise.all([
+    const [chainOfCommand, accessState, steward, accountableFor, runHealth, resolvedRuntime] = await Promise.all([
       svc.getChainOfCommand(agent.id),
       buildAgentAccessState(agent),
       stewardships.activeStewardForAgent(agent.companyId, agent.id),
       accountability.resolveForAgent(agent.companyId, agent.id),
       buildAgentRunHealth(agent.id),
+      // AgentDash (AGE-1): state the model/provider that will serve the next
+      // run, resolved the same way heartbeat resolves it, or an explicit
+      // unknown — never the instance-level adapter preset. Present and null
+      // rather than absent so a reader can tell "unknown" from "this build
+      // does not report runtime".
+      resolveAgentRuntimeModel({
+        adapterType: agent.adapterType,
+        adapterConfig:
+          agent.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+            ? agent.adapterConfig as Record<string, unknown>
+            : {},
+        agentId: agent.id,
+        runtimeConfig:
+          agent.runtimeConfig && typeof agent.runtimeConfig === "object" && !Array.isArray(agent.runtimeConfig)
+            ? agent.runtimeConfig as Record<string, unknown>
+            : {},
+      }),
     ]);
 
     return {
@@ -613,6 +666,9 @@ export function agentRoutes(
       access: accessState,
       // Derived from runs, not from stored claims. See buildAgentRunHealth.
       runHealth,
+      // AGE-1: what will serve the next run (model/provider/source-of-truth),
+      // or explicit nulls when unknown. Never the instance adapter preset.
+      resolvedRuntime,
     };
   }
 
@@ -2231,13 +2287,16 @@ export function agentRoutes(
       agent.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
         ? agent.adapterConfig as Record<string, unknown>
         : {};
-    const result = await runRequiredHarnessPreflight({
-      companyId: agent.companyId,
-      adapterType: agent.adapterType,
-      adapterConfig,
-      defaultEnvironmentId: agent.defaultEnvironmentId,
-      failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
-    });
+    const result = await withAgentResolvedModelCheck(
+      agent,
+      await runRequiredHarnessPreflight({
+        companyId: agent.companyId,
+        adapterType: agent.adapterType,
+        adapterConfig,
+        defaultEnvironmentId: agent.defaultEnvironmentId,
+        failureMessage: "Agent harness preflight failed. Resolve the adapter environment checks before running this agent.",
+      }),
+    );
     const metadata = withHarnessPreflightMetadata(
       agent.metadata as Record<string, unknown> | null | undefined,
       {

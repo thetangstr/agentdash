@@ -347,6 +347,7 @@ export type {
   AdapterEnvironmentTestStatus,
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
+  AgentResolvedRuntime,
   AssetImage,
   Project,
   ProjectCodebase,

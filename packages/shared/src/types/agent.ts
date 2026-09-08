@@ -170,6 +170,26 @@ export interface Agent {
    * on the detail view.
    */
   runHealth?: AgentRunHealth | null;
+  /**
+   * AGE-1: the model/provider that will serve this agent's NEXT run, resolved
+   * the same way heartbeat resolves it (explicit adapterConfig -> hermes
+   * per-agent profile -> hermes host default -> explicit unknown), plus which
+   * layer answered. Present-and-null means unknown — never the instance-level
+   * adapter preset, which is host state, not agent state. Absent on responses
+   * from builds older than AGE-1.
+   */
+  resolvedRuntime?: AgentResolvedRuntime | null;
+}
+
+/**
+ * AGE-1: what will serve an agent's next run and where that answer came from.
+ * A wrong answer about the serving model is worse than no answer, so `source`
+ * makes every value's provenance explicit and null model means unknown.
+ */
+export interface AgentResolvedRuntime {
+  model: string | null;
+  provider: string | null;
+  source: "adapter_config" | "agent_profile" | "hermes_host_default" | "unknown";
 }
 
 /**
@@ -189,6 +209,8 @@ export interface AgentAccountableParty {
 export interface AgentDetail extends Agent {
   chainOfCommand: AgentChainOfCommandEntry[];
   access: AgentAccessState;
+  /** AGE-1: what will serve the next run, or explicit unknown. */
+  resolvedRuntime: AgentResolvedRuntime | null;
 }
 
 // AgentDash (AGE-24): what minted an agent API key.
