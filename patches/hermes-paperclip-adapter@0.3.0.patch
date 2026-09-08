@@ -48,7 +48,7 @@ index e96d5c9c0d175a06c668406ba57ac8f5ba750901..bbecad669ef4b195395c98a5efd0b73e
 +        : {};
 +    const configuredCwd = cfgString(config.cwd);
 +    const useConfiguredInsteadOfAgentHome = cfgString(workspaceContext.source) === "agent_home"
-+        && configuredCwd.length > 0;
++        && (configuredCwd ?? "").length > 0;
 +    const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : cfgString(workspaceContext.cwd);
 +    const cwd = effectiveWorkspaceCwd || configuredCwd || cfgString(ctx.config?.workspaceDir) || ".";
      try {
