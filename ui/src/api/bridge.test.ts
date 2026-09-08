@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockApi = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn() }));
 vi.mock("./client", () => ({ api: mockApi }));
 
-const { bridgeApi, BRIDGE_READ } = await import("./bridge");
+const { bridgeApi, BRIDGE_READ, BRIDGE_INBOX } = await import("./bridge");
 
 describe("bridgeApi enrolment", () => {
   beforeEach(() => {
@@ -16,22 +16,42 @@ describe("bridgeApi enrolment", () => {
   /**
    * The security-relevant property of this whole surface.
    *
-   * `bridge:read` means an agent may ask this machine a question.
-   * `bridge:act` means it may change something on it — gated behind a per-task
-   * approval, but a far larger grant. Enrolling a laptop so its owner can be
-   * reached needs only the first, and nothing in the UI should be able to hand
-   * over the second as a side effect of a button labelled "connect".
+   * `bridge:act` means an agent may change something on this machine. It is
+   * gated behind a per-task approval, but it is a far larger grant than being
+   * asked a question, and nothing in the UI should be able to hand it over as
+   * a side effect of a button labelled "connect".
    */
-  it("requests read capability only, never act", async () => {
+  it("never requests act", async () => {
+    await bridgeApi.requestEnrollment("company-1", "My Mac");
+
+    const sent = mockApi.post.mock.calls[0][1] as { capabilities: string[] };
+    expect(sent.capabilities).not.toContain("bridge:act");
+  });
+
+  /**
+   * The capability the documented flow cannot work without.
+   *
+   * This assertion previously read `toEqual(["bridge:read"])`, which is how
+   * the defect survived: `stewardInboxService` rejects `/api/bridge/inbox/*`
+   * for any endpoint without `bridge:inbox`, so every key this call has ever
+   * minted got 403 from the `SessionStart` hook `inbox-init` installs. In
+   * production all seven enrolled endpoints are in that state and
+   * `steward_inbox_events` has never been read by anything. The test was
+   * pinning the broken behaviour in place.
+   *
+   * This is not a widening. The inbox is the signed-in person's own, and the
+   * endpoint is one they enrolled and can revoke.
+   */
+  it("requests the inbox capability, or the inbox returns 403 forever", async () => {
     await bridgeApi.requestEnrollment("company-1", "My Mac");
 
     expect(mockApi.post).toHaveBeenCalledWith("/companies/company-1/me/bridge/endpoints", {
       label: "My Mac",
-      capabilities: [BRIDGE_READ],
+      capabilities: [BRIDGE_READ, BRIDGE_INBOX],
     });
     const sent = mockApi.post.mock.calls[0][1] as { capabilities: string[] };
-    expect(sent.capabilities).toEqual(["bridge:read"]);
-    expect(sent.capabilities).not.toContain("bridge:act");
+    expect(sent.capabilities).toContain("bridge:inbox");
+    expect(sent.capabilities).toContain("bridge:read");
   });
 
   it("approves by endpoint id, which is what mints the token", async () => {

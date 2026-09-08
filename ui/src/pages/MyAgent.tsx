@@ -6,12 +6,13 @@ import { issuesApi } from "../api/issues";
 import { stewardshipsApi } from "../api/stewardships";
 import { StewardRequestEditor } from "../components/agent/StewardRequestEditor";
 import { AgentMandateEditor } from "../components/agent/AgentMandateEditor";
-import { ConnectYourHarness } from "../components/agent/ConnectYourHarness";
-import { ConnectInClaudeOrCodex } from "../components/agent/ConnectInClaudeOrCodex";
+import { ConnectYourTerminal } from "../components/agent/ConnectYourTerminal";
 import { DecisionsNeedingYou } from "../components/agent/DecisionsNeedingYou";
 import { QuestionsForYou } from "../components/agent/QuestionsForYou";
 import { useCompany } from "../context/CompanyContext";
+import { heartbeatsApi } from "../api/heartbeats";
 import { describeActivity } from "../lib/agent-activity-copy";
+import { summarizeAgentTrouble, type AgentTrouble } from "../lib/agent-trouble";
 import { describeAuthority } from "../lib/agent-authority-copy";
 import { queryKeys } from "../lib/queryKeys";
 import { timeAgo } from "../lib/timeAgo";
@@ -85,6 +86,59 @@ function Fold({
   );
 }
 
+/**
+ * Why the agent stopped, said once, at the top.
+ *
+ * The complaint this answers, from a steward diagnosing his own agent: "HAL's
+ * dashboard shows only the recovery-budget wrapper, and you have to click into
+ * the run to find the cause. I nearly reported the wrong root cause off HAL's
+ * dashboard alone."
+ *
+ * Two readers, one panel. The headline is a sentence anyone can act on; the
+ * adapter's own words sit directly beneath it in monospace for whoever is going
+ * to fix it. Neither is behind a click, because the click is what caused the
+ * near-miss.
+ */
+function AgentTroublePanel({ trouble }: { trouble: AgentTrouble }) {
+  return (
+    <section
+      aria-labelledby="my-agent-trouble-heading"
+      role="alert"
+      className="rounded-lg border border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/5 px-4 py-3.5"
+    >
+      <h2 id="my-agent-trouble-heading" className="text-sm font-semibold">
+        {trouble.headline}
+      </h2>
+
+      {trouble.cause ? (
+        <div className="mt-2.5 overflow-x-auto rounded-md border border-destructive/30 bg-background p-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            What the adapter reported
+          </p>
+          <p className="mt-1 whitespace-nowrap font-mono text-sm font-medium text-destructive">
+            {trouble.cause}
+          </p>
+          <p className="mt-1 whitespace-nowrap font-mono text-xs text-muted-foreground">
+            {[trouble.code, trouble.at ? timeAgo(trouble.at) : null].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+      ) : null}
+
+      {/* Naming the marker is the point. Left unexplained, the newest run reads
+          as the diagnosis, and it is not one. */}
+      {trouble.lookedPastRecoveryMarker ? (
+        <p className="mt-2.5 border-l-2 border-destructive/30 pl-3 text-xs text-muted-foreground">
+          Automatic recovery tried, gave up, and wrote its own entry on top of this one. That entry
+          is newer, but it only records that a budget ran out —{" "}
+          {trouble.cause
+            ? "the error above is the reason. We read past it so you do not have to."
+            : "and there is no earlier failure recorded to explain it."}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export default function MyAgent() {
   const { selectedCompanyId, selectedCompany } = useCompany();
   const isProfileCompany = selectedCompany?.productProfile === "agentdash_mk";
@@ -123,6 +177,22 @@ export default function MyAgent() {
     queryKey: ["me", "fact-requests", selectedCompanyId ?? ""],
     queryFn: () => stewardshipsApi.myFactRequests(selectedCompanyId!),
     enabled: !!selectedCompanyId && isProfileCompany,
+  });
+
+  /**
+   * Recent runs, purely so this page can say WHY an agent stopped.
+   *
+   * `GET /me/agent` returns `status: "error"` and nothing else, which is how a
+   * steward diagnosing his own stopped agent ended up reading the recovery
+   * wrapper as the cause: "HAL's dashboard shows only the recovery-budget
+   * wrapper, and you have to click into the run to find the cause. I nearly
+   * reported the wrong root cause off HAL's dashboard alone." Five is enough to
+   * see past a recovery marker to the failure underneath it.
+   */
+  const recentRuns = useQuery({
+    queryKey: ["me", "agent-runs", selectedCompanyId ?? "", agentId ?? ""],
+    queryFn: () => heartbeatsApi.list(selectedCompanyId!, agentId!, 5),
+    enabled: !!selectedCompanyId && !!agentId && isProfileCompany,
   });
 
   const activity = useQuery({
@@ -191,6 +261,8 @@ export default function MyAgent() {
   // is deliberately not "connected" — the fold would otherwise claim a machine
   // could reach you before it can.
   const authorityLines = describeAuthority(governance.data?.policy?.effectivePolicy);
+  // Null unless the newest run failed, so a working agent shows nothing.
+  const trouble = summarizeAgentTrouble((recentRuns.data ?? []) as never, agent.name);
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -206,11 +278,17 @@ export default function MyAgent() {
           My Agent
         </h1>
         <p className="text-xl font-semibold leading-snug text-foreground">
-          {statusSentence(
-            agent.name,
-            { count: work.length, known: workKnown },
-            { count: needsCount, known: needsKnown },
-          )}
+          {/* A stopped agent is not "working on 3 things". The old sentence
+              counted assigned issues and never looked at whether the agent was
+              running, so HAL's page read "HAL is working on 3 things" while HAL
+              had been dead for two hours. */}
+          {trouble
+            ? trouble.headline
+            : statusSentence(
+                agent.name,
+                { count: work.length, known: workKnown },
+                { count: needsCount, known: needsKnown },
+              )}
         </p>
         <p className="text-xs text-muted-foreground">
           {agent.name} · {humanRole(agent.role)} · {agent.status}
@@ -224,6 +302,8 @@ export default function MyAgent() {
           </p>
         )}
       </header>
+
+      {trouble ? <AgentTroublePanel trouble={trouble} /> : null}
 
       <DecisionsNeedingYou
         companyId={selectedCompanyId!}
@@ -241,10 +321,10 @@ export default function MyAgent() {
       {/* Connecting is the point of this page for a first-time steward, so it
           is a visible section rather than a disclosure — and it lives here
           rather than on a page of its own. */}
-      <ConnectInClaudeOrCodex
-        companyId={selectedCompanyId!}
+      <ConnectYourTerminal
+        agentId={agent.id}
         agentName={agent.name}
-        origin={window.location.origin}
+        companyId={selectedCompanyId!}
       />
 
       <section aria-labelledby="my-agent-work-heading" className="rounded-lg border">
@@ -363,16 +443,6 @@ export default function MyAgent() {
         <AgentMandateEditor agentId={agent.id} companyId={selectedCompanyId!} />
       </Fold>
 
-      {/* Running the agent's own work on a machine is a different job from
-          reading its inbox, and it is the technical one. Folded, and named for
-          what it is. */}
-      <Fold summary="Run this agent's work on a machine (for whoever operates it)">
-        <ConnectYourHarness
-          agentId={agent.id}
-          agentName={agent.name}
-          companyId={selectedCompanyId!}
-        />
-      </Fold>
     </div>
   );
 }

@@ -27,7 +27,7 @@ export type HealthStatus = {
    * The address the operator configured for this instance, when they set one.
    *
    * Used to generate harness configuration against a stable host instead of
-   * `window.location.origin` — see ConnectYourHarness. Absent when unset.
+   * `window.location.origin` — see ConnectYourTerminal. Absent when unset.
    */
   publicBaseUrl?: string;
   features?: {

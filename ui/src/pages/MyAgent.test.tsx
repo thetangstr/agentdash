@@ -32,6 +32,9 @@ const mockHubspotApi = vi.hoisted(() => ({
 }));
 
 const mockIssuesApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockHeartbeatsApi = vi.hoisted(() => ({ list: vi.fn() }));
+const mockAgentsApi = vi.hoisted(() => ({ createConnectCode: vi.fn(), createKey: vi.fn() }));
+const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -50,6 +53,9 @@ vi.mock("../api/agent-governance", () => ({ agentGovernanceApi: mockGovernanceAp
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
 vi.mock("../api/approvals", () => ({ approvalsApi: mockApprovalsApi }));
 vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
+vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
+vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
+vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -105,6 +111,17 @@ describe("MyAgent", () => {
     mockStewardshipsApi.myFactRequests.mockResolvedValue({ factRequests: [] });
     mockIssuesApi.list.mockResolvedValue([]);
     mockActivityApi.list.mockResolvedValue([]);
+    // Healthy by default: the newest run succeeded, so no agent is "in trouble"
+    // unless a test says so.
+    mockHeartbeatsApi.list.mockResolvedValue([
+      { status: "succeeded", error: null, errorCode: null, finishedAt: new Date().toISOString() },
+    ]);
+    mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "https://mk.example:3112" });
+    mockAgentsApi.createConnectCode.mockResolvedValue({
+      code: "KVTX-8F02",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      expiresInSeconds: 600,
+    });
     mockGovernanceApi.get.mockResolvedValue({
       policy: {
         id: "policy-1",
@@ -544,7 +561,7 @@ describe("MyAgent", () => {
 
     const text = container.textContent ?? "";
     const needs = text.indexOf("Needs you");
-    const connect = text.indexOf("Talk to Casper from Claude Code or Codex");
+    const connect = text.indexOf("Work with Casper from your own terminal");
     const doing = text.indexOf("What Casper is doing");
     const may = text.indexOf("What Casper may do");
 
@@ -555,6 +572,17 @@ describe("MyAgent", () => {
     expect(doing).toBeLessThan(may);
   });
 
+  /**
+   * Editing what an agent may do should be deliberate and found on purpose, so
+   * it folds. Connecting must not: folding it hid the only route to a working
+   * connection behind a click nobody had a reason to make.
+   *
+   * The old "Run this agent's work on a machine (for whoever operates it)" fold
+   * is deliberately gone. It held the connect-code flow — the one that actually
+   * works — behind a summary line addressed to technicians, while the visible
+   * card above it documented the bridge-token route that returns 403 for every
+   * key this UI mints. There is now one connection section and it is visible.
+   */
   it("folds the editing surfaces but never the connection itself", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
       stewardship: { id: "s-1", userId: "user-me" },
@@ -567,9 +595,114 @@ describe("MyAgent", () => {
       (node) => node.textContent ?? "",
     );
     expect(summaries.some((t) => /Change what Casper may do/.test(t))).toBe(true);
-    expect(summaries.some((t) => /Run this agent's work on a machine/.test(t))).toBe(true);
-    expect(summaries.some((t) => /Claude Code or Codex/.test(t))).toBe(false);
-    expect(container.querySelector('[aria-labelledby="connect-heading"]')).not.toBeNull();
+    expect(summaries.some((t) => /for whoever operates it/.test(t))).toBe(false);
+    expect(summaries.some((t) => /terminal|Claude Code|Codex/.test(t))).toBe(false);
+    expect(container.querySelector('[aria-labelledby="connect-terminal-heading"]')).not.toBeNull();
+  });
+
+  /** Two ways to connect, one of which 403s, is worse than one that works. */
+  it("offers exactly one way to connect", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Create a connect code");
+    // The bridge-token flow told people to write a file by hand and install a
+    // session hook, and its keys cannot reach the inbox routes at all.
+    expect(text).not.toMatch(/bridge-token|inbox-init|paperclipai bridge/);
+  });
+
+  /**
+   * The near-miss this page now prevents, in the reporter's own words: "HAL's
+   * dashboard shows only the recovery-budget wrapper, and you have to click
+   * into the run to find the cause. I nearly reported the wrong root cause off
+   * HAL's dashboard alone."
+   */
+  describe("when the agent has stopped", () => {
+    const HAL_RUNS = [
+      {
+        status: "cancelled",
+        errorCode: "task_recovery_budget_exhausted",
+        error: "Automatic recovery budget exhausted (attempts): attempts=1/1, turns=0/12",
+        finishedAt: new Date().toISOString(),
+      },
+      {
+        status: "failed",
+        errorCode: "adapter_failed",
+        error: "Process adapter missing command",
+        finishedAt: new Date().toISOString(),
+      },
+    ];
+
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "error" },
+      });
+      mockHeartbeatsApi.list.mockResolvedValue(HAL_RUNS);
+    });
+
+    it("shows the real error, not the recovery marker sitting on top of it", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Process adapter missing command");
+      // The wrapper may be explained, but it must never be the stated cause.
+      expect(text).not.toContain("attempts=1/1");
+    });
+
+    it("says a recovery marker was read past, so nobody has to know it exists", async () => {
+      await render();
+
+      expect(container.textContent ?? "").toMatch(/recovery tried, gave up/i);
+    });
+
+    it("does not claim the agent is working while it is stopped", async () => {
+      mockIssuesApi.list.mockResolvedValue([
+        { id: "i-1", title: "A", status: "in_progress", identifier: "MKT-1", updatedAt: null },
+        { id: "i-2", title: "B", status: "in_progress", identifier: "MKT-2", updatedAt: null },
+      ]);
+
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).not.toMatch(/Casper is working on 2 things/);
+      expect(text).toMatch(/Casper stopped/);
+    });
+
+    it("puts the reason above everything else on the page", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Process adapter missing command")).toBeLessThan(
+        text.indexOf("Work with Casper from your own terminal"),
+      );
+    });
+  });
+
+  /** An agent that is working is not in trouble, whatever its history holds. */
+  it("shows no failure banner when the newest run succeeded", async () => {
+    mockStewardshipsApi.getMyAgent.mockResolvedValue({
+      stewardship: { id: "s-1", userId: "user-me" },
+      agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+    });
+    mockHeartbeatsApi.list.mockResolvedValue([
+      { status: "succeeded", error: null, errorCode: null, finishedAt: new Date().toISOString() },
+      {
+        status: "failed",
+        errorCode: "adapter_failed",
+        error: "an old, already-fixed fault",
+        finishedAt: new Date().toISOString(),
+      },
+    ]);
+
+    await render();
+
+    expect(container.textContent ?? "").not.toContain("already-fixed");
   });
 
   /** The dead integrations are gone: none is configured on any instance. */
