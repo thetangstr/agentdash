@@ -541,8 +541,11 @@ describe.sequential("agent permission routes", () => {
         },
       }));
 
+    // AGE-113: the self-update adapterConfig refusal now fires before the
+    // workspace-command authority check. Same 403, earlier gate, and the
+    // invariant is the stricter of the two messages.
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("host-executed workspace commands");
+    expect(res.body.error).toContain("An agent cannot change its own adapterConfig");
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 
@@ -723,8 +726,10 @@ describe.sequential("agent permission routes", () => {
         },
       }));
 
+    // AGE-113: same as above — the self-update adapterConfig refusal fires
+    // before the instructions-bundle authority check. Same 403, earlier gate.
     expect(res.status).toBe(403);
-    expect(res.body.error).toContain("instructions path or bundle configuration");
+    expect(res.body.error).toContain("An agent cannot change its own adapterConfig");
     expect(mockLogActivity).not.toHaveBeenCalled();
   }, 15_000);
 

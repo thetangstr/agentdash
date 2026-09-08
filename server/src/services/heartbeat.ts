@@ -1731,12 +1731,21 @@ function mergeWakeCommentIds(...values: Array<unknown>): string[] {
   return merged;
 }
 
-function enrichWakeContextSnapshot(input: {
+export function enrichWakeContextSnapshot(input: {
   contextSnapshot: Record<string, unknown>;
   reason: string | null;
   source: WakeupOptions["source"];
   triggerDetail: WakeupOptions["triggerDetail"] | null;
   payload: Record<string, unknown> | null;
+  /**
+   * AGE-113: who asked for this wake. A wake payload is part of the request
+   * surface of whoever triggered it; `modelProfile` in a payload is therefore
+   * a model change requested by that actor, and an agent-authenticated actor
+   * may not request one. Defaults to "system" for internal callers that
+   * predate the parameter (timer wakes, automation retries) — those never
+   * carry a profile in the payload, so the gate is a no-op for them.
+   */
+  requestedByActorType?: "user" | "agent" | "system" | null;
 }) {
   const { contextSnapshot, reason, source, triggerDetail, payload } = input;
   const issueIdFromPayload = readNonEmptyString(payload?.["issueId"]);
@@ -1776,6 +1785,18 @@ function enrichWakeContextSnapshot(input: {
   }
   if (!readNonEmptyString(contextSnapshot["wakeTriggerDetail"]) && triggerDetail) {
     contextSnapshot.wakeTriggerDetail = triggerDetail;
+  }
+  // AGE-113: an agent-requested wake may not smuggle a model change through
+  // the payload. Drop it before it reaches the run context; everything else
+  // in the payload passes untouched.
+  if (input.requestedByActorType === "agent") {
+    if (readModelProfileKey(payload?.["modelProfile"])) {
+      logger.warn(
+        { requestedByActorType: input.requestedByActorType },
+        "[heartbeat] dropped payload.modelProfile — an agent-requested wake may not request a model profile",
+      );
+    }
+    delete payload?.["modelProfile"];
   }
   normalizeModelProfileWakeContext({ contextSnapshot, payload });
 
@@ -7028,6 +7049,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           source: promotedSource,
           triggerDetail: promotedTriggerDetail,
           payload: promotedPayload,
+          requestedByActorType: (["user", "agent", "system"] as const).includes(
+            deferred.requestedByActorType as "user" | "agent" | "system",
+          )
+            ? (deferred.requestedByActorType as "user" | "agent" | "system")
+            : null,
         });
 
         const sessionBefore =
@@ -7255,6 +7281,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       source,
       triggerDetail,
       payload,
+      requestedByActorType: opts.requestedByActorType ?? null,
     });
     let issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueIdFromPayload;
 
