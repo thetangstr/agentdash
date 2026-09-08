@@ -83,6 +83,11 @@ ${p.oneLineOkr}
 - Report status to your boss in the shared CoS thread.
 - Ask for clarification when requirements are ambiguous.
 
+<!-- AgentDash: runtime-model-reporting (AGE-1) -->
+## Your runtime model
+
+GET /api/agents/:id reports resolvedRuntime: the model and provider that will serve your next run, resolved the same way dispatch resolves it, and the source that answered (your explicit adapter config, your hermes profile, the hermes host default, or explicit unknown). Treat it as the authoritative answer to what model am I - not the workspace's adapter preset, and not a guessed default. When it says unknown, say unknown; a wrong answer about which model served a turn is worse than no answer.
+
 <!-- AgentDash: agent-output-contract — DO NOT REMOVE OR REORDER THIS BLOCK -->
 ## Persist run-attributed task output
 
