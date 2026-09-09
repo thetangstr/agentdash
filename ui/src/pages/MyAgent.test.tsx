@@ -772,6 +772,53 @@ describe("MyAgent", () => {
     });
   });
 
+  describe("scheduling the check", () => {
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+      });
+    });
+
+    /**
+     * Pinning cannot be part of the prompt — it is something the person does to
+     * the conversation in their own tool. Unsaid, the schedule dies with the
+     * conversation, and that failure reads as "the agent stopped telling me
+     * things" rather than as a missed step.
+     */
+    it("tells you to pin the conversation, and says it is a right-click", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toMatch(/pin that conversation/i);
+      expect(text).toMatch(/right-click/i);
+    });
+
+    it("keeps pinning out of the prompt, which cannot do it", async () => {
+      await render();
+
+      const prompt =
+        Array.from(container.querySelectorAll("pre code"))
+          .map((n) => n.textContent ?? "")
+          .find((t) => /Every 30 minutes/.test(t)) ?? "";
+      expect(prompt).not.toMatch(/pin/i);
+    });
+
+    /**
+     * The harness preview is gone on purpose. It showed an MCP panel, tool call
+     * rows and a connect command — none of which answers the only question this
+     * section exists for, which is how to schedule the check.
+     */
+    it("shows no harness preview", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).not.toContain("What you will see");
+      expect(text).not.toContain("MCP Server Status");
+      expect(container.querySelector('[role="tablist"]')).toBeNull();
+    });
+  });
+
   /** The dead integrations are gone: none is configured on any instance. */
   it("offers no telegram, whatsapp, teams or hubspot connection", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
