@@ -84,3 +84,16 @@ jobs:
             echo "- Service: \`${SERVICE}\`"
             echo "- URL: ${PUBLIC_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Health evidence — /api/health on the live deployment
+        if: always() && steps.guard.outputs.enabled == 'true'
+        run: |
+          set -u
+          echo "### /api/health evidence" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS "$PUBLIC_URL/api/health" | tee /dev/stderr >> "$GITHUB_STEP_SUMMARY" || \
+            echo "health endpoint did not return 200 (see smoke test result)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Merged SHA: ${GITHUB_SHA}"
+          echo "Health body above; \`version\` reports the deployed package version (AGE-26 AC2)."

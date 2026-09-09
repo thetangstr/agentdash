@@ -208,6 +208,43 @@ Without `RESEARCH_APP_URL` + `RESEARCH_APP_API_KEY` the route returns HTTP 503 �
 
 ---
 
+## 4b. The hosted production deploy story (what happens on merge)
+
+For **our hosted product** (the AgentDash-operated cloud deployment), deployment
+is automatic — you do not run `railway up` by hand:
+
+- **A merge to `main` auto-deploys the hosted product.** The
+  [Deploy workflow](../.github/workflows/deploy.yml) (`Deploy to Railway
+  (production)`) runs after the merge and runs `railway up --service web`
+  against the production Railway service (`web`, live at
+  `https://web-production-33a3b6.up.railway.app`). Railway builds the
+  Dockerfile, applies migrations on boot
+  (`PAPERCLIP_MIGRATION_AUTO_APPLY=true`), and the workflow then smoke-tests
+  the live URL (`/` and `/api/auth/social-providers`) before reporting green.
+  The deploy is gated on the `RAILWAY_TOKEN` repo secret: without the secret
+  the workflow is **inert** — it runs, logs "not configured", and exits green
+  without deploying.
+- **Customer instances do NOT auto-deploy.** The manual OTA-updater rollout
+  policy for local, HQ Mac mini, and customer instances is unchanged — a merge
+  to `main` ships the hosted product only, never a customer instance. Instance
+  rollouts stay operator-driven via the updater ([doc/VPS-DEPLOYMENT.md](VPS-DEPLOYMENT.md),
+  [doc/MAC-MINI-DEPLOYMENT.md](MAC-MINI-DEPLOYMENT.md)).
+- **Vercel serves the UI and proxies the API.** The public site is Vercel
+  (per [`vercel.json`](../vercel.json)): Vercel builds `ui/dist` and rewrites
+  `/api/*` to the Railway deployment at
+  `https://web-production-33a3b6.up.railway.app/api/*`. The API always comes
+  from Railway; Vercel is static hosting for the UI plus the rewrite.
+- **Rollback is one click.** Railway keeps the previous deployment; if a deploy
+  is bad, roll back in the Railway dashboard (service → Deployments → previous
+  deployment → Redeploy/rollback). No code action required.
+- **Disabling auto-deploy** reverts to the inert-by-default state: remove the
+  `RAILWAY_TOKEN` repo secret and the Deploy workflow logs "not configured"
+  and stops deploying.
+
+The rest of this section describes provisioning a *new* Railway deployment
+from scratch (also the reference for self-serve operators doing the same);
+the hosted product already exists and auto-deploys as above.
+
 ## 5. Deploy and smoke-test
 
 **Before going public, run the cloud preflight** (G5) — it fails closed on an unsafe public config (wrong auth mode, weak `BETTER_AUTH_SECRET`, missing DB, non-https base URL, an LLM adapter with no key → stub replies, or a dev bypass like `AGENTDASH_RATE_LIMIT_DISABLED=true` left on):

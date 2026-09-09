@@ -8,6 +8,30 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("deploy workflow deploys on merge, emits /api/health evidence, and stays inert without the token", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/deploy.yml"), "utf8");
+
+  // AGE-26 AC1/AC2 (AGE-48): a push to main runs the deploy against service
+  // `web` and records /api/health output as deploy evidence.
+  assert.match(workflow, /on:\s*\n\s*push:\s*\n\s*branches:\s*\[main\]/);
+  assert.match(workflow, /railway up --service "\$SERVICE" --ci/);
+  assert.match(workflow, /SERVICE:\s*web/);
+  assert.match(workflow, /name:\s*Health evidence — \/api\/health on the live deployment/);
+  assert.match(workflow, /curl -fsS "\$PUBLIC_URL\/api\/health"/);
+  assert.match(workflow, /Merged SHA:/);
+
+  // Inert-by-default guard: no RAILWAY_TOKEN -> no deploy steps run.
+  assert.match(workflow, /if \[ -z "\$\{RAILWAY_TOKEN\}" \]; then/);
+  assert.match(workflow, /echo "enabled=false" >> "\$GITHUB_OUTPUT"/);
+  assert.match(
+    workflow.match(/      - name: Checkout repository\n[\s\S]*?(?=      - name:)/)?.[0] ?? "",
+    /steps\.guard\.outputs\.enabled == 'true'/,
+  );
+
+  // Smoke test targets the live Railway production.
+  assert.match(workflow, /PUBLIC_URL:\s*https:\/\/web-production-33a3b6\.up\.railway\.app/);
+});
+
 test("release workflows run the workspace-link preflight before recursive typecheck", () => {
   const workflow = readFileSync(path.join(repoRoot, ".github/workflows/release.yml"), "utf8");
   const releaseScript = readFileSync(path.join(repoRoot, "scripts/release.sh"), "utf8");
