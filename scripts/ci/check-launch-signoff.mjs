@@ -3,7 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REQUIRED_CHECK_CONTEXTS = ["policy", "verify", "e2e", "launch-signoff", "audit", "drift", "check"];
+// AGE-25 (2026-09-04): the GHCR image is a supported distribution path —
+// production deploy tooling consumes it (docker/docker-compose.production.yml,
+// scripts/deploy/agentdash-mac-mini-launchd.mjs, scripts/deploy/agentdash-ota-update.mjs,
+// doc/VPS-DEPLOYMENT.md) — so a red image build must block the merge, not rot
+// silently on main as it did from 2026-08-27 to 2026-09-01. The image is built
+// on pull requests (never pushed) by the `build-and-push` job, so the check
+// reports before merge.
+const REQUIRED_CHECK_CONTEXTS = ["policy", "verify", "e2e", "launch-signoff", "audit", "drift", "check", "dependency-audit", "build-and-push"];
 const REQUIRED_CODEOWNER_PATTERNS = [
   ".github/**",
   "scripts/ci/**",

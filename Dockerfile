@@ -41,10 +41,20 @@ RUN pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /app
+# AgentDash: the server's `tsc` needs more than Node's default heap on hosts with
+# ~8 GB (V8 sizes the default old space from physical memory); pin it so the image
+# builds the same on a laptop Docker VM and on a 16 GB CI runner.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 COPY --from=deps /app /app
 COPY . .
+# AgentDash: the UI's `tsc -b` resolves @paperclipai/adapter-utils, @paperclipai/shared
+# and the adapter packages from their dist output, so the workspace packages
+# must be built first. `<pkg>^...` selects a package's workspace dependencies
+# (transitively, in topological order) and nothing else, so the plugin examples
+# that the deps stage never installs are not touched.
+# Building the UI first failed every image build from 2026-08-27 to 2026-09-01.
+RUN pnpm --filter "@paperclipai/ui^..." --filter "@paperclipai/server^..." build
 RUN pnpm --filter @paperclipai/ui build
-RUN pnpm --filter @paperclipai/plugin-sdk build
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 

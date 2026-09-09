@@ -30,6 +30,8 @@ GitHub branch protection on `main` with:
     - `audit`
     - `drift`
     - `check`
+    - `dependency-audit`
+    - `build-and-push`
 - ✅ Require branches to be up to date before merging (catches `main` advancing during review)
 - ✅ Do not allow bypassing the above settings
 - ✅ Restrict who can push to matching branches → empty list (PR-only)
@@ -62,7 +64,9 @@ gh api \
       "launch-signoff",
       "audit",
       "drift",
-      "check"
+      "check",
+      "dependency-audit",
+      "build-and-push"
     ]
   },
   "enforce_admins": true,
@@ -86,8 +90,10 @@ EOF
 slipping a direct push through admin privilege.
 
 The `contexts` list names the **check JOB names** (not workflow names). The PR
-workflow jobs are `policy`, `verify`, `e2e`, and `launch-signoff`; Hermes audit
-is `audit`, Hermes prompt drift is `drift`, and agents-md drift is `check`.
+workflow jobs are `policy`, `verify`, `e2e`, and `launch-signoff`; the agent audit
+is `audit`, the agent prompt drift is `drift`, agents-md drift is `check`, the
+dependency audit is `dependency-audit`, and the Docker image build is
+`build-and-push` (build-only on pull requests; pushes to GHCR from main/tags).
 If you add more required workflows, append their job names here.
 
 ### 2. Verify
@@ -106,7 +112,7 @@ Expected:
 
 ```json
 {
-  "required_status_checks": ["policy", "verify", "e2e", "launch-signoff", "audit", "drift", "check"],
+  "required_status_checks": ["policy", "verify", "e2e", "launch-signoff", "audit", "drift", "check", "dependency-audit", "build-and-push"],
   "enforce_admins": true,
   "require_pr": true,
   "linear_history": true
