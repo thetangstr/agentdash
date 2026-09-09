@@ -684,6 +684,51 @@ describe("MyAgent", () => {
     });
   });
 
+  /**
+   * Found on the live page by the owner: the panel showed "Process lost --
+   * server may have restarted" beneath "What the adapter reported", which sent
+   * him looking at the agent's configuration for a fault that was the
+   * platform's — the server had restarted and the reaper guessed.
+   */
+  describe("when the platform lost the run", () => {
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Scout", role: "marketing", status: "error" },
+      });
+      mockHeartbeatsApi.list.mockResolvedValue([
+        {
+          status: "failed",
+          errorCode: "process_lost",
+          error: "Process lost -- server may have restarted",
+          finishedAt: new Date().toISOString(),
+        },
+      ]);
+    });
+
+    it("does not blame the adapter for something the adapter never said", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).not.toContain("What the adapter reported");
+      expect(text).toContain("What the platform recorded");
+    });
+
+    it("tells the steward there is nothing here for them to fix", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toMatch(/nothing here for you to\s+fix/i);
+      expect(text).toMatch(/inference rather than something it observed/i);
+    });
+
+    it("does not claim the agent stopped", async () => {
+      await render();
+
+      expect(container.textContent ?? "").not.toMatch(/Scout stopped and has not run since/);
+    });
+  });
+
   /** An agent that is working is not in trouble, whatever its history holds. */
   it("shows no failure banner when the newest run succeeded", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
