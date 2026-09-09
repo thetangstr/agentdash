@@ -170,6 +170,19 @@ export interface Agent {
    * on the detail view.
    */
   runHealth?: AgentRunHealth | null;
+  /**
+   * AGE-1: the model/provider that will serve this agent's NEXT run, resolved
+   * the same way dispatch resolves it (explicit adapterConfig.model → the
+   * agent's managed hermes profile → the hermes host default), or an explicit
+   * unknown — never the instance-level adapter preset from /api/health, which
+   * is instance state, not agent state. `source` says which layer answered so
+   * "Default" can be explained instead of shown bare.
+   */
+  resolvedRuntime?: {
+    model: string | null;
+    provider: string;
+    source: "agent_adapter_config" | "agent_hermes_profile" | "hermes_host_default";
+  } | null;
 }
 
 /**
