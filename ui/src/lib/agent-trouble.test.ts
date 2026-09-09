@@ -77,6 +77,50 @@ describe("summarizeAgentTrouble", () => {
     expect(JSON.stringify(t)).not.toMatch(/already-fixed/);
   });
 
+  /**
+   * The defect a steward found on the live page: it showed
+   * "Process lost -- server may have restarted" under the heading "What the
+   * adapter reported". The adapter reported nothing. `services/heartbeat.ts`
+   * says so about its own code — "the reaper's inference, not an observation:
+   * it fires when the server can no longer see the child, and after a restart
+   * that is a guess."
+   */
+  describe("a lost process is the platform's fault, not the agent's", () => {
+    const LOST = [
+      run({
+        status: "failed",
+        errorCode: "process_lost",
+        error: "Process lost -- server may have restarted",
+      }),
+    ];
+
+    it("is classified as infrastructure, not as an adapter fault", () => {
+      expect(summarizeAgentTrouble(LOST as never, "Scout")!.kind).toBe("infrastructure");
+    });
+
+    it("does not say the agent stopped, because it did not", () => {
+      const t = summarizeAgentTrouble(LOST as never, "Scout")!;
+      expect(t.headline).toBe("Scout's last run was cut short when the server restarted.");
+      expect(t.headline).not.toMatch(/stopped and has not run since/);
+    });
+
+    it("still shows the recorded text, so nothing is hidden", () => {
+      expect(summarizeAgentTrouble(LOST as never, "Scout")!.cause).toBe(
+        "Process lost -- server may have restarted",
+      );
+    });
+
+    /** A real adapter failure must keep the sharper framing. */
+    it("leaves genuine adapter failures classified as adapter faults", () => {
+      const t = summarizeAgentTrouble(
+        [run({ errorCode: "adapter_failed", error: "Process adapter missing command" })] as never,
+        "HAL",
+      )!;
+      expect(t.kind).toBe("adapter");
+      expect(t.headline).toBe("HAL stopped and has not run since.");
+    });
+  });
+
   it("returns nothing when there are no runs at all", () => {
     expect(summarizeAgentTrouble([] as never, "HAL")).toBeNull();
   });

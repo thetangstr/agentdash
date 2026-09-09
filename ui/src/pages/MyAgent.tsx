@@ -115,28 +115,58 @@ function Fold({
  * near-miss.
  */
 function AgentTroublePanel({ trouble }: { trouble: AgentTrouble }) {
+  const infra = trouble.kind === "infrastructure";
   return (
     <section
       aria-labelledby="my-agent-trouble-heading"
       role="alert"
-      className="rounded-lg border border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/5 px-4 py-3.5"
+      className={
+        // A lost process is our fault, not the agent's, so it does not get the
+        // colour reserved for "your agent is broken".
+        infra
+          ? "rounded-lg border border-border border-l-[3px] border-l-muted-foreground bg-muted/40 px-4 py-3.5"
+          : "rounded-lg border border-destructive/40 border-l-[3px] border-l-destructive bg-destructive/5 px-4 py-3.5"
+      }
     >
       <h2 id="my-agent-trouble-heading" className="text-sm font-semibold">
         {trouble.headline}
       </h2>
 
       {trouble.cause ? (
-        <div className="mt-2.5 overflow-x-auto rounded-md border border-destructive/30 bg-background p-2.5">
+        <div
+          className={
+            infra
+              ? "mt-2.5 overflow-x-auto rounded-md border border-border bg-background p-2.5"
+              : "mt-2.5 overflow-x-auto rounded-md border border-destructive/30 bg-background p-2.5"
+          }
+        >
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            What the adapter reported
+            {/* Naming the source honestly. The adapter did not report a lost
+                process — the platform inferred it. */}
+            {infra ? "What the platform recorded" : "What the adapter reported"}
           </p>
-          <p className="mt-1 whitespace-nowrap font-mono text-sm font-medium text-destructive">
+          <p
+            className={
+              infra
+                ? "mt-1 whitespace-nowrap font-mono text-sm font-medium text-foreground"
+                : "mt-1 whitespace-nowrap font-mono text-sm font-medium text-destructive"
+            }
+          >
             {trouble.cause}
           </p>
           <p className="mt-1 whitespace-nowrap font-mono text-xs text-muted-foreground">
             {[trouble.code, trouble.at ? timeAgo(trouble.at) : null].filter(Boolean).join(" · ")}
           </p>
         </div>
+      ) : null}
+
+      {infra ? (
+        <p className="mt-2.5 border-l-2 border-border pl-3 text-xs text-muted-foreground">
+          Nothing is wrong with {"this agent's"} configuration and there is nothing here for you to
+          fix. The server lost sight of the run when it restarted, which it records as a failure —
+          but that is an inference rather than something it observed, and the work may even have
+          finished. It will run again on its next trigger.
+        </p>
       ) : null}
 
       {/* Naming the marker is the point. Left unexplained, the newest run reads
