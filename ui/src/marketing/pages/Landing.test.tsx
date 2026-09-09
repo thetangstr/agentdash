@@ -50,6 +50,14 @@ describe("Landing", () => {
     expect(hrefs.some((h) => h.includes("sign_up"))).toBe(false);
   });
 
+  it("owns the document title while mounted", async () => {
+    document.title = "AgentDash";
+    await act(async () => {
+      root.render(<LandingContent />);
+    });
+    expect(document.title).toContain("Chief of Staff");
+  });
+
   it("loads the marketing type families once, without touching the dashboard's fonts", async () => {
     await act(async () => {
       root.render(<LandingContent />);
