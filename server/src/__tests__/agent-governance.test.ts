@@ -658,6 +658,106 @@ describeEmbeddedPostgres("agent governance service and routes", () => {
     ]);
   });
 
+  // AGE-3: the accountable party can READ the enforced policy. The read guard
+  // is deliberately broader than the configuration guard — an autonomous
+  // agent's accountable human has no stewardship row, so only the shared
+  // accountability resolution (`agentAccountabilityService`) can authorize
+  // them — while every write route is unchanged.
+  it("lets the accountable steward read the governance policy (stewarded mode)", async () => {
+    const { company, steward, agent } = await seed();
+
+    const stewardApp = await createApp(db, makeBoardActor(company.id, steward.principalId, "operator"));
+    const res = await requestApp(stewardApp, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/governance`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.policy.effectivePolicy).toEqual(DEFAULT_AGENT_GOVERNANCE_POLICY);
+  });
+
+  it("lets the accountable human read the governance policy (autonomous mode)", async () => {
+    // Deliberately a non-admin operator: an owner/admin would pass through the
+    // pre-existing administrator branch of the configuration guard, which
+    // would make this test pass even without the fix. `agents:create` is
+    // absent from the member role, so only the accountability resolution can
+    // authorize this caller.
+    const { company, steward } = await seed();
+    const agent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Autonomous ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        autonomy: "autonomous",
+        accountableUserId: steward.principalId,
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const stewardApp = await createApp(db, makeBoardActor(company.id, steward.principalId, "operator"));
+    const res = await requestApp(stewardApp, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/governance`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.policy.agentId).toBe(agent.id);
+  });
+
+  it("still denies the governance policy read to a company member who is not the accountable party", async () => {
+    const { company, bystander, agent } = await seed();
+
+    const bystanderApp = await createApp(db, makeBoardActor(company.id, bystander.principalId, "operator"));
+    const res = await requestApp(bystanderApp, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/governance`),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("keeps the governance WRITE paths closed to the accountable human of an autonomous agent", async () => {
+    // Same non-admin choice as the read test above: the accountable human here
+    // holds no `agents:create` grant, so any write success would mean the read
+    // fix leaked into a write path — which it must not.
+    const { company, steward } = await seed();
+    const agent = await db
+      .insert(agents)
+      .values({
+        companyId: company.id,
+        name: `Autonomous ${randomUUID()}`,
+        role: "engineer",
+        status: "idle",
+        adapterType: "process",
+        autonomy: "autonomous",
+        accountableUserId: steward.principalId,
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const stewardApp = await createApp(db, makeBoardActor(company.id, steward.principalId, "operator"));
+
+    // The accountable human may read…
+    const read = await requestApp(stewardApp, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/${company.id}/agents/${agent.id}/governance`),
+    );
+    expect(read.status).toBe(200);
+
+    // …but neither write accepts them: the ceiling stays owner/admin-only and
+    // the steward-request write stays with the active steward. AGE-3 adds no
+    // write path.
+    const ceiling = await requestApp(stewardApp, (baseUrl) =>
+      request(baseUrl)
+        .put(`/api/companies/${company.id}/agents/${agent.id}/governance/ceiling`)
+        .send({ policy: CEILING, revision: 1 }),
+    );
+    expect(ceiling.status).toBe(403);
+
+    const requestWrite = await requestApp(stewardApp, (baseUrl) =>
+      request(baseUrl)
+        .put(`/api/companies/${company.id}/agents/${agent.id}/governance/request`)
+        .send({ policy: REQUESTED_WITHIN, revision: 1 }),
+    );
+    expect(requestWrite.status).toBe(403);
+  });
+
   it("rejects agent-authenticated callers and unknown payload keys", async () => {
     const { company, owner, agent } = await seed();
 
