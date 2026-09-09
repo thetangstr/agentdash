@@ -5,7 +5,7 @@ import { pinoHttp } from "pino-http";
 import { readConfigFile } from "../config-file.js";
 import { resolveDefaultLogsDir, resolveHomeAwarePath } from "../home-paths.js";
 import { shouldSilenceHttpSuccessLog } from "./http-log-policy.js";
-import { redactSensitive } from "./redact-sensitive.js";
+import { redactQueryObject, redactSensitive, redactUrlQuery } from "./redact-sensitive.js";
 
 function resolveServerLogDir(): string {
   const envOverride = process.env.PAPERCLIP_LOG_DIR?.trim();
@@ -70,6 +70,18 @@ export const logger = pino({
 
 export const httpLogger = pinoHttp({
   logger,
+  serializers: {
+    // AGE-83: the `req.url` pino-http puts on every log line is the raw
+    // request URL, so an OAuth callback's `?code=` landed on disk verbatim.
+    // TRAP (verified in the AGE-80 probe): pino-http wraps custom
+    // serializers in wrapRequestSerializer, so this receives the
+    // ALREADY-SERIALIZED req object ({method,url,headers,remoteAddress,
+    // remotePort}), not the Express request. Spread-copy keeps the
+    // serialized shape and only rewrites the URL.
+    req(obj) {
+      return { ...obj, url: redactUrlQuery(obj?.url) };
+    },
+  },
   customLogLevel(_req, res, err) {
     if (shouldSilenceHttpSuccessLog(_req.method, _req.url, res.statusCode)) {
       return "silent";
@@ -79,12 +91,14 @@ export const httpLogger = pinoHttp({
     return "info";
   },
   customSuccessMessage(req, res) {
-    return `${req.method} ${req.url} ${res.statusCode}`;
+    // AGE-83: pino-http routes ONLY err/>=500 to customErrorMessage, so 4xx
+    // lines carry their URL through THIS message — both messages must scrub.
+    return `${req.method} ${redactUrlQuery(req.url)} ${res.statusCode}`;
   },
   customErrorMessage(req, res, err) {
     const ctx = (res as any).__errorContext;
     const errMsg = ctx?.error?.message || err?.message || (res as any).err?.message || "unknown error";
-    return `${req.method} ${req.url} ${res.statusCode} — ${errMsg}`;
+    return `${req.method} ${redactUrlQuery(req.url)} ${res.statusCode} — ${errMsg}`;
   },
   customProps(req, res) {
     if (res.statusCode >= 400) {
@@ -94,7 +108,11 @@ export const httpLogger = pinoHttp({
           errorContext: ctx.error,
           reqBody: redactSensitive(ctx.reqBody),
           reqParams: redactSensitive(ctx.reqParams),
-          reqQuery: redactSensitive(ctx.reqQuery),
+          // AGE-83: reqQuery is the query channel — the query-key list with
+          // the suffix rule, not the body list. reqBody/reqParams stay on
+          // the body list on purpose (a body key named `code` is NOT
+          // newly redacted; pinned by regression test).
+          reqQuery: redactQueryObject(ctx.reqQuery),
         };
       }
       const props: Record<string, unknown> = {};
@@ -106,7 +124,7 @@ export const httpLogger = pinoHttp({
         props.reqParams = redactSensitive(params);
       }
       if (query && typeof query === "object" && Object.keys(query).length > 0) {
-        props.reqQuery = redactSensitive(query);
+        props.reqQuery = redactQueryObject(query);
       }
       if ((req as any).route?.path) {
         props.routePath = (req as any).route.path;
