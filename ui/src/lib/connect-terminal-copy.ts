@@ -6,21 +6,77 @@
  */
 
 /**
- * The address that gets baked into a config file on somebody else's laptop.
+ * Which address the pasted command should point at.
  *
- * `window.location.origin` is merely whichever URL happened to be in the
- * browser when Copy was pressed. Copy from a LAN address and that address is
- * written into `~/.codex/config.toml` on a colleague's machine, where it works
- * in this office and silently stops working anywhere else — and fixing it means
- * finding a file on someone else's computer. The operator's configured public
- * URL wins when there is one.
+ * There is no single right answer on this instance, and pretending otherwise is
+ * what made the old behaviour wrong for somebody either way. Three doors exist
+ * and none of them works for everyone:
+ *
+ *   http://mkmini.local:3102   plain HTTP on the office LAN — the only address a
+ *                              client user on a managed Mac can open with no IT ask
+ *   https://<host>:3112        real certificate, but only for someone on the tailnet
+ *   https://mkmini.local:3112  a private root a managed Mac will not trust
+ *
+ * So `PAPERCLIP_PUBLIC_URL` is a compromise chosen for the majority, and the
+ * page used to hand it to everyone — including the person who had demonstrably
+ * just reached the server by a different address, since they were reading the
+ * page through it.
+ *
+ * When the two agree there is nothing to decide and nothing is shown. When they
+ * disagree, both are offered.
+ *
+ * The published address stays FIRST, and that ordering is the safety property.
+ * The command is a thing people forward to a colleague, and a URL captured from
+ * whichever door happened to be open gets written into `~/.codex/config.toml`
+ * on somebody else's machine, where it works here and silently stops working
+ * anywhere else. Defaulting to the shared address means the person who has to
+ * override it is the one who can already see that they took a different door.
+ */
+export type OriginChoice = {
+  url: string;
+  kind: "published" | "current";
+  /** What a person needs to know to pick, in their words rather than ours. */
+  label: string;
+};
+
+/** Trailing slashes and case differ without meaning anything. */
+function sameOrigin(a: string, b: string): boolean {
+  const normalize = (value: string) => value.trim().replace(/\/+$/, "").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
+export function resolveOriginChoices(
+  publicBaseUrl: string | null | undefined,
+  browserOrigin: string,
+): OriginChoice[] {
+  const published = (publicBaseUrl ?? "").trim().replace(/\/+$/, "");
+  const current = (browserOrigin ?? "").trim().replace(/\/+$/, "");
+
+  if (!published) {
+    return current ? [{ url: current, kind: "current", label: "The address you are using now" }] : [];
+  }
+  const publishedChoice: OriginChoice = {
+    url: published,
+    kind: "published",
+    label: "The address this instance publishes",
+  };
+  if (!current || sameOrigin(published, current)) return [publishedChoice];
+
+  return [
+    publishedChoice,
+    { url: current, kind: "current", label: "The address you are using now" },
+  ];
+}
+
+/**
+ * The address to use when nobody chooses. First choice wins; see the ordering
+ * note above for why that is the published one.
  */
 export function resolveInstanceOrigin(
   publicBaseUrl: string | null | undefined,
   browserOrigin: string,
 ): string {
-  const configured = (publicBaseUrl ?? "").trim();
-  return configured || browserOrigin;
+  return resolveOriginChoices(publicBaseUrl, browserOrigin)[0]?.url ?? browserOrigin;
 }
 
 /** The whole setup, in one line, with the code already in it. */

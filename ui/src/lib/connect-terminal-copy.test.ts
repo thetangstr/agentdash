@@ -4,18 +4,56 @@ import {
   buildWatchPrompt,
   describeCodeLife,
   resolveInstanceOrigin,
+  resolveOriginChoices,
 } from "./connect-terminal-copy";
 
-describe("resolveInstanceOrigin", () => {
-  it("prefers the operator's configured URL over whatever is in the address bar", () => {
-    expect(resolveInstanceOrigin("https://mk.example.ts.net:3112", "http://192.168.1.9:3112")).toBe(
-      "https://mk.example.ts.net:3112",
-    );
+describe("resolveOriginChoices", () => {
+  const PUBLISHED = "http://mkmini.local:3102";
+  const TAILNET = "https://mkthinks-mac-mini.tail112187.ts.net:3112";
+
+  /**
+   * The common case, and it must stay invisible. A steward on the office LAN
+   * reaches the box at the published address, so there is nothing to decide and
+   * no control should appear.
+   */
+  it("offers nothing to choose when both addresses agree", () => {
+    const choices = resolveOriginChoices(PUBLISHED, PUBLISHED);
+    expect(choices).toHaveLength(1);
+    expect(choices[0]!.url).toBe(PUBLISHED);
   });
 
-  it("falls back to the browser origin when nothing is configured", () => {
-    expect(resolveInstanceOrigin(null, "http://mkmini.local:3103")).toBe("http://mkmini.local:3103");
-    expect(resolveInstanceOrigin("   ", "http://mkmini.local:3103")).toBe("http://mkmini.local:3103");
+  it("treats a trailing slash and case as the same address", () => {
+    expect(resolveOriginChoices(PUBLISHED, "http://MKMini.local:3102/")).toHaveLength(1);
+  });
+
+  /** Someone on the tailnet: the published LAN address is not how they got here. */
+  it("offers both when the door they came through is not the published one", () => {
+    const choices = resolveOriginChoices(PUBLISHED, TAILNET);
+    expect(choices.map((c) => c.url)).toEqual([PUBLISHED, TAILNET]);
+    expect(choices.map((c) => c.kind)).toEqual(["published", "current"]);
+  });
+
+  /**
+   * The ordering is a safety property, not a preference. The command gets
+   * forwarded to colleagues, and a URL captured from whichever door happened to
+   * be open ends up in someone else's config where it silently stops working.
+   * Whoever took the unusual door is the one who can see they did.
+   */
+  it("puts the shared address first, so the default is the forwardable one", () => {
+    expect(resolveOriginChoices(PUBLISHED, TAILNET)[0]!.kind).toBe("published");
+    expect(resolveInstanceOrigin(PUBLISHED, TAILNET)).toBe(PUBLISHED);
+  });
+
+  it("falls back to the browser address when nothing is published", () => {
+    expect(resolveOriginChoices(null, TAILNET)).toEqual([
+      { url: TAILNET, kind: "current", label: "The address you are using now" },
+    ]);
+    expect(resolveInstanceOrigin("   ", TAILNET)).toBe(TAILNET);
+  });
+
+  it("survives having neither", () => {
+    expect(resolveOriginChoices(null, "")).toEqual([]);
+    expect(resolveInstanceOrigin(null, "")).toBe("");
   });
 });
 

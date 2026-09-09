@@ -9,7 +9,7 @@ import {
   buildConnectCommand,
   buildWatchPrompt,
   describeCodeLife,
-  resolveInstanceOrigin,
+  resolveOriginChoices,
 } from "../../lib/connect-terminal-copy";
 import { Button } from "../ui/button";
 
@@ -52,7 +52,16 @@ export function ConnectYourTerminal({
     staleTime: 5 * 60_000,
   });
   const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  const origin = resolveInstanceOrigin(health?.publicBaseUrl, browserOrigin);
+  /**
+   * This instance has no address that works for everyone: the published one is
+   * plain HTTP on the office LAN (the only door a managed Mac can open with no
+   * IT ask), while the tailnet door has a real certificate but only for people
+   * on the tailnet. So when the address someone is reading this page through is
+   * not the published one, both are offered rather than one being guessed.
+   */
+  const originChoices = resolveOriginChoices(health?.publicBaseUrl, browserOrigin);
+  const [chosenOrigin, setChosenOrigin] = useState<string | null>(null);
+  const origin = chosenOrigin ?? originChoices[0]?.url ?? browserOrigin;
 
   const create = useMutation({
     mutationFn: () => agentsApi.createConnectCode(agentId, companyId),
@@ -74,6 +83,8 @@ export function ConnectYourTerminal({
   const secondsLeft = expiresAt ? Math.round((expiresAt - now) / 1000) : 0;
   const life = describeCodeLife(secondsLeft);
   const command = code ? buildConnectCommand(origin, code) : null;
+  // A control with one option is just noise.
+  const showOriginPicker = originChoices.length > 1;
   const watchPrompt = buildWatchPrompt(agentName);
 
   /**
@@ -153,6 +164,48 @@ export function ConnectYourTerminal({
               <pre className="mt-1.5 overflow-x-auto rounded-md border bg-muted/40 p-2.5 text-xs">
                 <code>{command}</code>
               </pre>
+
+              {showOriginPicker ? (
+                <fieldset className="mt-2 rounded-md border border-dashed px-3 py-2">
+                  <legend className="px-1 text-xs font-medium text-muted-foreground">
+                    Which address should it use?
+                  </legend>
+                  <p className="text-xs text-muted-foreground">
+                    You opened this page at a different address from the one this instance
+                    publishes, and they do not both work from everywhere.
+                  </p>
+                  <div className="mt-1.5 flex flex-col gap-1.5">
+                    {originChoices.map((choice) => (
+                      <label key={choice.url} className="flex items-start gap-2 text-xs">
+                        <input
+                          type="radio"
+                          name="connect-origin"
+                          className="mt-0.5"
+                          checked={origin === choice.url}
+                          onChange={() => setChosenOrigin(choice.url)}
+                        />
+                        <span>
+                          <span className="font-medium text-foreground">{choice.label}</span>
+                          {choice.kind === "published" ? (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — use this if you might send the command to someone else.
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — use this if you are pasting it on this machine.
+                            </span>
+                          )}
+                          <span className="mt-0.5 block break-all font-mono text-muted-foreground">
+                            {choice.url}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
               <p className="mt-1.5 text-xs text-muted-foreground">
                 It finds Claude Code and Codex if they are installed, writes their own config, and
                 changes nothing else. Undo any time with{" "}
