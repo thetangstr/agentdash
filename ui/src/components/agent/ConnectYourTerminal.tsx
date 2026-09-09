@@ -9,7 +9,7 @@ import {
   buildConnectCommand,
   buildWatchPrompt,
   describeCodeLife,
-  resolveInstanceOrigin,
+  resolveOriginChoices,
 } from "../../lib/connect-terminal-copy";
 import { Button } from "../ui/button";
 
@@ -29,9 +29,6 @@ import { Button } from "../ui/button";
  * is the whole reason it exists.
  */
 
-/** What the harness preview shows. Static by design: see PreviewPane. */
-type Harness = "claude" | "codex";
-
 export function ConnectYourTerminal({
   agentId,
   agentName,
@@ -44,7 +41,6 @@ export function ConnectYourTerminal({
   const [code, setCode] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [harness, setHarness] = useState<Harness>("claude");
 
   const { data: health } = useQuery({
     queryKey: queryKeys.health,
@@ -52,7 +48,16 @@ export function ConnectYourTerminal({
     staleTime: 5 * 60_000,
   });
   const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  const origin = resolveInstanceOrigin(health?.publicBaseUrl, browserOrigin);
+  /**
+   * This instance has no address that works for everyone: the published one is
+   * plain HTTP on the office LAN (the only door a managed Mac can open with no
+   * IT ask), while the tailnet door has a real certificate but only for people
+   * on the tailnet. So when the address someone is reading this page through is
+   * not the published one, both are offered rather than one being guessed.
+   */
+  const originChoices = resolveOriginChoices(health?.publicBaseUrl, browserOrigin);
+  const [chosenOrigin, setChosenOrigin] = useState<string | null>(null);
+  const origin = chosenOrigin ?? originChoices[0]?.url ?? browserOrigin;
 
   const create = useMutation({
     mutationFn: () => agentsApi.createConnectCode(agentId, companyId),
@@ -74,6 +79,8 @@ export function ConnectYourTerminal({
   const secondsLeft = expiresAt ? Math.round((expiresAt - now) / 1000) : 0;
   const life = describeCodeLife(secondsLeft);
   const command = code ? buildConnectCommand(origin, code) : null;
+  // A control with one option is just noise.
+  const showOriginPicker = originChoices.length > 1;
   const watchPrompt = buildWatchPrompt(agentName);
 
   /**
@@ -153,6 +160,48 @@ export function ConnectYourTerminal({
               <pre className="mt-1.5 overflow-x-auto rounded-md border bg-muted/40 p-2.5 text-xs">
                 <code>{command}</code>
               </pre>
+
+              {showOriginPicker ? (
+                <fieldset className="mt-2 rounded-md border border-dashed px-3 py-2">
+                  <legend className="px-1 text-xs font-medium text-muted-foreground">
+                    Which address should it use?
+                  </legend>
+                  <p className="text-xs text-muted-foreground">
+                    You opened this page at a different address from the one this instance
+                    publishes, and they do not both work from everywhere.
+                  </p>
+                  <div className="mt-1.5 flex flex-col gap-1.5">
+                    {originChoices.map((choice) => (
+                      <label key={choice.url} className="flex items-start gap-2 text-xs">
+                        <input
+                          type="radio"
+                          name="connect-origin"
+                          className="mt-0.5"
+                          checked={origin === choice.url}
+                          onChange={() => setChosenOrigin(choice.url)}
+                        />
+                        <span>
+                          <span className="font-medium text-foreground">{choice.label}</span>
+                          {choice.kind === "published" ? (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — use this if you might send the command to someone else.
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — use this if you are pasting it on this machine.
+                            </span>
+                          )}
+                          <span className="mt-0.5 block break-all font-mono text-muted-foreground">
+                            {choice.url}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
               <p className="mt-1.5 text-xs text-muted-foreground">
                 It finds Claude Code and Codex if they are installed, writes their own config, and
                 changes nothing else. Undo any time with{" "}
@@ -181,28 +230,6 @@ export function ConnectYourTerminal({
           ) : null}
         </div>
 
-        <div className="border-t px-4 py-4">
-          <p className="text-xs font-semibold">What you will see</p>
-          <div className="mt-2 flex flex-wrap gap-2" role="tablist" aria-label="Harness preview">
-            {(["claude", "codex"] as const).map((which) => (
-              <button
-                key={which}
-                type="button"
-                role="tab"
-                aria-selected={harness === which}
-                onClick={() => setHarness(which)}
-                className={
-                  harness === which
-                    ? "rounded-full border border-foreground bg-foreground px-3 py-1 text-xs font-medium text-background"
-                    : "rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground"
-                }
-              >
-                {which === "claude" ? "Claude Code" : "Codex"}
-              </button>
-            ))}
-          </div>
-          <PreviewPane harness={harness} agentName={agentName} />
-        </div>
       </section>
 
       {/* Connecting means you can ask. This means you get told. It carries the
@@ -223,7 +250,7 @@ export function ConnectYourTerminal({
             belongs to your tool — AgentDash never runs a timer and never interrupts you.
           </p>
           <div className="mt-3 flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold">Paste into a Claude Code chat</span>
+            <span className="text-xs font-semibold">1. Paste this into a new Claude Code chat</span>
             <Button size="sm" onClick={() => copy("prompt", watchPrompt)}>
               {copyLabel("prompt", "Copy prompt")}
             </Button>
@@ -231,12 +258,31 @@ export function ConnectYourTerminal({
           <pre className="mt-1.5 overflow-x-auto rounded-md border bg-muted/40 p-2.5 text-xs leading-relaxed">
             <code>{watchPrompt}</code>
           </pre>
+          {/*
+            Pinning is a step, not a footnote, and it deliberately sits outside
+            the prompt above. The prompt cannot do it: pinning is something the
+            person does to the conversation in their own tool, by right-clicking
+            it. Left unsaid, the schedule quietly dies with the conversation —
+            which is the one failure mode of this whole feature that looks like
+            "the agent stopped telling me things" rather than like a mistake.
+          */}
+          <div className="mt-3 rounded-md border border-dashed px-3 py-2.5">
+            <p className="text-xs font-semibold">2. Then pin that conversation</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Right-click the conversation and choose <span className="font-medium">Pin</span>. The
+              schedule belongs to this one conversation, so pinning is what stops it getting lost
+              behind everything else you open. There is nothing to paste for this step — the prompt
+              above cannot pin itself.
+            </p>
+          </div>
+
           <ul className="mt-3 flex flex-col gap-1.5 text-xs text-muted-foreground">
             <li>
               <span className="font-medium text-foreground">
                 The schedule lives in that conversation.
               </span>{" "}
-              Start a fresh one and it is gone; left alone it lapses after about a week.
+              Start a fresh one and it is gone; left alone it lapses after about a week, pinned or
+              not.
             </li>
             <li>
               <span className="font-medium text-foreground">
@@ -257,129 +303,6 @@ export function ConnectYourTerminal({
           </ul>
         </div>
       </section>
-    </div>
-  );
-}
-
-/**
- * A still of the harness, not a performance.
- *
- * The design review used a typing animation, which reads well once and is a
- * tax on every visit after that: motion the reader cannot pause, information
- * that arrives later than the eye does, and a `prefers-reduced-motion` branch
- * that has to be maintained forever. A steward opening this page for the tenth
- * time wants to see the shape of the thing immediately. So: the finished
- * screen, rendered, with everything legible at once.
- */
-function PreviewPane({ harness, agentName }: { harness: Harness; agentName: string }) {
-  const isClaude = harness === "claude";
-  return (
-    <div className="mt-3">
-      <div className="overflow-hidden rounded-lg border border-border bg-zinc-950">
-        <div className="flex items-center gap-1.5 border-b border-white/10 bg-white/5 px-3 py-2">
-          <span className="h-2 w-2 rounded-full bg-white/20" />
-          <span className="h-2 w-2 rounded-full bg-white/20" />
-          <span className="h-2 w-2 rounded-full bg-white/20" />
-          <span className="ml-2 font-mono text-[11px] text-zinc-500">
-            {isClaude ? "Claude Code" : "Codex"} — ~/projects
-          </span>
-        </div>
-
-        <div className="flex flex-col gap-2.5 px-4 py-3 font-mono text-[12px] leading-relaxed text-zinc-300">
-          {isClaude ? (
-            <>
-              <div className="rounded border border-white/10 px-2.5 py-1.5 text-zinc-500">
-                <div className="text-zinc-300">
-                  <span className="text-fuchsia-300">✻</span> Welcome to Claude Code
-                </div>
-                <div>cwd: ~/projects</div>
-              </div>
-              <div className="flex gap-2 text-white">
-                <span className="text-indigo-300">&gt;</span>
-                <span>/mcp</span>
-              </div>
-              <div className="overflow-hidden rounded border border-white/10">
-                <div className="border-b border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-zinc-500">
-                  MCP Server Status
-                </div>
-                <div className="flex items-center gap-3 px-2.5 py-1.5">
-                  <span className="min-w-[6rem] text-zinc-300">agentdash</span>
-                  <span className="text-emerald-300">✔ connected</span>
-                  <span className="ml-auto text-zinc-500">81 tools</span>
-                </div>
-              </div>
-              <div className="flex gap-2 text-white">
-                <span className="text-indigo-300">&gt;</span>
-                <span>who am I here, and what is waiting on me?</span>
-              </div>
-              <div>
-                <div className="flex gap-2">
-                  <span className="text-emerald-300">⏺</span>
-                  <span>agentdash - whoami</span>
-                </div>
-                <div className="pl-5 text-zinc-500">
-                  ⎿ {agentName} · Chief of Staff · steward: you
-                </div>
-              </div>
-              <div className="whitespace-pre-wrap">
-                <span className="text-amber-300">One thing is waiting on you.</span> Which campus
-                the September walkthrough covers first — it is holding up the schedule (MKT-431,
-                asked 40m ago).
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="rounded border border-white/10 px-2.5 py-1.5 text-zinc-500">
-                <div className="text-zinc-300">
-                  <span className="text-indigo-300">&gt;_</span> OpenAI Codex
-                </div>
-                <div>model: gpt-5-codex · cwd: ~/projects</div>
-              </div>
-              <div className="overflow-hidden rounded border border-white/10">
-                <div className="border-b border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-zinc-500">
-                  MCP
-                </div>
-                <div className="flex items-center gap-3 px-2.5 py-1.5">
-                  <span className="min-w-[6rem] text-zinc-300">agentdash</span>
-                  <span className="text-emerald-300">connected</span>
-                </div>
-              </div>
-              <div className="flex gap-2 text-white">
-                <span className="text-indigo-300">›</span>
-                <span>what is assigned to me in AgentDash?</span>
-              </div>
-              <div>
-                <div className="flex gap-2">
-                  <span className="text-emerald-300">•</span>
-                  <span>Calling agentdash.list_issues</span>
-                </div>
-                <div className="pl-5 text-zinc-500">└ 3 issues</div>
-              </div>
-              <div className="whitespace-pre-wrap text-zinc-400">
-                <span className="text-amber-300">MKT-431</span> Prepare the September walkthrough
-                schedule — <span className="text-amber-300">waiting on you</span>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* The composer is what makes this read as the app rather than a log. */}
-        <div className="mx-3 mb-1 flex items-center gap-2 rounded border border-white/20 px-2.5 py-1.5 font-mono text-[12px] text-zinc-500">
-          <span className="text-indigo-300">{isClaude ? ">" : "›"}</span>
-          <span>Ask anything</span>
-        </div>
-        <div className="flex px-4 pb-2 font-mono text-[10px] text-zinc-600">
-          <span>{isClaude ? "? for shortcuts" : "Ctrl+C to quit"}</span>
-          <span className="ml-auto">
-            agentdash <span className="text-emerald-400">connected</span>
-          </span>
-        </div>
-      </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">
-        {isClaude
-          ? "A recreation of the Claude Code interface."
-          : "A recreation of the Codex interface. Codex reads its key from the environment, so it needs a new terminal after connecting — Claude Code does not."}
-      </p>
     </div>
   );
 }

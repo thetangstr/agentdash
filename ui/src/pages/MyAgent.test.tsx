@@ -705,6 +705,120 @@ describe("MyAgent", () => {
     expect(container.textContent ?? "").not.toContain("already-fixed");
   });
 
+  /**
+   * This instance has no address that works for everyone. The published one is
+   * plain HTTP on the office LAN — the only door a client user on a managed Mac
+   * can open with no IT ask — while the tailnet door has a real certificate and
+   * is reachable only by someone on the tailnet. Guessing one for everybody is
+   * how the command came out wrong for whoever was on the other side.
+   */
+  describe("the address the connect command points at", () => {
+    const connect = async () => {
+      const button = Array.from(container.querySelectorAll("button")).find((b) =>
+        /Create a connect code/.test(b.textContent ?? ""),
+      )!;
+      await act(async () => {
+        button.click();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+    };
+
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+      });
+    });
+
+    /** The common case. A control with one option is noise. */
+    it("asks nothing when the published address is the one you are using", async () => {
+      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://localhost:3000" });
+
+      await render();
+      await connect();
+
+      expect(container.textContent ?? "").not.toContain("Which address should it use?");
+    });
+
+    it("offers both when you arrived by a different door", async () => {
+      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
+
+      await render();
+      await connect();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Which address should it use?");
+      expect(text).toContain("http://mkmini.local:3102");
+      // jsdom serves the page from localhost, standing in for the other door.
+      expect(text).toContain("http://localhost:3000");
+    });
+
+    /**
+     * The default is the forwardable one. A command captured from whichever
+     * door happened to be open gets written into a colleague's config, where it
+     * works here and silently stops working anywhere else.
+     */
+    it("defaults to the published address, not the one in the address bar", async () => {
+      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
+
+      await render();
+      await connect();
+
+      const command = container.querySelector("pre code")?.textContent ?? "";
+      expect(command).toContain("--url http://mkmini.local:3102");
+      expect(command).not.toContain("--url http://localhost:3000");
+    });
+  });
+
+  describe("scheduling the check", () => {
+    beforeEach(() => {
+      mockStewardshipsApi.getMyAgent.mockResolvedValue({
+        stewardship: { id: "s-1", userId: "user-me" },
+        agent: { id: "agent-1", name: "Casper", role: "marketing", status: "idle" },
+      });
+    });
+
+    /**
+     * Pinning cannot be part of the prompt — it is something the person does to
+     * the conversation in their own tool. Unsaid, the schedule dies with the
+     * conversation, and that failure reads as "the agent stopped telling me
+     * things" rather than as a missed step.
+     */
+    it("tells you to pin the conversation, and says it is a right-click", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toMatch(/pin that conversation/i);
+      expect(text).toMatch(/right-click/i);
+    });
+
+    it("keeps pinning out of the prompt, which cannot do it", async () => {
+      await render();
+
+      const prompt =
+        Array.from(container.querySelectorAll("pre code"))
+          .map((n) => n.textContent ?? "")
+          .find((t) => /Every 30 minutes/.test(t)) ?? "";
+      expect(prompt).not.toMatch(/pin/i);
+    });
+
+    /**
+     * The harness preview is gone on purpose. It showed an MCP panel, tool call
+     * rows and a connect command — none of which answers the only question this
+     * section exists for, which is how to schedule the check.
+     */
+    it("shows no harness preview", async () => {
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).not.toContain("What you will see");
+      expect(text).not.toContain("MCP Server Status");
+      expect(container.querySelector('[role="tablist"]')).toBeNull();
+    });
+  });
+
   /** The dead integrations are gone: none is configured on any instance. */
   it("offers no telegram, whatsapp, teams or hubspot connection", async () => {
     mockStewardshipsApi.getMyAgent.mockResolvedValue({
