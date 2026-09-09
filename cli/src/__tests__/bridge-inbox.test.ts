@@ -7,6 +7,7 @@ import {
   renderInbox,
   runBridgeInbox,
   scaffoldInboxWorkspace,
+  unseenApprovalCount,
 } from "../commands/bridge-inbox.js";
 
 let scratch: string;
@@ -219,14 +220,32 @@ describe("bridge inbox command", () => {
     expect(sync.auth).toBe("Bearer endpoint-token");
   });
 
-  it("acknowledges only the highest position it actually showed", async () => {
+  /**
+   * This previously asserted seq 2 under the name "acknowledges only the
+   * highest position it actually showed", while the fixture's digest shows only
+   * `a1`. So `a2` was acknowledged having never been rendered, and the cursor
+   * moved past it for good. The name described the correct behaviour and the
+   * assertion pinned the defect — a test written from the code rather than from
+   * the output. Acking the page is honest only because the rendering now
+   * accounts for every event on it.
+   */
+  it("never acknowledges an event it did not at least mention", async () => {
     const fetchMock = makeFetch({});
+    const lines: string[] = [];
     await runBridgeInbox(
       { server: "http://x.test", tokenFile, ack: true },
-      { env: {}, log: () => {}, errorLog: () => {}, fetchImpl: fetchMock.impl },
+      {
+        env: {},
+        log: (line: string) => lines.push(line),
+        errorLog: () => {},
+        fetchImpl: fetchMock.impl,
+      },
     );
     const ack = fetchMock.calls.find((c) => c.path.endsWith("/inbox/ack"));
     expect(ack?.body.seq).toBe(2);
+    // Two events on the page, one of them absent from the digest.
+    expect(unseenApprovalCount(digest() as never)).toBe(1);
+    expect(lines.join("\n")).toMatch(/1 approval\(s\) on this page were already decided/);
   });
 
   it("does not acknowledge when there was nothing to show", async () => {

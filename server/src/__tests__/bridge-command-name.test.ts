@@ -43,15 +43,36 @@ describe("bridge command name", () => {
   };
   const binNames = Object.keys(cliPackage.bin ?? {});
 
-  it("the enrollment page prints the CLI package's real bin in front of `bridge run`", () => {
-    const page = readFileSync(
-      path.join(repoRoot, "ui", "src", "components", "agent", "ConnectYourMachine.tsx"),
+  /**
+   * The connect page prints a command, and that command must name a bin some
+   * package in this repo actually declares.
+   *
+   * This used to read `ConnectYourMachine.tsx` and check a `BRIDGE_CLI_BIN`
+   * constant. That page is gone: the bridge-token enrolment it documented could
+   * not authenticate against the inbox routes, and the connect-code flow
+   * replaced it. The surface that prints a CLI name today is
+   * `connect-terminal-copy.ts`, and the bin it prints belongs to
+   * `packages/connect`, not to `cli`.
+   *
+   * Pinned against the manifest rather than a literal, because the failure this
+   * guards against is precisely a printed name drifting away from a real one.
+   */
+  it("the connect page prints a bin that a package in this repo declares", () => {
+    expect(binNames.length).toBeGreaterThan(0);
+
+    const connectPackage = JSON.parse(
+      readFileSync(path.join(repoRoot, "packages", "connect", "package.json"), "utf8"),
+    ) as { name: string; bin?: Record<string, string> };
+    const connectBins = Object.keys(connectPackage.bin ?? {});
+    expect(connectBins.length).toBeGreaterThan(0);
+
+    const copy = readFileSync(
+      path.join(repoRoot, "ui", "src", "lib", "connect-terminal-copy.ts"),
       "utf8",
     );
-    expect(binNames.length).toBeGreaterThan(0);
-    const printed = page.match(/BRIDGE_CLI_BIN = "([^"]+)"/)?.[1];
-    expect(printed, "ConnectYourMachine must pin BRIDGE_CLI_BIN").toBeDefined();
-    expect(binNames).toContain(printed);
+    const printed = copy.match(/npx ([\w.-]+) --url/)?.[1];
+    expect(printed, "connect-terminal-copy must print an npx command").toBeDefined();
+    expect([...connectBins, ...binNames]).toContain(printed);
   });
 
   it("no surface tells anyone to run `npx agentdash` or `agentdash bridge run`", () => {

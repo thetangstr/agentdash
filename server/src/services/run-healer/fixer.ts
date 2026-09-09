@@ -13,7 +13,18 @@ import { heartbeatService } from "../heartbeat.js";
 import { agentService } from "../agents.js";
 import { nextFallbackHop, readFallbackChain } from "../../lib/adapter-fallback-chain.js";
 
-// Adapter fallback chain: if one fails, try the next
+/**
+ * AGE-113 invariant: automatic recovery may not switch an agent's adapter or
+ * model. The built-in table and the env chain below are RETAINED as references
+ * for what a human may configure, and their hop logic (`nextFallbackHop`) is
+ * still used to report where an operator-configured chain WOULD have gone, but
+ * nothing here writes `agents.adapterType` or `adapterConfig.model` anymore.
+ *
+ * The healer's `adapter_switch` diagnosis is therefore executed as an
+ * ESCALATION: the run is re-enqueued once on the agent's own configuration
+ * (a bounded retry, the same wakeup the `retry` fix uses), and the failure is
+ * surfaced so a human can decide whether to change the configuration.
+ */
 const ADAPTER_FALLBACK_CHAIN: Record<string, string[]> = {
   claude_local: ["claude_api", "opencode_local", "hermes_local"],
   claude_api: ["opencode_local", "hermes_local"],
@@ -93,10 +104,17 @@ async function executeAdapterSwitchFix(
   run: { id: string; agentId: string; errorCode: string | null },
   diagnosis: HealDiagnosis,
 ): Promise<HealFixResult> {
+  // AGE-113: an adapter_switch diagnosis may not change the agent's adapter
+  // or model. Automatic recovery's job here is to (a) re-enqueue the run once
+  // on the agent's OWN configuration — the provider may have recovered, and a
+  // retry costs nothing — and (b) surface the failure for a human decision.
+  // What changed in behavior terms: the switch write below is gone. What did
+  // NOT change: the run still gets exactly one more attempt, still bounded by
+  // maxHealsPerRun/maxHealsPerDay.
   try {
-    // Get current agent info including companyId and adapterConfig — the
-    // config matters because a fallback hop can be "same adapter, different
-    // model", and because a stale model must not survive an adapter switch.
+    // Read (never write) the agent's configuration, and compute where an
+    // operator-configured chain or the legacy table WOULD have moved it, so
+    // the escalation carries actionable detail for the human.
     const [agent] = await db
       .select({
         companyId: agents.companyId,
@@ -113,72 +131,46 @@ async function executeAdapterSwitchFix(
     const currentConfig = (agent.adapterConfig ?? {}) as Record<string, unknown>;
     const currentModel = typeof currentConfig.model === "string" ? currentConfig.model : "";
 
-    // AgentDash: an operator-configured AGENTDASH_FALLBACK_CHAIN takes
-    // precedence over the built-in adapter table. The chain is ordered hops
-    // of `adapter[:model]`; position is matched on (adapter, model) so an
-    // agent already moved to hop N advances to hop N+1 instead of restarting.
+    let suggestedTarget: string | null = null;
     const envChain = readFallbackChain();
-    let targetAdapter: string;
-    let targetModel: string | undefined;
     if (envChain.length > 0) {
       const next = nextFallbackHop(envChain, { adapter: currentAdapter, model: currentModel });
-      if (!next) {
-        logger.info(
-          { runId: run.id, currentAdapter, currentModel },
-          "run_healer: fallback chain exhausted",
-        );
-        return { succeeded: false, actionTaken: "no_fallback_available", costUsd: 0 };
-      }
-      targetAdapter = next.adapter;
-      targetModel = next.model;
+      suggestedTarget = next ? `${next.adapter}${next.model ? `:${next.model}` : ""}` : null;
     } else {
       const fallbackChain = ADAPTER_FALLBACK_CHAIN[currentAdapter] ?? [];
-      if (fallbackChain.length === 0) {
-        logger.info({ runId: run.id, currentAdapter }, "run_healer: no fallback adapters available");
-        return { succeeded: false, actionTaken: "no_fallback_available", costUsd: 0 };
-      }
-      targetAdapter = fallbackChain[0];
-      targetModel = undefined;
+      if (fallbackChain.length > 0) suggestedTarget = fallbackChain[0] ?? null;
     }
 
-    logger.info(
-      { runId: run.id, from: currentAdapter, fromModel: currentModel || null, to: targetAdapter, toModel: targetModel ?? null, reason: diagnosis.diagnosis },
-      "run_healer: switching adapter",
+    logger.warn(
+      {
+        runId: run.id,
+        agentId: run.agentId,
+        currentAdapter,
+        currentModel: currentModel || null,
+        suggestedTarget,
+        reason: diagnosis.diagnosis,
+      },
+      "run_healer: adapter_switch requested — invariant refuses the switch; retrying on the agent's own configuration and escalating to a human",
     );
 
-    // Update the agent's adapter — and its model. A hop with a model sets
-    // it; a hop (or legacy-table switch) without one deletes it, because the
-    // previous adapter's model name is meaningless to the new adapter
-    // (gpt-5.6-terra is not a Hermes model).
-    const nextConfig: Record<string, unknown> = { ...currentConfig };
-    if (targetAdapter !== currentAdapter || targetModel !== undefined) {
-      delete nextConfig.model;
-    }
-    if (targetModel !== undefined) {
-      nextConfig.model = targetModel;
-    }
-    await db
-      .update(agents)
-      .set({ adapterType: targetAdapter, adapterConfig: nextConfig })
-      .where(eq(agents.id, run.agentId));
-
-    // Re-enqueue the run with the new adapter
+    // Bounded retry on the agent's own configuration. Same wakeup shape the
+    // `retry` fix uses; the run keeps its adapter, model and billing identity.
     const { agentWakeupRequests } = await import("@paperclipai/db");
     await db.insert(agentWakeupRequests).values({
       companyId: agent.companyId,
       agentId: run.agentId,
       source: "automation",
-      reason: "healer_adapter_switch",
-      triggerDetail: `healer_switched_from_${currentAdapter}_to_${targetAdapter}${targetModel ? `:${targetModel}` : ""}`,
+      reason: "healer_retry",
+      triggerDetail: "healer_adapter_switch_refused_retry_on_own_config",
     });
 
     return {
       succeeded: true,
-      actionTaken: `adapter_switch_${currentAdapter}_to_${targetAdapter}${targetModel ? `:${targetModel}` : ""}`,
+      actionTaken: `adapter_switch_refused_escalated_retry_on_${currentAdapter}${currentModel ? `:${currentModel}` : ""}`,
       costUsd: 0,
     };
   } catch (err) {
-    logger.error({ runId: run.id, error: err }, "run_healer: adapter switch failed");
+    logger.error({ runId: run.id, error: err }, "run_healer: adapter switch handling failed");
     return { succeeded: false, actionTaken: "adapter_switch_failed", costUsd: 0 };
   }
 }

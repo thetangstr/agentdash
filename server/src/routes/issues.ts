@@ -1878,6 +1878,14 @@ export function issueRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     await assertHostWorkspaceCommandAuthority(db, req, companyId, collectIssueWorkspaceCommandPaths(req.body));
+    // AGE-113: assignee adapter overrides change which adapter/model runs an
+    // assigned issue. That is agent configuration, and only a human may set it.
+    if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
+      res.status(403).json({
+        error: "Agent-authenticated callers cannot set assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration",
+      });
+      return;
+    }
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
     }
@@ -1945,6 +1953,13 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, parent.companyId);
     await assertHostWorkspaceCommandAuthority(db, req, parent.companyId, collectIssueWorkspaceCommandPaths(req.body));
+    // AGE-113: same gate as issue create — overrides are agent configuration.
+    if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
+      res.status(403).json({
+        error: "Agent-authenticated callers cannot set assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration",
+      });
+      return;
+    }
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, parent.companyId);
     }
@@ -2002,6 +2017,14 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     await assertHostWorkspaceCommandAuthority(db, req, existing.companyId, collectIssueWorkspaceCommandPaths(req.body));
+    // AGE-113: overrides change which adapter/model runs this issue. Only a
+    // human may set or clear them, on create or update alike.
+    if (req.actor.type === "agent" && req.body.assigneeAdapterOverrides !== undefined) {
+      res.status(403).json({
+        error: "Agent-authenticated callers cannot change assigneeAdapterOverrides; only a human with agent-configuration authority may change adapter or model configuration",
+      });
+      return;
+    }
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
 
     const actor = getActorInfo(req);

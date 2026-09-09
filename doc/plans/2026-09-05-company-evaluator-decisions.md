@@ -783,3 +783,24 @@ human to them on the agent row and is audited as
   Company-wide counts are aggregates; any list that reaches its read cap is
   named under `truncated`.
 - The runbook for the shadow run is `doc/plans/2026-09-06-company-evaluator-m5-shadow-run.md`.
+
+## Milestone 5 calibration notes (2026-09-07)
+
+- **P6 judges only evidenced transitions (rules 6a/6b; founder decision D-R1).** The first
+  shadow cards raised four immediate E3s; a human review under the founder's direction found
+  two of the flagged transitions were status writes with no recorded previous status (the
+  PATCH route writes `_previous` only for changed fields, so `fromUnknown: true` means no state
+  change) and one owner had been read from a snapshot taken after the move (`snapshotAt` falls
+  back to a later snapshot). Rule 6a: a transition with `from == null` is not judged and is
+  counted under `detail.insufficient.unknownFrom`; rule 6b: the owner comes from
+  `assigneeAtStrict` (records at or before the move) and an unknown owner is
+  `detail.insufficient.ownerUnknown`. Both are counted, cited and noted, never violations.
+  Card bytes changed, so `FORMULA_VERSION` is `m2-score/8` and `METRICS_FORMULA_VERSION`
+  `metrics/5`; the contract fixture was regenerated. Full record, authority matrix and the
+  reassessment of AGE-3/14/20/104: `2026-09-07-company-evaluator-authority-calibration.md`.
+- **Held for the second milestone's evidence (D-R2):** rule 6c (the verdict writer's
+  `in_review → done` close as the sanctioned step) and rule 6d (recorded authority grants as
+  ledger events). The two real moves on the first cards (AGE-3, AGE-14) were authorized by a
+  founder directive in prose; until authority has a record the rule keeps raising them, and the
+  human disposition is the calibration signal.
+

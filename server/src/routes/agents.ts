@@ -856,7 +856,16 @@ export function agentRoutes(
       // and got 200. The spend cap is the brake; an agent that can release its
       // own brake has no cap. `reportsTo` goes with it — rewriting your own
       // chain of command is the same move.
-      for (const field of ["budgetMonthlyCents", "reportsTo"] as const) {
+      // AGE-113: `adapterType` and `adapterConfig` join the list. An agent
+      // choosing its own adapter or model is the same class of self-release —
+      // the invariant says only a human with agent-configuration authority may
+      // change them, and "the agent itself" is not that.
+      for (const field of [
+        "budgetMonthlyCents",
+        "reportsTo",
+        "adapterType",
+        "adapterConfig",
+      ] as const) {
         if (req.body && Object.prototype.hasOwnProperty.call(req.body, field)) {
           throw forbidden(
             `An agent cannot change its own ${field}. Ask an owner, admin or operator.`,
@@ -3252,6 +3261,16 @@ export function agentRoutes(
       hasOwn(patchData, "adapterType") ||
       hasOwn(patchData, "adapterConfig");
     if (touchesAdapterConfiguration) {
+      // AGE-113: only a human with agent-configuration authority may change an
+      // agent's adapter or model — not the agent itself, and not another agent
+      // (including a CEO agent). Board actors pass; `authority === "agent"`
+      // means an agent key got this far, and it stops here.
+      if (updateAuthority === "agent") {
+        res.status(403).json({
+          error: "Only a human with agent-configuration authority may change an agent's adapterType or adapterConfig; ask an owner, admin or operator",
+        });
+        return;
+      }
       const existingAdapterConfig = asRecord(existing.adapterConfig) ?? {};
       const changingAdapterType =
         typeof patchData.adapterType === "string" && patchData.adapterType !== existing.adapterType;

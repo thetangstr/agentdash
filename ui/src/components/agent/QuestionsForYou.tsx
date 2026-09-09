@@ -61,20 +61,38 @@ export function QuestionsForYou({
 
   const questions: StewardFactRequest[] = pending.data?.factRequests ?? [];
 
-  if (questions.length === 0) {
-    // Rendered rather than hidden: "nothing is waiting on me" is information a
-    // steward wants, and a panel that only appears when there is work makes its
-    // absence indistinguishable from a page that failed to load.
+  // A failure must never read as an all-clear.
+  //
+  // This panel used to render "Nothing is waiting on you" whenever the query
+  // returned no data — including when it had failed, because the only read was
+  // `pending.data?.factRequests ?? []`. Measured against a rejected query, the
+  // page stated "Nothing is waiting on you" while knowing nothing at all. The
+  // panel written to stop absence being mistaken for failure was itself
+  // reporting failure as absence.
+  if (pending.error) {
     return (
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-sm font-semibold">Questions for you</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Nothing is waiting on you. When {agentName} is asked something only you can
-          answer, it appears here.
+        <p className="mt-1 text-sm text-destructive" role="alert">
+          {pending.error instanceof Error
+            ? pending.error.message
+            : "Could not load your questions."}{" "}
+          This is not the same as nothing waiting — reload to check again.
         </p>
       </section>
     );
   }
+
+  // Hidden when genuinely empty.
+  //
+  // This previously rendered an empty panel on the argument that a panel which
+  // only appears when there is work makes its absence indistinguishable from a
+  // failed load. That argument was sound while failure was silent; it is not
+  // now. Failure says so above, and the page states "Nothing needs you" once,
+  // in its opening sentence, for every kind of blocking at once — so a second
+  // box announcing its own emptiness adds nothing and pushes live information
+  // further down.
+  if (questions.length === 0) return null;
 
   return (
     <section className="rounded-lg border border-border bg-card p-4">

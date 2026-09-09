@@ -1,0 +1,43 @@
+.mkt-get__intro { display: grid; gap: 16px; max-width: 56ch; margin-bottom: 48px; }
+.mkt-get__intro p { color: var(--mkt-ink-soft); margin: 0; }
+.mkt-get { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }
+.mkt-get__card {
+  background: var(--mkt-surface-card);
+  border: 1px solid var(--mkt-rule);
+  border-radius: var(--mkt-radius-lg);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: var(--mkt-shadow-card);
+}
+.mkt-get__card--featured { border-color: var(--mkt-accent); }
+.mkt-get__card h3 { font-family: var(--mkt-font-serif); font-weight: 500; font-size: 26px; margin: 0; line-height: 1.15; }
+.mkt-get__card p { margin: 0; color: var(--mkt-ink-soft); font-size: 15px; line-height: 1.55; }
+.mkt-get__card .mkt-btn { align-self: flex-start; margin-top: auto; }
+.mkt-get__status {
+  justify-self: start;
+  font-family: var(--mkt-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+}
+.mkt-get__status.is-now { color: var(--mkt-success); background: var(--mkt-success-tint); }
+.mkt-get__status.is-limited { color: var(--mkt-accent-ink); background: var(--mkt-accent-tint); }
+.mkt-get__status.is-soon { color: var(--mkt-ink-soft); background: var(--mkt-surface-cream-2); border-color: var(--mkt-rule); }
+.mkt-get__cmd {
+  margin: 0;
+  background: var(--mkt-term-bg);
+  color: var(--mkt-term-fg);
+  border-radius: var(--mkt-radius-sm);
+  padding: 12px 14px;
+  font-family: var(--mkt-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 960px) { .mkt-get { grid-template-columns: 1fr; } }

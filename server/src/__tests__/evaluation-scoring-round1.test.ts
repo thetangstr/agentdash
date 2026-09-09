@@ -555,7 +555,7 @@ describe("round 4 — verification findings", () => {
   });
 
   it("MEDIUM 2: the formula version moved with the arithmetic", () => {
-    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/7");
+    expect(score([...roster(), ...evidenced(I1)]).formulaVersion).toBe("m2-score/8");
   });
 });
 
@@ -624,7 +624,7 @@ describe("round 5 — verification findings", () => {
   it("LOW 3 / 4: the composite floor lives in shared next to the other guard constants, and both formula versions moved with the arithmetic", () => {
     expect(COMPOSITE_COVERAGE_FLOOR).toBe(EVALUATION_COMPOSITE_COVERAGE_FLOOR);
     expect(COMPOSITE_FORMULA_VERSION).toBe("composite/6");
-    expect(METRICS_FORMULA_VERSION).toBe("metrics/4");
+    expect(METRICS_FORMULA_VERSION).toBe("metrics/5");
   });
 
   it("suggestion: an accepted waiver lifts O5's confidence cap but restores no weight", () => {

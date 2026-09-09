@@ -250,7 +250,11 @@ describe("dispatchLLM", () => {
       return spawnMock.mock.calls[0][1] as string[];
     }
 
-    it("routes CoS replies through codex and returns its final message", async () => {
+    // A codex-shaped JSONL stream. Two of the cases below used to "pass"
+    // because the outer beforeEach's hermes-style stdout parsed to an empty
+    // codex reply and the (now-refused) fallback answered for it — the exact
+    // placeholder-masking AGE-113 removes. Give codex a real reply.
+    function mockCodexReply(text: string) {
       spawnMock.mockImplementation(() => {
         const child: any = {
           kill: vi.fn(),
@@ -266,7 +270,7 @@ describe("dispatchLLM", () => {
                           JSON.stringify({ type: "thread.started", thread_id: "t1" }),
                           JSON.stringify({
                             type: "item.completed",
-                            item: { type: "agent_message", text: "codex reply" },
+                            item: { type: "agent_message", text },
                           }),
                         ].join("\n"),
                       ),
@@ -285,6 +289,10 @@ describe("dispatchLLM", () => {
         };
         return child;
       });
+    }
+
+    it("routes CoS replies through codex and returns its final message", async () => {
+      mockCodexReply("codex reply");
 
       process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
       const reply = await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
@@ -298,6 +306,7 @@ describe("dispatchLLM", () => {
       // The prompt carries other agents' output, which this system wraps in
       // <untrusted-agent-answer> precisely because it may be adversarial. Codex
       // agent RUNS bypass the sandbox deliberately; a chat reply must not.
+      mockCodexReply("codex reply");
       process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
       await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
 
@@ -309,6 +318,7 @@ describe("dispatchLLM", () => {
     });
 
     it("asks for a model a ChatGPT-account login accepts", async () => {
+      mockCodexReply("codex reply");
       process.env.AGENTDASH_DEFAULT_ADAPTER = "codex_local";
       await dispatchLLM({ system: "s", messages: [{ role: "user", content: "hi" }] });
 
@@ -331,31 +341,31 @@ describe("dispatchLLM", () => {
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("falls back to claude_api when the minimax adapter throws", async () => {
+  it("refuses to fall back to claude_api when the minimax adapter throws (AGE-113 invariant)", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
 
-    const reply = await dispatchLLM({
-      system: "You are a Chief of Staff.",
-      messages: [{ role: "user", content: "Help me hire agents." }],
-    });
-
-    expect(reply).toBe("anthropic fallback");
+    await expect(
+      dispatchLLM({
+        system: "You are a Chief of Staff.",
+        messages: [{ role: "user", content: "Help me hire agents." }],
+      }),
+    ).rejects.toThrow(/adapter\/model invariant/);
     expect(minimaxLLM).toHaveBeenCalledTimes(1);
-    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+    expect(anthropicLLM, "switched adapters automatically").not.toHaveBeenCalled();
   });
 
-  it("falls back to claude_api when the minimax adapter returns empty", async () => {
+  it("refuses to fall back when the minimax adapter returns empty", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockResolvedValueOnce("");
 
-    const reply = await dispatchLLM({
-      system: "You are a Chief of Staff.",
-      messages: [{ role: "user", content: "Help me hire agents." }],
-    });
-
-    expect(reply).toBe("anthropic fallback");
-    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+    await expect(
+      dispatchLLM({
+        system: "You are a Chief of Staff.",
+        messages: [{ role: "user", content: "Help me hire agents." }],
+      }),
+    ).rejects.toThrow(/adapter\/model invariant/);
+    expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
   it("routes CoS replies through the openai_compat adapter when selected", async () => {
@@ -371,18 +381,18 @@ describe("dispatchLLM", () => {
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("falls back to claude_api when the openai_compat adapter throws", async () => {
+  it("refuses to fall back to claude_api when the openai_compat adapter throws", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "openai_compat";
     openaiCompatLLMDetailed.mockRejectedValueOnce(new Error("openrouter 500"));
 
-    const reply = await dispatchLLM({
-      system: "You are a Chief of Staff.",
-      messages: [{ role: "user", content: "Help me hire agents." }],
-    });
-
-    expect(reply).toBe("anthropic fallback");
+    await expect(
+      dispatchLLM({
+        system: "You are a Chief of Staff.",
+        messages: [{ role: "user", content: "Help me hire agents." }],
+      }),
+    ).rejects.toThrow(/adapter\/model invariant/);
     expect(openaiCompatLLMDetailed).toHaveBeenCalledTimes(1);
-    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+    expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
   it("meters openai_compat usage via cost_events when a meter is provided (G3)", async () => {
@@ -498,18 +508,19 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
       throw new Error("spawn ENOENT");
     });
 
-    await expect(dispatchLLM(input)).rejects.toThrow(/no AGENTDASH_FALLBACK_ADAPTER/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
     expect(anthropicLLM, "the stub was reached anyway").not.toHaveBeenCalled();
   });
 
   it("does not reach for Anthropic when no fallback was configured", async () => {
-    // The point of the change: a deployment that chose MiniMax and said nothing
-    // about a fallback must not quietly answer from Claude on someone's key.
+    // The point of the invariant: a deployment that chose MiniMax and said
+    // nothing about a fallback must not quietly answer from Claude on
+    // someone's key.
     process.env.ANTHROPIC_API_KEY = "sk-test-key";
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
 
-    await expect(dispatchLLM(input)).rejects.toThrow(/no AGENTDASH_FALLBACK_ADAPTER/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
     expect(anthropicLLM, "fell through to Anthropic unasked").not.toHaveBeenCalled();
   });
 
@@ -518,7 +529,7 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     process.env.AGENTDASH_FALLBACK_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValue(new Error("minimax 500"));
 
-    await expect(dispatchLLM(input)).rejects.toThrow(/same adapter/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
     expect(minimaxLLM, "retried the adapter that just failed").toHaveBeenCalledTimes(1);
   });
 
@@ -540,16 +551,17 @@ describe("dispatchLLM refuses to answer with placeholder text", () => {
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("still falls back normally once one is configured and usable", async () => {
-    // The fallback is useful when there is something to fall back to — this
-    // guards against over-correcting into "never fall back".
+  it("still fails loudly even when a fallback IS configured and usable (AGE-113)", async () => {
+    // The pre-invariant behavior — hop to a working fallback — is exactly what
+    // AGE-113 forbids: recovery changed which adapter answered. Configured or
+    // not, a failure now surfaces instead of silently re-routing.
     process.env.AGENTDASH_FALLBACK_ADAPTER = "claude_api";
     process.env.ANTHROPIC_API_KEY = "sk-test-key";
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     minimaxLLM.mockRejectedValueOnce(new Error("minimax 500"));
 
-    await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
-    expect(anthropicLLM).toHaveBeenCalledTimes(1);
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
+    expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
   it("leaves the direct claude_api path stubbing for keyless local dev", async () => {
@@ -603,11 +615,11 @@ describe("stripHermesChatter", () => {
 });
 
 /**
- * AGENTDASH_FALLBACK_CHAIN: ordered `adapter[:model]` hops walked after the
- * primary adapter fails. Two hops on the same adapter with different models
- * are distinct — the motivating deployment is codex → hermes:k3 → hermes:glm.
+ * AGENTDASH_FALLBACK_CHAIN under the AGE-113 invariant: the env var is inert
+ * for chat dispatch. No hop — adapter or model — is ever applied after the
+ * configured adapter fails; the request fails loudly instead.
  */
-describe("dispatchLLM fallback chain", () => {
+describe("dispatchLLM fallback chain is inert (AGE-113)", () => {
   const input = {
     system: "You are a Chief of Staff.",
     messages: [{ role: "user" as const, content: "Draft a rollout plan." }],
@@ -660,62 +672,49 @@ describe("dispatchLLM fallback chain", () => {
     }
   });
 
-  it("falls back through a model-bearing hermes hop, passing -m", async () => {
+  it("never dispatches a model-bearing hermes hop after the primary fails", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:k3";
     minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
 
-    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "hermes",
-      expect.arrayContaining(["-m", "k3"]),
-      expect.anything(),
-    );
+    expect(spawnMock, "a chain hop ran despite the invariant").not.toHaveBeenCalled();
+    expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("takes precedence over the legacy single-hop AGENTDASH_FALLBACK_ADAPTER", async () => {
+  it("ignores the chain even when the legacy single-hop env is also set", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:k3";
     process.env.AGENTDASH_FALLBACK_ADAPTER = "claude_api";
     minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
 
-    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
+    expect(spawnMock).not.toHaveBeenCalled();
     expect(anthropicLLM).not.toHaveBeenCalled();
   });
 
-  it("walks past a failing hop to the next one", async () => {
+  it("same-adapter different-model hops are refused too — the model must not change", async () => {
+    // The k3 → glm-5.3 "same adapter, new model" case: it never switched
+    // adapters, but it still changed which model answered. That is a model
+    // switch, and the invariant forbids it all the same.
+    process.env.AGENTDASH_DEFAULT_ADAPTER = "hermes_local";
+    process.env.AGENTDASH_FALLBACK_CHAIN = "hermes_local:glm-5.3";
+    spawnMock.mockImplementationOnce(() => {
+      throw new Error("hermes timed out");
+    });
+
+    await expect(dispatchLLM(input)).rejects.toThrow(/adapter\/model invariant/);
+    // Exactly one attempt — the primary — never a second with a new -m.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the configured adapter and the underlying cause when refusing", async () => {
     process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
     process.env.AGENTDASH_FALLBACK_CHAIN = "claude_api,hermes_local:glm-5.3";
     minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
-    anthropicLLM.mockRejectedValue(new Error("anthropic down"));
 
-    await expect(dispatchLLM(input)).resolves.toBe("hermes reply");
-
-    expect(anthropicLLM).toHaveBeenCalledTimes(1);
-    expect(spawnMock).toHaveBeenCalledWith(
-      "hermes",
-      expect.arrayContaining(["-m", "glm-5.3"]),
-      expect.anything(),
-    );
-  });
-
-  it("skips a hop naming the failed adapter with no model override", async () => {
-    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
-    process.env.AGENTDASH_FALLBACK_CHAIN = "minimax,claude_api";
-    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
-
-    await expect(dispatchLLM(input)).resolves.toBe("anthropic fallback");
-    // Primary call only — the identical minimax hop must not be retried.
-    expect(minimaxLLM).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails loudly when every hop fails, naming each attempt", async () => {
-    process.env.AGENTDASH_DEFAULT_ADAPTER = "minimax";
-    process.env.AGENTDASH_FALLBACK_CHAIN = "claude_api";
-    minimaxLLM.mockRejectedValue(new Error("quota exhausted"));
-    anthropicLLM.mockRejectedValue(new Error("anthropic down"));
-
-    await expect(dispatchLLM(input)).rejects.toThrow(/All fallback-chain hops failed/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/minimax/);
+    await expect(dispatchLLM(input)).rejects.toThrow(/quota exhausted/);
   });
 });

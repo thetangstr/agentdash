@@ -1,7 +1,10 @@
 .mkt-final {
   text-align: center;
   display: grid;
-  gap: 32px;
+  gap: 24px;
   justify-items: center;
 }
-.mkt-final__cta-row { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.mkt-final .mkt-display-section { max-width: 16ch; }
+.mkt-final__sub { color: var(--mkt-ink-soft); max-width: 52ch; margin: 0; font-size: 17px; }
+.mkt-final__cta-row { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+.mkt-final__note { color: var(--mkt-ink-faint); font-family: var(--mkt-font-mono); font-size: 13px; margin: 0; }

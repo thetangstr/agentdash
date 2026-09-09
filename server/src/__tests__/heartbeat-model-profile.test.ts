@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AdapterModelProfileDefinition } from "../adapters/index.js";
 import {
+  enrichWakeContextSnapshot,
   mergeModelProfileAdapterConfig,
   normalizeModelProfileWakeContext,
   resolveModelProfileApplication,
@@ -119,5 +120,51 @@ describe("heartbeat model profile application", () => {
     });
 
     expect(contextSnapshot).toMatchObject({ modelProfile: "cheap" });
+  });
+
+  it("drops the payload model profile when an agent requested the wake (AGE-113)", () => {
+    const payload: Record<string, unknown> = { modelProfile: "cheap", issueId: "issue-1" };
+    const { contextSnapshot } = enrichWakeContextSnapshot({
+      contextSnapshot: {},
+      reason: "issue_assigned",
+      source: "assignment",
+      triggerDetail: "manual",
+      payload,
+      requestedByActorType: "agent",
+    });
+
+    // The profile must not reach the run context…
+    expect(contextSnapshot.modelProfile).toBeUndefined();
+    expect(contextSnapshot.paperclipModelProfile).toBeUndefined();
+    // …and the rest of the payload must pass untouched.
+    expect(payload.issueId).toBe("issue-1");
+  });
+
+  it("keeps the payload model profile when a human requested the wake (AGE-113)", () => {
+    const { contextSnapshot } = enrichWakeContextSnapshot({
+      contextSnapshot: {},
+      reason: "issue_assigned",
+      source: "assignment",
+      triggerDetail: "manual",
+      payload: { modelProfile: "cheap" },
+      requestedByActorType: "user",
+    });
+
+    expect(contextSnapshot.modelProfile).toBe("cheap");
+  });
+
+  it("keeps the payload model profile when no actor type is given (internal wakes)", () => {
+    // Timer/automation wakes never carry a profile; the default must not
+    // strip anything they do carry.
+    const { contextSnapshot } = enrichWakeContextSnapshot({
+      contextSnapshot: {},
+      reason: "timer",
+      source: "timer",
+      triggerDetail: "system",
+      payload: { modelProfile: "cheap" },
+      requestedByActorType: null,
+    });
+
+    expect(contextSnapshot.modelProfile).toBe("cheap");
   });
 });

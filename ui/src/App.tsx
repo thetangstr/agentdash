@@ -82,13 +82,13 @@ import { MemberOnboardingPage } from "./pages/MemberOnboarding";
 import { ServerUnreachableOverlay } from "@/components/ServerUnreachableOverlay";
 // AgentDash: marketing pages — render on cream/light surface, no CloudAccessGate.
 import { Landing as MarketingLanding } from "./marketing/pages/Landing";
+import { Demo as MarketingDemo } from "./marketing/pages/Demo";
 import { Consulting as MarketingConsulting } from "./marketing/pages/Consulting";
 import { About as MarketingAbout } from "./marketing/pages/About";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
 import MyAgent from "./pages/MyAgent";
-import ConnectYourMachineGuide from "./pages/ConnectYourMachineGuide";
 import { NewVersionNotice } from "./components/NewVersionNotice";
 import OverrideInbox from "./pages/OverrideInbox";
 import { shouldRedirectCompanylessRouteToOnboarding } from "./lib/onboarding-route";
@@ -177,7 +177,10 @@ function boardRoutes() {
       <Route path="evaluation/:kind/:id/:tab" element={<EvaluationMilestone />} />
       <Route path="activity" element={<Activity />} />
       <Route path="my-agent" element={<MyAgent />} />
-      <Route path="my-agent/connect-machine" element={<ConnectYourMachineGuide />} />
+      {/* The guide is now a section on My Agent itself. The deep link is kept
+          so existing bookmarks and the older release notes still land somewhere
+          useful, but there is no second copy of the content to drift. */}
+      <Route path="my-agent/connect-machine" element={<Navigate to="../my-agent" replace />} />
       <Route path="inbox/override" element={<OverrideInbox />} />
       <Route path="inbox" element={<InboxRootRedirect />} />
       <Route path="inbox/company" element={<CompanyInbox />} />
@@ -367,6 +370,7 @@ export function App() {
             cream/light surface isn't fighting the dashboard's html.dark theme.
             Landing redirects logged-in users to /companies on its own. */}
         <Route path="/" element={<MarketingLanding />} />
+        <Route path="demo" element={<MarketingDemo />} />
         <Route path="consulting" element={<MarketingConsulting />} />
         <Route path="about" element={<MarketingAbout />} />
         <Route path="assess" element={<AssessPage />} />
@@ -472,7 +476,17 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
-      <ServerUnreachableOverlay />
+      <ProductOnlyOverlay />
     </>
   );
+}
+
+// AgentDash: the public marketing surface does not depend on the API, so a
+// server outage must not blur the homepage with the dashboard's
+// "Connection Lost" overlay. Marketing routes render MarketingShell.
+const MARKETING_PATHS = new Set(["/", "/demo", "/about", "/consulting", "/mcp"]);
+function ProductOnlyOverlay() {
+  const location = useLocation();
+  if (MARKETING_PATHS.has(location.pathname.replace(/\/+$/, "") || "/")) return null;
+  return <ServerUnreachableOverlay />;
 }

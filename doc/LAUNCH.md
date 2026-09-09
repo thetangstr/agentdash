@@ -170,7 +170,7 @@ Other adapter picks (`gemini_local`, `codex_local`, `opencode_local`, …) are n
 |---|---|
 | `ANTHROPIC_API_KEY` | `sk-ant-…` from console.anthropic.com (only needed when `claude_api` is the adapter or the named fallback) |
 | `AGENTDASH_DEFAULT_ADAPTER` | `minimax` / `claude_api` / `claude_local` / `hermes_local` / `openai_compat` for CoS chat (default `minimax` if unset). Other adapters are for agent execution unless separately wired into CoS chat. |
-| `AGENTDASH_FALLBACK_ADAPTER` | Adapter to try when the configured one fails. **Unset means do not fall back** — the request fails loudly instead. One hop only; naming the same adapter is refused. |
+| `AGENTDASH_FALLBACK_ADAPTER` | **Inert since AGE-113.** Automatic recovery no longer switches adapters or models — a failed adapter fails the request loudly; only a human with agent-configuration authority changes an agent's adapter or model. The variable is read only for a log line and changes no behavior. |
 | `AGENTDASH_HERMES_COMMAND` | Optional absolute path to `hermes`; defaults to `hermes` on PATH. |
 
 **Why the default is not `claude_api`.** Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibit sharing an account or driving it by automated means "except when you are accessing our Services via an Anthropic API Key", and the [Agent SDK docs](https://code.claude.com/docs/en/agent-sdk) state that third-party products may not offer a claude.ai login and must use Console API-key auth. Defaulting to Claude pushed every unconfigured deployment toward either an unbudgeted key or a shared personal seat. `claude_api` with a Console key remains fully supported and is squarely within the Commercial Terms — it is now a deliberate choice rather than what you get by saying nothing. The same caution applies to `claude_local` and to pointing `hermes setup` at a Claude Pro/Max login.
@@ -274,10 +274,10 @@ PAPERCLIP_PUBLIC_URL=https://your-domain.com  # e.g. http://100.83.171.56:3100 f
 # LLM (CoS chat dispatch)
 AGENTDASH_DEFAULT_ADAPTER=minimax  # or claude_api / claude_local / hermes_local / openai_compat
 MINIMAX_API_KEY=…
-# Optional. Unset means a failed adapter fails the request rather than
-# quietly answering from somewhere nobody configured.
-# AGENTDASH_FALLBACK_ADAPTER=openai_compat
-# ANTHROPIC_API_KEY=sk-ant-…  # only for the claude_api adapter or fallback
+# AGE-113: no automatic adapter fallback exists anymore. A failed adapter
+# fails the request; adapter/model changes are a human's act on the agent's
+# configuration. (AGENTDASH_FALLBACK_ADAPTER / _CHAIN are inert.)
+# ANTHROPIC_API_KEY=sk-ant-…  # only for the claude_api adapter
 
 # OpenAI-compatible provider (Cloud SKU — usage-based via OpenRouter / Fireworks)
 # AGENTDASH_DEFAULT_ADAPTER=openai_compat

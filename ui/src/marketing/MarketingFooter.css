@@ -1,47 +1,57 @@
 .mkt-footer {
-  background: var(--mkt-surface-cream-2);
   border-top: 1px solid var(--mkt-rule);
-  padding: 80px var(--mkt-container-gutter) 40px;
+  background: var(--mkt-surface-cream-2);
+  padding-block: 64px 32px;
 }
 .mkt-footer__inner {
   max-width: var(--mkt-container-max);
   margin-inline: auto;
+  padding-inline: var(--mkt-container-gutter);
 }
 .mkt-footer__cols {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
-  gap: 48px;
+  grid-template-columns: 1.6fr repeat(3, 1fr);
+  gap: 40px;
 }
-.mkt-footer__brand {
-  font-family: var(--mkt-font-serif);
-  font-size: 22px;
-  font-weight: 500;
-  margin-bottom: 8px;
+.mkt-footer__about { display: grid; gap: 14px; align-content: start; }
+.mkt-footer__tagline {
+  color: var(--mkt-ink-soft);
+  max-width: 34ch;
+  font-size: 15px;
 }
-.mkt-footer__tagline { color: var(--mkt-ink-soft); max-width: 36ch; }
+.mkt-footer__status {
+  font-family: var(--mkt-font-mono);
+  font-size: 12px;
+  color: var(--mkt-ink-faint);
+  max-width: 40ch;
+}
 .mkt-footer__col h4 {
+  font-family: var(--mkt-font-mono);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--mkt-ink-soft);
-  margin: 0 0 16px;
-  font-family: var(--mkt-font-mono);
+  margin: 0 0 14px;
   font-weight: 500;
 }
-.mkt-footer__col ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
-.mkt-footer__col a { text-decoration: none; color: var(--mkt-ink); }
+.mkt-footer__col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.mkt-footer__col a { text-decoration: none; font-size: 15px; color: var(--mkt-ink); }
 .mkt-footer__col a:hover { color: var(--mkt-accent-ink); }
 .mkt-footer__legal {
-  margin-top: 64px;
-  padding-top: 24px;
+  margin-top: 48px;
+  padding-top: 20px;
   border-top: 1px solid var(--mkt-rule);
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
-  color: var(--mkt-ink-soft);
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--mkt-ink-faint);
 }
-@media (max-width: 800px) {
+@media (max-width: 860px) {
   .mkt-footer__cols { grid-template-columns: 1fr 1fr; }
+  .mkt-footer__about { grid-column: 1 / -1; }
+}
+@media (max-width: 480px) {
+  .mkt-footer__cols { grid-template-columns: 1fr; }
 }

@@ -2,14 +2,15 @@
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(250, 249, 245, 0.85);
-  backdrop-filter: saturate(180%) blur(8px);
+  background: rgba(250, 249, 245, 0.86);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
   border-bottom: 1px solid var(--mkt-rule);
 }
 .mkt-header__inner {
   max-width: var(--mkt-container-max);
   margin-inline: auto;
-  padding: 16px var(--mkt-container-gutter);
+  padding: 14px var(--mkt-container-gutter);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -20,11 +21,10 @@
   align-items: center;
   text-decoration: none;
   color: var(--mkt-ink);
-  /* Wordmark size + tracking come from AgentDashLogo's size prop. */
 }
 .mkt-header__nav {
   display: flex;
-  gap: 32px;
+  gap: 28px;
 }
 .mkt-header__nav a {
   text-decoration: none;
@@ -34,9 +34,48 @@
 .mkt-header__nav a:hover { color: var(--mkt-ink); }
 .mkt-header__cta {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
 }
-@media (max-width: 800px) {
-  .mkt-header__nav { display: none; }
+.mkt-header__toggle {
+  display: none;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--mkt-rule);
+  border-radius: var(--mkt-radius-sm);
+  color: var(--mkt-ink);
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mkt-header__sheet {
+  border-top: 1px solid var(--mkt-rule);
+  background: var(--mkt-surface-cream);
+  padding: 8px var(--mkt-container-gutter) 24px;
+}
+.mkt-header__sheet-nav {
+  display: grid;
+}
+.mkt-header__sheet-nav a {
+  text-decoration: none;
+  font-size: 18px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--mkt-rule);
+  color: var(--mkt-ink);
+}
+.mkt-header__sheet-cta {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+.mkt-header__sheet-cta .mkt-btn { width: 100%; }
+@media (max-width: 860px) {
+  .mkt-header__nav,
+  .mkt-header__cta { display: none; }
+  .mkt-header__toggle { display: inline-flex; }
+}
+@media (min-width: 861px) {
+  .mkt-header__sheet { display: none; }
 }

@@ -189,7 +189,9 @@ test("CEO consolidates three stewarded contributions with web and Telegram appro
   await expect(page.getByRole("heading", { name: "My Agent" })).toBeVisible();
   // The first agent a board user creates is automatically assigned to that
   // user, so the page must expose the agent rather than strand its creator.
-  await expect(page.locator("main").getByText(/CEO Agent.*ceo.*idle/)).toBeVisible();
+  // The role renders as a job title, not as the raw enum: "CEO", never "ceo"
+  // or "Ceo". A database value on a person's own page reads as a leak.
+  await expect(page.locator("main").getByText(/CEO Agent.*CEO.*idle/)).toBeVisible();
 
   // The Inbox `all` tab is scoped to the signed-in user in a profile company,
   // and says so. Asserted in the browser because the scoping is wiring between

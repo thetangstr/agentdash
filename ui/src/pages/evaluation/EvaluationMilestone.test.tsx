@@ -334,7 +334,7 @@ describe("EvaluationMilestone", () => {
   it("versions: every stored version with its score, confidence, engine and hash; an administrator's verify is a one-shot whose result is shown in words", async () => {
     versionsMock.mockResolvedValue({ versions: [
       { version: 1, storedAt: "2026-09-03T00:00:00.000Z", formulaVersion: "m2-score/5", contractVersion: "derived/1", throughSeq: 20, cardHash: "a".repeat(64), outcome: { score: null, confidence: null }, exceptionsTotal: 0 },
-      { version: 2, storedAt: "2026-09-05T00:00:00.000Z", formulaVersion: "m2-score/7", contractVersion: "derived/1", throughSeq: 42, cardHash: "b".repeat(64), outcome: { score: 68.1, confidence: "medium" }, exceptionsTotal: 1 },
+      { version: 2, storedAt: "2026-09-05T00:00:00.000Z", formulaVersion: "m2-score/8", contractVersion: "derived/1", throughSeq: 42, cardHash: "b".repeat(64), outcome: { score: 68.1, confidence: "medium" }, exceptionsTotal: 1 },
     ] });
     render(`/evaluation/project/${MILESTONE}/versions`, <EvaluationMilestone />);
     await flush();
@@ -343,16 +343,16 @@ describe("EvaluationMilestone", () => {
     expect(rows[0]).toContain("v2"); // newest first
     expect(rows[0]).toContain("68");
     expect(rows[0]).toContain("adequate evidence");
-    expect(rows[0]).toContain("m2-score/7");
+    expect(rows[0]).toContain("m2-score/8");
     expect(rows[0]).toContain("bbbbbbbbbbbb");
     expect(rows[1]).toContain("withheld");
     expect(container.textContent).toContain("Card engine");
     // verify: one call with verify=true, result in words, not cached into the card query
-    latestMock.mockImplementation(async (_c: string, _r: unknown, verify?: boolean) => ({ latest: { id: "s1", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 3, contractVersion: "derived/1", formulaVersion: "m2-score/7", throughSeq: 42, throughEventId: null, card, cardHash: "h".repeat(64), createdAt: "2026-09-05T12:00:00.000Z" }, verify: verify ? { ok: false, reason: "formula changed (m2-score/5 → m2-score/7)" } : null }));
+    latestMock.mockImplementation(async (_c: string, _r: unknown, verify?: boolean) => ({ latest: { id: "s1", companyId: "company-1", milestoneKind: "project", milestoneId: MILESTONE, version: 3, contractVersion: "derived/1", formulaVersion: "m2-score/8", throughSeq: 42, throughEventId: null, card, cardHash: "h".repeat(64), createdAt: "2026-09-05T12:00:00.000Z" }, verify: verify ? { ok: false, reason: "formula changed (m2-score/5 → m2-score/8)" } : null }));
     const verifyButton = [...container.querySelectorAll("button")].find((b) => b.textContent === "Verify latest against a replay") as HTMLButtonElement;
     await act(async () => { verifyButton.click(); });
     await flush();
     expect(latestMock).toHaveBeenCalledWith("company-1", { kind: "project", id: MILESTONE }, true);
-    expect(container.querySelector('[data-testid="verify-result"]')?.textContent).toContain("Replay does not agree: formula changed (m2-score/5 → m2-score/7)");
+    expect(container.querySelector('[data-testid="verify-result"]')?.textContent).toContain("Replay does not agree: formula changed (m2-score/5 → m2-score/8)");
   });
 });

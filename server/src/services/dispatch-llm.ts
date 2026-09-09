@@ -434,25 +434,26 @@ export interface DispatchOptions {
 /**
  * Try a second adapter after the configured one failed.
  *
- * This used to be hardwired to `claude_api`, which made Anthropic an implicit
- * dependency of every other adapter: a deployment that had deliberately chosen
- * MiniMax or Hermes still reached for Claude the moment its own provider
- * hiccuped. The fallback is now named by `AGENTDASH_FALLBACK_ADAPTER`, and
- * **unset means do not fall back** — a deployment that has not said where to go
- * next should fail loudly rather than silently route a colleague's question to a
- * provider nobody configured, on someone's credential.
+ * AGE-113 INVARIANT: automatic recovery may not route a request to a
+ * different adapter or model than the agent (or deployment) configured. This
+ * function therefore no longer dispatches anywhere: it refuses, loudly, with
+ * the original error and a pointed message. Callers surface the failure
+ * instead of receiving an answer from a provider nobody asked for.
  *
- * The hard part is not the routing, it is refusing to answer. An unconfigured
- * adapter that returns cheerful placeholder text turns a failure into a
- * plausible-looking agent turn in a team thread. Seen for real: `claude_local`
- * hit its 45s timeout on a busy machine, fell through to here, and an agent
- * replied "Got it. (stub reply — set ANTHROPIC_API_KEY…)" to a colleague's
- * question. Nothing surfaced the timeout, because the thread looked like it had
- * worked. Every adapter now throws on missing configuration for this reason.
+ * History, kept because it explains the env vars still read here:
+ * `AGENTDASH_FALLBACK_ADAPTER` and `AGENTDASH_FALLBACK_CHAIN` used to name
+ * alternate hops and this function walked them. That made Anthropic an
+ * implicit dependency of every other adapter once, and later let an
+ * operator-configured chain silently move a Chief-of-Staff between providers
+ * — changing who billed the run and which model answered, with no human in
+ * the loop. Both are against the invariant now. The env vars are inert;
+ * configuration changes go through an agent's adapter settings, by a human.
  *
- * One hop only. If the fallback also fails it lands back here with
- * `failedAdapter` equal to the configured fallback, which is refused below —
- * so a misconfigured pair cannot ping-pong.
+ * One nuance this refusal preserves: a chain hop that names the SAME adapter
+ * with a different model was never an adapter switch in the routing sense —
+ * but it still changed the model that answers, so it is refused too. A
+ * "different model answered my question" is exactly the surprise this
+ * invariant exists to prevent.
  */
 async function runFallbackAdapter(
   input: LLMInput,
@@ -463,65 +464,26 @@ async function runFallbackAdapter(
   const reason = cause instanceof Error ? cause.message : String(cause);
 
   // A chain hop that fails must surface to the chain walker, not start a
-  // nested walk of its own.
+  // nested walk of its own. (Retained for call-shape compatibility; with the
+  // chain walker gone below, this only keeps any historical caller honest.)
   if (options?.disableFallback) {
     throw cause instanceof Error
       ? cause
       : new Error(`Adapter "${failedAdapter}" failed: ${reason}`);
   }
 
-  // AgentDash: AGENTDASH_FALLBACK_CHAIN — ordered `adapter[:model]` hops.
-  // Takes precedence over the single-hop AGENTDASH_FALLBACK_ADAPTER when set.
-  const chain = readFallbackChain();
-  if (chain.length > 0) {
-    const errors: string[] = [`${failedAdapter}: ${reason}`];
-    for (const hop of chain) {
-      // A hop that names the failed adapter with no model override would be
-      // the identical call again; skip it. A hop with a model is a different
-      // call even on the same adapter — that is the k3 → glm-5.3 case.
-      if (hop.adapter === failedAdapter && !hop.model) continue;
-      logger.info(
-        { failedAdapter, hopAdapter: hop.adapter, hopModel: hop.model ?? null },
-        "[dispatch-llm] falling back via chain",
-      );
-      try {
-        // Deliberately no meter, matching the single-hop path below: a
-        // fallback reply is not the billable call the caller asked for.
-        return await dispatchLLM(input, undefined, {
-          adapter: hop.adapter,
-          model: hop.model,
-          disableFallback: true,
-        });
-      } catch (hopErr) {
-        const hopReason = hopErr instanceof Error ? hopErr.message : String(hopErr);
-        errors.push(`${hop.adapter}${hop.model ? `:${hop.model}` : ""}: ${hopReason}`);
-      }
-    }
-    throw new Error(
-      `All fallback-chain hops failed. Refusing to answer with placeholder text. Attempts — ${errors.join(" | ")}`,
-    );
-  }
-
-  const fallback = (process.env.AGENTDASH_FALLBACK_ADAPTER ?? "").trim();
-
-  if (!fallback) {
-    throw new Error(
-      `Adapter "${failedAdapter}" failed (${reason}) and no AGENTDASH_FALLBACK_ADAPTER ` +
-        "is configured. Refusing to answer with placeholder text.",
-    );
-  }
-  if (fallback === failedAdapter) {
-    throw new Error(
-      `Adapter "${failedAdapter}" failed (${reason}) and AGENTDASH_FALLBACK_ADAPTER ` +
-        "names that same adapter, so there is nothing to fall back to. " +
-        "Refusing to answer with placeholder text.",
-    );
-  }
-
-  logger.info({ failedAdapter, fallback }, "[dispatch-llm] falling back");
-  // Deliberately no meter: a fallback reply is not the billable call the caller
-  // asked for, and double-metering one answer would overstate usage.
-  return dispatchLLM(input, undefined, { adapter: fallback });
+  // AGE-113: refuse instead of falling back. Never answer with a different
+  // adapter or model than configured, and never answer with placeholder text.
+  logger.warn(
+    { failedAdapter, chainConfigured: readFallbackChain().length > 0, fallbackEnv: Boolean((process.env.AGENTDASH_FALLBACK_ADAPTER ?? "").trim()) },
+    "[dispatch-llm] fallback refused by adapter/model invariant — failing loudly on the configured adapter",
+  );
+  throw new Error(
+    `Adapter "${failedAdapter}" failed (${reason}) and the adapter/model invariant refuses ` +
+      "to retry on a different adapter or model. Fix or reconfigure the adapter " +
+      "(a human with agent-configuration authority) and try again. " +
+      "Refusing to answer with placeholder text.",
+  );
 }
 
 export async function dispatchLLM(

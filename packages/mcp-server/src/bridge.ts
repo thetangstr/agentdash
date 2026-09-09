@@ -100,7 +100,7 @@ export function bridgeTools(client: PaperclipApiClient): ToolDefinition[] {
 
     makeTool(
       "inbox_propose",
-      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X') and for changing how often the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.",
+      "Work out what an instruction means and read it back for confirmation. Changes nothing. Use for assigning work ('have Casper draft X'). It also records a check-interval preference, but nothing acts on it -- the check is triggered by the operator's own harness schedule, not by AgentDash, so do not tell the operator that setting it changes when the inbox is checked. If a name does not resolve this returns the alternatives -- put the question to the operator rather than guessing.",
       z.object({
         kind: z.enum(["assign_work", "set_cadence"]),
         items: z

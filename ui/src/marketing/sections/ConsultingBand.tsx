@@ -15,7 +15,7 @@ export function ConsultingBand() {
             operation.
           </p>
           <div>
-            <Button href="/consulting" variant="ghost">Talk to our consulting team</Button>
+            <Button href="/consulting" variant="ghost">How the consulting practice works</Button>
           </div>
         </div>
         <div className="mkt-cb__art" aria-hidden>

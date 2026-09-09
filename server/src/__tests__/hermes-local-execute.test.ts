@@ -535,6 +535,35 @@ describe("hermes_local working-directory resolution (AGE-14)", () => {
     expect(observed.cwd).toBe(await realpath(configuredDir));
   });
 
+  it("runs an agent with no configured cwd in its agent home without throwing (the 2026-09-06 outage)", async () => {
+    // cfgString(config.cwd) is undefined when no cwd is configured; the carve-out
+    // read `.length` on it whenever the runtime fell back to agent_home, so every
+    // timer run of an agent without a cwd threw before Hermes started.
+    const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-agent-home-no-cwd-"));
+    const agentHome = join(tempDir, "agent-home");
+    await mkdir(agentHome, { recursive: true });
+    const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);
+
+    const { getServerAdapter } = await import("../adapters/registry.js");
+    await expect(
+      getServerAdapter("hermes_local").execute(
+        buildNoCwdCtx({
+          hermesCommand,
+          context: {
+            paperclipWorkspace: {
+              cwd: agentHome,
+              source: "agent_home",
+            },
+          },
+        }) as never,
+      ),
+    ).resolves.toBeDefined();
+
+    const observed = JSON.parse(await readFile(cwdPath, "utf8")) as { cwd: string };
+    // No operator-named directory, so the generic agent_home fallback is where the run belongs.
+    expect(observed.cwd).toBe(await realpath(agentHome));
+  });
+
   it("resolves the last-resort '.' against the server's own working directory (the incident mechanism)", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "agentdash-hermes-age14-fallthrough-"));
     const { hermesCommand, cwdPath } = await writeCwdRecordingHermesCommand(tempDir);

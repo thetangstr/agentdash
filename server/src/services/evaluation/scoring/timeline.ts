@@ -685,6 +685,22 @@ export function assigneeAt(it: ItemTimeline, time: Date): { agentId: string | nu
   return a ? { agentId: a.toAgentId, userId: a.toUserId } : { agentId: null, userId: null };
 }
 
+/**
+ * The assignee at `time` from records at or before it only — no fallback to a later snapshot.
+ * `undefined` means no assignment or snapshot precedes `time`: the owner then is unknown, not
+ * whoever the item was later found assigned to (P6 rule 6b).
+ */
+export function assigneeAtStrict(it: ItemTimeline, time: Date): { agentId: string | null; userId: string | null } | undefined {
+  // Full scans: replay order is exact only to the skew bucket, so a later record may precede an earlier one.
+  let a: Assignment | null = null;
+  for (const x of it.assignments) if (x.time <= time && (!a || x.time >= a.time)) a = x;
+  let s: Snapshot | null = null;
+  for (const x of it.snapshots) if (x.time <= time && (!s || x.time >= s.time)) s = x;
+  if (!a && !s) return undefined;
+  if (a && (!s || a.time >= s.time)) return { agentId: a.toAgentId, userId: a.toUserId };
+  return { agentId: s!.assigneeAgentId, userId: s!.assigneeUserId };
+}
+
 export function labelsAt(it: ItemTimeline, time: Date): Set<string> {
   const out = new Set<string>(snapshotAt(it, time)?.labels ?? []);
   for (const l of it.labelAdds) if (l.time <= time && l.label) out.add(l.label);
