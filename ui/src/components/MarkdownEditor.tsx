@@ -565,6 +565,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   valueRef.current = editorValue;
   const latestValueRef = useRef(editorValue);
   const initialChildOnChangeRef = useRef(true);
+  const [richEditorError, setRichEditorError] = useState<string | null>(null);
+  const [richEditorErrorCount, setRichEditorErrorCount] = useState(0);
+  /**
+   * Bumping this changes the key on <MDXEditor>, forcing React to unmount and
+   * remount the editor instance instead of reusing the broken one. Without a
+   * remount, "Retry" just re-runs the empty-DOM check against the same dead
+   * editor and restores the same error.
+   */
+  const [richEditorMountNonce, setRichEditorMountNonce] = useState(0);
   /**
    * After imperative `setMarkdown` (prop sync, mentions, image upload), MDXEditor may emit `onChange`
    * with the same markdown. Skip notifying the parent for that echo so controlled parents that
@@ -573,7 +582,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   const echoIgnoreMarkdownRef = useRef<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [richEditorError, setRichEditorError] = useState<string | null>(null);
   const dragDepthRef = useRef(0);
 
   // Stable ref for imageUploadHandler so plugins don't recreate on every render
@@ -651,6 +659,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     element.style.height = `${element.scrollHeight}px`;
   }, []);
 
+  const reportRichEditorError = useCallback((message: string) => {
+    setRichEditorError(message);
+    setRichEditorErrorCount((count) => count + 1);
+  }, []);
+
+  /**
+   * Retry must actually remount the rich editor. Clearing the error state alone
+   * re-runs the empty-DOM check against the same broken editor instance and
+   * restores the same error, so the button looked like a no-op. Bumping the
+   * mount nonce changes <MDXEditor>'s key, forcing React to discard the broken
+   * instance and build a fresh one.
+   */
+  const handleRichEditorRetry = useCallback(() => {
+    initialChildOnChangeRef.current = true;
+    setRichEditorError(null);
+    setRichEditorMountNonce((nonce) => nonce + 1);
+  }, []);
+
   useEffect(() => {
     if (!richEditorError) return;
     autoSizeFallbackTextarea(fallbackTextareaRef.current);
@@ -670,7 +696,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         const activeElement = document.activeElement;
         if (activeElement === editable || editable.contains(activeElement)) return;
         if (isRichEditorDomEmpty(editable, editorValue, placeholder)) {
-          setRichEditorError("Rich editor failed to load content");
+          reportRichEditorError("Rich editor failed to load content");
         }
       }, 0);
     };
@@ -1019,6 +1045,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     : null;
 
   if (richEditorError) {
+    const persistentFailure = richEditorErrorCount > 1;
     return (
       <div
         ref={containerRef}
@@ -1033,13 +1060,21 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
           <button
             type="button"
             className="shrink-0 underline underline-offset-2 hover:text-foreground"
-            onClick={() => {
-              setRichEditorError(null);
-            }}
+            onClick={handleRichEditorRetry}
           >
             Retry rich editor
           </button>
         </div>
+        {persistentFailure && (
+          <p
+            role="alert"
+            data-testid="rich-editor-retry-failed"
+            className="px-3 pt-1 text-xs text-destructive"
+          >
+            Retrying the rich editor keeps failing. Keep editing in raw Markdown,
+            or reload the page and try again.
+          </p>
+        )}
         <textarea
           ref={fallbackTextareaRef}
           value={value}
@@ -1177,6 +1212,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       onPasteCapture={handlePasteCapture}
     >
       <MDXEditor
+        key={richEditorMountNonce}
         ref={setEditorRef}
         markdown={editorValue}
         suppressHtmlProcessing
@@ -1207,7 +1243,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         }}
         onBlur={() => onBlur?.()}
         onError={(payload) => {
-          setRichEditorError(payload.error);
+          reportRichEditorError(payload.error);
         }}
         className={cn("paperclip-mdxeditor", !bordered && "paperclip-mdxeditor--borderless")}
         contentEditableClassName={cn(
