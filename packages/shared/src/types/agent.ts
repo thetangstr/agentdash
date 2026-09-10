@@ -130,6 +130,18 @@ export interface Agent {
   lastHeartbeatAt: Date | null;
   metadata: Record<string, unknown> | null;
   /**
+   * Whether the saved harness preflight still describes this agent, decided by
+   * the server. The staleness test hashes the adapter configuration, so no
+   * client can compute it — and the restricted view is not even sent the
+   * configuration. Optional: an older server does not send it.
+   */
+  harnessReadiness?: {
+    ready: boolean;
+    reason: string;
+    message: string;
+    testedAt: string | null;
+  } | null;
+  /**
    * The human owner of record (AGE-13). Set from the board actor at creation,
    * backfilled to each company's first admin, and null when an agent was hired
    * by another agent rather than a person. The server has always sent this
