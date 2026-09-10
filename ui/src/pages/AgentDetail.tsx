@@ -759,8 +759,8 @@ export function AgentDetail() {
     [heartbeats],
   );
   const harnessPreflightStatus = useMemo(
-    () => readAgentHarnessPreflightStatus(agent?.metadata ?? null),
-    [agent?.metadata],
+    () => readAgentHarnessPreflightStatus(agent?.metadata ?? null, agent?.harnessReadiness ?? null),
+    [agent?.metadata, agent?.harnessReadiness],
   );
 
   useEffect(() => {

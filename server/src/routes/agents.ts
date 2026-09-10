@@ -486,6 +486,43 @@ export function agentRoutes(
    * their own company. So this widens no one's view of contact details; it only
    * puts the person next to the agent they are accountable for.
    */
+  /**
+   * The readiness verdict, sent alongside the evidence it judges.
+   *
+   * `metadata.harnessPreflight` is a record of one past test, and on this
+   * instance every agent's is out of date: three name `codex_local` while the
+   * agent runs `hermes_local`, and two report the wrong provider and claim no
+   * model is set. The server has always known — `evaluateAgentHarnessPreflightReadiness`
+   * compares the stored `configDigest` against the current configuration and
+   * refuses to start a run — but that verdict was computed at start time and
+   * thrown away, so every reader of the API got the stale evidence with no
+   * indication it was stale, and reasonably believed it.
+   *
+   * The UI cannot work this out for itself: the digest is a server-side hash
+   * over the adapter configuration, and the restricted view does not even
+   * receive that configuration. So the verdict travels with the record.
+   *
+   * It carries no configuration and no secret — only whether the evidence
+   * still describes the agent, and why not.
+   */
+  function withHarnessReadiness<T extends {
+    adapterType: string;
+    adapterConfig: unknown;
+    defaultEnvironmentId?: string | null;
+    metadata?: unknown;
+  }>(agent: T) {
+    const readiness = evaluateAgentHarnessPreflightReadiness({
+      adapterType: agent.adapterType,
+      adapterConfig:
+        agent.adapterConfig && typeof agent.adapterConfig === "object" && !Array.isArray(agent.adapterConfig)
+          ? agent.adapterConfig as Record<string, unknown>
+          : {},
+      defaultEnvironmentId: agent.defaultEnvironmentId ?? null,
+      metadata: agent.metadata ?? null,
+    });
+    return { ...agent, harnessReadiness: readiness };
+  }
+
   async function attachHumanContext<T extends { id: string }>(companyId: string, rows: T[]) {
     const agentIds = rows.map((row) => row.id);
     const [stewardsByAgentId, accountabilityByAgentId] = await Promise.all([
@@ -601,6 +638,11 @@ export function agentRoutes(
 
     return {
       ...(options?.restricted ? redactForRestrictedAgentView(agent) : agent),
+      // Computed from the UNREDACTED agent, deliberately: the digest needs the
+      // adapter configuration, and the restricted view strips it. The verdict
+      // itself carries no configuration, so it is safe on both views — and a
+      // restricted reader is exactly the one who cannot tell staleness alone.
+      harnessReadiness: withHarnessReadiness(agent).harnessReadiness,
       chainOfCommand,
       // Present and null when nobody stewards this agent, never absent: an
       // agent reading a missing key cannot tell "unstewarded" from "this
@@ -1869,7 +1911,7 @@ export function agentRoutes(
       });
       return;
     }
-    const result = await svc.list(companyId);
+    const result = (await svc.list(companyId)).map((agent) => withHarnessReadiness(agent));
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId);
     if (canReadConfigs) {
       res.json(await attachHumanContext(companyId, result));

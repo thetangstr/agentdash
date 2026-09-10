@@ -135,4 +135,64 @@ describe("what reaches the screen", () => {
     const html = render(evidence(), { error: "Adapter probe timed out" });
     expect(html).toContain("Adapter probe timed out");
   });
+})
+
+describe("stale evidence the client cannot detect alone", () => {
+  /**
+   * The exact shape found on every agent in the MK workspace: a preflight that
+   * passed weeks ago, naming `codex_local`, on an agent that now runs
+   * `hermes_local`. Reported as "all five agents, and three of them name the
+   * wrong adapter... anyone reading a preflight to learn what an agent runs
+   * gets a wrong answer."
+   */
+  const CODEX_EVIDENCE_ON_A_HERMES_AGENT = {
+    harnessPreflight: {
+      status: "pass",
+      adapterType: "codex_local",
+      testedAt: "2026-08-19T04:22:22.461Z",
+      configDigest: "6b725ac383b0b11950024a1708c3b76884d760c5318087f2ec8bf217afedd65d",
+      contractVersion: AGENT_HARNESS_PREFLIGHT_CONTRACT_VERSION,
+      checks: [],
+    },
+  };
+
+  it("reported a pass before the server's verdict was available", () => {
+    // Documents the defect rather than endorsing it: with no verdict there is
+    // nothing in the metadata that reveals the mismatch.
+    expect(readAgentHarnessPreflightStatus(CODEX_EVIDENCE_ON_A_HERMES_AGENT).state).toBe("pass");
+  });
+
+  it("reports stale once the server says the configuration changed", () => {
+    const status = readAgentHarnessPreflightStatus(CODEX_EVIDENCE_ON_A_HERMES_AGENT, {
+      ready: false,
+      reason: "stale",
+      message: "Run a new harness preflight because the agent configuration changed.",
+      testedAt: "2026-08-19T04:22:22.461Z",
+    });
+    expect(status.state).toBe("stale");
+    expect(status.message).toBe(
+      "Run a new harness preflight because the agent configuration changed.",
+    );
+  });
+
+  it("still shows what was tested, so the mismatch is visible not just asserted", () => {
+    const status = readAgentHarnessPreflightStatus(CODEX_EVIDENCE_ON_A_HERMES_AGENT, {
+      ready: false,
+      reason: "stale",
+      message: "Run a new harness preflight because the agent configuration changed.",
+      testedAt: "2026-08-19T04:22:22.461Z",
+    });
+    expect(status.adapterType).toBe("codex_local");
+    expect(status.testedAt).toBe("2026-08-19T04:22:22.461Z");
+  });
+
+  it("keeps reporting a pass when the server says the evidence is current", () => {
+    const status = readAgentHarnessPreflightStatus(CODEX_EVIDENCE_ON_A_HERMES_AGENT, {
+      ready: true,
+      reason: "passed",
+      message: "ok",
+      testedAt: "2026-08-19T04:22:22.461Z",
+    });
+    expect(status.state).toBe("pass");
+  });
 });

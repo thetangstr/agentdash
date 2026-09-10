@@ -49,7 +49,42 @@ function formatAdapterType(value: string | null) {
   return value ? value.replace(/[_-]+/g, " ") : "adapter";
 }
 
-export function readAgentHarnessPreflightStatus(metadata: unknown): AgentHarnessPreflightStatus {
+/**
+ * The server's verdict on whether the saved evidence still describes the agent.
+ *
+ * Shape mirrors `evaluateAgentHarnessPreflightReadiness`. Optional because an
+ * older server will not send it.
+ */
+export type AgentHarnessReadinessVerdict = {
+  ready: boolean;
+  reason: string;
+  message: string;
+  testedAt: string | null;
+};
+
+/**
+ * Read the saved preflight, and trust the server about whether it is current.
+ *
+ * This used to end at `status === "pass"` and report a pass. It could not do
+ * better alone: staleness turns on `configDigest`, a server-side hash over the
+ * adapter configuration, which this component cannot recompute and, on the
+ * restricted view, is never even sent. So month-old evidence naming the wrong
+ * adapter rendered as "Harness preflight passed".
+ *
+ * On this instance that was every agent at once — three saying `codex_local`
+ * while running `hermes_local`, two naming the wrong provider and claiming no
+ * model was set. The server knew all along and refused to start runs on that
+ * evidence; the verdict simply never reached the page. Anyone reading a
+ * preflight to learn what an agent runs got a wrong answer.
+ *
+ * The local checks below are kept for the cases that need no configuration to
+ * judge — absent evidence, malformed evidence, an outdated contract — so an
+ * older server still gets something honest.
+ */
+export function readAgentHarnessPreflightStatus(
+  metadata: unknown,
+  verdict?: AgentHarnessReadinessVerdict | null,
+): AgentHarnessPreflightStatus {
   const record = asRecord(metadata);
   const harness = asRecord(record?.harnessPreflight);
   if (!harness) {
@@ -87,6 +122,20 @@ export function readAgentHarnessPreflightStatus(metadata: unknown): AgentHarness
       state: "stale",
       title: "Harness preflight evidence is stale",
       message: "Run preflight again because the saved evidence was produced for an older launch contract.",
+      adapterType,
+      testedAt,
+      checks,
+    };
+  }
+
+  // The decisive check, and the one only the server can make. It must come
+  // before the `pass` branch: `status` records how the test went at the time,
+  // not whether the agent still matches what was tested.
+  if (verdict && !verdict.ready) {
+    return {
+      state: "stale",
+      title: "Harness preflight evidence is out of date",
+      message: verdict.message,
       adapterType,
       testedAt,
       checks,
