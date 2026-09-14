@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { eq } from "drizzle-orm";
@@ -8,6 +8,7 @@ import {
   agentApiKeys,
   agentConnectCodes,
   agents,
+  bridgeEndpoints,
   companies,
   createDb,
 } from "@paperclipai/db";
@@ -49,13 +50,20 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
     // The redeem path writes an activity row referencing the company, so this
     // has to come first or the company delete trips its foreign key.
     await db.delete(activityLog);
+    await db.delete(bridgeEndpoints);
     await db.delete(agentConnectCodes);
     await db.delete(agentApiKeys);
     await db.delete(agents);
     await db.delete(companies);
   });
 
-  async function seed(input?: { expiresAt?: Date; redeemedAt?: Date; revokedAt?: Date; agentStatus?: string }) {
+  async function seed(input?: {
+    expiresAt?: Date;
+    redeemedAt?: Date;
+    revokedAt?: Date;
+    agentStatus?: string;
+    createdByUserId?: string | null;
+  }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const code = "KVTX8F02";
@@ -84,6 +92,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
       expiresAt: input?.expiresAt ?? new Date(Date.now() + 10 * 60 * 1000),
       redeemedAt: input?.redeemedAt ?? null,
       revokedAt: input?.revokedAt ?? null,
+      createdByUserId: input?.createdByUserId ?? null,
     });
 
     return { companyId, agentId, code };
@@ -191,6 +200,109 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
       .send({ code: `pcp_${"a".repeat(48)}` });
     expect(res.status).toBe(400);
     expect(await db.select().from(agentApiKeys)).toHaveLength(0);
+  });
+
+  /**
+   * The other half of connecting a machine, reported missing by a steward who
+   * traced both 403s: the agent key drives the control plane, but every
+   * /bridge/* route requires a bridge ENDPOINT credential, and after the
+   * enrolment button was deleted nothing could create one. "The question lands
+   * in your Claude Code" was a promise over a path with no way to mint its
+   * credential. The code's creator made the code from their signed-in session,
+   * deliberately, to connect THEIR machine — so the endpoint binds to them,
+   * never to the unauthenticated redeemer.
+   */
+  describe("the bridge endpoint minted alongside the key", () => {
+    it("binds to the code's creator, enrolled, with read and inbox capabilities", async () => {
+      const { companyId, code } = await seed({ createdByUserId: "user-steward" });
+
+      const res = await request(app)
+        .post("/api/connect/redeem")
+        .send({ code, deviceName: "chris-laptop" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.bridgeToken).toBeTruthy();
+      expect(res.body.bridgeEndpointId).toBeTruthy();
+
+      const [endpoint] = await db.select().from(bridgeEndpoints);
+      expect(endpoint).toMatchObject({
+        companyId,
+        userId: "user-steward",
+        label: "chris-laptop",
+        capabilities: ["bridge:read", "bridge:inbox"],
+      });
+      // Enrolled means approved: a usable credential exists only past that step.
+      expect(endpoint?.enrolledAt).toBeTruthy();
+      expect(endpoint?.approvedByUserId).toBe("user-steward");
+      // The returned plaintext must be THE credential, not a placeholder.
+      const hash = createHash("sha256").update(String(res.body.bridgeToken)).digest("hex");
+      expect(endpoint?.tokenHash).toBe(hash);
+    });
+
+    /**
+     * A code minted by a board key records no creator. There is nobody to bind
+     * an inbox to, and inventing one would hand a person's inbox to whoever
+     * held the board key. The agent pairing must still succeed untouched.
+     */
+    it("mints no endpoint when the code has no recorded creator", async () => {
+      const { code } = await seed();
+
+      const res = await request(app)
+        .post("/api/connect/redeem")
+        .send({ code, deviceName: "titus-macbook" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.apiKey).toMatch(/^pcp_/);
+      expect(res.body.bridgeToken).toBeNull();
+      expect(res.body.bridgeEndpointId).toBeNull();
+      expect(await db.select().from(bridgeEndpoints)).toHaveLength(0);
+    });
+
+    /**
+     * The same laptop redeeming a second code is the common collision — labels
+     * are unique per user. The pairing must survive it with a discriminated
+     * label rather than fail over a name.
+     */
+    it("survives a label collision with a suffixed label", async () => {
+      const first = await seed({ createdByUserId: "user-steward" });
+      await request(app).post("/api/connect/redeem").send({ code: first.code, deviceName: "chris-laptop" });
+
+      // A second code for a second agent, same creator, same device name.
+      const companyId = first.companyId;
+      const agentId = randomUUID();
+      await db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "Relay",
+        role: "general",
+        status: "idle",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      });
+      const secondCode = "MTWX8F02";
+      await db.insert(agentConnectCodes).values({
+        companyId,
+        agentId,
+        codeHash: hashConnectCode(secondCode),
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        createdByUserId: "user-steward",
+      });
+
+      const res = await request(app)
+        .post("/api/connect/redeem")
+        .send({ code: secondCode, deviceName: "chris-laptop" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.bridgeToken).toBeTruthy();
+
+      const endpoints = await db.select().from(bridgeEndpoints);
+      expect(endpoints).toHaveLength(2);
+      const labels = endpoints.map((e) => e.label).sort();
+      expect(labels[0]).toBe("chris-laptop");
+      expect(labels[1]).toMatch(/^chris-laptop \(/);
+    });
   });
 
   it("names a key honestly when the client sends no device name", async () => {

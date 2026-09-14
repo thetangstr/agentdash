@@ -204,8 +204,9 @@ export function ConnectYourTerminal({
               ) : null}
               <p className="mt-1.5 text-xs text-muted-foreground">
                 It finds Claude Code and Codex if they are installed, writes their own config, and
-                changes nothing else. Undo any time with{" "}
-                <code className="font-mono">npx agentdash-connect --remove</code>.
+                creates an <code className="font-mono">~/agentdash-inbox</code> folder — open that
+                folder in Claude Code and anything waiting on you appears as the session starts.
+                Undo any time with <code className="font-mono">npx agentdash-connect --remove</code>.
               </p>
 
               <Button
