@@ -80,8 +80,11 @@ export function scaffoldInboxWorkspace(dir, { server } = {}) {
 
   const serverFlag = server ? ` --server ${server}` : "";
   // npx, not paperclipai: this package is the one thing guaranteed present,
-  // because running it is how the workspace came to exist.
-  const command = `npx -y agentdash-connect inbox --ack --quiet-when-empty${serverFlag}`;
+  // because running it is how the workspace came to exist. Pinned @latest, not
+  // bare: a bare name lets npx serve whatever version its cache holds, and a
+  // cached pre-0.2 copy has no `inbox` subcommand at all — the hook would fail
+  // on exactly the machines that connected earliest.
+  const command = `npx -y agentdash-connect@latest inbox --ack --quiet-when-empty${serverFlag}`;
 
   const settingsPath = path.join(claudeDir, "settings.json");
   if (existsSync(settingsPath)) {

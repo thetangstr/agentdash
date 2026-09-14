@@ -112,7 +112,7 @@ describe("scaffoldInboxWorkspace", () => {
     const hook = settings.hooks.SessionStart[0];
     expect(hook.matcher).toBe("startup|resume");
     const command = hook.hooks[0].command;
-    expect(command).toContain("npx -y agentdash-connect inbox");
+    expect(command).toContain("npx -y agentdash-connect@latest inbox");
     expect(command).toContain("--ack --quiet-when-empty");
     expect(command).toContain("--server https://mk.example:3112");
     expect(command).not.toContain("paperclipai");
