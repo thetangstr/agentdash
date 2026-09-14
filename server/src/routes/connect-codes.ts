@@ -29,6 +29,8 @@ import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import { logActivity } from "../services/index.js";
 import { agentService } from "../services/agents.js";
+import { bridgeService } from "../services/bridge.js";
+import { STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
 import {
   hashConnectCode,
   isWellFormedConnectCode,
@@ -49,6 +51,70 @@ const redeemSchema = z.object({
 export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode }) {
   const router = Router();
   const svc = agentService(db);
+  const bridge = bridgeService(db);
+
+  /**
+   * The other half of connecting a machine: the credential that lets the
+   * agent's questions reach the person.
+   *
+   * A connect code used to mint only an agent API key. That key is the agent's
+   * own identity — it drives the control plane — and every `/bridge/*` route
+   * refuses it, because letting an agent's credential read its steward's inbox
+   * and receive decision handles would hand the agent authority over the very
+   * approvals meant to constrain it. The inbox needs a SECOND credential, a
+   * bridge endpoint bound to the PERSON: their machine, their inbox, their
+   * decisions.
+   *
+   * There used to be a button that minted one. It was deleted when the connect
+   * page was consolidated, which left `bridge:inbox` capable of being granted
+   * and nothing capable of asking — the onboarding copy promised "the question
+   * lands in your Claude Code" over a path with no way to create its
+   * credential. Found by a steward who traced both 403s to their causes.
+   *
+   * So the code now delegates for both. The person who created it did so from
+   * their signed-in session, deliberately, to connect THEIR machine — the code
+   * IS their authorization, time-boxed to ten minutes and spent on first use.
+   * The endpoint binds to the code's creator, never to the redeeming caller,
+   * who is unauthenticated. Self-approval here is the same authority the old
+   * button exercised: request and approve were both the steward's own acts.
+   *
+   * Failure is deliberately non-fatal, matching everything else in this file:
+   * a pairing that worked must not fail because the inbox half did.
+   */
+  async function mintBridgeEndpointForCodeCreator(input: {
+    companyId: string;
+    createdByUserId: string | null;
+    deviceName: string;
+  }): Promise<{ endpointId: string; token: string } | null> {
+    if (!input.createdByUserId) return null;
+    const capabilities = ["bridge:read", STEWARD_INBOX_CAPABILITY];
+    // Labels are unique per user. The same laptop redeeming a second code is
+    // the common collision, so retry once with a discriminating suffix rather
+    // than failing the whole pairing over a name.
+    const labels = [input.deviceName, `${input.deviceName} (${Date.now().toString(36)})`];
+    for (const label of labels) {
+      try {
+        const { enrollmentId } = await bridge.requestEnrollment(input.companyId, {
+          userId: input.createdByUserId,
+          label,
+          capabilities,
+        });
+        const approved = await bridge.approveEnrollment(
+          input.companyId,
+          enrollmentId,
+          input.createdByUserId,
+        );
+        return { endpointId: approved.endpointId, token: approved.token };
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status === 409) continue; // label taken — try the suffixed one
+        logger.warn({ err, companyId: input.companyId }, "connect code redeemed but bridge endpoint minting failed");
+        return null;
+      }
+    }
+    logger.warn({ companyId: input.companyId }, "connect code redeemed but both endpoint labels collided");
+    return null;
+  }
 
   router.post(
     "/connect/redeem",
@@ -182,6 +248,12 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
         logger.warn({ err, agentId: agent.id }, "failed to log connect code redemption");
       });
 
+      const bridgeEndpoint = await mintBridgeEndpointForCodeCreator({
+        companyId: agent.companyId,
+        createdByUserId: (claimed as { createdByUserId?: string | null }).createdByUserId ?? null,
+        deviceName,
+      });
+
       res.json({
         apiKey: issued.token,
         agentId: agent.id,
@@ -189,6 +261,10 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
         companyId: agent.companyId,
         companyName: company?.name ?? null,
         deviceName,
+        // Null when the code has no recorded creator (a board key minted it) or
+        // the endpoint could not be created. The pairing above still stands.
+        bridgeToken: bridgeEndpoint?.token ?? null,
+        bridgeEndpointId: bridgeEndpoint?.endpointId ?? null,
       });
     },
   );

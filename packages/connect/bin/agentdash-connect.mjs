@@ -24,6 +24,12 @@ import {
 } from "../src/index.mjs";
 import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
 import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
+import {
+  defaultInboxDir,
+  runInbox,
+  scaffoldInboxWorkspace,
+  storeBridgeToken,
+} from "../src/inbox.mjs";
 
 // Read the real version rather than restating it. A CLI that misreports which
 // version it is turns "did the fix reach me?" into guesswork -- which is
@@ -43,6 +49,12 @@ function parseArgs(argv) {
     else if (token === "--version" || token === "-v") args.version = true;
     else if (token === "--url") args.url = argv[++i];
     else if (token === "--name") args.name = argv[++i];
+    else if (token === "--server") args.server = argv[++i];
+    else if (token === "--token-file") args.tokenFile = argv[++i];
+    else if (token === "--ack") args.ack = true;
+    else if (token === "--quiet-when-empty") args.quietWhenEmpty = true;
+    else if (token.startsWith("--server=")) args.server = token.slice(9);
+    else if (token.startsWith("--token-file=")) args.tokenFile = token.slice(13);
     else if (token.startsWith("--url=")) args.url = token.slice(6);
     else if (token.startsWith("--name=")) args.name = token.slice(7);
     else args._.push(token);
@@ -58,6 +70,8 @@ function usage() {
   npx agentdash-connect --url <url>      skip the URL question
   npx agentdash-connect --check          is the existing connection still good?
   npx agentdash-connect --remove         undo everything this wrote
+  npx agentdash-connect inbox            read your AgentDash inbox (used by the
+                                         SessionStart hook in ~/agentdash-inbox)
 
 Options
   --name <name>   MCP server name to write (default: ${DEFAULT_SERVER_NAME})
@@ -137,6 +151,18 @@ async function main() {
     out("");
     out("Open a new terminal so the removed environment variable stops being set.");
     return 0;
+  }
+
+  // The inbox read is what the scaffolded SessionStart hook runs, so it must
+  // work with nothing but this package: token from ~/.agentdash/bridge-token,
+  // server recovered from the MCP config the connect flow wrote.
+  if (args._[0] === "inbox") {
+    return runInbox({
+      server: args.server,
+      tokenFile: args.tokenFile,
+      ack: Boolean(args.ack),
+      quietWhenEmpty: Boolean(args.quietWhenEmpty),
+    });
   }
 
   if (args.check) {
@@ -263,6 +289,33 @@ async function main() {
   if (harnesses.codex && secretBackend === "file") {
     out(`Note: no OS keychain was available, so the key is in ~/.agentdash/${account}.key (mode 600).`);
   }
+  /*
+   * The other half of the connection: the inbox. Redeeming a code now also
+   * mints a bridge endpoint for whoever created the code — that credential is
+   * how the agent's questions reach this person, and it is deliberately not
+   * the agent key written above (the inbox is the steward's own; an agent's
+   * credential must never read it). An older instance returns no bridgeToken,
+   * and this block simply does not run — pairing still works as before.
+   */
+  if (pairedWith?.bridgeToken) {
+    try {
+      const tokenPath = storeBridgeToken(pairedWith.bridgeToken);
+      const inboxDir = defaultInboxDir();
+      const { created } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
+      out("");
+      out("Inbox connected too:");
+      out(`  token   ${tokenPath}
+          your inbox credential (mode 600) — questions for you arrive with it`);
+      for (const file of created) out(`  inbox   ${file}`);
+      out("");
+      out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
+    } catch (error) {
+      // The agent pairing above already succeeded; say what did not, precisely.
+      bad(`Inbox setup failed (${error?.message ?? error}). The agent connection above still works.`);
+      bad(`Retry later with a fresh connect code.`);
+    }
+  }
+
   out(`Start a new session and ask your agent to list its AgentDash tools.`);
   out(`Undo any time with:  npx agentdash-connect --remove${args.name ? ` --name ${serverName}` : ""}`);
   if (harnesses.codex) out(`Codex needs a new terminal so ${envVar} is set.`);

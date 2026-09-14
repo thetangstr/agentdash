@@ -69,10 +69,24 @@ describe("advertised tool surface", () => {
 
   it("still offers the full control plane to an API credential", () => {
     const surface = surfaceFor("pcp_abc123");
-    // The whole point: far more than the bridge subset, and the bridge tools too.
     expect(surface.length).toBeGreaterThan(BRIDGE_TOOLS.length * 2);
-    for (const name of BRIDGE_TOOLS) expect(surface).toContain(name);
     expect(surface).toContain("whoami");
+  });
+
+  /**
+   * This test used to assert the opposite — "and the bridge tools too" — which
+   * is how the defect survived. Every /bridge/* route requires a
+   * bridge-endpoint actor, so each of the eight answered an agent key with 403
+   * "Bridge endpoint authentication required"; a steward counted seven inbox
+   * tools in tools/list and traced the failures before we did. The separation
+   * is also the security property: the inbox is the steward's own, carrying
+   * their approvals and decision handles, and an agent's credential must not
+   * reach it. An asserted surface is a promise about what works — this one
+   * promised eight tools that never could.
+   */
+  it("offers an API credential no bridge tools, because none would work", () => {
+    const surface = surfaceFor("pcp_abc123");
+    for (const name of BRIDGE_TOOLS) expect(surface).not.toContain(name);
   });
 
   it("does not shrink the surface for a fresh install with no key yet", () => {

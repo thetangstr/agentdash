@@ -60,10 +60,19 @@ export function buildToolSurface(
   config: PaperclipMcpConfig,
 ): ToolDefinition[] {
   if (!isControlPlaneCredential(config.apiKey)) return [...bridgeTools(client)];
+  // No bridge tools on a control-plane credential — the exclusion cuts BOTH
+  // ways. Every /bridge/* route requires a bridge-endpoint actor, so each of
+  // these tools answered an agent key with 403 "Bridge endpoint authentication
+  // required"; a steward counted all eight in tools/list and reasonably read
+  // the failures as a broken instance. And the separation is deliberate, not
+  // incidental: the inbox is the STEWARD's — it carries their approvals and
+  // delivers their decision handles — so an agent's own credential must never
+  // reach it even if the routes could be widened. bridge.ts says the same from
+  // the other side: the endpoint token "is deliberately NOT an AgentDash API
+  // key". Two credentials, two surfaces, no overlap.
   return [
     ...createToolDefinitions(client),
     ...createJourneyToolDefinitions(client),
-    ...bridgeTools(client),
     ...harnessTools(client),
   ];
 }
