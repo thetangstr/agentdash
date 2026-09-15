@@ -49,6 +49,8 @@ interface DigestSection<T> {
 }
 
 interface InboxSyncResponse {
+  /** Whose inbox this is; older instances do not send it. */
+  owner?: { name: string | null; email: string | null };
   lastAckedSeq: number;
   headSeq: number;
   hasMore: boolean;
@@ -132,8 +134,14 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
   const digest = response.digest;
   const lines: string[] = [];
 
+  // Whose inbox this is, on every render. A machine can hold the wrong
+  // person's credential — it happened, silently, on a shared machine — and
+  // the only reader who can notice is one told a name they do not answer to.
+  const ownerName = response.owner?.name || response.owner?.email || null;
+  const heading = ownerName ? `AgentDash inbox — ${ownerName}` : "AgentDash inbox";
+
   if (!digest) {
-    lines.push(`AgentDash inbox: ${response.events.length} new event(s).`);
+    lines.push(`${heading}: ${response.events.length} new event(s).`);
     return lines.join("\n");
   }
 
@@ -144,12 +152,12 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
     // fetched page, so anything unmentioned here is buried permanently.
     const other = unseenApprovalCount(response);
     if (other > 0) {
-      return `AgentDash inbox: nothing waiting on you. ${other} other update(s) already dealt with.`;
+      return `${heading}: nothing waiting on you. ${other} other update(s) already dealt with.`;
     }
-    return "AgentDash inbox: nothing waiting on you.";
+    return `${heading}: nothing waiting on you.`;
   }
 
-  lines.push("AgentDash inbox");
+  lines.push(heading);
   lines.push("");
 
   // Order is the contract: urgent approvals, then blockers, then completions.
@@ -186,8 +194,11 @@ export function renderInbox(response: InboxSyncResponse, now: number): string {
   if (other > 0) {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
+  // Point at the surface that works. This named inbox_decide, and the first
+  // steward through the flow met a session with no such tool — deciding
+  // in-session is not wired yet, and delivered text must not promise it.
   lines.push(
-    "Decide with the inbox_decide tool. Details are in AgentDash — nothing above carries the evidence.",
+    "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
   );
   return lines.join("\n").trimEnd();
 }

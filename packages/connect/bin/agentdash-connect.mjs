@@ -26,8 +26,11 @@ import { VerifyError, redeemConnectCode } from "../src/verify.mjs";
 import { formatConnectCode, looksLikeConnectCode } from "../src/codes.mjs";
 import {
   defaultInboxDir,
+  ownerConflict,
+  readBridgeOwner,
   runInbox,
   scaffoldInboxWorkspace,
+  storeBridgeOwner,
   storeBridgeToken,
 } from "../src/inbox.mjs";
 
@@ -35,6 +38,12 @@ import {
 // version it is turns "did the fix reach me?" into guesswork -- which is
 // exactly the question that matters right after a broken release.
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
+/**
+ * Hostname plus platform, so "what OS was that pairing?" is answerable from
+ * the audit trail — it was asked, and nothing recorded had the answer.
+ */
+const deviceName = () => `${os.hostname()} (${process.platform})`;
 
 const out = (line = "") => process.stdout.write(`${line}\n`);
 const bad = (line = "") => process.stderr.write(`${line}\n`);
@@ -213,7 +222,7 @@ async function main() {
     out("");
     out(`Redeeming code ${formatConnectCode(positional)} …`);
     try {
-      const paired = await redeemConnectCode(instanceUrl, positional, os.hostname());
+      const paired = await redeemConnectCode(instanceUrl, positional, deviceName());
       key = paired.apiKey;
       pairedWith = paired;
     } catch (error) {
@@ -239,7 +248,7 @@ async function main() {
       out("");
       out("That looks like a connect code — redeeming it.");
       try {
-        const paired = await redeemConnectCode(instanceUrl, key, os.hostname());
+        const paired = await redeemConnectCode(instanceUrl, key, deviceName());
         key = paired.apiKey;
         pairedWith = paired;
         out(
@@ -299,20 +308,44 @@ async function main() {
    */
   if (pairedWith?.bridgeToken) {
     try {
+      /**
+       * Never silently replace a different person's inbox connection. The
+       * failure this guards actually happened: a shared machine, re-paired
+       * under another signed-in account, switched whose approvals arrived
+       * here with nothing on screen saying so. Replacing is allowed — one
+       * machine changing hands is normal — but only as an answered question.
+       */
+      const conflict = ownerConflict(readBridgeOwner(), pairedWith.owner ?? null);
+      if (conflict) {
+        bad("");
+        bad(`This machine's inbox currently belongs to ${conflict.existing}.`);
+        bad(`This pairing would hand it to ${conflict.incoming} instead.`);
+        const answer = await ask(`Replace it? [y/N]: `);
+        if (!/^y(es)?$/i.test(answer.trim())) {
+          out("Kept the existing inbox connection. The agent pairing above still stands.");
+          throw { skipped: true };
+        }
+      }
       const tokenPath = storeBridgeToken(pairedWith.bridgeToken);
+      if (pairedWith.owner) storeBridgeOwner(pairedWith.owner, { server: instanceUrl });
       const inboxDir = defaultInboxDir();
       const { created } = scaffoldInboxWorkspace(inboxDir, { server: instanceUrl });
       out("");
-      out("Inbox connected too:");
+      const ownerLine = pairedWith.owner?.name
+        ? `${pairedWith.owner.name}${pairedWith.owner.email ? ` (${pairedWith.owner.email})` : ""}`
+        : null;
+      out(ownerLine ? `Inbox connected for ${ownerLine}:` : "Inbox connected too:");
       out(`  token   ${tokenPath}
           your inbox credential (mode 600) — questions for you arrive with it`);
       for (const file of created) out(`  inbox   ${file}`);
       out("");
       out(`Open ${inboxDir} in Claude Code and anything waiting on you appears as the session starts.`);
     } catch (error) {
-      // The agent pairing above already succeeded; say what did not, precisely.
-      bad(`Inbox setup failed (${error?.message ?? error}). The agent connection above still works.`);
-      bad(`Retry later with a fresh connect code.`);
+      if (!error?.skipped) {
+        // The agent pairing above already succeeded; say what did not, precisely.
+        bad(`Inbox setup failed (${error?.message ?? error}). The agent connection above still works.`);
+        bad(`Retry later with a fresh connect code.`);
+      }
     }
   }
 

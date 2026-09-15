@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ownerConflict,
+  readBridgeOwner,
   renderInbox,
+  storeBridgeOwner,
   resolveBridgeToken,
   resolveInboxServer,
   runInbox,
@@ -69,7 +72,10 @@ describe("renderInbox", () => {
     expect(decision).toBeLessThan(blocked);
     expect(blocked).toBeLessThan(finished);
     expect(text).toContain("HAL — purchase [high: exceeds the $25 limit], rev 3, waiting 3h");
-    expect(text).toContain("Decide with the inbox_decide tool.");
+    // The old closing line named inbox_decide; the first steward through the
+    // flow met a session with no such tool. Delivered text must not promise it.
+    expect(text).toContain("Decide on your AgentDash page.");
+    expect(text).not.toContain("inbox_decide");
   });
 
   /**
@@ -144,6 +150,47 @@ describe("resolveInboxServer", () => {
     expect(resolveInboxServer({ server: "https://mk.example:3112/api/", env: {} })).toBe(
       "https://mk.example:3112",
     );
+  });
+});
+
+describe("owner identity", () => {
+  it("names the owner on every render, so a wrong-person inbox is visible", () => {
+    const text = renderInbox(
+      { events: [], digest: digest(), owner: { name: "Chris Hong", email: "chris@x" } },
+      NOW,
+    );
+    expect(text).toBe("AgentDash inbox — Chris Hong: nothing waiting on you.");
+  });
+
+  it("renders exactly as before when an older instance sends no owner", () => {
+    expect(renderInbox({ events: [], digest: digest() }, NOW)).toBe(
+      "AgentDash inbox: nothing waiting on you.",
+    );
+  });
+
+  it("stores and reads the owner beside the token, mode 600", () => {
+    const dir = tmp();
+    const ownerPath = path.join(dir, "bridge-owner.json");
+    storeBridgeOwner({ name: "Chris Hong", email: "chris@x" }, { server: "https://mk" }, ownerPath);
+    expect(statSync(ownerPath).mode & 0o777).toBe(0o600);
+    const read = readBridgeOwner(ownerPath);
+    expect(read.email).toBe("chris@x");
+    expect(read.server).toBe("https://mk");
+  });
+
+  /**
+   * The failure this exists for: a shared machine re-paired under a different
+   * signed-in account, whose inbox switched people with nothing on screen.
+   * Same person, missing sides, and older instances must all stay silent.
+   */
+  it("flags a pairing that would hand the inbox to a different person", () => {
+    expect(ownerConflict({ name: "Titus", email: "shem@x" }, { name: "Yang", email: "yang@x" })).toEqual({
+      existing: "Titus",
+      incoming: "Yang",
+    });
+    expect(ownerConflict({ email: "yang@x" }, { email: "YANG@X" })).toBeNull();
+    expect(ownerConflict(null, { email: "yang@x" })).toBeNull();
+    expect(ownerConflict({ email: "yang@x" }, null)).toBeNull();
   });
 });
 

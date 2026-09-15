@@ -8,6 +8,7 @@ import {
   agentApiKeys,
   agentConnectCodes,
   agents,
+  authUsers,
   bridgeEndpoints,
   companies,
   createDb,
@@ -51,6 +52,7 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
     // has to come first or the company delete trips its foreign key.
     await db.delete(activityLog);
     await db.delete(bridgeEndpoints);
+    await db.delete(authUsers);
     await db.delete(agentConnectCodes);
     await db.delete(agentApiKeys);
     await db.delete(agents);
@@ -244,6 +246,32 @@ describeEmbeddedPostgres("POST /api/connect/redeem", () => {
      * an inbox to, and inventing one would hand a person's inbox to whoever
      * held the board key. The agent pairing must still succeed untouched.
      */
+    /**
+     * The CLI prints who the pairing belongs to and refuses to silently
+     * replace another person's inbox — both need the owner's name to travel
+     * with the redemption. Display identity only; the credential rides above.
+     */
+    it("names the code's creator in the response", async () => {
+      const { code } = await seed({ createdByUserId: "user-steward" });
+      await db.insert(authUsers).values({
+        id: "user-steward",
+        name: "Chris Hong",
+        email: "chris@example.test",
+        emailVerified: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const res = await request(app)
+        .post("/api/connect/redeem")
+        .send({ code, deviceName: "chris-laptop (win32)" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.owner).toEqual({ name: "Chris Hong", email: "chris@example.test" });
+      // The platform suffix survives sanitization into the stored names.
+      expect(res.body.deviceName).toBe("chris-laptop (win32)");
+    });
+
     it("mints no endpoint when the code has no recorded creator", async () => {
       const { code } = await seed();
 

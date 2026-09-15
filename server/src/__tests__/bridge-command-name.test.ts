@@ -70,7 +70,10 @@ describe("bridge command name", () => {
       path.join(repoRoot, "ui", "src", "lib", "connect-terminal-copy.ts"),
       "utf8",
     );
-    const printed = copy.match(/npx ([\w.-]+) --url/)?.[1];
+    // `-y` and a version pin are allowed; the NAME is what must be real. The
+    // pin (@latest) exists because a bare name lets npx serve a cached pre-0.2
+    // CLI that silently skips the inbox half of the pairing.
+    const printed = copy.match(/npx (?:-y )?([\w.-]+?)(?:@[\w.-]+)? --url/)?.[1];
     expect(printed, "connect-terminal-copy must print an npx command").toBeDefined();
     expect([...connectBins, ...binNames]).toContain(printed);
   });

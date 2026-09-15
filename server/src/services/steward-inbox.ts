@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import {
   agents,
   approvals,
+  authUsers,
   bridgeEndpoints,
   channelCallbackTokens,
   companies,
@@ -221,6 +222,16 @@ export function stewardInboxService(db: Db) {
    * Revoked, unapproved, and inbox-less endpoints are refused here rather than
    * at the route, so every caller inherits the same gate.
    */
+  /** Name and email only — display identity, no credential, no authority. */
+  async function ownerDisplay(userId: string): Promise<{ name: string | null; email: string | null }> {
+    const row = await db
+      .select({ name: authUsers.name, email: authUsers.email })
+      .from(authUsers)
+      .where(eq(authUsers.id, userId))
+      .then((rows) => rows[0] ?? null);
+    return { name: row?.name ?? null, email: row?.email ?? null };
+  }
+
   async function requireInboxEndpoint(endpointId: string) {
     const endpoint = await db
       .select()
@@ -382,6 +393,15 @@ export function stewardInboxService(db: Db) {
     endpointId: string,
     options: { limit?: number; includeDigest?: boolean } = {},
   ): Promise<{
+    /**
+     * Whose inbox this is, by name. A machine can hold the wrong person's
+     * credential — it happened on the operator's own box, where a re-pairing
+     * under a different signed-in account silently replaced the token and the
+     * inbox switched people with nothing on screen saying so. The reader had
+     * to trace server source to find out whose approvals they were looking
+     * at. Every render should be able to open with the owner's name instead.
+     */
+    owner: { name: string | null; email: string | null };
     lastAckedSeq: number;
     headSeq: number;
     events: Array<{
@@ -453,6 +473,7 @@ export function stewardInboxService(db: Db) {
     );
 
     return {
+      owner: await ownerDisplay(endpoint.userId),
       lastAckedSeq,
       headSeq: await headSeq(endpoint.companyId, endpoint.userId),
       events,

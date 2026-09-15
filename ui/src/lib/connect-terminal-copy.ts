@@ -25,12 +25,15 @@
  * When the two agree there is nothing to decide and nothing is shown. When they
  * disagree, both are offered.
  *
- * The published address stays FIRST, and that ordering is the safety property.
- * The command is a thing people forward to a colleague, and a URL captured from
- * whichever door happened to be open gets written into `~/.codex/config.toml`
- * on somebody else's machine, where it works here and silently stops working
- * anywhere else. Defaulting to the shared address means the person who has to
- * override it is the one who can already see that they took a different door.
+ * The address you are USING comes first, and that is a reversal, made on field
+ * evidence. The first ordering put the published address first, reasoning that
+ * the command gets forwarded to colleagues — but the page's own copy says "run
+ * this on the machine you work on", and the first remote steward to use it hit
+ * exactly the failure the old default guaranteed: the published LAN name does
+ * not resolve over a VPN, and he had to notice and switch by hand. Self-use is
+ * the dominant case; the person you MIGHT forward to is the exception, so the
+ * caution now lives on the published option's label instead of in the default.
+ * A steward whose two addresses agree still sees no choice at all.
  */
 export type OriginChoice = {
   url: string;
@@ -63,14 +66,14 @@ export function resolveOriginChoices(
   if (!current || sameOrigin(published, current)) return [publishedChoice];
 
   return [
-    publishedChoice,
     { url: current, kind: "current", label: "The address you are using now" },
+    publishedChoice,
   ];
 }
 
 /**
  * The address to use when nobody chooses. First choice wins; see the ordering
- * note above for why that is the published one.
+ * note above for why that is the one the reader is provably using.
  */
 export function resolveInstanceOrigin(
   publicBaseUrl: string | null | undefined,
@@ -79,9 +82,15 @@ export function resolveInstanceOrigin(
   return resolveOriginChoices(publicBaseUrl, browserOrigin)[0]?.url ?? browserOrigin;
 }
 
-/** The whole setup, in one line, with the code already in it. */
+/**
+ * The whole setup, in one line, with the code already in it.
+ *
+ * `@latest` is load-bearing: a bare package name lets npx serve whatever its
+ * cache holds, and a cached pre-0.2 CLI silently skips the inbox half of the
+ * pairing. The first Windows steward would have hit exactly that.
+ */
 export function buildConnectCommand(origin: string, code: string): string {
-  return `npx agentdash-connect --url ${origin} ${code}`;
+  return `npx -y agentdash-connect@latest --url ${origin} ${code}`;
 }
 
 export type CodeLife =

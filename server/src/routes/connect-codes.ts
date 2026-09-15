@@ -22,7 +22,7 @@ import { Router } from "express";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { agentConnectCodes, agents, companies } from "@paperclipai/db";
+import { agentConnectCodes, agents, authUsers, companies } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import { createAuthRateLimiter } from "../middleware/rate-limit.js";
 import { validate } from "../middleware/validate.js";
@@ -248,6 +248,22 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
         logger.warn({ err, agentId: agent.id }, "failed to log connect code redemption");
       });
 
+      /**
+       * Who this pairing belongs to, by name. The CLI prints it at pairing
+       * and refuses to silently replace a token that belongs to somebody
+       * else — the failure that actually happened: a machine holding one
+       * person's inbox was re-paired under another signed-in account and
+       * nothing said so. Display identity only; the credential is above.
+       */
+      const creatorId = (claimed as { createdByUserId?: string | null }).createdByUserId ?? null;
+      const owner = creatorId
+        ? await db
+            .select({ name: authUsers.name, email: authUsers.email })
+            .from(authUsers)
+            .where(eq(authUsers.id, creatorId))
+            .then((rows) => rows[0] ?? null)
+        : null;
+
       const bridgeEndpoint = await mintBridgeEndpointForCodeCreator({
         companyId: agent.companyId,
         createdByUserId: (claimed as { createdByUserId?: string | null }).createdByUserId ?? null,
@@ -265,6 +281,7 @@ export function connectCodeRoutes(db: Db, opts: { deploymentMode: DeploymentMode
         // the endpoint could not be created. The pairing above still stands.
         bridgeToken: bridgeEndpoint?.token ?? null,
         bridgeEndpointId: bridgeEndpoint?.endpointId ?? null,
+        owner: owner ? { name: owner.name, email: owner.email } : null,
       });
     },
   );

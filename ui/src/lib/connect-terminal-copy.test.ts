@@ -29,19 +29,23 @@ describe("resolveOriginChoices", () => {
   /** Someone on the tailnet: the published LAN address is not how they got here. */
   it("offers both when the door they came through is not the published one", () => {
     const choices = resolveOriginChoices(PUBLISHED, TAILNET);
-    expect(choices.map((c) => c.url)).toEqual([PUBLISHED, TAILNET]);
-    expect(choices.map((c) => c.kind)).toEqual(["published", "current"]);
+    expect(choices.map((c) => c.url)).toEqual([TAILNET, PUBLISHED]);
+    expect(choices.map((c) => c.kind)).toEqual(["current", "published"]);
   });
 
   /**
-   * The ordering is a safety property, not a preference. The command gets
-   * forwarded to colleagues, and a URL captured from whichever door happened to
-   * be open ends up in someone else's config where it silently stops working.
-   * Whoever took the unusual door is the one who can see they did.
+   * REVERSED on field evidence, deliberately. The first ordering defaulted to
+   * the published address so a forwarded command would be the shared one — and
+   * the first remote steward to use the page hit exactly the failure that
+   * default guarantees: the published LAN name does not resolve over a VPN,
+   * and he had to notice and switch by hand. The page's own copy says "run
+   * this on the machine you work on"; self-use is the dominant case, so the
+   * default is the address the reader is provably using, and the forwarding
+   * caution lives on the published option's label instead.
    */
-  it("puts the shared address first, so the default is the forwardable one", () => {
-    expect(resolveOriginChoices(PUBLISHED, TAILNET)[0]!.kind).toBe("published");
-    expect(resolveInstanceOrigin(PUBLISHED, TAILNET)).toBe(PUBLISHED);
+  it("defaults to the address the reader is using, not the published one", () => {
+    expect(resolveOriginChoices(PUBLISHED, TAILNET)[0]!.kind).toBe("current");
+    expect(resolveInstanceOrigin(PUBLISHED, TAILNET)).toBe(TAILNET);
   });
 
   it("falls back to the browser address when nothing is published", () => {
@@ -60,7 +64,9 @@ describe("resolveOriginChoices", () => {
 describe("buildConnectCommand", () => {
   it("carries the code and the instance, so nothing else must be typed", () => {
     const line = buildConnectCommand("https://mk.example:3112", "KVTX-8F02");
-    expect(line).toBe("npx agentdash-connect --url https://mk.example:3112 KVTX-8F02");
+    // @latest is load-bearing: a bare name lets npx serve a cached pre-0.2 CLI
+    // that silently skips the inbox half of the pairing.
+    expect(line).toBe("npx -y agentdash-connect@latest --url https://mk.example:3112 KVTX-8F02");
   });
 
   it("is one line", () => {
