@@ -35,6 +35,52 @@ export function defaultTokenPath() {
   return path.join(os.homedir(), ".agentdash", "bridge-token");
 }
 
+export function defaultOwnerPath() {
+  return path.join(os.homedir(), ".agentdash", "bridge-owner.json");
+}
+
+/**
+ * Who the stored token belongs to. Display metadata, not a credential — it
+ * exists so the NEXT pairing can notice it is about to replace somebody
+ * else's inbox connection and say so, instead of doing it silently. That
+ * silent replacement actually happened: a shared machine was re-paired under
+ * a different signed-in account and its inbox switched people with nothing on
+ * screen. Null when no pairing has recorded an owner (pre-0.2.1, or an older
+ * instance that does not report one).
+ */
+export function readBridgeOwner(ownerPath = defaultOwnerPath()) {
+  try {
+    const parsed = JSON.parse(readFileSync(ownerPath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeBridgeOwner(owner, { server } = {}, ownerPath = defaultOwnerPath()) {
+  mkdirSync(path.dirname(ownerPath), { recursive: true });
+  writeFileSync(
+    ownerPath,
+    `${JSON.stringify({ name: owner?.name ?? null, email: owner?.email ?? null, server: server ?? null, pairedAt: new Date().toISOString() }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  chmodSync(ownerPath, 0o600);
+  return ownerPath;
+}
+
+/**
+ * Would this pairing replace a different person's inbox connection?
+ * Compared by email because that is the stable human identifier both sides
+ * hold; either side missing means there is nothing to protect and no
+ * conflict to report.
+ */
+export function ownerConflict(existing, incoming) {
+  const a = existing?.email?.trim().toLowerCase();
+  const b = incoming?.email?.trim().toLowerCase();
+  if (!a || !b || a === b) return null;
+  return { existing: existing.name || existing.email, incoming: incoming.name || incoming.email };
+}
+
 export function defaultInboxDir() {
   return path.join(os.homedir(), "agentdash-inbox");
 }
@@ -136,10 +182,10 @@ export function scaffoldInboxWorkspace(dir, { server } = {}) {
         "",
         "## Deciding",
         "",
-        "Ask in this session. The `inbox_decide` tool spends a handle that is good for",
-        "one approval, at one revision, once. Handles are not accepted on the command",
-        "line, because anything in a command line is readable by every user on this",
-        "machine.",
+        "On your AgentDash page, for now. This session tells you what is waiting; it",
+        "cannot yet decide — that needs an add-on this instance does not ship to",
+        "steward machines yet. When it lands, decisions will spend a handle good for",
+        "one approval, at one revision, once.",
         "",
         "## What arrives here",
         "",
@@ -205,17 +251,23 @@ export function renderInbox(response, now) {
     return lines.join("\n");
   }
 
+  // Whose inbox this is, on every render. A machine can hold the wrong
+  // person's credential, and the only reader who can notice is the one who is
+  // told a name they do not answer to.
+  const ownerName = response.owner?.name || response.owner?.email || null;
+  const heading = ownerName ? `AgentDash inbox — ${ownerName}` : "AgentDash inbox";
+
   const nothing =
     digest.approvals.total === 0 && digest.blockers.total === 0 && digest.completions.total === 0;
   if (nothing) {
     const other = unseenApprovalCount(response);
     if (other > 0) {
-      return `AgentDash inbox: nothing waiting on you. ${other} other update(s) already dealt with.`;
+      return `${heading}: nothing waiting on you. ${other} other update(s) already dealt with.`;
     }
-    return "AgentDash inbox: nothing waiting on you.";
+    return `${heading}: nothing waiting on you.`;
   }
 
-  lines.push("AgentDash inbox");
+  lines.push(heading);
   lines.push("");
 
   // Order is the contract: urgent approvals, then blockers, then completions.
@@ -252,8 +304,11 @@ export function renderInbox(response, now) {
   if (other > 0) {
     lines.push(`(${other} approval(s) on this page were already decided elsewhere.)`);
   }
+  // Point at the surface that works. This used to name inbox_decide, and the
+  // first steward through the flow met a session with no such tool — deciding
+  // in-session is not wired yet, and delivered text must not promise it.
   lines.push(
-    "Decide with the inbox_decide tool. Details are in AgentDash — nothing above carries the evidence.",
+    "Decide on your AgentDash page. This carries the ask and a pointer — never the evidence.",
   );
   return lines.join("\n").trimEnd();
 }

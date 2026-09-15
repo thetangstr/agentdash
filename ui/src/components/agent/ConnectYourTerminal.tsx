@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { agentsApi } from "../../api/agents";
+import { authApi } from "../../api/auth";
+import { bridgeApi } from "../../api/bridge";
 import { healthApi } from "../../api/health";
+import { timeAgo } from "../../lib/timeAgo";
 import { queryKeys } from "../../lib/queryKeys";
 import { copyToClipboard } from "../../lib/clipboard";
 import {
@@ -46,6 +49,43 @@ export function ConnectYourTerminal({
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
     staleTime: 5 * 60_000,
+  });
+
+  /**
+   * Who the pairing will belong to — said before the button, not after.
+   *
+   * Everything a connect code mints binds to the signed-in account, and on a
+   * shared or wrong-session browser that is not necessarily the person at the
+   * keyboard. That exact miss happened: a machine was re-paired under another
+   * account's session and its owner's inbox quietly became someone else's.
+   * Naming the account here is the moment to catch it.
+   */
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const connectingAs = session?.user?.name || session?.user?.email || null;
+
+  /**
+   * The machines this person has connected, with the way to take one back.
+   * Revocation existed only as an API since the old machine page was deleted;
+   * a credential you cannot see is one you cannot revoke.
+   */
+  const queryClient2 = useQueryClient();
+  const endpoints = useQuery({
+    queryKey: ["bridge", "me", "endpoints", companyId],
+    queryFn: () => bridgeApi.listMyEndpoints(companyId),
+    enabled: Boolean(companyId),
+  });
+  const machines = (endpoints.data?.endpoints ?? []).filter(
+    (e) => e.enrolledAt !== null,
+  );
+  const revoke = useMutation({
+    mutationFn: (endpointId: string) => bridgeApi.revoke(companyId, endpointId),
+    onSuccess: () =>
+      queryClient2.invalidateQueries({ queryKey: ["bridge", "me", "endpoints", companyId] }),
   });
   const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
   /**
@@ -117,6 +157,13 @@ export function ConnectYourTerminal({
                 Claude Code or Codex with its work and its mandate. No key changes hands, and the
                 code stops working ten minutes from now.
               </p>
+              {connectingAs ? (
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Connecting as <span className="font-medium text-foreground">{connectingAs}</span>
+                  {session?.user?.email && session.user.name ? ` (${session.user.email})` : null} —
+                  the machine and its inbox will belong to this account.
+                </p>
+              ) : null}
               <Button
                 className="mt-3"
                 size="sm"
@@ -232,6 +279,48 @@ export function ConnectYourTerminal({
         </div>
 
       </section>
+
+      {machines.length > 0 ? (
+        <section
+          aria-labelledby="connect-machines-heading"
+          className="rounded-lg border border-border bg-card"
+        >
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+            <h2 id="connect-machines-heading" className="text-sm font-semibold">
+              Connected machines
+            </h2>
+            <span className="font-mono text-xs text-muted-foreground">{machines.length}</span>
+          </div>
+          <ul className="divide-y divide-border">
+            {machines.map((machine) => (
+              <li
+                key={machine.id}
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5"
+              >
+                <span className="text-sm">
+                  {machine.label}
+                  <span className="ml-2 font-mono text-xs text-muted-foreground">
+                    {machine.capabilities.includes("bridge:inbox") ? "inbox" : "read-only"}
+                    {machine.lastSeenAt ? ` · seen ${timeAgo(machine.lastSeenAt)}` : " · never seen"}
+                  </span>
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={revoke.isPending}
+                  onClick={() => revoke.mutate(machine.id)}
+                >
+                  {revoke.isPending ? "Disconnecting…" : "Disconnect"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <p className="px-4 py-2.5 text-xs text-muted-foreground">
+            Disconnecting stops that machine's inbox and tasks immediately. Its key stops working;
+            reconnect with a fresh code.
+          </p>
+        </section>
+      ) : null}
 
       {/* Connecting means you can ask. This means you get told. It carries the
           same weight as the section above because it is the half people miss. */}

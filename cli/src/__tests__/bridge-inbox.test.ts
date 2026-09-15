@@ -116,9 +116,19 @@ describe("bridge inbox rendering", () => {
 
   it("carries the ask and points elsewhere for the evidence", () => {
     const text = renderInbox(digest() as never, NOW);
-    expect(text).toContain("nothing above carries the evidence");
+    expect(text).toContain("never the evidence");
+    // The closing line points at the page, not at inbox_decide: deciding
+    // in-session is not wired, and the first steward through the flow met a
+    // session with no such tool. Delivered text must not promise it.
+    expect(text).toContain("Decide on your AgentDash page.");
+    expect(text).not.toContain("inbox_decide");
     expect(text).toContain("Casper");
     expect(text).toContain("high: Destructive action");
+  });
+
+  it("names the owner on every render when the instance reports one", () => {
+    const withOwner = { ...(digest() as object), owner: { name: "Chris Hong", email: null } };
+    expect(renderInbox(withOwner as never, NOW)).toContain("AgentDash inbox — Chris Hong");
   });
 
   it("says so plainly when nothing is waiting", () => {

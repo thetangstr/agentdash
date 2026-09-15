@@ -35,6 +35,8 @@ const mockIssuesApi = vi.hoisted(() => ({ list: vi.fn() }));
 const mockHeartbeatsApi = vi.hoisted(() => ({ list: vi.fn() }));
 const mockAgentsApi = vi.hoisted(() => ({ createConnectCode: vi.fn(), createKey: vi.fn() }));
 const mockHealthApi = vi.hoisted(() => ({ get: vi.fn() }));
+const mockAuthApi = vi.hoisted(() => ({ getSession: vi.fn() }));
+const mockBridgeApi = vi.hoisted(() => ({ listMyEndpoints: vi.fn(), revoke: vi.fn() }));
 const mockApprovalsApi = vi.hoisted(() => ({ approve: vi.fn(), reject: vi.fn() }));
 const mockActivityApi = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -56,6 +58,8 @@ vi.mock("../api/activity", () => ({ activityApi: mockActivityApi }));
 vi.mock("../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 vi.mock("../api/agents", () => ({ agentsApi: mockAgentsApi }));
 vi.mock("../api/health", () => ({ healthApi: mockHealthApi }));
+vi.mock("../api/auth", () => ({ authApi: mockAuthApi }));
+vi.mock("../api/bridge", () => ({ bridgeApi: mockBridgeApi }));
 vi.mock("../context/CompanyContext", () => ({ useCompany: () => mockCompany.value }));
 
 const { default: MyAgent } = await import("./MyAgent");
@@ -117,6 +121,11 @@ describe("MyAgent", () => {
       { status: "succeeded", error: null, errorCode: null, finishedAt: new Date().toISOString() },
     ]);
     mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "https://mk.example:3112" });
+    mockAuthApi.getSession.mockResolvedValue({
+      session: { id: "s", userId: "user-me" },
+      user: { id: "user-me", name: "Yang Tang", email: "yang@x", image: null },
+    });
+    mockBridgeApi.listMyEndpoints.mockResolvedValue({ endpoints: [] });
     mockAgentsApi.createConnectCode.mockResolvedValue({
       code: "KVTX-8F02",
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
@@ -801,19 +810,58 @@ describe("MyAgent", () => {
     });
 
     /**
-     * The default is the forwardable one. A command captured from whichever
-     * door happened to be open gets written into a colleague's config, where it
-     * works here and silently stops working anywhere else.
+     * REVERSED on field evidence: the first remote steward hit exactly what a
+     * published-address default guarantees off-LAN — a name that does not
+     * resolve over his VPN. Self-use is the page's own stated case ("run this
+     * on the machine you work on"), so the default is the address the reader
+     * is provably using; the forwarding caution lives on the published
+     * option's label.
      */
-    it("defaults to the published address, not the one in the address bar", async () => {
+    it("defaults to the address in the address bar, not the published one", async () => {
       mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
 
       await render();
       await connect();
 
       const command = container.querySelector("pre code")?.textContent ?? "";
-      expect(command).toContain("--url http://mkmini.local:3102");
-      expect(command).not.toContain("--url http://localhost:3000");
+      expect(command).toContain("--url http://localhost:3000");
+      expect(command).not.toContain("--url http://mkmini.local:3102");
+    });
+
+    it("names the account the pairing will belong to, before the button", async () => {
+      await render();
+
+      expect(container.textContent ?? "").toContain("Connecting as");
+      expect(container.textContent ?? "").toContain("Yang Tang");
+    });
+
+    /**
+     * A credential you cannot see is one you cannot revoke — the machines
+     * list went missing with the old connect page, and a dead-but-enrolled
+     * endpoint sat unreachable for days because of it.
+     */
+    it("lists connected machines with a way to disconnect each", async () => {
+      mockBridgeApi.listMyEndpoints.mockResolvedValue({
+        endpoints: [
+          {
+            id: "ep-1",
+            label: "chris-laptop (win32)",
+            capabilities: ["bridge:read", "bridge:inbox"],
+            enrolledAt: "2026-09-15T00:00:00Z",
+            lastSeenAt: new Date().toISOString(),
+            pendingApproval: false,
+          },
+        ],
+      });
+
+      await render();
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Connected machines");
+      expect(text).toContain("chris-laptop (win32)");
+      expect(text).toContain("inbox");
+      const buttons = Array.from(container.querySelectorAll("button")).map((b) => b.textContent);
+      expect(buttons).toContain("Disconnect");
     });
   });
 

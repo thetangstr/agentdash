@@ -7,6 +7,7 @@ import {
   agentConnectCodes,
   agents,
   approvals,
+  authUsers,
   bridgeEndpoints,
   companies,
   companyMemberships,
@@ -131,6 +132,15 @@ describeEmbeddedPostgres("connect code → inbox, end to end", () => {
       assignedByUserId: owner.principalId,
     });
 
+    await db.insert(authUsers).values({
+      id: steward.principalId,
+      name: "Loop Steward",
+      email: `steward-${steward.principalId.slice(0, 8)}@example.test`,
+      emailVerified: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
     // The steward creates a code from their signed-in session; this seeds the
     // row that create route writes, creator recorded.
     const code = "KVTX8F02";
@@ -168,6 +178,12 @@ describeEmbeddedPostgres("connect code → inbox, end to end", () => {
     expect(res.status).toBe(200);
     expect(res.body.events).toEqual([]);
     expect(res.body.digest).toBeTruthy();
+    // Every sync says whose inbox it is, so a wrong-person machine is visible
+    // to its reader instead of needing a trip through the server source.
+    expect(res.body.owner).toEqual({
+      name: "Loop Steward",
+      email: expect.stringContaining("@example.test"),
+    });
   });
 
   /**
