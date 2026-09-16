@@ -195,4 +195,37 @@ describe("applyHermesSessionUsage", () => {
     const result = { ...base, model: "x" };
     expect(applyHermesSessionUsage(result, null)).toEqual(result);
   });
+
+  // AGE-142 DoD c2: the task recovery budget reads turns from
+  // resultJson.num_turns, and until now no adapter wrote it — the turns
+  // dimension could never exhaust. The ledger's per-model api_call_count sum
+  // is that number, persisted on every run the ledger can see.
+  it("persists the ledger's api call count as num_turns in resultJson", () => {
+    const merged = applyHermesSessionUsage({ ...base }, usage);
+    expect(merged.resultJson).toMatchObject({ num_turns: 2 });
+  });
+
+  it("merges num_turns into an existing resultJson without dropping keys", () => {
+    const merged = applyHermesSessionUsage(
+      { ...base, resultJson: { summary: "did the work" } },
+      usage,
+    );
+    expect(merged.resultJson).toEqual({ summary: "did the work", num_turns: 2 });
+  });
+
+  it("does not clobber a turn count the adapter already reported", () => {
+    const merged = applyHermesSessionUsage(
+      { ...base, resultJson: { num_turns: 7 } },
+      usage,
+    );
+    expect(merged.resultJson).toMatchObject({ num_turns: 7 });
+  });
+
+  it("writes no num_turns when the ledger recorded no api calls", () => {
+    const merged = applyHermesSessionUsage(
+      { ...base },
+      summarizeHermesUsageRows([{ model: "m", api_call_count: 0, input_tokens: 1, output_tokens: 1 }]),
+    );
+    expect(merged.resultJson?.num_turns).toBeUndefined();
+  });
 });

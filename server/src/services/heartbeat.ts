@@ -135,6 +135,7 @@ import {
   evaluateTaskRecoveryBudget,
   formatTaskRecoveryBudgetUsage,
   TASK_RECOVERY_BUDGET_LIMITS,
+  TASK_RECOVERY_SCOPE_SCAN_CAP,
 } from "./task-recovery-budget.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { redactEventPayload } from "../redaction.js";
@@ -3104,28 +3105,40 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     run: typeof heartbeatRuns.$inferSelect,
     issueId: string,
   ) {
+    // AGE-142 (S3): attempts are a property of the task, not of the retry
+    // chain. The old walk followed retryOfRunId / continuation links and
+    // missed every run the chain never linked — exactly the refused and
+    // cancelled retry dispatches whose absence read attempts=0/1 on AGE-104
+    // while three dispatch attempts existed. All terminal runs recorded for
+    // the same issue+agent scope are the attempt ledger now, newest-first and
+    // capped the way the walk capped its depth.
     const ancestors: Array<typeof heartbeatRuns.$inferSelect> = [];
     const seen = new Set<string>([run.id]);
-    let parentId = taskRecoveryParentRunId(run);
-
-    while (parentId && ancestors.length < 50 && !seen.has(parentId)) {
-      seen.add(parentId);
-      const parent = await db
-        .select()
-        .from(heartbeatRuns)
-        .where(
-          and(
-            eq(heartbeatRuns.id, parentId),
-            eq(heartbeatRuns.companyId, run.companyId),
-            eq(heartbeatRuns.agentId, run.agentId),
+    const rows = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, run.companyId),
+          eq(heartbeatRuns.agentId, run.agentId),
+          inArray(heartbeatRuns.status, HEARTBEAT_RUN_TERMINAL_STATUSES),
+          or(
+            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
           ),
-        )
-        .limit(1)
-        .then((rows) => rows[0] ?? null);
-      if (!parent) break;
-      if (taskRecoveryRunIssueId(parent) !== issueId) break;
-      ancestors.push(parent);
-      parentId = taskRecoveryParentRunId(parent);
+        ),
+      )
+      // createdAt, not startedAt: refused runs never get claimed, so their
+      // startedAt is null — and Postgres sorts nulls first on DESC, which
+      // would crowd real history out of the cap with unclaimed refusals.
+      .orderBy(desc(heartbeatRuns.createdAt))
+      .limit(TASK_RECOVERY_SCOPE_SCAN_CAP);
+    for (const row of rows) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        ancestors.push(row);
+      }
+      if (ancestors.length >= TASK_RECOVERY_SCOPE_SCAN_CAP) break;
     }
 
     return ancestors;
@@ -3232,23 +3245,35 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       return true;
     }
 
+    // AGE-142 (S3): the budget binds automatic recovery — a dispatch linked to
+    // its predecessor by retryOfRunId / continuation. Unlinked dispatches (a
+    // human-triggered remediation, or the very first dispatch of a task) are
+    // not automatic recovery and keep bypassing this check: that exemption is
+    // the remediation window the exhaustion message promises. What changes is
+    // the ledger a linked retry is judged against: the old chain walk saw only
+    // runs the retry chain linked, which is exactly how AGE-104 read
+    // attempts=0/1 while refused and cancelled dispatches piled up unlinked.
+    // The scope query counts every terminal run recorded for the same
+    // issue+agent — refused and cancelled included — so the ledger reflects
+    // observed attempts rather than chain shape.
     if (!taskRecoveryParentRunId(run)) return false;
-    const ancestors = await taskRecoveryAncestors(run, issueId);
-    if (ancestors.length === 0) return false;
+    const priorRuns = await taskRecoveryAncestors(run, issueId);
+    if (priorRuns.length === 0) return false;
 
-    const decision = evaluateTaskRecoveryBudget(ancestors);
-    if (decision.exhaustedBy.length === 0) return false;
+    const decision = evaluateTaskRecoveryBudget(priorRuns);
+    const exhaustedBy = decision.exhaustedBy;
+    if (exhaustedBy.length === 0) return false;
 
     const now = new Date();
     const usageSummary = formatTaskRecoveryBudgetUsage(decision.usage);
-    const reason = `Automatic recovery budget exhausted (${decision.exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until human remediation clears the exhausted recovery state.`;
+    const reason = `Automatic recovery budget exhausted (${exhaustedBy.join(", ")}): ${usageSummary}. The task is blocked and no further provider run will start until human remediation clears the exhausted recovery state.`;
     const recoveryBudget = {
       status: "exhausted",
-      exhaustedBy: decision.exhaustedBy,
+      exhaustedBy,
       usage: decision.usage,
       limits: TASK_RECOVERY_BUDGET_LIMITS,
       exhaustedAt: now.toISOString(),
-      sourceRunId: ancestors[0]?.id ?? null,
+      sourceRunId: priorRuns[0]?.id ?? null,
       refusedRunId: run.id,
     };
 
@@ -3291,7 +3316,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       run,
       issueId,
       usageSummary,
-      exhaustedBy: decision.exhaustedBy,
+      exhaustedBy,
     });
     await appendRunEvent(cancelled, await nextRunEventSeq(cancelled.id), {
       eventType: "lifecycle",
