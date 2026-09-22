@@ -26,6 +26,7 @@ import { hashConnectCode } from "../lib/connect-codes.js";
 import { agentStewardshipService } from "../services/agent-stewardships.js";
 import { bridgeService } from "../services/bridge.js";
 import { stewardInboxService } from "../services/steward-inbox.js";
+import { truncateWithRetry } from "./helpers/truncate.js";
 
 /**
  * The whole journey a steward's machine actually takes, with nothing stubbed:
@@ -79,7 +80,7 @@ describeEmbeddedPostgres("connect code → inbox, end to end", () => {
   afterEach(async () => {
     // Post-decision effects reach beyond this suite's own tables; cascade
     // rather than maintaining a second copy of the deletion order.
-    await db.execute(sql`truncate table ${companies} cascade`);
+    await truncateWithRetry(db, sql`${companies}`);
   });
 
   /** The same shape production has: a stewarded agent in an MK-profile company. */

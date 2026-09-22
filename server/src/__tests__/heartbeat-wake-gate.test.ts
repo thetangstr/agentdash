@@ -11,6 +11,7 @@ import {
 } from "@paperclipai/db";
 import { isNotNull, sql } from "drizzle-orm";
 import { heartbeatService } from "../services/heartbeat.js";
+import { truncateWithRetry } from "./helpers/truncate.js";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -59,7 +60,7 @@ describeEmbeddedPostgres("heartbeat wake gate", () => {
       .from(heartbeatRuns)
       .where(isNotNull(heartbeatRuns.finishedAt));
     expect(executed).toEqual([]);
-    await db.execute(sql`truncate table ${companies} cascade`);
+    await truncateWithRetry(db, sql`${companies}`);
   });
 
   afterAll(async () => {

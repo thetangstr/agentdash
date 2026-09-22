@@ -36,6 +36,7 @@ import {
 } from "../services/steward-inbox-actions.js";
 import { companyService } from "../services/companies.js";
 import { stewardInboxService, STEWARD_INBOX_CAPABILITY } from "../services/steward-inbox.js";
+import { truncateWithRetry } from "./helpers/truncate.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -158,7 +159,7 @@ describeEmbeddedPostgres("agentdash-mk steward inbox", () => {
     // synced. Enumerating that chain here would make the teardown a second,
     // worse copy of the production deletion order, and every new effect would
     // break this file rather than the code it belongs to.
-    await db.execute(sql`truncate table ${companies} cascade`);
+    await truncateWithRetry(db, sql`${companies}`);
   });
 
   afterAll(async () => {
