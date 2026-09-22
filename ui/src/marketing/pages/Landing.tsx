@@ -14,10 +14,6 @@ import { FinalCTA } from "../sections/FinalCTA";
 import { useDocumentMeta } from "../hooks/useDocumentMeta";
 
 export function Landing() {
-  useDocumentMeta(
-    "AgentDash · A Chief of Staff agent that answers to you",
-    "Hire a Chief of Staff agent stewarded by you, direct it from Claude Code or Codex, and let it work with the rest of your agent workforce. Self-hosted and open source.",
-  );
   const [searchParams] = useSearchParams();
   // ?preview=1 skips the logged-in redirect so the marketing landing is
   // viewable locally even in local_trusted mode (where the user is implicitly
@@ -43,8 +39,17 @@ export function Landing() {
   return <LandingContent />;
 }
 
-/** The page itself, separated so tests can render it without the auth gate. */
+/**
+ * The page itself, separated so tests can render it without the auth gate.
+ * The title is set here rather than in Landing: while the gate is resolving,
+ * Landing renders nothing, so BreadcrumbProvider's mount effect sees no
+ * `.mkt-root` and resets the title to "AgentDash" after the hook ran.
+ */
 export function LandingContent() {
+  useDocumentMeta(
+    "AgentDash · A Chief of Staff agent that answers to you",
+    "Hire a Chief of Staff agent stewarded by you, direct it from Claude Code or Codex, and let it work with the rest of your agent workforce. Self-hosted and open source.",
+  );
   return (
     <MarketingShell>
       <Hero />
