@@ -763,11 +763,11 @@ describe("MyAgent", () => {
   });
 
   /**
-   * This instance has no address that works for everyone. The published one is
-   * plain HTTP on the office LAN — the only door a client user on a managed Mac
-   * can open with no IT ask — while the tailnet door has a real certificate and
-   * is reachable only by someone on the tailnet. Guessing one for everybody is
-   * how the command came out wrong for whoever was on the other side.
+   * One address: the one this instance publishes. The door a reader happens to
+   * come through — routinely the tailnet host — is the one address the person
+   * they are pairing cannot reach, so it is neither offered nor defaulted to.
+   * Where that published address is wrong, it is wrong in one env var for
+   * everyone, which is a thing an operator can fix once.
    */
   describe("the address the connect command points at", () => {
     const connect = async () => {
@@ -789,46 +789,66 @@ describe("MyAgent", () => {
       });
     });
 
-    /** The common case. A control with one option is noise. */
-    it("asks nothing when the published address is the one you are using", async () => {
-      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://localhost:3000" });
-
-      await render();
-      await connect();
-
-      expect(container.textContent ?? "").not.toContain("Which address should it use?");
-    });
-
-    it("offers both when you arrived by a different door", async () => {
+    /** No picker, ever. There is nothing for the reader to decide. */
+    it("never asks the reader to choose an address", async () => {
       mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
 
       await render();
       await connect();
 
       const text = container.textContent ?? "";
-      expect(text).toContain("Which address should it use?");
-      expect(text).toContain("http://mkmini.local:3102");
-      // jsdom serves the page from localhost, standing in for the other door.
-      expect(text).toContain("http://localhost:3000");
+      expect(text).not.toContain("Which address should it use?");
+      expect(container.querySelector('input[name="connect-origin"]')).toBeNull();
     });
 
     /**
-     * REVERSED on field evidence: the first remote steward hit exactly what a
-     * published-address default guarantees off-LAN — a name that does not
-     * resolve over his VPN. Self-use is the page's own stated case ("run this
-     * on the machine you work on"), so the default is the address the reader
-     * is provably using; the forwarding caution lives on the published
-     * option's label.
+     * The failure this change exists to stop. jsdom serves the page from
+     * localhost, standing in for the tailnet door a steward reads it through;
+     * the command must still carry the published address, because that is the
+     * one the colleague running it can reach.
      */
-    it("defaults to the address in the address bar, not the published one", async () => {
+    it("uses the published address, not the one in the address bar", async () => {
       mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
 
       await render();
       await connect();
 
       const command = container.querySelector("pre code")?.textContent ?? "";
+      expect(command).toContain("--url http://mkmini.local:3102");
+      expect(command).not.toContain("--url http://localhost:3000");
+    });
+
+    /**
+     * An unreachable command must be explicable. When the published address is
+     * not the reader's own door, the card says so and says whose problem it is.
+     */
+    it("says which address it points at when that is not the reader's own", async () => {
+      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://mkmini.local:3102" });
+
+      await render();
+      await connect();
+
+      expect(container.textContent ?? "").toContain("the address this instance publishes");
+    });
+
+    it("stays quiet about the address when it is the one you are using", async () => {
+      mockHealthApi.get.mockResolvedValue({ publicBaseUrl: "http://localhost:3000" });
+
+      await render();
+      await connect();
+
+      expect(container.textContent ?? "").not.toContain("the address this instance publishes");
+    });
+
+    /** Nothing published at all: a present address beats an empty --url. */
+    it("falls back to the browser address when the instance publishes none", async () => {
+      mockHealthApi.get.mockResolvedValue({});
+
+      await render();
+      await connect();
+
+      const command = container.querySelector("pre code")?.textContent ?? "";
       expect(command).toContain("--url http://localhost:3000");
-      expect(command).not.toContain("--url http://mkmini.local:3102");
     });
 
     it("names the account the pairing will belong to, before the button", async () => {
